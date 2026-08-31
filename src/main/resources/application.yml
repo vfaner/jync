@@ -1,0 +1,88 @@
+spring:
+  application:
+    name: synctool
+  datasource:
+    # AUTO_SERVER lets an external tool inspect the store while the app runs.
+    # H2 2.x rejects combining it with DB_CLOSE_ON_EXIT, so that flag is omitted.
+    url: jdbc:h2:file:./data/synctool;MODE=MySQL;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    hikari:
+      pool-name: synctool-meta
+      maximum-pool-size: 10
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  thymeleaf:
+    cache: false
+    encoding: UTF-8
+  messages:
+    basename: i18n/messages
+    encoding: UTF-8
+    fallback-to-system-locale: false
+  web:
+    resources:
+      cache:
+        period: 0
+  quartz:
+    job-store-type: memory
+    properties:
+      org.quartz.scheduler.instanceName: synctool-scheduler
+      org.quartz.threadPool.threadCount: "10"
+  h2:
+    console:
+      enabled: false
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+    encoding:
+      charset: UTF-8
+      force: true
+
+app:
+  # Repository link behind the nav GitHub icon and the donate dialog buttons.
+  github-url: https://github.com/vfaner/synctool
+
+sync:
+  # Default polling interval in milliseconds for change detection
+  poll-interval: 2000
+  # Directory for optional on-disk metadata snapshot dumps
+  snapshot-dir: ./snapshots
+  # Max retry attempts for a failed sync unit before it is logged as an error
+  max-retries: 3
+  # JDBC batch size for data synchronization
+  batch-size: 500
+  # Fetch size hint applied to source result sets
+  fetch-size: 1000
+  # Subtracted from the timestamp high-watermark so in-flight source transactions
+  # that commit slightly out of clock order are not skipped. See SyncProperties.
+  safety-lag-ms: 1000
+  # How often, at most, to re-count both sides of a table and confirm the target still
+  # holds every row the cursor claims to have delivered. Set to 0 to disable.
+  # Costs one COUNT(*) per side per table, hence the throttle.
+  row-count-audit-interval-ms: 60000
+  # Row count ceiling under which a table with no usable cursor column is
+  # synchronized by full comparison instead of being skipped
+  full-compare-max-rows: 20000
+  # TTL for the per-project sync lock; a crashed node's lock expires after this
+  lock-ttl-ms: 300000
+  # Encryption key for stored database passwords. OVERRIDE THIS IN PRODUCTION.
+  crypto-password: synctool-default-key-change-me
+  crypto-salt: 5c0744940b5c369b
+
+logging:
+  level:
+    root: INFO
+    com.synctool: INFO
+    org.hibernate.SQL: WARN
+  file:
+    name: ./logs/synctool.log

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'dashboard', 'dashboard.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{dashboard.title}">Dashboard</h1>
+            <p class="sub" th:text="#{app.subtitle}">Real-time database synchronization</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/dashboard}">
+                <svg class="ico"><use href="#arrow-clockwise"/></svg><span th:text="#{common.refresh}">Refresh</span>
+            </a>
+            <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
+                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- 指标卡 -->
+    <div class="stat-grid">
+        <div class="stat">
+            <span class="stat-ico"><svg class="ico"><use href="#diagram-3-fill"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" th:text="${stats.projectCount}">0</div>
+                <div class="stat-l" th:text="#{dashboard.projects}">Projects</div>
+                <div class="stat-x" th:text="#{dashboard.projectsEnabled(${stats.enabledProjectCount})}">
+                    0 running
+                </div>
+            </div>
+        </div>
+        <div class="stat is-info">
+            <span class="stat-ico"><svg class="ico"><use href="#hdd-network-fill"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" th:text="${stats.databaseCount}">0</div>
+                <div class="stat-l" th:text="#{dashboard.databases}">Connections</div>
+            </div>
+        </div>
+        <div class="stat is-ok">
+            <span class="stat-ico"><svg class="ico"><use href="#table"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" th:text="${stats.syncedTableCount}">0</div>
+                <div class="stat-l" th:text="#{dashboard.tables}">Synced tables</div>
+            </div>
+        </div>
+        <div class="stat" th:classappend="${stats.errorTaskCount > 0} ? 'is-danger' : 'is-warn'">
+            <span class="stat-ico"><svg class="ico"><use href="#activity"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" th:text="${stats.changesToday}">0</div>
+                <div class="stat-l" th:text="#{dashboard.changesToday}">Changes (24h)</div>
+                <div class="stat-x">
+                    <span th:text="${stats.rowsToday}">0</span>
+                    <span th:text="#{common.rows}">rows</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 仅在真的有任务失败时出现，保证这条提示始终有意义 -->
+    <div th:if="${stats.errorTaskCount > 0}" class="alert alert-warn">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <div class="alert-body">
+            <strong th:text="${stats.errorTaskCount}">0</strong>
+            <span th:text="#{dashboard.errors}">failing tasks</span>
+        </div>
+    </div>
+
+    <div class="split">
+        <!-- 项目概览 -->
+        <div class="card">
+            <div class="card-head">
+                <h2 th:text="#{dashboard.projectOverview}">Project overview</h2>
+                <a class="btn btn-ghost btn-xs" th:href="@{/projects}">
+                    <span th:text="#{common.all}">All</span><svg class="ico"><use href="#chevron-right"/></svg>
+                </a>
+            </div>
+            <div class="card-body tight">
+                <div th:if="${#lists.isEmpty(stats.projectSummaries)}" class="empty">
+                    <div class="empty-ico"><svg class="ico"><use href="#inbox"/></svg></div>
+                    <h3 th:text="#{dashboard.noProjects}">No projects yet.</h3>
+                    <p th:text="#{project.createHint}">Create one to begin.</p>
+                    <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
+                        <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
+                    </a>
+                </div>
+                <div th:unless="${#lists.isEmpty(stats.projectSummaries)}" class="tbl-wrap">
+                    <table class="tbl">
+                        <thead>
+                        <tr>
+                            <th th:text="#{common.name}">Name</th>
+                            <th th:text="#{common.status}">Status</th>
+                            <th class="num" th:text="#{dashboard.trackedTables}">Tables</th>
+                            <th class="num" th:text="#{dashboard.rowsSynced}">Rows</th>
+                            <th th:text="#{dashboard.lastSync}">Last sync</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <tr th:each="s : ${stats.projectSummaries}">
+                            <td>
+                                <a class="fw-semibold" style="font-weight:600"
+                                   th:href="@{/projects/{id}(id=${s.project.id})}"
+                                   th:text="${s.project.name}">Project</a>
+                                <div class="small muted truncate" th:if="${s.project.description}"
+                                     th:text="${s.project.description}">desc</div>
+                            </td>
+                            <td th:with="st=${s.statusName()}">
+                                <span class="badge"
+                                      th:classappend="${st == 'RUNNING'} ? 'badge-ok'
+                                                    : (${st == 'ERROR'} ? 'badge-danger' : 'badge-mute')">
+                                    <span class="dot" th:classappend="${st == 'RUNNING'} ? 'dot-live' : ''"></span>
+                                    <span th:text="#{'status.' + ${st}}">Stopped</span>
+                                </span>
+                            </td>
+                            <td class="num" th:text="${s.trackedTableCount}">0</td>
+                            <td class="num" th:text="${s.totalRowsSynced}">0</td>
+                            <td class="small muted"
+                                th:text="${s.task != null and s.task.lastSyncTime != null}
+                                         ? ${#temporals.format(s.task.lastSyncTime, 'MM-dd HH:mm:ss')}
+                                         : #{common.never}">Never</td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 最近活动 -->
+        <div class="card">
+            <div class="card-head">
+                <h2 th:text="#{dashboard.recentActivity}">Recent activity</h2>
+                <a class="btn btn-ghost btn-xs" th:href="@{/change-logs}">
+                    <span th:text="#{project.viewAllLogs}">Full log</span><svg class="ico"><use href="#chevron-right"/></svg>
+                </a>
+            </div>
+            <div class="card-body tight">
+                <div th:if="${#lists.isEmpty(stats.recentChanges)}" class="empty">
+                    <div class="empty-ico"><svg class="ico"><use href="#clock-history"/></svg></div>
+                    <h3 th:text="#{dashboard.noActivity}">No activity yet.</h3>
+                </div>
+                <ul th:unless="${#lists.isEmpty(stats.recentChanges)}" class="feed">
+                    <li th:each="log : ${stats.recentChanges}">
+                        <span class="feed-ico" th:classappend="${log.success} ? 'ok' : 'bad'">
+                            <svg class="ico"><use th:attr="href=${log.success} ? '#check-lg' : '#x-lg'"/></svg>
+                        </span>
+                        <div class="feed-main">
+                            <div class="feed-top">
+                                <span class="badge badge-brand"
+                                      th:text="#{'objectType.' + ${log.objectType}}">Table</span>
+                                <span class="feed-name" th:text="${log.objectName}">name</span>
+                                <span class="badge badge-mute"
+                                      th:text="#{'changeType.' + ${log.changeType}}">Create</span>
+                            </div>
+                            <div class="feed-detail" th:if="${log.details}" th:text="${log.details}">details</div>
+                        </div>
+                        <div class="feed-side">
+                            <div th:text="${#temporals.format(log.occurredAt, 'MM-dd HH:mm')}">time</div>
+                            <div style="font-weight:600" th:if="${log.affectedRows != null and log.affectedRows > 0}"
+                                 th:text="${log.affectedRows}">0</div>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

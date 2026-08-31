@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'projects', 'project.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{project.title}">Projects</h1>
+            <p class="sub" th:text="#{project.listHint}">Source-to-target synchronization projects</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
+                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
+            </a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body tight">
+            <div th:if="${#lists.isEmpty(projects)}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#diagram-3"/></svg></div>
+                <h3 th:text="#{dashboard.noProjects}">No projects yet.</h3>
+                <p th:text="#{project.createHint}">Create one to begin.</p>
+                <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
+                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
+                </a>
+            </div>
+
+            <div th:unless="${#lists.isEmpty(projects)}" class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.name}">Name</th>
+                        <th th:text="#{common.status}">Status</th>
+                        <th th:text="#{dashboard.lastSync}">Last sync</th>
+                        <th th:text="#{common.details}">Result</th>
+                        <th class="num" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="project : ${projects}" th:with="task=${taskLookup.get(project.id)}">
+                        <td>
+                            <a style="font-weight:600" th:href="@{/projects/{id}(id=${project.id})}"
+                               th:text="${project.name}">Project</a>
+                            <div class="small muted truncate" th:if="${project.description}"
+                                 th:text="${project.description}">description</div>
+                        </td>
+                        <td th:with="st=${task != null and task.status != null ? task.status.name() : 'STOPPED'}">
+                            <span class="badge"
+                                  th:classappend="${st == 'RUNNING'} ? 'badge-ok'
+                                                : (${st == 'ERROR'} ? 'badge-danger' : 'badge-mute')">
+                                <span class="dot" th:classappend="${st == 'RUNNING'} ? 'dot-live' : ''"></span>
+                                <span th:text="#{'status.' + ${st}}">Stopped</span>
+                            </span>
+                        </td>
+                        <td class="small muted"
+                            th:text="${task != null and task.lastSyncTime != null}
+                                     ? ${#temporals.format(task.lastSyncTime, 'yyyy-MM-dd HH:mm:ss')}
+                                     : #{common.never}">Never</td>
+                        <td>
+                            <span class="chip" th:if="${task != null and task.lastSyncResult != null}"
+                                  th:text="${task.lastSyncResult}">result</span>
+                            <span class="muted" th:unless="${task != null and task.lastSyncResult != null}">—</span>
+                        </td>
+                        <td>
+                            <div class="btn-row" style="justify-content:flex-end">
+                                <!-- 启动/停止互斥，由 enabled 标志决定显示哪一个 -->
+                                <button type="button" class="btn-icon is-ok" th:unless="${project.enabled}"
+                                        data-role="api-btn" data-reload="true"
+                                        th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})}"
+                                        th:title="#{project.start}">
+                                    <svg class="ico"><use href="#play-fill"/></svg>
+                                </button>
+                                <button type="button" class="btn-icon is-warn" th:if="${project.enabled}"
+                                        data-role="api-btn" data-reload="true"
+                                        th:attr="data-action=@{/api/projects/{id}/stop(id=${project.id})}"
+                                        th:title="#{project.stop}">
+                                    <svg class="ico"><use href="#pause-fill"/></svg>
+                                </button>
+                                <button type="button" class="btn-icon" data-role="api-btn" data-reload="true"
+                                        th:attr="data-action=@{/api/projects/{id}/sync-now(id=${project.id})}"
+                                        th:title="#{project.syncNow}">
+                                    <svg class="ico"><use href="#arrow-repeat"/></svg>
+                                </button>
+                                <a class="btn-icon" th:href="@{/projects/{id}(id=${project.id})}"
+                                   th:title="#{project.detail}"><svg class="ico"><use href="#list-ul"/></svg></a>
+                                <a class="btn-icon" th:href="@{/projects/{id}/edit(id=${project.id})}"
+                                   th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
+                                <form method="post" style="display:inline"
+                                      th:action="@{/projects/{id}/delete(id=${project.id})}"
+                                      th:attr="data-confirm=#{common.confirm}">
+                                    <button type="submit" class="btn-icon is-danger" th:title="#{common.delete}">
+                                        <svg class="ico"><use href="#trash"/></svg>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

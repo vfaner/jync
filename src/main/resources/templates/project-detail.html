@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'projects', 'project.detail')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${project.name}">Project</h1>
+            <p class="sub" th:if="${project.description}" th:text="${project.description}">description</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/projects/{id}/edit(id=${project.id})}">
+                <svg class="ico"><use href="#pencil"/></svg><span th:text="#{common.edit}">Edit</span>
+            </a>
+            <a class="btn btn-ghost btn-sm" th:href="@{/projects}">
+                <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div th:if="${sourceWarning}" class="alert alert-warn">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <div class="alert-body" th:text="${#messages.msgOrNull(sourceWarning) ?: sourceWarning}">warning</div>
+    </div>
+
+    <!-- 运行控制 -->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#sliders"/></svg> <span th:text="#{project.controls}">Controls</span></h2>
+            <div th:with="st=${task != null and task.status != null ? task.status.name() : 'STOPPED'}">
+                <span class="badge"
+                      th:classappend="${st == 'RUNNING'} ? 'badge-ok'
+                                    : (${st == 'ERROR'} ? 'badge-danger' : 'badge-mute')">
+                    <span class="dot" th:classappend="${st == 'RUNNING'} ? 'dot-live' : ''"></span>
+                    <span th:text="#{'status.' + ${st}}">Stopped</span>
+                </span>
+            </div>
+        </div>
+        <div class="card-body">
+            <dl class="dl" style="margin-bottom:16px">
+                <dt th:text="#{dashboard.lastSync}">Last sync</dt>
+                <dd th:text="${task != null and task.lastSyncTime != null}
+                             ? ${#temporals.format(task.lastSyncTime, 'yyyy-MM-dd HH:mm:ss')}
+                             : #{common.never}">Never</dd>
+                <th:block th:if="${task != null and task.lastSyncResult != null}">
+                    <dt th:text="#{common.details}">Result</dt>
+                    <dd><span class="chip" th:text="${task.lastSyncResult}">result</span></dd>
+                </th:block>
+            </dl>
+
+            <div style="display:flex;gap:9px;flex-wrap:wrap">
+                <button type="button" class="btn btn-ok btn-sm" th:unless="${project.enabled}"
+                        data-role="api-btn" data-reload="true"
+                        th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
+                                 data-busy-text=#{common.loading}">
+                    <svg class="ico"><use href="#play-fill"/></svg><span th:text="#{project.start}">Start</span>
+                </button>
+                <button type="button" class="btn btn-warn btn-sm" th:if="${project.enabled}"
+                        data-role="api-btn" data-reload="true"
+                        th:attr="data-action=@{/api/projects/{id}/stop(id=${project.id})},
+                                 data-busy-text=#{common.loading}">
+                    <svg class="ico"><use href="#pause-fill"/></svg><span th:text="#{project.stop}">Stop</span>
+                </button>
+                <button type="button" class="btn btn-primary btn-sm"
+                        data-role="api-btn" data-reload="true"
+                        th:attr="data-action=@{/api/projects/{id}/sync-now(id=${project.id})},
+                                 data-busy-text=#{common.loading}">
+                    <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{project.syncNow}">Sync now</span>
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm"
+                        data-role="api-btn" data-reload="true"
+                        th:attr="data-action=@{/api/projects/{id}/reset(id=${project.id})},
+                                 data-confirm=#{common.confirm},
+                                 data-busy-text=#{common.loading}">
+                    <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
+                    <span th:text="#{project.reset}">Reset progress</span>
+                </button>
+            </div>
+            <p class="small muted" style="margin:11px 0 0" th:text="#{project.resetHelp}">Reset help</p>
+        </div>
+    </div>
+
+    <form method="post" th:action="@{/projects/{id}/config(id=${project.id})}">
+        <div class="split-wide" style="margin-top:18px">
+            <!-- 对象选择 -->
+            <div class="card" style="margin-top:0">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#list-check"/></svg> <span th:text="#{project.syncObjects}">Objects</span></h2>
+                    <span class="badge badge-brand" th:if="${sourceObjects != null}">
+                        <svg class="ico"><use href="#database"/></svg>
+                        <span th:text="${sourceObjects.schema}">schema</span>
+                    </span>
+                </div>
+                <div class="card-body">
+                    <!-- 表 -->
+                    <div class="picker" data-role="picker">
+                        <div class="picker-head">
+                            <span class="picker-title">
+                                <svg class="ico"><use href="#table"/></svg>
+                                <span th:text="#{project.tables}">Tables</span><span class="req">*</span>
+                                <span class="badge badge-mute" data-count
+                                      th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                            </span>
+                            <span class="picker-tools">
+                                <input type="search" class="input" data-filter th:placeholder="#{common.filter}">
+                                <button type="button" class="btn btn-ghost btn-xs" data-all
+                                        th:text="#{common.selectAll}">All</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-none
+                                        th:text="#{common.selectNone}">None</button>
+                            </span>
+                        </div>
+                        <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.tables)}">
+                            <label class="pick" th:each="tbl,i : ${sourceObjects.tables}">
+                                <input type="checkbox" name="tables" th:value="${tbl}"
+                                       th:checked="${config.tables.isEmpty() or config.includesTable(tbl)}">
+                                <span th:text="${tbl}">table</span>
+                            </label>
+                        </div>
+                        <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.tables)}"
+                           th:text="#{project.noTables}">No tables.</p>
+                    </div>
+
+                    <!-- 视图 -->
+                    <div class="picker" data-role="picker">
+                        <div class="picker-head">
+                            <span class="picker-title">
+                                <svg class="ico"><use href="#eye"/></svg>
+                                <span th:text="#{project.views}">Views</span>
+                                <span class="badge badge-mute" data-count
+                                      th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                            </span>
+                            <span class="picker-tools">
+                                <button type="button" class="btn btn-ghost btn-xs" data-all
+                                        th:text="#{common.selectAll}">All</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-none
+                                        th:text="#{common.selectNone}">None</button>
+                            </span>
+                        </div>
+                        <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.views)}">
+                            <label class="pick" th:each="v : ${sourceObjects.views}">
+                                <input type="checkbox" name="views" th:value="${v}"
+                                       th:checked="${config.views.isEmpty() or config.includesView(v)}">
+                                <span th:text="${v}">view</span>
+                            </label>
+                        </div>
+                        <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.views)}"
+                           th:text="#{project.noViews}">No views.</p>
+                    </div>
+
+                    <!-- 存储过程 -->
+                    <div class="picker" data-role="picker">
+                        <div class="picker-head">
+                            <span class="picker-title">
+                                <svg class="ico"><use href="#code-square"/></svg>
+                                <span th:text="#{project.procedures}">Procedures</span>
+                                <span class="badge badge-mute" data-count
+                                      th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                            </span>
+                            <span class="picker-tools">
+                                <button type="button" class="btn btn-ghost btn-xs" data-all
+                                        th:text="#{common.selectAll}">All</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-none
+                                        th:text="#{common.selectNone}">None</button>
+                            </span>
+                        </div>
+                        <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.procedures)}">
+                            <label class="pick" th:each="p : ${sourceObjects.procedures}">
+                                <input type="checkbox" name="procedures" th:value="${p}"
+                                       th:checked="${config.procedures.isEmpty() or config.includesProcedure(p)}">
+                                <span th:text="${p}">proc</span>
+                            </label>
+                        </div>
+                        <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.procedures)}"
+                           th:text="#{project.noProcedures}">No procedures.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 选项与调度 -->
+            <div>
+                <div class="card" style="margin-top:0">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#toggles"/></svg> <span th:text="#{project.syncOptions}">Options</span></h2>
+                    </div>
+                    <div class="card-body">
+                        <label class="switch">
+                            <input type="checkbox" name="syncStructure" value="true" th:checked="${config.syncStructure}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.syncStructure}">Structure</strong>
+                                <span class="help" th:text="#{option.syncStructureHelp}">help</span>
+                            </span>
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" name="syncData" value="true" th:checked="${config.syncData}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.syncData}">Data</strong>
+                                <span class="help" th:text="#{option.syncDataHelp}">help</span>
+                            </span>
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" name="syncIndexes" value="true" th:checked="${config.syncIndexes}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.syncIndexes}">Indexes</strong>
+                                <span class="help" th:text="#{option.syncIndexesHelp}">help</span>
+                            </span>
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" name="syncViews" value="true" th:checked="${config.syncViews}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.syncViews}">Views</strong>
+                                <span class="help" th:text="#{option.syncViewsHelp}">help</span>
+                            </span>
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" name="syncProcedures" value="true" th:checked="${config.syncProcedures}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.syncProcedures}">Procedures</strong>
+                                <span class="help" th:text="#{option.syncProceduresHelp}">help</span>
+                            </span>
+                        </label>
+
+                        <hr class="divider">
+
+                        <label class="switch is-warn">
+                            <input type="checkbox" name="allowDrop" value="true" th:checked="${config.allowDrop}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong style="color:var(--warn)" th:text="#{option.allowDrop}">Allow drops</strong>
+                                <span class="help" th:text="#{option.allowDropHelp}">help</span>
+                            </span>
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" name="syncDeletes" value="true" th:checked="${config.syncDeletes}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.syncDeletes}">Sync deletes</strong>
+                                <span class="help" th:text="#{option.syncDeletesHelp}">help</span>
+                            </span>
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" name="disableTargetConstraints" value="true"
+                                   th:checked="${config.disableTargetConstraints}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.disableConstraints}">Suspend FKs</strong>
+                                <span class="help" th:text="#{option.disableConstraintsHelp}">help</span>
+                            </span>
+                        </label>
+                        <label class="switch">
+                            <input type="checkbox" name="truncateBeforeInitialLoad" value="true"
+                                   th:checked="${config.truncateBeforeInitialLoad}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.truncateBeforeInitialLoad}">Truncate first</strong>
+                                <span class="help" th:text="#{option.truncateBeforeInitialLoadHelp}">help</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#clock"/></svg> <span th:text="#{project.schedule}">Schedule</span></h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="field">
+                            <label for="pollIntervalMs" th:text="#{option.pollInterval}">Poll interval</label>
+                            <input type="number" class="input" id="pollIntervalMs" name="pollIntervalMs"
+                                   min="200" step="100" th:value="${config.pollIntervalMs}">
+                            <div class="help" th:text="#{option.pollIntervalHelp}">help</div>
+                        </div>
+                        <div class="field">
+                            <label for="cronExpression" th:text="#{option.cronExpression}">Cron</label>
+                            <input type="text" class="input mono" id="cronExpression" name="cronExpression"
+                                   placeholder="0/5 * * * * ?" th:value="${config.cronExpression}">
+                            <div class="help" th:text="#{option.cronExpressionHelp}">help</div>
+                        </div>
+                        <div class="field">
+                            <label for="batchSize" th:text="#{option.batchSize}">Batch size</label>
+                            <input type="number" class="input" id="batchSize" name="batchSize"
+                                   min="1" step="50" th:value="${config.batchSize}">
+                            <div class="help" th:text="#{option.batchSizeHelp}">help</div>
+                        </div>
+                    </div>
+                    <div class="card-foot">
+                        <button type="submit" class="btn btn-primary" style="width:100%">
+                            <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{common.save}">Save</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </form>
+
+    <!-- 各表进度与游标策略 -->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#graph-up"/></svg> <span th:text="#{project.progress}">Progress</span></h2>
+            <span class="hint" th:text="#{cursor.help}">help</span>
+        </div>
+        <div class="card-body tight">
+            <div th:if="${#lists.isEmpty(progressList)}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#hourglass"/></svg></div>
+                <h3 th:text="#{dashboard.noActivity}">No activity yet.</h3>
+            </div>
+            <div th:unless="${#lists.isEmpty(progressList)}" class="tbl-wrap">
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{log.objectName}">Table</th>
+                        <th th:text="#{cursor.strategy}">Strategy</th>
+                        <th th:text="#{cursor.column}">Column</th>
+                        <th th:text="#{cursor.lastValue}">Last value</th>
+                        <th class="num" th:text="#{cursor.rowsTotal}">Rows</th>
+                        <th th:text="#{dashboard.lastSync}">Last sync</th>
+                        <th class="num" th:text="#{cursor.set}">Set cursor</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="p : ${progressList}" th:with="strat=${p.cursorStrategy ?: 'NONE'}">
+                        <td class="mono" style="font-weight:600" th:text="${p.objectName}">table</td>
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${strat == 'TIMESTAMP'} ? 'badge-ok'
+                                                : (${strat == 'IDENTITY'} ? 'badge-info'
+                                                : (${strat == 'FULL_COMPARE'} ? 'badge-warn' : 'badge-danger'))"
+                                  th:title="#{'cursor.strategy.' + ${strat} + '.help'}">
+                                <span th:text="#{'cursor.' + ${strat}}">strategy</span>
+                            </span>
+                            <!-- 策略无法感知更新时明确标出，避免用户误以为数据完全同步 -->
+                            <svg class="ico" style="color:var(--warn);margin-left:4px"
+                               th:if="${strat == 'IDENTITY' or strat == 'NONE'}"
+                               th:title="#{project.strategyWarn}"><use href="#exclamation-triangle-fill"/></svg>
+                        </td>
+                        <td class="mono small" th:text="${p.cursorColumn ?: '—'}">col</td>
+                        <td><span class="chip" th:text="${p.lastSyncValue ?: '—'}">value</span></td>
+                        <td class="num" th:text="${p.rowsSyncedTotal}">0</td>
+                        <td class="small muted"
+                            th:text="${p.lastSyncTime != null}
+                                     ? ${#temporals.format(p.lastSyncTime, 'MM-dd HH:mm:ss')}
+                                     : #{common.never}">never</td>
+                        <td>
+                            <!-- 每行一个小表单，可为单表覆盖自动识别的游标列。
+                                 输入框带 datalist 候选，聚焦时从后端拉取该表可用的游标列
+                                 （时间 + 整数类型），免去手动敲列名。 -->
+                            <form method="post" class="input-group" style="justify-content:flex-end"
+                                  th:action="@{/projects/{id}/cursor(id=${project.id})}"
+                                  data-role="cursor-form">
+                                <input type="hidden" name="tableName" th:value="${p.objectName}">
+                                <input type="text" class="input mono" style="max-width:145px" name="cursorColumn"
+                                       th:value="${config.cursorColumnFor(p.objectName)}"
+                                       th:placeholder="#{cursor.auto}"
+                                       th:attr="list='datalist-cursor-' + ${p.objectName},
+                                                data-table=${p.objectName},
+                                                data-action=@{/api/projects/{id}/cursor-candidates(id=${project.id})}">
+                                <datalist th:id="'datalist-cursor-' + ${p.objectName}"></datalist>
+                                <button type="submit" class="btn-icon" th:title="#{common.apply}">
+                                    <svg class="ico"><use href="#check-lg"/></svg>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div style="margin-top:16px">
+        <a class="btn btn-ghost btn-sm" th:href="@{/change-logs(projectId=${project.id})}">
+            <svg class="ico"><use href="#clock-history"/></svg>
+            <span th:text="#{project.viewAllLogs}">Full change log</span>
+        </a>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

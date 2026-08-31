@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'change-logs', 'log.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{log.title}">Change log</h1>
+            <p class="sub">
+                <span th:text="${logs.totalElements}">0</span>
+                <span th:text="#{log.entries}">entries</span>
+            </p>
+        </div>
+        <div class="page-actions">
+            <form method="get" th:action="@{/change-logs}">
+                <select class="select" name="projectId" onchange="this.form.submit()" style="min-width:210px">
+                    <option value="" th:text="#{log.allProjects}">All projects</option>
+                    <option th:each="p : ${projects}" th:value="${p.id}"
+                            th:selected="${selectedProjectId != null and selectedProjectId == p.id}"
+                            th:text="${p.name}">Project</option>
+                </select>
+            </form>
+            <form method="post" th:action="@{/change-logs/clear}"
+                  th:data-confirm="#{log.clear.confirm}"
+                  data-role="clear-logs-form">
+                <input type="hidden" name="projectId" th:value="${selectedProjectId}">
+                <button type="submit" class="btn btn-ghost btn-sm btn-warn">
+                    <svg class="ico"><use href="#trash"/></svg><span th:text="#{log.clear}">Clear</span></button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body tight">
+            <div th:if="${logs.totalElements == 0}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#clock-history"/></svg></div>
+                <h3 th:text="#{log.noLogs}">No changes recorded.</h3>
+            </div>
+
+            <div th:unless="${logs.totalElements == 0}" class="tbl-wrap">
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{log.occurredAt}">Time</th>
+                        <th th:text="#{log.objectType}">Type</th>
+                        <th th:text="#{log.objectName}">Object</th>
+                        <th th:text="#{log.changeType}">Change</th>
+                        <th class="num" th:text="#{log.affectedRows}">Rows</th>
+                        <th class="num" th:text="#{common.duration}">Duration</th>
+                        <th th:text="#{common.details}">Details</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="log : ${logs.content}" th:classappend="${!log.success} ? 'row-bad' : ''">
+                        <td class="small mono" style="white-space:nowrap"
+                            th:text="${#temporals.format(log.occurredAt, 'yyyy-MM-dd HH:mm:ss')}">time</td>
+                        <td>
+                            <span class="badge badge-brand"
+                                  th:text="#{'objectType.' + ${log.objectType}}">Table</span>
+                        </td>
+                        <td class="mono small" th:text="${log.objectName ?: '—'}">object</td>
+                        <td th:with="ct=${log.changeType.name()}">
+                            <span class="badge"
+                                  th:classappend="${ct == 'ERROR'} ? 'badge-danger'
+                                                : (${ct == 'DROP' or ct == 'DELETE'} ? 'badge-warn'
+                                                : (${ct == 'CREATE'} ? 'badge-ok' : 'badge-mute'))"
+                                  th:text="#{'changeType.' + ${ct}}">Create</span>
+                        </td>
+                        <td class="num" th:text="${log.affectedRows ?: '—'}">0</td>
+                        <td class="num small muted"
+                            th:text="${log.durationMs != null and log.durationMs > 0} ? ${log.durationMs} + ' ms' : '—'">—</td>
+                        <td>
+                            <div class="wrap-detail" th:classappend="${!log.success} ? '' : 'muted'"
+                                 th:style="${!log.success} ? 'color:var(--danger)' : ''"
+                                 th:text="${log.details ?: ''}">details</div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card-foot" th:if="${logs.totalPages > 1}"
+             style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <span class="small muted"
+                  th:text="#{log.page(${logs.number + 1}, ${logs.totalPages})}">Page 1 of 1</span>
+            <div style="display:flex;gap:7px">
+                <a class="btn btn-ghost btn-sm"
+                   th:if="${!logs.first}"
+                   th:href="@{/change-logs(projectId=${selectedProjectId}, page=${logs.number - 1})}">
+                    <svg class="ico"><use href="#chevron-left"/></svg><span th:text="#{log.previous}">Previous</span>
+                </a>
+                <a class="btn btn-ghost btn-sm"
+                   th:if="${!logs.last}"
+                   th:href="@{/change-logs(projectId=${selectedProjectId}, page=${logs.number + 1})}">
+                    <span th:text="#{log.next}">Next</span><svg class="ico"><use href="#chevron-right"/></svg>
+                </a>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

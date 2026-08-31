@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'settings', 'settings.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{settings.title}">Settings</h1>
+            <p class="sub" th:text="#{settings.configNote}">Read-only; edit application.yml and restart</p>
+        </div>
+    </div>
+
+    <div class="split">
+        <div class="card" style="margin-top:0">
+            <div class="card-head">
+                <h2><svg class="ico"><use href="#cpu"/></svg> <span th:text="#{settings.runtime}">Runtime</span></h2>
+            </div>
+            <div class="card-body">
+                <dl class="dl">
+                    <dt th:text="#{settings.instanceId}">Instance</dt>
+                    <dd><span class="chip" th:text="${instanceId}">host:pid</span></dd>
+
+                    <dt th:text="#{settings.javaVersion}">Java</dt>
+                    <dd><span class="chip" th:text="${javaVersion}">17</span></dd>
+
+                    <dt th:text="#{settings.scheduledProjects}">Scheduled</dt>
+                    <dd>
+                        <span class="muted" th:if="${#lists.isEmpty(scheduledProjectIds)}"
+                              th:text="#{common.none}">None</span>
+                        <span class="chip" th:unless="${#lists.isEmpty(scheduledProjectIds)}"
+                              th:text="${#strings.listJoin(scheduledProjectIds, ', ')}">1, 2</span>
+                    </dd>
+
+                    <dt th:text="#{settings.snapshotDir}">Snapshots</dt>
+                    <dd><span class="chip" th:text="${properties.snapshotDir}">./snapshots</span></dd>
+                </dl>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top:0">
+            <div class="card-head">
+                <h2><svg class="ico"><use href="#sliders2"/></svg> <span th:text="#{settings.syncDefaults}">Defaults</span></h2>
+            </div>
+            <div class="card-body">
+                <dl class="dl">
+                    <dt th:text="#{settings.pollInterval}">Poll interval</dt>
+                    <dd><span class="chip" th:text="${properties.pollInterval} + ' ms'">2000 ms</span></dd>
+
+                    <dt th:text="#{settings.batchSize}">Batch size</dt>
+                    <dd><span class="chip" th:text="${properties.batchSize}">500</span></dd>
+
+                    <dt th:text="#{settings.fetchSize}">Fetch size</dt>
+                    <dd><span class="chip" th:text="${properties.fetchSize}">1000</span></dd>
+
+                    <dt th:text="#{settings.maxRetries}">Max retries</dt>
+                    <dd><span class="chip" th:text="${properties.maxRetries}">3</span></dd>
+
+                    <dt th:text="#{settings.fullCompareMax}">Full-compare ceiling</dt>
+                    <dd><span class="chip" th:text="${properties.fullCompareMaxRows}">20000</span></dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <!-- 让并发与恢复机制对用户可见，而不是埋在代码里 -->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#shield-check"/></svg>
+                <span th:text="#{settings.concurrency}">Concurrency and recovery</span></h2>
+        </div>
+        <div class="card-body">
+            <p class="small soft" style="margin:0 0 16px" th:text="#{settings.concurrencyNote}">note</p>
+            <dl class="dl">
+                <dt th:text="#{settings.safetyLag}">Safety margin</dt>
+                <dd>
+                    <span class="chip" th:text="${properties.safetyLagMs} + ' ms'">1000 ms</span>
+                    <div class="help" th:text="#{settings.safetyLagHelp}">help</div>
+                </dd>
+
+                <dt th:text="#{settings.lockTtl}">Lock lease</dt>
+                <dd>
+                    <span class="chip" th:text="${properties.lockTtlMs} + ' ms'">300000 ms</span>
+                    <div class="help" th:text="#{settings.lockTtlHelp}">help</div>
+                </dd>
+            </dl>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#database"/></svg>
+                <span th:text="#{settings.supportedDatabases}">Supported databases</span></h2>
+            <span class="hint" th:text="#{settings.customHint}">Any other database via a custom driver jar</span>
+        </div>
+        <div class="card-body tight">
+            <div class="tbl-wrap">
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.type}">Type</th>
+                        <th class="num" th:text="#{db.port}">Port</th>
+                        <th th:text="#{db.driverClass}">Driver class</th>
+                        <th th:text="#{db.customUrl}">URL template</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="t : ${supportedTypes}">
+                        <td style="font-weight:600" th:text="${t.displayName}">MySQL</td>
+                        <td class="num mono small"
+                            th:text="${t.defaultPort > 0} ? ${t.defaultPort} : '—'">3306</td>
+                        <td class="mono small" th:text="${t.driverClassName ?: '—'}">driver</td>
+                        <td class="mono small truncate" th:text="${t.urlTemplate ?: '—'}"
+                            th:title="${t.urlTemplate}">url</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

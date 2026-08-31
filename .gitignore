@@ -1,0 +1,110 @@
+# ============================================
+# 构建产物 / Build output
+# ============================================
+target/
+!.mvn/wrapper/maven-wrapper.jar
+pom.xml.versionsBackup
+dependency-reduced-pom.xml
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.properties
+
+# ============================================
+# 运行时数据 —— 绝对不要提交
+# Runtime data — NEVER commit
+# ============================================
+# data/ 是 H2 元数据库，内含加密后的数据库连接口令
+# data/ is the H2 metadata store and holds encrypted DB credentials
+data/
+logs/
+snapshots/
+*.log
+
+# H2 数据库文件（自定义路径时的兜底）
+# H2 database files (fallback when a custom path is used)
+*.mv.db
+*.trace.db
+*.lock.db
+
+# ============================================
+# 本地配置 / Local configuration
+# 只忽略仓库根目录的外部配置覆盖文件，
+# src/main/resources/application.yml 是随包发布的默认配置，必须提交。
+# Only the repo-root external overrides are ignored;
+# src/main/resources/application.yml ships with the app and must be committed.
+# ============================================
+/application.yml
+/application.yaml
+/application.properties
+/application-*.yml
+/application-*.yaml
+/application-*.properties
+/config/
+.env
+.env.*
+
+# ============================================
+# 凭据与密钥 / Credentials and keys
+# ============================================
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+*secret*
+*credentials*
+
+# ============================================
+# 第三方 JDBC 驱动（许可原因不随仓库分发）
+# Third-party JDBC drivers (not redistributable)
+# ============================================
+drivers/
+lib/
+libs/
+/*.jar
+
+# ============================================
+# IDE
+# ============================================
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+bin/
+nbproject/
+.nb-gradle/
+
+# ============================================
+# 操作系统 / OS
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================
+# Python（build-icons.py 的副产物）
+# Python (byproducts of build-icons.py)
+# ============================================
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ============================================
+# 临时文件 / Temporary files
+# ============================================
+*.bak
+*.orig
+*.rej
+*.tmp
+*.swp
+*~
+.cache/

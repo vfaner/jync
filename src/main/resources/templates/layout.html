@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<!--/*
+  基础布局。页面这样使用：
+
+    <html th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'projects', 'project.title')}">
+
+  把内容和脚本块作为片段参数传入，好处是每个页面仍是一个自包含文件，
+  也不必额外引入 thymeleaf-layout-dialect 依赖。
+*/-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:fragment="page(content, scripts, activeNav, titleKey)"
+      th:lang="${#locale.toString().startsWith('zh')} ? 'zh-CN' : 'en'"
+      data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title th:with="pt=${titleKey != null ? #messages.msg(titleKey) : #messages.msg('app.subtitle')}"
+           th:text="|${pt} · #{app.title}|">DB Sync Tool</title>
+
+    <!--/* 首屏前应用主题，否则深色用户会看到一帧白底闪烁。
+           与参考项目一致：没手动选过就跟随系统。 */-->
+    <script>
+        (function () {
+            var mode;
+            try {
+                mode = localStorage.getItem('synctool-theme');
+            } catch (e) { /* 隐私模式：跟随系统 */ }
+            if (mode !== 'dark' && mode !== 'light') {
+                mode = window.matchMedia
+                    && window.matchMedia('(prefers-color-scheme: dark)').matches
+                    ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-theme', mode);
+        })();
+    </script>
+
+    <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body>
+
+<!--/* SVG 图标精灵表，内联在页面里：
+       <use href="#name"> 无需额外请求即可解析，也不会像图标字体那样因
+       字体文件相对路径解析错误而整体失效。由 build-icons.py 生成，
+       只包含本项目实际使用的图标。 */-->
+<th:block th:replace="~{fragments/icons :: sprite}"></th:block>
+
+<header class="nav">
+    <div class="nav-inner">
+        <a class="logo" th:href="@{/}">
+            <span class="logo-mark"><svg class="ico"><use href="#arrow-left-right"/></svg></span>
+            <span class="logo-text">
+                <span th:text="#{app.title}">DB Sync Tool</span>
+                <small th:text="#{app.subtitle}">Real-time sync</small>
+            </span>
+        </a>
+
+        <nav class="nav-links" id="nav-links">
+            <a th:href="@{/dashboard}" th:classappend="${activeNav == 'dashboard'} ? 'active' : ''">
+                <svg class="ico"><use href="#speedometer2"/></svg><span th:text="#{nav.dashboard}">Dashboard</span>
+            </a>
+            <a th:href="@{/projects}" th:classappend="${activeNav == 'projects'} ? 'active' : ''">
+                <svg class="ico"><use href="#diagram-3"/></svg><span th:text="#{nav.projects}">Projects</span>
+            </a>
+            <a th:href="@{/databases}" th:classappend="${activeNav == 'databases'} ? 'active' : ''">
+                <svg class="ico"><use href="#hdd-network"/></svg><span th:text="#{nav.databases}">Connections</span>
+            </a>
+            <a th:href="@{/change-logs}" th:classappend="${activeNav == 'change-logs'} ? 'active' : ''">
+                <svg class="ico"><use href="#clock-history"/></svg><span th:text="#{nav.changeLogs}">Change Log</span>
+            </a>
+            <a th:href="@{/settings}" th:classappend="${activeNav == 'settings'} ? 'active' : ''">
+                <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">Settings</span>
+            </a>
+        </nav>
+
+        <div class="nav-right">
+            <!--/* 语言切换：空 URL 保留当前路径，只追加 ?lang，
+                   由 LocaleChangeInterceptor 接收、CookieLocaleResolver 持久化。
+                   显式选择之后优先级高于时区推断。 */-->
+            <a class="icon-btn lang-btn"
+               th:href="${#locale.toString().startsWith('zh')} ? @{''(lang='en')} : @{''(lang='zh_CN')}"
+               th:title="#{nav.language}"
+               th:text="${#locale.toString().startsWith('zh')} ? '中' : 'EN'">EN</a>
+
+            <button type="button" class="icon-btn" data-theme-btn
+                    th:attr="data-to-dark=#{nav.theme.dark},data-to-light=#{nav.theme.light}">
+                <svg class="ico"><use href="#moon-stars-fill"/></svg>
+            </button>
+
+            <!--/* 赞赏：打开下方弹窗，收款码是本地图片，离线可用 */-->
+            <button type="button" class="btn btn-ghost btn-sm donate-btn" data-role="open-donate"
+                    th:title="#{nav.donate}">
+                <svg class="ico"><use href="#heart-fill"/></svg>
+                <span th:text="#{nav.donate}">Donate</span>
+                <span class="nav-badge" th:text="#{nav.donateBadge}">Tip</span>
+            </button>
+
+            <!--/* GitHub：新窗口打开仓库。图标用 assets 下的 svg 而非精灵表，
+                   因为它不属于 build-icons.py 生成的 Bootstrap Icons 集合。 */-->
+            <a class="icon-btn" th:href="${githubUrl}" target="_blank" rel="noopener noreferrer"
+               th:title="#{nav.github}" th:aria-label="#{nav.github}">
+                <img th:src="@{/assets/github.svg}" alt="" width="16" height="16" class="gh-ico">
+            </a>
+
+            <button type="button" class="icon-btn nav-toggle" data-role="nav-toggle"
+                    th:title="#{nav.menu}" th:aria-label="#{nav.menu}">
+                <svg class="ico"><use href="#list"/></svg>
+            </button>
+        </div>
+    </div>
+</header>
+
+<div id="toasts"></div>
+
+<main class="shell">
+    <!--/* Flash 消息里存的是 i18n key；msgOrNull 让未收录的原始文案也能原样显示 */-->
+    <div th:if="${message}" class="alert alert-ok" data-auto-dismiss>
+        <svg class="ico"><use href="#check-circle-fill"/></svg>
+        <div class="alert-body" th:text="${#messages.msgOrNull(message) ?: message}">Saved</div>
+        <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
+    </div>
+    <div th:if="${error}" class="alert alert-danger">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <div class="alert-body" th:text="${#messages.msgOrNull(error) ?: error}">Error</div>
+        <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
+    </div>
+
+    <th:block th:replace="${content}">
+        <p>Page content goes here.</p>
+    </th:block>
+</main>
+
+<footer class="foot">
+    <span>
+        <span th:text="#{app.title}">DB Sync Tool</span>
+        <span class="mx-1">·</span>
+        <span th:text="#{app.subtitle}">Real-time database synchronization</span>
+    </span>
+    <span th:text="#{foot.offline}">All assets local · works offline</span>
+</footer>
+
+<!--/* 赞赏弹窗。默认隐藏，由导航栏按钮打开；收款码是本地 webp，离线也能扫。 */-->
+<div class="modal" id="donate-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:aria-label="#{donate.title}" th:data-assets="@{/assets/}">
+    <div class="modal-mask" data-role="close-donate"></div>
+    <div class="modal-dialog">
+        <button type="button" class="modal-close" data-role="close-donate"
+                th:title="#{common.close}" th:aria-label="#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+
+        <div class="modal-head">
+            <span class="sec-tag" th:text="#{donate.tag}">Donate</span>
+            <h3 th:text="#{donate.title}">Buy the author a coffee</h3>
+            <p th:text="#{donate.desc}">This project is free and open-source.</p>
+        </div>
+
+        <!--/* 顺序按偏好：微信 → 支付宝 → QQ，微信默认。切换只换图和提示文案。
+               提示文案挂在按钮上，JS 无需再拿一份 i18n 字典。 */-->
+        <div class="pay-tabs" data-role="pay-tabs">
+            <button type="button" class="pay-tab active" data-pay="wechat"
+                    th:data-hint="#{donate.hint.wechat}"
+                    th:text="#{donate.pay.wechat}">WeChat</button>
+            <button type="button" class="pay-tab" data-pay="alipay"
+                    th:data-hint="#{donate.hint.alipay}"
+                    th:text="#{donate.pay.alipay}">Alipay</button>
+            <button type="button" class="pay-tab" data-pay="qq"
+                    th:data-hint="#{donate.hint.qq}"
+                    th:text="#{donate.pay.qq}">QQ</button>
+        </div>
+
+        <div class="qr-shell">
+            <img id="donate-qr" th:src="@{/assets/wechat.webp}" th:alt="#{donate.pay.wechat}"
+                 width="216" height="216" loading="lazy">
+        </div>
+        <div class="qr-tip" id="donate-tip" th:text="#{donate.hint.wechat}">Scan with WeChat</div>
+
+        <p class="donate-note" th:text="#{donate.note}">Tipping is completely optional.</p>
+
+        <div class="donate-actions">
+            <a class="btn btn-primary btn-sm" th:href="${githubUrl}"
+               target="_blank" rel="noopener noreferrer">
+                <img th:src="@{/assets/github.svg}" alt="" width="15" height="15" class="gh-ico gh-ico-on-brand">
+                <span th:text="#{donate.star}">Star it on GitHub</span>
+            </a>
+            <a class="btn btn-ghost btn-sm" th:href="|${githubUrl}/issues|"
+               target="_blank" rel="noopener noreferrer" th:text="#{donate.issue}">Send feedback</a>
+        </div>
+    </div>
+</div>
+
+<script th:inline="javascript">
+    /* 服务端返回 i18n key，这里把解析好的文案暴露给 JS 使用 */
+    window.SyncToolMessages = {
+        'msg.sync.started': /*[[#{msg.sync.started}]]*/ '',
+        'msg.sync.stopped': /*[[#{msg.sync.stopped}]]*/ '',
+        'msg.sync.completed': /*[[#{msg.sync.completed}]]*/ '',
+        'msg.sync.completed.errors': /*[[#{msg.sync.completed.errors}]]*/ '',
+        'msg.sync.already.running': /*[[#{msg.sync.already.running}]]*/ '',
+        'msg.progress.reset': /*[[#{msg.progress.reset}]]*/ '',
+        'msg.no.drivers.declared': /*[[#{msg.no.drivers.declared}]]*/ '',
+        'db.testSuccess': /*[[#{db.testSuccess}]]*/ '',
+        'db.testFailed': /*[[#{db.testFailed}]]*/ '',
+        'db.customJarPathHelp': /*[[#{db.customJarPathHelp}]]*/ '',
+        'error.project.not.found': /*[[#{error.project.not.found}]]*/ '',
+        'error.project.endpoints.required': /*[[#{error.project.endpoints.required}]]*/ '',
+        'error.project.stop.before.reset': /*[[#{error.project.stop.before.reset}]]*/ ''
+    };
+</script>
+<script th:src="@{/js/theme.js}"></script>
+<script th:src="@{/js/app.js}"></script>
+<th:block th:replace="${scripts} ?: _"></th:block>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'databases', 'db.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{db.title}">Connections</h1>
+            <p class="sub" th:text="#{db.listHint}">Source and target database connections</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-primary btn-sm" th:href="@{/databases/new}">
+                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.new}">New connection</span>
+            </a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body tight">
+            <div th:if="${#lists.isEmpty(configs)}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#hdd-network"/></svg></div>
+                <h3 th:text="#{db.noConfigs}">No connections yet.</h3>
+                <p th:text="#{db.createHint}">Add a source and a target to begin.</p>
+                <a class="btn btn-primary btn-sm" th:href="@{/databases/new}">
+                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.new}">New connection</span>
+                </a>
+            </div>
+
+            <div th:unless="${#lists.isEmpty(configs)}" class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.name}">Name</th>
+                        <th th:text="#{common.type}">Type</th>
+                        <th th:text="#{db.host}">Host</th>
+                        <th th:text="#{db.databaseName}">Database</th>
+                        <th th:text="#{db.username}">User</th>
+                        <th class="num" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="config : ${configs}">
+                        <td style="font-weight:600" th:text="${config.name}">name</td>
+                        <td>
+                            <span class="badge badge-brand" th:text="${config.type.displayName}">MySQL</span>
+                        </td>
+                        <td class="mono small"
+                            th:text="${config.host != null and !config.host.isEmpty()}
+                                     ? |${config.host}:${config.port}| : '—'">host</td>
+                        <td class="mono small" th:text="${config.databaseName ?: '—'}">db</td>
+                        <td class="mono small" th:text="${config.username ?: '—'}">user</td>
+                        <td>
+                            <div class="btn-row" style="justify-content:flex-end">
+                                <button type="button" class="btn-icon is-ok" data-role="api-btn"
+                                        th:attr="data-action=@{/api/databases/{id}/test(id=${config.id})},
+                                                 data-busy-text=''"
+                                        th:title="#{common.test}">
+                                    <svg class="ico"><use href="#plug"/></svg>
+                                </button>
+                                <a class="btn-icon" th:href="@{/databases/{id}/edit(id=${config.id})}"
+                                   th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
+                                <form method="post" style="display:inline"
+                                      th:action="@{/databases/{id}/delete(id=${config.id})}"
+                                      th:attr="data-confirm=#{common.confirm}">
+                                    <button type="submit" class="btn-icon is-danger" th:title="#{common.delete}">
+                                        <svg class="ico"><use href="#trash"/></svg>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

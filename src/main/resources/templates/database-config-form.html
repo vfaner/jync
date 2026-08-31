@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'databases', 'db.edit')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${config.id != null} ? #{db.edit} : #{db.new}">New connection</h1>
+            <p class="sub" th:text="#{db.formHint}">Test before saving to catch mistakes early</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/databases}">
+                <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div style="max-width:820px">
+        <form method="post" id="db-form" th:action="@{/databases/save}" th:object="${config}">
+            <input type="hidden" th:field="*{id}">
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#hdd-network"/></svg> <span th:text="#{db.connectionInfo}">Connection</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="name">
+                                <span th:text="#{common.name}">Name</span><span class="req">*</span>
+                            </label>
+                            <input type="text" class="input" id="name" th:field="*{name}" required maxlength="128">
+                        </div>
+                        <div class="field">
+                            <label for="type">
+                                <span th:text="#{common.type}">Type</span><span class="req">*</span>
+                            </label>
+                            <select class="select" id="type" th:field="*{type}" data-role="type-select"
+                                    th:attr="data-action=@{/api/databases/type-defaults}">
+                                <option th:each="t : ${types}" th:value="${t.name()}"
+                                        th:text="${t.displayName}">MySQL</option>
+                            </select>
+                            <div class="help mono" id="url-hint"
+                                 th:text="${config.type != null ? config.type.urlTemplate : ''}"></div>
+                        </div>
+                    </div>
+
+                    <div class="grid-3">
+                        <div class="field" style="grid-column:span 2">
+                            <label for="host" th:text="#{db.host}">Host</label>
+                            <input type="text" class="input" id="host" th:field="*{host}" placeholder="localhost">
+                        </div>
+                        <div class="field">
+                            <label for="port" th:text="#{db.port}">Port</label>
+                            <input type="number" class="input" id="port" th:field="*{port}">
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="databaseName" th:text="#{db.databaseName}">Database</label>
+                            <input type="text" class="input" id="databaseName" th:field="*{databaseName}">
+                        </div>
+                        <div class="field">
+                            <label for="schemaName" th:text="#{db.schemaName}">Schema</label>
+                            <input type="text" class="input" id="schemaName" th:field="*{schemaName}">
+                            <div class="help" th:text="#{db.schemaNameHelp}">help</div>
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="username" th:text="#{db.username}">User</label>
+                            <input type="text" class="input" id="username" th:field="*{username}" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="rawPassword" th:text="#{db.password}">Password</label>
+                            <!--/* 密码从不回填到浏览器；留空表示保留已存值 */-->
+                            <input type="password" class="input" id="rawPassword" name="rawPassword"
+                                   autocomplete="new-password">
+                            <div class="help" th:if="${config.id != null}" th:text="#{db.passwordKeepHelp}">help</div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="extraParams" th:text="#{db.extraParams}">Extra params</label>
+                        <input type="text" class="input mono" id="extraParams" th:field="*{extraParams}">
+                        <div class="help" th:text="#{db.extraParamsHelp}">help</div>
+                    </div>
+                </div>
+            </div>
+
+            <!--/* 自定义数据库需要这三项；也可用于覆盖已知类型的 URL */-->
+            <div class="card" id="custom-section"
+                 th:attr="hidden=${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'hidden'">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#puzzle"/></svg> <span th:text="#{db.customSection}">Custom driver</span></h2>
+                    <span class="hint" th:text="#{db.customHint}">Loaded at runtime from a local jar</span>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label for="customUrl" th:text="#{db.customUrl}">JDBC URL</label>
+                        <input type="text" class="input mono" id="customUrl" th:field="*{customUrl}"
+                               placeholder="jdbc:dm://host:5236/DBNAME">
+                        <div class="help" th:text="#{db.customUrlHelp}">help</div>
+                    </div>
+                    <div class="field">
+                        <label for="customJarPath" th:text="#{db.customJarPath}">Driver jar path</label>
+                        <div class="input-group">
+                            <input type="text" class="input mono" id="customJarPath" th:field="*{customJarPath}"
+                                   placeholder="/opt/drivers/DmJdbcDriver18.jar">
+                            <button type="button" class="btn btn-ghost" data-role="find-drivers"
+                                    th:attr="data-action=@{/api/databases/discover-drivers}">
+                                <svg class="ico"><use href="#search"/></svg>
+                                <span th:text="#{db.discoverDrivers}">Detect</span>
+                            </button>
+                        </div>
+                        <div class="help" th:text="#{db.customJarPathHelp}">help</div>
+                    </div>
+                    <div class="field">
+                        <label for="customDriver" th:text="#{db.customDriver}">Driver class</label>
+                        <input type="text" class="input mono" id="customDriver" th:field="*{customDriver}"
+                               list="driver-options" placeholder="dm.jdbc.driver.DmDriver">
+                        <datalist id="driver-options"></datalist>
+                        <div class="help mono" id="driver-hint"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body" style="display:flex;gap:9px;flex-wrap:wrap">
+                    <button type="submit" class="btn btn-primary">
+                        <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{common.save}">Save</span>
+                    </button>
+                    <!--/* 直接用表单当前值测试，不必先保存 */-->
+                    <button type="button" class="btn btn-ghost" data-role="test-conn" data-form="db-form"
+                            th:attr="data-action=@{/api/databases/test},data-busy-text=#{db.testing}">
+                        <svg class="ico"><use href="#plug"/></svg><span th:text="#{common.test}">Test</span>
+                    </button>
+                    <a class="btn btn-ghost" th:href="@{/databases}" th:text="#{common.cancel}">Cancel</a>
+                </div>
+            </div>
+
+            <div id="test-result" class="alert" hidden></div>
+        </form>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'projects', 'project.edit')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${project.id != null} ? #{project.edit} : #{project.new}">New project</h1>
+            <p class="sub" th:text="#{project.formHint}">Pick the source and target connections</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/projects}">
+                <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div th:if="${#lists.isEmpty(databases)}" class="alert alert-warn">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <div class="alert-body">
+            <span th:text="#{project.noDatabases}">No connections defined yet.</span>
+            <a th:href="@{/databases/new}" th:text="#{db.new}">New connection</a>
+        </div>
+    </div>
+
+    <div style="max-width:720px">
+        <form method="post" th:action="@{/projects/save}" th:object="${project}">
+            <input type="hidden" th:field="*{id}">
+            <!--/* 保留 enabled 与已有配置：启停在详情页操作，此表单不应把它们清掉 */-->
+            <input type="hidden" th:field="*{enabled}">
+            <input type="hidden" th:field="*{syncConfig}">
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#info-circle"/></svg> <span th:text="#{project.basicInfo}">Basic information</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label for="name">
+                            <span th:text="#{common.name}">Name</span><span class="req">*</span>
+                        </label>
+                        <input type="text" class="input" id="name" th:field="*{name}" required maxlength="128">
+                    </div>
+                    <div class="field">
+                        <label for="description" th:text="#{common.description}">Description</label>
+                        <textarea class="textarea" id="description" rows="2"
+                                  th:field="*{description}" maxlength="512"></textarea>
+                    </div>
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="sourceDbId">
+                                <svg class="ico"><use href="#box-arrow-up-right"/></svg>
+                                <span th:text="#{project.sourceDb}">Source</span><span class="req">*</span>
+                            </label>
+                            <select class="select" id="sourceDbId" th:field="*{sourceDbId}" required>
+                                <option value="" th:text="#{project.selectDatabase}">-- select --</option>
+                                <option th:each="db : ${databases}" th:value="${db.id}"
+                                        th:text="|${db.name} · ${db.type.displayName}|">db</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="targetDbId">
+                                <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                                <span th:text="#{project.targetDb}">Target</span><span class="req">*</span>
+                            </label>
+                            <select class="select" id="targetDbId" th:field="*{targetDbId}" required>
+                                <option value="" th:text="#{project.selectDatabase}">-- select --</option>
+                                <option th:each="db : ${databases}" th:value="${db.id}"
+                                        th:text="|${db.name} · ${db.type.displayName}|">db</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-foot" style="display:flex;gap:9px">
+                    <button type="submit" class="btn btn-primary">
+                        <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{common.save}">Save</span>
+                    </button>
+                    <a class="btn btn-ghost" th:href="@{/projects}" th:text="#{common.cancel}">Cancel</a>
+                </div>
+            </div>
+        </form>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>
