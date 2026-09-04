@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'ai', 'ai.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{ai.title}">AI settings</h1>
+            <p class="sub" th:text="#{ai.listHint}">One provider active at a time</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-primary btn-sm" th:href="@{/ai/new}">
+                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{ai.new}">New provider</span>
+            </a>
+        </div>
+    </div>
+
+    <!--/* 能力状态条：启用后辅助转换即可用，但产出永远只是候选，需人工确认后才落库 */-->
+    <div class="alert" th:classappend="${assistAvailable} ? 'alert-ok' : 'alert-info'">
+        <svg class="ico"><use th:attr="href=${assistAvailable} ? '#check-circle-fill' : '#info-circle-fill'"/></svg>
+        <div class="alert-body">
+            <strong th:text="${assistAvailable} ? #{ai.assistOn} : #{ai.assistOff}">Status</strong>
+            <div class="small muted" th:text="#{ai.assistNote}">
+                AI only drafts a candidate; nothing is applied without your confirmation.
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body tight">
+            <div th:if="${#lists.isEmpty(providers)}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#cpu"/></svg></div>
+                <h3 th:text="#{ai.noProviders}">No AI provider configured.</h3>
+                <p th:text="#{ai.createHint}">Add one to enable AI-assisted conversion.</p>
+                <a class="btn btn-primary btn-sm" th:href="@{/ai/new}">
+                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{ai.new}">New provider</span>
+                </a>
+            </div>
+
+            <div th:unless="${#lists.isEmpty(providers)}" class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.name}">Name</th>
+                        <th th:text="#{ai.protocol}">Protocol</th>
+                        <th th:text="#{ai.model}">Model</th>
+                        <th th:text="#{ai.baseUrl}">Base URL</th>
+                        <th th:text="#{common.status}">Status</th>
+                        <th class="num" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="p : ${providers}" th:classappend="${p.enabled} ? 'row-active' : ''">
+                        <td>
+                            <span style="font-weight:600" th:text="${p.name}">name</span>
+                            <span th:if="${p.enabled}" class="badge badge-ok"
+                                  th:text="#{ai.active}">Active</span>
+                        </td>
+                        <td>
+                            <span class="badge badge-brand" th:text="${p.protocol.displayName}">OpenAI</span>
+                        </td>
+                        <td class="mono small" th:text="${p.model ?: '—'}">model</td>
+                        <td class="mono small" th:text="${p.baseUrl ?: '—'}"
+                            style="max-width:280px;overflow:hidden;text-overflow:ellipsis">url</td>
+                        <td>
+                            <!--/* 显示最近一次探测的留痕，不在渲染时重新发请求 ——
+                                   列表页不该产生外部流量 */-->
+                            <span th:if="${p.lastTestOk == null}" class="badge badge-mute"
+                                  th:text="#{ai.neverTested}">Not tested</span>
+                            <span th:if="${p.lastTestOk == true}" class="badge badge-ok"
+                                  th:title="${p.lastTestMessage}" th:text="#{ai.reachable}">OK</span>
+                            <span th:if="${p.lastTestOk == false}" class="badge badge-danger"
+                                  th:title="${p.lastTestMessage}" th:text="#{ai.unreachable}">Failed</span>
+                        </td>
+                        <td>
+                            <div class="btn-row" style="justify-content:flex-end">
+                                <!--/* 启用是互斥的：服务端会把其他条目一并关掉 */-->
+                                <form th:unless="${p.enabled}" method="post" style="display:inline"
+                                      th:action="@{/ai/{id}/enable(id=${p.id})}">
+                                    <button type="submit" class="btn btn-primary btn-sm">
+                                        <svg class="ico"><use href="#play-fill"/></svg>
+                                        <span th:text="#{ai.enable}">Enable</span>
+                                    </button>
+                                </form>
+                                <form th:if="${p.enabled}" method="post" style="display:inline"
+                                      th:action="@{/ai/{id}/disable(id=${p.id})}">
+                                    <button type="submit" class="btn btn-ghost btn-sm">
+                                        <svg class="ico"><use href="#pause-fill"/></svg>
+                                        <span th:text="#{ai.disable}">Disable</span>
+                                    </button>
+                                </form>
+
+                                <button type="button" class="btn-icon is-ok" data-role="api-btn"
+                                        th:attr="data-action=@{/api/ai/{id}/test(id=${p.id})},
+                                                 data-reload='true',data-busy-text=''"
+                                        th:title="#{ai.test}">
+                                    <svg class="ico"><use href="#plug"/></svg>
+                                </button>
+                                <a class="btn-icon" th:href="@{/ai/{id}/edit(id=${p.id})}"
+                                   th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
+                                <form method="post" style="display:inline"
+                                      th:action="@{/ai/{id}/delete(id=${p.id})}"
+                                      th:attr="data-confirm=#{common.confirm}">
+                                    <button type="submit" class="btn-icon is-danger" th:title="#{common.delete}">
+                                        <svg class="ico"><use href="#trash"/></svg>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#shield-check"/></svg>
+                <span th:text="#{ai.privacyTitle}">Before you enable this</span></h2>
+        </div>
+        <div class="card-body">
+            <p class="small" th:text="#{ai.privacyBody}">
+                Procedure source is sent to the configured endpoint.
+            </p>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

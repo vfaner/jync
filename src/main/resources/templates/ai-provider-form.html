@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'ai', 'ai.edit')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${provider.id != null} ? #{ai.edit} : #{ai.new}">New provider</h1>
+            <p class="sub" th:text="#{ai.formHint}">Test before saving to catch mistakes early</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/ai}">
+                <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div style="max-width:820px">
+        <form method="post" id="ai-form" th:action="@{/ai/save}" th:object="${provider}">
+            <input type="hidden" th:field="*{id}">
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#cpu"/></svg>
+                        <span th:text="#{ai.endpointInfo}">Endpoint</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="name">
+                                <span th:text="#{common.name}">Name</span><span class="req">*</span>
+                            </label>
+                            <input type="text" class="input" id="name" th:field="*{name}"
+                                   required maxlength="128" placeholder="DeepSeek">
+                        </div>
+                        <div class="field">
+                            <label for="protocol">
+                                <span th:text="#{ai.protocol}">Protocol</span><span class="req">*</span>
+                            </label>
+                            <select class="select" id="protocol" th:field="*{protocol}"
+                                    data-role="protocol-select"
+                                    th:attr="data-action=@{/api/ai/protocol-defaults}">
+                                <option th:each="p : ${protocols}" th:value="${p.name()}"
+                                        th:text="${p.displayName}">OpenAI</option>
+                            </select>
+                            <div class="help" th:text="#{ai.protocolHelp}">
+                                Most self-hosted endpoints speak the OpenAI shape.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="baseUrl">
+                            <span th:text="#{ai.baseUrl}">Base URL</span><span class="req">*</span>
+                        </label>
+                        <input type="url" class="input mono" id="baseUrl" th:field="*{baseUrl}"
+                               required maxlength="512" placeholder="https://api.deepseek.com/v1">
+                        <!--/* 各家对 /v1 归属的写法不一致，所以把实际拼出的路径提示出来 */-->
+                        <div class="help">
+                            <span th:text="#{ai.baseUrlHelp}">Path appended:</span>
+                            <span class="mono" id="endpoint-hint"
+                                  th:text="${provider.protocol != null ? provider.protocol.chatPath : ''}"></span>
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="model">
+                                <span th:text="#{ai.model}">Model</span><span class="req">*</span>
+                            </label>
+                            <input type="text" class="input mono" id="model" th:field="*{model}"
+                                   required maxlength="128" placeholder="deepseek-chat">
+                        </div>
+                        <div class="field">
+                            <label for="rawApiKey" th:text="#{ai.apiKey}">API key</label>
+                            <!--/* 密钥从不回填到浏览器；留空表示保留已存值 */-->
+                            <input type="password" class="input" id="rawApiKey" name="rawApiKey"
+                                   autocomplete="new-password">
+                            <div class="help" th:if="${provider.id != null}"
+                                 th:text="#{ai.apiKeyKeepHelp}">Leave blank to keep the stored key.</div>
+                            <div class="help" th:unless="${provider.id != null}"
+                                 th:text="#{ai.apiKeyHelp}">Stored encrypted.</div>
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="maxTokens" th:text="#{ai.maxTokens}">Max tokens</label>
+                            <input type="number" class="input" id="maxTokens" th:field="*{maxTokens}"
+                                   min="1" max="200000">
+                            <div class="help" th:text="#{ai.maxTokensHelp}">
+                                A long procedure needs room for the whole rewritten body.
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="timeoutSeconds" th:text="#{ai.timeout}">Timeout (s)</label>
+                            <input type="number" class="input" id="timeoutSeconds"
+                                   th:field="*{timeoutSeconds}" min="1" max="600">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body" style="display:flex;gap:9px;flex-wrap:wrap">
+                    <button type="submit" class="btn btn-primary">
+                        <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{common.save}">Save</span>
+                    </button>
+                    <!--/* 直接用表单当前值探测，不必先保存 */-->
+                    <button type="button" class="btn btn-ghost" data-role="test-conn" data-form="ai-form"
+                            th:attr="data-action=@{/api/ai/test},data-busy-text=#{ai.testing},
+                                     data-ok-key='ai.testSuccess',data-fail-key='ai.testFailed'">
+                        <svg class="ico"><use href="#plug"/></svg><span th:text="#{ai.test}">Test</span>
+                    </button>
+                    <a class="btn btn-ghost" th:href="@{/ai}" th:text="#{common.cancel}">Cancel</a>
+                </div>
+            </div>
+
+            <div id="test-result" class="alert" hidden></div>
+        </form>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

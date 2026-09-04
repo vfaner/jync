@@ -78,6 +78,12 @@ sync:
   # Encryption key for stored database passwords. OVERRIDE THIS IN PRODUCTION.
   crypto-password: synctool-default-key-change-me
   crypto-salt: 5c0744940b5c369b
+  ai:
+    # AI-assisted procedure conversion. This is the only feature that can talk to anything
+    # outside the two databases, and it stays inert until a provider is configured AND
+    # enabled in the UI -- a stock install makes no outbound request. Set to false to remove
+    # the feature entirely (menu and REST endpoints) on an air-gapped deployment.
+    enabled: true
 
 logging:
   level:

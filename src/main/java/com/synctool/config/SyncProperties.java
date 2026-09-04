@@ -55,4 +55,20 @@ public class SyncProperties {
 
     /** Days of change-log history to keep; 0 disables pruning. */
     private int changeLogRetentionDays = 30;
+
+    private final Ai ai = new Ai();
+
+    /**
+     * AI-assisted conversion settings.
+     *
+     * <p>This is the only part of the tool that can talk to anything outside the two databases.
+     * It stays inert until a provider is configured and enabled, so a stock install still makes
+     * no outbound request. Setting {@code sync.ai.enabled=false} removes the feature entirely --
+     * menu and endpoints -- which is the clean way to lock down an air-gapped deployment.
+     */
+    @Getter
+    @Setter
+    public static class Ai {
+        private boolean enabled = true;
+    }
 }

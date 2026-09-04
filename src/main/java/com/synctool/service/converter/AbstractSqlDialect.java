@@ -61,7 +61,6 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     /** Maps by {@link Types} category; returns null when the category is unknown. */
     protected String mapByJdbcType(ColumnMeta c, DatabaseType sourceType) {
         int size = c.getSize() == null ? 0 : c.getSize();
-        int scale = c.getDecimalDigits() == null ? 0 : c.getDecimalDigits();
 
         switch (c.getJdbcType()) {
             case Types.BIT:
@@ -82,7 +81,10 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                 return doubleType();
             case Types.NUMERIC:
             case Types.DECIMAL:
-                return decimalType(effectivePrecision(size), scale, c, sourceType);
+                // Raw metadata is passed through: distinguishing "scale 0" from "scale not
+                // reported" is what keeps an unconstrained NUMBER from losing its fraction,
+                // and clamping here would erase that distinction.
+                return decimalType(c, sourceType);
             case Types.CHAR:
             case Types.NCHAR:
                 return charType(Math.max(size, 1));
@@ -92,7 +94,7 @@ public abstract class AbstractSqlDialect implements SqlDialect {
             case Types.LONGNVARCHAR:
                 return varcharType(size);
             case Types.DATE:
-                return dateType();
+                return dateTypeFor(c, sourceType);
             case Types.TIME:
             case Types.TIME_WITH_TIMEZONE:
                 return timeType();
@@ -132,6 +134,37 @@ public abstract class AbstractSqlDialect implements SqlDialect {
 
     protected int defaultNumericPrecision() {
         return 38;
+    }
+
+    /**
+     * Fractional digits reserved when the source reports no precision <em>and</em> no usable
+     * scale. Zero would be wrong: an unconstrained numeric can hold a fraction, and a
+     * DECIMAL(p,0) target truncates it on every insert without raising an error.
+     */
+    protected int unconstrainedNumericScale() {
+        return Math.min(10, defaultNumericPrecision() / 2);
+    }
+
+    /**
+     * Maps a source DATE column.
+     *
+     * <p>Oracle's DATE is not a date: it carries hours, minutes and seconds. Sending it to a
+     * date-only target type therefore drops the time silently on every row. Whether the
+     * problem is reachable at all depends on the driver — ojdbc may report such a column as
+     * either {@link Types#DATE} or {@link Types#TIMESTAMP} — so this widens defensively and
+     * is a no-op when the driver already reports TIMESTAMP.
+     *
+     * <p>The widening is skipped when the target is itself in the Oracle family, because
+     * there DATE already means the same thing and rewriting it to TIMESTAMP would change
+     * date-arithmetic semantics for no benefit. That leaves Oracle → 达梦 (DM) unwidened;
+     * DM's DATE precision is not verified here, so confirm it before relying on that path.
+     */
+    protected String dateTypeFor(ColumnMeta c, DatabaseType sourceType) {
+        if (sourceType == DatabaseType.ORACLE
+                && family() != DatabaseType.DialectFamily.ORACLE) {
+            return timestampType();
+        }
+        return dateType();
     }
 
     // --- Type names each dialect must supply -------------------------------------------
@@ -186,15 +219,64 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         return "VARBINARY(" + size + ")";
     }
 
-    protected String decimalType(int precision, int scale, ColumnMeta c, DatabaseType sourceType) {
-        // Oracle NUMBER with scale 0 and no precision is an integer in practice; using
-        // DECIMAL(38,0) everywhere would be correct but needlessly wide.
-        if (scale <= 0 && precision <= 0) {
-            return bigIntType();
+    /**
+     * Maps a NUMERIC/DECIMAL column, treating "not reported" and "zero" as different answers.
+     *
+     * <p>A previous form of this method clamped the precision before deciding, which made its
+     * own {@code precision <= 0} branch unreachable and left every unconstrained numeric as
+     * {@code DECIMAL(38,0)} — silently truncating fractions. The distinction now survives:
+     *
+     * <ul>
+     *   <li>precision and scale both usable → copied through</li>
+     *   <li>precision missing, scale usable → widest precision, source scale</li>
+     *   <li>both missing → widest precision with {@link #unconstrainedNumericScale()}
+     *       fractional digits, so a fraction is preserved rather than rounded away</li>
+     * </ul>
+     */
+    protected String decimalType(ColumnMeta c, DatabaseType sourceType) {
+        Integer rawPrecision = c.getSize();
+        Integer rawScale = c.getDecimalDigits();
+
+        // "Declared" and "representable" are different questions, and conflating them loses
+        // data: a NUMBER(38,4) going to DB2 has a precision the source stated plainly, it is
+        // just wider than DB2's 31-digit ceiling. That needs clamping, not the unconstrained
+        // treatment below -- which would discard the declared scale of 4.
+        boolean precisionDeclared = rawPrecision != null && rawPrecision > 0;
+        // Oracle marks an unconstrained NUMBER with scale -127, and some drivers report null
+        // instead. Either way the value may have a fraction.
+        boolean scaleKnown = rawScale != null && rawScale >= 0;
+
+        if (scaleKnown && isUnconstrainedOracleNumber(c, sourceType, precisionDeclared)) {
+            // Drivers also report this case as a plain 0, which is indistinguishable from a
+            // genuine integer NUMBER(p,0) except by the absent precision.
+            scaleKnown = false;
         }
-        int p = Math.max(precision, 1);
-        int s = Math.max(Math.min(scale, p), 0);
+
+        if (!precisionDeclared && !scaleKnown) {
+            String mapped = "DECIMAL(" + defaultNumericPrecision() + ","
+                    + unconstrainedNumericScale() + ")";
+            log.warn("Column {} has an unconstrained {} (precision {}, scale {}); mapping to "
+                            + "{} so a fractional value is not truncated. Constrain the source "
+                            + "type, or set a DDL override, if a different precision is wanted.",
+                    c.getName(), c.getTypeName(), rawPrecision, rawScale, mapped);
+            return mapped;
+        }
+
+        int p = precisionDeclared ? Math.min(rawPrecision, maxNumericPrecision()) : defaultNumericPrecision();
+        int s = scaleKnown ? Math.max(Math.min(rawScale, p), 0) : 0;
         return "DECIMAL(" + p + "," + s + ")";
+    }
+
+    /**
+     * True for an Oracle NUMBER declared with neither precision nor scale, which behaves as a
+     * floating-point decimal rather than an integer.
+     */
+    private boolean isUnconstrainedOracleNumber(ColumnMeta c, DatabaseType sourceType,
+                                                boolean precisionDeclared) {
+        return !precisionDeclared
+                && (sourceType == DatabaseType.ORACLE || sourceType == DatabaseType.DM)
+                && c.getTypeName() != null
+                && c.getTypeName().toUpperCase().startsWith("NUMBER");
     }
 
     protected int maxVarcharLength() {

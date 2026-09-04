@@ -149,18 +149,6 @@ class SqlDialectTest {
     }
 
     @Test
-    void unconstrainedNumericDoesNotProduceAnInvalidPrecision() {
-        // Oracle reports NUMBER without precision as size 0; naively emitting DECIMAL(0,0)
-        // would be rejected by every target.
-        ColumnMeta number = column("qty", "NUMBER", Types.NUMERIC, 0);
-        number.setDecimalDigits(0);
-        for (SqlDialect dialect : allDialects) {
-            String mapped = dialect.mapType(number, DatabaseType.ORACLE);
-            assertThat(mapped).doesNotContain("(0,0)").doesNotContain("(0)");
-        }
-    }
-
-    @Test
     void timestampMapsToTheWidestAvailableTypePerProduct() {
         ColumnMeta ts = column("created", "TIMESTAMP", Types.TIMESTAMP, 26);
         assertThat(mysql.mapType(ts, DatabaseType.POSTGRESQL)).isEqualTo("DATETIME");
@@ -285,5 +273,98 @@ class SqlDialectTest {
         // Oracle's ROWNUM nesting works on releases without OFFSET/FETCH.
         assertThat(oracle.getPaginationSql(base, 100, 50)).contains("ROWNUM");
         assertThat(sqlServer.getPaginationSql(base, 100, 50)).contains("OFFSET 100").contains("FETCH NEXT 50");
+    }
+
+    // --- Oracle DATE carries a time component -----------------------------------------
+
+    /**
+     * Oracle's DATE stores hours, minutes and seconds. A date-only target type therefore
+     * discards the time on every row, without any error to notice.
+     */
+    @Test
+    void oracleDateKeepsItsTimeComponentOnANonOracleTarget() {
+        ColumnMeta d = column("created", "DATE", Types.DATE, 7);
+
+        assertThat(mysql.mapType(d, DatabaseType.ORACLE)).isEqualTo("DATETIME");
+        assertThat(sqlServer.mapType(d, DatabaseType.ORACLE)).isEqualTo("DATETIME2");
+        assertThat(postgres.mapType(d, DatabaseType.ORACLE)).containsIgnoringCase("TIMESTAMP");
+        assertThat(db2.mapType(d, DatabaseType.ORACLE)).isEqualTo("TIMESTAMP");
+    }
+
+    @Test
+    void aDateFromAProductWhereDateIsDateOnlyStaysADate() {
+        // Only Oracle overloads DATE this way; widening everyone would be wrong.
+        ColumnMeta d = column("birthday", "DATE", Types.DATE, 10);
+
+        assertThat(mysql.mapType(d, DatabaseType.POSTGRESQL)).isEqualTo("DATE");
+        assertThat(postgres.mapType(d, DatabaseType.MYSQL)).isEqualTo("DATE");
+        // Oracle to Oracle needs no rewrite: DATE already means the same thing there, and
+        // changing it would alter date-arithmetic semantics.
+        assertThat(oracle.mapType(d, DatabaseType.ORACLE)).isEqualTo("DATE");
+    }
+
+    // --- Unconstrained numerics --------------------------------------------------------
+
+    @Test
+    void unconstrainedNumericDoesNotProduceAnInvalidPrecision() {
+        // Oracle reports NUMBER without precision as size 0; naively emitting DECIMAL(0,0)
+        // would be rejected by every target.
+        ColumnMeta number = column("qty", "NUMBER", Types.NUMERIC, 0);
+        number.setDecimalDigits(0);
+        for (SqlDialect dialect : allDialects) {
+            String mapped = dialect.mapType(number, DatabaseType.ORACLE);
+            assertThat(mapped).doesNotContain("(0,0)").doesNotContain("(0)");
+        }
+    }
+
+    /**
+     * An Oracle NUMBER with neither precision nor scale is a floating decimal, so it can hold
+     * 1.5. Mapping it onto a zero-scale target truncates that on every insert and reports no
+     * error, which is the worst possible outcome.
+     */
+    @Test
+    void unconstrainedOracleNumberReservesFractionalDigits() {
+        for (Integer reportedScale : new Integer[] {null, 0, -127}) {
+            ColumnMeta number = column("amount", "NUMBER", Types.NUMERIC, 0);
+            number.setDecimalDigits(reportedScale);
+
+            for (SqlDialect dialect : allDialects) {
+                String mapped = dialect.mapType(number, DatabaseType.ORACLE);
+                assertThat(mapped)
+                        .as("dialect %s, driver-reported scale %s",
+                                dialect.getClass().getSimpleName(), reportedScale)
+                        .doesNotEndWith(",0)");
+            }
+        }
+    }
+
+    @Test
+    void aGenuinelyIntegerNumericKeepsScaleZero() {
+        // NUMBER(10) really is an integer: the precision is present, so scale 0 is a fact
+        // rather than a gap in the metadata.
+        ColumnMeta id = column("order_id", "NUMBER", Types.NUMERIC, 10);
+        id.setDecimalDigits(0);
+        assertThat(mysql.mapType(id, DatabaseType.ORACLE)).isEqualTo("DECIMAL(10,0)");
+    }
+
+    @Test
+    void declaredPrecisionAndScaleAreCopiedThrough() {
+        ColumnMeta price = column("price", "NUMBER", Types.NUMERIC, 12);
+        price.setDecimalDigits(2);
+        assertThat(mysql.mapType(price, DatabaseType.ORACLE)).isEqualTo("DECIMAL(12,2)");
+    }
+
+    /** DB2 rejects a DECIMAL wider than 31 digits, so the shared default must be clamped. */
+    @Test
+    void db2NeverExceedsItsDecimalCeiling() {
+        ColumnMeta wide = column("amount", "NUMBER", Types.NUMERIC, 38);
+        wide.setDecimalDigits(4);
+        assertThat(db2.mapType(wide, DatabaseType.ORACLE)).isEqualTo("DECIMAL(31,4)");
+
+        ColumnMeta unconstrained = column("amount", "NUMBER", Types.NUMERIC, 0);
+        unconstrained.setDecimalDigits(null);
+        String mapped = db2.mapType(unconstrained, DatabaseType.ORACLE);
+        int precision = Integer.parseInt(mapped.replaceAll("[^0-9,]", "").split(",")[0]);
+        assertThat(precision).isLessThanOrEqualTo(31);
     }
 }

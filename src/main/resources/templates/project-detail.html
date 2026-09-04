@@ -11,6 +11,13 @@
             <p class="sub" th:if="${project.description}" th:text="${project.description}">description</p>
         </div>
         <div class="page-actions">
+            <!--/* 转换复审入口：只在项目已配好两端时才有意义 */-->
+            <a class="btn btn-ghost btn-sm"
+               th:if="${project.sourceDbId != null and project.targetDbId != null}"
+               th:href="@{/projects/{id}/conversions(id=${project.id})}">
+                <svg class="ico"><use href="#code-square"/></svg>
+                <span th:text="#{conversion.list}">Conversion review</span>
+            </a>
             <a class="btn btn-ghost btn-sm" th:href="@{/projects/{id}/edit(id=${project.id})}">
                 <svg class="ico"><use href="#pencil"/></svg><span th:text="#{common.edit}">Edit</span>
             </a>

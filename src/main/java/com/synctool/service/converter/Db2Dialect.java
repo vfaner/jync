@@ -51,6 +51,17 @@ public class Db2Dialect extends AbstractSqlDialect {
         return "BIGINT";
     }
 
+    /** DB2 caps DECIMAL at 31 digits, not the 38 the other products allow. */
+    @Override
+    protected int maxNumericPrecision() {
+        return 31;
+    }
+
+    @Override
+    protected int defaultNumericPrecision() {
+        return 31;
+    }
+
     @Override
     protected String floatType() {
         return "REAL";

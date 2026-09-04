@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'projects', 'conversion.list')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{conversion.list}">Conversion Review</h1>
+            <p class="sub" th:text="#{conversion.listHint}">
+                Review and override DDL for views and procedures
+            </p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/projects/{id}(id=${projectId})}">
+                <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <!--/* 能力状态 */-->
+    <div class="alert" th:classappend="${overview.assistAvailable} ? 'alert-ok' : 'alert-info'">
+        <svg class="ico"><use th:attr="href=${overview.assistAvailable} ? '#check-circle-fill' : '#info-circle-fill'"/></svg>
+        <div class="alert-body">
+            <strong th:text="${overview.assistAvailable} ? #{conversion.assistOn} : #{conversion.assistOff}">Status</strong>
+            <div class="small muted" th:text="#{conversion.platformHint}">1 source → target</div>
+        </div>
+    </div>
+
+    <!--/* 存储过程/函数 */-->
+    <div class="card">
+        <div class="card-head">
+            <h2>
+                <svg class="ico"><use href="#code-square"/></svg>
+                <span th:text="#{conversion.routines}">Routines</span>
+            </h2>
+            <span class="badge badge-brand" th:text="${#lists.size(overview.routines)}">0</span>
+        </div>
+        <div class="card-body tight">
+            <div th:if="${#lists.isEmpty(overview.routines)}" class="empty">
+                <p class="small muted" th:text="#{conversion.noRoutines}">No routines selected.</p>
+            </div>
+            <div th:unless="${#lists.isEmpty(overview.routines)}" class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.name}">Name</th>
+                        <th th:text="#{common.type}">Type</th>
+                        <th th:text="#{conversion.status}">Status</th>
+                        <th class="num" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="r : ${overview.routines}">
+                        <td><span class="mono" th:text="${r.name}">name</span></td>
+                        <td><span class="badge badge-brand" th:text="#{conversion.procedure}">Procedure</span></td>
+                        <td>
+                            <span th:if="${r.hasOverride}" class="badge badge-ok"
+                                  th:text="#{conversion.overridden}">Overridden</span>
+                            <span th:unless="${r.hasOverride}" class="badge badge-mute"
+                                  th:text="#{conversion.auto}">Auto</span>
+                        </td>
+                        <td>
+                            <a class="btn btn-ghost btn-sm"
+                               th:href="@{/projects/{id}/conversions/PROCEDURE/{name}(id=${projectId}, name=${r.name})}">
+                                <svg class="ico"><use href="#pencil"/></svg>
+                                <span th:text="#{conversion.review}">Review</span>
+                            </a>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!--/* 视图 */-->
+    <div class="card">
+        <div class="card-head">
+            <h2>
+                <svg class="ico"><use href="#eye"/></svg>
+                <span th:text="#{conversion.views}">Views</span>
+            </h2>
+            <span class="badge badge-brand" th:text="${#lists.size(overview.views)}">0</span>
+        </div>
+        <div class="card-body tight">
+            <div th:if="${#lists.isEmpty(overview.views)}" class="empty">
+                <p class="small muted" th:text="#{conversion.noViews}">No views selected.</p>
+            </div>
+            <div th:unless="${#lists.isEmpty(overview.views)}" class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.name}">Name</th>
+                        <th th:text="#{conversion.status}">Status</th>
+                        <th class="num" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="v : ${overview.views}">
+                        <td><span class="mono" th:text="${v.name}">name</span></td>
+                        <td>
+                            <span th:if="${v.hasOverride}" class="badge badge-ok"
+                                  th:text="#{conversion.overridden}">Overridden</span>
+                            <span th:unless="${v.hasOverride}" class="badge badge-mute"
+                                  th:text="#{conversion.auto}">Auto</span>
+                        </td>
+                        <td>
+                            <a class="btn btn-ghost btn-sm"
+                               th:href="@{/projects/{id}/conversions/VIEW/{name}(id=${projectId}, name=${v.name})}">
+                                <svg class="ico"><use href="#pencil"/></svg>
+                                <span th:text="#{conversion.review}">Review</span>
+                            </a>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!--/* 孤儿覆盖 */-->
+    <div class="card" th:if="${!#lists.isEmpty(overview.orphanedOverrides)}">
+        <div class="card-head">
+            <h2>
+                <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+                <span class="text-danger" th:text="#{conversion.orphaned}">Orphaned Overrides</span>
+            </h2>
+        </div>
+        <div class="card-body tight">
+            <p class="small muted" th:text="#{conversion.orphanedHint}">
+                These overrides reference objects that no longer exist in the source or are no
+                longer selected. They are still stored and would be applied if the object
+                returned. Click to remove them.
+            </p>
+            <div class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{conversion.overrideKey}">Key</th>
+                        <th class="num" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="ok : ${overview.orphanedOverrides}">
+                        <td class="mono" th:text="${ok}">key</td>
+                        <td>
+                            <!--/* 普通表单提交：和项目里其他删除操作走同一条路，
+                                   不为了一个按钮引入带 body 的 fetch */-->
+                            <form method="post" style="display:inline"
+                                  th:action="@{/projects/{id}/conversions/cleanup(id=${projectId})}"
+                                  th:attr="data-confirm=#{common.confirm}">
+                                <input type="hidden" name="overrideKey" th:value="${ok}">
+                                <button type="submit" class="btn btn-ghost btn-sm">
+                                    <svg class="ico"><use href="#trash"/></svg>
+                                    <span th:text="#{common.delete}">Delete</span>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

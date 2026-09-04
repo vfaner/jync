@@ -69,6 +69,11 @@
             <a th:href="@{/change-logs}" th:classappend="${activeNav == 'change-logs'} ? 'active' : ''">
                 <svg class="ico"><use href="#clock-history"/></svg><span th:text="#{nav.changeLogs}">Change Log</span>
             </a>
+            <!--/* AI 菜单可由 sync.ai.enabled=false 整体隐藏，给锁死的内网部署一个干净的关法 */-->
+            <a th:if="${aiEnabled}" th:href="@{/ai}"
+               th:classappend="${activeNav == 'ai'} ? 'active' : ''">
+                <svg class="ico"><use href="#cpu"/></svg><span th:text="#{nav.ai}">AI</span>
+            </a>
             <a th:href="@{/settings}" th:classappend="${activeNav == 'settings'} ? 'active' : ''">
                 <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">Settings</span>
             </a>
@@ -203,6 +208,24 @@
         'db.testSuccess': /*[[#{db.testSuccess}]]*/ '',
         'db.testFailed': /*[[#{db.testFailed}]]*/ '',
         'db.customJarPathHelp': /*[[#{db.customJarPathHelp}]]*/ '',
+        'ai.testSuccess': /*[[#{ai.testSuccess}]]*/ '',
+        'ai.testFailed': /*[[#{ai.testFailed}]]*/ '',
+        'conversion.draftDone': /*[[#{conversion.draftDone}]]*/ '',
+        'conversion.draftFailed': /*[[#{conversion.draftFailed}]]*/ '',
+        'conversion.validateOk': /*[[#{conversion.validateOk}]]*/ '',
+        'conversion.validateFailed': /*[[#{conversion.validateFailed}]]*/ '',
+        'conversion.noUncertainties': /*[[#{conversion.noUncertainties}]]*/ '',
+        'error.override.empty': /*[[#{error.override.empty}]]*/ '',
+        'error.ai.notAvailable': /*[[#{error.ai.notAvailable}]]*/ '',
+        'error.ai.noSourceBody': /*[[#{error.ai.noSourceBody}]]*/ '',
+        'error.ai.emptyReply': /*[[#{error.ai.emptyReply}]]*/ '',
+        'error.ai.declined': /*[[#{error.ai.declined}]]*/ '',
+        'error.ai.unstructuredReply': /*[[#{error.ai.unstructuredReply}]]*/ '',
+        'error.ai.model.required': /*[[#{error.ai.model.required}]]*/ '',
+        'error.validate.empty': /*[[#{error.validate.empty}]]*/ '',
+        'error.validate.noHeader': /*[[#{error.validate.noHeader}]]*/ '',
+        'warn.validate.selfReference': /*[[#{warn.validate.selfReference}]]*/ '',
+        'error.unexpected': /*[[#{error.unexpected}]]*/ '',
         'error.project.not.found': /*[[#{error.project.not.found}]]*/ '',
         'error.project.endpoints.required': /*[[#{error.project.endpoints.required}]]*/ '',
         'error.project.stop.before.reset': /*[[#{error.project.stop.before.reset}]]*/ ''

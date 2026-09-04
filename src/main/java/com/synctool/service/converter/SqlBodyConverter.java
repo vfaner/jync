@@ -1,7 +1,11 @@
 package com.synctool.service.converter;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Component;
 
@@ -26,6 +30,13 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class SqlBodyConverter {
 
+    /**
+     * Date/number formatting functions. Present in more than one product under the same name
+     * but with incompatible format strings, so they are reported rather than rewritten.
+     */
+    private static final Pattern FORMAT_SENSITIVE = Pattern.compile(
+            "(?i)\\b(TO_CHAR|TO_DATE|TO_TIMESTAMP|TO_NUMBER|DATE_FORMAT|STR_TO_DATE|FORMAT)\\s*\\(");
+
     /** Function name translations, keyed by target family. */
     private final Map<DatabaseType.DialectFamily, Map<String, String>> functionMaps = new LinkedHashMap<>();
 
@@ -40,7 +51,6 @@ public class SqlBodyConverter {
         toMysql.put("SYSTIMESTAMP", "NOW()");
         toMysql.put("GETDATE", "NOW");
         toMysql.put("SUBSTR", "SUBSTRING");
-        toMysql.put("TO_CHAR", "DATE_FORMAT");
         toMysql.put("LEN", "LENGTH");
         toMysql.put("ISNULL", "IFNULL");
         functionMaps.put(DatabaseType.DialectFamily.MYSQL, toMysql);
@@ -104,12 +114,40 @@ public class SqlBodyConverter {
         }
 
         String result = sql;
+        warnOnFormatSensitiveFunctions(result, from, to);
         result = convertIdentifierQuotes(result, from, to);
         result = convertConcatenation(result, from, to);
-        result = convertFunctions(result, to);
+        result = convertFunctions(result, from, to);
         result = convertLimitClause(result, from, to);
         result = convertDualTable(result, from, to);
         return result;
+    }
+
+    /**
+     * Functions whose <em>name</em> has an equivalent in the target but whose format string
+     * does not.
+     *
+     * <p>These are deliberately left alone. Renaming {@code TO_CHAR(d,'YYYY-MM-DD')} to
+     * {@code DATE_FORMAT(d,'YYYY-MM-DD')} produces valid SQL that returns the literal text
+     * {@code YYYY-MM-DD}, because MySQL spells those fields {@code %Y-%m-%d} — a wrong answer
+     * with no error, which is strictly worse than a failure that names the object. The same
+     * name also serves unrelated purposes ({@code TO_CHAR} of a number is not date
+     * formatting at all), so no mechanical rule is safe.
+     */
+    void warnOnFormatSensitiveFunctions(String sql, DatabaseType.DialectFamily from,
+                                        DatabaseType.DialectFamily to) {
+        java.util.regex.Matcher m = FORMAT_SENSITIVE.matcher(sql);
+        Set<String> found = new LinkedHashSet<>();
+        while (m.find()) {
+            found.add(m.group(1).toUpperCase());
+        }
+        if (!found.isEmpty()) {
+            log.warn("SQL body uses formatting function(s) {} whose format-string syntax "
+                    + "differs between {} and {}. The names are left unchanged on purpose: a "
+                    + "rename without translating the format string would return wrong values "
+                    + "silently. Review this object and supply a manual DDL override if the "
+                    + "target rejects it or the output differs.", found, from, to);
+        }
     }
 
     /**
@@ -222,18 +260,121 @@ public class SqlBodyConverter {
     }
 
     /** Applies whole-word function name substitutions for the target family. */
-    String convertFunctions(String sql, DatabaseType.DialectFamily to) {
+    String convertFunctions(String sql, DatabaseType.DialectFamily from,
+                            DatabaseType.DialectFamily to) {
         Map<String, String> map = functionMaps.get(to);
         if (map == null) {
             return sql;
         }
-        String result = sql;
-        for (Map.Entry<String, String> e : map.entrySet()) {
-            // Word boundary on both sides so SUBSTR does not match SUBSTRING.
-            result = result.replaceAll("(?i)\\b" + java.util.regex.Pattern.quote(e.getKey()) + "\\b",
-                    java.util.regex.Matcher.quoteReplacement(e.getValue()));
+        // Only real code is rewritten: a literal or a quoted identifier that happens to spell
+        // a function name is left alone.
+        return applyOutsideLiterals(sql, from, to, code -> {
+            String result = code;
+            for (Map.Entry<String, String> e : map.entrySet()) {
+                // Word boundary on both sides so SUBSTR does not match SUBSTRING.
+                result = result.replaceAll(
+                        "(?i)\\b" + java.util.regex.Pattern.quote(e.getKey()) + "\\b",
+                        java.util.regex.Matcher.quoteReplacement(e.getValue()));
+            }
+            return result;
+        });
+    }
+
+    /**
+     * Applies {@code transform} to the executable parts of {@code sql}, leaving string
+     * literals, quoted identifiers and comments untouched.
+     *
+     * <p>A blind {@code replaceAll} over the whole body rewrites text it has no business
+     * touching: {@code SELECT 'NVL means null value logic'} became
+     * {@code SELECT 'IFNULL means null value logic'}, and a column named {@code "LEN"} was
+     * renamed to {@code "LENGTH"}.
+     *
+     * <p>Every character of the input is emitted exactly once — through {@code transform} or
+     * verbatim — so a region this misjudges can only cost a missed substitution, never
+     * corrupted output.
+     */
+    String applyOutsideLiterals(String sql, DatabaseType.DialectFamily from,
+                                DatabaseType.DialectFamily to,
+                                UnaryOperator<String> transform) {
+        // Quoting is checked against both families: this runs after convertIdentifierQuotes,
+        // so a body may already carry the target's delimiters. Over-protecting only skips a
+        // substitution; under-protecting corrupts a literal.
+        boolean backtick = from == DatabaseType.DialectFamily.MYSQL
+                || to == DatabaseType.DialectFamily.MYSQL;
+        boolean bracket = from == DatabaseType.DialectFamily.SQLSERVER
+                || to == DatabaseType.DialectFamily.SQLSERVER;
+        // Backslash escapes are a MySQL extension. Assuming them elsewhere would mis-read an
+        // Oracle literal that legitimately ends in a backslash.
+        boolean backslashEscapes = from == DatabaseType.DialectFamily.MYSQL;
+
+        StringBuilder out = new StringBuilder(sql.length());
+        StringBuilder code = new StringBuilder();
+        int i = 0;
+        int n = sql.length();
+
+        while (i < n) {
+            char c = sql.charAt(i);
+
+            if (c == '-' && i + 1 < n && sql.charAt(i + 1) == '-') {
+                flushCode(out, code, transform);
+                int end = sql.indexOf('\n', i);
+                end = end < 0 ? n : end + 1;
+                out.append(sql, i, end);
+                i = end;
+                continue;
+            }
+            if (c == '/' && i + 1 < n && sql.charAt(i + 1) == '*') {
+                flushCode(out, code, transform);
+                int end = sql.indexOf("*/", i + 2);
+                end = end < 0 ? n : end + 2;
+                out.append(sql, i, end);
+                i = end;
+                continue;
+            }
+
+            boolean opensQuote = c == '\'' || c == '"'
+                    || (backtick && c == '`')
+                    || (bracket && c == '[');
+            if (opensQuote) {
+                flushCode(out, code, transform);
+                char close = c == '[' ? ']' : c;
+                int j = i + 1;
+                while (j < n) {
+                    char d = sql.charAt(j);
+                    if (backslashEscapes && c == '\'' && d == '\\' && j + 1 < n) {
+                        j += 2;
+                        continue;
+                    }
+                    if (d == close) {
+                        // A doubled delimiter escapes itself; brackets have no such form.
+                        if (close != ']' && j + 1 < n && sql.charAt(j + 1) == close) {
+                            j += 2;
+                            continue;
+                        }
+                        j++;
+                        break;
+                    }
+                    j++;
+                }
+                int end = Math.min(j, n);
+                out.append(sql, i, end);
+                i = end;
+                continue;
+            }
+
+            code.append(c);
+            i++;
         }
-        return result;
+        flushCode(out, code, transform);
+        return out.toString();
+    }
+
+    private void flushCode(StringBuilder out, StringBuilder code,
+                           UnaryOperator<String> transform) {
+        if (code.length() > 0) {
+            out.append(transform.apply(code.toString()));
+            code.setLength(0);
+        }
     }
 
     /** Rewrites row-limiting syntax between LIMIT, ROWNUM, TOP and FETCH FIRST. */

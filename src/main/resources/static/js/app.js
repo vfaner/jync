@@ -78,10 +78,18 @@
 
   /* ─── API 调用 ──────────────────────────────────────────── */
 
-  function postJson(url, body) {
+  /**
+   * POST，返回解析好的 JSON。
+   *
+   * json=true 时补上 Content-Type，否则 Spring 的 @RequestBody 会以 415 拒收 ——
+   * 表单式调用不带 body，不能无条件加这个头。
+   */
+  function postJson(url, body, json) {
+    var headers = { 'Accept': 'application/json' };
+    if (json) headers['Content-Type'] = 'application/json';
     return fetch(url, {
       method: 'POST',
-      headers: { 'Accept': 'application/json' },
+      headers: headers,
       body: body
     }).then(function (response) {
       return response.json().catch(function () {
@@ -143,7 +151,8 @@
 
       postJson(btn.dataset.action, new FormData(form)).then(function (p) {
         if (!out) {
-          toast(t(p.success ? 'db.testSuccess' : 'db.testFailed')
+          toast(t(p.success ? (btn.dataset.okKey || 'db.testSuccess')
+                            : (btn.dataset.failKey || 'db.testFailed'))
             + (p.message ? ': ' + p.message : ''), p.success ? 'ok' : 'danger');
           return;
         }
@@ -155,10 +164,14 @@
         body.className = 'alert-body';
 
         var head = document.createElement('strong');
-        head.textContent = t(p.success ? 'db.testSuccess' : 'db.testFailed');
+        head.textContent = t(btn.dataset.okKey || 'db.testSuccess');
+        if (!p.success) head.textContent = t(btn.dataset.failKey || 'db.testFailed');
         body.appendChild(head);
 
-        [p.productInfo, p.driverInfo, p.success ? null : p.message, p.jdbcUrl]
+        /* 数据库测试给 productInfo/jdbcUrl，AI 测试给 model/endpoint —— 同一套渲染，
+           各自用自己的字段名，不必为了复用而假装是另一种东西 */
+        [p.productInfo || p.model, p.driverInfo, p.success ? null : p.message,
+          p.jdbcUrl || p.endpoint]
           .forEach(function (line, idx) {
             if (!line) return;
             var div = document.createElement('div');
@@ -307,6 +320,31 @@
     }
   }
 
+  /* ─── AI 协议切换：预填 base URL ─────────────────────────── */
+
+  function bindProtocolSelect(select) {
+    var url = document.getElementById('baseUrl');
+    if (url) {
+      // 手动改过就不再覆盖 —— 内网端点几乎一定和默认值不同，抹掉它最恼人
+      url.addEventListener('input', function () { url.dataset.autofilled = 'false'; });
+    }
+
+    select.addEventListener('change', function () {
+      fetch(select.dataset.action + '?protocol=' + encodeURIComponent(select.value))
+        .then(function (r) { return r.json(); })
+        .then(function (p) {
+          if (url && p.defaultBaseUrl
+              && (!url.value.trim() || url.dataset.autofilled === 'true')) {
+            url.value = p.defaultBaseUrl;
+            url.dataset.autofilled = 'true';
+          }
+          var hint = document.getElementById('endpoint-hint');
+          if (hint) hint.textContent = p.chatPath || '';
+        })
+        .catch(function () { /* 预填失败只是少了便利，表单仍可手填 */ });
+    });
+  }
+
   /* ─── 移动端导航抽屉 ────────────────────────────────────── */
 
   function bindNavToggle(btn) {
@@ -412,6 +450,137 @@
     });
   }
 
+  /* ─── 转换复审：AI 起草 + 目标库语法检查 ──────────────────── */
+
+  /**
+   * 渲染「不保证」清单。
+   *
+   * 这一份清单比 SQL 本身更值得看：模型对着一段 PL/SQL 一定能吐出语法正确的
+   * MySQL，能不能吐出行为一致的 MySQL 是另一回事。所以清单放在编辑器上方，
+   * 空清单也照样把框显示出来 —— 「模型说它没有疑虑」本身就是一条需要警惕的信息。
+   */
+  function renderUncertainties(entries) {
+    var box = document.getElementById('uncertainty-box');
+    var list = document.getElementById('uncertainty-list');
+    if (!box || !list) return;
+
+    list.innerHTML = '';
+    (entries || []).forEach(function (entry) {
+      var li = document.createElement('li');
+      // 服务端可能给 i18n key（error.ai.*），也可能是模型的原文，t() 两种都能处理
+      li.textContent = t(entry);
+      list.appendChild(li);
+    });
+    if (!entries || !entries.length) {
+      var li = document.createElement('li');
+      li.textContent = t('conversion.noUncertainties');
+      list.appendChild(li);
+    }
+    box.style.display = '';
+  }
+
+  /** AI 起草：把候选写进编辑器，同时把模型的疑虑摊开 */
+  function bindAiDraft(btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var editor = document.getElementById('override-sql');
+      if (!editor) return;
+
+      var original = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spin"></span> ' + (btn.dataset.busyText || '');
+
+      postJson(btn.dataset.action).then(function (payload) {
+        if (!payload.success) {
+          // 模型主动拒绝转换时，理由就在 uncertainties 里，那是这次调用唯一有价值的
+          // 产出。只弹一个 toast 就丢掉，用户会以为是网络错误而反复重试。
+          if (payload.uncertainties && payload.uncertainties.length) {
+            renderUncertainties(payload.uncertainties);
+          }
+          toast(t(payload.message) || t('conversion.draftFailed'), 'danger');
+          return;
+        }
+        editor.value = payload.sql || '';
+        renderUncertainties(payload.uncertainties);
+        toast(t('conversion.draftDone') + ' — ' + (payload.model || '') +
+          ' (' + (payload.elapsedMs || 0) + 'ms)', 'ok');
+      }).catch(function (err) {
+        toast(String((err && err.message) || err), 'danger');
+      }).then(function () {
+        btn.disabled = false;
+        btn.innerHTML = original;
+      });
+    });
+  }
+
+  /**
+   * 语法检查：把编辑器里的当前内容发到目标库上真建一次再删掉。
+   *
+   * 发的是编辑器内容而不是服务端重新推导的 SQL —— 用户手改过的地方才是最需要
+   * 验的地方。会写目标库，所以必须先 confirm。
+   */
+  function bindValidateSql(btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var editor = document.getElementById('override-sql');
+      var out = document.getElementById('validate-result');
+      if (!editor) return;
+      if (!editor.value.trim()) {
+        toast(t('error.override.empty'), 'danger');
+        return;
+      }
+      if (btn.dataset.confirm && !window.confirm(btn.dataset.confirm)) return;
+
+      var original = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spin"></span> ' + (btn.dataset.busyText || '');
+      if (out) out.innerHTML = '';
+
+      postJson(btn.dataset.action, JSON.stringify({
+        kind: btn.dataset.kind,
+        name: btn.dataset.name,
+        sql: editor.value
+      }), true).then(function (payload) {
+        var kind = payload.success ? 'ok' : 'danger';
+        toast(t(payload.success ? 'conversion.validateOk' : 'conversion.validateFailed'), kind);
+
+        if (!out) return;
+        var alert = document.createElement('div');
+        alert.className = 'alert alert-' + kind;
+        alert.appendChild(icon(payload.success ? 'check-circle-fill' : 'x-circle-fill'));
+
+        var body = document.createElement('div');
+        body.className = 'alert-body';
+        var head = document.createElement('strong');
+        head.textContent = t(payload.success
+          ? 'conversion.validateOk' : 'conversion.validateFailed');
+        body.appendChild(head);
+
+        // 失败时目标库自己的报错最有用，原样带出来
+        if (!payload.success && payload.message) {
+          var detail = document.createElement('div');
+          detail.className = 'small mono';
+          detail.textContent = payload.message;
+          body.appendChild(detail);
+        }
+        // 即使通过也要显示 caveats：「目标库接受了」和「行为一致」是两件事
+        (payload.caveats || []).forEach(function (c) {
+          var line = document.createElement('div');
+          line.className = 'small muted';
+          line.textContent = t(c);
+          body.appendChild(line);
+        });
+        alert.appendChild(body);
+        out.appendChild(alert);
+      }).catch(function (err) {
+        toast(String((err && err.message) || err), 'danger');
+      }).then(function () {
+        btn.disabled = false;
+        btn.innerHTML = original;
+      });
+    });
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -420,6 +589,9 @@
     document.querySelectorAll('[data-role="picker"]').forEach(bindPicker);
     document.querySelectorAll('[data-role="find-drivers"]').forEach(bindDriverDiscovery);
     document.querySelectorAll('[data-role="type-select"]').forEach(bindTypeSelect);
+    document.querySelectorAll('[data-role="protocol-select"]').forEach(bindProtocolSelect);
+    document.querySelectorAll('[data-role="ai-draft"]').forEach(bindAiDraft);
+    document.querySelectorAll('[data-role="validate-sql"]').forEach(bindValidateSql);
     document.querySelectorAll('[data-role="nav-toggle"]').forEach(bindNavToggle);
     document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
       .forEach(bindCursorInput);

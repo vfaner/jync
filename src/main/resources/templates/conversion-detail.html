@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'projects', 'conversion.reviewTitle')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1>
+                <span class="mono" th:text="${detail.name}">NAME</span>
+            </h1>
+            <p class="sub">
+                <span class="badge badge-brand" th:text="${detail.routineType}">PROCEDURE</span>
+                <span th:text="${detail.sourceProduct?.displayName}">Oracle</span>
+                <svg class="ico"><use href="#arrow-left-right"/></svg>
+                <span th:text="${detail.targetProduct?.displayName}">MySQL</span>
+            </p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm"
+               th:href="@{/projects/{id}/conversions(id=${projectId})}">
+                <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <!--/* 同族转换是直通的，没有复审价值，先说清楚免得用户白花时间 */-->
+    <div th:if="${detail.sameFamily}" class="alert alert-info">
+        <svg class="ico"><use href="#info-circle-fill"/></svg>
+        <div class="alert-body" th:text="#{conversion.sameFamilyNote}">
+            Source and target share a dialect family; the mechanical conversion is a passthrough.
+        </div>
+    </div>
+
+    <!--/* 原始定义 vs 机械转换：并排两栏 */-->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#diagram-3"/></svg>
+                <span th:text="#{conversion.compare}">Comparison</span></h2>
+        </div>
+        <div class="card-body">
+            <div class="diff-grid">
+                <div class="diff-pane">
+                    <div class="diff-head">
+                        <span th:text="#{conversion.sourceSide}">Source</span>
+                        <span class="chip" th:text="${detail.sourceProduct?.displayName}">Oracle</span>
+                    </div>
+                    <pre class="code-block" th:text="${detail.sourceSql}">source sql</pre>
+                </div>
+                <div class="diff-pane">
+                    <div class="diff-head">
+                        <span th:text="#{conversion.mechanicalSide}">Mechanical conversion</span>
+                        <span class="chip" th:text="${detail.targetProduct?.displayName}">MySQL</span>
+                    </div>
+                    <pre class="code-block" th:text="${detail.mechanicalSql}">converted sql</pre>
+                </div>
+            </div>
+            <p class="small muted" style="margin-top:10px" th:text="#{conversion.mechanicalNote}">
+                This is exactly what structure sync would run if no override is saved.
+            </p>
+        </div>
+    </div>
+
+    <!--/* 编辑器 + AI 起草 + 语法检查 + 落库 */-->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#pencil"/></svg>
+                <span th:text="#{conversion.override}">DDL Override</span></h2>
+            <span th:if="${!#strings.isEmpty(detail.override)}" class="badge badge-ok"
+                  th:text="#{conversion.overridden}">Overridden</span>
+        </div>
+        <div class="card-body">
+
+            <div class="btn-row" style="margin-bottom:12px">
+                <!--/* AI 起草：只读源库、只产出候选，不写任何库 */-->
+                <button type="button" class="btn btn-primary btn-sm"
+                        th:if="${detail.assistAvailable}"
+                        data-role="ai-draft"
+                        th:attr="data-action=@{/api/projects/{id}/conversions/{kind}/{name}/draft(id=${projectId}, kind=${detail.kind}, name=${detail.name})},
+                                 data-busy-text=#{conversion.drafting}">
+                    <svg class="ico"><use href="#cpu"/></svg>
+                    <span th:text="#{conversion.draft}">AI draft</span>
+                </button>
+                <span th:unless="${detail.assistAvailable}" class="badge badge-mute"
+                      th:text="#{conversion.assistOff}">AI not configured</span>
+
+                <!--/* 语法检查会在目标库上真建一次再删掉，按钮文案必须说清楚 */-->
+                <button type="button" class="btn btn-ghost btn-sm"
+                        data-role="validate-sql"
+                        th:attr="data-action=@{/api/projects/{id}/conversions/validate(id=${projectId})},
+                                 data-kind=${detail.kind},
+                                 data-name=${detail.name},
+                                 data-confirm=#{conversion.validateConfirm},
+                                 data-busy-text=#{conversion.validating}">
+                    <svg class="ico"><use href="#shield-check"/></svg>
+                    <span th:text="#{conversion.validate}">Syntax check</span>
+                </button>
+            </div>
+
+            <!--/* AI 的「不保证」清单：这是这套流程里最有价值的输出，位置放在 SQL 之前 */-->
+            <div id="uncertainty-box" class="alert alert-warn" style="display:none">
+                <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+                <div class="alert-body">
+                    <strong th:text="#{conversion.uncertainties}">Not guaranteed</strong>
+                    <ul id="uncertainty-list" class="small" style="margin:6px 0 0 18px"></ul>
+                </div>
+            </div>
+
+            <div id="validate-result"></div>
+
+            <form method="post"
+                  th:action="@{/projects/{id}/conversions/{kind}/{name}/save(id=${projectId}, kind=${detail.kind}, name=${detail.name})}">
+                <div class="field">
+                    <label for="override-sql" th:text="#{conversion.editorLabel}">Statement</label>
+                    <textarea id="override-sql" name="sql" class="input mono" rows="18"
+                              spellcheck="false"
+                              th:text="${detail.editorSeed()}"></textarea>
+                    <p class="help" th:text="#{conversion.editorHelp}">
+                        Saved as-is and executed as a single statement.
+                    </p>
+                </div>
+                <div class="btn-row">
+                    <button type="submit" class="btn btn-primary btn-sm">
+                        <svg class="ico"><use href="#check-lg"/></svg>
+                        <span th:text="#{conversion.saveOverride}">Save override</span>
+                    </button>
+                </div>
+            </form>
+
+            <form method="post" style="margin-top:10px"
+                  th:if="${!#strings.isEmpty(detail.override)}"
+                  th:action="@{/projects/{id}/conversions/{kind}/{name}/delete-override(id=${projectId}, kind=${detail.kind}, name=${detail.name})}"
+                  th:attr="data-confirm=#{common.confirm}">
+                <button type="submit" class="btn btn-outline-danger btn-sm">
+                    <svg class="ico"><use href="#trash"/></svg>
+                    <span th:text="#{conversion.deleteOverride}">Remove override</span>
+                </button>
+                <span class="small muted" th:text="#{conversion.deleteOverrideHelp}">
+                    Restores automatic conversion.
+                </span>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#shield-check"/></svg>
+                <span th:text="#{conversion.limitsTitle}">What this cannot tell you</span></h2>
+        </div>
+        <div class="card-body">
+            <p class="small" th:text="#{conversion.limitsBody}">
+                A passing syntax check proves the target accepted the DDL, not that it behaves
+                the same.
+            </p>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

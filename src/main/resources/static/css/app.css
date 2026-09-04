@@ -303,6 +303,30 @@ table.tbl.dense td, table.tbl.dense th { padding: 8px 14px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .row-bad { background: color-mix(in srgb, var(--danger) 6%, transparent); }
 .row-bad:hover { background: color-mix(in srgb, var(--danger) 10%, transparent) !important; }
+/* 当前启用项：AI 供应商列表里只会有一行命中 */
+.row-active { background: color-mix(in srgb, var(--brand) 6%, transparent); }
+.row-active:hover { background: color-mix(in srgb, var(--brand) 10%, transparent) !important; }
+.row-active td:first-child { box-shadow: inset 3px 0 0 var(--brand); }
+
+/* ─── 转换复审：并排对比 + 代码块 ───────────────────────── */
+.diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.diff-pane { border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.diff-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line);
+  background: var(--bg-soft); font-size: 13px; font-weight: 600;
+}
+/* 存储过程正文很长，两个方向都给滚动条，不让它把卡片撑破 */
+.code-block {
+  font-family: var(--mono); font-size: 13px; line-height: 1.55;
+  padding: 12px; margin: 0; white-space: pre;
+  max-height: 480px; overflow: auto;
+}
+.text-danger { color: var(--danger); }
+/* 窄屏下并排会挤成两条不可读的细缝，改成上下 */
+@media (max-width: 900px) {
+  .diff-grid { grid-template-columns: 1fr; }
+}
 
 /* ─── 徽章 ──────────────────────────────────────────────── */
 .badge {

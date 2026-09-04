@@ -26,6 +26,7 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 - [Concurrency & Consistency Design](#concurrency--consistency-design)
 - [Incremental Detection Strategies](#incremental-detection-strategies)
 - [Configuration](#configuration)
+- [AI-Assisted Conversion (optional)](#ai-assisted-conversion-optional)
 - [Architecture](#architecture)
 - [Tests](#tests)
 - [Known Limitations](#known-limitations)
@@ -444,8 +445,67 @@ Under `sync.*` in `application.yml`:
 | `lock-ttl-ms` | `300000` | Sync lock lease duration (ms) |
 | `crypto-password` | *(default)* | Password encryption key — **must be changed in production** |
 | `crypto-salt` | *(default)* | Encryption salt (hex) — **must be changed in production** |
+| `ai.enabled` | `true` | Whether AI-assisted conversion may be configured. `false` removes the menu and its endpoints |
 
 Connection passwords are stored encrypted with AES-256 via Spring Security Crypto, marked with an `enc:` prefix to avoid double encryption, and remain compatible with plaintext written before encryption was enabled.
+
+
+---
+
+## AI-Assisted Conversion (optional)
+
+Textual substitution only goes so far with incompatible stored-procedure syntax. `SqlBodyConverter`
+deliberately refuses to translate procedural control flow, because getting it wrong yields SQL that
+is valid but returns different results — a silent wrong answer, which is far worse than a failure
+that names the object. The `AI` menu offers another route: let a model draft a candidate that you
+review before it is stored.
+
+**The boundaries here are hard:**
+
+- AI **only produces candidates**. It never participates in a sync; `StructureSyncService` calls no
+  AI code at all.
+- A candidate is written to the project's `ddlOverrides` only after you confirm it, using the manual
+  override path that was already supported.
+- With no provider enabled, the tool makes **no outbound request whatsoever**, exactly as before.
+- Setting `sync.ai.enabled=false` removes the feature entirely — menu and REST endpoints alike.
+
+### Configuration
+
+The `AI` page accepts several providers, of which **exactly one is active at a time**. Enabling
+another switches the current one off; the exclusivity is enforced server-side inside a transaction,
+so two open browser tabs cannot leave two providers enabled.
+
+| Field | Notes |
+|---|---|
+| Protocol | `OpenAI-compatible` or `Anthropic`. Nearly every self-hosted endpoint is the former |
+| Base URL | Endpoint root. Vendors disagree about whether `/v1` belongs here, so the form shows the request path that will actually be used |
+| Model | Model name, e.g. `deepseek-chat` |
+| API key | Encrypted with AES-256 like a database password; leave blank when editing to keep the stored value |
+| Max tokens / timeout | A long procedure needs room for the whole rewritten body |
+
+Every provider can be **probed**. The probe sends a real request with `max_tokens: 1`: a TCP or
+`HEAD` check would report success for a wrong key, a misspelled model, or a base URL that is one
+path segment off — the three things that actually go wrong. The outcome is stored and shown as a
+status badge, so rendering the list itself never reaches out to the network.
+
+Enabling a provider makes AI-assisted conversion available. A failed probe does **not** block
+enabling — a transient network problem should not make the setting unsavable — and the list shows
+a red badge instead.
+
+### Before you use it
+
+Probing and conversion both send requests to the endpoint you configure, and a conversion includes
+**the procedure's source code**, which often encodes business rules and even the full table
+structure. On an intranet or a regulated deployment, prefer a local or in-house inference endpoint,
+and confirm you are permitted to send this code off-site.
+
+Also note that **no tool can guarantee the converted procedure behaves identically**, and an LLM is
+no exception. Procedure differences are usually semantic rather than syntactic: cursor behaviour,
+implicit transaction boundaries, `NO_DATA_FOUND`-style exception control flow, the
+non-determinism of pagination without an explicit sort, or `NULL` in string concatenation — treated
+as an empty string by Oracle but poisoning the whole expression in MySQL. So the role here is
+**drafting**, not **guaranteeing**: every candidate needs human review, and critical procedures
+should be tested against the target for real.
 
 ---
 
@@ -480,12 +540,14 @@ com.synctool
 mvn test
 ```
 
-43 unit tests, covering:
+113 unit tests, covering:
 
-- **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, precision-less `NUMBER` never yields `DECIMAL(0,0)`); non-portable defaults are dropped rather than emitted as invalid DDL
+- **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
+- **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself
 - **Cursor strategies** — resolution priority; `IDENTITY` correctly flagged as "may miss updates"; graceful downgrade rather than an error when a configured column becomes invalid; a `VARCHAR` `update_time` is never misused
 - **Cursor serialization** — timestamps round-trip as UTC ISO-8601 without losing millisecond precision; oversized numbers downgrade to `BigDecimal`; corrupt values are treated as "not yet synced" instead of throwing
 - **Password encryption** — round-trip, no double encryption, backward compatibility with legacy plaintext, distinct ciphertexts for identical passwords
+- **AI configuration** — enabling one provider necessarily disables every other (the enabled set is asserted to be exactly one); the global switch masks even an enabled provider; keys are stored encrypted, a blank field on edit keeps the stored one, and the probe receives the plaintext rather than the ciphertext; changing the endpoint clears a stale "reachable" badge; the key appears neither in the probe result nor in the edit page source; OpenAI sends `Authorization: Bearer` while Anthropic sends `x-api-key` and no `Authorization`; a trailing slash or an already-complete endpoint path never produces a doubled path
 
 There is also an end-to-end script (H2 source and target, 20 assertions) covering initial full load, incremental inserts, incremental updates, idempotency across repeated syncs, DDL column-addition propagation, **matching row counts with no duplicates under concurrent writes**, concurrent invocations rejected by the lock, **writes made during downtime backfilled after restart**, automatic polling, and change-log / cursor-strategy reporting.
 
