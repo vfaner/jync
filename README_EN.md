@@ -66,6 +66,18 @@ Object name, change type, affected row count, elapsed time, and full error detai
 
 ![Change log](src/main/resources/static/assets/dataSync_log.png)
 
+### AI providers — several configured, exactly one active
+
+Enabling another switches the current one off. The list shows the protocol, the model, and the last probe result; rendering it never reaches out to the network.
+
+![AI providers](src/main/resources/static/assets/dataSync_ai.png)
+
+### Adding a provider — probe the endpoint before saving
+
+The key is encrypted like a database password. The probe sends a real request rather than a TCP check — a wrong key, a misspelled model, and a base URL that is one path segment off are invisible to anything less.
+
+![Adding a provider](src/main/resources/static/assets/dataSync_ai_add.png)
+
 ---
 
 ## Features
@@ -492,6 +504,41 @@ Enabling a provider makes AI-assisted conversion available. A failed probe does 
 enabling — a transient network problem should not make the setting unsavable — and the list shows
 a red badge instead.
 
+### Conversion review
+
+The `Conversion review` entry on the project detail page (it appears once both the source and the
+target are configured) lists every view and stored procedure the project has selected, marking which
+ones already carry a manual override. Opening one object leads to the review page:
+
+| Area | Contents |
+|---|---|
+| Side-by-side | The source's original definition on the left, `SqlBodyConverter`'s mechanical conversion on the right — that is, **the statement the sync would actually execute if you did nothing** |
+| Uncertainties | The model's own list of what it cannot guarantee is equivalent, placed above the SQL. This is the first thing to read |
+| Editor | What gets stored. If an override already exists it opens with that content, which a fresh mechanical conversion will not overwrite |
+| Syntax check | Takes the editor's current content and really creates it on the **target**, then drops it |
+
+The mechanical column calls the same `StructureSyncService` methods the sync itself uses, not a
+second simplified implementation — the moment the two drift, this page is lying, and "the SQL shown
+to the reviewer differs from the SQL the sync runs" is worse than showing nothing.
+
+Two things need saying plainly:
+
+**The uncertainty list is worth more than the SQL.** If a two-hundred-line procedure comes back with
+no uncertainties at all, that is a signal the model did not look carefully — not a signal the
+conversion is good. Read the list before reading the SQL.
+
+**The syntax check writes to the target.** It really creates an object there named
+`SYNCTOOL_AI_CHECK_<timestamp>`, then drops it in a `finally`. This is the only place any AI-related
+code writes to the target, so it runs only when you click the button, and only after a confirmation
+dialog; the sync path never calls it. Why create it for real: no database offers a portable
+"parse but do not execute" call, and Oracle-family products create PL/SQL that fails to compile as
+an `INVALID` object rather than raising an error — hence the `USER_ERRORS` readback for those
+products, without which every check would report a false success.
+
+Passing the check **only proves the target accepts this DDL**, not that it behaves the same. A
+recursive object is verified only as a renamed copy, whose self-call resolves to whatever already
+exists on the target; that is reported explicitly as a caveat.
+
 ### Before you use it
 
 Probing and conversion both send requests to the endpoint you configure, and a conversion includes
@@ -521,6 +568,7 @@ com.synctool
 │   ├── monitor      ChangeDetector (schema diffing), CursorStrategyResolver
 │   ├── converter    SqlDialect implementations, type mapping, SQL body conversion
 │   ├── sync         SyncEngine, DataSyncService, StructureSyncService, DdlExecutor
+│   ├── ai           Provider config, shared HTTP layer, candidate drafting, candidate validation, review orchestration
 │   └── task         Quartz scheduling, three-layer locking, context assembly, startup recovery
 ├── model            JPA entities and enums
 ├── repository       Spring Data JPA
@@ -540,7 +588,7 @@ com.synctool
 mvn test
 ```
 
-113 unit tests, covering:
+196 unit tests, covering:
 
 - **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
 - **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself
@@ -548,6 +596,11 @@ mvn test
 - **Cursor serialization** — timestamps round-trip as UTC ISO-8601 without losing millisecond precision; oversized numbers downgrade to `BigDecimal`; corrupt values are treated as "not yet synced" instead of throwing
 - **Password encryption** — round-trip, no double encryption, backward compatibility with legacy plaintext, distinct ciphertexts for identical passwords
 - **AI configuration** — enabling one provider necessarily disables every other (the enabled set is asserted to be exactly one); the global switch masks even an enabled provider; keys are stored encrypted, a blank field on edit keeps the stored one, and the probe receives the plaintext rather than the ciphertext; changing the endpoint clears a stale "reachable" badge; the key appears neither in the probe result nor in the edit page source; OpenAI sends `Authorization: Bearer` while Anthropic sends `x-api-key` and no `Authorization`; a trailing slash or an already-complete endpoint path never produces a doubled path
+- **AI reply parsing** — SQL is recovered from bare JSON, from a ```` ```json ```` fence, and from half a fence truncated by the token limit; a reply that ignores the output format entirely still has its SQL used, but gains an extra uncertainty entry (a model that would not follow the format probably did not follow "do not invent columns" either); when the model declines the conversion outright its stated reasons are kept rather than discarded as a network error; an empty reply never silently clears the editor; an unconfigured provider throws rather than masquerading as "conversion failed"
+- **Candidate validation** (against real H2) — a same-named object is **byte-identical before and after** a check, including the two forms easiest to get wrong (`CREATE OR REPLACE` and a schema-qualified name); no object is left behind afterwards, and a failed `CREATE` is cleaned up just the same; a statement whose `CREATE` header cannot be parsed is refused rather than forwarded verbatim to the target; the temporary name stays within Oracle's 30-byte limit and two consecutive checks never collide; "the database is unreachable" and "the statement was rejected" do not share one message
+- **Override storage** — the key matches the one `StructureSyncService` actually looks up (`FUNCTION` folds onto `PROCEDURE`); a blank override is refused (an empty-string override is worse than none — the sync would execute it and the object would silently disappear); deleting a key that does not exist writes nothing; overrides whose object was dropped at the source or deselected in the project are flagged as orphans and can be cleared
+- **Page rendering** — every conditional branch of both review pages (override present/absent, model available/not, same dialect family/not, orphans/none) is actually rendered, asserting that no `??` appears in the output — a message key added to only one bundle shows up here as `??key_en_US??`; an object name containing a dot is not truncated as a file extension by Spring
+- **JSON endpoints** — both a rejected request and a server-side exception return 200 with `success:false`, because the caller is `fetch()` and a 500 carrying an HTML error page reaches the user as nothing but a blank toast
 
 There is also an end-to-end script (H2 source and target, 20 assertions) covering initial full load, incremental inserts, incremental updates, idempotency across repeated syncs, DDL column-addition propagation, **matching row counts with no duplicates under concurrent writes**, concurrent invocations rejected by the lock, **writes made during downtime backfilled after restart**, automatic polling, and change-log / cursor-strategy reporting.
 
@@ -555,7 +608,9 @@ There is also an end-to-end script (H2 source and target, 20 assertions) coverin
 
 ## Known Limitations
 
-- **Stored procedure conversion** — mechanical differences (function names, identifier quoting, `FROM DUAL`, pagination syntax) are converted automatically, but PL/SQL, T-SQL, and PL/pgSQL have different procedural control-flow constructs, so complex procedures cannot be translated reliably. Such objects are attempted with their original source; on failure the specific error is reported, and you can supply a manual DDL override in the project configuration.
+- **Stored procedure conversion** — mechanical differences (function names, identifier quoting, `FROM DUAL`, pagination syntax) are converted automatically, but PL/SQL, T-SQL, and PL/pgSQL have different procedural control-flow constructs, so complex procedures cannot be translated reliably. Such objects are attempted with their original source; on failure the specific error is reported. You can review them one by one on the `Conversion review` page and save a manual override there (with a provider configured, a model can draft the candidate for you) — but **a candidate still needs human confirmation**, and passing the syntax check does not mean semantic equivalence.
+- **What AI drafting is and is not** — the model only produces candidates and never participates in a sync; `StructureSyncService` calls no AI code. Semantic equivalence cannot be guaranteed by any tool — cursor behaviour, implicit transaction boundaries, exception control flow, and `NULL` concatenation semantics do not show up in the syntax, so critical procedures must be tested against the target for real.
+- **What the syntax check costs** — it really creates a temporary object on the target and then drops it. It runs only on a manual click (behind a confirmation), but killing the process between those two steps leaves a `SYNCTOOL_AI_CHECK_*` object behind, and the list page will not discover it for you.
 - **Row-delete detection** — without a source-side audit table this requires comparing the full primary-key sets on both sides, so it is only enabled for tables below `full-compare-max-rows`.
 - **Tables without a primary key** — idempotency cannot be guaranteed and replay may produce duplicate rows; the tool warns.
 - **Target writers** — the target database is assumed to be written only by this tool.
