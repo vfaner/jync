@@ -22,6 +22,7 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 - [Comparison With Existing Tools](#comparison-with-existing-tools)
 - [Supported Databases](#supported-databases)
 - [Deployment](#deployment)
+- [Login & Roles](#login--roles)
 - [Workflow](#workflow)
 - [Concurrency & Consistency Design](#concurrency--consistency-design)
 - [Incremental Detection Strategies](#incremental-detection-strategies)
@@ -36,17 +37,35 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 
 ## Screenshots
 
+### Sign-in — one password stands between the jar and your connections
+
+Username and password, with theme and language switchable from the top-right corner at any time. Until the default password is changed, every page carries a red warning at the top — dismissable for the session, but back as soon as the browser reopens, and gone for good only once the password actually changes.
+
+![Sign-in](src/main/resources/static/assets/dataSync_login.png)
+
 ### Dashboard — the whole sync posture on one screen
 
 Project count, connection count, synced tables, 24-hour change volume, and a recent activity feed.
 
 ![Dashboard](src/main/resources/static/assets/dataSync_kanban.png)
 
+### Dark theme — the whole palette moves, not just the background
+
+One toggle in the top-right corner. Dashboard, cards, tables, and icons all follow, instead of a black background left studded with glaring light-mode controls.
+
+![Dashboard in dark theme](src/main/resources/static/assets/dataSync_kanban_anye.png)
+
 ### Database connections — test before you save
 
 Pick a database type and the JDBC URL is generated for you; preview it, test it. For non-bundled drivers, just point at the jar and it is loaded dynamically.
 
 ![Database connections](src/main/resources/static/assets/dataSync_db.png)
+
+### Adding a connection — pick the type, the URL writes itself
+
+Fill in host, port, and database name and the JDBC URL appears as you type, so there is no need to remember each vendor's connection-string shape. The password is encrypted on the way into storage, and the connection can be tested before you commit it.
+
+![Adding a connection](src/main/resources/static/assets/dataSync_db_add.png)
 
 ### Projects — many pipelines in parallel, start and pause at will
 
@@ -59,6 +78,12 @@ Each project is one source → target pair, independently startable and pausable
 Tables / views / stored procedures grouped for selection, with search and bulk actions. Every table's incremental detection strategy is labeled inline — `IDENTITY` and `NONE` are called out prominently, because they mean updates may not propagate.
 
 ![Project detail](src/main/resources/static/assets/dataSync_xiangmu_xiangqing.png)
+
+### A read-only account — visible, but not editable
+
+The same project-detail page seen through the `view` user, which holds query permission only. Tables, views, and cursor strategies are all there to read; write actions are not offered to it. Every other screenshot here is taken as `admin`.
+
+![Project detail as a read-only user](src/main/resources/static/assets/dataSync_xiangmu_xiangqing_view.png)
 
 ### Change log — every change is traceable
 
@@ -340,6 +365,36 @@ The metadata store uses `ddl-auto: update`, so its schema evolves automatically.
 
 ---
 
+## Login & Roles
+
+Every page and every endpoint requires a signed-in session. There is no anonymous entry point.
+
+On first start two accounts are seeded into the `app_user` table of the metadata store (skipped entirely if the table already has rows — nobody's password is ever reset):
+
+| Username | Role | Initial password | Permissions |
+|---|---|---|---|
+| `admin` | Administrator | `123456` | Everything |
+| `view` | Viewer | `123456` | Read-only |
+
+> ⚠️ **Change both passwords immediately after your first sign-in.** The jar is publicly downloadable, so the initial password is not a secret. Any account still on it sees a persistent yellow banner at the top of every page; clicking it jumps to the change-password form.
+
+### What the two roles differ on
+
+Authorization is not a list of paths — it is decided **by HTTP method**. Every write in this tool is a POST and no GET mutates state, so there is exactly one rule: **a POST requires the administrator role.** New endpoints therefore cannot be forgotten.
+
+- **Administrator**: create/edit/delete database connections, projects and AI providers; select sync objects, start/pause sync, sync now, reset cursors; draft and save procedure conversions; clear the change log.
+- **Viewer**: sees every page and all of the data (dashboard, connection list, the checked state on project detail, the change log, and the SQL on the conversion review page — all viewable, selectable and copyable), but no write control is rendered anywhere, and hand-crafting the request to hit the endpoint directly is refused too. The config block on project detail is kept visible and natively greyed out rather than hidden, because the selection state is itself useful read-only information.
+
+Both roles can change their own password.
+
+### Changing your own password
+
+Click your username in the top-right → **Change password**, or go straight to `/account/password`. The current password is required; the new one must be at least 6 characters and must differ from the current one. The change signs you out immediately — sign back in with the new password.
+
+Login passwords are stored as one-way BCrypt hashes, unlike the database and AI credentials, which must be recoverable in cleartext to hand to a driver. **A forgotten password cannot be recovered.** If it really is lost, delete that row from `app_user`; the initial password is re-seeded on the next restart.
+
+---
+
 ## Workflow
 
 1. **Database Connections** → create a source and a target connection → click **Test Connection**
@@ -560,7 +615,7 @@ should be tested against the target for real.
 
 ```
 com.synctool
-├── config           Configuration: i18n, Quartz, Jackson, SyncProperties
+├── config           Configuration: i18n, Quartz, Jackson, SecurityConfig, SyncProperties
 ├── controller       MVC controllers; controller/api holds the REST endpoints
 ├── service
 │   ├── connection   DataSourceManager, DriverLoader, DriverShim, connection testing
@@ -569,7 +624,8 @@ com.synctool
 │   ├── converter    SqlDialect implementations, type mapping, SQL body conversion
 │   ├── sync         SyncEngine, DataSyncService, StructureSyncService, DdlExecutor
 │   ├── ai           Provider config, shared HTTP layer, candidate drafting, candidate validation, review orchestration
-│   └── task         Quartz scheduling, three-layer locking, context assembly, startup recovery
+│   ├── task         Quartz scheduling, three-layer locking, context assembly, startup recovery
+│   └── auth         Account seeding, BCrypt password change, UserDetailsService
 ├── model            JPA entities and enums
 ├── repository       Spring Data JPA
 ├── dto              SyncConfig, ChangeEvent, SyncResult, meta/* metadata models
@@ -588,7 +644,7 @@ com.synctool
 mvn test
 ```
 
-196 unit tests, covering:
+223 unit tests, covering:
 
 - **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
 - **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself
@@ -600,6 +656,8 @@ mvn test
 - **Candidate validation** (against real H2) — a same-named object is **byte-identical before and after** a check, including the two forms easiest to get wrong (`CREATE OR REPLACE` and a schema-qualified name); no object is left behind afterwards, and a failed `CREATE` is cleaned up just the same; a statement whose `CREATE` header cannot be parsed is refused rather than forwarded verbatim to the target; the temporary name stays within Oracle's 30-byte limit and two consecutive checks never collide; "the database is unreachable" and "the statement was rejected" do not share one message
 - **Override storage** — the key matches the one `StructureSyncService` actually looks up (`FUNCTION` folds onto `PROCEDURE`); a blank override is refused (an empty-string override is worse than none — the sync would execute it and the object would silently disappear); deleting a key that does not exist writes nothing; overrides whose object was dropped at the source or deselected in the project are flagged as orphans and can be cleared
 - **Page rendering** — every conditional branch of both review pages (override present/absent, model available/not, same dialect family/not, orphans/none) is actually rendered, asserting that no `??` appears in the output — a message key added to only one bundle shows up here as `??key_en_US??`; an object name containing a dot is not truncated as a file extension by Spring
+- **Login & roles** — the initial accounts are seeded only into an empty table, so a restart does not re-seed and a table that already has rows has nobody's password reset; the stored hash starts with `$2a$` and does not contain the cleartext; the five rejection reasons for a password change (wrong current password, too short, mismatch, same as the current one, no such account) each return their own message key; the "using the initial password" flag flips to false after a successful change
+- **Authorization rules** — an unauthenticated page request redirects to `/login`, while an unauthenticated `/api/**` request answers 401 JSON rather than handing a login page to `fetch()`; every POST by a viewer is refused; `/account/password` is permitted for both roles, and that rule *must* precede "a POST requires admin" or a viewer would be shown a password form they are forbidden to submit; a POST missing its CSRF token is refused even for an administrator
 - **JSON endpoints** — both a rejected request and a server-side exception return 200 with `success:false`, because the caller is `fetch()` and a 500 carrying an HTML error page reaches the user as nothing but a blank toast
 
 There is also an end-to-end script (H2 source and target, 20 assertions) covering initial full load, incremental inserts, incremental updates, idempotency across repeated syncs, DDL column-addition propagation, **matching row counts with no duplicates under concurrent writes**, concurrent invocations rejected by the lock, **writes made during downtime backfilled after restart**, automatic polling, and change-log / cursor-strategy reporting.
