@@ -348,6 +348,10 @@ table.tbl.dense td, table.tbl.dense th { padding: 8px 14px; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* ─── 表单 ──────────────────────────────────────────────── */
+/* 纯分组用的 fieldset：只借它的 disabled 语义，不要它的边框。
+   project-detail 用它把整块配置对访客置灰。 */
+fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
+
 .field { margin-bottom: 16px; }
 .field:last-child { margin-bottom: 0; }
 .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--ink); }
@@ -671,6 +675,154 @@ table.tbl.dense td, table.tbl.dense th { padding: 8px 14px; }
   .donate-btn { width: 36px; height: 36px; padding: 0; border-radius: 9px; }
   .donate-btn span { display: none; }
 }
+/* ─── 登录页 ────────────────────────────────────────────
+   唯一不套 layout 的页面。只用既有 CSS 变量，因此深色主题
+   无需第二套规则，跟着 [data-theme] 自动成立。 */
+.login-body {
+  min-height: 100vh;
+  display: grid; place-items: center;
+  padding: 32px 20px;
+  background: var(--bg-soft);
+  position: relative; overflow-x: hidden;
+}
+
+/* 背景光斑：纯 CSS 渐变，不产生任何图片请求（内网离线可用） */
+.login-glow {
+  position: fixed; border-radius: 50%; pointer-events: none;
+  filter: blur(90px); opacity: .5; z-index: 0;
+}
+.login-glow-a {
+  width: 480px; height: 480px; top: -160px; left: -130px;
+  background: radial-gradient(circle, var(--brand) 0%, transparent 70%);
+}
+.login-glow-b {
+  width: 420px; height: 420px; bottom: -150px; right: -120px;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+}
+[data-theme="dark"] .login-glow { opacity: .28; }
+
+.login-tools {
+  position: fixed; top: 20px; right: 20px; z-index: 2;
+  display: flex; gap: 8px;
+}
+
+.login-wrap {
+  position: relative; z-index: 1;
+  width: 100%; max-width: 400px;
+}
+
+.login-brand { text-align: center; margin-bottom: 24px; }
+.login-mark {
+  width: 54px; height: 54px; border-radius: 15px; margin: 0 auto 14px;
+  background: linear-gradient(135deg, var(--brand), var(--accent));
+  display: grid; place-items: center; color: #fff;
+  box-shadow: var(--shadow-brand);
+}
+.login-mark .ico { width: 26px; height: 26px; }
+.login-brand h1 {
+  font-size: 21px; font-weight: 700; margin: 0 0 6px; color: var(--ink);
+  letter-spacing: -.2px;
+}
+.login-brand p { font-size: 13px; color: var(--ink-mute); margin: 0; }
+
+/* 玻璃卡片：与导航栏同一套观感 */
+.login-card {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 26px 24px;
+}
+.login-card .alert { margin-bottom: 18px; }
+.login-form .field { margin-bottom: 18px; }
+
+/* 密码框右侧的显示/隐藏按钮 */
+.login-pw { position: relative; }
+.login-pw .input { padding-right: 42px; }
+.login-pw-toggle {
+  position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
+  width: 30px; height: 30px; border: none; background: transparent;
+  color: var(--ink-mute);
+}
+.login-pw-toggle:hover { color: var(--brand); background: var(--bg-tint); }
+
+.login-submit { width: 100%; justify-content: center; margin-top: 4px; }
+
+.login-foot {
+  text-align: center; font-size: 11.5px; color: var(--ink-mute);
+  margin: 20px 0 0;
+}
+
+@media (max-width: 420px) {
+  .login-card { padding: 22px 18px; border-radius: var(--radius); }
+  .login-tools { top: 14px; right: 14px; }
+}
+
+/* ─── 默认口令横幅 ──────────────────────────────────────
+   公开分发的 jar 若一直用播种口令，等于没有鉴权。做成横贯内容区的
+   整条横幅而非角落提示，是因为角落提示会被当作装饰忽略掉。
+
+   宽度与 .shell 的内容列对齐，而不是整屏通栏：.shell 是 1440 上限
+   加 28 内边距，内容列因此是 1384，卡片的左右边缘就落在那里。宽屏上
+   通栏横幅会比它警告的那些内容宽出一大截，反而显得像页面装饰。 */
+.default-pw-banner {
+  display: flex; align-items: center; gap: 10px;
+  width: calc(100% - 56px); max-width: 1384px;
+  margin: 18px auto 0;
+  padding: 10px 16px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 500;
+  color: #fff; background: linear-gradient(90deg, var(--danger), var(--accent));
+}
+.default-pw-banner .ico { width: 15px; height: 15px; flex-shrink: 0; }
+.default-pw-banner a {
+  color: #fff; text-decoration: underline; text-underline-offset: 2px;
+  font-weight: 700; white-space: nowrap;
+}
+/* 关闭按钮：推到最右侧，与横幅同色系（透明底 + 白字），
+   hover 时给一层浅白底表示可点，不引入第二种配色。 */
+.default-pw-banner .banner-close {
+  margin-left: auto; flex-shrink: 0;
+  width: 26px; height: 26px; padding: 0;
+  border: none; border-radius: 7px;
+  background: rgba(255, 255, 255, .16); color: #fff;
+  cursor: pointer; display: grid; place-items: center;
+  transition: background .2s;
+}
+.default-pw-banner .banner-close:hover { background: rgba(255, 255, 255, .32); }
+.default-pw-banner .banner-close .ico { width: 12px; height: 12px; }
+
+/* 窄屏：shell 的左右内边距收到 16，横幅跟着收，否则会比卡片宽出一截。
+   这条必须留在上面的基础规则之后 —— 媒体查询不提升特异性，写进文件前面
+   那个 900px 区块会被后出现的同名规则覆盖掉。 */
+@media (max-width: 900px) {
+  .default-pw-banner { width: calc(100% - 32px); margin-top: 14px; }
+}
+
+/* ─── 导航栏用户区 ─────────────────────────────────────── */
+.user-chip {
+  display: flex; align-items: center; gap: 7px;
+  padding: 0 10px; height: 34px;
+  border: 1px solid var(--line); border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink);
+  background: var(--bg); text-decoration: none;
+  transition: border-color .2s, background .2s;
+}
+.user-chip:hover { border-color: var(--brand); background: var(--bg-tint); }
+.user-chip .ico { width: 14px; height: 14px; color: var(--ink-mute); }
+.user-chip .role {
+  font-size: 10px; font-weight: 700; letter-spacing: .3px;
+  padding: 1px 6px; border-radius: 999px;
+}
+.user-chip .role-admin { background: color-mix(in srgb, var(--brand) 15%, transparent); color: var(--brand); }
+.user-chip .role-viewer { background: var(--bg-tint); color: var(--ink-mute); }
+
+.logout-form { display: inline-flex; margin: 0; }
+
+@media (max-width: 860px) {
+  .user-chip .uname { display: none; }
+}
+
 @media (max-width: 560px) {
   .stat-grid { grid-template-columns: 1fr 1fr; gap: 11px; }
   .stat { padding: 14px; flex-direction: column; align-items: flex-start; gap: 9px; }

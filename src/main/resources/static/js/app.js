@@ -87,11 +87,26 @@
   function postJson(url, body, json) {
     var headers = { 'Accept': 'application/json' };
     if (json) headers['Content-Type'] = 'application/json';
+    // CSRF：表单由 Thymeleaf 自动注入隐藏域，fetch 得自己带头。
+    // 令牌在 layout.html 的 <meta> 里，所以整个 JS 层只有这一处要管。
+    var token = document.querySelector('meta[name="_csrf"]');
+    var header = document.querySelector('meta[name="_csrf_header"]');
+    if (token && header && token.content && header.content) {
+      headers[header.content] = token.content;
+    }
     return fetch(url, {
       method: 'POST',
       headers: headers,
       body: body
     }).then(function (response) {
+      // 会话过期会被安全层拦成 401 JSON。此时页面上的一切操作都已无效，
+      // 停在原地只会让用户对着「未授权」反复重试。这里重载而不是跳转到
+      // 拼出来的 /login：重载走的是当前 URL，由安全层自己重定向，
+      // 于是 context-path 和多层路径（如 /projects/1/conversions/...）都不会拼错。
+      if (response.status === 401) {
+        window.location.reload();
+        return { success: false, message: 'error.sessionExpired' };
+      }
       return response.json().catch(function () {
         // 非 JSON 响应说明是意外的服务端错误，把状态码带出来
         return { success: false, message: 'HTTP ' + response.status };
@@ -581,6 +596,25 @@
     });
   }
 
+  /* ─── 默认口令横幅 ──────────────────────────────────────── */
+
+  /**
+   * 关掉「仍在用默认口令」的横幅。
+   *
+   * 记在 sessionStorage 而不是 localStorage：关掉只对本次会话有效，浏览器一关
+   * 状态就没了，下次打开继续提示。口令真的改了之后服务端不再渲染这条横幅，
+   * 所以这里不需要、也不应该提供永久关闭。
+   */
+  function bindDefaultPwDismiss(btn) {
+    btn.addEventListener('click', function () {
+      var banner = btn.closest('.default-pw-banner');
+      if (banner) banner.remove();
+      try {
+        sessionStorage.setItem('synctool-pw-banner-dismissed', '1');
+      } catch (e) { /* 隐私模式：写不进去，本次点击仍然生效 */ }
+    });
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -593,8 +627,10 @@
     document.querySelectorAll('[data-role="ai-draft"]').forEach(bindAiDraft);
     document.querySelectorAll('[data-role="validate-sql"]').forEach(bindValidateSql);
     document.querySelectorAll('[data-role="nav-toggle"]').forEach(bindNavToggle);
+    document.querySelectorAll('[data-role="toggle-password"]').forEach(bindPasswordToggle);
     document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
       .forEach(bindCursorInput);
+    document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     bindDonate();
 
     // 关闭提示条
@@ -616,6 +652,23 @@
       });
     });
   });
+
+  /**
+   * 密码框的显示/隐藏。
+   *
+   * 只切 type 属性，不把明文写进任何变量或 DOM 文本节点，
+   * 于是不会有一份密码留在别处等着被别的脚本读到。
+   */
+  function bindPasswordToggle(btn) {
+    var input = document.getElementById(btn.dataset.target);
+    if (!input) return;
+    btn.addEventListener('click', function () {
+      var shown = input.type === 'text';
+      input.type = shown ? 'password' : 'text';
+      btn.classList.toggle('active', !shown);
+      input.focus();
+    });
+  }
 
   window.SyncToolUI = { toast: toast, t: t, icon: icon, iconHtml: iconHtml };
 })();

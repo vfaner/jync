@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<!--/*
+  登录页。这是全项目唯一不套 layout 的模板 —— 未登录的人不该看到导航、
+  也不该看到「有哪些功能」这类信息。因此 <head> 在这里自成一份，
+  包括防白闪的主题脚本（与 layout 里那段同源，深色用户不会先闪一帧白底）。
+*/-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:lang="${#locale.toString().startsWith('zh')} ? 'zh-CN' : 'en'"
+      data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title th:text="|#{login.title} · #{app.title}|">Sign in · DB Sync Tool</title>
+
+    <script>
+        (function () {
+            var mode;
+            try {
+                mode = localStorage.getItem('synctool-theme');
+            } catch (e) { /* 隐私模式：跟随系统 */ }
+            if (mode !== 'dark' && mode !== 'light') {
+                mode = window.matchMedia
+                    && window.matchMedia('(prefers-color-scheme: dark)').matches
+                    ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-theme', mode);
+        })();
+    </script>
+
+    <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body class="login-body">
+
+<th:block th:replace="~{fragments/icons :: sprite}"></th:block>
+
+<!--/* 两团光斑做背景，纯 CSS，无图片请求 */-->
+<div class="login-glow login-glow-a" aria-hidden="true"></div>
+<div class="login-glow login-glow-b" aria-hidden="true"></div>
+
+<div class="login-tools">
+    <a class="icon-btn lang-btn"
+       th:href="${#locale.toString().startsWith('zh')} ? @{/login(lang='en')} : @{/login(lang='zh_CN')}"
+       th:title="#{nav.language}"
+       th:text="${#locale.toString().startsWith('zh')} ? '中' : 'EN'">EN</a>
+    <button type="button" class="icon-btn" data-theme-btn
+            th:attr="data-to-dark=#{nav.theme.dark},data-to-light=#{nav.theme.light}">
+        <svg class="ico"><use href="#moon-stars-fill"/></svg>
+    </button>
+</div>
+
+<main class="login-wrap">
+
+    <div class="login-brand">
+        <span class="login-mark"><svg class="ico"><use href="#arrow-left-right"/></svg></span>
+        <h1 th:text="#{app.title}">DB Sync Tool</h1>
+        <p th:text="#{login.tagline}">Sign in to continue · works offline</p>
+    </div>
+
+    <div class="login-card">
+
+        <div class="alert alert-danger" th:if="${param.error}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.failed}">Wrong username or password.</div>
+        </div>
+        <div class="alert alert-ok" th:if="${param.logout}">
+            <svg class="ico"><use href="#check-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.loggedOut}">Signed out.</div>
+        </div>
+        <div class="alert alert-ok" th:if="${param.changed}">
+            <svg class="ico"><use href="#check-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.passwordChanged}">
+                Password changed. Sign in again.
+            </div>
+        </div>
+
+        <!--/* th:action 让 Thymeleaf 自动注入 CSRF 隐藏域 */-->
+        <form method="post" th:action="@{/login}" class="login-form">
+            <div class="field">
+                <label for="username" th:text="#{login.username}">Username</label>
+                <input type="text" class="input" id="username" name="username"
+                       autocomplete="username" required autofocus maxlength="64"
+                       th:placeholder="#{login.usernamePlaceholder}">
+            </div>
+
+            <div class="field">
+                <label for="password" th:text="#{login.password}">Password</label>
+                <div class="login-pw">
+                    <input type="password" class="input" id="password" name="password"
+                           autocomplete="current-password" required maxlength="128">
+                    <button type="button" class="icon-btn login-pw-toggle"
+                            data-role="toggle-password" data-target="password"
+                            th:title="#{login.showPassword}"
+                            th:aria-label="#{login.showPassword}">
+                        <svg class="ico"><use href="#eye"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-lg login-submit">
+                <svg class="ico"><use href="#shield-check"/></svg>
+                <span th:text="#{login.submit}">Sign in</span>
+            </button>
+        </form>
+    </div>
+
+    <p class="login-foot" th:text="#{login.foot}">Zero external dependencies · MIT</p>
+</main>
+
+<script th:src="@{/js/app.js}"></script>
+</body>
+</html>

@@ -14,7 +14,7 @@
             <a class="btn btn-ghost btn-sm" th:href="@{/dashboard}">
                 <svg class="ico"><use href="#arrow-clockwise"/></svg><span th:text="#{common.refresh}">Refresh</span>
             </a>
-            <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
+            <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/projects/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
             </a>
         </div>
@@ -82,7 +82,7 @@
                     <div class="empty-ico"><svg class="ico"><use href="#inbox"/></svg></div>
                     <h3 th:text="#{dashboard.noProjects}">No projects yet.</h3>
                     <p th:text="#{project.createHint}">Create one to begin.</p>
-                    <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
+                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/projects/new}">
                         <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
                     </a>
                 </div>

@@ -37,6 +37,11 @@
 
     <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
     <link rel="stylesheet" th:href="@{/css/app.css}">
+
+    <!--/* CSRF 令牌给 app.js 的 postJson 用。表单不需要这个 —— Thymeleaf 见到
+           th:action 会自动注入隐藏域，全部 14 个表单都符合。只有 fetch() 要自己带头。 */-->
+    <meta name="_csrf" th:content="${_csrf?.token}">
+    <meta name="_csrf_header" th:content="${_csrf?.headerName}">
 </head>
 <body>
 
@@ -108,6 +113,26 @@
                 <img th:src="@{/assets/github.svg}" alt="" width="16" height="16" class="gh-ico">
             </a>
 
+            <!--/* 当前用户：点进去改自己的密码。VIEWER 也能改，
+                   所以 SecurityConfig 把 /account/password 排在
+                   「POST 一律 ADMIN」那条规则之前。 */-->
+            <a class="user-chip" th:if="${currentUsername != null}" th:href="@{/account/password}"
+               th:title="#{account.title}">
+                <svg class="ico"><use href="#shield-check"/></svg>
+                <span class="uname" th:text="${currentUsername}">admin</span>
+                <span class="role"
+                      th:classappend="${isAdmin} ? 'role-admin' : 'role-viewer'"
+                      th:text="${isAdmin} ? #{role.admin} : #{role.viewer}">ADMIN</span>
+            </a>
+
+            <form class="logout-form" method="post" th:action="@{/logout}"
+                  th:if="${currentUsername != null}">
+                <button type="submit" class="icon-btn" th:title="#{nav.logout}"
+                        th:aria-label="#{nav.logout}">
+                    <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                </button>
+            </form>
+
             <button type="button" class="icon-btn nav-toggle" data-role="nav-toggle"
                     th:title="#{nav.menu}" th:aria-label="#{nav.menu}">
                 <svg class="ico"><use href="#list"/></svg>
@@ -115,6 +140,40 @@
         </div>
     </div>
 </header>
+
+<!--/* 仍在用播种口令时的警告。jar 是公开下载的，默认口令人人皆知，
+       所以这条必须显眼到无法当作装饰忽略。
+
+       可以关掉，但只关掉「这一次」：状态写 sessionStorage 而不是 localStorage，
+       浏览器一关就没了，下次打开照旧提示 —— 除非口令真的改了（改了之后
+       usingDefaultPassword 为 false，整条横幅根本不会渲染）。
+
+       横幅和它的脚本共用一个 th:if：条件只写一处，口令改掉之后连那段
+       「检查有没有被关过」的脚本也一起消失，不留无事可做的代码。 */-->
+<th:block th:if="${usingDefaultPassword}">
+    <div class="default-pw-banner" id="default-pw-banner">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <span th:text="#{warn.defaultPassword(${currentUsername})}">You are still using the default password.</span>
+        <a th:href="@{/account/password}" th:text="#{warn.defaultPassword.action}">Change it now</a>
+        <button type="button" class="banner-close" data-role="dismiss-default-pw"
+                th:title="#{common.close}" th:aria-label="#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+    </div>
+    <!--/* 紧跟横幅的内联脚本：本次会话已关过就直接移除。放在这里而不是 app.js，
+           是因为 app.js 在 body 末尾加载，那时横幅已经绘制过一帧了。 */-->
+    <script>
+        (function () {
+            var el = document.getElementById('default-pw-banner');
+            if (!el) return;
+            try {
+                if (sessionStorage.getItem('synctool-pw-banner-dismissed') === '1') {
+                    el.remove();
+                }
+            } catch (e) { /* 隐私模式：读不到就照常提示 */ }
+        })();
+    </script>
+</th:block>
 
 <div id="toasts"></div>
 
@@ -228,7 +287,9 @@
         'error.unexpected': /*[[#{error.unexpected}]]*/ '',
         'error.project.not.found': /*[[#{error.project.not.found}]]*/ '',
         'error.project.endpoints.required': /*[[#{error.project.endpoints.required}]]*/ '',
-        'error.project.stop.before.reset': /*[[#{error.project.stop.before.reset}]]*/ ''
+        'error.project.stop.before.reset': /*[[#{error.project.stop.before.reset}]]*/ '',
+        'error.forbidden': /*[[#{error.forbidden}]]*/ '',
+        'error.sessionExpired': /*[[#{error.sessionExpired}]]*/ ''
     };
 </script>
 <script th:src="@{/js/theme.js}"></script>

@@ -139,13 +139,13 @@
                     <thead>
                     <tr>
                         <th th:text="#{conversion.overrideKey}">Key</th>
-                        <th class="num" th:text="#{common.actions}">Actions</th>
+                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
                     </tr>
                     </thead>
                     <tbody>
                     <tr th:each="ok : ${overview.orphanedOverrides}">
                         <td class="mono" th:text="${ok}">key</td>
-                        <td>
+                        <td th:if="${isAdmin}">
                             <!--/* 普通表单提交：和项目里其他删除操作走同一条路，
                                    不为了一个按钮引入带 body 的 fetch */-->
                             <form method="post" style="display:inline"

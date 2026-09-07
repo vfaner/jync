@@ -13,7 +13,7 @@
 
     <groupId>com.synctool</groupId>
     <artifactId>synctool</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <name>synctool</name>
     <description>Real-time database structure and data synchronization tool</description>
 
@@ -61,6 +61,18 @@
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
+        <!--
+          Login, roles, and CSRF. The decisive reason for the starter rather than a hand-written
+          filter is CSRF: with no login there was nothing to forge, but the moment an ADMIN session
+          exists a third-party page can make that browser POST /databases/save. Every one of this
+          app's 14 POST forms already uses th:action, so Thymeleaf injects the token into all of
+          them with no template edits; only postJson() needs the header.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
         <!-- Tool's own metadata store -->
         <dependency>
             <groupId>com.h2database</groupId>
@@ -91,6 +103,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- @WithMockUser and csrf() for the controller tests -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

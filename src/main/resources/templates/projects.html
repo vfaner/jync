@@ -10,7 +10,7 @@
             <h1 th:text="#{project.title}">Projects</h1>
             <p class="sub" th:text="#{project.listHint}">Source-to-target synchronization projects</p>
         </div>
-        <div class="page-actions">
+        <div class="page-actions" th:if="${isAdmin}">
             <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
             </a>
@@ -23,7 +23,7 @@
                 <div class="empty-ico"><svg class="ico"><use href="#diagram-3"/></svg></div>
                 <h3 th:text="#{dashboard.noProjects}">No projects yet.</h3>
                 <p th:text="#{project.createHint}">Create one to begin.</p>
-                <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
+                <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/projects/new}">
                     <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
                 </a>
             </div>
@@ -66,6 +66,7 @@
                         </td>
                         <td>
                             <div class="btn-row" style="justify-content:flex-end">
+                                <th:block th:if="${isAdmin}">
                                 <!-- 启动/停止互斥，由 enabled 标志决定显示哪一个 -->
                                 <button type="button" class="btn-icon is-ok" th:unless="${project.enabled}"
                                         data-role="api-btn" data-reload="true"
@@ -84,8 +85,11 @@
                                         th:title="#{project.syncNow}">
                                     <svg class="ico"><use href="#arrow-repeat"/></svg>
                                 </button>
+                                </th:block>
+                                <!--/* 详情是只读的，访客也要能点进去 */-->
                                 <a class="btn-icon" th:href="@{/projects/{id}(id=${project.id})}"
                                    th:title="#{project.detail}"><svg class="ico"><use href="#list-ul"/></svg></a>
+                                <th:block th:if="${isAdmin}">
                                 <a class="btn-icon" th:href="@{/projects/{id}/edit(id=${project.id})}"
                                    th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
                                 <form method="post" style="display:inline"
@@ -95,6 +99,7 @@
                                         <svg class="ico"><use href="#trash"/></svg>
                                     </button>
                                 </form>
+                                </th:block>
                             </div>
                         </td>
                     </tr>

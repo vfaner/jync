@@ -10,7 +10,7 @@
             <h1 th:text="#{ai.title}">AI settings</h1>
             <p class="sub" th:text="#{ai.listHint}">One provider active at a time</p>
         </div>
-        <div class="page-actions">
+        <div class="page-actions" th:if="${isAdmin}">
             <a class="btn btn-primary btn-sm" th:href="@{/ai/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{ai.new}">New provider</span>
             </a>
@@ -34,7 +34,7 @@
                 <div class="empty-ico"><svg class="ico"><use href="#cpu"/></svg></div>
                 <h3 th:text="#{ai.noProviders}">No AI provider configured.</h3>
                 <p th:text="#{ai.createHint}">Add one to enable AI-assisted conversion.</p>
-                <a class="btn btn-primary btn-sm" th:href="@{/ai/new}">
+                <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/ai/new}">
                     <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{ai.new}">New provider</span>
                 </a>
             </div>
@@ -48,7 +48,7 @@
                         <th th:text="#{ai.model}">Model</th>
                         <th th:text="#{ai.baseUrl}">Base URL</th>
                         <th th:text="#{common.status}">Status</th>
-                        <th class="num" th:text="#{common.actions}">Actions</th>
+                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -74,7 +74,8 @@
                             <span th:if="${p.lastTestOk == false}" class="badge badge-danger"
                                   th:title="${p.lastTestMessage}" th:text="#{ai.unreachable}">Failed</span>
                         </td>
-                        <td>
+                        <!--/* 这一列里全是写操作，访客整列都不显示 */-->
+                        <td th:if="${isAdmin}">
                             <div class="btn-row" style="justify-content:flex-end">
                                 <!--/* 启用是互斥的：服务端会把其他条目一并关掉 */-->
                                 <form th:unless="${p.enabled}" method="post" style="display:inline"

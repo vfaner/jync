@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.flash;
@@ -20,6 +21,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.synctool.model.DatabaseType;
@@ -37,6 +39,14 @@ import com.synctool.service.ai.ConversionAssistService;
 @WebMvcTest(ConversionController.class)
 @Import(GlobalModelAdvice.class)
 @TestPropertySource(properties = "app.github-url=https://example.com/repo")
+/**
+ * Signed in as ADMIN for the whole class. These slices exercise rendering and handler behaviour,
+ * not authorization -- the role and CSRF rules have their own tests in
+ * {@code com.synctool.config.SecurityConfigTest}. Without this the security filter chain answers
+ * every request with a redirect to the login page and none of the assertions below get a chance
+ * to run.
+ */
+@WithMockUser(roles = "ADMIN")
 class ConversionControllerViewTest {
 
     @Autowired
@@ -217,7 +227,7 @@ class ConversionControllerViewTest {
 
     @Test
     void savingAnOverrideRedirectsBackToTheObject() throws Exception {
-        mvc.perform(post("/projects/1/conversions/PROCEDURE/GET_TOTAL/save")
+        mvc.perform(post("/projects/1/conversions/PROCEDURE/GET_TOTAL/save").with(csrf())
                         .param("sql", "CREATE PROCEDURE GET_TOTAL() BEGIN END"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/projects/1/conversions/PROCEDURE/GET_TOTAL"))
@@ -232,14 +242,14 @@ class ConversionControllerViewTest {
         doThrow(new IllegalArgumentException("error.override.empty"))
                 .when(assistService).saveOverride(anyLong(), anyString(), anyString(), any());
 
-        mvc.perform(post("/projects/1/conversions/PROCEDURE/GET_TOTAL/save").param("sql", "  "))
+        mvc.perform(post("/projects/1/conversions/PROCEDURE/GET_TOTAL/save").with(csrf()).param("sql", "  "))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.override.empty"));
     }
 
     @Test
     void deletingAnOverrideUsesTheFoldedKey() throws Exception {
-        mvc.perform(post("/projects/1/conversions/PROCEDURE/GET_TOTAL/delete-override"))
+        mvc.perform(post("/projects/1/conversions/PROCEDURE/GET_TOTAL/delete-override").with(csrf()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("message", "msg.override.deleted"));
 
@@ -248,7 +258,7 @@ class ConversionControllerViewTest {
 
     @Test
     void cleaningUpAnOrphanReturnsToTheList() throws Exception {
-        mvc.perform(post("/projects/1/conversions/cleanup")
+        mvc.perform(post("/projects/1/conversions/cleanup").with(csrf())
                         .param("overrideKey", "VIEW:GONE"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/projects/1/conversions"))

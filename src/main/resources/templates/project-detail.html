@@ -18,7 +18,8 @@
                 <svg class="ico"><use href="#code-square"/></svg>
                 <span th:text="#{conversion.list}">Conversion review</span>
             </a>
-            <a class="btn btn-ghost btn-sm" th:href="@{/projects/{id}/edit(id=${project.id})}">
+            <a class="btn btn-ghost btn-sm" th:if="${isAdmin}"
+               th:href="@{/projects/{id}/edit(id=${project.id})}">
                 <svg class="ico"><use href="#pencil"/></svg><span th:text="#{common.edit}">Edit</span>
             </a>
             <a class="btn btn-ghost btn-sm" th:href="@{/projects}">
@@ -57,7 +58,7 @@
                 </th:block>
             </dl>
 
-            <div style="display:flex;gap:9px;flex-wrap:wrap">
+            <div style="display:flex;gap:9px;flex-wrap:wrap" th:if="${isAdmin}">
                 <button type="button" class="btn btn-ok btn-sm" th:unless="${project.enabled}"
                         data-role="api-btn" data-reload="true"
                         th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
@@ -85,11 +86,18 @@
                     <span th:text="#{project.reset}">Reset progress</span>
                 </button>
             </div>
-            <p class="small muted" style="margin:11px 0 0" th:text="#{project.resetHelp}">Reset help</p>
+            <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin}"
+               th:text="#{project.resetHelp}">Reset help</p>
+            <p class="small muted" style="margin:0" th:unless="${isAdmin}"
+               th:text="#{common.readOnly}">Read-only account.</p>
         </div>
     </div>
 
     <form method="post" th:action="@{/projects/{id}/config(id=${project.id})}">
+    <!--/* 访客保留这一整块而不是藏掉：勾选状态本身是有用的只读信息。
+           fieldset[disabled] 让浏览器原生置灰全部输入，比逐个加 disabled 可靠，
+           也顺带保证浏览器不会把这些字段提交上去。 */-->
+    <fieldset class="bare" th:attr="disabled=${isAdmin} ? null : 'disabled'">
         <div class="split-wide" style="margin-top:18px">
             <!-- 对象选择 -->
             <div class="card" style="margin-top:0">
@@ -296,7 +304,7 @@
                             <div class="help" th:text="#{option.batchSizeHelp}">help</div>
                         </div>
                     </div>
-                    <div class="card-foot">
+                    <div class="card-foot" th:if="${isAdmin}">
                         <button type="submit" class="btn btn-primary" style="width:100%">
                             <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{common.save}">Save</span>
                         </button>
@@ -304,6 +312,7 @@
                 </div>
             </div>
         </div>
+    </fieldset>
     </form>
 
     <!-- 各表进度与游标策略 -->
@@ -327,7 +336,7 @@
                         <th th:text="#{cursor.lastValue}">Last value</th>
                         <th class="num" th:text="#{cursor.rowsTotal}">Rows</th>
                         <th th:text="#{dashboard.lastSync}">Last sync</th>
-                        <th class="num" th:text="#{cursor.set}">Set cursor</th>
+                        <th class="num" th:if="${isAdmin}" th:text="#{cursor.set}">Set cursor</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -353,7 +362,7 @@
                             th:text="${p.lastSyncTime != null}
                                      ? ${#temporals.format(p.lastSyncTime, 'MM-dd HH:mm:ss')}
                                      : #{common.never}">never</td>
-                        <td>
+                        <td th:if="${isAdmin}">
                             <!-- 每行一个小表单，可为单表覆盖自动识别的游标列。
                                  输入框带 datalist 候选，聚焦时从后端拉取该表可用的游标列
                                  （时间 + 整数类型），免去手动敲列名。 -->

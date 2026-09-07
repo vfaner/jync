@@ -22,7 +22,7 @@
                             th:text="${p.name}">Project</option>
                 </select>
             </form>
-            <form method="post" th:action="@{/change-logs/clear}"
+            <form method="post" th:if="${isAdmin}" th:action="@{/change-logs/clear}"
                   th:data-confirm="#{log.clear.confirm}"
                   data-role="clear-logs-form">
                 <input type="hidden" name="projectId" th:value="${selectedProjectId}">

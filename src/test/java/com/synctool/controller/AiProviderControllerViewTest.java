@@ -16,6 +16,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.synctool.model.AiProtocol;
@@ -32,6 +33,14 @@ import com.synctool.service.ai.AiProviderService;
 @WebMvcTest(AiProviderController.class)
 @Import(GlobalModelAdvice.class)
 @TestPropertySource(properties = "app.github-url=https://example.com/repo")
+/**
+ * Signed in as ADMIN for the whole class. These slices exercise rendering and handler behaviour,
+ * not authorization -- the role and CSRF rules have their own tests in
+ * {@code com.synctool.config.SecurityConfigTest}. Without this the security filter chain answers
+ * every request with a redirect to the login page and none of the assertions below get a chance
+ * to run.
+ */
+@WithMockUser(roles = "ADMIN")
 class AiProviderControllerViewTest {
 
     @Autowired

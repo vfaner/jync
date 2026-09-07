@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -19,6 +20,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.synctool.service.ai.AiSqlAssistant;
@@ -34,6 +36,14 @@ import com.synctool.service.ai.ConversionAssistService;
  * and "the server broke" must not share a status code.
  */
 @WebMvcTest(ConversionApiController.class)
+/**
+ * Signed in as ADMIN for the whole class. These slices exercise rendering and handler behaviour,
+ * not authorization -- the role and CSRF rules have their own tests in
+ * {@code com.synctool.config.SecurityConfigTest}. Without this the security filter chain answers
+ * every request with a redirect to the login page and none of the assertions below get a chance
+ * to run.
+ */
+@WithMockUser(roles = "ADMIN")
 class ConversionApiControllerTest {
 
     @Autowired
@@ -75,7 +85,7 @@ class ConversionApiControllerTest {
         when(assistService.draft(1L, "PROCEDURE", "GET_TOTAL")).thenReturn(
                 drafted("CREATE PROCEDURE x() BEGIN END", List.of("Cursor semantics differ")));
 
-        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/GET_TOTAL/draft"))
+        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/GET_TOTAL/draft").with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.sql").value("CREATE PROCEDURE x() BEGIN END"))
@@ -92,7 +102,7 @@ class ConversionApiControllerTest {
 
         // The refusal reason is the entire value of the answer. Dropping it on the failure path
         // would make a considered "no" look identical to a timeout.
-        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/P/draft"))
+        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/P/draft").with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("error.ai.declined"))
@@ -105,7 +115,7 @@ class ConversionApiControllerTest {
         when(assistService.draft(anyLong(), anyString(), anyString()))
                 .thenThrow(new IllegalStateException("error.ai.notAvailable"));
 
-        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/P/draft"))
+        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/P/draft").with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("error.ai.notAvailable"));
@@ -119,7 +129,7 @@ class ConversionApiControllerTest {
         when(assistService.draft(anyLong(), anyString(), anyString()))
                 .thenThrow(new IllegalArgumentException("error.project.not.found"));
 
-        mvc.perform(post("/api/projects/99/conversions/PROCEDURE/P/draft"))
+        mvc.perform(post("/api/projects/99/conversions/PROCEDURE/P/draft").with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("error.project.not.found"));
@@ -131,7 +141,7 @@ class ConversionApiControllerTest {
         when(assistService.draft(anyLong(), anyString(), anyString()))
                 .thenThrow(new IllegalStateException());
 
-        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/P/draft"))
+        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/P/draft").with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("error.unexpected"));
@@ -143,7 +153,7 @@ class ConversionApiControllerTest {
         when(assistService.draft(anyLong(), anyString(), anyString()))
                 .thenReturn(drafted("x", List.of()));
 
-        mvc.perform(post("/api/projects/1/conversions/VIEW/APP.V_SALES/draft"))
+        mvc.perform(post("/api/projects/1/conversions/VIEW/APP.V_SALES/draft").with(csrf()))
                 .andExpect(status().isOk());
 
         verify(assistService).draft(1L, "VIEW", "APP.V_SALES");
@@ -155,7 +165,7 @@ class ConversionApiControllerTest {
         when(assistService.validate(1L, "GET_TOTAL", "CREATE PROCEDURE GET_TOTAL() BEGIN END"))
                 .thenReturn(passed("SYNCTOOL_AI_CHECK_ABC", List.of()));
 
-        mvc.perform(post("/api/projects/1/conversions/validate")
+        mvc.perform(post("/api/projects/1/conversions/validate").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"kind\":\"PROCEDURE\",\"name\":\"GET_TOTAL\","
                                 + "\"sql\":\"CREATE PROCEDURE GET_TOTAL() BEGIN END\"}"))
@@ -170,7 +180,7 @@ class ConversionApiControllerTest {
         when(assistService.validate(anyLong(), anyString(), anyString()))
                 .thenReturn(rejected("Table \"NOPE\" not found", "SYNCTOOL_AI_CHECK_ABC"));
 
-        mvc.perform(post("/api/projects/1/conversions/validate")
+        mvc.perform(post("/api/projects/1/conversions/validate").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"kind\":\"VIEW\",\"name\":\"V\",\"sql\":\"CREATE VIEW V AS x\"}"))
                 .andExpect(status().isOk())
@@ -186,7 +196,7 @@ class ConversionApiControllerTest {
 
         // "It compiled" plus "but the recursion was not really tested" is the honest answer; the
         // first half alone would read as a clean bill of health.
-        mvc.perform(post("/api/projects/1/conversions/validate")
+        mvc.perform(post("/api/projects/1/conversions/validate").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"kind\":\"PROCEDURE\",\"name\":\"F\",\"sql\":\"CREATE PROCEDURE F\"}"))
                 .andExpect(status().isOk())
@@ -197,7 +207,7 @@ class ConversionApiControllerTest {
     @Test
     @DisplayName("a validate call missing a field is refused without touching the target")
     void anIncompleteValidateRequestIsRefused() throws Exception {
-        mvc.perform(post("/api/projects/1/conversions/validate")
+        mvc.perform(post("/api/projects/1/conversions/validate").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"kind\":\"VIEW\",\"name\":\"V\"}"))
                 .andExpect(status().isBadRequest())
@@ -213,7 +223,7 @@ class ConversionApiControllerTest {
         when(assistService.validate(anyLong(), anyString(), anyString()))
                 .thenThrow(new IllegalStateException("error.connection.missing"));
 
-        mvc.perform(post("/api/projects/1/conversions/validate")
+        mvc.perform(post("/api/projects/1/conversions/validate").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"kind\":\"VIEW\",\"name\":\"V\",\"sql\":\"CREATE VIEW V AS SELECT 1\"}"))
                 .andExpect(status().isOk())

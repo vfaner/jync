@@ -72,7 +72,8 @@
         </div>
         <div class="card-body">
 
-            <div class="btn-row" style="margin-bottom:12px">
+            <!--/* 起草和语法检查都是 POST，而且语法检查会真的动目标库，访客一律看不到 */-->
+            <div class="btn-row" style="margin-bottom:12px" th:if="${isAdmin}">
                 <!--/* AI 起草：只读源库、只产出候选，不写任何库 */-->
                 <button type="button" class="btn btn-primary btn-sm"
                         th:if="${detail.assistAvailable}"
@@ -115,12 +116,13 @@
                     <label for="override-sql" th:text="#{conversion.editorLabel}">Statement</label>
                     <textarea id="override-sql" name="sql" class="input mono" rows="18"
                               spellcheck="false"
+                              th:attr="readonly=${isAdmin} ? null : 'readonly'"
                               th:text="${detail.editorSeed()}"></textarea>
                     <p class="help" th:text="#{conversion.editorHelp}">
                         Saved as-is and executed as a single statement.
                     </p>
                 </div>
-                <div class="btn-row">
+                <div class="btn-row" th:if="${isAdmin}">
                     <button type="submit" class="btn btn-primary btn-sm">
                         <svg class="ico"><use href="#check-lg"/></svg>
                         <span th:text="#{conversion.saveOverride}">Save override</span>
@@ -129,7 +131,7 @@
             </form>
 
             <form method="post" style="margin-top:10px"
-                  th:if="${!#strings.isEmpty(detail.override)}"
+                  th:if="${isAdmin and !#strings.isEmpty(detail.override)}"
                   th:action="@{/projects/{id}/conversions/{kind}/{name}/delete-override(id=${projectId}, kind=${detail.kind}, name=${detail.name})}"
                   th:attr="data-confirm=#{common.confirm}">
                 <button type="submit" class="btn btn-outline-danger btn-sm">
