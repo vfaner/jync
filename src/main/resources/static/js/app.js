@@ -615,6 +615,119 @@
     });
   }
 
+  /* ─── 变更日志的刷新 ────────────────────────────────────── */
+
+  var LOG_AUTO_KEY = 'synctool-log-auto-refresh';
+  var LOG_AUTO_INTERVAL = 5000;
+
+  /**
+   * 变更日志页的手动刷新 + 自动刷新。
+   *
+   * 这一页是服务端渲染的一次快照：同步在后台一直往日志里写，页面却停在你打开
+   * 它的那一刻。所以要么自己刷，要么给它一个会刷的理由。
+   *
+   * 不用 location.reload()：整页重载会闪、会把滚动位置弹回顶部、正在读的错误
+   * 详情会被打断。这里重新取一次「当前 URL」（projectId、page 都在里面），
+   * 只把卡片和计数换掉。表格怎么画仍然只有 Thymeleaf 一份，这里一行渲染逻辑
+   * 都不复制。
+   */
+  function bindLogRefresh(btn) {
+    var card = document.getElementById('log-card');
+    if (!card) return;
+
+    var countEl = document.getElementById('log-count');
+    var stampEl = document.getElementById('log-updated');
+    var autoBtn = document.querySelector('[data-role="log-auto"]');
+    var icon = btn.querySelector('.ico');
+    var timer = null;
+    var inFlight = false;
+
+    function stamp() {
+      if (!stampEl) return;
+      var tpl = stampEl.dataset.tpl || '{0}';
+      stampEl.textContent = tpl.replace('{0}', new Date().toLocaleTimeString());
+      stampEl.hidden = false;
+    }
+
+    function refresh() {
+      // 上一轮还没回来就跳过这一轮：网络慢的时候不该把请求越堆越多
+      if (inFlight) return;
+      inFlight = true;
+      if (icon) icon.classList.add('spinning');
+
+      fetch(window.location.href, { cache: 'no-store' })
+        .then(function (response) { return response.text(); })
+        .then(function (html) {
+          var fresh = new DOMParser().parseFromString(html, 'text/html');
+          var freshCard = fresh.getElementById('log-card');
+          // 取回来的不是日志页，说明会话过期、安全层把它换成了登录页。
+          // 和 postJson 里一样重载当前 URL，让安全层自己决定跳到哪儿。
+          if (!freshCard) {
+            window.location.reload();
+            return;
+          }
+          card.innerHTML = freshCard.innerHTML;
+          var freshCount = fresh.getElementById('log-count');
+          if (countEl && freshCount) countEl.textContent = freshCount.textContent;
+          stamp();
+        })
+        .catch(function () {
+          // 网络抖一下不值得清空用户正在看的表格，保留原样，下一轮再试
+        })
+        .then(function () {
+          inFlight = false;
+          if (icon) icon.classList.remove('spinning');
+        });
+    }
+
+    function stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }
+
+    /** 默认开启：没存过就是开。存过 'off' 才关。 */
+    function autoOn() {
+      if (!autoBtn || autoBtn.disabled) return false;
+      try {
+        return localStorage.getItem(LOG_AUTO_KEY) !== 'off';
+      } catch (e) {
+        return true; // 隐私模式：记不住选择，那就按默认来
+      }
+    }
+
+    function applyAuto() {
+      var on = autoOn();
+      if (autoBtn) autoBtn.classList.toggle('is-on', on);
+      stop();
+      // 页面在后台时刷新纯属浪费流量，切回来再补
+      if (on && !document.hidden) timer = setInterval(refresh, LOG_AUTO_INTERVAL);
+    }
+
+    btn.addEventListener('click', function () { refresh(); });
+
+    if (autoBtn) {
+      autoBtn.addEventListener('click', function () {
+        var next = autoOn() ? 'off' : 'on';
+        try {
+          localStorage.setItem(LOG_AUTO_KEY, next);
+        } catch (e) { /* 隐私模式：本次点击仍然生效，只是记不住 */ }
+        applyAuto();
+        if (next === 'on') refresh();
+      });
+    }
+
+    document.addEventListener('visibilitychange', function () {
+      var wasOn = timer !== null;
+      applyAuto();
+      // 回到前台时先补一次，不让用户对着一屏旧数据等满一个间隔
+      if (!document.hidden && !wasOn && autoOn()) refresh();
+    });
+
+    applyAuto();
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -631,6 +744,7 @@
     document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
       .forEach(bindCursorInput);
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
+    document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
     bindDonate();
 
     // 关闭提示条

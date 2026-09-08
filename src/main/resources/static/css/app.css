@@ -183,6 +183,16 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .btn-ghost { background: var(--bg); color: var(--ink); border-color: var(--line); }
 .btn-ghost:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); transform: translateY(-2px); }
 
+/* 开关型按钮的「已开启」态。悬停之外唯一会给按钮上色的状态，
+   所以用品牌色的淡底而不是实心底 —— 它是个状态，不是个主操作。 */
+.btn.is-on {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+}
+/* 刷新进行中：复用下面 .spinner 那条 @keyframes spin */
+.ico.spinning { animation: spin .7s linear infinite; }
+
 .btn-ok      { background: var(--ok);     color: #fff; box-shadow: 0 8px 26px rgba(16, 185, 129, .26); }
 .btn-warn    { background: var(--warn);   color: #fff; box-shadow: 0 8px 26px rgba(245, 158, 11, .26); }
 .btn-danger  { background: var(--danger); color: #fff; box-shadow: 0 8px 26px rgba(239, 68, 68, .24); }

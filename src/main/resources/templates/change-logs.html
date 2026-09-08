@@ -9,8 +9,12 @@
         <div>
             <h1 th:text="#{log.title}">Change log</h1>
             <p class="sub">
-                <span th:text="${logs.totalElements}">0</span>
+                <span id="log-count" th:text="${logs.totalElements}">0</span>
                 <span th:text="#{log.entries}">entries</span>
+                <!--/* 文案模板留在 data-tpl 里，而不是塞进 layout 的全局
+                       SyncToolMessages —— 只有这一页用得上。 */-->
+                <span id="log-updated" class="muted" hidden
+                      th:data-tpl="#{log.refresh.updated}"></span>
             </p>
         </div>
         <div class="page-actions">
@@ -22,6 +26,16 @@
                             th:text="${p.name}">Project</option>
                 </select>
             </form>
+            <!--/* 刷新是读操作，两个角色都该有 —— 所以放在下面 isAdmin 那层外面。 */-->
+            <button type="button" class="btn btn-ghost btn-sm" data-role="log-refresh">
+                <svg class="ico"><use href="#arrow-clockwise"/></svg><span th:text="#{log.refresh}">Refresh</span></button>
+            <!--/* 第二页往后不自动刷新：日志按时间倒序，新条目一进来整页就往下挪，
+                   自动刷新会让你读的那几行一直在换位置。禁用而不是悄悄不动，
+                   title 里说清为什么。 */-->
+            <button type="button" class="btn btn-ghost btn-sm" data-role="log-auto"
+                    th:disabled="${logs.number > 0}"
+                    th:title="${logs.number > 0} ? #{log.refresh.firstPageOnly} : null">
+                <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{log.refresh.auto}">Auto</span></button>
             <form method="post" th:if="${isAdmin}" th:action="@{/change-logs/clear}"
                   th:data-confirm="#{log.clear.confirm}"
                   data-role="clear-logs-form">
@@ -32,7 +46,7 @@
         </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="log-card">
         <div class="card-body tight">
             <div th:if="${logs.totalElements == 0}" class="empty">
                 <div class="empty-ico"><svg class="ico"><use href="#clock-history"/></svg></div>
