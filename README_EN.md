@@ -382,7 +382,7 @@ On first start two accounts are seeded into the `app_user` table of the metadata
 
 Authorization is not a list of paths — it is decided **by HTTP method**. Every write in this tool is a POST and no GET mutates state, so there is exactly one rule: **a POST requires the administrator role.** New endpoints therefore cannot be forgotten.
 
-- **Administrator**: create/edit/delete database connections, projects and AI providers; select sync objects, start/pause sync, sync now, reset cursors; draft and save procedure conversions; clear the change log.
+- **Administrator**: create/edit/delete database connections, projects and AI providers; select sync objects, start/pause sync, sync now, reset progress; draft and save procedure conversions; clear the change log.
 - **Viewer**: sees every page and all of the data (dashboard, connection list, the checked state on project detail, the change log, and the SQL on the conversion review page — all viewable, selectable and copyable), but no write control is rendered anywhere, and hand-crafting the request to hit the endpoint directly is refused too. The config block on project detail is kept visible and natively greyed out rather than hidden, because the selection state is itself useful read-only information.
 
 Both roles can change their own password.
@@ -480,18 +480,70 @@ A cursor can prove "how far I read," but not "the target still holds those rows.
 
 ## Incremental Detection Strategies
 
+### What actually triggers a sync
+
+Incremental sync is one query:
+
+```sql
+SELECT * FROM table WHERE cursor_col > last_cursor AND cursor_col <= watermark ORDER BY cursor_col
+```
+
+**Whether a row gets synced depends on one thing only: whether its cursor column value has risen above the last recorded value.** Everything below follows from that:
+
+- Cursor on a **single numeric primary key** (`id`): an UPDATE does not change `id`, so the row's cursor value stays put → **updates never propagate**. Only inserts get through.
+- Cursor on a **creation timestamp** (`create_time`): same story — a creation time does not move when the row is modified → **updates never propagate**.
+- Cursor on a **last-modified timestamp** (`update_time`): updates are detected, but **only if that column is actually changed**. If the DDL has no `ON UPDATE CURRENT_TIMESTAMP` and your statement is `UPDATE t SET name = 'x' WHERE id = 1` (never setting `update_time`), the column does not move and the row is never picked up.
+
+In other words, **the cursor column must be one that increases whenever a row is touched.** Otherwise modifications are invisible to the sync. This is not a defect; it is the unavoidable price of doing incremental replication with ordinary queries — without reading the source's binlog and without installing triggers. Nothing in the source tells us a row was modified, so the column value has to say it.
+
+### Auto-detection order
+
 Chosen in descending order of reliability:
 
-| Strategy | Trigger | Capability |
+| Strategy | Trigger | Inserts | Updates |
+|---|---|:---:|---|
+| `TIMESTAMP` | A temporal-typed column matching the **last-modified** naming convention | ✅ | ✅ provided that column really is updated |
+| `IDENTITY` | A column matching the **creation-time** convention, or a single numeric primary key | ✅ | ❌ never detected |
+| `FULL_COMPARE` | No usable cursor column, and row count ≤ `sync.full-compare-max-rows` (default 20000) | ✅ | ✅ full-table upsert every cycle |
+| `NONE` | No usable cursor column and the table is too large | ❌ | ❌ initial full load only, then skipped with a stated reason |
+
+Names accepted as **last-modified** (16, resolve to `TIMESTAMP`):
+
+`UPDATE_TIME` `UPDATED_AT` `UPDATETIME` `UPDATED_TIME` `LAST_MODIFIED` `LASTMODIFIED` `LAST_UPDATE` `LAST_UPDATED` `MODIFY_TIME` `MODIFIED_AT` `MODIFIED_TIME` `GMT_MODIFIED` `ROW_VERSION` `ROWVERSION` `SYS_UPDATE_TIME` `DATA_CHANGE_TIME`
+
+Names accepted as **creation-time** (7, resolve to `IDENTITY`, updates undetectable):
+
+`CREATE_TIME` `CREATED_AT` `CREATETIME` `CREATED_TIME` `GMT_CREATE` `INSERT_TIME` `ADD_TIME`
+
+Matching rules: case-insensitive, `-` treated as `_`, matched as a **substring** (`biz_update_time_utc` counts as a hit), and the lists are tried in the order above so the most specific convention wins. **The column's type must also genuinely be temporal** — a `VARCHAR` named `update_time` is not used as a cursor, because string comparison ordering is unreliable. By the same rule `ROW_VERSION` / `ROWVERSION` only matches when its type really is temporal; SQL Server's `rowversion` is a binary type and does not qualify.
+
+### Setting the cursor column manually
+
+**You can set a cursor column per table** on the project detail page; it takes precedence over auto-detection. But what you pick is a **column**, not a strategy — the column's type decides which strategy you end up with:
+
+| Type of the chosen column | Resulting strategy | Note |
 |---|---|---|
-| `TIMESTAMP` | A column named `update_time` / `updated_at` / `last_modified` etc. **of an actual timestamp type** | Detects inserts **and** updates |
-| `IDENTITY` | A creation-time column, or a single numeric primary key | Detects inserts **only** |
-| `FULL_COMPARE` | No cursor column, and row count below `sync.full-compare-max-rows` | Full-table upsert every cycle |
-| `NONE` | No cursor column and the table is too large | Initial full load only, then skipped with a stated reason |
+| Temporal (`DATETIME` / `TIMESTAMP` / `DATE` / `TIME`) | `TIMESTAMP` | Detects updates |
+| Numeric (`INT` / `BIGINT` / `DECIMAL`, …) | `IDENTITY` | **Still cannot detect updates** |
+| Anything else, or the column does not exist | Ignored, falls back to auto-detection | Logged as a WARN |
 
-Name matching requires the column's type to genuinely be temporal — a `VARCHAR` named `update_time` will not be used as a timestamp cursor, because string comparison ordering is unreliable.
+So there is **no way** to force a table into `FULL_COMPARE` from the UI: it is selected automatically only when no usable cursor column exists at all and the table is small enough.
 
-**You can set a cursor column manually per table** on the project detail page; it takes precedence over auto-detection. Tables resolving to `IDENTITY` or `NONE` are flagged in the UI, because it means updates may not propagate.
+Tables resolving to `IDENTITY` or `NONE` are flagged on the project detail page along with the reason, because it means updates may not propagate.
+
+### When updates are not propagating
+
+**The durable fix** — give the source table a last-modified column that genuinely moves:
+
+```sql
+-- MySQL
+ALTER TABLE your_table ADD COLUMN update_time DATETIME
+  DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
+```
+
+With that name you do not need to configure anything; the next cycle resolves it to `TIMESTAMP` automatically. On databases without an equivalent "rewrite on update" clause, the writer (application code or a trigger) has to maintain the column.
+
+**Catching up on updates already missed** — **stop the sync first**, then hit **Reset progress** on the project detail page (resetting is refused while the project is enabled, with a message telling you to stop it). This deletes all cursor progress and structure snapshots for the project, so the next cycle performs a full load: the table is re-read and every row upserted, previously missed updates go across, and the structure is re-baselined. It is a one-time catch-up though: unless the cursor column itself is fixed, the next UPDATE will be missed again.
 
 ---
 
