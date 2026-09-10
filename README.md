@@ -10,6 +10,7 @@
 
 - 项目地址：<https://github.com/vfaner/synctool>
 - 国内镜像：<https://gitee.com/super_rgh/synctool>
+- 视频演示：<https://www.bilibili.com/video/BV1iHYJ6vEEd>（10 分钟，从建连接到实时同步）
 
 技术栈：Spring Boot 2.7 单体架构 + Thymeleaf 服务端渲染 + Quartz 调度 + H2 内嵌元数据库。**零外部依赖，内网离线可用。**
 

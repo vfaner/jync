@@ -10,6 +10,7 @@ A ready-to-run web application that keeps **schema and data** in sync **across h
 
 - Repository: <https://github.com/vfaner/synctool>
 - China mirror: <https://gitee.com/super_rgh/synctool>
+- Demo video: <https://www.bilibili.com/video/BV1iHYJ6vEEd> (Bilibili, ~10 min; narration in Chinese)
 
 Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz scheduling + embedded H2 metadata store. **Zero external dependencies, fully usable on an air-gapped intranet.**
 
