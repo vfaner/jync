@@ -27,6 +27,11 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class DriverLoader {
 
+    /** Accepts the platform path separator ({@code :} on Unix, {@code ;} on Windows) plus
+     *  {@code ,}, which the form hints at. Detection and loading must agree on this. */
+    private static final String PATH_SPLIT =
+            File.pathSeparator.equals(":") ? "[:;,]" : "[;,]";
+
     /** Cache key is the canonical jar path (or the joined paths of a directory). */
     private final Map<String, URLClassLoader> loaderCache = new ConcurrentHashMap<>();
 
@@ -89,7 +94,7 @@ public class DriverLoader {
 
     private URLClassLoader buildLoader(String jarPath) {
         List<URL> urls = new ArrayList<>();
-        for (String part : jarPath.split(File.pathSeparator.equals(":") ? "[:;,]" : "[;,]")) {
+        for (String part : jarPath.split(PATH_SPLIT)) {
             String trimmed = part.trim();
             if (trimmed.isEmpty()) {
                 continue;
@@ -147,7 +152,7 @@ public class DriverLoader {
     /** Lists candidate driver class names found in a jar, to help the user fill the form. */
     public List<String> discoverDriverClasses(String jarPath) {
         List<String> found = new ArrayList<>();
-        for (String part : jarPath.split("[;,]")) {
+        for (String part : jarPath.split(PATH_SPLIT)) {
             File file = new File(part.trim());
             if (!file.isFile()) {
                 continue;

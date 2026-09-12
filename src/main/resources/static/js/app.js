@@ -168,7 +168,8 @@
         if (!out) {
           toast(t(p.success ? (btn.dataset.okKey || 'db.testSuccess')
                             : (btn.dataset.failKey || 'db.testFailed'))
-            + (p.message ? ': ' + p.message : ''), p.success ? 'ok' : 'danger');
+            // p.message 可能是 i18n key，t() 找不到时原样返回（驱动的英文报错不受影响）
+            + (p.message ? ': ' + t(p.message) : ''), p.success ? 'ok' : 'danger');
           return;
         }
         out.className = 'alert ' + (p.success ? 'alert-ok' : 'alert-danger');
@@ -185,7 +186,7 @@
 
         /* 数据库测试给 productInfo/jdbcUrl，AI 测试给 model/endpoint —— 同一套渲染，
            各自用自己的字段名，不必为了复用而假装是另一种东西 */
-        [p.productInfo || p.model, p.driverInfo, p.success ? null : p.message,
+        [p.productInfo || p.model, p.driverInfo, p.success ? null : t(p.message),
           p.jdbcUrl || p.endpoint]
           .forEach(function (line, idx) {
             if (!line) return;
@@ -278,18 +279,26 @@
       fetch(btn.dataset.action + '?jarPath=' + encodeURIComponent(jar.value.trim()))
         .then(function (r) { return r.json(); })
         .then(function (p) {
-          var list = document.getElementById('driver-options');
-          if (list) {
-            list.innerHTML = '';
-            (p.drivers || []).forEach(function (d) {
-              var o = document.createElement('option');
-              o.value = d;
-              list.appendChild(o);
-            });
+          // 预设类型（GBase / 神通）的驱动类名由枚举固定，驱动类输入框藏在 CUSTOM 卡片里。
+          // 这时只把检测结果 toast 出来供核对，绝不能写隐藏域 —— 否则服务端会优先用它覆盖预设类名。
+          var customSection = document.getElementById('custom-section');
+          var customEditable = !customSection || !customSection.hidden;
+          if (customEditable) {
+            var list = document.getElementById('driver-options');
+            if (list) {
+              list.innerHTML = '';
+              (p.drivers || []).forEach(function (d) {
+                var o = document.createElement('option');
+                o.value = d;
+                list.appendChild(o);
+              });
+            }
+            if (p.drivers && p.drivers.length) {
+              var input = document.getElementById('customDriver');
+              if (input && !input.value.trim()) input.value = p.drivers[0];
+            }
           }
           if (p.drivers && p.drivers.length) {
-            var input = document.getElementById('customDriver');
-            if (input && !input.value.trim()) input.value = p.drivers[0];
             toast(p.drivers.join(', '), 'ok');
           } else {
             toast(t(p.message || 'msg.no.drivers.declared'), 'warn');
@@ -320,6 +329,14 @@
           }
           var custom = document.getElementById('custom-section');
           if (custom) custom.hidden = !p.custom;
+          // 未内置的预设（如 GBase / 神通）也要填 jar；bundled 由服务端查 classpath 得出
+          var jarCard = document.getElementById('jar-card');
+          if (jarCard) {
+            var showJar = p.custom || p.bundled === false;
+            jarCard.hidden = !showJar;
+            // 只 hidden 还会照常提交，必须连控件一起禁用，否则残留的旧 jar 路径会劫持内置驱动
+            jarCard.querySelectorAll('input,button').forEach(function (el) { el.disabled = !showJar; });
+          }
           var hint = document.getElementById('url-hint');
           if (hint) hint.textContent = p.urlTemplate || '';
           var driverHint = document.getElementById('driver-hint');

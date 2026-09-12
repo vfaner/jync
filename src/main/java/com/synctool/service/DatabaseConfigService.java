@@ -13,6 +13,7 @@ import com.synctool.repository.DatabaseConfigRepository;
 import com.synctool.repository.ProjectRepository;
 import com.synctool.service.connection.ConnectionTestService;
 import com.synctool.service.connection.DataSourceManager;
+import com.synctool.service.connection.DriverPresence;
 import com.synctool.util.CryptoUtil;
 
 import lombok.extern.slf4j.Slf4j;
@@ -98,7 +99,8 @@ public class DatabaseConfigService {
         });
         config.setName(config.getName().trim());
 
-        if (config.getType() == DatabaseType.CUSTOM) {
+        DatabaseType type = config.getType();
+        if (type == DatabaseType.CUSTOM) {
             // Without these three a custom connection cannot be opened at all.
             if (config.getCustomUrl() == null || config.getCustomUrl().isBlank()) {
                 throw new IllegalArgumentException("error.custom.url.required");
@@ -106,9 +108,17 @@ public class DatabaseConfigService {
             if (config.getCustomDriver() == null || config.getCustomDriver().isBlank()) {
                 throw new IllegalArgumentException("error.custom.driver.required");
             }
-        } else if (config.getHost() == null || config.getHost().isBlank()) {
-            if (config.getCustomUrl() == null || config.getCustomUrl().isBlank()) {
-                throw new IllegalArgumentException("error.connection.host.required");
+        } else {
+            if (config.getHost() == null || config.getHost().isBlank()) {
+                if (config.getCustomUrl() == null || config.getCustomUrl().isBlank()) {
+                    throw new IllegalArgumentException("error.connection.host.required");
+                }
+            }
+            // GBase / Oscar and any future preset without a bundled driver must bring a jar,
+            // otherwise the failure surfaces much later in English at sync time.
+            if (DriverPresence.externalJarRequired(type, config.getCustomDriver())
+                    && (config.getCustomJarPath() == null || config.getCustomJarPath().isBlank())) {
+                throw new IllegalArgumentException("error.driver.jar.required");
             }
         }
     }

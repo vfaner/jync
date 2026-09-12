@@ -58,7 +58,7 @@
 
 ### 数据库连接：保存前先测通
 
-选择数据库类型后自动生成 JDBC URL，可预览、可测试；非内置驱动填写 jar 路径即可动态加载。
+选择数据库类型后自动生成 JDBC URL，可预览、可测试；绝大多数数据库驱动已随包内置，GBase、神通及自定义驱动填写 jar 路径即可动态加载。
 
 ![数据库连接](src/main/resources/static/assets/dataSync_db.png)
 
@@ -196,7 +196,7 @@ Debezium / Flink CDC 是优秀的流式框架，但要跑起来一条 MySQL → 
 
 **3. 为国产数据库与信创迁移而生**
 
-达梦、人大金仓、南大通用、神通、OpenGauss 是内置的一等选项 —— 不是「通过通用 JDBC 也许能连上」，而是各自有专门的方言实现：`MERGE INTO ... FROM DUAL` 的 upsert 写法、类型上限（Oracle VARCHAR2 4000）、函数名差异、标识符引号规则都已处理。Oracle/SQL Server → 国产库的替换场景是本工具的主战场，而这恰恰是 Debezium、Canal 生态最薄弱的地方。
+达梦、人大金仓、南大通用、神通、OpenGauss 是预设的一等选项 —— 不是「通过通用 JDBC 也许能连上」，而是各自有专门的方言实现：`MERGE INTO ... FROM DUAL` 的 upsert 写法、类型上限（Oracle VARCHAR2 4000）、函数名差异、标识符引号规则都已处理。Oracle/SQL Server → 国产库的替换场景是本工具的主战场，而这恰恰是 Debezium、Canal 生态最薄弱的地方。
 
 **4. 零侵入源库**
 
@@ -222,7 +222,7 @@ Navicat / DBeaver 的「数据传输」和 DataX 解决的是「把数据搬过�
 
 MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**达梦 (DM)**、**人大金仓 (KingBase)**、**南大通用 (GBase)**、**神通 (Oscar)**、H2，以及**自定义数据库**（提供 JDBC URL、驱动类名与驱动 jar 路径，运行时动态加载）。
 
-内置驱动仅 **MySQL / PostgreSQL / H2**；其余数据库需在连接配置中填写驱动 jar 路径，工具会用独立 `URLClassLoader` 加载并通过 `DriverShim` 注册到 `DriverManager`。这样做的好处是：**发行包不必捆绑一堆商业驱动，也不会因为驱动版本冲突污染应用类加载器。**
+除 **GBase** 与 **神通 Oscar** 外，上面各数据库的 JDBC 驱动都已随发行包内置，开箱即用，无需另放 jar。GBase、神通未在 Maven Central 发布官方构件，本项目也未获得再分发授权，需要自行从厂商处获取驱动 jar，在连接配置中填写路径；自定义类型同理。外部 jar 用独立 `URLClassLoader` 加载，并通过 `DriverShim` 注册到 `DriverManager`，与应用类加载器隔离，驱动版本冲突不会污染主程序。各内置驱动的版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 
 ---
 
@@ -306,16 +306,16 @@ java -jar synctool.jar --spring.config.location=file:./application.yml
 
 > 🔐 **安全提示**：`sync.crypto-password` 与 `sync.crypto-salt` 用于加密存储的数据库连接密码，**发行包带有默认值，生产环境必须修改**。修改后已存储的旧密码将无法解密，需在界面上重新填写。`crypto-salt` 必须是合法的十六进制字符串。
 
-### 四、加载非内置驱动
+### 四、加载外部驱动 jar（GBase / 神通 / 自定义）
 
-对于 Oracle、SQL Server、DB2、达梦、金仓等，把厂商驱动 jar 放到服务器上，例如：
+MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、达梦、金仓、H2 的驱动都已随发行包内置，**不需要这一步**。只有 **GBase**、**神通 Oscar** 和**自定义数据库**需要外部 jar。把厂商驱动 jar 放到服务器上，例如：
 
 ```bash
 mkdir -p /opt/synctool/drivers
-cp ojdbc8.jar DmJdbcDriver18.jar kingbase8-8.6.0.jar /opt/synctool/drivers/
+cp gbase-jdbc.jar oscar.jar /opt/synctool/drivers/
 ```
 
-然后在「数据库连接」页面新建连接时，填写**驱动 jar 路径**（如 `/opt/synctool/drivers/ojdbc8.jar`）与**驱动类名**（选择预设类型时会自动填好）。点击「测试连接」验证加载成功即可保存。
+选中这几类数据库时，表单会自动出现「驱动 jar」卡片。填写**驱动 jar 路径**即可，单个 jar 文件或存放多个 jar 的目录都行（如 `/opt/synctool/drivers`）；自定义类型还需填写 JDBC URL 与驱动类名，可以点「检测驱动类」直接从 jar 里识别。点击「测试连接」验证加载成功后保存。
 
 ### 五、后台常驻
 
@@ -708,4 +708,4 @@ mvn test
 
 本项目基于 [MIT License](LICENSE) 开源，可自由用于商业与非商业用途。
 
-第三方 JDBC 驱动不随本项目分发，其许可条款由各自厂商单独约定 —— 尤其是 Oracle、DB2 及国产数据库的驱动，请自行确认使用授权。
+发行包内置的第三方 JDBC 驱动（Oracle、DB2、达梦、金仓等共 10 个）各自适用其原厂许可证，版本、链接与再分发说明见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。**GBase** 与**神通 Oscar** 的驱动不随本项目分发，请自行从厂商处获取并确认使用授权。

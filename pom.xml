@@ -80,7 +80,8 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Bundled drivers; every other database is loaded dynamically from a user-supplied jar -->
+        <!-- Bundled drivers. GBase and Oscar have no artifact on Maven Central, so they stay
+             on the user-supplied-jar path together with CUSTOM; see DriverPresence. -->
         <dependency>
             <groupId>mysql</groupId>
             <artifactId>mysql-connector-java</artifactId>
@@ -90,6 +91,55 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mariadb.jdbc</groupId>
+            <artifactId>mariadb-java-client</artifactId>
+            <scope>runtime</scope>
+            <!-- Only needed for native Windows (SSPI/AD) authentication; pulls in JNA
+                 and several MB of native libraries that Linux/Mac deployments never use. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>com.github.waffle</groupId>
+                    <artifactId>waffle-jna</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.microsoft.sqlserver</groupId>
+            <artifactId>mssql-jdbc</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.oracle.database.jdbc</groupId>
+            <artifactId>ojdbc8</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.db2</groupId>
+            <artifactId>jcc</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- The "-og" version is the openGauss driver: org.opengauss.Driver / jdbc:opengauss://.
+             The plain version registers org.postgresql.Driver and would collide with the real
+             PostgreSQL driver above. -->
+        <dependency>
+            <groupId>org.opengauss</groupId>
+            <artifactId>opengauss-jdbc</artifactId>
+            <version>6.0.0-og</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.dameng</groupId>
+            <artifactId>DmJdbcDriver18</artifactId>
+            <version>8.1.3.140</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>cn.com.kingbase</groupId>
+            <artifactId>kingbase8</artifactId>
+            <version>9.0.1.jre7</version>
             <scope>runtime</scope>
         </dependency>
 

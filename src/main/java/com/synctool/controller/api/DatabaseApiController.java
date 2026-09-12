@@ -18,6 +18,7 @@ import com.synctool.model.DatabaseType;
 import com.synctool.service.DatabaseConfigService;
 import com.synctool.service.connection.ConnectionTestService;
 import com.synctool.service.connection.DriverLoader;
+import com.synctool.service.connection.DriverPresence;
 
 /** REST endpoints for connection testing and driver discovery. */
 @RestController
@@ -88,6 +89,8 @@ public class DatabaseApiController {
         body.put("driverClass", dbType.getDriverClassName());
         body.put("urlTemplate", dbType.getUrlTemplate());
         body.put("custom", dbType.isCustom());
+        // CUSTOM has no driver class of its own, so it is never "bundled".
+        body.put("bundled", DriverPresence.isPresent(dbType.getDriverClassName()));
         return ResponseEntity.ok(body);
     }
 

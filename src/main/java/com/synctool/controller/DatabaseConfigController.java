@@ -13,6 +13,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import com.synctool.model.DatabaseConfig;
 import com.synctool.model.DatabaseType;
 import com.synctool.service.DatabaseConfigService;
+import com.synctool.service.connection.DriverPresence;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -43,6 +44,7 @@ public class DatabaseConfigController {
         config.setPort(DatabaseType.MYSQL.getDefaultPort());
         model.addAttribute("config", config);
         model.addAttribute("types", DatabaseType.values());
+        model.addAttribute("jarCardVisible", jarCardVisible(config.getType()));
         model.addAttribute("activeNav", "databases");
         return "database-config-form";
     }
@@ -52,12 +54,25 @@ public class DatabaseConfigController {
         return service.findById(id).map(config -> {
             model.addAttribute("config", config);
             model.addAttribute("types", DatabaseType.values());
+            model.addAttribute("jarCardVisible", jarCardVisible(config.getType()));
             model.addAttribute("activeNav", "databases");
             return "database-config-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.connection.missing");
             return "redirect:/databases";
         });
+    }
+
+    /**
+     * The jar-path card is shown for CUSTOM (nothing is bundled) and for preset types whose
+     * driver is not on the classpath (currently GBase and Oscar), so the first paint already
+     * matches the selected type instead of flashing after the type-defaults round-trip.
+     */
+    private static boolean jarCardVisible(DatabaseType type) {
+        if (type == null || type == DatabaseType.CUSTOM) {
+            return true;
+        }
+        return !DriverPresence.isPresent(type.getDriverClassName());
     }
 
     @PostMapping("/save")

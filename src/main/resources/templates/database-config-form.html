@@ -54,7 +54,10 @@
                         </div>
                         <div class="field">
                             <label for="port" th:text="#{db.port}">Port</label>
-                            <input type="number" class="input" id="port" th:field="*{port}">
+                            <!--/* 新建页服务端预填的默认端口必须打上自动填充标记，否则 app.js
+                                    会把 3306 当成用户手填值，切换类型时拒绝覆盖；编辑页是已保存端口，不打标 */-->
+                            <input type="number" class="input" id="port" th:field="*{port}"
+                                   th:attr="data-autofilled=${config.id == null} ? 'true' : null">
                         </div>
                     </div>
 
@@ -92,7 +95,36 @@
                 </div>
             </div>
 
-            <!--/* 自定义数据库需要这三项；也可用于覆盖已知类型的 URL */-->
+            <!--/* 未随发行包内置的驱动（CUSTOM，以及 GBase / 神通等预设）从本地 jar 加载。
+                    初始显隐由服务端按 classpath 决定，切换类型时 app.js 再同步，避免首屏闪动。 */-->
+            <div class="card" id="jar-card"
+                 th:attr="hidden=${jarCardVisible} ? null : 'hidden'">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#database"/></svg> <span th:text="#{db.jarCard}">Driver jar</span></h2>
+                    <span class="hint" th:text="#{db.jarCardHint}">Not bundled; load it from a vendor jar</span>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label for="customJarPath" th:text="#{db.customJarPath}">Driver jar path</label>
+                        <div class="input-group">
+                            <!--/* 卡片隐藏时必须禁用：hidden 不等于不提交，否则选 GBase 填了路径又改选
+                                    达梦，旧路径会劫持内置驱动、去错误的 jar 里加载达梦驱动类 */-->
+                            <input type="text" class="input mono" id="customJarPath" th:field="*{customJarPath}"
+                                   placeholder="/opt/drivers/gbase-jdbc.jar"
+                                   th:disabled="${jarCardVisible} ? null : 'disabled'">
+                            <button type="button" class="btn btn-ghost" data-role="find-drivers"
+                                    th:attr="data-action=@{/api/databases/discover-drivers}"
+                                    th:disabled="${jarCardVisible} ? null : 'disabled'">
+                                <svg class="ico"><use href="#search"/></svg>
+                                <span th:text="#{db.discoverDrivers}">Detect</span>
+                            </button>
+                        </div>
+                        <div class="help" th:text="#{db.customJarPathHelp}">help</div>
+                    </div>
+                </div>
+            </div>
+
+            <!--/* CUSTOM 还需要自己给 URL 与驱动类；也可用于覆盖已知类型的 URL */-->
             <div class="card" id="custom-section"
                  th:attr="hidden=${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'hidden'">
                 <div class="card-head">
@@ -103,26 +135,13 @@
                     <div class="field">
                         <label for="customUrl" th:text="#{db.customUrl}">JDBC URL</label>
                         <input type="text" class="input mono" id="customUrl" th:field="*{customUrl}"
-                               placeholder="jdbc:dm://host:5236/DBNAME">
+                               placeholder="jdbc:other://host:5236/DBNAME">
                         <div class="help" th:text="#{db.customUrlHelp}">help</div>
-                    </div>
-                    <div class="field">
-                        <label for="customJarPath" th:text="#{db.customJarPath}">Driver jar path</label>
-                        <div class="input-group">
-                            <input type="text" class="input mono" id="customJarPath" th:field="*{customJarPath}"
-                                   placeholder="/opt/drivers/DmJdbcDriver18.jar">
-                            <button type="button" class="btn btn-ghost" data-role="find-drivers"
-                                    th:attr="data-action=@{/api/databases/discover-drivers}">
-                                <svg class="ico"><use href="#search"/></svg>
-                                <span th:text="#{db.discoverDrivers}">Detect</span>
-                            </button>
-                        </div>
-                        <div class="help" th:text="#{db.customJarPathHelp}">help</div>
                     </div>
                     <div class="field">
                         <label for="customDriver" th:text="#{db.customDriver}">Driver class</label>
                         <input type="text" class="input mono" id="customDriver" th:field="*{customDriver}"
-                               list="driver-options" placeholder="dm.jdbc.driver.DmDriver">
+                               list="driver-options" placeholder="com.example.jdbc.Driver">
                         <datalist id="driver-options"></datalist>
                         <div class="help mono" id="driver-hint"></div>
                     </div>

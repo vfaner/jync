@@ -58,7 +58,7 @@ One toggle in the top-right corner. Dashboard, cards, tables, and icons all foll
 
 ### Database connections — test before you save
 
-Pick a database type and the JDBC URL is generated for you; preview it, test it. For non-bundled drivers, just point at the jar and it is loaded dynamically.
+Pick a database type and the JDBC URL is generated for you; preview it, test it. Nearly every database driver ships inside the distribution — for GBase, Oscar, and custom drivers, just point at a jar and it loads dynamically.
 
 ![Database connections](src/main/resources/static/assets/dataSync_db.png)
 
@@ -196,7 +196,7 @@ Most CDC tools solve only the data stream; the target tables are yours to create
 
 **3. Built for Chinese domestic databases and localization migrations**
 
-Dameng (DM), KingBase, GBase, Oscar, and OpenGauss are built-in first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly where the Debezium and Canal ecosystems are weakest.
+Dameng (DM), KingBase, GBase, Oscar, and OpenGauss are preset first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly where the Debezium and Canal ecosystems are weakest.
 
 **4. Zero intrusion into the source database**
 
@@ -222,7 +222,7 @@ Being honest about the boundaries:
 
 MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, **Dameng (DM)**, **KingBase**, **GBase**, **Oscar**, H2, plus **custom databases** (supply a JDBC URL, driver class name, and driver jar path — loaded dynamically at runtime).
 
-Only **MySQL / PostgreSQL / H2** drivers are bundled. For anything else, fill in the driver jar path in the connection form; the tool loads it with a dedicated `URLClassLoader` and registers it with `DriverManager` through a `DriverShim`. The upside: **the distribution doesn't have to ship a pile of commercial drivers, and driver version conflicts can't pollute the application classloader.**
+Every driver above except **GBase** and **Oscar** ships inside the distribution, so those types work out of the box with no extra jar. GBase and Oscar publish no official artifact on Maven Central and are not redistributed here: obtain the vendor jar yourself and fill in its path; the same applies to custom types. External jars are loaded through a dedicated `URLClassLoader` and registered with `DriverManager` via a `DriverShim`, isolated from the application classloader so driver version conflicts can't pollute the main app. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the bundled drivers' versions and licenses.
 
 ---
 
@@ -306,16 +306,16 @@ java -jar synctool.jar --spring.config.location=file:./application.yml
 
 > 🔐 **Security note:** `sync.crypto-password` and `sync.crypto-salt` encrypt the stored database passwords. **The distribution ships with defaults; you must change them in production.** After changing them, previously stored passwords can no longer be decrypted and must be re-entered in the UI. `crypto-salt` must be a valid hexadecimal string.
 
-### 4. Loading non-bundled drivers
+### 4. Loading external driver jars (GBase / Oscar / custom)
 
-For Oracle, SQL Server, DB2, DM, KingBase, and friends, place the vendor jar on the server:
+Drivers for MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, Dameng, KingBase, and H2 ship inside the distribution, so **this step is not needed for them**. Only **GBase**, **Oscar**, and **custom databases** require an external jar. Place the vendor jar on the server, for example:
 
 ```bash
 mkdir -p /opt/synctool/drivers
-cp ojdbc8.jar DmJdbcDriver18.jar kingbase8-8.6.0.jar /opt/synctool/drivers/
+cp gbase-jdbc.jar oscar.jar /opt/synctool/drivers/
 ```
 
-Then, when creating a connection on the **Database Connections** page, fill in the **driver jar path** (e.g. `/opt/synctool/drivers/ojdbc8.jar`) and the **driver class name** (auto-filled when you pick a preset type). Click **Test Connection** to confirm it loads, then save.
+When one of these types is selected, the form automatically shows a **Driver jar** card. Just fill in the **driver jar path** — either a single jar file or a directory of jars, e.g. `/opt/synctool/drivers`. Custom types also need a JDBC URL and a driver class; the **Detect driver classes** button can read candidate class names straight from the jar. Click **Test Connection** to confirm it loads, then save.
 
 ### 5. Running as a service
 
@@ -744,4 +744,4 @@ If this project helps you, a Star ⭐ is appreciated.
 
 Released under the [MIT License](LICENSE) — free for commercial and non-commercial use.
 
-Third-party JDBC drivers are **not** distributed with this project; their license terms are set by their respective vendors. This especially applies to the Oracle, DB2, and Chinese domestic database drivers — please confirm your own usage rights.
+The distribution bundles ten third-party JDBC drivers (Oracle, DB2, Dameng, KingBase, and others), each under its vendor license — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for versions, links, and the Oracle/IBM redistribution terms. **GBase** and **Oscar** drivers are not distributed with this project; obtain them from the vendors and confirm your own usage rights.

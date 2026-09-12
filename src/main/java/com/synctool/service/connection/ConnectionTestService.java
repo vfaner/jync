@@ -5,6 +5,7 @@ import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
 
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import com.synctool.model.DatabaseConfig;
 
@@ -30,6 +31,12 @@ public class ConnectionTestService {
      */
     public TestResult test(DatabaseConfig config) {
         long start = System.currentTimeMillis();
+        // Fail with an i18n key before the driver loader can produce an English stacktrace-style
+        // message ("not on the classpath and no jar path was supplied").
+        if (DriverPresence.externalJarRequired(config.getType(), config.getCustomDriver())
+                && !StringUtils.hasText(config.getCustomJarPath())) {
+            return TestResult.failure("error.driver.jar.required", 0);
+        }
         try (Connection conn = dataSourceManager.getConnection(config)) {
             if (!conn.isValid(5)) {
                 return TestResult.failure("Connection was established but is not valid",
