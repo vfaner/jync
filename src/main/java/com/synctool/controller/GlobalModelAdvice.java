@@ -1,9 +1,12 @@
 package com.synctool.controller;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.info.BuildProperties;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ModelAttribute;
 
@@ -22,11 +25,27 @@ public class GlobalModelAdvice {
 
     private final String githubUrl;
     private final SyncProperties properties;
+    private final ObjectProvider<BuildProperties> buildProperties;
 
     public GlobalModelAdvice(@Value("${app.github-url}") String githubUrl,
-                             SyncProperties properties) {
+                             SyncProperties properties,
+                             ObjectProvider<BuildProperties> buildProperties) {
         this.githubUrl = githubUrl;
         this.properties = properties;
+        this.buildProperties = buildProperties;
+    }
+
+    /**
+     * Running artifact version with a leading {@code v} for the header and footer, or
+     * {@code null} for IDE runs without {@code build-info.properties} (templates then hide it).
+     */
+    @ModelAttribute("appVersion")
+    public String appVersion() {
+        BuildProperties props = buildProperties.getIfAvailable();
+        if (props == null || !StringUtils.hasText(props.getVersion())) {
+            return null;
+        }
+        return "v" + props.getVersion().trim();
     }
 
     /** Repository link used by the nav icon and the donate dialog. */

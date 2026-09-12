@@ -7,7 +7,7 @@
 
     <div class="page-head">
         <div>
-            <h1 th:text="#{settings.title}">Settings</h1>
+            <h1 th:text="#{settings.title}">System information</h1>
             <p class="sub" th:text="#{settings.configNote}">Read-only; edit application.yml and restart</p>
         </div>
     </div>
@@ -85,6 +85,74 @@
                     <div class="help" th:text="#{settings.lockTtlHelp}">help</div>
                 </dd>
             </dl>
+        </div>
+    </div>
+
+    <!-- 版本信息：当前版本、GitHub 最新版本、当前版本更新内容 -->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#tag"/></svg>
+                <span th:text="#{settings.version}">Version information</span></h2>
+        </div>
+        <div class="card-body">
+            <div class="version-bar">
+                <span class="badge badge-ok" th:if="${versionInfo.state.name() == 'UP_TO_DATE'}">
+                    <svg class="ico"><use href="#check-lg"/></svg>
+                    <span th:text="#{settings.upToDate}">Up to date</span>
+                </span>
+                <th:block th:if="${versionInfo.state.name() == 'UPDATE_AVAILABLE'}">
+                    <a class="btn btn-warn btn-sm" target="_blank" rel="noopener noreferrer"
+                       th:href="${versionInfo.releaseUrl}">
+                        <svg class="ico"><use href="#box-arrow-up-right"/></svg>
+                        <span th:text="#{settings.updateNow}">Update now</span>
+                    </a>
+                    <span class="small soft">
+                        <span th:text="#{settings.updateAvailable}">New version available</span>
+                        <span class="mono" th:text="'v' + ${versionInfo.latestVersion}">vX.Y.Z</span>
+                        <span th:if="${versionInfo.latestPublishedDate}"
+                              th:text="'(' + ${versionInfo.latestPublishedDate} + ')'">(YYYY-MM-DD)</span>
+                    </span>
+                </th:block>
+                <span class="badge badge-mute" th:if="${versionInfo.state.name() == 'CHECKING'}">
+                    <svg class="ico spinning"><use href="#arrow-clockwise"/></svg>
+                    <span th:text="#{settings.checking}">Checking for updates…</span>
+                </span>
+                <span class="badge badge-mute" th:if="${versionInfo.state.name() == 'UNKNOWN'}">
+                    <svg class="ico"><use href="#info-circle"/></svg>
+                    <span th:text="#{settings.checkFailed}">Update check failed; will retry shortly</span>
+                </span>
+                <span class="badge badge-mute" th:if="${versionInfo.state.name() == 'DISABLED'}">
+                    <svg class="ico"><use href="#info-circle"/></svg>
+                    <span th:text="#{settings.checkDisabled}">Update check disabled</span>
+                </span>
+            </div>
+
+            <dl class="dl">
+                <dt th:text="#{settings.currentVersion}">Current version</dt>
+                <dd>
+                    <span class="chip mono" th:if="${versionInfo.currentVersion}"
+                          th:text="'v' + ${versionInfo.currentVersion}">vX.Y.Z</span>
+                    <span class="chip" th:unless="${versionInfo.currentVersion}"
+                          th:text="#{settings.devBuild}">Development build</span>
+                </dd>
+
+                <dt th:text="#{settings.latestVersion}">Latest version</dt>
+                <dd>
+                    <th:block th:if="${versionInfo.latestVersion}">
+                        <span class="chip mono" th:text="'v' + ${versionInfo.latestVersion}">vX.Y.Z</span>
+                        <span class="small soft" th:if="${versionInfo.latestPublishedDate}"
+                              th:text="${versionInfo.latestPublishedDate}">YYYY-MM-DD</span>
+                    </th:block>
+                    <span class="muted" th:unless="${versionInfo.latestVersion}">—</span>
+                </dd>
+            </dl>
+
+            <h3 class="release-notes-title" th:if="${versionInfo.currentNotesHtml}"
+                th:text="#{settings.releaseNotes}">What's new in this version</h3>
+            <div class="release-notes" th:if="${versionInfo.currentNotesHtml}"
+                 th:utext="${versionInfo.currentNotesHtml}">notes</div>
+            <p class="small soft" th:if="${versionInfo.currentNotesHtml}"
+               th:text="#{settings.updateHelp}">upgrade help</p>
         </div>
     </div>
 

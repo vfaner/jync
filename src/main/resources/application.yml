@@ -51,6 +51,10 @@ server:
 app:
   # Repository link behind the nav GitHub icon and the donate dialog buttons.
   github-url: https://github.com/vfaner/synctool
+  # 设置页的新版本检查（调用 GitHub API，成功结果缓存 10 分钟、失败缓存 1 分钟）。
+  # 纯内网无法访问 GitHub 时建议关闭。
+  update-check:
+    enabled: true
 
 sync:
   # Default polling interval in milliseconds for change detection

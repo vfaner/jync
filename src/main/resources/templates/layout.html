@@ -57,7 +57,11 @@
             <span class="logo-mark"><svg class="ico"><use href="#arrow-left-right"/></svg></span>
             <span class="logo-text">
                 <span th:text="#{app.title}">DB Sync Tool</span>
-                <small th:text="#{app.subtitle}">Real-time sync</small>
+                <small>
+                    <span th:text="#{app.subtitle}">Real-time sync</span>
+                    <span class="logo-ver-sep" th:if="${appVersion}">·</span>
+                    <span class="logo-ver" th:if="${appVersion}" th:text="${appVersion}">vX.Y.Z</span>
+                </small>
             </span>
         </a>
 
@@ -80,7 +84,7 @@
                 <svg class="ico"><use href="#cpu"/></svg><span th:text="#{nav.ai}">AI</span>
             </a>
             <a th:href="@{/settings}" th:classappend="${activeNav == 'settings'} ? 'active' : ''">
-                <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">Settings</span>
+                <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">System info</span>
             </a>
         </nav>
 
@@ -200,6 +204,7 @@
         <span th:text="#{app.title}">DB Sync Tool</span>
         <span class="mx-1">·</span>
         <span th:text="#{app.subtitle}">Real-time database synchronization</span>
+        <small class="foot-ver mono" th:if="${appVersion}" th:text="${appVersion}">vX.Y.Z</small>
     </span>
     <span th:text="#{foot.offline}">All assets local · works offline</span>
 </footer>
