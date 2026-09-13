@@ -10,7 +10,7 @@
 
 - 项目地址：<https://github.com/vfaner/synctool>
 - 国内镜像：<https://gitee.com/super_rgh/synctool>
-- 视频演示：<https://www.bilibili.com/video/BV1iHYJ6vEEd>（10 分钟，从建连接到实时同步）
+- 视频演示：<https://www.bilibili.com/video/BV1iHYJ6vEEd>（14 分钟，从建连接到实时同步）
 
 技术栈：Spring Boot 2.7 单体架构 + Thymeleaf 服务端渲染 + Quartz 调度 + H2 内嵌元数据库。**零外部依赖，内网离线可用。**
 
@@ -56,15 +56,21 @@
 
 ![暗色看板](src/main/resources/static/assets/dataSync_kanban_anye.png)
 
-### 数据库连接：保存前先测通
+### 英文界面：右上角一键切换
 
-选择数据库类型后自动生成 JDBC URL，可预览、可测试；绝大多数数据库驱动已随包内置，GBase、神通及自定义驱动填写 jar 路径即可动态加载。
+点导航栏的「中 / EN」按钮即可在中英文之间切换，菜单、表单、状态与错误提示整套文案一起换，选择记在浏览器里；首次访问未手动选择时，默认语言按浏览器时区智能推断。
+
+![英文界面](src/main/resources/static/assets/dataSync_en.png)
+
+### 数据库连接：源 / 目标分栏，保存前先测通
+
+连接按用途拆成「源数据库连接」「目标数据库连接」两张表，各自独立分页；新建项目时源、目标下拉只列出对应栏目的连接，不会再选错。选择数据库类型后自动生成 JDBC URL，可预览、可测试；绝大多数数据库驱动已随包内置，GBase、神通及自定义驱动填写 jar 路径即可动态加载。
 
 ![数据库连接](src/main/resources/static/assets/dataSync_db.png)
 
-### 新增连接：类型选好，URL 自己拼
+### 新增连接：先定用途，类型选好 URL 自己拼
 
-填主机、端口、库名，JDBC URL 当场生成，不用记各家数据库的连接串格式。密码加密后入库，测试连接通过再保存。
+必选「源数据库连接」（同步时数据读出）或「目标数据库连接」（数据写入）；再填主机、端口、库名，JDBC URL 当场生成，不用记各家数据库的连接串格式。密码加密后入库，测试连接通过再保存。
 
 ![新增连接](src/main/resources/static/assets/dataSync_db_add.png)
 
@@ -104,6 +110,12 @@
 
 ![新增供应商](src/main/resources/static/assets/dataSync_ai_add.png)
 
+### 系统信息：运行参数与版本一目了然
+
+实例标识、Java 版本、已调度项目数、同步默认参数与并发恢复机制集中只读展示；版本信息卡片显示当前版本、GitHub 最新版本和本版更新内容。更新检查在后台进行、不拖慢页面，纯内网环境下本地版本号与更新说明照常显示。
+
+![系统信息](src/main/resources/static/assets/dataSync_system.png)
+
 ---
 
 ## 核心功能
@@ -111,6 +123,7 @@
 | 分类 | 能力 |
 |---|---|
 | **项目管理** | 配置源库/目标库，多项目并行互不干扰 |
+| **连接管理** | 连接按源 / 目标用途分类，列表分栏、独立分页；存量连接升级后自动归类 |
 | **连接测试** | 保存前即可验证连通性，支持预览自动拼装的 JDBC URL |
 | **对象选择** | 表 / 视图 / 存储过程，默认全选，支持搜索与批量勾选 |
 | **同步内容** | 表结构、表数据、索引、视图、存储过程与函数 |

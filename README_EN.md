@@ -56,15 +56,21 @@ One toggle in the top-right corner. Dashboard, cards, tables, and icons all foll
 
 ![Dashboard in dark theme](src/main/resources/static/assets/dataSync_kanban_anye.png)
 
-### Database connections — test before you save
+### Bilingual UI — one click switches the whole interface
 
-Pick a database type and the JDBC URL is generated for you; preview it, test it. Nearly every database driver ships inside the distribution — for GBase, Oscar, and custom drivers, just point at a jar and it loads dynamically.
+The "中 / EN" button in the navbar flips every menu, form, status, and error message between Chinese and English; the choice is remembered in the browser. Until the user picks one explicitly, the default language is inferred from the browser timezone.
+
+![English interface](src/main/resources/static/assets/dataSync_en.png)
+
+### Database connections — sources and targets in separate lists, test before you save
+
+Connections are split by purpose into a Source table and a Target table, each paginated on its own; the project form's source and target selectors only offer connections from the matching list, so the two sides can no longer be mixed up. Pick a database type and the JDBC URL is generated for you — preview it, test it. Nearly every database driver ships inside the distribution; for GBase, Oscar, and custom drivers, just point at a jar and it loads dynamically.
 
 ![Database connections](src/main/resources/static/assets/dataSync_db.png)
 
-### Adding a connection — pick the type, the URL writes itself
+### Adding a connection — pick the purpose first; the URL writes itself
 
-Fill in host, port, and database name and the JDBC URL appears as you type, so there is no need to remember each vendor's connection-string shape. The password is encrypted on the way into storage, and the connection can be tested before you commit it.
+Choose Source (data is read from it during sync) or Target (data is written into it), then fill in host, port, and database name; the JDBC URL appears as you type, so there is no need to remember each vendor's connection-string shape. The password is encrypted on the way into storage, and the connection can be tested before you commit it.
 
 ![Adding a connection](src/main/resources/static/assets/dataSync_db_add.png)
 
@@ -104,6 +110,12 @@ The key is encrypted like a database password. The probe sends a real request ra
 
 ![Adding a provider](src/main/resources/static/assets/dataSync_ai_add.png)
 
+### System information — runtime settings and version on one page
+
+Instance ID, Java version, scheduled project count, sync defaults, and the concurrency/recovery safeguards are gathered as read-only info. The version card shows the running version, the latest GitHub release, and this version's release notes. The update check runs in the background and never slows the page down — on an air-gapped intranet, the local version number and bundled notes still render normally.
+
+![System information](src/main/resources/static/assets/dataSync_system.png)
+
 ---
 
 ## Features
@@ -111,6 +123,7 @@ The key is encrypted like a database password. The probe sends a real request ra
 | Area | Capability |
 |---|---|
 | **Project management** | Configure source/target databases; run many projects in parallel without interference |
+| **Connection management** | Connections are classified as source or target, shown in separate paginated lists; existing connections are categorized automatically on upgrade |
 | **Connection testing** | Verify connectivity before saving; preview the auto-assembled JDBC URL |
 | **Object selection** | Tables / views / stored procedures, all selected by default, with search and bulk checkboxes |
 | **Sync scope** | Table schema, table data, indexes, views, stored procedures and functions |
