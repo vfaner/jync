@@ -1,13 +1,23 @@
 package com.synctool.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
+import java.util.stream.IntStream;
+
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+
+import com.synctool.model.ConnectionRole;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -77,6 +87,27 @@ class DatabaseConfigFormViewTest {
     }
 
     @Test
+    void newFormOffersSourceAndTargetRoleAndDefaultsToSource() throws Exception {
+        String page = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(page).contains("name=\"role\"");
+        assertThat(page).contains("value=\"SOURCE\"");
+        assertThat(page).contains("value=\"TARGET\"");
+        assertThat(page).containsPattern("value=\"SOURCE\"[^>]*checked");
+        assertThat(page).doesNotContain("??db.role");
+    }
+
+    @Test
+    void newFormPreselectsRoleFromQueryParameter() throws Exception {
+        String page = html(mvc.perform(get("/databases/new").param("role", "TARGET")
+                        .with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(page).containsPattern("value=\"TARGET\"[^>]*checked");
+        assertThat(page).doesNotContainPattern(
+                Pattern.compile("value=\"SOURCE\"[^>]*checked"));
+    }
+
+    @Test
     void newFormMarksThePrefilledPortAsAutofilled() throws Exception {
         // Without the flag app.js treats the server-prefilled 3306 as a user value and never
         // replaces it when the type changes.
@@ -119,6 +150,69 @@ class DatabaseConfigFormViewTest {
         // The path must actually submit for an external-driver type.
         assertThat(page).doesNotContainPattern(
                 java.util.regex.Pattern.compile("id=\"customJarPath\"[^>]*disabled"));
+    }
+
+    private DatabaseConfig config(long id, String name, ConnectionRole role) {
+        DatabaseConfig c = new DatabaseConfig();
+        c.setId(id);
+        c.setName(name);
+        c.setType(DatabaseType.MYSQL);
+        c.setRole(role);
+        c.setHost("localhost");
+        c.setPort(3306);
+        return c;
+    }
+
+    @Test
+    void listRendersSourceAndTargetSections() throws Exception {
+        when(service.findPageByRole(eq(ConnectionRole.SOURCE), anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(List.of(config(1L, "src-one", ConnectionRole.SOURCE)),
+                        PageRequest.of(0, 10), 1));
+        when(service.findPageByRole(eq(ConnectionRole.TARGET), anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(List.of(config(2L, "tgt-one", ConnectionRole.TARGET)),
+                        PageRequest.of(0, 10), 1));
+
+        String page = html(mvc.perform(get("/databases").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(page).contains("src-one", "tgt-one");
+        assertThat(page).contains("/databases/new?role=SOURCE", "/databases/new?role=TARGET");
+        assertThat(page).doesNotContain("??db.section", "??db.noSources", "??db.noTargets");
+    }
+
+    @Test
+    void listPagerKeepsBothPageParameters() throws Exception {
+        List<DatabaseConfig> eleven = new ArrayList<>();
+        IntStream.rangeClosed(1, 11).forEach(i ->
+                eleven.add(config(i, "src-" + i, ConnectionRole.SOURCE)));
+        when(service.findPageByRole(eq(ConnectionRole.SOURCE), anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(eleven.subList(0, 10), PageRequest.of(0, 10), 11));
+        when(service.findPageByRole(eq(ConnectionRole.TARGET), anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 10), 0));
+
+        String page = html(mvc.perform(get("/databases").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(page).contains("sourcePage=1");
+        assertThat(page).contains("targetPage=0");
+        // The target section has a single page: no pager there.
+        assertThat(page).doesNotContain("targetPage=1");
+    }
+
+    @Test
+    void listHidesActionsFromViewer() throws Exception {
+        when(service.findPageByRole(eq(ConnectionRole.SOURCE), anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(List.of(config(1L, "src-one", ConnectionRole.SOURCE)),
+                        PageRequest.of(0, 10), 1));
+        when(service.findPageByRole(eq(ConnectionRole.TARGET), anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(List.of(config(2L, "tgt-one", ConnectionRole.TARGET)),
+                        PageRequest.of(0, 10), 1));
+
+        String page = html(mvc.perform(get("/databases").with(as(UserRole.VIEWER)))
+                .andExpect(status().isOk()));
+
+        assertThat(page).contains("src-one", "tgt-one");
+        assertThat(page).doesNotContain("/delete", "/databases/new?role=", "data-role=\"api-btn\"");
     }
 
     @Test

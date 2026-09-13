@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.synctool.model.ConnectionRole;
 import com.synctool.model.DatabaseConfig;
 import com.synctool.model.DatabaseType;
 import com.synctool.service.DatabaseConfigService;
@@ -23,6 +24,8 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class DatabaseConfigController {
 
+    static final int PAGE_SIZE = 10;
+
     private final DatabaseConfigService service;
 
     public DatabaseConfigController(DatabaseConfigService service) {
@@ -30,16 +33,22 @@ public class DatabaseConfigController {
     }
 
     @GetMapping
-    public String list(Model model) {
-        model.addAttribute("configs", service.findAll());
+    public String list(@RequestParam(defaultValue = "0") int sourcePage,
+                       @RequestParam(defaultValue = "0") int targetPage,
+                       Model model) {
+        model.addAttribute("sources",
+                service.findPageByRole(ConnectionRole.SOURCE, sourcePage, PAGE_SIZE));
+        model.addAttribute("targets",
+                service.findPageByRole(ConnectionRole.TARGET, targetPage, PAGE_SIZE));
         model.addAttribute("activeNav", "databases");
         return "database-configs";
     }
 
     @GetMapping("/new")
-    public String createForm(Model model) {
+    public String createForm(@RequestParam(required = false) ConnectionRole role, Model model) {
         DatabaseConfig config = new DatabaseConfig();
         config.setType(DatabaseType.MYSQL);
+        config.setRole(role != null ? role : ConnectionRole.SOURCE);
         config.setHost("localhost");
         config.setPort(DatabaseType.MYSQL.getDefaultPort());
         model.addAttribute("config", config);

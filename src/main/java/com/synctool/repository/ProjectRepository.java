@@ -18,4 +18,8 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
     long countByEnabledTrue();
 
     List<Project> findBySourceDbIdOrTargetDbId(Long sourceDbId, Long targetDbId);
+
+    List<Project> findBySourceDbId(Long sourceDbId);
+
+    List<Project> findByTargetDbId(Long targetDbId);
 }

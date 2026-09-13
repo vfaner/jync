@@ -35,6 +35,16 @@ public class DatabaseConfig {
     @Column(nullable = false, length = 32)
     private DatabaseType type = DatabaseType.MYSQL;
 
+    /**
+     * Source (read) or target (write); decides which section and project selector lists it in.
+     * The column stays nullable at DDL level on purpose: ddl-auto=update adds it to existing
+     * databases whose rows need the startup backfill, and H2 rejects adding a NOT NULL column
+     * to a non-empty table. Application-level validation in DatabaseConfigService requires it.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private ConnectionRole role = ConnectionRole.SOURCE;
+
     @Column(length = 255)
     private String host;
 

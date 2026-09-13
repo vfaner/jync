@@ -1,5 +1,6 @@
 package com.synctool.controller;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -17,6 +18,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.synctool.dto.SyncConfig;
+import com.synctool.model.ConnectionRole;
+import com.synctool.model.DatabaseConfig;
 import com.synctool.model.Project;
 import com.synctool.model.SyncTask;
 import com.synctool.service.DatabaseConfigService;
@@ -58,8 +61,9 @@ public class ProjectController {
 
     @GetMapping("/new")
     public String createForm(Model model) {
-        model.addAttribute("project", new Project());
-        model.addAttribute("databases", databaseConfigService.findAll());
+        Project project = new Project();
+        model.addAttribute("project", project);
+        addDatabaseOptions(model, project);
         model.addAttribute("activeNav", "projects");
         return "project-form";
     }
@@ -68,13 +72,33 @@ public class ProjectController {
     public String editForm(@PathVariable Long id, Model model, RedirectAttributes flash) {
         return projectService.findById(id).map(project -> {
             model.addAttribute("project", project);
-            model.addAttribute("databases", databaseConfigService.findAll());
+            addDatabaseOptions(model, project);
             model.addAttribute("activeNav", "projects");
             return "project-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.project.not.found");
             return "redirect:/projects";
         });
+    }
+
+    /**
+     * Source/target selectors only list connections classified for that role. A project's
+     * currently selected connection is still appended when its role no longer matches (legacy
+     * data edge case), so the selector renders the real value instead of silently losing it.
+     */
+    private void addDatabaseOptions(Model model, Project project) {
+        model.addAttribute("sourceDatabases",
+                optionsForRole(ConnectionRole.SOURCE, project.getSourceDbId()));
+        model.addAttribute("targetDatabases",
+                optionsForRole(ConnectionRole.TARGET, project.getTargetDbId()));
+    }
+
+    private List<DatabaseConfig> optionsForRole(ConnectionRole role, Long selectedId) {
+        List<DatabaseConfig> options = new ArrayList<>(databaseConfigService.findByRole(role));
+        if (selectedId != null && options.stream().noneMatch(c -> selectedId.equals(c.getId()))) {
+            databaseConfigService.findById(selectedId).ifPresent(options::add);
+        }
+        return options;
     }
 
     @PostMapping("/save")

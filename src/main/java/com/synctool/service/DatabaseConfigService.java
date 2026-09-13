@@ -1,11 +1,18 @@
 package com.synctool.service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.synctool.model.ConnectionRole;
 import com.synctool.model.DatabaseConfig;
 import com.synctool.model.DatabaseType;
 import com.synctool.model.Project;
@@ -45,6 +52,15 @@ public class DatabaseConfigService {
         return repository.findAllByOrderByNameAsc();
     }
 
+    public List<DatabaseConfig> findByRole(ConnectionRole role) {
+        return repository.findByRoleOrderByNameAsc(role);
+    }
+
+    public Page<DatabaseConfig> findPageByRole(ConnectionRole role, int page, int size) {
+        Pageable pageable = PageRequest.of(Math.max(0, page), size);
+        return repository.findByRoleOrderByNameAsc(role, pageable);
+    }
+
     public Optional<DatabaseConfig> findById(Long id) {
         return repository.findById(id);
     }
@@ -66,6 +82,19 @@ public class DatabaseConfigService {
         if (config.getId() != null) {
             DatabaseConfig existing = repository.findById(config.getId())
                     .orElseThrow(() -> new IllegalArgumentException("Connection not found"));
+            if (existing.getRole() != null && existing.getRole() != config.getRole()) {
+                // Reclassifying a connection that projects already depend on would silently
+                // remove it from the project form's selector on the other side.
+                List<Project> blocking = config.getRole() == ConnectionRole.TARGET
+                        ? projectRepository.findBySourceDbId(config.getId())
+                        : projectRepository.findByTargetDbId(config.getId());
+                if (!blocking.isEmpty()) {
+                    String key = config.getRole() == ConnectionRole.TARGET
+                            ? "error.connection.role.source.in.use:"
+                            : "error.connection.role.target.in.use:";
+                    throw new IllegalStateException(key + joinNames(blocking));
+                }
+            }
             if (rawPassword == null || rawPassword.isEmpty()) {
                 config.setPassword(existing.getPassword());
             } else {
@@ -89,6 +118,9 @@ public class DatabaseConfigService {
     }
 
     private void validate(DatabaseConfig config) {
+        if (config.getRole() == null) {
+            throw new IllegalArgumentException("error.connection.role.required");
+        }
         if (config.getName() == null || config.getName().isBlank()) {
             throw new IllegalArgumentException("error.connection.name.required");
         }
@@ -133,9 +165,7 @@ public class DatabaseConfigService {
     public void delete(Long id) {
         List<Project> dependents = projectRepository.findBySourceDbIdOrTargetDbId(id, id);
         if (!dependents.isEmpty()) {
-            String names = dependents.stream().map(Project::getName)
-                    .reduce((a, b) -> a + ", " + b).orElse("");
-            throw new IllegalStateException("error.connection.in.use:" + names);
+            throw new IllegalStateException("error.connection.in.use:" + joinNames(dependents));
         }
         dataSourceManager.evict(id);
         repository.deleteById(id);
@@ -172,6 +202,40 @@ public class DatabaseConfigService {
             return dataSourceManager.buildJdbcUrl(config);
         } catch (RuntimeException e) {
             return "(" + e.getMessage() + ")";
+        }
+    }
+
+    private static String joinNames(List<Project> projects) {
+        return projects.stream().map(Project::getName)
+                .reduce((a, b) -> a + ", " + b).orElse("");
+    }
+
+    /**
+     * Backfills the role column for rows created before source/target classification existed:
+     * ddl-auto=update adds the column as nullable, so existing connections start with NULL.
+     * The role is inferred from how projects reference the connection; unreferenced rows
+     * default to SOURCE and can be reclassified by the user as long as no project blocks it.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void backfillRoles() {
+        List<DatabaseConfig> missing = new ArrayList<>();
+        for (DatabaseConfig config : repository.findAll()) {
+            if (config.getRole() != null) {
+                continue;
+            }
+            if (!projectRepository.findBySourceDbId(config.getId()).isEmpty()) {
+                config.setRole(ConnectionRole.SOURCE);
+            } else if (!projectRepository.findByTargetDbId(config.getId()).isEmpty()) {
+                config.setRole(ConnectionRole.TARGET);
+            } else {
+                config.setRole(ConnectionRole.SOURCE);
+            }
+            missing.add(config);
+        }
+        if (!missing.isEmpty()) {
+            repository.saveAll(missing);
+            log.info("Backfilled source/target role for {} existing connection(s)", missing.size());
         }
     }
 }

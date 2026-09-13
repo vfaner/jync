@@ -10,25 +10,30 @@
             <h1 th:text="#{db.title}">Connections</h1>
             <p class="sub" th:text="#{db.listHint}">Source and target database connections</p>
         </div>
-        <div class="page-actions" th:if="${isAdmin}">
-            <a class="btn btn-primary btn-sm" th:href="@{/databases/new}">
-                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.new}">New connection</span>
-            </a>
-        </div>
     </div>
 
+    <!--/* 源连接卡片：独立分页，翻页参数 sourcePage；链接同时回传 targetPage，避免另一张表被重置 */-->
     <div class="card">
+        <div class="card-head">
+            <h2>
+                <svg class="ico"><use href="#box-arrow-up-right"/></svg>
+                <span th:text="#{db.section.sources}">Source connections</span>
+                <span class="hint" th:text="'(' + ${sources.totalElements} + ')'">(0)</span>
+            </h2>
+            <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new(role='SOURCE')}">
+                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newSource}">New source</span>
+            </a>
+        </div>
         <div class="card-body tight">
-            <div th:if="${#lists.isEmpty(configs)}" class="empty">
-                <div class="empty-ico"><svg class="ico"><use href="#hdd-network"/></svg></div>
-                <h3 th:text="#{db.noConfigs}">No connections yet.</h3>
-                <p th:text="#{db.createHint}">Add a source and a target to begin.</p>
-                <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new}">
-                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.new}">New connection</span>
+            <div th:if="${sources.empty}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#box-arrow-up-right"/></svg></div>
+                <h3 th:text="#{db.noSources}">No source connections yet.</h3>
+                <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new(role='SOURCE')}">
+                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newSource}">New source</span>
                 </a>
             </div>
 
-            <div th:unless="${#lists.isEmpty(configs)}" class="tbl-wrap">
+            <div th:unless="${sources.empty}" class="tbl-wrap">
                 <table class="tbl">
                     <thead>
                     <tr>
@@ -41,7 +46,7 @@
                     </tr>
                     </thead>
                     <tbody>
-                    <tr th:each="config : ${configs}">
+                    <tr th:each="config : ${sources.content}">
                         <td style="font-weight:600" th:text="${config.name}">name</td>
                         <td>
                             <span class="badge badge-brand" th:text="${config.type.displayName}">MySQL</span>
@@ -73,6 +78,110 @@
                     </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+        <div class="card-foot" th:if="${sources.totalPages > 1}"
+             style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <span class="small muted"
+                  th:text="#{log.page(${sources.number + 1}, ${sources.totalPages})}">Page 1 of 1</span>
+            <div style="display:flex;gap:7px">
+                <a class="btn btn-ghost btn-sm"
+                   th:if="${!sources.first}"
+                   th:href="@{/databases(sourcePage=${sources.number - 1}, targetPage=${targets.number})}">
+                    <svg class="ico"><use href="#chevron-left"/></svg><span th:text="#{log.previous}">Previous</span>
+                </a>
+                <a class="btn btn-ghost btn-sm"
+                   th:if="${!sources.last}"
+                   th:href="@{/databases(sourcePage=${sources.number + 1}, targetPage=${targets.number})}">
+                    <span th:text="#{log.next}">Next</span><svg class="ico"><use href="#chevron-right"/></svg>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!--/* 目标连接卡片：独立分页，翻页参数 targetPage，链接同时回传 sourcePage */-->
+    <div class="card">
+        <div class="card-head">
+            <h2>
+                <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                <span th:text="#{db.section.targets}">Target connections</span>
+                <span class="hint" th:text="'(' + ${targets.totalElements} + ')'">(0)</span>
+            </h2>
+            <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new(role='TARGET')}">
+                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newTarget}">New target</span>
+            </a>
+        </div>
+        <div class="card-body tight">
+            <div th:if="${targets.empty}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#box-arrow-in-down-left"/></svg></div>
+                <h3 th:text="#{db.noTargets}">No target connections yet.</h3>
+                <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new(role='TARGET')}">
+                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newTarget}">New target</span>
+                </a>
+            </div>
+
+            <div th:unless="${targets.empty}" class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.name}">Name</th>
+                        <th th:text="#{common.type}">Type</th>
+                        <th th:text="#{db.host}">Host</th>
+                        <th th:text="#{db.databaseName}">Database</th>
+                        <th th:text="#{db.username}">User</th>
+                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="config : ${targets.content}">
+                        <td style="font-weight:600" th:text="${config.name}">name</td>
+                        <td>
+                            <span class="badge badge-brand" th:text="${config.type.displayName}">MySQL</span>
+                        </td>
+                        <td class="mono small"
+                            th:text="${config.host != null and !config.host.isEmpty()}
+                                     ? |${config.host}:${config.port}| : '—'">host</td>
+                        <td class="mono small" th:text="${config.databaseName ?: '—'}">db</td>
+                        <td class="mono small" th:text="${config.username ?: '—'}">user</td>
+                        <td th:if="${isAdmin}">
+                            <div class="btn-row" style="justify-content:flex-end">
+                                <button type="button" class="btn-icon is-ok" data-role="api-btn"
+                                        th:attr="data-action=@{/api/databases/{id}/test(id=${config.id})},
+                                                 data-busy-text=''"
+                                        th:title="#{common.test}">
+                                    <svg class="ico"><use href="#plug"/></svg>
+                                </button>
+                                <a class="btn-icon" th:href="@{/databases/{id}/edit(id=${config.id})}"
+                                   th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
+                                <form method="post" style="display:inline"
+                                      th:action="@{/databases/{id}/delete(id=${config.id})}"
+                                      th:attr="data-confirm=#{common.confirm}">
+                                    <button type="submit" class="btn-icon is-danger" th:title="#{common.delete}">
+                                        <svg class="ico"><use href="#trash"/></svg>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card-foot" th:if="${targets.totalPages > 1}"
+             style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <span class="small muted"
+                  th:text="#{log.page(${targets.number + 1}, ${targets.totalPages})}">Page 1 of 1</span>
+            <div style="display:flex;gap:7px">
+                <a class="btn btn-ghost btn-sm"
+                   th:if="${!targets.first}"
+                   th:href="@{/databases(targetPage=${targets.number - 1}, sourcePage=${sources.number})}">
+                    <svg class="ico"><use href="#chevron-left"/></svg><span th:text="#{log.previous}">Previous</span>
+                </a>
+                <a class="btn btn-ghost btn-sm"
+                   th:if="${!targets.last}"
+                   th:href="@{/databases(targetPage=${targets.number + 1}, sourcePage=${sources.number})}">
+                    <span th:text="#{log.next}">Next</span><svg class="ico"><use href="#chevron-right"/></svg>
+                </a>
             </div>
         </div>
     </div>

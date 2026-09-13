@@ -26,6 +26,30 @@
                     <h2><svg class="ico"><use href="#hdd-network"/></svg> <span th:text="#{db.connectionInfo}">Connection</span></h2>
                 </div>
                 <div class="card-body">
+                    <div class="field">
+                        <label>
+                            <span th:text="#{db.role}">Purpose</span><span class="req">*</span>
+                        </label>
+                        <div class="role-group">
+                            <label class="role-pick">
+                                <input type="radio" th:field="*{role}" th:value="'SOURCE'" required>
+                                <svg class="ico"><use href="#box-arrow-up-right"/></svg>
+                                <span class="role-text">
+                                    <strong th:text="#{db.role.source}">Source connection</strong>
+                                    <span class="help" th:text="#{db.role.sourceHelp}">Data is read from here</span>
+                                </span>
+                            </label>
+                            <label class="role-pick">
+                                <input type="radio" th:field="*{role}" th:value="'TARGET'" required>
+                                <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                                <span class="role-text">
+                                    <strong th:text="#{db.role.target}">Target connection</strong>
+                                    <span class="help" th:text="#{db.role.targetHelp}">Data is written to here</span>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
                     <div class="grid-2">
                         <div class="field">
                             <label for="name">

@@ -3,8 +3,11 @@ package com.synctool.repository;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import com.synctool.model.ConnectionRole;
 import com.synctool.model.DatabaseConfig;
 import com.synctool.model.DatabaseType;
 
@@ -17,4 +20,10 @@ public interface DatabaseConfigRepository extends JpaRepository<DatabaseConfig, 
     List<DatabaseConfig> findAllByOrderByNameAsc();
 
     long countByType(DatabaseType type);
+
+    Page<DatabaseConfig> findByRoleOrderByNameAsc(ConnectionRole role, Pageable pageable);
+
+    List<DatabaseConfig> findByRoleOrderByNameAsc(ConnectionRole role);
+
+    long countByRole(ConnectionRole role);
 }

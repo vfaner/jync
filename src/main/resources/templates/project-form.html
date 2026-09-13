@@ -17,7 +17,8 @@
         </div>
     </div>
 
-    <div th:if="${#lists.isEmpty(databases)}" class="alert alert-warn">
+    <div th:if="${#lists.isEmpty(sourceDatabases) and #lists.isEmpty(targetDatabases)}"
+         class="alert alert-warn">
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
         <div class="alert-body">
             <span th:text="#{project.noDatabases}">No connections defined yet.</span>
@@ -56,7 +57,7 @@
                             </label>
                             <select class="select" id="sourceDbId" th:field="*{sourceDbId}" required>
                                 <option value="" th:text="#{project.selectDatabase}">-- select --</option>
-                                <option th:each="db : ${databases}" th:value="${db.id}"
+                                <option th:each="db : ${sourceDatabases}" th:value="${db.id}"
                                         th:text="|${db.name} · ${db.type.displayName}|">db</option>
                             </select>
                         </div>
@@ -67,7 +68,7 @@
                             </label>
                             <select class="select" id="targetDbId" th:field="*{targetDbId}" required>
                                 <option value="" th:text="#{project.selectDatabase}">-- select --</option>
-                                <option th:each="db : ${databases}" th:value="${db.id}"
+                                <option th:each="db : ${targetDatabases}" th:value="${db.id}"
                                         th:text="|${db.name} · ${db.type.displayName}|">db</option>
                             </select>
                         </div>
