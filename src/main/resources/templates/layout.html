@@ -188,9 +188,15 @@
         <div class="alert-body" th:text="${#messages.msgOrNull(message) ?: message}">Saved</div>
         <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
     </div>
+    <!--/* 服务端抛出的错误可能是「i18n key:附加上下文」（如被占用的项目名列表），
+           msgOrNull 对整串取不到时，退而解析冒号前的 key 前缀，再把上下文拼回。 */-->
     <div th:if="${error}" class="alert alert-danger">
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
-        <div class="alert-body" th:text="${#messages.msgOrNull(error) ?: error}">Error</div>
+        <div class="alert-body"
+             th:with="head=${#messages.msgOrNull(#strings.substringBefore(error, ':'))},
+                      suffix=${#strings.substringAfter(error, ':')}"
+             th:text="${head != null} ? ${head + (#strings.isEmpty(suffix) ? '' : ' ' + suffix)}
+                                      : ${#messages.msgOrNull(error) ?: error}">Error</div>
         <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
     </div>
 
