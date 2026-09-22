@@ -14,7 +14,8 @@ import com.synctool.model.DatabaseType;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Oracle and 达梦 (DM) reader.
+ * Oracle-family reader: Oracle, 达梦 (DM) and 崖山 (YashanDB), which keep the same
+ * dictionary layout ({@code ALL_VIEWS}, {@code ALL_SOURCE}, {@code ALL_OBJECTS}).
  *
  * <p>Oracle has no catalogs, so the catalog argument is always null and the schema is the
  * owner. View text lives in {@code ALL_VIEWS.TEXT} and routine source in
@@ -26,7 +27,9 @@ public class OracleMetadataReader extends GenericMetadataReader {
 
     @Override
     public boolean supports(DatabaseType type) {
-        return type == DatabaseType.ORACLE || type == DatabaseType.DM;
+        return type == DatabaseType.ORACLE
+                || type == DatabaseType.DM
+                || type == DatabaseType.YASHANDB;
     }
 
     @Override

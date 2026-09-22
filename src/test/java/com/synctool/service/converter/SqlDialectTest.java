@@ -278,8 +278,9 @@ class SqlDialectTest {
     // --- Oracle DATE carries a time component -----------------------------------------
 
     /**
-     * Oracle's DATE stores hours, minutes and seconds. A date-only target type therefore
-     * discards the time on every row, without any error to notice.
+     * The whole Oracle family (Oracle, DM, YashanDB) stores hours, minutes and seconds in
+     * DATE. A date-only target type therefore discards the time on every row, without any
+     * error to notice.
      */
     @Test
     void oracleDateKeepsItsTimeComponentOnANonOracleTarget() {
@@ -289,6 +290,11 @@ class SqlDialectTest {
         assertThat(sqlServer.mapType(d, DatabaseType.ORACLE)).isEqualTo("DATETIME2");
         assertThat(postgres.mapType(d, DatabaseType.ORACLE)).containsIgnoringCase("TIMESTAMP");
         assertThat(db2.mapType(d, DatabaseType.ORACLE)).isEqualTo("TIMESTAMP");
+
+        // Family members share the semantics, so they must share the widening.
+        assertThat(mysql.mapType(d, DatabaseType.DM)).isEqualTo("DATETIME");
+        assertThat(mysql.mapType(d, DatabaseType.YASHANDB)).isEqualTo("DATETIME");
+        assertThat(postgres.mapType(d, DatabaseType.YASHANDB)).containsIgnoringCase("TIMESTAMP");
     }
 
     @Test
@@ -299,8 +305,10 @@ class SqlDialectTest {
         assertThat(mysql.mapType(d, DatabaseType.POSTGRESQL)).isEqualTo("DATE");
         assertThat(postgres.mapType(d, DatabaseType.MYSQL)).isEqualTo("DATE");
         // Oracle to Oracle needs no rewrite: DATE already means the same thing there, and
-        // changing it would alter date-arithmetic semantics.
+        // changing it would alter date-arithmetic semantics. The same holds within the
+        // whole Oracle family.
         assertThat(oracle.mapType(d, DatabaseType.ORACLE)).isEqualTo("DATE");
+        assertThat(oracle.mapType(d, DatabaseType.YASHANDB)).isEqualTo("DATE");
     }
 
     // --- Unconstrained numerics --------------------------------------------------------
@@ -318,22 +326,27 @@ class SqlDialectTest {
     }
 
     /**
-     * An Oracle NUMBER with neither precision nor scale is a floating decimal, so it can hold
-     * 1.5. Mapping it onto a zero-scale target truncates that on every insert and reports no
-     * error, which is the worst possible outcome.
+     * An Oracle-family NUMBER with neither precision nor scale is a floating decimal, so it
+     * can hold 1.5. Mapping it onto a zero-scale target truncates that on every insert and
+     * reports no error, which is the worst possible outcome. DM and YashanDB inherit the
+     * NUMBER semantics along with the dictionary layout.
      */
     @Test
     void unconstrainedOracleNumberReservesFractionalDigits() {
+        List<DatabaseType> oracleFamily =
+                List.of(DatabaseType.ORACLE, DatabaseType.DM, DatabaseType.YASHANDB);
         for (Integer reportedScale : new Integer[] {null, 0, -127}) {
             ColumnMeta number = column("amount", "NUMBER", Types.NUMERIC, 0);
             number.setDecimalDigits(reportedScale);
 
             for (SqlDialect dialect : allDialects) {
-                String mapped = dialect.mapType(number, DatabaseType.ORACLE);
-                assertThat(mapped)
-                        .as("dialect %s, driver-reported scale %s",
-                                dialect.getClass().getSimpleName(), reportedScale)
-                        .doesNotEndWith(",0)");
+                for (DatabaseType source : oracleFamily) {
+                    String mapped = dialect.mapType(number, source);
+                    assertThat(mapped)
+                            .as("dialect %s, source %s, driver-reported scale %s",
+                                    dialect.getClass().getSimpleName(), source, reportedScale)
+                            .doesNotEndWith(",0)");
+                }
             }
         }
     }

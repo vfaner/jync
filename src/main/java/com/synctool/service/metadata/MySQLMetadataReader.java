@@ -14,7 +14,8 @@ import com.synctool.model.DatabaseType;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * MySQL / MariaDB reader.
+ * MySQL-family reader: MySQL, MariaDB, OceanBase (MySQL mode), TiDB and GBase, which all
+ * speak the MySQL protocol and share its catalog layout.
  *
  * <p>MySQL exposes the database as the JDBC <em>catalog</em> and leaves schema null, so the
  * catalog/schema pairing is inverted relative to the generic reader. View and routine
@@ -28,7 +29,9 @@ public class MySQLMetadataReader extends GenericMetadataReader {
     public boolean supports(DatabaseType type) {
         return type == DatabaseType.MYSQL
                 || type == DatabaseType.MARIADB
-                || type == DatabaseType.GBASE;
+                || type == DatabaseType.GBASE
+                || type == DatabaseType.OCEANBASE
+                || type == DatabaseType.TIDB;
     }
 
     @Override

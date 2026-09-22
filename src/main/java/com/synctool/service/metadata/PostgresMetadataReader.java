@@ -14,8 +14,9 @@ import com.synctool.model.DatabaseType;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * PostgreSQL reader, also used for OpenGauss, 人大金仓 (KingBase) and 神通 (Oscar), which
- * are all PostgreSQL-derived and keep the same catalog layout.
+ * PostgreSQL reader, also used for OpenGauss, 人大金仓 (KingBase), 神通 (Oscar),
+ * 瀚高 (HighGo) and 海量 (Vastbase), which are all PostgreSQL-derived and keep the same
+ * catalog layout ({@code pg_class}, {@code pg_proc}, {@code pg_get_viewdef}…).
  */
 @Component
 @Slf4j
@@ -26,7 +27,9 @@ public class PostgresMetadataReader extends GenericMetadataReader {
         return type == DatabaseType.POSTGRESQL
                 || type == DatabaseType.OPENGAUSS
                 || type == DatabaseType.KINGBASE
-                || type == DatabaseType.OSCAR;
+                || type == DatabaseType.OSCAR
+                || type == DatabaseType.HIGHGO
+                || type == DatabaseType.VASTBASE;
     }
 
     @Override

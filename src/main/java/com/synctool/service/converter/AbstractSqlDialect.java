@@ -148,11 +148,12 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     /**
      * Maps a source DATE column.
      *
-     * <p>Oracle's DATE is not a date: it carries hours, minutes and seconds. Sending it to a
-     * date-only target type therefore drops the time silently on every row. Whether the
-     * problem is reachable at all depends on the driver — ojdbc may report such a column as
-     * either {@link Types#DATE} or {@link Types#TIMESTAMP} — so this widens defensively and
-     * is a no-op when the driver already reports TIMESTAMP.
+     * <p>In the Oracle family (Oracle itself, 达梦 DM, 崖山 YashanDB) DATE is not a date: it
+     * carries hours, minutes and seconds. Sending it to a date-only target type therefore
+     * drops the time silently on every row. Whether the problem is reachable at all depends
+     * on the driver — ojdbc may report such a column as either {@link Types#DATE} or
+     * {@link Types#TIMESTAMP} — so this widens defensively and is a no-op when the driver
+     * already reports TIMESTAMP.
      *
      * <p>The widening is skipped when the target is itself in the Oracle family, because
      * there DATE already means the same thing and rewriting it to TIMESTAMP would change
@@ -160,7 +161,8 @@ public abstract class AbstractSqlDialect implements SqlDialect {
      * DM's DATE precision is not verified here, so confirm it before relying on that path.
      */
     protected String dateTypeFor(ColumnMeta c, DatabaseType sourceType) {
-        if (sourceType == DatabaseType.ORACLE
+        if (sourceType != null
+                && sourceType.getFamily() == DatabaseType.DialectFamily.ORACLE
                 && family() != DatabaseType.DialectFamily.ORACLE) {
             return timestampType();
         }
@@ -268,13 +270,14 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     }
 
     /**
-     * True for an Oracle NUMBER declared with neither precision nor scale, which behaves as a
-     * floating-point decimal rather than an integer.
+     * True for an Oracle-family NUMBER (Oracle, 达梦 DM, 崖山 YashanDB) declared with neither
+     * precision nor scale, which behaves as a floating-point decimal rather than an integer.
      */
     private boolean isUnconstrainedOracleNumber(ColumnMeta c, DatabaseType sourceType,
                                                 boolean precisionDeclared) {
         return !precisionDeclared
-                && (sourceType == DatabaseType.ORACLE || sourceType == DatabaseType.DM)
+                && sourceType != null
+                && sourceType.getFamily() == DatabaseType.DialectFamily.ORACLE
                 && c.getTypeName() != null
                 && c.getTypeName().toUpperCase().startsWith("NUMBER");
     }
