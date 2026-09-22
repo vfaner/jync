@@ -748,6 +748,88 @@
     applyAuto();
   }
 
+  /**
+   * 通用弹窗：[data-open-modal=id] 打开、[data-close-modal=id] 关闭、Esc 关当前开着的。
+   * 赞赏弹窗有自己的历史绑定（含收款码切换），不走这里。
+   */
+  function setModalOpen(id, open) {
+    var modal = document.getElementById(id);
+    if (!modal) return;
+    modal.classList.toggle('open', open);
+    modal.setAttribute('aria-hidden', open ? 'false' : 'true');
+    // 弹窗自己可滚动，锁住背景避免两层滚动条打架
+    document.body.style.overflow = open ? 'hidden' : '';
+  }
+
+  function bindGenericModals() {
+    document.querySelectorAll('[data-open-modal]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        setModalOpen(btn.getAttribute('data-open-modal'), true);
+      });
+    });
+    document.querySelectorAll('[data-close-modal]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        setModalOpen(el.getAttribute('data-close-modal'), false);
+      });
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      document.querySelectorAll('.modal.open').forEach(function (m) {
+        setModalOpen(m.id, false);
+      });
+    });
+  }
+
+  /**
+   * 用户名下拉：点击展开/收起，点菜单外或 Esc 收起；
+   * 菜单里的退出项提交隐藏表单（CSRF 隐藏域由服务端渲染）。
+   */
+  function bindUserMenu() {
+    var groups = document.querySelectorAll('.nav-group');
+
+    function closeAll(except) {
+      groups.forEach(function (g) {
+        if (g === except) return;
+        g.classList.remove('open');
+        var t = g.querySelector('.nav-trigger');
+        if (t) t.setAttribute('aria-expanded', 'false');
+      });
+    }
+
+    groups.forEach(function (group) {
+      var trigger = group.querySelector('.nav-trigger');
+      if (!trigger) return;
+      trigger.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var willOpen = !group.classList.contains('open');
+        closeAll(group);
+        group.classList.toggle('open', willOpen);
+        trigger.setAttribute('aria-expanded', String(willOpen));
+      });
+      // 桌面鼠标移出后清掉点击留下的展开态，避免再次悬停状态错乱
+      group.addEventListener('mouseleave', function () {
+        group.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+      });
+      // 选中菜单项（打开弹窗 / 提交退出）后收起下拉
+      group.querySelectorAll('.menu-item').forEach(function (item) {
+        item.addEventListener('click', function () { closeAll(); });
+      });
+    });
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest || !e.target.closest('.nav-group')) closeAll();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeAll();
+    });
+
+    var logoutBtn = document.getElementById('logout-btn');
+    var logoutForm = document.getElementById('logout-form');
+    if (logoutBtn && logoutForm) {
+      logoutBtn.addEventListener('click', function () { logoutForm.submit(); });
+    }
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -766,6 +848,8 @@
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
     bindDonate();
+    bindGenericModals();
+    bindUserMenu();
 
     // 关闭提示条
     document.querySelectorAll('[data-dismiss]').forEach(function (btn) {

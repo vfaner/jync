@@ -100,6 +100,19 @@ class DefaultPasswordBannerViewTest {
     }
 
     @Test
+    void theBannerOpensThePasswordModalInPlace() throws Exception {
+        String html = render(as("admin", true), "zh-CN");
+
+        int banner = html.indexOf("default-pw-banner");
+        String block = html.substring(banner, html.indexOf("</div>", banner));
+        // "Change it now" opens the navbar's cp-modal instead of navigating to
+        // /account/password -- one less hop between the warning and the fix.
+        assertThat(block).containsPattern(
+                "class=\"banner-action\"\\s+data-open-modal=\"cp-modal\"");
+        assertThat(block).doesNotContain("href=\"/account/password\"");
+    }
+
+    @Test
     void theBannerCarriesADismissControl() throws Exception {
         String html = render(as("admin", true), "zh-CN");
 

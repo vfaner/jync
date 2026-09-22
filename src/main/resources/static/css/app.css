@@ -644,8 +644,19 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* 主色按钮上是白字，图标也得是纯白 */
 .gh-ico-on-brand,
 [data-theme="dark"] .gh-ico-on-brand { filter: brightness(0) invert(1); }
+/* 设置页作者栏的仓库链接：图标 + 地址一行排，悬停时图标恢复原色 */
+.repo-link {
+  display: inline-flex; align-items: center; gap: 7px;
+  color: var(--ink); text-decoration: none; max-width: 100%;
+}
+.repo-link span { overflow: hidden; text-overflow: ellipsis; }
+.repo-link:hover { color: var(--brand); }
+.repo-link:hover .gh-ico { filter: none; }
+[data-theme="dark"] .repo-link:hover .gh-ico { filter: brightness(0) invert(1); }
 
 .donate-btn { position: relative; }
+/* 心形固定红色：随文字色会变墨黑，看着像没加载出来的图标 */
+.donate-btn .ico { color: #e5484d; }
 .nav-badge {
   padding: 1px 5px; border-radius: 5px;
   font-size: 9.5px; font-weight: 700; line-height: 1.5; letter-spacing: .2px;
@@ -696,6 +707,11 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   font-size: 20px; font-weight: 800; letter-spacing: -.4px; margin: 11px 0 7px;
 }
 .modal-head p { font-size: 13.5px; color: var(--ink-soft); margin: 0; }
+/* 改密弹窗按钮行右齐，与设计稿一致 */
+.modal-actions {
+  display: flex; justify-content: flex-end; gap: 9px; flex-wrap: wrap;
+  margin-top: 22px;
+}
 
 .pay-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
 .pay-tab {
@@ -851,7 +867,10 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   color: #fff; background: linear-gradient(90deg, var(--danger), var(--accent));
 }
 .default-pw-banner .ico { width: 15px; height: 15px; flex-shrink: 0; }
-.default-pw-banner a {
+/* 「立即修改」是就地开弹窗的按钮，外观与原来的链接保持一致 */
+.default-pw-banner a,
+.default-pw-banner .banner-action {
+  border: 0; padding: 0; background: none; font: inherit; cursor: pointer;
   color: #fff; text-decoration: underline; text-underline-offset: 2px;
   font-weight: 700; white-space: nowrap;
 }
@@ -893,7 +912,48 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .user-chip .role-admin { background: color-mix(in srgb, var(--brand) 15%, transparent); color: var(--brand); }
 .user-chip .role-viewer { background: var(--bg-tint); color: var(--ink-mute); }
 
-.logout-form { display: inline-flex; margin: 0; }
+/* chip 现在是下拉的触发按钮：补手型光标与继承字体 */
+.user-chip.nav-trigger { cursor: pointer; font-family: inherit; }
+.user-chip .nav-caret {
+  width: 11px; height: 11px; margin-left: 1px;
+  opacity: .65; transition: transform .18s;
+}
+.user-chip:hover .nav-caret, .nav-group.open .nav-caret { transform: rotate(180deg); }
+
+/* ─── 下拉菜单（用户菜单：修改密码 / 退出登录）───────────── */
+.nav-group { position: relative; display: flex; align-items: center; }
+.nav-menu {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  min-width: 168px; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow);
+  opacity: 0; visibility: hidden; transform: translateY(-5px);
+  transition: opacity .16s, transform .16s, visibility .16s;
+  z-index: 1100;
+}
+/* 菜单与触发按钮之间留 8px 桥接区，鼠标斜向移入不会收起 */
+.nav-menu::before { content: ""; position: absolute; top: -8px; left: 0; right: 0; height: 8px; }
+.nav-group.open .nav-menu { opacity: 1; visibility: visible; transform: translateY(0); }
+/* 桌面端鼠标悬停即展开；触屏与键盘仍走点击留下的 .open */
+@media (min-width: 861px) {
+  .nav-group:hover .nav-menu { opacity: 1; visibility: visible; transform: translateY(0); }
+}
+.nav-menu .menu-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 11px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--ink-soft);
+  font: inherit; font-size: 13.5px; font-weight: 500;
+  text-align: left; white-space: nowrap; cursor: pointer;
+}
+.nav-menu .menu-item:hover { color: var(--brand); background: var(--bg-tint); }
+.nav-menu .menu-item .ico { width: 14px; height: 14px; color: var(--ink-mute); }
+.nav-menu .menu-item:hover .ico { color: var(--brand); }
+.nav-menu .menu-item.is-danger:hover {
+  color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.nav-menu .menu-item.is-danger:hover .ico { color: var(--danger); }
 
 @media (max-width: 860px) {
   .user-chip .uname { display: none; }

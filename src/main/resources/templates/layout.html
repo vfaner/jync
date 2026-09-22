@@ -110,32 +110,38 @@
                 <span class="nav-badge" th:text="#{nav.donateBadge}">Tip</span>
             </button>
 
-            <!--/* GitHub：新窗口打开仓库。图标用 assets 下的 svg 而非精灵表，
-                   因为它不属于 build-icons.py 生成的 Bootstrap Icons 集合。 */-->
-            <a class="icon-btn" th:href="${githubUrl}" target="_blank" rel="noopener noreferrer"
-               th:title="#{nav.github}" th:aria-label="#{nav.github}">
-                <img th:src="@{/assets/github.svg}" alt="" width="16" height="16" class="gh-ico">
-            </a>
-
-            <!--/* 当前用户：点进去改自己的密码。VIEWER 也能改，
+            <!--/* 当前用户下拉：修改密码（弹窗）/ 退出登录。VIEWER 也能改自己的密码，
                    所以 SecurityConfig 把 /account/password 排在
-                   「POST 一律 ADMIN」那条规则之前。 */-->
-            <a class="user-chip" th:if="${currentUsername != null}" th:href="@{/account/password}"
-               th:title="#{account.title}">
-                <svg class="ico"><use href="#shield-check"/></svg>
-                <span class="uname" th:text="${currentUsername}">admin</span>
-                <span class="role"
-                      th:classappend="${isAdmin} ? 'role-admin' : 'role-viewer'"
-                      th:text="${isAdmin} ? #{role.admin} : #{role.viewer}">ADMIN</span>
-            </a>
-
-            <form class="logout-form" method="post" th:action="@{/logout}"
-                  th:if="${currentUsername != null}">
-                <button type="submit" class="icon-btn" th:title="#{nav.logout}"
-                        th:aria-label="#{nav.logout}">
-                    <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                   「POST 一律 ADMIN」那条规则之前。
+                   旧版是「chip 跳改密页 + 独立退出按钮」两个入口，现收进下拉。 */-->
+            <div class="nav-group user-group" th:if="${currentUsername != null}">
+                <button type="button" class="user-chip nav-trigger"
+                        aria-haspopup="true" aria-expanded="false">
+                    <svg class="ico"><use href="#shield-check"/></svg>
+                    <span class="uname" th:text="${currentUsername}">admin</span>
+                    <span class="role"
+                          th:classappend="${isAdmin} ? 'role-admin' : 'role-viewer'"
+                          th:text="${isAdmin} ? #{role.admin} : #{role.viewer}">ADMIN</span>
+                    <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
                 </button>
-            </form>
+                <div class="nav-menu">
+                    <button type="button" class="menu-item" data-open-modal="cp-modal"
+                            th:title="#{account.title}">
+                        <svg class="ico"><use href="#key"/></svg>
+                        <span th:text="#{account.title}">Change password</span>
+                    </button>
+                    <button type="button" class="menu-item is-danger" id="logout-btn"
+                            th:title="#{nav.logout}">
+                        <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                        <span th:text="#{nav.logout}">Sign out</span>
+                    </button>
+                </div>
+            </div>
+
+            <!--/* 隐藏表单：下拉里的退出按钮由 JS 提交它。th:action 会让
+                   Spring Security 自动带上 CSRF 隐藏域。 */-->
+            <form id="logout-form" method="post" th:action="@{/logout}"
+                  th:if="${currentUsername != null}" hidden></form>
 
             <button type="button" class="icon-btn nav-toggle" data-role="nav-toggle"
                     th:title="#{nav.menu}" th:aria-label="#{nav.menu}">
@@ -158,7 +164,10 @@
     <div class="default-pw-banner" id="default-pw-banner">
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
         <span th:text="#{warn.defaultPassword(${currentUsername})}">You are still using the default password.</span>
-        <a th:href="@{/account/password}" th:text="#{warn.defaultPassword.action}">Change it now</a>
+        <!--/* 就地打开改密弹窗，不再跳 /account/password 页面 —— 横幅要的是
+               「立刻改」，多一次跳转只会给人「稍后再说」的机会。 */-->
+        <button type="button" class="banner-action" data-open-modal="cp-modal"
+                th:text="#{warn.defaultPassword.action}">Change it now</button>
         <button type="button" class="banner-close" data-role="dismiss-default-pw"
                 th:title="#{common.close}" th:aria-label="#{common.close}">
             <svg class="ico"><use href="#x-lg"/></svg>
@@ -214,6 +223,55 @@
     </span>
     <span th:text="#{foot.offline}">All assets local · works offline</span>
 </footer>
+
+<!--/* 修改密码弹窗：用户名下拉的「修改密码」打开。表单与改密页同一后端：
+       成功后会话作废跳登录页（口令已变，必须重新登录），失败则带错误渲染改密页，
+       弹窗只是少跳一页的快捷入口，改密页仍是横幅链接与错误回显的落点。 */-->
+<div class="modal" id="cp-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:aria-label="#{account.title}">
+    <div class="modal-mask" data-close-modal="cp-modal"></div>
+    <div class="modal-dialog">
+        <button type="button" class="modal-close" data-close-modal="cp-modal"
+                th:title="#{common.close}" th:aria-label="#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 th:text="#{account.title}">Change password</h3>
+        </div>
+        <form method="post" th:action="@{/account/password}" autocomplete="off">
+            <div class="field">
+                <label for="cp-current">
+                    <span th:text="#{account.current}">Current password</span><span class="req">*</span>
+                </label>
+                <input type="password" class="input" id="cp-current" name="currentPassword"
+                       autocomplete="current-password" required>
+            </div>
+            <div class="field">
+                <label for="cp-new">
+                    <span th:text="#{account.new}">New password</span><span class="req">*</span>
+                </label>
+                <input type="password" class="input" id="cp-new" name="newPassword"
+                       autocomplete="new-password" minlength="6" required>
+                <div class="help" th:text="#{account.newHelp}">At least 6 characters.</div>
+            </div>
+            <div class="field">
+                <label for="cp-confirm">
+                    <span th:text="#{account.confirm}">Confirm new password</span><span class="req">*</span>
+                </label>
+                <input type="password" class="input" id="cp-confirm" name="confirmPassword"
+                       autocomplete="new-password" minlength="6" required>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-ghost" data-close-modal="cp-modal"
+                        th:text="#{common.cancel}">Cancel</button>
+                <button type="submit" class="btn btn-primary">
+                    <svg class="ico"><use href="#check-lg"/></svg>
+                    <span th:text="#{account.submit}">Change password</span>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
 
 <!--/* 赞赏弹窗。默认隐藏，由导航栏按钮打开；收款码是本地 webp，离线也能扫。 */-->
 <div class="modal" id="donate-modal" aria-hidden="true" role="dialog" aria-modal="true"

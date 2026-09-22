@@ -51,6 +51,10 @@ server:
 app:
   # Repository link behind the nav GitHub icon and the donate dialog buttons.
   github-url: https://github.com/vfaner/synctool
+  # 设置页「项目与作者」栏：Gitee 镜像地址与作者联系方式，留空则对应行不显示。
+  gitee-url: https://gitee.com/super_rgh/synctool
+  contact-qq: 817094/2912167928
+  contact-wechat: hua47609
   # 设置页的新版本检查（调用 GitHub API，成功结果缓存 10 分钟、失败缓存 1 分钟）。
   # 纯内网无法访问 GitHub 时建议关闭。
   update-check:

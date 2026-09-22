@@ -88,6 +88,44 @@
         </div>
     </div>
 
+    <!-- 项目地址（GitHub + Gitee）与作者联系方式：application.yml 中留空的行不显示 -->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#code-square"/></svg>
+                <span th:text="#{settings.projectAuthor}">Project &amp; author</span></h2>
+        </div>
+        <div class="card-body grid-2">
+            <dl class="dl">
+                <dt th:text="#{settings.githubUrl}">GitHub</dt>
+                <dd>
+                    <a class="repo-link" th:href="${githubUrl}" target="_blank" rel="noopener noreferrer">
+                        <img th:src="@{/assets/github.svg}" alt="" width="15" height="15" class="gh-ico">
+                        <span class="mono" th:text="${githubUrl}">https://github.com/…</span>
+                    </a>
+                </dd>
+                <th:block th:if="${not #strings.isEmpty(giteeUrl)}">
+                    <dt th:text="#{settings.giteeUrl}">Gitee</dt>
+                    <dd>
+                        <a class="repo-link" th:href="${giteeUrl}" target="_blank" rel="noopener noreferrer">
+                            <img th:src="@{/assets/gitee.ico}" alt="" width="15" height="15" class="gh-ico">
+                            <span class="mono" th:text="${giteeUrl}">https://gitee.com/…</span>
+                        </a>
+                    </dd>
+                </th:block>
+            </dl>
+            <dl class="dl">
+                <th:block th:if="${not #strings.isEmpty(contactQq)}">
+                    <dt th:text="#{settings.contactQq}">QQ</dt>
+                    <dd class="mono" th:text="${contactQq}">QQ</dd>
+                </th:block>
+                <th:block th:if="${not #strings.isEmpty(contactWechat)}">
+                    <dt th:text="#{settings.contactWechat}">WeChat</dt>
+                    <dd class="mono" th:text="${contactWechat}">wechat</dd>
+                </th:block>
+            </dl>
+        </div>
+    </div>
+
     <!-- 版本信息：当前版本、GitHub 最新版本、当前版本更新内容 -->
     <div class="card">
         <div class="card-head">
