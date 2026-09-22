@@ -339,6 +339,9 @@
           }
           var hint = document.getElementById('url-hint');
           if (hint) hint.textContent = p.urlTemplate || '';
+          // 服务名说明只对 Oracle 有意义，其余类型隐藏
+          var oracleHelp = document.getElementById('oracle-name-help');
+          if (oracleHelp) oracleHelp.hidden = select.value !== 'ORACLE';
           var driverHint = document.getElementById('driver-hint');
           if (driverHint) driverHint.textContent = p.driverClass || '';
         })

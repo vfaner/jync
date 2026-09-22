@@ -89,6 +89,11 @@
                         <div class="field">
                             <label for="databaseName" th:text="#{db.databaseName}">Database</label>
                             <input type="text" class="input" id="databaseName" th:field="*{databaseName}">
+                            <!--/* Oracle 的库名栏按服务名理解；只有 SID 的老库走自定义 URL。
+                                    初始显隐由服务端按当前类型定，切换类型时 app.js 同步 */-->
+                            <div class="help" id="oracle-name-help"
+                                 th:attr="hidden=${config.type != null and config.type.name() == 'ORACLE'} ? null : 'hidden'"
+                                 th:text="#{db.oracleNameHelp}">help</div>
                         </div>
                         <div class="field">
                             <label for="schemaName" th:text="#{db.schemaName}">Schema</label>
@@ -148,7 +153,7 @@
                 </div>
             </div>
 
-            <!--/* CUSTOM 还需要自己给 URL 与驱动类；也可用于覆盖已知类型的 URL */-->
+            <!--/* CUSTOM 还需要自己给 URL 与驱动类 */-->
             <div class="card" id="custom-section"
                  th:attr="hidden=${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'hidden'">
                 <div class="card-head">

@@ -32,8 +32,17 @@ public enum DatabaseType {
             "jdbc:mariadb://%s:%d/%s",
             3306, DialectFamily.MYSQL),
 
+    /**
+     * Service-name syntax ({@code @//host:port/service}), not the old colon-SID form
+     * ({@code @host:port:SID}): the listener registers services, and under 12c+ CDB/PDB a
+     * pluggable database has no SID at all, so the colon form dies with ORA-12505
+     * ("listener does not currently know of SID") even when host and port are right.
+     * Non-CDB instances register a service equal to the database name, so the same
+     * "database name" field keeps working for them; truly SID-only setups can still
+     * paste a full descriptor into the custom-URL field.
+     */
     ORACLE("Oracle", "oracle.jdbc.OracleDriver",
-            "jdbc:oracle:thin:@%s:%d:%s",
+            "jdbc:oracle:thin:@//%s:%d/%s",
             1521, DialectFamily.ORACLE),
 
     SQLSERVER("SQL Server", "com.microsoft.sqlserver.jdbc.SQLServerDriver",
