@@ -15,9 +15,13 @@ SyncTool 自身以 MIT 许可证发布（见 `pom.xml` 中的声明）。发行�
 | openGauss | `org.opengauss:opengauss-jdbc:6.0.0-og` | BSD-2-Clause | `META-INF/LICENSE` |
 | 达梦 DM | `com.dameng:DmJdbcDriver18:8.1.3.140` | Apache License 2.0 | — |
 | 人大金仓 KingbaseES | `cn.com.kingbase:kingbase8:9.0.1.jre7` | Apache License 2.0 | — |
+| OceanBase | `com.oceanbase:oceanbase-client:2.4.14` | LGPL-2.1 | `META-INF/LICENSE` |
+| 瀚高 HighGo | `com.highgo:HgdbJdbc:6.2.4` | Apache License 2.0 | `META-INF/LICENSE` |
+| 海量 Vastbase | `cn.com.vastdata:vastbase-jdbc:2.11v` | Apache License 2.0 | `META-INF/LICENSE` |
+| 崖山 YashanDB | `com.yashandb:yashandb-jdbc:1.7.10` | Apache License 2.0 | `META-INF/LICENSE` |
 | H2（本工具的元数据库） | `com.h2database:h2:2.1.214` | MPL 2.0 / EPL 1.0（双许可） | — |
 
-其中 PostgreSQL、MariaDB、SQL Server、ojdbc8、DB2 jcc 的版本由 Spring Boot 2.7.18 的依赖管理统一锁定。
+其中 PostgreSQL、MariaDB、SQL Server、ojdbc8、DB2 jcc 的版本由 Spring Boot 2.7.18 的依赖管理统一锁定。TiDB 预置类型复用 MySQL 驱动（MySQL 协议兼容），不单独内置构件。
 
 各许可证原文：
 

@@ -16,7 +16,7 @@
 
 ### 常用数据库驱动内置
 
-MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、openGauss、达梦、人大金仓、H2 共十种驱动随包内置，不再需要手动往服务器放 jar。GBase、神通（Oscar）和自定义类型仍需填写厂商驱动 jar 路径。
+MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、openGauss、达梦、人大金仓、OceanBase、瀚高、海量、崖山、H2 共十四种驱动随包内置（TiDB 兼容 MySQL 协议、复用 MySQL 驱动，选 TiDB 类型即可），不再需要手动往服务器放 jar。GBase、神通（Oscar）和自定义类型仍需填写厂商驱动 jar 路径；PolarDB 无官方 JDBC 构件，按兼容协议选 MySQL 或 PostgreSQL 类型，GBase 8s 走自定义类型。
 
 ### 其他改进
 

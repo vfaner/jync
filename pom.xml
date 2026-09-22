@@ -142,6 +142,33 @@
             <version>9.0.1.jre7</version>
             <scope>runtime</scope>
         </dependency>
+        <!-- Domestic drivers. Class names come from each jar's META-INF/services/java.sql.Driver
+             and the URL prefixes were verified with Driver.acceptsURL before being baked into
+             DatabaseType; see BundledDriversTest, which keeps both honest. -->
+        <dependency>
+            <groupId>com.oceanbase</groupId>
+            <artifactId>oceanbase-client</artifactId>
+            <version>2.4.14</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.highgo</groupId>
+            <artifactId>HgdbJdbc</artifactId>
+            <version>6.2.4</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>cn.com.vastdata</groupId>
+            <artifactId>vastbase-jdbc</artifactId>
+            <version>2.11v</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.yashandb</groupId>
+            <artifactId>yashandb-jdbc</artifactId>
+            <version>1.7.10</version>
+            <scope>runtime</scope>
+        </dependency>
 
         <!-- Renders the current version's release notes on the settings page. -->
         <dependency>

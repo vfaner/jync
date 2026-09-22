@@ -187,7 +187,7 @@
 | **持续增量同步** | ✅ 轮询/Cron | ✅ 日志级 | ✅ binlog | ✅ 日志级 | ❌ 一次性批量 | ⚠️ 需自建定时与增量逻辑 | ✅ 触发器 | ❌ 一次性 |
 | **结构（DDL）同步** | ✅ **自动建表/索引/视图/存储过程** | ⚠️ 输出 DDL 事件，落库需自写 | ⚠️ 仅事件 | ⚠️ 需自定义 | ❌ 需预建表 | ⚠️ 手工映射 | ⚠️ 有限 | ✅ 但仅一次性 |
 | **异构方言转换** | ✅ 类型/函数/引号/分页/过程 | ❌ 需自行实现 | ❌ | ⚠️ 部分 | ⚠️ 类型映射有限 | ⚠️ 手工 | ⚠️ 有限 | ⚠️ 一次性映射 |
-| **国产数据库** | ✅ **达梦/金仓/GBase/神通/OpenGauss** | ❌ 基本不支持 | ❌ 仅 MySQL | ⚠️ 少数 | ⚠️ 需自写插件 | ⚠️ 靠通用 JDBC | ⚠️ 有限 | ⚠️ 部分 |
+| **国产数据库** | ✅ **达梦/金仓/OceanBase/TiDB/瀚高/海量/崖山/GBase/神通/OpenGauss** | ❌ 基本不支持 | ❌ 仅 MySQL | ⚠️ 少数 | ⚠️ 需自写插件 | ⚠️ 靠通用 JDBC | ⚠️ 有限 | ⚠️ 部分 |
 | **源库侵入性** | **只读查询，零侵入** | 需开 binlog/wal + 复制权限 | 需开 binlog | 需开 binlog/wal | 只读 | 只读 | **需建触发器** | 只读 |
 | **幂等 / 断点续传** | ✅ 主键 upsert + 游标持久化 | ✅ offset | ✅ | ✅ checkpoint | ❌ | ❌ 需自建 | ✅ | ❌ |
 | **可视化监控** | ✅ 看板 + 变更日志 | 需接 Prometheus/Grafana | 需自建 | Flink UI（偏作业） | 日志 | 有限 | 有 Web 控制台 | ❌ |
@@ -209,7 +209,7 @@ Debezium / Flink CDC 是优秀的流式框架，但要跑起来一条 MySQL → 
 
 **3. 为国产数据库与信创迁移而生**
 
-达梦、人大金仓、南大通用、神通、OpenGauss 是预设的一等选项 —— 不是「通过通用 JDBC 也许能连上」，而是各自有专门的方言实现：`MERGE INTO ... FROM DUAL` 的 upsert 写法、类型上限（Oracle VARCHAR2 4000）、函数名差异、标识符引号规则都已处理。Oracle/SQL Server → 国产库的替换场景是本工具的主战场，而这恰恰是 Debezium、Canal 生态最薄弱的地方。
+达梦、人大金仓、OceanBase、TiDB、瀚高、海量、崖山、南大通用、神通、OpenGauss 是预设的一等选项 —— 不是「通过通用 JDBC 也许能连上」，而是各自有专门的方言实现：`MERGE INTO ... FROM DUAL` 的 upsert 写法、类型上限（Oracle VARCHAR2 4000）、函数名差异、标识符引号规则都已处理。Oracle/SQL Server → 国产库的替换场景是本工具的主战场，而这恰恰是 Debezium、Canal 生态最薄弱的地方。
 
 **4. 零侵入源库**
 
@@ -233,9 +233,9 @@ Navicat / DBeaver 的「数据传输」和 DataX 解决的是「把数据搬过�
 
 ## 支持的数据库
 
-MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**达梦 (DM)**、**人大金仓 (KingBase)**、**南大通用 (GBase)**、**神通 (Oscar)**、H2，以及**自定义数据库**（提供 JDBC URL、驱动类名与驱动 jar 路径，运行时动态加载）。
+MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**达梦 (DM)**、**人大金仓 (KingBase)**、**OceanBase**、**TiDB**、**瀚高 (HighGo)**、**海量 (Vastbase)**、**崖山 (YashanDB)**、**南大通用 (GBase)**、**神通 (Oscar)**、H2，以及**自定义数据库**（提供 JDBC URL、驱动类名与驱动 jar 路径，运行时动态加载）。
 
-除 **GBase** 与 **神通 Oscar** 外，上面各数据库的 JDBC 驱动都已随发行包内置，开箱即用，无需另放 jar。GBase、神通未在 Maven Central 发布官方构件，本项目也未获得再分发授权，需要自行从厂商处获取驱动 jar，在连接配置中填写路径；自定义类型同理。外部 jar 用独立 `URLClassLoader` 加载，并通过 `DriverShim` 注册到 `DriverManager`，与应用类加载器隔离，驱动版本冲突不会污染主程序。各内置驱动的版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
+除 **GBase** 与 **神通 Oscar** 外，上面各数据库的 JDBC 驱动都已随发行包内置，开箱即用，无需另放 jar。GBase、神通未在 Maven Central 发布官方构件，本项目也未获得再分发授权，需要自行从厂商处获取驱动 jar，在连接配置中填写路径；自定义类型同理。外部 jar 用独立 `URLClassLoader` 加载，并通过 `DriverShim` 注册到 `DriverManager`，与应用类加载器隔离，驱动版本冲突不会污染主程序。各内置驱动的版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。PolarDB 未在 Maven Central 发布官方 JDBC 构件，按兼容协议选 MySQL 或 PostgreSQL 类型即可；GBase 8s 的驱动也未上架，走自定义类型。
 
 ---
 
@@ -321,7 +321,7 @@ java -jar synctool.jar --spring.config.location=file:./application.yml
 
 ### 四、加载外部驱动 jar（GBase / 神通 / 自定义）
 
-MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、达梦、金仓、H2 的驱动都已随发行包内置，**不需要这一步**。只有 **GBase**、**神通 Oscar** 和**自定义数据库**需要外部 jar。把厂商驱动 jar 放到服务器上，例如：
+MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、达梦、金仓、OceanBase、瀚高、海量、崖山、H2 的驱动都已随发行包内置（TiDB 兼容 MySQL 协议，复用 MySQL 驱动），**不需要这一步**。只有 **GBase**、**神通 Oscar** 和**自定义数据库**需要外部 jar。把厂商驱动 jar 放到服务器上，例如：
 
 ```bash
 mkdir -p /opt/synctool/drivers
@@ -721,4 +721,4 @@ mvn test
 
 本项目基于 [MIT License](LICENSE) 开源，可自由用于商业与非商业用途。
 
-发行包内置的第三方 JDBC 驱动（Oracle、DB2、达梦、金仓等共 10 个）各自适用其原厂许可证，版本、链接与再分发说明见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。**GBase** 与**神通 Oscar** 的驱动不随本项目分发，请自行从厂商处获取并确认使用授权。
+发行包内置的第三方 JDBC 驱动（Oracle、DB2、达梦、金仓、OceanBase、瀚高、海量、崖山等共 14 个）各自适用其原厂许可证，版本、链接与再分发说明见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。**GBase** 与**神通 Oscar** 的驱动不随本项目分发，请自行从厂商处获取并确认使用授权。

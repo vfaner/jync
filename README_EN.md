@@ -187,7 +187,7 @@ Typography uses the system font stack (`PingFang SC` / `Microsoft YaHei` / …) 
 | **Continuous incremental sync** | ✅ polling/Cron | ✅ log-based | ✅ binlog | ✅ log-based | ❌ one-shot batch | ⚠️ roll your own scheduling & delta logic | ✅ trigger-based | ❌ one-shot |
 | **Schema (DDL) sync** | ✅ **auto-creates tables/indexes/views/procs** | ⚠️ emits DDL events; applying them is your job | ⚠️ events only | ⚠️ custom code | ❌ tables must pre-exist | ⚠️ manual mapping | ⚠️ limited | ✅ but one-shot |
 | **Heterogeneous dialect conversion** | ✅ types/functions/quoting/paging/procs | ❌ DIY | ❌ | ⚠️ partial | ⚠️ limited type mapping | ⚠️ manual | ⚠️ limited | ⚠️ one-shot mapping |
-| **Chinese domestic databases** | ✅ **DM / KingBase / GBase / Oscar / OpenGauss** | ❌ essentially unsupported | ❌ MySQL only | ⚠️ a few | ⚠️ needs custom plugins | ⚠️ generic JDBC only | ⚠️ limited | ⚠️ partial |
+| **Chinese domestic databases** | ✅ **DM / KingBase / OceanBase / TiDB / HighGo / Vastbase / YashanDB / GBase / Oscar / OpenGauss** | ❌ essentially unsupported | ❌ MySQL only | ⚠️ a few | ⚠️ needs custom plugins | ⚠️ generic JDBC only | ⚠️ limited | ⚠️ partial |
 | **Intrusiveness to source** | **Read-only queries, zero intrusion** | binlog/WAL + replication privileges | binlog required | binlog/WAL required | read-only | read-only | **must create triggers** | read-only |
 | **Idempotency / resume** | ✅ PK upsert + persisted cursor | ✅ offsets | ✅ | ✅ checkpoints | ❌ | ❌ DIY | ✅ | ❌ |
 | **Built-in monitoring** | ✅ dashboard + change log | Prometheus/Grafana required | DIY | Flink UI (job-level) | logs | limited | Web console | ❌ |
@@ -209,7 +209,7 @@ Most CDC tools solve only the data stream; the target tables are yours to create
 
 **3. Built for Chinese domestic databases and localization migrations**
 
-Dameng (DM), KingBase, GBase, Oscar, and OpenGauss are preset first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly where the Debezium and Canal ecosystems are weakest.
+Dameng (DM), KingBase, OceanBase, TiDB, HighGo, Vastbase, YashanDB, GBase, Oscar, and OpenGauss are preset first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly where the Debezium and Canal ecosystems are weakest.
 
 **4. Zero intrusion into the source database**
 
@@ -233,9 +233,9 @@ Being honest about the boundaries:
 
 ## Supported Databases
 
-MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, **Dameng (DM)**, **KingBase**, **GBase**, **Oscar**, H2, plus **custom databases** (supply a JDBC URL, driver class name, and driver jar path — loaded dynamically at runtime).
+MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, **Dameng (DM)**, **KingBase**, **OceanBase**, **TiDB**, **HighGo**, **Vastbase**, **YashanDB**, **GBase**, **Oscar**, H2, plus **custom databases** (supply a JDBC URL, driver class name, and driver jar path — loaded dynamically at runtime).
 
-Every driver above except **GBase** and **Oscar** ships inside the distribution, so those types work out of the box with no extra jar. GBase and Oscar publish no official artifact on Maven Central and are not redistributed here: obtain the vendor jar yourself and fill in its path; the same applies to custom types. External jars are loaded through a dedicated `URLClassLoader` and registered with `DriverManager` via a `DriverShim`, isolated from the application classloader so driver version conflicts can't pollute the main app. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the bundled drivers' versions and licenses.
+Every driver above except **GBase** and **Oscar** ships inside the distribution, so those types work out of the box with no extra jar. GBase and Oscar publish no official artifact on Maven Central and are not redistributed here: obtain the vendor jar yourself and fill in its path; the same applies to custom types. External jars are loaded through a dedicated `URLClassLoader` and registered with `DriverManager` via a `DriverShim`, isolated from the application classloader so driver version conflicts can't pollute the main app. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the bundled drivers' versions and licenses. PolarDB publishes no official JDBC artifact on Maven Central — pick the MySQL or PostgreSQL type according to the edition's protocol; GBase 8s likewise has none, so use the custom type.
 
 ---
 
@@ -321,7 +321,7 @@ java -jar synctool.jar --spring.config.location=file:./application.yml
 
 ### 4. Loading external driver jars (GBase / Oscar / custom)
 
-Drivers for MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, Dameng, KingBase, and H2 ship inside the distribution, so **this step is not needed for them**. Only **GBase**, **Oscar**, and **custom databases** require an external jar. Place the vendor jar on the server, for example:
+Drivers for MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and H2 ship inside the distribution (TiDB speaks the MySQL protocol and reuses the MySQL driver), so **this step is not needed for them**. Only **GBase**, **Oscar**, and **custom databases** require an external jar. Place the vendor jar on the server, for example:
 
 ```bash
 mkdir -p /opt/synctool/drivers
@@ -757,4 +757,4 @@ If this project helps you, a Star ⭐ is appreciated.
 
 Released under the [MIT License](LICENSE) — free for commercial and non-commercial use.
 
-The distribution bundles ten third-party JDBC drivers (Oracle, DB2, Dameng, KingBase, and others), each under its vendor license — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for versions, links, and the Oracle/IBM redistribution terms. **GBase** and **Oscar** drivers are not distributed with this project; obtain them from the vendors and confirm your own usage rights.
+The distribution bundles fourteen third-party JDBC drivers (Oracle, DB2, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and others), each under its vendor license — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for versions, links, and the Oracle/IBM redistribution terms. **GBase** and **Oscar** drivers are not distributed with this project; obtain them from the vendors and confirm your own usage rights.

@@ -43,13 +43,33 @@ class BundledDriversTest {
     }
 
     @Test
-    @DisplayName("内置驱动共 10 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/H2")
-    void tenDriversAreBundled() {
+    @DisplayName("内置驱动预设共 15 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/OceanBase/TiDB/瀚高/海量/崖山/H2")
+    void fifteenDriversAreBundled() {
         long bundled = Arrays.stream(DatabaseType.values())
                 .filter(t -> !EXTERNAL.contains(t))
                 .filter(t -> DriverPresence.isPresent(t.getDriverClassName()))
                 .count();
-        assertEquals(10, bundled);
+        assertEquals(15, bundled);
+    }
+
+    /**
+     * A URL template that the type's own driver rejects fails only at the customer site,
+     * when they click "Test connection" — the same blind spot the presence check above
+     * closes for missing jars. TiDB borrows the MySQL driver, which is exactly the point
+     * being tested: the borrowed template must be accepted too.
+     */
+    @Test
+    @DisplayName("每个内置类型的 URL 模板都能被其驱动接受")
+    void bundledDriversAcceptTheirUrlTemplate() throws Exception {
+        for (DatabaseType type : DatabaseType.values()) {
+            if (EXTERNAL.contains(type) || type.getUrlTemplate() == null) {
+                continue;
+            }
+            String url = String.format(type.getUrlTemplate(), "localhost", type.getDefaultPort(), "db");
+            java.sql.Driver driver = (java.sql.Driver) Class.forName(type.getDriverClassName())
+                    .getDeclaredConstructor().newInstance();
+            assertTrue(driver.acceptsURL(url), type + " 的驱动不接受自己的 URL 模板: " + url);
+        }
     }
 
     @Test

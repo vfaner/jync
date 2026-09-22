@@ -69,6 +69,43 @@ public enum DatabaseType {
             "jdbc:kingbase8://%s:%d/%s",
             54321, DialectFamily.POSTGRES),
 
+    /**
+     * MySQL-mode tenants. The same driver reaches Oracle-mode tenants, but the dialect
+     * does not follow, so an Oracle-mode deployment belongs in a CUSTOM connection with
+     * an Oracle-family URL rather than this preset. Default port is the OBProxy port;
+     * a direct observer connection uses 2881.
+     */
+    OCEANBASE("OceanBase", "com.oceanbase.jdbc.Driver",
+            "jdbc:oceanbase://%s:%d/%s",
+            2883, DialectFamily.MYSQL),
+
+    /**
+     * Speaks the MySQL protocol and its vendor points users at the standard Connector/J,
+     * so this preset reuses the bundled MySQL driver instead of the third-party
+     * repackaged "TiDB driver" that circulates on Maven Central.
+     */
+    TIDB("TiDB", "com.mysql.cj.jdbc.Driver",
+            "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+                    + "&characterEncoding=utf8&useAffectedRows=true",
+            4000, DialectFamily.MYSQL),
+
+    HIGHGO("瀚高 HighGo", "com.highgo.jdbc.Driver",
+            "jdbc:highgo://%s:%d/%s",
+            5866, DialectFamily.POSTGRES),
+
+    VASTBASE("海量 Vastbase", "cn.com.vastbase.Driver",
+            "jdbc:vastbase://%s:%d/%s",
+            5432, DialectFamily.POSTGRES),
+
+    /**
+     * Oracle-compatible: unquoted identifiers fold to upper case and MERGE upserts apply,
+     * so it joins the Oracle dialect family. The URL prefix is {@code jdbc:yasdb:},
+     * not {@code jdbc:yashandb:} — verified against the driver itself.
+     */
+    YASHANDB("崖山 YashanDB", "com.yashandb.jdbc.Driver",
+            "jdbc:yasdb://%s:%d/%s",
+            1688, DialectFamily.ORACLE),
+
     GBASE("南大通用 GBase", "com.gbase.jdbc.Driver",
             "jdbc:gbase://%s:%d/%s",
             5258, DialectFamily.MYSQL),
