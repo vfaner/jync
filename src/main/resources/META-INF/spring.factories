@@ -1,0 +1,4 @@
+# EnvironmentPostProcessors run before the context (and logging) initialise; this is the
+# registration mechanism Spring Boot 2.7 uses for them.
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.qqmu.jync.config.LegacyStoreMigration

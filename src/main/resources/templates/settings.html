@@ -59,6 +59,12 @@
 
                     <dt th:text="#{settings.fullCompareMax}">Full-compare ceiling</dt>
                     <dd><span class="chip" th:text="${properties.fullCompareMaxRows}">20000</span></dd>
+
+                    <dt th:text="#{settings.changeLogRetention}">Change-log retention (days)</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.changeLogRetentionDays}">30</span>
+                        <div class="help" th:text="#{settings.changeLogRetentionHelp}">help</div>
+                    </dd>
                 </dl>
             </div>
         </div>
@@ -140,7 +146,7 @@
                 </span>
                 <th:block th:if="${versionInfo.state.name() == 'UPDATE_AVAILABLE'}">
                     <a class="btn btn-warn btn-sm" target="_blank" rel="noopener noreferrer"
-                       th:href="${versionInfo.releaseUrl}">
+                       th:if="${versionInfo.releaseUrl}" th:href="${versionInfo.releaseUrl}">
                         <svg class="ico"><use href="#box-arrow-up-right"/></svg>
                         <span th:text="#{settings.updateNow}">Update now</span>
                     </a>

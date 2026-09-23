@@ -16,24 +16,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title th:with="pt=${titleKey != null ? #messages.msg(titleKey) : #messages.msg('app.subtitle')}"
-           th:text="|${pt} · #{app.title}|">DB Sync Tool</title>
+           th:text="|${pt} · #{app.title}|">Jync</title>
 
-    <!--/* 首屏前应用主题，否则深色用户会看到一帧白底闪烁。
-           与参考项目一致：没手动选过就跟随系统。 */-->
-    <script>
-        (function () {
-            var mode;
-            try {
-                mode = localStorage.getItem('synctool-theme');
-            } catch (e) { /* 隐私模式：跟随系统 */ }
-            if (mode !== 'dark' && mode !== 'light') {
-                mode = window.matchMedia
-                    && window.matchMedia('(prefers-color-scheme: dark)').matches
-                    ? 'dark' : 'light';
-            }
-            document.documentElement.setAttribute('data-theme', mode);
-        })();
-    </script>
+    <!--/* 首屏前应用主题（防白闪），与 login.html 共用一份片段 */-->
+    <script th:replace="~{fragments/theme-bootstrap :: script}"></script>
 
     <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
     <link rel="stylesheet" th:href="@{/css/app.css}">
@@ -56,7 +42,7 @@
         <a class="logo" th:href="@{/}">
             <span class="logo-mark"><svg class="ico"><use href="#arrow-left-right"/></svg></span>
             <span class="logo-text">
-                <span th:text="#{app.title}">DB Sync Tool</span>
+                <span th:text="#{app.title}">Jync</span>
                 <small>
                     <span th:text="#{app.subtitle}">Real-time sync</span>
                     <span class="logo-ver-sep" th:if="${appVersion}">·</span>
@@ -180,7 +166,7 @@
             var el = document.getElementById('default-pw-banner');
             if (!el) return;
             try {
-                if (sessionStorage.getItem('synctool-pw-banner-dismissed') === '1') {
+                if (sessionStorage.getItem('jync-pw-banner-dismissed') === '1') {
                     el.remove();
                 }
             } catch (e) { /* 隐私模式：读不到就照常提示 */ }
@@ -216,7 +202,7 @@
 
 <footer class="foot">
     <span>
-        <span th:text="#{app.title}">DB Sync Tool</span>
+        <span th:text="#{app.title}">Jync</span>
         <span class="mx-1">·</span>
         <span th:text="#{app.subtitle}">Real-time database synchronization</span>
         <small class="foot-ver mono" th:if="${appVersion}" th:text="${appVersion}">vX.Y.Z</small>
@@ -325,7 +311,7 @@
 
 <script th:inline="javascript">
     /* 服务端返回 i18n key，这里把解析好的文案暴露给 JS 使用 */
-    window.SyncToolMessages = {
+    window.JyncMessages = {
         'msg.sync.started': /*[[#{msg.sync.started}]]*/ '',
         'msg.sync.stopped': /*[[#{msg.sync.stopped}]]*/ '',
         'msg.sync.completed': /*[[#{msg.sync.completed}]]*/ '',
@@ -353,6 +339,7 @@
         'error.ai.model.required': /*[[#{error.ai.model.required}]]*/ '',
         'error.validate.empty': /*[[#{error.validate.empty}]]*/ '',
         'error.validate.noHeader': /*[[#{error.validate.noHeader}]]*/ '',
+        'error.validate.unknown': /*[[#{error.validate.unknown}]]*/ '',
         'warn.validate.selfReference': /*[[#{warn.validate.selfReference}]]*/ '',
         'error.unexpected': /*[[#{error.unexpected}]]*/ '',
         'error.project.not.found': /*[[#{error.project.not.found}]]*/ '',

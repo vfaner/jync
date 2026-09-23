@@ -1,15 +1,18 @@
 spring:
   application:
-    name: synctool
+    name: jync
   datasource:
     # AUTO_SERVER lets an external tool inspect the store while the app runs.
     # H2 2.x rejects combining it with DB_CLOSE_ON_EXIT, so that flag is omitted.
-    url: jdbc:h2:file:./data/synctool;MODE=MySQL;AUTO_SERVER=TRUE
+    # Upgrades from SyncTool (<= 1.2.x): LegacyStoreMigration renames a synctool.mv.db
+    # sitting next to the effective store path, so no data is lost. A deployment whose
+    # overridden URL still names .../synctool keeps using that exact file, untouched.
+    url: jdbc:h2:file:./data/jync;MODE=MySQL;AUTO_SERVER=TRUE
     driver-class-name: org.h2.Driver
     username: sa
     password: ""
     hikari:
-      pool-name: synctool-meta
+      pool-name: jync-meta
       maximum-pool-size: 10
   jpa:
     hibernate:
@@ -34,7 +37,7 @@ spring:
   quartz:
     job-store-type: memory
     properties:
-      org.quartz.scheduler.instanceName: synctool-scheduler
+      org.quartz.scheduler.instanceName: jync-scheduler
       org.quartz.threadPool.threadCount: "10"
   h2:
     console:
@@ -50,9 +53,9 @@ server:
 
 app:
   # Repository link behind the nav GitHub icon and the donate dialog buttons.
-  github-url: https://github.com/vfaner/synctool
+  github-url: https://github.com/vfaner/jync
   # 设置页「项目与作者」栏：Gitee 镜像地址与作者联系方式，留空则对应行不显示。
-  gitee-url: https://gitee.com/super_rgh/synctool
+  gitee-url: https://gitee.com/super_rgh/jync
   contact-qq: 817094/2912167928
   contact-wechat: hua47609
   # 设置页的新版本检查（调用 GitHub API，成功结果缓存 10 分钟、失败缓存 1 分钟）。
@@ -84,6 +87,9 @@ sync:
   # TTL for the per-project sync lock; a crashed node's lock expires after this
   lock-ttl-ms: 300000
   # Encryption key for stored database passwords. OVERRIDE THIS IN PRODUCTION.
+  # NOTE: the default value is deliberately kept at its pre-rename literal — stored
+  # connection passwords were AES-encrypted with it, and changing it would make
+  # every existing installation's saved credentials undecryptable after upgrade.
   crypto-password: synctool-default-key-change-me
   crypto-salt: 5c0744940b5c369b
   ai:
@@ -96,7 +102,7 @@ sync:
 logging:
   level:
     root: INFO
-    com.synctool: INFO
+    com.qqmu.jync: INFO
     org.hibernate.SQL: WARN
   file:
-    name: ./logs/synctool.log
+    name: ./logs/jync.log

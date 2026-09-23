@@ -2,7 +2,7 @@
 <!--/*
   登录页。这是全项目唯一不套 layout 的模板 —— 未登录的人不该看到导航、
   也不该看到「有哪些功能」这类信息。因此 <head> 在这里自成一份，
-  包括防白闪的主题脚本（与 layout 里那段同源，深色用户不会先闪一帧白底）。
+  防白闪的主题脚本引用与 layout 共用的 fragments/theme-bootstrap 片段。
 */-->
 <html xmlns:th="http://www.thymeleaf.org"
       th:lang="${#locale.toString().startsWith('zh')} ? 'zh-CN' : 'en'"
@@ -11,22 +11,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title th:text="|#{login.title} · #{app.title}|">Sign in · DB Sync Tool</title>
+    <title th:text="|#{login.title} · #{app.title}|">Sign in · Jync</title>
 
-    <script>
-        (function () {
-            var mode;
-            try {
-                mode = localStorage.getItem('synctool-theme');
-            } catch (e) { /* 隐私模式：跟随系统 */ }
-            if (mode !== 'dark' && mode !== 'light') {
-                mode = window.matchMedia
-                    && window.matchMedia('(prefers-color-scheme: dark)').matches
-                    ? 'dark' : 'light';
-            }
-            document.documentElement.setAttribute('data-theme', mode);
-        })();
-    </script>
+    <script th:replace="~{fragments/theme-bootstrap :: script}"></script>
 
     <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
     <link rel="stylesheet" th:href="@{/css/app.css}">
@@ -54,7 +41,7 @@
 
     <div class="login-brand">
         <span class="login-mark"><svg class="ico"><use href="#arrow-left-right"/></svg></span>
-        <h1 th:text="#{app.title}">DB Sync Tool</h1>
+        <h1 th:text="#{app.title}">Jync</h1>
         <p th:text="#{login.tagline}">Sign in to continue · works offline</p>
     </div>
 
@@ -108,6 +95,9 @@
     <p class="login-foot" th:text="#{login.foot}">Zero external dependencies · MIT</p>
 </main>
 
+<!--/* theme.js 给上面 data-theme-btn 按钮绑定切换、跑旧键迁移和时区上报；
+       此前登录页漏引了它，主题按钮点了没反应。 */-->
+<script th:src="@{/js/theme.js}"></script>
 <script th:src="@{/js/app.js}"></script>
 </body>
 </html>

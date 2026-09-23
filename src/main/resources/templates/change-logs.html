@@ -12,7 +12,7 @@
                 <span id="log-count" th:text="${logs.totalElements}">0</span>
                 <span th:text="#{log.entries}">entries</span>
                 <!--/* 文案模板留在 data-tpl 里，而不是塞进 layout 的全局
-                       SyncToolMessages —— 只有这一页用得上。 */-->
+                       JyncMessages —— 只有这一页用得上。 */-->
                 <span id="log-updated" class="muted" hidden
                       th:data-tpl="#{log.refresh.updated}"></span>
             </p>

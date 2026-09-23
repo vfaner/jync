@@ -1,4 +1,8 @@
-# SyncTool · Real-Time Database Sync
+# Jync · Real-Time Heterogeneous Database Sync
+
+> **Jync**, pronounced exactly like "sync" — the **J** stands for Java.
+> A minimal four-letter coinage and a member of the J-family (sibling project: Jargus, a Java code-review platform).
+> One JAR, ready to run — no Kafka, no ZooKeeper, not a single line of code.
 
 [简体中文](README.md) | **English**
 
@@ -8,8 +12,8 @@
 
 A ready-to-run web application that keeps **schema and data** in sync **across heterogeneous databases** in real time. Start a single jar, click a few times in your browser, and Oracle tables stream continuously into PostgreSQL, or MySQL deltas land live in Dameng — **no Kafka, no ZooKeeper, not a single line of code.**
 
-- Repository: <https://github.com/vfaner/synctool>
-- China mirror: <https://gitee.com/super_rgh/synctool>
+- Repository: <https://github.com/vfaner/jync>
+- China mirror: <https://gitee.com/super_rgh/jync>
 - Demo video: <https://www.bilibili.com/video/BV1iHYJ6vEEd> (Bilibili, ~10 min; narration in Chinese)
 
 Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz scheduling + embedded H2 metadata store. **Zero external dependencies, fully usable on an air-gapped intranet.**
@@ -145,7 +149,7 @@ Indigo-to-pink gradient accent (`#4f46e5` → `#ec4899`), soft shadows, glassmor
 **Theme switching**
 
 - The theme lives on `<html data-theme="dark|light">` and only overrides CSS variables, so components need no second set of dark rules
-- Storage key `synctool-theme` (localStorage)
+- Storage key `jync-theme` (localStorage)
 - **Follows the OS** `prefers-color-scheme` until the user has chosen explicitly, and reacts live to OS theme changes; once the toggle is clicked, the user's choice wins permanently
 - An inline `<head>` script applies the theme before first paint, so dark-mode users never see a white flash
 
@@ -160,7 +164,7 @@ Indigo-to-pink gradient accent (`#4f46e5` → `#ec4899`), soft shadows, glassmor
 
 **Why timezone outranks `Accept-Language`:** overseas Chinese users often run an English-language browser while sitting in a Chinese timezone. Timezone is the better signal for "which language do you actually want to read."
 
-Because rendering is server-side, the language must be decided before render, so a frontend script probes the timezone and writes the `SYNCTOOL_TZ` cookie; the server's `TimezoneAwareLocaleResolver` reads it to pick the Locale. On a first visit, if the rendered language disagrees with the timezone inference, the page refreshes once; after an explicit language choice it never refreshes again.
+Because rendering is server-side, the language must be decided before render, so a frontend script probes the timezone and writes the `JYNC_TZ` cookie; the server's `TimezoneAwareLocaleResolver` reads it to pick the Locale. On a first visit, if the rendered language disagrees with the timezone inference, the page refreshes once; after an explicit language choice it never refreshes again.
 
 **Offline / intranet ready** — every frontend asset lives in the repo, and **no external request is made at runtime**:
 
@@ -179,7 +183,7 @@ Typography uses the system font stack (`PingFang SC` / `Microsoft YaHei` / …) 
 
 ### At a glance
 
-| Dimension | **SyncTool** | Debezium + Kafka | Canal | Flink CDC | DataX | Kettle | SymmetricDS | Navicat/DBeaver transfer |
+| Dimension | **Jync** | Debezium + Kafka | Canal | Flink CDC | DataX | Kettle | SymmetricDS | Navicat/DBeaver transfer |
 |---|---|---|---|---|---|---|---|---|
 | **Deployment** | **One jar** | Kafka + Connect + ZK/KRaft | Canal Server (+MQ) | Flink cluster (JM/TM) | CLI scripts | Desktop + repository | Engine on every node | Desktop client |
 | **External deps** | **None** | Kafka, ZooKeeper | ZooKeeper (cluster) | Flink, checkpoint store | None (but JSON jobs) | JVM + plugins | Triggers in source DB | None |
@@ -201,11 +205,11 @@ Typography uses the system font stack (`PingFang SC` / `Microsoft YaHei` / …) 
 
 **1. "One jar" versus "a whole platform"**
 
-Debezium and Flink CDC are excellent streaming frameworks, but standing up a single MySQL → PostgreSQL pipeline means Kafka, Kafka Connect, a coordination service, and then a consumer you write yourself to translate events into target-side DML. The SyncTool equivalent is: `java -jar synctool.jar`, open a browser, create two connections, create a project, click Start. **When the size of the sync need doesn't justify the operational cost of a streaming platform, this gap is decisive.**
+Debezium and Flink CDC are excellent streaming frameworks, but standing up a single MySQL → PostgreSQL pipeline means Kafka, Kafka Connect, a coordination service, and then a consumer you write yourself to translate events into target-side DML. The Jync equivalent is: `java -jar jync.jar`, open a browser, create two connections, create a project, click Start. **When the size of the sync need doesn't justify the operational cost of a streaming platform, this gap is decisive.**
 
 **2. Schema sync is a first-class feature, not homework left for you**
 
-Most CDC tools solve only the data stream; the target tables are yours to create. DataX explicitly requires them to pre-exist. SyncTool reads source metadata and creates tables, indexes, views, and stored procedures **in the target's dialect**, then propagates the diff after source-side DDL changes. In a heterogeneous migration, DDL translation and type mapping is usually more work than moving the rows.
+Most CDC tools solve only the data stream; the target tables are yours to create. DataX explicitly requires them to pre-exist. Jync reads source metadata and creates tables, indexes, views, and stored procedures **in the target's dialect**, then propagates the diff after source-side DDL changes. In a heterogeneous migration, DDL translation and type mapping is usually more work than moving the rows.
 
 **3. Built for Chinese domestic databases and localization migrations**
 
@@ -213,20 +217,20 @@ Dameng (DM), KingBase, OceanBase, TiDB, HighGo, Vastbase, YashanDB, GBase, Oscar
 
 **4. Zero intrusion into the source database**
 
-SymmetricDS requires triggers in the source. Debezium, Canal, and Flink CDC require binlog / WAL logical replication to be enabled plus replication privileges — on many production databases that is a change request with an approval workflow attached. SyncTool needs one **read-only account** and derives deltas from cursor-column queries. The source's schema and configuration are untouched.
+SymmetricDS requires triggers in the source. Debezium, Canal, and Flink CDC require binlog / WAL logical replication to be enabled plus replication privileges — on many production databases that is a change request with an approval workflow attached. Jync needs one **read-only account** and derives deltas from cursor-column queries. The source's schema and configuration are untouched.
 
 **5. One-shot data movement versus staying in sync**
 
-Navicat's and DBeaver's "data transfer", and DataX, solve "copy this data across, once." SyncTool solves "keep both sides consistent, indefinitely": resume from the cursor after a restart, backfill changes that happened while down, and make every row write idempotent. Those are two different problems.
+Navicat's and DBeaver's "data transfer", and DataX, solve "copy this data across, once." Jync solves "keep both sides consistent, indefinitely": resume from the cursor after a restart, backfill changes that happened while down, and make every row write idempotent. Those are two different problems.
 
-### When *not* to use SyncTool
+### When *not* to use Jync
 
 Being honest about the boundaries:
 
 - **You need millisecond latency or strict change ordering** → use Debezium / Flink CDC. A polling design's floor on latency is the poll interval.
 - **You need physical-delete capture on large tables** → without a source-side audit table, delete detection requires comparing full primary-key sets, so it's only enabled below `full-compare-max-rows`.
 - **One-time initial load of hundreds of millions of rows** → tools built for bulk throughput, like DataX, will be faster.
-- **You need complex ETL transformation (cleansing, aggregation, multi-stream joins)** → use Kettle / Flink. SyncTool does **synchronization**, not **transformation**.
+- **You need complex ETL transformation (cleansing, aggregation, multi-stream joins)** → use Kettle / Flink. Jync does **synchronization**, not **transformation**.
 - **Bidirectional multi-master replication** → use SymmetricDS. This tool assumes it is the sole writer to the target.
 
 ---
@@ -254,20 +258,20 @@ Every driver above except **GBase** and **Oscar** ships inside the distribution,
 ### 1. Build
 
 ```bash
-git clone https://github.com/vfaner/synctool.git
+git clone https://github.com/vfaner/jync.git
 # In mainland China, use the mirror:
-# git clone https://gitee.com/super_rgh/synctool.git
+# git clone https://gitee.com/super_rgh/jync.git
 
-cd synctool
+cd jync
 mvn clean package -DskipTests
 ```
 
-Artifact: `target/synctool.jar` (executable fat jar).
+Artifact: `target/jync.jar` (executable fat jar).
 
 ### 2. Run
 
 ```bash
-java -jar target/synctool.jar
+java -jar target/jync.jar
 ```
 
 Open <http://localhost:8080>.
@@ -292,11 +296,11 @@ server:
 
 spring:
   datasource:
-    url: jdbc:h2:file:/opt/synctool/data/synctool;MODE=MySQL;AUTO_SERVER=TRUE
+    url: jdbc:h2:file:/opt/jync/data/jync;MODE=MySQL;AUTO_SERVER=TRUE
 
 sync:
   poll-interval: 2000              # polling interval in ms
-  snapshot-dir: /opt/synctool/snapshots
+  snapshot-dir: /opt/jync/snapshots
   batch-size: 500
   fetch-size: 1000
   safety-lag-ms: 1000
@@ -308,13 +312,13 @@ sync:
 
 logging:
   file:
-    path: /opt/synctool/logs
+    path: /opt/jync/logs
 ```
 
 Start with:
 
 ```bash
-java -jar synctool.jar --spring.config.location=file:./application.yml
+java -jar jync.jar --spring.config.location=file:./application.yml
 ```
 
 > 🔐 **Security note:** `sync.crypto-password` and `sync.crypto-salt` encrypt the stored database passwords. **The distribution ships with defaults; you must change them in production.** After changing them, previously stored passwords can no longer be decrypted and must be re-entered in the UI. `crypto-salt` must be a valid hexadecimal string.
@@ -324,29 +328,29 @@ java -jar synctool.jar --spring.config.location=file:./application.yml
 Drivers for MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and H2 ship inside the distribution (TiDB speaks the MySQL protocol and reuses the MySQL driver), so **this step is not needed for them**. Only **GBase**, **Oscar**, and **custom databases** require an external jar. Place the vendor jar on the server, for example:
 
 ```bash
-mkdir -p /opt/synctool/drivers
-cp gbase-jdbc.jar oscar.jar /opt/synctool/drivers/
+mkdir -p /opt/jync/drivers
+cp gbase-jdbc.jar oscar.jar /opt/jync/drivers/
 ```
 
-When one of these types is selected, the form automatically shows a **Driver jar** card. Just fill in the **driver jar path** — either a single jar file or a directory of jars, e.g. `/opt/synctool/drivers`. Custom types also need a JDBC URL and a driver class; the **Detect driver classes** button can read candidate class names straight from the jar. Click **Test Connection** to confirm it loads, then save.
+When one of these types is selected, the form automatically shows a **Driver jar** card. Just fill in the **driver jar path** — either a single jar file or a directory of jars, e.g. `/opt/jync/drivers`. Custom types also need a JDBC URL and a driver class; the **Detect driver classes** button can read candidate class names straight from the jar. Click **Test Connection** to confirm it loads, then save.
 
 ### 5. Running as a service
 
 **Option A: systemd (recommended)**
 
-`/etc/systemd/system/synctool.service`:
+`/etc/systemd/system/jync.service`:
 
 ```ini
 [Unit]
-Description=SyncTool Database Sync
+Description=Jync Database Sync
 After=network.target
 
 [Service]
 Type=simple
-User=synctool
-WorkingDirectory=/opt/synctool
-ExecStart=/usr/bin/java -Xms512m -Xmx1g -jar /opt/synctool/synctool.jar \
-  --spring.config.location=file:/opt/synctool/application.yml
+User=jync
+WorkingDirectory=/opt/jync
+ExecStart=/usr/bin/java -Xms512m -Xmx1g -jar /opt/jync/jync.jar \
+  --spring.config.location=file:/opt/jync/application.yml
 Restart=always
 RestartSec=10
 
@@ -356,23 +360,23 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now synctool
-sudo systemctl status synctool
+sudo systemctl enable --now jync
+sudo systemctl status jync
 ```
 
 **Option B: nohup (quick trial)**
 
 ```bash
-cd /opt/synctool
-nohup java -jar synctool.jar > /dev/null 2>&1 &
+cd /opt/jync
+nohup java -jar jync.jar > /dev/null 2>&1 &
 ```
 
 ### 6. Upgrading
 
 ```bash
-sudo systemctl stop synctool
-cp target/synctool.jar /opt/synctool/synctool.jar
-sudo systemctl start synctool
+sudo systemctl stop jync
+cp target/jync.jar /opt/jync/jync.jar
+sudo systemctl start jync
 ```
 
 The metadata store uses `ddl-auto: update`, so its schema evolves automatically. **Back up `./data` before upgrading.** Source-side changes that occur while the tool is down are backfilled by the cursor mechanism on restart — nothing is lost.
@@ -649,7 +653,7 @@ no uncertainties at all, that is a signal the model did not look carefully — n
 conversion is good. Read the list before reading the SQL.
 
 **The syntax check writes to the target.** It really creates an object there named
-`SYNCTOOL_AI_CHECK_<timestamp>`, then drops it in a `finally`. This is the only place any AI-related
+`JYNC_AI_CHECK_<timestamp>`, then drops it in a `finally`. This is the only place any AI-related
 code writes to the target, so it runs only when you click the button, and only after a confirmation
 dialog; the sync path never calls it. Why create it for real: no database offers a portable
 "parse but do not execute" call, and Oracle-family products create PL/SQL that fails to compile as
@@ -680,7 +684,7 @@ should be tested against the target for real.
 ## Architecture
 
 ```
-com.synctool
+com.qqmu.jync
 ├── config           Configuration: i18n, Quartz, Jackson, SecurityConfig, SyncProperties
 ├── controller       MVC controllers; controller/api holds the REST endpoints
 ├── service
@@ -734,7 +738,7 @@ There is also an end-to-end script (H2 source and target, 20 assertions) coverin
 
 - **Stored procedure conversion** — mechanical differences (function names, identifier quoting, `FROM DUAL`, pagination syntax) are converted automatically, but PL/SQL, T-SQL, and PL/pgSQL have different procedural control-flow constructs, so complex procedures cannot be translated reliably. Such objects are attempted with their original source; on failure the specific error is reported. You can review them one by one on the `Conversion review` page and save a manual override there (with a provider configured, a model can draft the candidate for you) — but **a candidate still needs human confirmation**, and passing the syntax check does not mean semantic equivalence.
 - **What AI drafting is and is not** — the model only produces candidates and never participates in a sync; `StructureSyncService` calls no AI code. Semantic equivalence cannot be guaranteed by any tool — cursor behaviour, implicit transaction boundaries, exception control flow, and `NULL` concatenation semantics do not show up in the syntax, so critical procedures must be tested against the target for real.
-- **What the syntax check costs** — it really creates a temporary object on the target and then drops it. It runs only on a manual click (behind a confirmation), but killing the process between those two steps leaves a `SYNCTOOL_AI_CHECK_*` object behind, and the list page will not discover it for you.
+- **What the syntax check costs** — it really creates a temporary object on the target and then drops it. It runs only on a manual click (behind a confirmation), but killing the process between those two steps leaves a `JYNC_AI_CHECK_*` object behind, and the list page will not discover it for you. Upgrading from before v1.3.0: orphans left by older releases use the prefix `SYNCTOOL_AI_CHECK_*` — look for the old prefix when cleaning up.
 - **Row-delete detection** — without a source-side audit table this requires comparing the full primary-key sets on both sides, so it is only enabled for tables below `full-compare-max-rows`.
 - **Tables without a primary key** — idempotency cannot be guaranteed and replay may produce duplicate rows; the tool warns.
 - **Target writers** — the target database is assumed to be written only by this tool.
@@ -746,8 +750,8 @@ There is also an end-to-end script (H2 source and target, 20 assertions) coverin
 
 Issues and pull requests are welcome:
 
-- GitHub: <https://github.com/vfaner/synctool>
-- Gitee: <https://gitee.com/super_rgh/synctool>
+- GitHub: <https://github.com/vfaner/jync>
+- Gitee: <https://gitee.com/super_rgh/jync>
 
 If this project helps you, a Star ⭐ is appreciated.
 

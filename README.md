@@ -1,4 +1,8 @@
-# SyncTool · 数据库实时同步工具
+# Jync 捷同 · 异构数据库实时同步工具
+
+> **Jync**，读作 "sync" —— **J** 代表 Java；**捷同**：敏捷同步，两库皆同。
+> 极简 4 字母生造词，J 字家族成员（姊妹项目：Jargus · Java 代码评审平台）。
+> 单 JAR 开箱即用 —— 不要 Kafka，不要 ZooKeeper，不要一行代码。
 
 **简体中文** | [English](README_EN.md)
 
@@ -8,8 +12,8 @@
 
 在**异构数据库**之间实时同步**结构与数据**的开箱即用 Web 应用。单个 jar 启动，浏览器点几下即可让 Oracle 的表持续流向 PostgreSQL、让 MySQL 的增量实时落到达梦 —— 不需要 Kafka、不需要 ZooKeeper、不需要写一行代码。
 
-- 项目地址：<https://github.com/vfaner/synctool>
-- 国内镜像：<https://gitee.com/super_rgh/synctool>
+- 项目地址：<https://github.com/vfaner/jync>
+- 国内镜像：<https://gitee.com/super_rgh/jync>
 - 视频演示：<https://www.bilibili.com/video/BV1iHYJ6vEEd>（14 分钟，从建连接到实时同步）
 
 技术栈：Spring Boot 2.7 单体架构 + Thymeleaf 服务端渲染 + Quartz 调度 + H2 内嵌元数据库。**零外部依赖，内网离线可用。**
@@ -145,7 +149,7 @@
 **主题切换**
 
 - 主题写在 `<html data-theme="dark|light">`，只覆盖 CSS 变量，因此组件无需第二套深色规则
-- 存储键 `synctool-theme`（localStorage）
+- 存储键 `jync-theme`（localStorage）
 - **未手动选择过时跟随系统** `prefers-color-scheme`，并监听系统主题变化实时跟随；用户点过切换按钮之后就以用户选择为准，不再被系统覆盖
 - `<head>` 内联脚本在首屏渲染前应用主题，避免深色用户看到一帧白底闪烁
 
@@ -160,7 +164,7 @@
 
 **为什么时区优先于 `Accept-Language`**：境外华人用户的浏览器语言常常是英文，但人在国内时区。时区是「想看哪种语言」更准的信号。
 
-由于本项目是服务端渲染，语言必须在渲染前定好，所以时区由前端脚本探测后写入 `SYNCTOOL_TZ` cookie，服务端 `TimezoneAwareLocaleResolver` 读取它决定 Locale。首次访问若渲染语言与时区推断不符会自动刷新一次；用户显式选过语言后不再刷新。
+由于本项目是服务端渲染，语言必须在渲染前定好，所以时区由前端脚本探测后写入 `JYNC_TZ` cookie，服务端 `TimezoneAwareLocaleResolver` 读取它决定 Locale。首次访问若渲染语言与时区推断不符会自动刷新一次；用户显式选过语言后不再刷新。
 
 **离线／内网可用** —— 所有前端资源均在仓库内，运行时不发起任何外部请求：
 
@@ -179,7 +183,7 @@
 
 ### 一览表
 
-| 维度 | **SyncTool** | Debezium + Kafka | Canal | Flink CDC | DataX | Kettle | SymmetricDS | Navicat/DBEaver 数据传输 |
+| 维度 | **Jync** | Debezium + Kafka | Canal | Flink CDC | DataX | Kettle | SymmetricDS | Navicat/DBEaver 数据传输 |
 |---|---|---|---|---|---|---|---|---|
 | **部署形态** | **单个 jar** | Kafka + Connect + ZK/KRaft | Canal Server (+MQ) | Flink 集群 (JM/TM) | 客户端脚本 | 桌面 + 资源库 | 每节点部署引擎 | 桌面客户端 |
 | **外部依赖** | **无** | Kafka、ZooKeeper | ZooKeeper（集群） | Flink、Checkpoint 存储 | 无（但需 JSON 作业） | JVM + 插件 | 数据库触发器 | 无 |
@@ -201,11 +205,11 @@
 
 **1. 「一个 jar」对「一套基础设施」**
 
-Debezium / Flink CDC 是优秀的流式框架，但要跑起来一条 MySQL → PostgreSQL 的链路，你需要 Kafka、Kafka Connect、协调服务，再写一个消费端把事件翻译成目标库的 DML。SyncTool 的等价操作是：`java -jar synctool.jar`，打开浏览器，建两个连接，建一个项目，点「启动同步」。**当同步需求的规模配不上一套流式基础设施的运维成本时，这个差距就是决定性的。**
+Debezium / Flink CDC 是优秀的流式框架，但要跑起来一条 MySQL → PostgreSQL 的链路，你需要 Kafka、Kafka Connect、协调服务，再写一个消费端把事件翻译成目标库的 DML。Jync 的等价操作是：`java -jar jync.jar`，打开浏览器，建两个连接，建一个项目，点「启动同步」。**当同步需求的规模配不上一套流式基础设施的运维成本时，这个差距就是决定性的。**
 
 **2. 结构同步是一等公民，不是留给你的作业**
 
-绝大多数 CDC 工具只解决「数据流」，目标表得你自己先建好；DataX 更是明确要求预建表。SyncTool 会读取源库元数据，按**目标库方言**自动创建表、索引、视图、存储过程，并在源库 DDL 变更后把差异传播过去。跨异构库迁移里，建表和类型映射的工作量往往比搬数据本身更大。
+绝大多数 CDC 工具只解决「数据流」，目标表得你自己先建好；DataX 更是明确要求预建表。Jync 会读取源库元数据，按**目标库方言**自动创建表、索引、视图、存储过程，并在源库 DDL 变更后把差异传播过去。跨异构库迁移里，建表和类型映射的工作量往往比搬数据本身更大。
 
 **3. 为国产数据库与信创迁移而生**
 
@@ -213,20 +217,20 @@ Debezium / Flink CDC 是优秀的流式框架，但要跑起来一条 MySQL → 
 
 **4. 零侵入源库**
 
-SymmetricDS 需要在源库建触发器；Debezium / Canal / Flink CDC 需要开启 binlog / WAL 逻辑复制并申请复制权限 —— 在很多生产库上，这是一次要走审批流程的变更。SyncTool 只需要一个**只读账号**，通过查询游标列做增量，源库结构和配置一动不动。
+SymmetricDS 需要在源库建触发器；Debezium / Canal / Flink CDC 需要开启 binlog / WAL 逻辑复制并申请复制权限 —— 在很多生产库上，这是一次要走审批流程的变更。Jync 只需要一个**只读账号**，通过查询游标列做增量，源库结构和配置一动不动。
 
 **5. 一次性搬数 vs 持续同步**
 
-Navicat / DBeaver 的「数据传输」和 DataX 解决的是「把数据搬过去一次」。SyncTool 解决的是「让两边持续保持一致」：进程重启后从游标继续、停机期间的变更会被补齐、每一行写入都是幂等的。这是两个完全不同的问题。
+Navicat / DBeaver 的「数据传输」和 DataX 解决的是「把数据搬过去一次」。Jync 解决的是「让两边持续保持一致」：进程重启后从游标继续、停机期间的变更会被补齐、每一行写入都是幂等的。这是两个完全不同的问题。
 
-### 什么时候**不**该用 SyncTool
+### 什么时候**不**该用 Jync
 
 诚实地讲清边界：
 
 - **需要毫秒级延迟或严格的变更顺序** → 用 Debezium / Flink CDC。轮询方案的延迟下限就是轮询间隔。
 - **需要捕获物理删除且表很大** → 无源库审计表时，删除检测要比对双方主键全集，仅对行数低于 `full-compare-max-rows` 的表启用。
 - **单表数亿行的一次性初始化** → DataX 这类专为批量吞吐设计的工具更快。
-- **需要复杂 ETL 变换（清洗、聚合、多流 join）** → 用 Kettle / Flink。SyncTool 做的是**同步**，不是**转换**。
+- **需要复杂 ETL 变换（清洗、聚合、多流 join）** → 用 Kettle / Flink。Jync 做的是**同步**，不是**转换**。
 - **多主双向复制** → 用 SymmetricDS。本工具假定目标库仅由自己写入。
 
 ---
@@ -254,20 +258,20 @@ MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**达梦 
 ### 一、构建
 
 ```bash
-git clone https://github.com/vfaner/synctool.git
+git clone https://github.com/vfaner/jync.git
 # 国内网络请使用镜像：
-# git clone https://gitee.com/super_rgh/synctool.git
+# git clone https://gitee.com/super_rgh/jync.git
 
-cd synctool
+cd jync
 mvn clean package -DskipTests
 ```
 
-产物：`target/synctool.jar`（可执行 fat jar）。
+产物：`target/jync.jar`（可执行 fat jar）。
 
 ### 二、启动
 
 ```bash
-java -jar target/synctool.jar
+java -jar target/jync.jar
 ```
 
 访问 <http://localhost:8080> 即可。
@@ -292,11 +296,11 @@ server:
 
 spring:
   datasource:
-    url: jdbc:h2:file:/opt/synctool/data/synctool;MODE=MySQL;AUTO_SERVER=TRUE
+    url: jdbc:h2:file:/opt/jync/data/jync;MODE=MySQL;AUTO_SERVER=TRUE
 
 sync:
   poll-interval: 2000              # 轮询间隔（毫秒）
-  snapshot-dir: /opt/synctool/snapshots
+  snapshot-dir: /opt/jync/snapshots
   batch-size: 500
   fetch-size: 1000
   safety-lag-ms: 1000
@@ -308,13 +312,13 @@ sync:
 
 logging:
   file:
-    path: /opt/synctool/logs
+    path: /opt/jync/logs
 ```
 
 启动时指定：
 
 ```bash
-java -jar synctool.jar --spring.config.location=file:./application.yml
+java -jar jync.jar --spring.config.location=file:./application.yml
 ```
 
 > 🔐 **安全提示**：`sync.crypto-password` 与 `sync.crypto-salt` 用于加密存储的数据库连接密码，**发行包带有默认值，生产环境必须修改**。修改后已存储的旧密码将无法解密，需在界面上重新填写。`crypto-salt` 必须是合法的十六进制字符串。
@@ -324,29 +328,29 @@ java -jar synctool.jar --spring.config.location=file:./application.yml
 MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、达梦、金仓、OceanBase、瀚高、海量、崖山、H2 的驱动都已随发行包内置（TiDB 兼容 MySQL 协议，复用 MySQL 驱动），**不需要这一步**。只有 **GBase**、**神通 Oscar** 和**自定义数据库**需要外部 jar。把厂商驱动 jar 放到服务器上，例如：
 
 ```bash
-mkdir -p /opt/synctool/drivers
-cp gbase-jdbc.jar oscar.jar /opt/synctool/drivers/
+mkdir -p /opt/jync/drivers
+cp gbase-jdbc.jar oscar.jar /opt/jync/drivers/
 ```
 
-选中这几类数据库时，表单会自动出现「驱动 jar」卡片。填写**驱动 jar 路径**即可，单个 jar 文件或存放多个 jar 的目录都行（如 `/opt/synctool/drivers`）；自定义类型还需填写 JDBC URL 与驱动类名，可以点「检测驱动类」直接从 jar 里识别。点击「测试连接」验证加载成功后保存。
+选中这几类数据库时，表单会自动出现「驱动 jar」卡片。填写**驱动 jar 路径**即可，单个 jar 文件或存放多个 jar 的目录都行（如 `/opt/jync/drivers`）；自定义类型还需填写 JDBC URL 与驱动类名，可以点「检测驱动类」直接从 jar 里识别。点击「测试连接」验证加载成功后保存。
 
 ### 五、后台常驻
 
 **方式 A：systemd（推荐）**
 
-`/etc/systemd/system/synctool.service`：
+`/etc/systemd/system/jync.service`：
 
 ```ini
 [Unit]
-Description=SyncTool Database Sync
+Description=Jync Database Sync
 After=network.target
 
 [Service]
 Type=simple
-User=synctool
-WorkingDirectory=/opt/synctool
-ExecStart=/usr/bin/java -Xms512m -Xmx1g -jar /opt/synctool/synctool.jar \
-  --spring.config.location=file:/opt/synctool/application.yml
+User=jync
+WorkingDirectory=/opt/jync
+ExecStart=/usr/bin/java -Xms512m -Xmx1g -jar /opt/jync/jync.jar \
+  --spring.config.location=file:/opt/jync/application.yml
 Restart=always
 RestartSec=10
 
@@ -356,23 +360,23 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now synctool
-sudo systemctl status synctool
+sudo systemctl enable --now jync
+sudo systemctl status jync
 ```
 
 **方式 B：nohup（快速验证）**
 
 ```bash
-cd /opt/synctool
-nohup java -jar synctool.jar > /dev/null 2>&1 &
+cd /opt/jync
+nohup java -jar jync.jar > /dev/null 2>&1 &
 ```
 
 ### 六、升级
 
 ```bash
-sudo systemctl stop synctool
-cp target/synctool.jar /opt/synctool/synctool.jar
-sudo systemctl start synctool
+sudo systemctl stop jync
+cp target/jync.jar /opt/jync/jync.jar
+sudo systemctl start jync
 ```
 
 元数据库使用 `ddl-auto: update`，表结构会自动演进。**升级前请备份 `./data` 目录。** 停机期间源库产生的变更会在重启后由游标机制自动补齐，不会丢失。
@@ -629,7 +633,7 @@ ALTER TABLE 你的表 ADD COLUMN update_time DATETIME
 
 **不确定项清单比 SQL 本身更有价值。** 一段两百行的过程体如果换回来一条不确定项都没有，那是模型没仔细看的信号，不是转换质量高的信号。审阅时应当先看清单再看 SQL。
 
-**语法检查会写目标库。** 它在目标库上以 `SYNCTOOL_AI_CHECK_<时间戳>` 为名真的建一次对象，随后在 `finally` 里删除。这是唯一一处 AI 相关代码会写目标库的地方，因此只由你手动点按钮触发，点之前会二次确认，同步流程永不调用。之所以要真建：没有哪个数据库提供跨产品可用的「只解析不执行」调用，而 Oracle 系产品会把编译不过的 PL/SQL 建成 `INVALID` 对象而非报错，所以对 Oracle 系还要回查 `USER_ERRORS`，否则每次检查都会假报成功。
+**语法检查会写目标库。** 它在目标库上以 `JYNC_AI_CHECK_<时间戳>` 为名真的建一次对象，随后在 `finally` 里删除。这是唯一一处 AI 相关代码会写目标库的地方，因此只由你手动点按钮触发，点之前会二次确认，同步流程永不调用。之所以要真建：没有哪个数据库提供跨产品可用的「只解析不执行」调用，而 Oracle 系产品会把编译不过的 PL/SQL 建成 `INVALID` 对象而非报错，所以对 Oracle 系还要回查 `USER_ERRORS`，否则每次检查都会假报成功。
 
 检查通过**只证明目标库接受这段 DDL**，不证明它跑起来结果一致；递归对象更是只在改名后的副本上验的，其自我调用解析到的是目标库上原本就有的对象，这一条会作为附注明确列出。
 
@@ -644,7 +648,7 @@ ALTER TABLE 你的表 ADD COLUMN update_time DATETIME
 ## 架构
 
 ```
-com.synctool
+com.qqmu.jync
 ├── config           配置：i18n、Quartz、Jackson、SecurityConfig、SyncProperties
 ├── controller       MVC 控制器；controller/api 为 REST 端点
 ├── service
@@ -698,7 +702,7 @@ mvn test
 
 - **存储过程转换**：函数名、标识符引号、`FROM DUAL`、分页语法等机械差异可自动转换；但 PL/SQL、T-SQL、PL/pgSQL 的过程化控制流结构不同，复杂过程无法可靠自动翻译。这类对象会保留源码尝试执行，失败时给出具体错误。可在 `转换审阅` 页逐个审阅并保存手工覆盖（配好 AI 供应商时还可让模型起草候选），但**候选仍需人工确认**，且语法检查通过不等于语义等价。
 - **AI 起草的边界**：模型只产出候选，不参与同步；`StructureSyncService` 不调用任何 AI 代码。语义等价无法由任何工具保证 —— 游标行为、隐式事务边界、异常控制流、`NULL` 拼接语义这类差异不体现在语法上，关键过程务必在目标库实测。
-- **语法检查的代价**：审阅页的语法检查会在目标库上真建一次临时对象再删除。仅由手动点击触发（会二次确认），但进程在这两步之间被强杀会残留一个 `SYNCTOOL_AI_CHECK_*` 对象，列表页不会自动发现它。
+- **语法检查的代价**：审阅页的语法检查会在目标库上真建一次临时对象再删除。仅由手动点击触发（会二次确认），但进程在这两步之间被强杀会残留一个 `JYNC_AI_CHECK_*` 对象，列表页不会自动发现它。从 v1.3.0 之前的版本升级的注意：旧版本残留用的前缀是 `SYNCTOOL_AI_CHECK_*`，清理时按旧前缀找。
 - **行删除检测**：无源库审计表时需比对双方主键全集，因此仅对行数低于 `full-compare-max-rows` 的表启用。
 - **无主键表**：无法保证写入幂等，重放可能产生重复行；工具会告警。
 - **目标库写入方**：假定目标库仅由本工具写入。
@@ -710,8 +714,8 @@ mvn test
 
 欢迎 Issue 与 Pull Request：
 
-- GitHub：<https://github.com/vfaner/synctool>
-- Gitee：<https://gitee.com/super_rgh/synctool>
+- GitHub：<https://github.com/vfaner/jync>
+- Gitee：<https://gitee.com/super_rgh/jync>
 
 如果这个项目对你有帮助，欢迎点个 Star ⭐
 

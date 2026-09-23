@@ -1,6 +1,6 @@
 # 第三方组件许可
 
-SyncTool 自身以 MIT 许可证发布（见 `pom.xml` 中的声明）。发行包（可执行 jar）内除本项目代码外，还内置了下列第三方 JDBC 驱动。这些驱动均**未经修改**，全部来自 Maven Central，各自适用其原厂许可证；jar 内自带的许可与版权声明文件原样保留在可执行包的 `BOOT-INF/lib/` 中。本文件只是摘要，一切以各许可证原文为准。
+Jync（捷同，原 SyncTool）自身以 MIT 许可证发布（见 `pom.xml` 中的声明）。发行包（可执行 jar）内除本项目代码外，还内置了下列第三方 JDBC 驱动。这些驱动均**未经修改**，全部来自 Maven Central，各自适用其原厂许可证；jar 内自带的许可与版权声明文件原样保留在可执行包的 `BOOT-INF/lib/` 中。本文件只是摘要，一切以各许可证原文为准。
 
 ## 内置 JDBC 驱动
 
@@ -38,7 +38,7 @@ ojdbc8 按 Oracle Free Use Terms and Conditions 发布，其中明确允许再�
 
 > "(b) redistribute unmodified Programs and Programs Documentation, under the terms of this License, provided that You do not charge Your end users any additional fees for the use of the Programs."
 
-条件包括：再分发时必须附带该许可证副本；不得移除 Oracle 或许可方的专有权标识与声明。SyncTool 为免费开源软件，不就驱动程序另行收费，jar 未经修改原样打包，`META-INF/license.txt` 保留，并在此附上许可证全文链接：<https://www.oracle.com/downloads/licenses/oracle-free-license.html>。
+条件包括：再分发时必须附带该许可证副本；不得移除 Oracle 或许可方的专有权标识与声明。Jync 为免费开源软件，不就驱动程序另行收费，jar 未经修改原样打包，`META-INF/license.txt` 保留，并在此附上许可证全文链接：<https://www.oracle.com/downloads/licenses/oracle-free-license.html>。
 
 ### IBM DB2 jcc（IPLA）的说明
 

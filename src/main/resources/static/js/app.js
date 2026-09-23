@@ -6,7 +6,7 @@
   'use strict';
 
   /* 服务端返回的是 i18n key，布局里把解析好的文案挂在这里 */
-  var messages = window.SyncToolMessages || {};
+  var messages = window.JyncMessages || {};
 
   function t(key) {
     if (!key) return '';
@@ -114,12 +114,53 @@
     });
   }
 
+  /**
+   * GET，返回解析好的 JSON，约定与 postJson 完全一致：
+   * 401 视为会话过期，重载当前 URL（为什么重载而不是拼 /login，见 postJson 里的注释）；
+   * 非 JSON 响应兜底成 { success:false, message:'HTTP 状态码' }，调用方永远不会拿到 rejection。
+   * GET 不改状态，CSRF 防护不拦它，所以不像 postJson 那样带令牌。
+   */
+  function getJson(url) {
+    return fetch(url, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    }).then(function (response) {
+      if (response.status === 401) {
+        window.location.reload();
+        return { success: false, message: 'error.sessionExpired' };
+      }
+      return response.json().catch(function () {
+        return { success: false, message: 'HTTP ' + response.status };
+      });
+    });
+  }
+
+  /**
+   * 按钮加载态：记下原内容 → 禁用 → 换成转圈 → 任务落定后恢复原样。
+   *
+   * 恢复用 then 的双参形式而不是 finally：效果相同，但不依赖较新的 Promise 特性，
+   * 与本文件的兼容基线一致。业务错误应由 task 自己 catch（并 toast），
+   * 这里的兜底只负责一件事——按钮无论如何都会恢复，不会永远卡在加载态。
+   */
+  function withBusy(btn, busyHtml, task) {
+    var original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = busyHtml;
+    function restore() {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+    return task().then(restore, restore);
+  }
+
   /** 带加载态的动作按钮，完成后可选刷新页面 */
   function bindActionButton(btn) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
       if (btn.dataset.confirm && !window.confirm(btn.dataset.confirm)) return;
 
+      // 这里不用 withBusy：下方 reload 分支刻意「不恢复」按钮 ——
+      // 保持加载态直到页面刷新，避免重载前按钮文案闪回原样
       var original = btn.innerHTML;
       btn.disabled = true;
       btn.innerHTML = '<span class="spin"></span>' +
@@ -160,56 +201,52 @@
       if (!form) return;
 
       var out = document.getElementById('test-result');
-      var original = btn.innerHTML;
-      btn.disabled = true;
-      btn.innerHTML = '<span class="spin"></span> ' + (btn.dataset.busyText || '');
 
-      postJson(btn.dataset.action, new FormData(form)).then(function (p) {
-        if (!out) {
-          toast(t(p.success ? (btn.dataset.okKey || 'db.testSuccess')
-                            : (btn.dataset.failKey || 'db.testFailed'))
-            // p.message 可能是 i18n key，t() 找不到时原样返回（驱动的英文报错不受影响）
-            + (p.message ? ': ' + t(p.message) : ''), p.success ? 'ok' : 'danger');
-          return;
-        }
-        out.className = 'alert ' + (p.success ? 'alert-ok' : 'alert-danger');
-        out.innerHTML = '';
+      withBusy(btn, '<span class="spin"></span> ' + (btn.dataset.busyText || ''), function () {
+        return postJson(btn.dataset.action, new FormData(form)).then(function (p) {
+          if (!out) {
+            toast(t(p.success ? (btn.dataset.okKey || 'db.testSuccess')
+                              : (btn.dataset.failKey || 'db.testFailed'))
+              // p.message 可能是 i18n key，t() 找不到时原样返回（驱动的英文报错不受影响）
+              + (p.message ? ': ' + t(p.message) : ''), p.success ? 'ok' : 'danger');
+            return;
+          }
+          out.className = 'alert ' + (p.success ? 'alert-ok' : 'alert-danger');
+          out.innerHTML = '';
 
-        var iconEl = icon(p.success ? 'check-circle-fill' : 'x-circle-fill');
-        var body = document.createElement('div');
-        body.className = 'alert-body';
+          var iconEl = icon(p.success ? 'check-circle-fill' : 'x-circle-fill');
+          var body = document.createElement('div');
+          body.className = 'alert-body';
 
-        var head = document.createElement('strong');
-        head.textContent = t(btn.dataset.okKey || 'db.testSuccess');
-        if (!p.success) head.textContent = t(btn.dataset.failKey || 'db.testFailed');
-        body.appendChild(head);
+          var head = document.createElement('strong');
+          head.textContent = t(btn.dataset.okKey || 'db.testSuccess');
+          if (!p.success) head.textContent = t(btn.dataset.failKey || 'db.testFailed');
+          body.appendChild(head);
 
-        /* 数据库测试给 productInfo/jdbcUrl，AI 测试给 model/endpoint —— 同一套渲染，
-           各自用自己的字段名，不必为了复用而假装是另一种东西 */
-        [p.productInfo || p.model, p.driverInfo, p.success ? null : t(p.message),
-          p.jdbcUrl || p.endpoint]
-          .forEach(function (line, idx) {
-            if (!line) return;
-            var div = document.createElement('div');
-            div.className = idx === 0 ? 'small' : 'small muted';
-            if (idx >= 2) div.classList.add('mono');
-            div.textContent = line;
-            body.appendChild(div);
-          });
+          /* 数据库测试给 productInfo/jdbcUrl，AI 测试给 model/endpoint —— 同一套渲染，
+             各自用自己的字段名，不必为了复用而假装是另一种东西 */
+          [p.productInfo || p.model, p.driverInfo, p.success ? null : t(p.message),
+            p.jdbcUrl || p.endpoint]
+            .forEach(function (line, idx) {
+              if (!line) return;
+              var div = document.createElement('div');
+              div.className = idx === 0 ? 'small' : 'small muted';
+              if (idx >= 2) div.classList.add('mono');
+              div.textContent = line;
+              body.appendChild(div);
+            });
 
-        var ms = document.createElement('div');
-        ms.className = 'small muted';
-        ms.textContent = p.elapsedMs + ' ms';
-        body.appendChild(ms);
+          var ms = document.createElement('div');
+          ms.className = 'small muted';
+          ms.textContent = p.elapsedMs + ' ms';
+          body.appendChild(ms);
 
-        out.appendChild(iconEl);
-        out.appendChild(body);
-        out.hidden = false;
-      }).catch(function (err) {
-        toast(String(err && err.message || err), 'danger');
-      }).then(function () {
-        btn.disabled = false;
-        btn.innerHTML = original;
+          out.appendChild(iconEl);
+          out.appendChild(body);
+          out.hidden = false;
+        }).catch(function (err) {
+          toast(String(err && err.message || err), 'danger');
+        });
       });
     });
   }
@@ -272,43 +309,38 @@
         toast(t('db.customJarPathHelp'), 'warn');
         return;
       }
-      var original = btn.innerHTML;
-      btn.disabled = true;
-      btn.innerHTML = '<span class="spin"></span>';
-
-      fetch(btn.dataset.action + '?jarPath=' + encodeURIComponent(jar.value.trim()))
-        .then(function (r) { return r.json(); })
-        .then(function (p) {
-          // 预设类型（GBase / 神通）的驱动类名由枚举固定，驱动类输入框藏在 CUSTOM 卡片里。
-          // 这时只把检测结果 toast 出来供核对，绝不能写隐藏域 —— 否则服务端会优先用它覆盖预设类名。
-          var customSection = document.getElementById('custom-section');
-          var customEditable = !customSection || !customSection.hidden;
-          if (customEditable) {
-            var list = document.getElementById('driver-options');
-            if (list) {
-              list.innerHTML = '';
-              (p.drivers || []).forEach(function (d) {
-                var o = document.createElement('option');
-                o.value = d;
-                list.appendChild(o);
-              });
+      withBusy(btn, '<span class="spin"></span>', function () {
+        return getJson(btn.dataset.action + '?jarPath=' + encodeURIComponent(jar.value.trim()))
+          .then(function (p) {
+            // 预设类型（GBase / 神通）的驱动类名由枚举固定，驱动类输入框藏在 CUSTOM 卡片里。
+            // 这时只把检测结果 toast 出来供核对，绝不能写隐藏域 —— 否则服务端会优先用它覆盖预设类名。
+            var customSection = document.getElementById('custom-section');
+            var customEditable = !customSection || !customSection.hidden;
+            if (customEditable) {
+              var list = document.getElementById('driver-options');
+              if (list) {
+                list.innerHTML = '';
+                (p.drivers || []).forEach(function (d) {
+                  var o = document.createElement('option');
+                  o.value = d;
+                  list.appendChild(o);
+                });
+              }
+              if (p.drivers && p.drivers.length) {
+                var input = document.getElementById('customDriver');
+                if (input && !input.value.trim()) input.value = p.drivers[0];
+              }
             }
             if (p.drivers && p.drivers.length) {
-              var input = document.getElementById('customDriver');
-              if (input && !input.value.trim()) input.value = p.drivers[0];
+              toast(p.drivers.join(', '), 'ok');
+            } else {
+              // getJson 的兜底载荷（HTTP xxx / error.sessionExpired）没有 drivers 字段，
+              // 也落到这一支：p.message 经 t() 解析后原样 toast 出具体原因，不会静默失败
+              toast(t(p.message || 'msg.no.drivers.declared'), 'warn');
             }
-          }
-          if (p.drivers && p.drivers.length) {
-            toast(p.drivers.join(', '), 'ok');
-          } else {
-            toast(t(p.message || 'msg.no.drivers.declared'), 'warn');
-          }
-        })
-        .catch(function (err) { toast(String(err && err.message || err), 'danger'); })
-        .then(function () {
-          btn.disabled = false;
-          btn.innerHTML = original;
-        });
+          })
+          .catch(function (err) { toast(String(err && err.message || err), 'danger'); });
+      });
     });
   }
 
@@ -316,9 +348,11 @@
 
   function bindTypeSelect(select) {
     function apply() {
-      fetch(select.dataset.action + '?type=' + encodeURIComponent(select.value))
-        .then(function (r) { return r.json(); })
+      getJson(select.dataset.action + '?type=' + encodeURIComponent(select.value))
         .then(function (p) {
+          // getJson 的兜底载荷（success:false）不含任何预填字段：直接返回，
+          // 和旧版「静默失败」一致，不能拿 undefined 去改端口和卡片显隐
+          if (p.success === false) return;
           var port = document.getElementById('port');
           // 只在端口为空或还是上一个类型的默认值时才覆盖，避免抹掉用户手填的值
           if (port && p.defaultPort) {
@@ -365,9 +399,10 @@
     }
 
     select.addEventListener('change', function () {
-      fetch(select.dataset.action + '?protocol=' + encodeURIComponent(select.value))
-        .then(function (r) { return r.json(); })
+      getJson(select.dataset.action + '?protocol=' + encodeURIComponent(select.value))
         .then(function (p) {
+          // 兜底载荷（success:false）没有预填字段：跳过，别用空值抹掉 endpoint 提示
+          if (p.success === false) return;
           if (url && p.defaultBaseUrl
               && (!url.value.trim() || url.dataset.autofilled === 'true')) {
             url.value = p.defaultBaseUrl;
@@ -410,8 +445,8 @@
       if (loaded) return;
       loaded = true;
       var url = input.dataset.action + '?table=' + encodeURIComponent(input.dataset.table);
-      fetch(url, { headers: { 'Accept': 'application/json' } })
-        .then(function (r) { return r.json(); })
+      // getJson 的兜底载荷（success:false）正好被下面第一行守卫拦住，无需另加判断
+      getJson(url)
         .then(function (data) {
           if (!data || !data.success || !Array.isArray(data.columns)) return;
           var listId = input.getAttribute('list');
@@ -434,7 +469,8 @@
   /* ─── 赞赏弹窗 ──────────────────────────────────────────── */
 
   /**
-   * 打开/关闭弹窗，并在支付方式之间切换收款码。
+   * 赞赏弹窗：开关与 Esc 复用 setModalOpen / bindGenericModals，不再自己维护
+   * 一份重复实现；这里只保留支付方式之间切换收款码的逻辑。
    * 图片文件名与 data-pay 同名（wechat/alipay/qq），提示文案由服务端渲染在
    * data-hint 上，因此这里不需要第二份 i18n 字典。
    */
@@ -444,26 +480,14 @@
 
     var assets = modal.dataset.assets || '/assets/';
 
-    function open() {
-      modal.classList.add('open');
-      modal.setAttribute('aria-hidden', 'false');
-      // 弹窗自己可滚动，锁住背景避免两层滚动条打架
-      document.body.style.overflow = 'hidden';
-    }
-    function close() {
-      modal.classList.remove('open');
-      modal.setAttribute('aria-hidden', 'true');
-      document.body.style.overflow = '';
-    }
-
+    // 触发属性是 data-role="open-donate/close-donate" 而不是通用的
+    // data-open-modal/data-close-modal，所以事件绑定留在这里；
+    // Esc 关闭已由 bindGenericModals 统一处理（#donate-modal 带 .modal 类）
     document.querySelectorAll('[data-role="open-donate"]').forEach(function (btn) {
-      btn.addEventListener('click', open);
+      btn.addEventListener('click', function () { setModalOpen(modal.id, true); });
     });
     document.querySelectorAll('[data-role="close-donate"]').forEach(function (el) {
-      el.addEventListener('click', close);
-    });
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && modal.classList.contains('open')) close();
+      el.addEventListener('click', function () { setModalOpen(modal.id, false); });
     });
 
     var tabs = modal.querySelector('[data-role="pay-tabs"]');
@@ -521,29 +545,24 @@
       var editor = document.getElementById('override-sql');
       if (!editor) return;
 
-      var original = btn.innerHTML;
-      btn.disabled = true;
-      btn.innerHTML = '<span class="spin"></span> ' + (btn.dataset.busyText || '');
-
-      postJson(btn.dataset.action).then(function (payload) {
-        if (!payload.success) {
-          // 模型主动拒绝转换时，理由就在 uncertainties 里，那是这次调用唯一有价值的
-          // 产出。只弹一个 toast 就丢掉，用户会以为是网络错误而反复重试。
-          if (payload.uncertainties && payload.uncertainties.length) {
-            renderUncertainties(payload.uncertainties);
+      withBusy(btn, '<span class="spin"></span> ' + (btn.dataset.busyText || ''), function () {
+        return postJson(btn.dataset.action).then(function (payload) {
+          if (!payload.success) {
+            // 模型主动拒绝转换时，理由就在 uncertainties 里，那是这次调用唯一有价值的
+            // 产出。只弹一个 toast 就丢掉，用户会以为是网络错误而反复重试。
+            if (payload.uncertainties && payload.uncertainties.length) {
+              renderUncertainties(payload.uncertainties);
+            }
+            toast(t(payload.message) || t('conversion.draftFailed'), 'danger');
+            return;
           }
-          toast(t(payload.message) || t('conversion.draftFailed'), 'danger');
-          return;
-        }
-        editor.value = payload.sql || '';
-        renderUncertainties(payload.uncertainties);
-        toast(t('conversion.draftDone') + ' — ' + (payload.model || '') +
-          ' (' + (payload.elapsedMs || 0) + 'ms)', 'ok');
-      }).catch(function (err) {
-        toast(String((err && err.message) || err), 'danger');
-      }).then(function () {
-        btn.disabled = false;
-        btn.innerHTML = original;
+          editor.value = payload.sql || '';
+          renderUncertainties(payload.uncertainties);
+          toast(t('conversion.draftDone') + ' — ' + (payload.model || '') +
+            ' (' + (payload.elapsedMs || 0) + 'ms)', 'ok');
+        }).catch(function (err) {
+          toast(String((err && err.message) || err), 'danger');
+        });
       });
     });
   }
@@ -566,52 +585,48 @@
       }
       if (btn.dataset.confirm && !window.confirm(btn.dataset.confirm)) return;
 
-      var original = btn.innerHTML;
-      btn.disabled = true;
-      btn.innerHTML = '<span class="spin"></span> ' + (btn.dataset.busyText || '');
       if (out) out.innerHTML = '';
 
-      postJson(btn.dataset.action, JSON.stringify({
-        kind: btn.dataset.kind,
-        name: btn.dataset.name,
-        sql: editor.value
-      }), true).then(function (payload) {
-        var kind = payload.success ? 'ok' : 'danger';
-        toast(t(payload.success ? 'conversion.validateOk' : 'conversion.validateFailed'), kind);
+      withBusy(btn, '<span class="spin"></span> ' + (btn.dataset.busyText || ''), function () {
+        return postJson(btn.dataset.action, JSON.stringify({
+          kind: btn.dataset.kind,
+          name: btn.dataset.name,
+          sql: editor.value
+        }), true).then(function (payload) {
+          var kind = payload.success ? 'ok' : 'danger';
+          toast(t(payload.success ? 'conversion.validateOk' : 'conversion.validateFailed'), kind);
 
-        if (!out) return;
-        var alert = document.createElement('div');
-        alert.className = 'alert alert-' + kind;
-        alert.appendChild(icon(payload.success ? 'check-circle-fill' : 'x-circle-fill'));
+          if (!out) return;
+          var alert = document.createElement('div');
+          alert.className = 'alert alert-' + kind;
+          alert.appendChild(icon(payload.success ? 'check-circle-fill' : 'x-circle-fill'));
 
-        var body = document.createElement('div');
-        body.className = 'alert-body';
-        var head = document.createElement('strong');
-        head.textContent = t(payload.success
-          ? 'conversion.validateOk' : 'conversion.validateFailed');
-        body.appendChild(head);
+          var body = document.createElement('div');
+          body.className = 'alert-body';
+          var head = document.createElement('strong');
+          head.textContent = t(payload.success
+            ? 'conversion.validateOk' : 'conversion.validateFailed');
+          body.appendChild(head);
 
-        // 失败时目标库自己的报错最有用，原样带出来
-        if (!payload.success && payload.message) {
-          var detail = document.createElement('div');
-          detail.className = 'small mono';
-          detail.textContent = payload.message;
-          body.appendChild(detail);
-        }
-        // 即使通过也要显示 caveats：「目标库接受了」和「行为一致」是两件事
-        (payload.caveats || []).forEach(function (c) {
-          var line = document.createElement('div');
-          line.className = 'small muted';
-          line.textContent = t(c);
-          body.appendChild(line);
+          // 失败时目标库自己的报错最有用；message 也可能是 i18n key，t() 找不到时原样返回
+          if (!payload.success && payload.message) {
+            var detail = document.createElement('div');
+            detail.className = 'small mono';
+            detail.textContent = t(payload.message);
+            body.appendChild(detail);
+          }
+          // 即使通过也要显示 caveats：「目标库接受了」和「行为一致」是两件事
+          (payload.caveats || []).forEach(function (c) {
+            var line = document.createElement('div');
+            line.className = 'small muted';
+            line.textContent = t(c);
+            body.appendChild(line);
+          });
+          alert.appendChild(body);
+          out.appendChild(alert);
+        }).catch(function (err) {
+          toast(String((err && err.message) || err), 'danger');
         });
-        alert.appendChild(body);
-        out.appendChild(alert);
-      }).catch(function (err) {
-        toast(String((err && err.message) || err), 'danger');
-      }).then(function () {
-        btn.disabled = false;
-        btn.innerHTML = original;
       });
     });
   }
@@ -630,15 +645,25 @@
       var banner = btn.closest('.default-pw-banner');
       if (banner) banner.remove();
       try {
-        sessionStorage.setItem('synctool-pw-banner-dismissed', '1');
+        sessionStorage.setItem('jync-pw-banner-dismissed', '1');
       } catch (e) { /* 隐私模式：写不进去，本次点击仍然生效 */ }
     });
   }
 
   /* ─── 变更日志的刷新 ────────────────────────────────────── */
 
-  var LOG_AUTO_KEY = 'synctool-log-auto-refresh';
+  var LOG_AUTO_KEY = 'jync-log-auto-refresh';
   var LOG_AUTO_INTERVAL = 5000;
+  try {
+    // 一次性迁移：SyncTool 时代的自动刷新偏好，搬完即删
+    var legacyAuto = localStorage.getItem('synctool-log-auto-refresh');
+    if (legacyAuto !== null) {
+      if (localStorage.getItem(LOG_AUTO_KEY) === null) {
+        localStorage.setItem(LOG_AUTO_KEY, legacyAuto);
+      }
+      localStorage.removeItem('synctool-log-auto-refresh');
+    }
+  } catch (e) { /* 隐私模式：偏好回到默认值（开） */ }
 
   /**
    * 变更日志页的手动刷新 + 自动刷新。
@@ -675,8 +700,17 @@
       inFlight = true;
       if (icon) icon.classList.add('spinning');
 
+      // 这里取的是整页 HTML（喂给 DOMParser）而不是 JSON，所以不能套用 getJson
       fetch(window.location.href, { cache: 'no-store' })
-        .then(function (response) { return response.text(); })
+        .then(function (response) {
+          // 服务端明确报错（5xx 等）时不解析、更不重载：自动刷新每 5 秒一轮，
+          // 重载过去多半还是错误页，等于把整页变成重载循环。抛给下方 catch，
+          // 与网络抖动同样处理——保留用户正在看的表格，下一轮再试。
+          // （会话过期不走这里：重定向被 fetch 跟随，回来的是 200 的登录页，
+          // 由下面「找不到 log-card 就重载」的分支处理。）
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
         .then(function (html) {
           var fresh = new DOMParser().parseFromString(html, 'text/html');
           var freshCard = fresh.getElementById('log-card');
@@ -750,7 +784,8 @@
 
   /**
    * 通用弹窗：[data-open-modal=id] 打开、[data-close-modal=id] 关闭、Esc 关当前开着的。
-   * 赞赏弹窗有自己的历史绑定（含收款码切换），不走这里。
+   * 赞赏弹窗的触发属性名不同、还带收款码切换，事件绑定留在 bindDonate 里，
+   * 但开/关效果与 Esc 同样复用这一套。
    */
   function setModalOpen(id, open) {
     var modal = document.getElementById(id);
@@ -888,5 +923,7 @@
     });
   }
 
-  window.SyncToolUI = { toast: toast, t: t, icon: icon, iconHtml: iconHtml };
+  // 有意暴露的全局入口（承自改名前的 SyncToolUI）：供浏览器控制台调试与后续扩展使用。
+  // 仓库内搜不到调用方属预期情况，不是死代码，评审时请勿删除。
+  window.JyncUI = { toast: toast, t: t, icon: icon, iconHtml: iconHtml };
 })();

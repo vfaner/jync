@@ -29,9 +29,6 @@
     <div style="max-width:720px">
         <form method="post" th:action="@{/projects/save}" th:object="${project}">
             <input type="hidden" th:field="*{id}">
-            <!--/* 保留 enabled 与已有配置：启停在详情页操作，此表单不应把它们清掉 */-->
-            <input type="hidden" th:field="*{enabled}">
-            <input type="hidden" th:field="*{syncConfig}">
 
             <div class="card">
                 <div class="card-head">

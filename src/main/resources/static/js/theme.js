@@ -8,9 +8,13 @@
 (function () {
   'use strict';
 
-  var THEME_KEY = 'synctool-theme';
-  var TZ_COOKIE = 'SYNCTOOL_TZ';
-  var LANG_COOKIE = 'SYNCTOOL_LANG';
+  var THEME_KEY = 'jync-theme';
+  var TZ_COOKIE = 'JYNC_TZ';
+  var LANG_COOKIE = 'JYNC_LANG';
+  /* SyncTool（<=1.2.x）时代的旧键名，仅用于一次性迁移 */
+  var LEGACY_THEME_KEY = 'synctool-theme';
+  var LEGACY_TZ_COOKIE = 'SYNCTOOL_TZ';
+  var LEGACY_LANG_COOKIE = 'SYNCTOOL_LANG';
 
   /* ─── 主题 ──────────────────────────────────────────────── */
 
@@ -89,6 +93,46 @@
       + ';expires=' + expires + ';path=/;SameSite=Lax';
   }
 
+  function expireCookie(name) {
+    document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax';
+  }
+
+  /**
+   * 一次性迁移：把 SyncTool 时代存下的主题/时区/语言偏好搬到新键名下。
+   * 老用户升级后主题与语言选择保持不变。
+   *
+   * 时区本来可以不搬 —— reportTimezone 马上会用 Intl 重写 JYNC_TZ —— 但极老的
+   * 浏览器没有 Intl，搬一次能让服务端的时区兜底继续生效。旧 cookie 搬完显式作废，
+   * 否则两个死键还会跟着每个请求跑一年（它们当初就是按 365 天写的）。
+   * 服务端在新 cookie 写入前本来就会回退读旧 cookie（TimezoneAwareLocaleResolver），
+   * 所以作废时机不影响首帧语言。
+   */
+  function migrateLegacyPrefs() {
+    try {
+      var oldTheme = localStorage.getItem(LEGACY_THEME_KEY);
+      if (oldTheme) {
+        if (!localStorage.getItem(THEME_KEY)) {
+          localStorage.setItem(THEME_KEY, oldTheme);
+        }
+        localStorage.removeItem(LEGACY_THEME_KEY);
+      }
+    } catch (e) { /* 隐私模式下不可读写，跳过 */ }
+    var legacyTz = readCookie(LEGACY_TZ_COOKIE);
+    if (legacyTz) {
+      if (!readCookie(TZ_COOKIE)) {
+        writeCookie(TZ_COOKIE, legacyTz, 365);
+      }
+      expireCookie(LEGACY_TZ_COOKIE);
+    }
+    var legacyLang = readCookie(LEGACY_LANG_COOKIE);
+    if (legacyLang) {
+      if (!readCookie(LANG_COOKIE)) {
+        writeCookie(LANG_COOKIE, legacyLang, 365);
+      }
+      expireCookie(LEGACY_LANG_COOKIE);
+    }
+  }
+
   /**
    * 把浏览器时区告诉服务端。
    *
@@ -126,6 +170,8 @@
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   function init() {
+    migrateLegacyPrefs();
+
     // 主题在 <head> 的内联脚本里已经应用过（避免首屏闪烁），这里只同步按钮状态
     applyTheme(document.documentElement.getAttribute('data-theme') || 'light');
 
@@ -145,7 +191,9 @@
     init();
   }
 
-  window.SyncToolTheme = {
+  // 有意暴露的全局入口（承自改名前的 SyncToolTheme）：供浏览器控制台调试与后续扩展使用。
+  // 仓库内搜不到调用方属预期情况，不是死代码，评审时请勿删除。
+  window.JyncTheme = {
     toggle: toggleTheme,
     apply: applyTheme,
     get current() { return document.documentElement.getAttribute('data-theme'); }

@@ -1,0 +1,18 @@
+<!--/* 首屏前应用主题，否则深色用户会看到一帧白底闪烁。layout.html 与 login.html
+       共用这一份（login 是全项目唯一不套 layout 的模板）。
+       与参考项目一致：没手动选过就跟随系统。 */-->
+<script xmlns:th="http://www.thymeleaf.org" th:fragment="script">
+    (function () {
+        var mode;
+        try {
+            // 新键优先，回退到升级前（SyncTool 时代）的旧键，theme.js 随后会完成迁移
+            mode = localStorage.getItem('jync-theme') || localStorage.getItem('synctool-theme');
+        } catch (e) { /* 隐私模式：跟随系统 */ }
+        if (mode !== 'dark' && mode !== 'light') {
+            mode = window.matchMedia
+                && window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', mode);
+    })();
+</script>
