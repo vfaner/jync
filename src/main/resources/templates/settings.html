@@ -84,6 +84,15 @@
                             <dt th:text="#{settings.contactWechat}">WeChat</dt>
                             <dd class="mono" th:text="${contactWechat}">wechat</dd>
                         </div>
+                        <!-- 官网行通栏垫底，链接再长也不用省略号 -->
+                        <div class="kv wide" th:if="${not #strings.isEmpty(siteUrl)}">
+                            <dt th:text="#{settings.website}">Website</dt>
+                            <dd>
+                                <a class="repo-link" th:href="${siteUrl}" target="_blank" rel="noopener noreferrer">
+                                    <span class="mono" th:text="${siteUrl}">https://jync.qqmu.com</span>
+                                </a>
+                            </dd>
+                        </div>
                     </dl>
                 </div>
             </div>
@@ -115,7 +124,8 @@
                         <dt th:text="#{settings.fullCompareMax}">Full-compare ceiling</dt>
                         <dd><span class="chip" th:text="${properties.fullCompareMaxRows}">20000</span></dd>
                     </div>
-                    <div class="kv">
+                    <!-- 带说明的行跨满双列：值和说明并排成一条长行，不挤在右半栏窄格里 -->
+                    <div class="kv wide">
                         <dt th:text="#{settings.changeLogRetention}">Change-log retention (days)</dt>
                         <dd>
                             <span class="chip" th:text="${properties.changeLogRetentionDays}">30</span>
@@ -137,14 +147,14 @@
             <!-- 限宽避免整段横贯全宽卡，行过长反而难读 -->
             <p class="small soft" style="margin:0 0 16px;max-width:1080px" th:text="#{settings.concurrencyNote}">note</p>
             <dl class="dl pairs">
-                <div class="kv">
+                <div class="kv wide">
                     <dt th:text="#{settings.safetyLag}">Safety margin</dt>
                     <dd>
                         <span class="chip" th:text="${properties.safetyLagMs} + ' ms'">1000 ms</span>
                         <div class="help" th:text="#{settings.safetyLagHelp}">help</div>
                     </dd>
                 </div>
-                <div class="kv">
+                <div class="kv wide">
                     <dt th:text="#{settings.lockTtl}">Lock lease</dt>
                     <dd>
                         <span class="chip" th:text="${properties.lockTtlMs} + ' ms'">300000 ms</span>

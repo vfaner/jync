@@ -20,12 +20,14 @@ public class SettingsController {
     private final SyncLockService lockService;
     private final VersionService versionService;
     private final String giteeUrl;
+    private final String siteUrl;
     private final String contactQq;
     private final String contactWechat;
 
     public SettingsController(SyncProperties properties, SyncScheduler scheduler,
                               SyncLockService lockService, VersionService versionService,
                               @Value("${app.gitee-url:}") String giteeUrl,
+                              @Value("${app.site-url:}") String siteUrl,
                               @Value("${app.contact-qq:}") String contactQq,
                               @Value("${app.contact-wechat:}") String contactWechat) {
         this.properties = properties;
@@ -33,6 +35,7 @@ public class SettingsController {
         this.lockService = lockService;
         this.versionService = versionService;
         this.giteeUrl = giteeUrl;
+        this.siteUrl = siteUrl;
         this.contactQq = contactQq;
         this.contactWechat = contactWechat;
     }
@@ -46,6 +49,7 @@ public class SettingsController {
         model.addAttribute("javaVersion", System.getProperty("java.version"));
         model.addAttribute("versionInfo", versionService.snapshot());
         model.addAttribute("giteeUrl", giteeUrl);
+        model.addAttribute("siteUrl", siteUrl);
         model.addAttribute("contactQq", contactQq);
         model.addAttribute("contactWechat", contactWechat);
         model.addAttribute("activeNav", "settings");

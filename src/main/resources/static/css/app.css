@@ -556,6 +556,11 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   grid-template-columns: minmax(40px, auto) minmax(0, 1fr);
   align-items: center;
 }
+/* 通栏行：值与说明并排成一条长行跨满双列，不再挤在右半栏的窄格子里；
+   作者卡的官网行也用它垫底，链接再长也只在自己行内出省略号 */
+.dl.pairs .kv.wide { grid-column: 1 / -1; }
+.dl.pairs .kv.wide dd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.dl.pairs .kv.wide dd .help { margin-top: 0; max-width: none; }
 
 /* ─── 活动流 ────────────────────────────────────────────── */
 .feed { list-style: none; margin: 0; padding: 0; }
@@ -665,8 +670,11 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   display: inline-flex; align-items: center; gap: 7px;
   color: var(--ink); text-decoration: none; max-width: 100%;
 }
-/* nowrap 是 ellipsis 的前提：URL 无换行点，缺了它窄列里会溢出轨道而不是出省略号 */
-.repo-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* nowrap 是 ellipsis 的前提：URL 无换行点，缺了它窄列里会溢出轨道而不是出省略号。
+   span 必须是块级——inline 元素上 overflow:hidden 不生效，URL 会整条穿出卡片 */
+.repo-link span {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .repo-link:hover { color: var(--brand); }
 [data-theme="dark"] .repo-link:hover .gh-ico { filter: brightness(0) invert(1); }
 
