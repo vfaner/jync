@@ -546,7 +546,11 @@ public class DataSyncService {
 
         WriteStats total = new WriteStats();
         try (PreparedStatement select = sourceConn.prepareStatement(selectSql)) {
-            select.setFetchSize(properties.getFetchSize());
+            // The dialect decides how to ask its driver for a streamed read: MySQL-protocol
+            // sources need the Integer.MIN_VALUE sentinel, everyone else honors the
+            // configured fetch size.
+            select.setFetchSize(ctx.getSourceDialect()
+                    .streamingFetchSize(properties.getFetchSize()));
             for (int i = 0; i < params.size(); i++) {
                 select.setObject(i + 1, params.get(i));
             }

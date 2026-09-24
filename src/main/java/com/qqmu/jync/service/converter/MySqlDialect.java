@@ -22,6 +22,22 @@ public class MySqlDialect extends AbstractSqlDialect {
         return DatabaseType.DialectFamily.MYSQL;
     }
 
+    /**
+     * MySQL Connector/J — and the MySQL-protocol forks this family covers (MariaDB,
+     * OceanBase, TiDB, GBase) — only stream a result set row-by-row when the fetch size
+     * is {@code Integer.MIN_VALUE}; any other value silently buffers the whole set in
+     * the client, which a multi-million-row full load would not survive.
+     *
+     * <p>Streaming requires a forward-only, read-only statement (the default here) and
+     * blocks the connection for other statements until the result set closes — safe in
+     * the sync path, where the source connection runs exactly one SELECT at a time and
+     * every write goes to a different connection.
+     */
+    @Override
+    public int streamingFetchSize(int configured) {
+        return Integer.MIN_VALUE;
+    }
+
     @Override
     protected char quoteChar() {
         return '`';

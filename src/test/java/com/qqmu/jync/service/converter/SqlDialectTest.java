@@ -434,4 +434,26 @@ class SqlDialectTest {
         assertThat(oracle.getModifyColumnSql("s", "orders", relaxed, DatabaseType.ORACLE))
                 .contains(" NULL");
     }
+
+    // --- Streaming reads ----------------------------------------------------------------
+
+    /**
+     * Connector/J and the MySQL-protocol forks (MariaDB, OceanBase, TiDB, GBase) buffer the
+     * whole result set client-side unless the fetch size is the Integer.MIN_VALUE sentinel;
+     * a full load of a big table would otherwise risk OOM before a single row is written.
+     */
+    @Test
+    void mysqlProtocolSourcesStreamWithTheDriverSentinel() {
+        assertThat(mysql.streamingFetchSize(1000)).isEqualTo(Integer.MIN_VALUE);
+    }
+
+    @Test
+    void otherDialectsKeepTheConfiguredFetchSize() {
+        // These drivers honor a plain fetch size, so the configured paging must survive.
+        assertThat(postgres.streamingFetchSize(1000)).isEqualTo(1000);
+        assertThat(oracle.streamingFetchSize(500)).isEqualTo(500);
+        assertThat(sqlServer.streamingFetchSize(1000)).isEqualTo(1000);
+        assertThat(db2.streamingFetchSize(1000)).isEqualTo(1000);
+        assertThat(new GenericSqlDialect().streamingFetchSize(1000)).isEqualTo(1000);
+    }
 }

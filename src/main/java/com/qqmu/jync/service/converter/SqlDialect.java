@@ -20,6 +20,19 @@ public interface SqlDialect {
 
     DatabaseType.DialectFamily family();
 
+    /**
+     * The fetch size to use when streaming a large SELECT from a source of this dialect.
+     *
+     * <p>This is the one source-side concern a dialect carries: MySQL-protocol drivers
+     * ignore ordinary fetch sizes and buffer the <em>entire</em> result set client-side,
+     * so a full load of a big table becomes an out-of-memory risk unless the driver's
+     * streaming sentinel is used. Drivers that honor plain fetch sizes keep the
+     * configured value.
+     */
+    default int streamingFetchSize(int configured) {
+        return configured;
+    }
+
     /** Wraps an identifier so reserved words and mixed case survive. */
     String quoteIdentifier(String name);
 
