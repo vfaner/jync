@@ -89,11 +89,10 @@
             </button>
 
             <!--/* 赞赏：打开下方弹窗，收款码是本地图片，离线可用 */-->
-            <button type="button" class="btn btn-ghost btn-sm donate-btn" data-role="open-donate"
-                    th:title="#{nav.donate}">
+            <!--/* 与语言/主题按钮同款纯图标：红心即入口，语义靠 title / aria-label 兜 */-->
+            <button type="button" class="icon-btn donate-btn" data-role="open-donate"
+                    th:title="#{nav.donate}" th:aria-label="#{nav.donate}">
                 <svg class="ico"><use href="#heart-fill"/></svg>
-                <span th:text="#{nav.donate}">Donate</span>
-                <span class="nav-badge" th:text="#{nav.donateBadge}">Tip</span>
             </button>
 
             <!--/* 当前用户下拉：修改密码（弹窗）/ 退出登录。VIEWER 也能改自己的密码，

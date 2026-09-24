@@ -541,7 +541,21 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .dl { display: grid; grid-template-columns: minmax(140px, auto) 1fr; gap: 11px 18px; font-size: 13.5px; margin: 0; }
 .dl dt { color: var(--ink-mute); font-weight: 600; }
 .dl dd { margin: 0; }
-.dl dd .help { font-size: 12px; color: var(--ink-mute); margin-top: 3px; line-height: 1.5; }
+.dl dd .help { font-size: 12px; color: var(--ink-mute); margin-top: 3px; line-height: 1.5; max-width: 480px; }
+/* 系统信息页：dt/dd 用 .kv 成对包裹后双列排布，卡片高度减半，
+   全宽卡里 chip 右侧的大片空白也随之消失；窄屏回退见 900px 断点 */
+.dl.pairs { grid-template-columns: 1fr 1fr; gap: 10px 28px; }
+.dl.pairs .kv {
+  display: grid; grid-template-columns: minmax(92px, auto) minmax(0, 1fr);
+  gap: 2px 12px; align-items: start;
+}
+/* 项目与作者：标签是 15px 图标或 QQ / 微信这类短词，标签列收到 40px；
+   英文 WeChat 更宽时 auto 仍会撑开，不会裁字。
+   各行都是单线内容（无 help），垂直居中让图标和链接基线对齐 */
+.dl.pairs.authors .kv {
+  grid-template-columns: minmax(40px, auto) minmax(0, 1fr);
+  align-items: center;
+}
 
 /* ─── 活动流 ────────────────────────────────────────────── */
 .feed { list-style: none; margin: 0; padding: 0; }
@@ -587,6 +601,8 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* 两列布局：主内容 + 侧栏 */
 .split { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; align-items: start; }
 .split-wide { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; align-items: start; }
+/* 设置页：split 后面跟的全宽卡不满足 .card + .card，拿不到上边距，由 split 补下边距 */
+.split-cols { margin-bottom: 18px; }
 
 /* 页脚 */
 .foot {
@@ -638,9 +654,9 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* github.svg 用 fill="currentColor"，但 <img> 里 currentColor 解析不到，
    于是走滤镜：浅色模式压成墨色，深色模式再反相。 */
 .gh-ico { display: block; filter: brightness(0) opacity(.62); transition: filter .2s; }
-.icon-btn:hover .gh-ico { filter: none; }
+/* Gitee 图标自带品牌红，不走墨色滤镜；深浅色下都显示原色 */
+.gitee-ico { display: block; }
 [data-theme="dark"] .gh-ico { filter: brightness(0) invert(1) opacity(.75); }
-[data-theme="dark"] .icon-btn:hover .gh-ico { filter: brightness(0) invert(1); }
 /* 主色按钮上是白字，图标也得是纯白 */
 .gh-ico-on-brand,
 [data-theme="dark"] .gh-ico-on-brand { filter: brightness(0) invert(1); }
@@ -649,19 +665,13 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   display: inline-flex; align-items: center; gap: 7px;
   color: var(--ink); text-decoration: none; max-width: 100%;
 }
-.repo-link span { overflow: hidden; text-overflow: ellipsis; }
+/* nowrap 是 ellipsis 的前提：URL 无换行点，缺了它窄列里会溢出轨道而不是出省略号 */
+.repo-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-link:hover { color: var(--brand); }
-.repo-link:hover .gh-ico { filter: none; }
 [data-theme="dark"] .repo-link:hover .gh-ico { filter: brightness(0) invert(1); }
 
-.donate-btn { position: relative; }
 /* 心形固定红色：随文字色会变墨黑，看着像没加载出来的图标 */
 .donate-btn .ico { color: #e5484d; }
-.nav-badge {
-  padding: 1px 5px; border-radius: 5px;
-  font-size: 9.5px; font-weight: 700; line-height: 1.5; letter-spacing: .2px;
-  color: #fff; background: linear-gradient(135deg, var(--accent), #f43f5e);
-}
 
 .sec-tag {
   display: inline-block; padding: 4px 12px; border-radius: 999px;
@@ -748,6 +758,8 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* ─── 响应式 ────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .split, .split-wide { grid-template-columns: 1fr; }
+  /* 单列时左 wrapper 与右卡是相邻 grid item，18px 的 grid gap 已经隔开它们；
+     再叠 margin-top 会得到双倍间距，所以这里不补 */
 }
 @media (max-width: 900px) {
   .nav-toggle { display: grid; }
@@ -763,9 +775,9 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   .nav-inner, .foot { padding-left: 16px; padding-right: 16px; }
   .dl { grid-template-columns: 1fr; gap: 3px 0; }
   .dl dt { margin-top: 9px; }
-  /* 导航栏挤了：赞赏按钮收成图标，文字和角标先让位 */
-  .donate-btn { width: 36px; height: 36px; padding: 0; border-radius: 9px; }
-  .donate-btn span { display: none; }
+  /* .kv 成对的 dl 同样收单列，但配对内部保持「标签 + 值」一行 */
+  .dl.pairs { grid-template-columns: 1fr; gap: 9px 0; }
+  .dl.pairs dt { margin-top: 0; }
 }
 /* ─── 登录页 ────────────────────────────────────────────
    唯一不套 layout 的页面。只用既有 CSS 变量，因此深色主题
