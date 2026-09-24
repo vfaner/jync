@@ -87,7 +87,16 @@
                     </a>
                 </div>
                 <div th:unless="${#lists.isEmpty(stats.projectSummaries)}" class="tbl-wrap">
-                    <table class="tbl">
+                    <!--/* 固定列宽：自动列宽在只有一两行数据时会被内容牵着走，
+                           状态列被空白撑得很宽、数字列悬在中间，表头与值看着就错位。 */-->
+                    <table class="tbl" style="table-layout:fixed">
+                        <colgroup>
+                            <col style="width:26%">
+                            <col style="width:18%">
+                            <col style="width:14%">
+                            <col style="width:18%">
+                            <col style="width:24%">
+                        </colgroup>
                         <thead>
                         <tr>
                             <th th:text="#{common.name}">Name</th>

@@ -40,6 +40,7 @@ public class SyncJob implements Job {
         Long projectId = context.getMergedJobDataMap().getLong(PROJECT_ID);
         try {
             runner.runOnce(projectId)
+                    .result()
                     .ifPresent(result -> log.debug("Scheduled sync of project {} -> {}",
                             projectId, result.summary()));
         } catch (RuntimeException e) {

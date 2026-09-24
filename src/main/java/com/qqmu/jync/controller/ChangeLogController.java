@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.service.ProjectService;
@@ -18,8 +19,6 @@ import com.qqmu.jync.service.ProjectService;
 /** Paged, filterable view of the change log. */
 @Controller
 public class ChangeLogController {
-
-    private static final int PAGE_SIZE = 50;
 
     private final ChangeLogRepository changeLogRepository;
     private final ProjectService projectService;
@@ -32,14 +31,24 @@ public class ChangeLogController {
 
     @GetMapping("/change-logs")
     public String list(@RequestParam(required = false) Long projectId,
-                       @RequestParam(defaultValue = "0") int page,
+                       @RequestParam(defaultValue = "1") Integer page,
+                       @RequestParam(required = false) Integer size,
+                       @RequestParam(required = false) Integer spanL,
+                       @RequestParam(required = false) Integer spanR,
                        Model model) {
-        Pageable pageable = PageRequest.of(Math.max(0, page), PAGE_SIZE);
+        // Count first: the pager clamps the requested page to the real page count, and the
+        // clamped value is what the row query must use.
+        long total = projectId != null
+                ? changeLogRepository.countByProjectId(projectId)
+                : changeLogRepository.count();
+        Pager pager = Pager.of(page, size, total, spanL, spanR);
+        Pageable pageable = PageRequest.of(pager.getPage() - 1, pager.getSize());
         Page<ChangeLog> logs = projectId != null
                 ? changeLogRepository.findByProjectIdOrderByOccurredAtDesc(projectId, pageable)
                 : changeLogRepository.findAllByOrderByOccurredAtDesc(pageable);
 
         model.addAttribute("logs", logs);
+        model.addAttribute("pager", pager);
         model.addAttribute("projects", projectService.findAll());
         model.addAttribute("selectedProjectId", projectId);
         model.addAttribute("activeNav", "change-logs");

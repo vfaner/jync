@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.service.ProjectService;
+import com.qqmu.jync.service.task.SyncTaskRunner;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -46,27 +47,41 @@ public class ProjectApiController {
     /**
      * Runs one cycle immediately.
      *
-     * <p>Contends for the same lock as the scheduler, so an empty result means a cycle was
-     * already in progress rather than that nothing happened.
+     * <p>Contends for the same lock as the scheduler. A request that arrives mid-cycle is not
+     * an error: it comes back as a queued rerun, which the runner serves once the in-flight
+     * cycle releases the lock.
      */
     @PostMapping("/{id}/sync-now")
     public ResponseEntity<Map<String, Object>> syncNow(@PathVariable Long id) {
-        return projectService.syncNow(id)
-                .map(result -> {
-                    Map<String, Object> body = ok(result.isSuccess()
-                            ? "msg.sync.completed" : "msg.sync.completed.errors");
-                    body.put("summary", result.summary());
-                    body.put("structureChanges", result.getStructureChanges());
-                    body.put("rowsInserted", result.getRowsInserted());
-                    body.put("rowsUpdated", result.getRowsUpdated());
-                    body.put("rowsDeleted", result.getRowsDeleted());
-                    body.put("tablesProcessed", result.getTablesProcessed());
-                    body.put("durationMs", result.getDurationMs());
-                    body.put("errors", result.getErrors());
-                    body.put("success", result.isSuccess());
-                    return ResponseEntity.ok(body);
-                })
-                .orElseGet(() -> ResponseEntity.ok(ok("msg.sync.already.running")));
+        SyncTaskRunner.Outcome outcome = projectService.syncNow(id);
+        switch (outcome.kind()) {
+            case QUEUED: {
+                // Accepted, not executed: amber rather than green or red, and no reload —
+                // the page would refresh while the cycle the click queued behind is running.
+                Map<String, Object> body = ok("msg.sync.rerun.queued");
+                body.put("success", true);
+                body.put("toastKind", "warn");
+                body.put("noReload", true);
+                return ResponseEntity.ok(body);
+            }
+            case NO_PROJECT:
+                return ResponseEntity.notFound().build();
+            default:
+                break;
+        }
+        SyncResult result = outcome.result().orElseGet(SyncResult::new);
+        Map<String, Object> body = ok(result.isSuccess()
+                ? "msg.sync.completed" : "msg.sync.completed.errors");
+        body.put("summary", result.summary());
+        body.put("structureChanges", result.getStructureChanges());
+        body.put("rowsInserted", result.getRowsInserted());
+        body.put("rowsUpdated", result.getRowsUpdated());
+        body.put("rowsDeleted", result.getRowsDeleted());
+        body.put("tablesProcessed", result.getTablesProcessed());
+        body.put("durationMs", result.getDurationMs());
+        body.put("errors", result.getErrors());
+        body.put("success", result.isSuccess());
+        return ResponseEntity.ok(body);
     }
 
     /** Clears all cursors and snapshots so the next run performs a full reload. */

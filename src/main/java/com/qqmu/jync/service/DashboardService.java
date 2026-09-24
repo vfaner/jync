@@ -28,6 +28,9 @@ import lombok.Setter;
 @Service
 public class DashboardService {
 
+    /** Row ceiling for the two dashboard lists, so growing data never stretches the page. */
+    private static final int OVERVIEW_ROWS = 5;
+
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
     private final SyncProgressRepository progressRepository;
@@ -79,7 +82,7 @@ public class DashboardService {
 
         stats.setErrorTaskCount(taskStore.findByStatus(TaskStatus.ERROR).size());
         stats.setRunningTaskCount(taskStore.findByStatus(TaskStatus.RUNNING).size());
-        stats.setRecentChanges(changeLogRepository.findTop10ByOrderByOccurredAtDesc());
+        stats.setRecentChanges(changeLogRepository.findTop5ByOrderByOccurredAtDesc());
 
         // Per-project rows for the overview table.
         List<ProjectSummary> summaries = new ArrayList<>();
@@ -95,7 +98,11 @@ public class DashboardService {
                     .countByProjectIdAndSuccessFalse(project.getId()));
             summaries.add(summary);
         }
-        stats.setProjectSummaries(summaries);
+        // Same rule as the activity feed: five rows keep the card a fixed height no matter
+        // how many projects exist; the card header links to the paged full list.
+        stats.setProjectSummaries(summaries.size() > OVERVIEW_ROWS
+                ? new ArrayList<>(summaries.subList(0, OVERVIEW_ROWS))
+                : summaries);
         return stats;
     }
 

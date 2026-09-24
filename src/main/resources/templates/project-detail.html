@@ -87,6 +87,8 @@
                 </button>
             </div>
             <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin}"
+               th:text="#{project.syncNowHelp}">Sync now help</p>
+            <p class="small muted" style="margin:3px 0 0" th:if="${isAdmin}"
                th:text="#{project.resetHelp}">Reset help</p>
             <p class="small muted" style="margin:0" th:unless="${isAdmin}"
                th:text="#{common.readOnly}">Read-only account.</p>

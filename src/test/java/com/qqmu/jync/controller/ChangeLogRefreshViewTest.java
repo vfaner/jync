@@ -83,6 +83,7 @@ class ChangeLogRefreshViewTest {
         entry.setOccurredAt(Instant.now());
         Pageable pageable = PageRequest.of(pageNumber, 50);
         Page<ChangeLog> page = new PageImpl<>(List.of(entry), pageable, totalEntries);
+        when(changeLogRepository.count()).thenReturn((long) totalEntries);
         when(changeLogRepository.findAllByOrderByOccurredAtDesc(any(Pageable.class))).thenReturn(page);
         when(projectService.findAll()).thenReturn(List.of());
     }
@@ -155,7 +156,9 @@ class ChangeLogRefreshViewTest {
     void autoRefreshIsDisabledOnPagesOtherThanTheFirst() throws Exception {
         stubOnePageOf(120, 1);
 
-        String html = render(as(UserRole.ADMIN), "?page=1", "zh-CN");
+        // The page number now comes from the URL (the pager owns it), not from the
+        // repository's echoed pageable — so ask for page 2 explicitly.
+        String html = render(as(UserRole.ADMIN), "?page=2", "zh-CN");
 
         int auto = html.indexOf("data-role=\"log-auto\"");
         assertThat(auto).as("the auto-refresh button is rendered").isGreaterThan(-1);

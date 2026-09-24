@@ -1,6 +1,12 @@
 package com.qqmu.jync.service.task;
 
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import javax.annotation.PreDestroy;
 
 import org.springframework.stereotype.Service;
 
@@ -18,6 +24,11 @@ import lombok.extern.slf4j.Slf4j;
  * <p>This is the only entry point for executing a sync, whether triggered by the scheduler or
  * manually from the UI. Routing both through here is what makes the lock meaningful: a manual
  * run and a scheduled fire contend for the same lock instead of racing each other.
+ *
+ * <p>A manual request that arrives while a cycle is in flight is not dropped. The running
+ * cycle's window was cut when it started, so changes committed after that moment would
+ * otherwise wait for the next scheduled poll; instead the click is coalesced — any number of
+ * clicks become one queued rerun — and served on a background thread once the lock frees up.
  */
 @Service
 @Slf4j
@@ -28,6 +39,16 @@ public class SyncTaskRunner {
     private final SyncEngine syncEngine;
     private final SyncLockService lockService;
     private final SyncTaskStore taskStore;
+
+    /** Projects whose in-flight cycle should be followed by exactly one more cycle. */
+    private final Set<Long> queuedReruns = ConcurrentHashMap.newKeySet();
+
+    /** Runs a queued rerun off the requesting thread, so no click ever waits for two cycles. */
+    private final ExecutorService rerunExecutor = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "jync-rerun");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public SyncTaskRunner(ProjectRepository projectRepository,
                           SyncContextFactory contextFactory,
@@ -44,24 +65,48 @@ public class SyncTaskRunner {
     /**
      * Executes one cycle if the lock can be taken.
      *
-     * @return the result, or empty when the project was busy or no longer exists
+     * @return an {@link Outcome}: executed with the result, queued when a cycle was already
+     *         in flight (this request will be served right after it), or no project
      */
-    public Optional<SyncResult> runOnce(Long projectId) {
+    public Outcome runOnce(Long projectId) {
         Optional<Project> maybeProject = projectRepository.findById(projectId);
         if (maybeProject.isEmpty()) {
             log.warn("Sync requested for project {}, which no longer exists", projectId);
-            return Optional.empty();
+            return Outcome.noProject();
         }
         Project project = maybeProject.get();
         taskStore.ensureTask(project);
 
         try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
             if (lock == null) {
-                // Another runner holds it. Skipping is correct: the work is already happening.
-                return Optional.empty();
+                // Another runner holds the lock, so the work is already happening — but this
+                // click may know about changes the running cycle's window no longer covers.
+                // Remember it as at most one rerun instead of dropping it.
+                queuedReruns.add(projectId);
+                return Outcome.queued();
             }
-            return Optional.of(execute(project, lock));
+            SyncResult result = execute(project, lock);
+            startQueuedRerun(projectId);
+            return Outcome.executed(result);
         }
+    }
+
+    /**
+     * Hands a coalesced rerun to the background executor now that a cycle has finished.
+     *
+     * <p>The rerun re-acquires the lock over there; if a scheduled fire grabbed it in between,
+     * the request re-registers and is served when that cycle finishes in turn.
+     */
+    private void startQueuedRerun(Long projectId) {
+        if (queuedReruns.remove(projectId)) {
+            log.info("Sync of project {} finished; running the queued extra cycle", projectId);
+            rerunExecutor.submit(() -> runOnce(projectId));
+        }
+    }
+
+    @PreDestroy
+    void shutdownRerunExecutor() {
+        rerunExecutor.shutdown();
     }
 
     private SyncResult execute(Project project, SyncLockService.LockHandle lock) {
@@ -91,5 +136,39 @@ public class SyncTaskRunner {
             log.info("Sync of '{}' finished: {}", project.getName(), result.summary());
         }
         return result;
+    }
+
+    /** What became of a sync request. */
+    public static final class Outcome {
+
+        public enum Kind { EXECUTED, QUEUED, NO_PROJECT }
+
+        private final Kind kind;
+        private final SyncResult result;
+
+        private Outcome(Kind kind, SyncResult result) {
+            this.kind = kind;
+            this.result = result;
+        }
+
+        static Outcome executed(SyncResult result) {
+            return new Outcome(Kind.EXECUTED, result);
+        }
+
+        static Outcome queued() {
+            return new Outcome(Kind.QUEUED, null);
+        }
+
+        static Outcome noProject() {
+            return new Outcome(Kind.NO_PROJECT, null);
+        }
+
+        public Kind kind() {
+            return kind;
+        }
+
+        public Optional<SyncResult> result() {
+            return Optional.ofNullable(result);
+        }
     }
 }

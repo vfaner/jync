@@ -10,7 +10,7 @@
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
 
-A ready-to-run web application that keeps **schema and data** in sync **across heterogeneous databases** in real time. Start a single jar, click a few times in your browser, and Oracle tables stream continuously into PostgreSQL, or MySQL deltas land live in Dameng — **no Kafka, no ZooKeeper, not a single line of code.**
+A ready-to-run web application that keeps **schema and data** in sync **across heterogeneous databases** in real time. Start a single jar, click a few times in your browser, and **any two of the 17 built-in database types (plus a custom type)** form a continuous sync link — Oracle → PostgreSQL and MySQL → Dameng are just two examples among them — **no Kafka, no ZooKeeper, not a single line of code.**
 
 - Repository: <https://github.com/vfaner/jync>
 - China mirror: <https://gitee.com/super_rgh/jync>
@@ -46,79 +46,79 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 
 Username and password, with theme and language switchable from the top-right corner at any time. Until the default password is changed, every page carries a red warning at the top — dismissable for the session, but back as soon as the browser reopens, and gone for good only once the password actually changes.
 
-![Sign-in](src/main/resources/static/assets/dataSync_login.png)
+![Sign-in](src/main/resources/static/assets/jync_login.png)
 
 ### Dashboard — the whole sync posture on one screen
 
-Project count, connection count, synced tables, 24-hour change volume, and a recent activity feed.
+Project count, connection count, synced tables, 24-hour change volume, and a recent activity feed. The project overview and the activity feed show **at most five rows each**, so the dashboard never grows with the log; the card headers link through to the full project list and change log.
 
-![Dashboard](src/main/resources/static/assets/dataSync_kanban.png)
+![Dashboard](src/main/resources/static/assets/jync_kanban.png)
 
 ### Dark theme — the whole palette moves, not just the background
 
-One toggle in the top-right corner. Dashboard, cards, tables, and icons all follow, instead of a black background left studded with glaring light-mode controls.
+One toggle in the top-right corner. Dashboard, cards, tables, and icons all follow, instead of a black background left studded with glaring light-mode controls. The toggle's moon / sun icon is fixed golden yellow, legible on either palette.
 
-![Dashboard in dark theme](src/main/resources/static/assets/dataSync_kanban_anye.png)
+![Dashboard in dark theme](src/main/resources/static/assets/jync_kanban_anye.png)
 
 ### Bilingual UI — one click switches the whole interface
 
 The "中 / EN" button in the navbar flips every menu, form, status, and error message between Chinese and English; the choice is remembered in the browser. Until the user picks one explicitly, the default language is inferred from the browser timezone.
 
-![English interface](src/main/resources/static/assets/dataSync_en.png)
+![English interface](src/main/resources/static/assets/jync_kanban_en.png)
 
 ### Database connections — sources and targets in separate lists, test before you save
 
 Connections are split by purpose into a Source table and a Target table, each paginated on its own; the project form's source and target selectors only offer connections from the matching list, so the two sides can no longer be mixed up. Pick a database type and the JDBC URL is generated for you — preview it, test it. Nearly every database driver ships inside the distribution; for GBase, Oscar, and custom drivers, just point at a jar and it loads dynamically.
 
-![Database connections](src/main/resources/static/assets/dataSync_db.png)
+![Database connections](src/main/resources/static/assets/jync_db.png)
 
 ### Adding a connection — pick the purpose first; the URL writes itself
 
 Choose Source (data is read from it during sync) or Target (data is written into it), then fill in host, port, and database name; the JDBC URL appears as you type, so there is no need to remember each vendor's connection-string shape. The password is encrypted on the way into storage, and the connection can be tested before you commit it.
 
-![Adding a connection](src/main/resources/static/assets/dataSync_db_add.png)
+![Adding a connection](src/main/resources/static/assets/jync_db_add.png)
 
 ### Projects — many pipelines in parallel, start and pause at will
 
-Each project is one source → target pair, independently startable and pausable, with status and last-sync time at a glance.
+Each project is one source → target pair, independently startable and pausable, with status and last-sync time at a glance. The list is paginated — twenty rows per page by default, with 15 / 20 / 30 / 50 / 100 selectable in the footer plus a jump-to-page box; long page ranges collapse into ellipses, and clicking an ellipsis widens that side by five pages in place instead of laying out every number at once.
 
-![Projects](src/main/resources/static/assets/dataSync_xiangmu.png)
+![Projects](src/main/resources/static/assets/jync_xiangmu.png)
+
+### New project — one tested connection per side
+
+Fill in the name and description, pick one tested connection from each of the source and target lists; saving lands you on the project detail page to choose sync objects.
+
+![New project](src/main/resources/static/assets/jync_xiangmu_add.png)
 
 ### Project detail — per-table selection with visible cursor strategy
 
-Tables / views / stored procedures grouped for selection, with search and bulk actions. Every table's incremental detection strategy is labeled inline — `IDENTITY` and `NONE` are called out prominently, because they mean updates may not propagate.
+Tables / views / stored procedures grouped for selection, with search and bulk actions. Every table's incremental detection strategy is labeled inline — `IDENTITY` and `NONE` are called out prominently, because they mean updates may not propagate. Clicking "Sync now" while a cycle is in flight is not discarded: one extra round runs automatically once the current round releases the lock, and any number of clicks coalesce into exactly one such rerun.
 
-![Project detail](src/main/resources/static/assets/dataSync_xiangmu_xiangqing.png)
-
-### A read-only account — visible, but not editable
-
-The same project-detail page seen through the `view` user, which holds query permission only. Tables, views, and cursor strategies are all there to read; write actions are not offered to it. Every other screenshot here is taken as `admin`.
-
-![Project detail as a read-only user](src/main/resources/static/assets/dataSync_xiangmu_xiangqing_view.png)
+![Project detail](src/main/resources/static/assets/jync_xiangmu_xiangqing.png)
 
 ### Change log — every change is traceable
 
-Object name, change type, affected row count, elapsed time, and full error detail.
+Object name, change type, affected row count, elapsed time, and full error detail. The same pager as the project list; from page two on, auto-refresh is disabled with the reason in its tooltip — the log is newest-first, so an arriving entry would otherwise shuffle the rows you are reading downwards.
 
-![Change log](src/main/resources/static/assets/dataSync_log.png)
+![Change log](src/main/resources/static/assets/jync_log.png)
 
 ### AI providers — several configured, exactly one active
 
 Enabling another switches the current one off. The list shows the protocol, the model, and the last probe result; rendering it never reaches out to the network.
 
-![AI providers](src/main/resources/static/assets/dataSync_ai.png)
+![AI providers](src/main/resources/static/assets/jync_ai.png)
 
 ### Adding a provider — probe the endpoint before saving
 
 The key is encrypted like a database password. The probe sends a real request rather than a TCP check — a wrong key, a misspelled model, and a base URL that is one path segment off are invisible to anything less.
 
-![Adding a provider](src/main/resources/static/assets/dataSync_ai_add.png)
+![Adding a provider](src/main/resources/static/assets/jync_ai_add.png)
 
 ### System information — runtime settings and version on one page
 
 Instance ID, Java version, scheduled project count, sync defaults, and the concurrency/recovery safeguards are gathered as read-only info. The version card shows the running version, the latest GitHub release, and this version's release notes. The update check runs in the background and never slows the page down — on an air-gapped intranet, the local version number and bundled notes still render normally.
 
-![System information](src/main/resources/static/assets/dataSync_system.png)
+![System information](src/main/resources/static/assets/jync_system.png)
 
 ---
 
@@ -136,8 +136,10 @@ Instance ID, Java version, scheduled project count, sync defaults, and the concu
 | **Real-time sync** | Polling (2s default), or precise orchestration via Cron expressions |
 | **Crash recovery** | Resumes from the last cursor after a restart; changes made while down are backfilled |
 | **Start/stop control** | Start or pause anytime; manual "Sync Now" supported |
+| **Sync-now rerun** | A click during a run is not discarded: one extra round follows automatically, and repeated clicks coalesce into one |
 | **Change records** | Object, change type, row count, duration, and error detail for every run |
-| **Dashboard** | Projects, connections, synced tables, 24-hour change volume, recent activity |
+| **Dashboard** | Projects, connections, synced tables, 24-hour change volume, recent activity; overview and feed capped at five rows each |
+| **Pagination** | Project and change-log lists paginate at 20 rows/page by default, with 15/20/30/50/100 selectable, jump-to-page, and in-place ellipsis expansion |
 | **i18n** | Chinese / English switch; default language inferred from browser timezone |
 | **Theming** | Light/dark toggle; follows the OS until the user picks one |
 | **Fully local frontend** | No CDN, no webfont, zero outbound requests at runtime — works offline |
@@ -418,7 +420,7 @@ Login passwords are stored as one-way BCrypt hashes, unlike the database and AI 
 1. **Database Connections** → create a source and a target connection → click **Test Connection**
 2. **Projects** → create a project → pick the source and target
 3. Open **project detail** → check the tables/views/procedures to sync → configure sync options → save
-4. Click **Sync Now** for a one-off verification, or **Start Sync** to begin continuous polling
+4. Click **Sync Now** for a one-off verification (a click during a run queues exactly one extra round once the current one finishes), or **Start Sync** to begin continuous polling
 5. Inspect each run in the **Change Log**
 
 ---
@@ -481,6 +483,10 @@ So when persisting the watermark, we roll it back by `sync.safety-lag-ms` (1 sec
 The database lock is the layer that survives restarts: in-memory locks die with the process, and with only in-memory locking a new instance could not tell whether a hard-killed predecessor is still running. The lock row carries a lease (`sync.lock-ttl-ms`, 5 minutes by default) so a crashed instance's lock can be taken over instead of blocking the project forever; on startup, an instance also proactively releases locks it left behind.
 
 Acquisition uses a conditional UPDATE (`WHERE lock_owner IS NULL OR lock_owner = ? OR lock_expires_at < ?`), so when two instances race, only one UPDATE can match — they can never both hold the lock.
+
+### Clicks during a run: coalesced into one rerun
+
+"Sync Now" and the scheduled trigger share the three locks above. A click that finds the lock held no longer ends at a curt "already running" — the request registers a **rerun**: once the current round finishes and releases the lock, a background thread runs one more round. N clicks during a run coalesce into **one** rerun, never a queue of N; and if the rerun itself finds the lock taken again (a scheduled trigger got there first, say), it re-registers until it is consumed. A scheduled fire that lands mid-run takes the same path, so "the round I missed" is made up as well.
 
 ### Recovering from schema changes
 
@@ -714,7 +720,7 @@ com.qqmu.jync
 mvn test
 ```
 
-223 unit tests, covering:
+410 unit tests, covering:
 
 - **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
 - **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself
@@ -729,6 +735,9 @@ mvn test
 - **Login & roles** — the initial accounts are seeded only into an empty table, so a restart does not re-seed and a table that already has rows has nobody's password reset; the stored hash starts with `$2a$` and does not contain the cleartext; the five rejection reasons for a password change (wrong current password, too short, mismatch, same as the current one, no such account) each return their own message key; the "using the initial password" flag flips to false after a successful change
 - **Authorization rules** — an unauthenticated page request redirects to `/login`, while an unauthenticated `/api/**` request answers 401 JSON rather than handing a login page to `fetch()`; every POST by a viewer is refused; `/account/password` is permitted for both roles, and that rule *must* precede "a POST requires admin" or a viewer would be shown a password form they are forbidden to submit; a POST missing its CSRF token is refused even for an administrator
 - **JSON endpoints** — both a rejected request and a server-side exception return 200 with `success:false`, because the caller is `fetch()` and a 500 carrying an HTML error page reaches the user as nothing but a blank toast
+- **Pager window** — an unusable page size falls back to the default and an out-of-range page clamps to the last; an ellipsis widens only its own side by five pages; the chosen page size really reaches the repository query; a single page renders just that one number
+- **Sync-now rerun** — repeated clicks during a run produce exactly one extra round; a click with nothing in flight executes immediately and queues nothing; a request for a missing project runs nothing
+- **Dialect defaults** — a MySQL temporal column's default must carry the column's fractional precision (`CURRENT_TIMESTAMP(6)`), or MySQL rejects the CREATE TABLE with error 1067
 
 There is also an end-to-end script (H2 source and target, 20 assertions) covering initial full load, incremental inserts, incremental updates, idempotency across repeated syncs, DDL column-addition propagation, **matching row counts with no duplicates under concurrent writes**, concurrent invocations rejected by the lock, **writes made during downtime backfilled after restart**, automatic polling, and change-log / cursor-strategy reporting.
 

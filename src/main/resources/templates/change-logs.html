@@ -9,7 +9,7 @@
         <div>
             <h1 th:text="#{log.title}">Change log</h1>
             <p class="sub">
-                <span id="log-count" th:text="${logs.totalElements}">0</span>
+                <span id="log-count" th:text="${pager.totalItems}">0</span>
                 <span th:text="#{log.entries}">entries</span>
                 <!--/* 文案模板留在 data-tpl 里，而不是塞进 layout 的全局
                        JyncMessages —— 只有这一页用得上。 */-->
@@ -33,8 +33,8 @@
                    自动刷新会让你读的那几行一直在换位置。禁用而不是悄悄不动，
                    title 里说清为什么。 */-->
             <button type="button" class="btn btn-ghost btn-sm" data-role="log-auto"
-                    th:disabled="${logs.number > 0}"
-                    th:title="${logs.number > 0} ? #{log.refresh.firstPageOnly} : null">
+                    th:disabled="${pager.page > 1}"
+                    th:title="${pager.page > 1} ? #{log.refresh.firstPageOnly} : null">
                 <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{log.refresh.auto}">Auto</span></button>
             <form method="post" th:if="${isAdmin}" th:action="@{/change-logs/clear}"
                   th:data-confirm="#{log.clear.confirm}"
@@ -46,7 +46,11 @@
         </div>
     </div>
 
-    <div class="card" id="log-card">
+    <!--/* 基底 URL 必须提前算好：Thymeleaf 的片段调用参数里不认
+           @{/x}(k=v) 这种带参链接表达式（括号配对会把签名解析搞崩），
+           所以在外层 th:with 里先展开成普通字符串再传进去。 */-->
+    <div class="card" id="log-card"
+         th:with="pagerBase=@{/change-logs(projectId=${selectedProjectId})}">
         <div class="card-body tight">
             <div th:if="${logs.totalElements == 0}" class="empty">
                 <div class="empty-ico"><svg class="ico"><use href="#clock-history"/></svg></div>
@@ -96,23 +100,7 @@
             </div>
         </div>
 
-        <div class="card-foot" th:if="${logs.totalPages > 1}"
-             style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-            <span class="small muted"
-                  th:text="#{log.page(${logs.number + 1}, ${logs.totalPages})}">Page 1 of 1</span>
-            <div style="display:flex;gap:7px">
-                <a class="btn btn-ghost btn-sm"
-                   th:if="${!logs.first}"
-                   th:href="@{/change-logs(projectId=${selectedProjectId}, page=${logs.number - 1})}">
-                    <svg class="ico"><use href="#chevron-left"/></svg><span th:text="#{log.previous}">Previous</span>
-                </a>
-                <a class="btn btn-ghost btn-sm"
-                   th:if="${!logs.last}"
-                   th:href="@{/change-logs(projectId=${selectedProjectId}, page=${logs.number + 1})}">
-                    <span th:text="#{log.next}">Next</span><svg class="ico"><use href="#chevron-right"/></svg>
-                </a>
-            </div>
-        </div>
+        <div th:replace="~{fragments/pager :: pager(${pager}, ${pagerBase})}"></div>
     </div>
 
 </div>

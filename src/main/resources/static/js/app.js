@@ -170,14 +170,16 @@
         var text = payload.summary
           ? t(payload.message) + ' — ' + payload.summary
           : t(payload.message);
-        toast(text, payload.success ? 'ok' : 'danger');
+        // 服务端可用 toastKind 指定级别（如「已排队补跑」用 warn），缺省按成败二色
+        toast(text, payload.toastKind || (payload.success ? 'ok' : 'danger'));
 
         // 逐条列出错误，比只给一句「失败」有用
         if (payload.errors && payload.errors.length) {
           payload.errors.slice(0, 3).forEach(function (err) { toast(err, 'danger'); });
         }
 
-        if (payload.success && btn.dataset.reload === 'true') {
+        // noReload：请求被接受但没有真正执行完（如补跑排队），页面不该刷新
+        if (payload.success && payload.noReload !== true && btn.dataset.reload === 'true') {
           setTimeout(function () { window.location.reload(); }, 850);
           return;
         }
@@ -871,6 +873,38 @@
     }
   }
 
+  /* ─── 分页条 ──────────────────────────────────────────────
+     页码和省略号都是服务端渲染好的链接，这里只接两个拼 URL 的控件：
+     每页条数下拉（改条数回到第 1 页）和跳页输入（回车或失焦跳转，越界夹住）。 */
+
+  function bindPager(bar) {
+    var base = bar.dataset.base;
+    var sep = bar.dataset.sep;
+    var sizeSel = bar.querySelector('.pager-size');
+    var jump = bar.querySelector('.pager-jump-input');
+
+    function go(page, size) {
+      window.location.href = base + sep + 'page=' + page + '&size=' + size;
+    }
+    function commitJump() {
+      var max = parseInt(jump.max, 10);
+      var n = parseInt(jump.value, 10);
+      if (isNaN(n)) { jump.value = ''; return; }
+      if (!isNaN(max)) { n = Math.min(n, max); }
+      go(Math.max(1, n), sizeSel ? sizeSel.value : 20);
+    }
+
+    if (sizeSel) {
+      sizeSel.addEventListener('change', function () { go(1, sizeSel.value); });
+    }
+    if (jump) {
+      jump.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.keyCode === 13) { commitJump(); }
+      });
+      jump.addEventListener('change', commitJump);
+    }
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -888,6 +922,7 @@
       .forEach(bindCursorInput);
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
+    document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindDonate();
     bindGenericModals();
     bindUserMenu();

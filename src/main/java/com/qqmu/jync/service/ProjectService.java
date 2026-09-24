@@ -12,7 +12,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.dto.SyncConfig;
-import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
@@ -175,7 +174,7 @@ public class ProjectService {
     }
 
     /** Runs one cycle on demand, contending for the same lock the scheduler uses. */
-    public Optional<SyncResult> syncNow(Long projectId) {
+    public SyncTaskRunner.Outcome syncNow(Long projectId) {
         require(projectId);
         return taskRunner.runOnce(projectId);
     }

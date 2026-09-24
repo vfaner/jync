@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -43,8 +44,13 @@ public class ProjectController {
     }
 
     @GetMapping
-    public String list(Model model) {
-        List<Project> projects = projectService.findAll();
+    public String list(@RequestParam(defaultValue = "1") Integer page,
+                       @RequestParam(required = false) Integer size,
+                       @RequestParam(required = false) Integer spanL,
+                       @RequestParam(required = false) Integer spanR,
+                       Model model) {
+        Pager pager = Pager.of(page, size, projectService.count(), spanL, spanR);
+        List<Project> projects = pager.slice(projectService.findAll());
 
         // Collectors.toMap rejects null values, and a project has no task row until its first
         // save completes, so the map is built explicitly to allow absent entries.
@@ -55,6 +61,7 @@ public class ProjectController {
 
         model.addAttribute("projects", projects);
         model.addAttribute("taskLookup", taskLookup);
+        model.addAttribute("pager", pager);
         model.addAttribute("activeNav", "projects");
         return "projects";
     }

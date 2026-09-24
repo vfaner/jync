@@ -19,7 +19,10 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
 
     Page<ChangeLog> findAllByOrderByOccurredAtDesc(Pageable pageable);
 
-    List<ChangeLog> findTop10ByOrderByOccurredAtDesc();
+    /** The dashboard is a glance, not a report: five rows, the full list lives at /change-logs. */
+    List<ChangeLog> findTop5ByOrderByOccurredAtDesc();
+
+    long countByProjectId(Long projectId);
 
     long countByOccurredAtAfter(Instant after);
 

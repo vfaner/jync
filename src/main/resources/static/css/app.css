@@ -246,6 +246,34 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .card-body.tight { padding: 0; }
 .card-foot { padding: 13px 20px; border-top: 1px solid var(--line); background: var(--bg-soft); }
 
+/* ─── 分页条 ──────────────────────────────────────────────
+   页码窗口 + 省略号展开；整条复用 card-foot 的底边与底色。
+   单行居右、禁止换行：一旦允许 wrap，窄一点的窗口就会把页码挤到第二行、
+   把"前往"竖着拆成两个字。极窄屏幕靠横向滚动兜底，不折行。 */
+.pager-bar {
+  display: flex; justify-content: flex-end; align-items: center;
+  gap: 14px; flex-wrap: nowrap; padding: 9px 20px; overflow-x: auto;
+}
+.pager-bar > span { white-space: nowrap; }
+.pager-mid { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+.pager-bar .select { height: 28px; padding: 0 8px; font-size: 12.5px; margin-right: 5px; }
+.pager-num, .pager-gap {
+  min-width: 28px; height: 28px; padding: 0 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--ink-soft); font-size: 12.5px;
+}
+.pager-num:hover, .pager-gap:hover { border-color: var(--brand); color: var(--brand); }
+.pager-num.is-current { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; }
+.pager-gap { letter-spacing: 1px; }
+.pager-arrow { padding: 0 7px; }
+.pager-arrow-off {
+  min-width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  opacity: .35;
+}
+.pager-jump { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; white-space: nowrap; }
+.pager-jump-input { width: 56px; height: 28px; padding: 0 8px; font-size: 12.5px; }
+
 /* ─── 看板统计卡 ────────────────────────────────────────── */
 .stat-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
@@ -311,6 +339,9 @@ table.tbl tbody tr:hover { background: var(--bg-soft); }
 table.tbl tbody tr:last-child td { border-bottom: none; }
 table.tbl.dense td, table.tbl.dense th { padding: 8px 14px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
+/* table.tbl th 的 text-align:left 特异性高于 .num，数字列表头会被它压回左对齐，
+   与右对齐的单元格错开 —— 表头必须单独再声明一次。 */
+table.tbl th.num { text-align: right; }
 .row-bad { background: color-mix(in srgb, var(--danger) 6%, transparent); }
 .row-bad:hover { background: color-mix(in srgb, var(--danger) 10%, transparent) !important; }
 /* 当前启用项：AI 供应商列表里只会有一行命中 */
@@ -680,6 +711,11 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 
 /* 心形固定红色：随文字色会变墨黑，看着像没加载出来的图标 */
 .donate-btn .ico { color: #e5484d; }
+
+/* 主题切换图标固定金黄色：月亮/太阳自带昼夜语义，跟按钮文字色走会发灰发黑；
+   深色模式下提亮一档，与警告色同族保持协调 */
+[data-theme-btn] .ico { color: #eab308; }
+[data-theme="dark"] [data-theme-btn] .ico { color: #fbbf24; }
 
 .sec-tag {
   display: inline-block; padding: 4px 12px; border-radius: 999px;

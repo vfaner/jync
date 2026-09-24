@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* 共用分页条：总条数 + 每页条数下拉 + 带省略号的页码窗口 + 跳页输入。
+     页码与省略号全是服务端渲染的链接；省略号点击后该侧窗口原地展开 5 页。
+     base 由调用方经 @{} 生成（带上下文路径与本页筛选参数），此处只做字符串拼接；
+     下拉与跳页输入的两个 data 属性供 app.js 拼 URL 用。 */-->
+<div th:fragment="pager(pager, base)" th:if="${pager.totalItems > 0}"
+     th:with="sep=${#strings.contains(base, '?')} ? '&' : '?'"
+     class="card-foot pager-bar" data-role="pager"
+     th:data-base="${base}" th:data-sep="${sep}">
+    <span class="small muted" th:text="#{pager.total(${pager.totalItems})}">0</span>
+
+    <div class="pager-mid">
+        <select class="select pager-size" th:attr="aria-label=#{pager.sizeLabel}">
+            <option th:each="s : ${pager.sizes}" th:value="${s}" th:selected="${s == pager.size}"
+                    th:text="#{pager.perPage(${s})}">20</option>
+        </select>
+
+        <a class="btn btn-ghost btn-sm pager-arrow" th:if="${!pager.first}" th:title="#{log.previous}"
+           th:href="${base + sep + 'page=' + (pager.page - 1) + '&size=' + pager.size
+                      + '&spanL=' + pager.spanLeft + '&spanR=' + pager.spanRight}">
+            <svg class="ico"><use href="#chevron-left"/></svg>
+        </a>
+        <span class="pager-arrow pager-arrow-off" th:if="${pager.first}">
+            <svg class="ico"><use href="#chevron-left"/></svg>
+        </span>
+
+        <th:block th:each="slot : ${pager.items}">
+            <span class="pager-num is-current" th:if="${slot.page != null and slot.page == pager.page}"
+                  th:text="${slot.page}">1</span>
+            <a class="pager-num" th:if="${slot.page != null and slot.page != pager.page}"
+               th:text="${slot.page}"
+               th:href="${base + sep + 'page=' + slot.page + '&size=' + pager.size
+                          + '&spanL=' + pager.spanLeft + '&spanR=' + pager.spanRight}">2</a>
+            <a class="pager-gap" th:if="${slot.page == null and slot.left}" th:title="#{pager.expand}"
+               th:href="${base + sep + 'page=' + pager.page + '&size=' + pager.size
+                          + '&spanL=' + pager.expandLeftSpan + '&spanR=' + pager.spanRight}">&#8943;</a>
+            <a class="pager-gap" th:if="${slot.page == null and !slot.left}" th:title="#{pager.expand}"
+               th:href="${base + sep + 'page=' + pager.page + '&size=' + pager.size
+                          + '&spanL=' + pager.spanLeft + '&spanR=' + pager.expandRightSpan}">&#8943;</a>
+        </th:block>
+
+        <a class="btn btn-ghost btn-sm pager-arrow" th:if="${!pager.last}" th:title="#{log.next}"
+           th:href="${base + sep + 'page=' + (pager.page + 1) + '&size=' + pager.size
+                      + '&spanL=' + pager.spanLeft + '&spanR=' + pager.spanRight}">
+            <svg class="ico"><use href="#chevron-right"/></svg>
+        </a>
+        <span class="pager-arrow pager-arrow-off" th:if="${pager.last}">
+            <svg class="ico"><use href="#chevron-right"/></svg>
+        </span>
+    </div>
+
+    <div class="pager-jump small muted">
+        <span th:text="#{pager.goto}">Go to</span>
+        <input class="input pager-jump-input" type="number" min="1" th:max="${pager.totalPages}"
+               th:attr="aria-label=#{pager.goto}">
+        <span th:if="${not #strings.isEmpty(#messages.msgOrNull('pager.pageUnit'))}"
+              th:text="#{pager.pageUnit}">page</span>
+    </div>
+</div>
+</body>
+</html>
