@@ -146,6 +146,19 @@ public final class JdbcRowMapper {
             return ((java.sql.Date) value).toLocalDate().atStartOfDay()
                     .toInstant(ZoneOffset.UTC).toString();
         }
+        if (value instanceof java.sql.Time) {
+            // "HH:mm:ss" — no date part to disambiguate; this is what cursorFromString
+            // expects back for a TIME cursor column.
+            return value.toString();
+        }
+        if (value instanceof java.time.LocalTime) {
+            // Normalize through java.sql.Time so the text always carries seconds
+            // (LocalTime.toString() omits ":00" — Time.valueOf would reject it).
+            return java.sql.Time.valueOf((java.time.LocalTime) value).toString();
+        }
+        if (value instanceof java.time.LocalDate) {
+            return ((java.time.LocalDate) value).atStartOfDay().toInstant(ZoneOffset.UTC).toString();
+        }
         if (value instanceof Instant) {
             return value.toString();
         }
@@ -165,6 +178,16 @@ public final class JdbcRowMapper {
             return null;
         }
         if (CursorTypes.isTemporal(jdbcType)) {
+            if (jdbcType == Types.TIME) {
+                // TIME columns are stored as "HH:mm:ss" (see cursorToString); an
+                // ISO instant is meaningless for them, so parse the time form only.
+                try {
+                    return java.sql.Time.valueOf(stored.trim());
+                } catch (Exception e) {
+                    log.warn("Unparseable stored time cursor '{}'; treating as absent", stored);
+                    return null;
+                }
+            }
             try {
                 return Timestamp.from(Instant.parse(stored));
             } catch (Exception e) {

@@ -74,7 +74,10 @@ public class MySqlDialect extends AbstractSqlDialect {
 
     @Override
     protected String timestampType() {
-        return "DATETIME";
+        // DATETIME(6), not DATETIME: scale 0 silently truncates fractional seconds on
+        // every synced row, and a truncated cursor column skews the row-count audit's
+        // "<= watermark" comparison. MySQL 5.6+ and MariaDB 10+ both support (6).
+        return "DATETIME(6)";
     }
 
     @Override

@@ -55,15 +55,24 @@ public class SyncTaskStore {
             task.setLastSyncTime(Instant.now());
             task.setLastSyncResult(truncate(result.summary()));
 
+            // A stop requested mid-cycle must survive the cycle's own outcome: the
+            // scheduler entry is already gone, so flipping back to RUNNING (or to
+            // ERROR, which promises "keeps retrying on schedule") would misreport
+            // the project as active. Stats are still recorded either way.
+            boolean stopped = task.getStatus() == TaskStatus.STOPPED;
             if (result.isSuccess()) {
                 task.setConsecutiveFailures(0);
-                task.setStatus(TaskStatus.RUNNING);
+                if (!stopped) {
+                    task.setStatus(TaskStatus.RUNNING);
+                }
             } else {
                 int failures = (task.getConsecutiveFailures() == null ? 0
                         : task.getConsecutiveFailures()) + 1;
                 task.setConsecutiveFailures(failures);
-                task.setStatus(failures >= properties.getMaxRetries()
-                        ? TaskStatus.ERROR : TaskStatus.RUNNING);
+                if (!stopped) {
+                    task.setStatus(failures >= properties.getMaxRetries()
+                            ? TaskStatus.ERROR : TaskStatus.RUNNING);
+                }
                 if (failures == properties.getMaxRetries()) {
                     log.error("Project {} has failed {} consecutive times; marking it ERROR. "
                             + "It keeps retrying on schedule.", projectId, failures);
@@ -90,9 +99,10 @@ public class SyncTaskStore {
     public void markStopped(Long projectId) {
         taskRepository.findByProjectId(projectId).ifPresent(task -> {
             task.setStatus(TaskStatus.STOPPED);
-            // Clear the lease so a restart is not blocked by a lock nobody holds.
-            task.setLockOwner(null);
-            task.setLockExpiresAt(null);
+            // The lease is deliberately NOT cleared here: a cycle may still be in
+            // flight, and dropping its lock would let another instance acquire it and
+            // run concurrently. The runner releases the lock when the cycle ends; a
+            // crashed owner's lease is reaped at startup (stable owner id) or via TTL.
             taskRepository.save(task);
         });
     }

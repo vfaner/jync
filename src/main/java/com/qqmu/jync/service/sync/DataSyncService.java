@@ -2,6 +2,7 @@ package com.qqmu.jync.service.sync;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -203,6 +204,18 @@ public class DataSyncService {
                 ? readHighWatermark(sourceConn, table, strategy, ctx)
                 : null;
 
+        Object upperBound = watermark == null ? null : parseCursor(watermark, strategy);
+        if (watermark != null && upperBound == null) {
+            // The source reported a high-watermark we cannot turn back into a bind value
+            // (an exotic temporal type, a corrupted cursor, ...). Loading unbounded would
+            // desync the stored cursor from the copied rows, and List.of(null) would NPE;
+            // fail this cycle instead so the next one retries cleanly.
+            log.warn("Cannot parse high-watermark '{}' for {} (column {}); skipping this cycle",
+                    watermark, table.getName(), strategy.getColumn());
+            result.error = "Unparseable high-watermark: " + watermark;
+            return result;
+        }
+
         SqlDialect sourceDialect = ctx.getSourceDialect();
         String selectSql = "SELECT * FROM "
                 + sourceDialect.qualify(ctx.getSourceSchema(), table.getName());
@@ -213,12 +226,16 @@ public class DataSyncService {
 
         log.info("Full load of {} -> {}", table.getName(), targetTable);
         WriteStats stats = copyRows(sourceConn, targetConn, selectSql,
-                watermark != null ? List.of(parseCursor(watermark, strategy)) : List.of(),
+                watermark != null ? List.of(upperBound) : List.of(),
                 table, targetTable, ctx);
 
         result.rowsWritten = stats.read;
         applyStats(result, stats);
-        result.newCursorValue = watermark;
+        // Same rewind as the incremental path: a source transaction whose in-window
+        // timestamp commits after the SELECT snapshot above would otherwise be skipped
+        // forever, because the next window starts after this watermark. applySafetyLag
+        // passes non-timestamp watermarks through untouched.
+        result.newCursorValue = watermark == null ? null : applySafetyLag(watermark);
 
         // 非增量策略（full-compare）没有真正的游标，我们存一个"行数指纹"到 lastSyncValue，
         // 让下一轮知道初始加载已经做过了，否则 lastSyncValue == null 会让每一轮都当成首次加载。
@@ -244,6 +261,15 @@ public class DataSyncService {
 
         Object lastCursor = parseCursor(progress.getLastSyncValue(), strategy);
         Object upperBound = parseCursor(watermark, strategy);
+        if (upperBound == null) {
+            // Same reasoning as fullLoad: a watermark we cannot re-parse must not be
+            // bound as a window edge (null would silently match no rows and still
+            // advance the cursor past them). Fail the cycle and retry next round.
+            log.warn("Cannot parse high-watermark '{}' for {} (column {}); skipping this cycle",
+                    watermark, table.getName(), strategy.getColumn());
+            result.error = "Unparseable high-watermark: " + watermark;
+            return result;
+        }
         if (lastCursor != null && !isGreaterThan(upperBound, lastCursor)) {
             // The watermark has not moved past what we already synced.
             return result;
@@ -273,13 +299,12 @@ public class DataSyncService {
                     progress.getLastSyncValue(), watermark);
         }
 
-        // Rewind the persisted watermark slightly for timestamp cursors, so a source
-        // transaction that committed out of clock order is re-read next cycle instead of
-        // being skipped forever. Numeric cursors need no rewind: an identity value is
-        // assigned and committed in order relative to the sequence.
-        result.newCursorValue = strategy.getKind() == CursorStrategy.Kind.TIMESTAMP
-                ? applySafetyLag(watermark)
-                : watermark;
+        // Rewind the persisted watermark slightly, so a source transaction that committed
+        // out of clock order is re-read next cycle instead of being skipped forever.
+        // Decided by the watermark's VALUE, not the strategy kind: a temporal column
+        // resolved as IDENTITY (e.g. a create-time column) still parses as an instant and
+        // gets the lag; a numeric identity watermark does not parse and passes through.
+        result.newCursorValue = applySafetyLag(watermark);
         return result;
     }
 
@@ -389,20 +414,89 @@ public class DataSyncService {
             return null;
         }
 
+        SqlDialect targetDialect = ctx.getTargetDialect();
+        String targetTable = ctx.getConfig().targetTableName(table.getName());
+
+        // The target cursor column can be coarser than the source's — a legacy table
+        // created as DATETIME(0) before the MySQL dialect emitted DATETIME(6). Drivers
+        // ROUND fractional seconds on insert, so a row exactly at the bound can be stored
+        // up to half a unit ABOVE it; comparing the raw bound on both sides then reports
+        // the target as permanently short and fires corrective reload after reload.
+        // Truncate the bound to the target column's own scale and use it for both counts:
+        // every row the truncated bound counts at the source was synced, and its rounded
+        // stored value still satisfies the truncated bound — no false deficit. Rows whose
+        // stored value rounds past it simply drop out of both counts, and an unsynced row
+        // just above the bound can only inflate the TARGET side, which the one-sided test
+        // ignores by design.
+        Object bound = cursor;
+        if (cursor instanceof Timestamp) {
+            int scale = targetCursorScale(targetConn, ctx.getTargetSchema(), targetTable,
+                    strategy.getColumn());
+            bound = truncateToScale((Timestamp) cursor, scale);
+        }
+
         SqlDialect sourceDialect = ctx.getSourceDialect();
         long sourceRows = countAtOrBelow(sourceConn,
                 sourceDialect.qualify(ctx.getSourceSchema(), table.getName()),
-                sourceDialect.quoteIdentifier(strategy.getColumn()), cursor);
+                sourceDialect.quoteIdentifier(strategy.getColumn()), bound);
 
-        SqlDialect targetDialect = ctx.getTargetDialect();
-        String targetTable = ctx.getConfig().targetTableName(table.getName());
         long targetRows = countAtOrBelow(targetConn,
                 targetDialect.qualify(ctx.getTargetSchema(), targetTable),
                 // Column names are copied verbatim from the source, so the cursor column is
                 // spelled the same on both sides; only the quoting differs.
-                targetDialect.quoteIdentifier(strategy.getColumn()), cursor);
+                targetDialect.quoteIdentifier(strategy.getColumn()), bound);
 
         return new RowCountAudit(sourceRows, targetRows);
+    }
+
+    /** DECIMAL_DIGITS of the target cursor column, or -1 when the driver will not say. */
+    private int targetCursorScale(Connection targetConn, String schema, String table,
+                                  String column) {
+        try {
+            DatabaseMetaData md = targetConn.getMetaData();
+            int scale = columnScale(md, null, schema, table, column);
+            if (scale < 0) {
+                // MySQL-family drivers carry the database in the CATALOG and report a
+                // null schema; retry with the schema name in the catalog slot.
+                scale = columnScale(md, schema, null, table, column);
+            }
+            return scale;
+        } catch (SQLException e) {
+            log.debug("Cannot read cursor column scale for {}.{}: {}", table, column, e.getMessage());
+            return -1;
+        }
+    }
+
+    private int columnScale(DatabaseMetaData md, String catalog, String schema,
+                            String table, String column) throws SQLException {
+        try (ResultSet rs = md.getColumns(catalog, schema, table, column)) {
+            if (rs.next()) {
+                return rs.getInt("DECIMAL_DIGITS");
+            }
+        }
+        // Oracle and DB2 fold identifiers to upper case in their dictionaries.
+        try (ResultSet rs = md.getColumns(
+                catalog == null ? null : catalog.toUpperCase(),
+                schema == null ? null : schema.toUpperCase(),
+                table.toUpperCase(), column.toUpperCase())) {
+            if (rs.next()) {
+                return rs.getInt("DECIMAL_DIGITS");
+            }
+        }
+        return -1;
+    }
+
+    /** Drops precision below the given scale, so the bound compares like a stored value. */
+    private Timestamp truncateToScale(Timestamp ts, int scale) {
+        if (scale < 0 || scale >= 9) {
+            return ts;
+        }
+        long unit = 1L;
+        for (int i = 0; i < 9 - scale; i++) {
+            unit *= 10L;
+        }
+        long remainder = Math.floorMod(ts.toInstant().getNano(), unit);
+        return remainder == 0 ? ts : Timestamp.from(ts.toInstant().minusNanos(remainder));
     }
 
     private long countAtOrBelow(Connection conn, String qualifiedTable, String quotedColumn,

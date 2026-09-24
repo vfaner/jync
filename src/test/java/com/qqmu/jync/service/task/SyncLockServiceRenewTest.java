@@ -25,7 +25,7 @@ class SyncLockServiceRenewTest {
     @BeforeEach
     void setUp() {
         store = mock(SyncLockStore.class);
-        service = new SyncLockService(store, new SyncProperties());
+        service = new SyncLockService(store, new SyncProperties(), 8080);
         when(store.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
     }
 

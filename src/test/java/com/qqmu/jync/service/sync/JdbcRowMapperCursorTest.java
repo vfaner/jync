@@ -44,6 +44,38 @@ class JdbcRowMapperCursorTest {
     }
 
     @Test
+    void timeCursorRoundTrips() {
+        // TIME is in CursorTypes.isTemporal, so a TIME column can be chosen as the cursor.
+        // The mapper used to store it as "14:05:06" but parse temporal cursors only via
+        // Instant.parse / Timestamp.valueOf — both fail on a bare time, the null bound then
+        // reached List.of(...) and the whole full load died with an NPE.
+        java.sql.Time source = java.sql.Time.valueOf("14:05:06");
+
+        String stored = JdbcRowMapper.cursorToString(source);
+        Object restored = JdbcRowMapper.cursorFromString(stored, Types.TIME);
+
+        assertThat(stored).isEqualTo("14:05:06");
+        assertThat(restored).isInstanceOf(java.sql.Time.class);
+        assertThat(restored.toString()).isEqualTo("14:05:06");
+    }
+
+    @Test
+    void aLocalTimeWatermarkIsStoredWithSecondsSoItParsesBack() {
+        // Drivers may hand back java.time.LocalTime. LocalTime.toString() omits ":00"
+        // seconds ("09:30"), which java.sql.Time.valueOf rejects — the stored form must
+        // be normalized, not String.valueOf'd.
+        String stored = JdbcRowMapper.cursorToString(java.time.LocalTime.of(9, 30));
+        assertThat(stored).isEqualTo("09:30:00");
+        assertThat(JdbcRowMapper.cursorFromString(stored, Types.TIME))
+                .isInstanceOf(java.sql.Time.class);
+    }
+
+    @Test
+    void anUnparseableTimeCursorIsTreatedAsAbsent() {
+        assertThat(JdbcRowMapper.cursorFromString("not-a-time", Types.TIME)).isNull();
+    }
+
+    @Test
     void numericCursorRoundTrips() {
         String stored = JdbcRowMapper.cursorToString(123456789L);
         Object restored = JdbcRowMapper.cursorFromString(stored, Types.BIGINT);

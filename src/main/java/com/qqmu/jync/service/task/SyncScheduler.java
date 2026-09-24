@@ -60,7 +60,7 @@ public class SyncScheduler {
      *
      * <p>Safe to call repeatedly: an existing job is replaced rather than duplicated.
      */
-    public void reschedule(Project project) {
+    public synchronized void reschedule(Project project) {
         if (Boolean.TRUE.equals(project.getEnabled())) {
             schedule(project);
         } else {
@@ -68,8 +68,14 @@ public class SyncScheduler {
         }
     }
 
-    /** Registers the polling job, replacing any previous registration. */
-    public void schedule(Project project) {
+    /**
+     * Registers the polling job, replacing any previous registration.
+     *
+     * <p>Synchronized: check-exists → delete → schedule is a compound step, and callers
+     * overlap (startup re-registration vs. a UI save, two saves in quick flight). Without
+     * the monitor a race ends in ObjectAlreadyExistsException or a silently missing job.
+     */
+    public synchronized void schedule(Project project) {
         Long projectId = project.getId();
         SyncTask task = taskStore.ensureTask(project);
         SyncConfig config = contextFactory.parseConfig(project);
@@ -145,7 +151,7 @@ public class SyncScheduler {
     }
 
     /** Removes the polling job, pausing the project. In-flight cycles finish on their own. */
-    public void unschedule(Long projectId) {
+    public synchronized void unschedule(Long projectId) {
         try {
             if (scheduler.checkExists(jobKey(projectId))) {
                 scheduler.deleteJob(jobKey(projectId));

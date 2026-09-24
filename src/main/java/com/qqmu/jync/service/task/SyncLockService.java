@@ -45,22 +45,26 @@ public class SyncLockService {
 
     private final Map<Long, ReentrantLock> jvmLocks = new ConcurrentHashMap<>();
 
-    public SyncLockService(SyncLockStore store, SyncProperties properties) {
+    public SyncLockService(SyncLockStore store, SyncProperties properties,
+                           @org.springframework.beans.factory.annotation.Value("${server.port:8080}") int serverPort) {
         this.store = store;
         this.properties = properties;
-        this.ownerId = buildOwnerId();
+        this.ownerId = buildOwnerId(serverPort);
         log.info("Sync lock owner id for this instance: {}", ownerId);
     }
 
-    private String buildOwnerId() {
+    private String buildOwnerId(int serverPort) {
         String host;
         try {
             host = java.net.InetAddress.getLocalHost().getHostName();
         } catch (Exception e) {
             host = "unknown-host";
         }
-        // The PID distinguishes two instances started on the same machine.
-        return host + ":" + ProcessHandle.current().pid();
+        // host:port, NOT host:pid — the id must be STABLE across restarts so a fresh
+        // instance reaps the locks its crashed predecessor left behind (releaseAllOf
+        // matches by owner). The port still distinguishes two instances on one machine;
+        // a pid would differ on every restart and orphan those locks until TTL expiry.
+        return host + ":" + serverPort;
     }
 
     public String getOwnerId() {

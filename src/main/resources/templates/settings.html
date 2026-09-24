@@ -58,7 +58,7 @@
                 <div class="card-body">
                     <dl class="dl pairs authors">
                         <!-- 仓库行：dt 用品牌图标代替文字标签（alt 仍取 i18n 键），dd 只放超链接 -->
-                        <div class="kv">
+                        <div class="kv" th:if="${not #strings.isEmpty(githubUrl)}">
                             <dt><img th:src="@{/assets/github.svg}" th:alt="#{settings.githubUrl}"
                                      alt="GitHub" width="15" height="15" class="gh-ico"></dt>
                             <dd>

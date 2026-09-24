@@ -151,7 +151,8 @@ class SqlDialectTest {
     @Test
     void timestampMapsToTheWidestAvailableTypePerProduct() {
         ColumnMeta ts = column("created", "TIMESTAMP", Types.TIMESTAMP, 26);
-        assertThat(mysql.mapType(ts, DatabaseType.POSTGRESQL)).isEqualTo("DATETIME");
+        // (6) keeps fractional seconds; plain DATETIME would truncate every synced row.
+        assertThat(mysql.mapType(ts, DatabaseType.POSTGRESQL)).isEqualTo("DATETIME(6)");
         // DATETIME2 has wider range and precision than DATETIME.
         assertThat(sqlServer.mapType(ts, DatabaseType.POSTGRESQL)).isEqualTo("DATETIME2");
         assertThat(oracle.mapType(ts, DatabaseType.POSTGRESQL)).isEqualTo("TIMESTAMP");
@@ -296,14 +297,14 @@ class SqlDialectTest {
     void oracleDateKeepsItsTimeComponentOnANonOracleTarget() {
         ColumnMeta d = column("created", "DATE", Types.DATE, 7);
 
-        assertThat(mysql.mapType(d, DatabaseType.ORACLE)).isEqualTo("DATETIME");
+        assertThat(mysql.mapType(d, DatabaseType.ORACLE)).isEqualTo("DATETIME(6)");
         assertThat(sqlServer.mapType(d, DatabaseType.ORACLE)).isEqualTo("DATETIME2");
         assertThat(postgres.mapType(d, DatabaseType.ORACLE)).containsIgnoringCase("TIMESTAMP");
         assertThat(db2.mapType(d, DatabaseType.ORACLE)).isEqualTo("TIMESTAMP");
 
         // Family members share the semantics, so they must share the widening.
-        assertThat(mysql.mapType(d, DatabaseType.DM)).isEqualTo("DATETIME");
-        assertThat(mysql.mapType(d, DatabaseType.YASHANDB)).isEqualTo("DATETIME");
+        assertThat(mysql.mapType(d, DatabaseType.DM)).isEqualTo("DATETIME(6)");
+        assertThat(mysql.mapType(d, DatabaseType.YASHANDB)).isEqualTo("DATETIME(6)");
         assertThat(postgres.mapType(d, DatabaseType.YASHANDB)).containsIgnoringCase("TIMESTAMP");
     }
 

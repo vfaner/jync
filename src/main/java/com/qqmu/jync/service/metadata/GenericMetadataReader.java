@@ -447,8 +447,13 @@ public class GenericMetadataReader implements MetadataReader {
             return false;
         }
         boolean schemaRequested = requestedSchema != null && !requestedSchema.isBlank();
+        // The driver is queried with schemaPattern(requestedSchema), which subclasses may
+        // normalize (Oracle/DB2 uppercase it). The reported schema then matches the
+        // PATTERN, not the raw request — compare against both or a lowercase request
+        // would filter out every row on a case-normalizing driver.
         return !schemaRequested || reportedSchema == null
-                || reportedSchema.equals(requestedSchema);
+                || reportedSchema.equals(requestedSchema)
+                || reportedSchema.equals(schemaPattern(requestedSchema));
     }
 
     /** Filters out recycle-bin and system-generated objects that must never be synced. */

@@ -608,11 +608,17 @@
             ? 'conversion.validateOk' : 'conversion.validateFailed');
           body.appendChild(head);
 
-          // 失败时目标库自己的报错最有用；message 也可能是 i18n key，t() 找不到时原样返回
+          // 失败时目标库自己的报错最有用；message 也可能是 i18n key，t() 找不到时原样返回。
+          // 服务端会拼 "key: 驱动原始报错"，先在第一个 ": " 处拆开：key 部分走翻译，
+          // 驱动细节原样附上（t() 未命中时返回原文，拆开再拼回是无损的）。
           if (!payload.success && payload.message) {
             var detail = document.createElement('div');
             detail.className = 'small mono';
-            detail.textContent = t(payload.message);
+            var msg = String(payload.message);
+            var cut = msg.indexOf(': ');
+            detail.textContent = cut > -1
+              ? t(msg.slice(0, cut)) + msg.slice(cut)
+              : t(msg);
             body.appendChild(detail);
           }
           // 即使通过也要显示 caveats：「目标库接受了」和「行为一致」是两件事

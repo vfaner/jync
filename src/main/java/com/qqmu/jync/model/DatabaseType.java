@@ -114,9 +114,15 @@ public enum DatabaseType {
             "jdbc:oscar://%s:%d/%s",
             2003, DialectFamily.POSTGRES),
 
+    /**
+     * GENERIC, not MYSQL: H2 only understands MySQL syntax when explicitly started with
+     * {@code MODE=MySQL}, and the MySQL dialect's DDL suffix
+     * ({@code ENGINE=InnoDB DEFAULT CHARSET=utf8mb4}) is rejected by a default-mode H2.
+     * The generic dialect emits standard SQL that H2 accepts in any mode.
+     */
     H2("H2", "org.h2.Driver",
             "jdbc:h2:tcp://%s:%d/%s",
-            9092, DialectFamily.MYSQL),
+            9092, DialectFamily.GENERIC),
 
     CUSTOM("自定义 Custom", null, null, 0, DialectFamily.GENERIC);
 
