@@ -243,6 +243,21 @@ class SqlDialectTest {
     }
 
     @Test
+    void mysqlCurrentTimestampDefaultCarriesTheColumnFractionalPrecision() {
+        // MySQL rejects DATETIME(6) DEFAULT CURRENT_TIMESTAMP as a precision mismatch
+        // (error 1067, "Invalid default value"); the default must repeat the column's (6).
+        ColumnMeta ts = column("update_time", "TIMESTAMP", Types.TIMESTAMP, 26);
+        ts.setDefaultValue("CURRENT_TIMESTAMP");
+        assertThat(mysql.renderDefaultValue(ts)).isEqualTo("CURRENT_TIMESTAMP(6)");
+
+        TableMeta table = new TableMeta();
+        table.setName("orders");
+        table.setColumns(List.of(ts));
+        assertThat(mysql.getCreateTableSql(table, "cee", "orders", DatabaseType.MYSQL))
+                .contains("DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6)");
+    }
+
+    @Test
     void postgresQuotedDefaultWithACastIsNormalized() {
         ColumnMeta col = column("state", "VARCHAR", Types.VARCHAR, 20);
         col.setDefaultValue("'active'::character varying");

@@ -96,6 +96,17 @@ public class MySqlDialect extends AbstractSqlDialect {
         return "DATETIME(6)";
     }
 
+    /**
+     * MySQL requires a temporal default's fractional precision to match the column's:
+     * {@code DATETIME(6) DEFAULT CURRENT_TIMESTAMP} is rejected with "Invalid default
+     * value" (error 1067), {@code CURRENT_TIMESTAMP(6)} is accepted. {@link #timestampType()}
+     * always maps to DATETIME(6), so the default must always carry the (6).
+     */
+    @Override
+    protected String currentTimestampFunction() {
+        return "CURRENT_TIMESTAMP(6)";
+    }
+
     @Override
     protected String blobType() {
         return "LONGBLOB";
