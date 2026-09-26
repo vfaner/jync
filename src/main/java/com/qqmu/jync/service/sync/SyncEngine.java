@@ -11,6 +11,7 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.config.SyncProperties;
@@ -399,7 +400,9 @@ public class SyncEngine {
 
         // 游标只能证明"我们读到哪儿了"，证明不了"目标真的收到了"。定期核对一次行数，
         // 目标少了就把游标清掉，让下一轮重新全量读一遍。
-        auditRowCounts(table, sourceConn, targetConn, strategy, progress, ctx);
+        // 用审计返回的实例继续：一旦它清了游标，修复是在自己的事务里提交的，
+        // 只有返回的那个实例带着新版本号，旧引用再写就会撞乐观锁。
+        progress = auditRowCounts(table, sourceConn, targetConn, strategy, progress, ctx);
 
         DataSyncService.TableSyncResult tableResult = dataSync.syncTable(
                 sourceConn, targetConn, table, strategy, progress, ctx);
@@ -430,7 +433,16 @@ public class SyncEngine {
 
         // Advance the cursor only now that the target has committed the data. This ordering is
         // the core of the crash- and concurrency-safety argument.
-        stateWriter.advanceCursor(progress, tableResult, strategy);
+        try {
+            stateWriter.advanceCursor(progress, tableResult, strategy);
+        } catch (OptimisticLockingFailureException e) {
+            // 本轮周期里这行被别人写过（比如手工重置进度）。那个事务已经提交，
+            // 重读当前行再推进，别让目标已经收到的数据下一轮再全量付一遍。
+            log.warn("Cursor row for {} was written concurrently; re-reading before advancing: {}",
+                    table.getName(), e.getMessage());
+            progress = stateWriter.loadOrCreateProgress(ctx.projectId(), table.getName());
+            stateWriter.advanceCursor(progress, tableResult, strategy);
+        }
 
         result.setTablesProcessed(result.getTablesProcessed() + 1);
         int changed = tableResult.getRowsChanged();
@@ -502,12 +514,16 @@ public class SyncEngine {
      * <p>Clearing the cursor is the whole repair: the next pass sees no cursor, takes the
      * full-load path, and re-upserts the table. Failures here are logged and swallowed — an
      * audit that cannot run must not stop the sync it was meant to protect.
+     *
+     * <p>Returns the progress instance the cycle must continue with: a repair commits in its
+     * own transaction and bumps the row's version, so the instance handed in here is stale
+     * afterwards whenever the cursor was actually cleared.
      */
-    private void auditRowCounts(TableMeta table, Connection sourceConn, Connection targetConn,
-                                CursorStrategy strategy, SyncProgress progress, SyncContext ctx) {
+    private SyncProgress auditRowCounts(TableMeta table, Connection sourceConn, Connection targetConn,
+                                        CursorStrategy strategy, SyncProgress progress, SyncContext ctx) {
         long interval = properties.getRowCountAuditIntervalMs();
         if (interval <= 0) {
-            return;
+            return progress;
         }
         // COUNT(*) is a full index scan on InnoDB, and the poll cycle is measured in seconds.
         // Throttling per table keeps the audit's cost proportional to its usefulness.
@@ -515,7 +531,7 @@ public class SyncEngine {
         long now = System.currentTimeMillis();
         Long previous = lastRowCountAudit.get(key);
         if (previous != null && now - previous < interval) {
-            return;
+            return progress;
         }
         lastRowCountAudit.put(key, now);
 
@@ -523,7 +539,7 @@ public class SyncEngine {
             DataSyncService.RowCountAudit audit = dataSync.auditSyncedRowCounts(
                     sourceConn, targetConn, table, strategy, progress, ctx);
             if (audit == null || !audit.isTargetShort()) {
-                return;
+                return progress;
             }
             long missing = audit.getSourceRows() - audit.getTargetRows();
             // Read before clearing: clearCursor nulls this field on the same instance.
@@ -531,7 +547,7 @@ public class SyncEngine {
             log.warn("Row count audit failed for {}: source has {} row(s) at or below cursor {}"
                             + " but target has {} — forcing a full reload of this table",
                     table.getName(), audit.getSourceRows(), cursor, audit.getTargetRows());
-            stateWriter.clearCursor(progress);
+            progress = stateWriter.clearCursor(progress);
             stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
                     ChangeType.INFO,
                     "Row count audit: target is missing " + missing + " row(s) already marked as"
@@ -543,6 +559,7 @@ public class SyncEngine {
             // Worth knowing about, but not worth failing the table over.
             log.warn("Row count audit could not run for {}: {}", table.getName(), e.getMessage());
         }
+        return progress;
     }
 
     /**

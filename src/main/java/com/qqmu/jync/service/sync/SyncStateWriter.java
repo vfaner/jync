@@ -75,11 +75,18 @@ public class SyncStateWriter {
      * well would additionally re-arm {@code truncateBeforeInitialLoad} — emptying the target
      * before refilling it, which for a repair would throw away exactly the rows the reload is
      * meant to protect.
+     *
+     * <p>Returns the progress instance to continue with; see the save comment for why the
+     * caller's own reference is stale once this method commits.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void clearCursor(SyncProgress progress) {
+    public SyncProgress clearCursor(SyncProgress progress) {
         progress.setLastSyncValue(null);
-        progressRepository.save(progress);
+        // Return the saved row and require callers to continue with it. save() merges this
+        // detached instance into a managed copy whose version is bumped at commit, so a caller
+        // that kept its old reference would fail the optimistic lock on its next write — which
+        // is exactly what happened when a cycle advanced the cursor after an audit repair.
+        return progressRepository.save(progress);
     }
 
     /** Loads a table's progress row, creating a fresh one on first sight. */
