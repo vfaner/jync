@@ -99,12 +99,11 @@
                 </button>
             </div>
 
-            <!--/* AI 的「不保证」清单：这是这套流程里最有价值的输出，位置放在 SQL 之前 */-->
-            <div id="uncertainty-box" class="alert alert-warn" style="display:none">
+            <!--/* AI 输出只是候选：起草完成后提醒人工自测，不再逐条罗列模型自语 */-->
+            <div id="draft-notice" class="alert alert-warn" style="display:none">
                 <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
                 <div class="alert-body">
-                    <strong th:text="#{conversion.uncertainties}">Not guaranteed</strong>
-                    <ul id="uncertainty-list" class="small" style="margin:6px 0 0 18px"></ul>
+                    <span th:text="#{conversion.manualTestNotice}">Test manually first</span>
                 </div>
             </div>
 
@@ -114,8 +113,8 @@
                   th:action="@{/projects/{id}/conversions/{kind}/{name}/save(id=${projectId}, kind=${detail.kind}, name=${detail.name})}">
                 <div class="field">
                     <label for="override-sql" th:text="#{conversion.editorLabel}">Statement</label>
-                    <textarea id="override-sql" name="sql" class="input mono" rows="18"
-                              spellcheck="false"
+                    <textarea id="override-sql" name="sql" class="input mono sql-edit" rows="18"
+                              wrap="off" spellcheck="false"
                               th:attr="readonly=${isAdmin} ? null : 'readonly'"
                               th:text="${detail.editorSeed()}"></textarea>
                     <p class="help" th:text="#{conversion.editorHelp}">

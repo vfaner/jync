@@ -570,12 +570,4 @@ public class SyncEngine {
     public void resetProject(Long projectId) {
         stateWriter.resetProject(projectId);
     }
-
-    /** Batch size for a project, honouring its override. */
-    public int resolveBatchSize(Integer projectOverride) {
-        if (projectOverride != null && projectOverride > 0) {
-            return projectOverride;
-        }
-        return properties.getBatchSize();
-    }
 }

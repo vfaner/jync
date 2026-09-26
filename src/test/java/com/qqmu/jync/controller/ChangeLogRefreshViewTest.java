@@ -108,7 +108,7 @@ class ChangeLogRefreshViewTest {
                 .contains("data-role=\"log-refresh\"")
                 .contains("data-role=\"log-auto\"");
         // ...and the reason they could not simply be added next to it.
-        assertThat(html).doesNotContain("data-role=\"clear-logs-form\"");
+        assertThat(html).doesNotContain("/change-logs/clear");
     }
 
     @Test
@@ -120,7 +120,7 @@ class ChangeLogRefreshViewTest {
         assertThat(html)
                 .contains("data-role=\"log-refresh\"")
                 .contains("data-role=\"log-auto\"")
-                .contains("data-role=\"clear-logs-form\"");
+                .contains("/change-logs/clear");
     }
 
     /**

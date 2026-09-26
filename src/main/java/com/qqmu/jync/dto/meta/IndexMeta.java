@@ -23,9 +23,6 @@ public class IndexMeta {
     /** True when this index backs the primary key and must not be created separately. */
     private boolean primaryKey;
 
-    /** Product-specific index kind, e.g. BTREE / HASH. May be null. */
-    private String indexType;
-
     public String signature() {
         return String.join("|",
                 String.valueOf(name).toUpperCase(),

@@ -3,9 +3,7 @@ package com.qqmu.jync.service.metadata;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Instant;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -104,7 +102,6 @@ public class MetadataSnapshotService {
         }
         snapshot.setSnapshotJson(json);
         snapshot.setContentHash(hash);
-        snapshot.setCapturedAt(Instant.now());
         repository.save(snapshot);
     }
 
@@ -117,10 +114,6 @@ public class MetadataSnapshotService {
     public void deleteAllForProject(Long projectId) {
         repository.deleteByProjectId(projectId);
         log.info("Cleared all metadata snapshots for project {}", projectId);
-    }
-
-    public List<MetadataSnapshot> findByProject(Long projectId) {
-        return repository.findByProjectId(projectId);
     }
 
     static String sha256(String input) {

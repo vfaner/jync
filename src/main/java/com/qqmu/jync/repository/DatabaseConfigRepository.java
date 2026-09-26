@@ -19,6 +19,4 @@ public interface DatabaseConfigRepository extends JpaRepository<DatabaseConfig, 
     Page<DatabaseConfig> findByRoleOrderByNameAsc(ConnectionRole role, Pageable pageable);
 
     List<DatabaseConfig> findByRoleOrderByNameAsc(ConnectionRole role);
-
-    long countByRole(ConnectionRole role);
 }

@@ -28,7 +28,7 @@ class AiSqlAssistantTest {
 
     /** Returns a canned reply and records what it was asked. */
     private static class StubClient extends AiChatClient {
-        private String reply = "{}";
+        private String reply = "CREATE PROCEDURE x() BEGIN END";
         private boolean fail;
         private String failMessage = "HTTP 401";
 
@@ -89,7 +89,6 @@ class AiSqlAssistantTest {
     @Test
     @DisplayName("both products, the object name and the source body reach the prompt")
     void thePromptNamesBothProductsAndCarriesTheSource() {
-        client.reply = "{\"sql\":\"CREATE PROCEDURE x() BEGIN END\",\"uncertainties\":[]}";
         draft();
 
         assertThat(client.lastUser)
@@ -103,22 +102,20 @@ class AiSqlAssistantTest {
     }
 
     @Test
-    @DisplayName("the system prompt forbids inventing schema and demands an uncertainty list")
+    @DisplayName("the system prompt forbids inventing schema and demands the statement alone")
     void theSystemPromptCarriesTheTwoRulesThatMatter() {
-        client.reply = "{\"sql\":\"x\",\"uncertainties\":[]}";
         draft();
 
-        // These two rules are why the whole workflow is trustworthy. If a refactor drops them
-        // the feature still "works" and silently becomes much more dangerous.
+        // "Never invent" is why the workflow is trustworthy: if a refactor drops it the feature
+        // still "works" and silently becomes much more dangerous. "Nothing else" is what keeps
+        // the reply usable verbatim, with no wrapper to parse or to leak into the editor.
         assertThat(client.lastSystem).contains("Never invent");
-        assertThat(client.lastSystem).contains("uncertainties");
-        assertThat(client.lastSystem).contains("NO_DATA_FOUND");
+        assertThat(client.lastSystem).contains("nothing else");
     }
 
     @Test
     @DisplayName("the mechanical attempt is offered as a starting point when it differs")
     void theMechanicalAttemptIsIncluded() {
-        client.reply = "{\"sql\":\"x\",\"uncertainties\":[]}";
         assistant.draft("PROCEDURE", "GET_TOTAL", ORACLE_BODY,
                 "CREATE PROCEDURE GET_TOTAL(p_id DECIMAL) BEGIN SELECT IFNULL(SUM(amount),0); END",
                 DatabaseType.ORACLE, DatabaseType.MYSQL);
@@ -129,7 +126,6 @@ class AiSqlAssistantTest {
     @Test
     @DisplayName("a mechanical attempt identical to the source is not pasted in twice")
     void anIdenticalMechanicalAttemptIsNotRepeated() {
-        client.reply = "{\"sql\":\"x\",\"uncertainties\":[]}";
         assistant.draft("PROCEDURE", "GET_TOTAL", ORACLE_BODY, ORACLE_BODY,
                 DatabaseType.ORACLE, DatabaseType.DM);
 
@@ -139,49 +135,30 @@ class AiSqlAssistantTest {
     }
 
     @Test
-    @DisplayName("a bare JSON reply is parsed")
-    void aBareJsonReplyIsParsed() {
-        client.reply = "{\"sql\":\"CREATE PROCEDURE p() BEGIN SELECT 1; END\","
-                + "\"uncertainties\":[\"Cursor loop rewritten as a WHILE loop\"]}";
+    @DisplayName("a plain SQL reply is used verbatim")
+    void aPlainSqlReplyIsUsedVerbatim() {
+        client.reply = "CREATE PROCEDURE p() BEGIN SELECT 1; END";
         AiSqlAssistant.Candidate candidate = draft();
 
         assertThat(candidate.isSuccess()).isTrue();
         assertThat(candidate.getSql()).isEqualTo("CREATE PROCEDURE p() BEGIN SELECT 1; END");
-        assertThat(candidate.getUncertainties())
-                .containsExactly("Cursor loop rewritten as a WHILE loop");
         assertThat(candidate.getModel()).isEqualTo("served-model");
     }
 
     @Test
-    @DisplayName("a JSON reply wrapped in a markdown fence is parsed")
-    void aFencedJsonReplyIsParsed() {
+    @DisplayName("a reply wrapped in a markdown fence is unwrapped")
+    void aFencedReplyIsUnwrapped() {
+        // The prompt forbids the fence; models emit one anyway often enough that stripping it
+        // is part of the contract rather than a workaround.
         client.reply = """
-                ```json
-                {"sql": "CREATE PROCEDURE p() BEGIN SELECT 1; END", "uncertainties": ["a", "b"]}
+                ```sql
+                CREATE PROCEDURE p() BEGIN SELECT 1; END
                 ```
                 """;
         AiSqlAssistant.Candidate candidate = draft();
 
         assertThat(candidate.isSuccess()).isTrue();
         assertThat(candidate.getSql()).isEqualTo("CREATE PROCEDURE p() BEGIN SELECT 1; END");
-        assertThat(candidate.getUncertainties()).containsExactly("a", "b");
-    }
-
-    @Test
-    @DisplayName("a reply that ignores the JSON contract is used as SQL but flagged")
-    void anUnstructuredReplyIsUsedAndFlagged() {
-        client.reply = """
-                ```sql
-                CREATE PROCEDURE GET_TOTAL(IN p_id DECIMAL) BEGIN SELECT 1; END
-                ```
-                """;
-        AiSqlAssistant.Candidate candidate = draft();
-
-        assertThat(candidate.isSuccess()).isTrue();
-        assertThat(candidate.getSql()).startsWith("CREATE PROCEDURE GET_TOTAL");
-        // A model that ignored the output format may have ignored "do not invent" too, so the
-        // reviewer is told rather than handed clean-looking SQL with no caveat.
-        assertThat(candidate.getUncertainties()).containsExactly("error.ai.unstructuredReply");
     }
 
     @Test
@@ -197,28 +174,16 @@ class AiSqlAssistantTest {
     }
 
     @Test
-    @DisplayName("an empty sql field means the model declined, and its reasons are kept")
-    void anEmptySqlFieldMeansDeclined() {
-        client.reply = "{\"sql\":\"\",\"uncertainties\":"
-                + "[\"Package-level state has no MySQL equivalent\"]}";
+    @DisplayName("a reply with nothing in it means the model declined")
+    void anEmptyReplyAfterStrippingMeansDeclined() {
+        // Rule 4: an impossible conversion is answered with nothing. That must read as a
+        // considered "no", not as a transport failure the user should retry.
+        client.reply = "```sql\n```";
         AiSqlAssistant.Candidate candidate = draft();
 
         assertThat(candidate.isSuccess()).isFalse();
         assertThat(candidate.getMessage()).isEqualTo("error.ai.declined");
-        // The refusal reason is the whole value of the answer; losing it would make a declined
-        // conversion indistinguishable from a network error.
-        assertThat(candidate.getUncertainties())
-                .containsExactly("Package-level state has no MySQL equivalent");
-    }
-
-    @Test
-    @DisplayName("blank uncertainty entries are dropped rather than shown as empty bullets")
-    void blankUncertaintyEntriesAreDropped() {
-        client.reply = "{\"sql\":\"CREATE PROCEDURE p() BEGIN END\","
-                + "\"uncertainties\":[\"real concern\",\"\",\"   \"]}";
-        AiSqlAssistant.Candidate candidate = draft();
-
-        assertThat(candidate.getUncertainties()).containsExactly("real concern");
+        assertThat(candidate.getSql()).isEmpty();
     }
 
     @Test
@@ -271,7 +236,6 @@ class AiSqlAssistantTest {
     @Test
     @DisplayName("the provider's Max Tokens is the reply budget")
     void theProvidersBudgetIsUsed() {
-        client.reply = "{\"sql\":\"x\",\"uncertainties\":[]}";
         provider.setMaxTokens(8192);
         draft();
 
@@ -281,7 +245,6 @@ class AiSqlAssistantTest {
     @Test
     @DisplayName("an unset Max Tokens falls back to a usable default, not zero")
     void anUnsetBudgetFallsBack() {
-        client.reply = "{\"sql\":\"x\",\"uncertainties\":[]}";
         provider.setMaxTokens(null);
         draft();
 
@@ -292,7 +255,6 @@ class AiSqlAssistantTest {
     @Test
     @DisplayName("the decrypted key is what gets sent, never the stored ciphertext")
     void theDecryptedKeyIsUsed() {
-        client.reply = "{\"sql\":\"x\",\"uncertainties\":[]}";
         provider.setApiKey("enc:ciphertext");
         draft();
 

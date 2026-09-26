@@ -74,11 +74,6 @@ public class ConnectionTestService {
         return result;
     }
 
-    /** Simple boolean form, matching the interface described in the specification. */
-    public boolean testConnection(DatabaseConfig config) {
-        return test(config).isSuccess();
-    }
-
     private String sqlMessage(SQLException e) {
         StringBuilder sb = new StringBuilder();
         if (e.getSQLState() != null) {

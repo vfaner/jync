@@ -111,12 +111,184 @@ public class AiChatClient {
         }
     }
 
+    /**
+     * Sends one streaming completion request, handing each text delta to {@code sink} as it
+     * arrives, and returns the accumulated reply in the usual {@link ChatResult}.
+     *
+     * <p>Exists because a conversion draft is as long as the procedure it rewrites: waiting for
+     * the whole body in one buffer means the reviewer watches a spinner for the entire
+     * generation. Streaming moves the first visible text to the first network chunk.
+     *
+     * <p>The request timeout bounds the header wait; for the body the same value is used as a
+     * stall limit between consecutive lines. It is deliberately not an absolute deadline: a
+     * gateway that buffers the whole generation goes silent for exactly that long, and failing
+     * it would break drafts the buffered call completes.
+     */
+    public ChatResult stream(AiProvider provider, String apiKey, String system, String user,
+                             int maxTokens, java.util.function.Consumer<String> sink) {
+        AiProtocol protocol = provider.getProtocol() == null
+                ? AiProtocol.OPENAI : provider.getProtocol();
+        String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
+        String model = provider.getModel() == null ? "" : provider.getModel().trim();
+        long start = System.currentTimeMillis();
+
+        if (model.isEmpty()) {
+            return ChatResult.failure("error.ai.model.required", endpoint, model, 0);
+        }
+        Duration timeout = Duration.ofSeconds(provider.getTimeoutSeconds() == null
+                || provider.getTimeoutSeconds() <= 0 ? 30 : provider.getTimeoutSeconds());
+        // How long the stream may go quiet before it is considered dead. Not an absolute
+        // deadline: see the read loop for why the first-byte wait is deliberately unbounded.
+        long deadline = timeout.toMillis();
+
+        try {
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(timeout)
+                    .followRedirects(HttpClient.Redirect.NEVER)
+                    .build();
+            HttpRequest request = buildRequest(protocol, endpoint, model, apiKey, timeout,
+                    system, user, maxTokens, true);
+            HttpResponse<java.io.InputStream> response =
+                    client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+
+            if (response.statusCode() / 100 != 2) {
+                String detail = extractError(readAll(response.body()));
+                log.warn("AI stream to '{}' failed: HTTP {} {}",
+                        provider.getName(), response.statusCode(), detail);
+                return ChatResult.failure("HTTP " + response.statusCode()
+                        + (detail.isEmpty() ? "" : " — " + detail), endpoint, model,
+                        System.currentTimeMillis() - start);
+            }
+
+            StringBuilder text = new StringBuilder();
+            String[] served = {""};
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+                String line;
+                String event = null;
+                // Some gateways accept stream:true and answer with one buffered completion
+                // anyway, often only after the whole generation. The first meaningful line
+                // tells the two apart; from then on the body is collected whole and parsed
+                // like a non-streaming reply, so such a provider degrades to the old
+                // behaviour instead of losing the reply entirely.
+                StringBuilder rawBody = null;
+                // Stall clock, not an absolute one: a gateway that buffers the generation
+                // stays silent for exactly as long as the generation takes, and cutting that
+                // silence would fail drafts the buffered call always completed. Only a stream
+                // that goes quiet MID-flight is broken, and only that is cut here. The wait
+                // for the very first byte stays bounded by the request timeout alone.
+                long lastLine = -1;
+                while ((line = reader.readLine()) != null) {
+                    long now = System.currentTimeMillis();
+                    if (lastLine >= 0 && now - lastLine > deadline) {
+                        return ChatResult.failure("Stream stalled for over "
+                                + timeout.getSeconds() + "s", endpoint, model, now - start);
+                    }
+                    lastLine = now;
+                    if (rawBody != null) {
+                        rawBody.append(line).append('\n');
+                        continue;
+                    }
+                    if (line.isEmpty()) {
+                        event = null;
+                        continue;
+                    }
+                    if (!line.startsWith("data:") && !line.startsWith("event:")
+                            && !line.startsWith(":")) {
+                        rawBody = new StringBuilder(line).append('\n');
+                        continue;
+                    }
+                    if (line.startsWith("event:")) {
+                        event = line.substring(6).trim();
+                        continue;
+                    }
+                    if (!line.startsWith("data:")) {
+                        continue;
+                    }
+                    String data = line.substring(5).trim();
+                    if (data.isEmpty()) {
+                        continue;
+                    }
+                    if ("[DONE]".equals(data) || "message_stop".equals(event)) {
+                        break;
+                    }
+                    JsonNode root = parseOrNull(data);
+                    if (root == null) {
+                        continue;
+                    }
+                    if (served[0].isEmpty()) {
+                        served[0] = servedModel(root);
+                    }
+                    // Chunk shape is detected, not assumed: gateways are routinely configured
+                    // with one protocol and answer with the other's events.
+                    String delta = "";
+                    JsonNode choice = root.path("choices").path(0);
+                    if (!choice.isMissingNode()) {
+                        delta = choice.path("delta").path("content").asText("");
+                        if (delta.isEmpty()) {
+                            // Some compatible endpoints send the whole text as a message chunk.
+                            delta = choice.path("message").path("content").asText("");
+                        }
+                    } else if ("message_stop".equals(root.path("type").asText(""))) {
+                        break;
+                    } else if ("content_block_delta".equals(root.path("type").asText(""))
+                            && "text_delta".equals(root.path("delta").path("type").asText(""))) {
+                        delta = root.path("delta").path("text").asText("");
+                    }
+                    if (!delta.isEmpty()) {
+                        text.append(delta);
+                        sink.accept(delta);
+                    }
+                }
+                if (rawBody != null) {
+                    // Buffered reply from a gateway that ignored stream=true: one sink call,
+                    // same contract as complete() would have given.
+                    JsonNode root = parseOrNull(rawBody.toString());
+                    String whole = extractText(protocol, root);
+                    if (!whole.isEmpty()) {
+                        sink.accept(whole);
+                    }
+                    return ChatResult.success(whole, servedModel(root), endpoint, model,
+                            System.currentTimeMillis() - start);
+                }
+            }
+            return ChatResult.success(text.toString(), served[0], endpoint, model,
+                    System.currentTimeMillis() - start);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ChatResult.failure("Interrupted", endpoint, model,
+                    System.currentTimeMillis() - start);
+        } catch (IOException | RuntimeException e) {
+            log.warn("AI stream to '{}' failed: {}", provider.getName(), e.toString());
+            return ChatResult.failure(e.getMessage() == null ? e.toString() : e.getMessage(),
+                    endpoint, model, System.currentTimeMillis() - start);
+        }
+    }
+
+    /** Drains an error body; only reached on a non-2xx stream response. */
+    private String readAll(java.io.InputStream in) throws IOException {
+        try (in) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
     private HttpRequest buildRequest(AiProtocol protocol, String endpoint, String model,
                                      String apiKey, Duration timeout,
                                      String system, String user, int maxTokens) {
+        return buildRequest(protocol, endpoint, model, apiKey, timeout, system, user, maxTokens,
+                false);
+    }
+
+    private HttpRequest buildRequest(AiProtocol protocol, String endpoint, String model,
+                                     String apiKey, Duration timeout,
+                                     String system, String user, int maxTokens, boolean stream) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", model);
         body.put("max_tokens", maxTokens);
+        if (stream) {
+            body.put("stream", true);
+        }
 
         boolean anthropic = protocol == AiProtocol.ANTHROPIC;
         boolean hasSystem = system != null && !system.isBlank();
@@ -140,7 +312,9 @@ public class AiChatClient {
                 .uri(URI.create(endpoint))
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
-                .header("Accept", "application/json");
+                // A few gateways only switch to SSE on the Accept header rather than the
+                // stream flag; the majors ignore Accept entirely, so asking costs nothing.
+                .header("Accept", stream ? "text/event-stream" : "application/json");
 
         if (anthropic) {
             builder.header("x-api-key", apiKey == null ? "" : apiKey)

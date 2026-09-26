@@ -13,8 +13,6 @@ public interface MetadataSnapshotRepository extends JpaRepository<MetadataSnapsh
     Optional<MetadataSnapshot> findByProjectIdAndObjectTypeAndObjectName(
             Long projectId, ObjectType objectType, String objectName);
 
-    List<MetadataSnapshot> findByProjectId(Long projectId);
-
     List<MetadataSnapshot> findByProjectIdAndObjectType(Long projectId, ObjectType objectType);
 
     void deleteByProjectId(Long projectId);

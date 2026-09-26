@@ -1,7 +1,5 @@
 package com.qqmu.jync.model;
 
-import java.time.Instant;
-
 import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.EnumType;
@@ -54,7 +52,4 @@ public class MetadataSnapshot {
     /** Hash of {@link #snapshotJson}, compared first to avoid parsing unchanged objects. */
     @Column(name = "content_hash", length = 64)
     private String contentHash;
-
-    @Column(name = "captured_at")
-    private Instant capturedAt;
 }

@@ -145,11 +145,6 @@ public enum DatabaseType {
         return this == CUSTOM;
     }
 
-    /** Oracle-family products fold unquoted identifiers to upper case. */
-    public boolean isUpperCaseIdentifiers() {
-        return family == DialectFamily.ORACLE || family == DialectFamily.DB2;
-    }
-
     /**
      * Whether a batched upsert against this target reports enough detail in its JDBC update
      * counts to tell an inserted row from an updated one.

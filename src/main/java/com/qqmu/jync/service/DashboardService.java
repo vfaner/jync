@@ -81,7 +81,6 @@ public class DashboardService {
         stats.setRowsToday(changeLogRepository.sumAffectedRowsSince(dayAgo));
 
         stats.setErrorTaskCount(taskStore.findByStatus(TaskStatus.ERROR).size());
-        stats.setRunningTaskCount(taskStore.findByStatus(TaskStatus.RUNNING).size());
         stats.setRecentChanges(changeLogRepository.findTop5ByOrderByOccurredAtDesc());
 
         // Per-project rows for the overview table.
@@ -94,8 +93,6 @@ public class DashboardService {
                     .findByProjectIdAndObjectType(project.getId(), ObjectType.TABLE).size());
             summary.setTotalRowsSynced(changeLogRepository
                     .sumAffectedRowsByProject(project.getId()));
-            summary.setFailureCount(changeLogRepository
-                    .countByProjectIdAndSuccessFalse(project.getId()));
             summaries.add(summary);
         }
         // Same rule as the activity feed: five rows keep the card a fixed height no matter
@@ -117,7 +114,6 @@ public class DashboardService {
         private long changesToday;
         private long rowsToday;
         private long errorTaskCount;
-        private long runningTaskCount;
         private List<ChangeLog> recentChanges = new ArrayList<>();
         private List<ProjectSummary> projectSummaries = new ArrayList<>();
     }
@@ -130,7 +126,6 @@ public class DashboardService {
         private SyncTask task;
         private int trackedTableCount;
         private long totalRowsSynced;
-        private long failureCount;
 
         public String statusName() {
             if (task == null || task.getStatus() == null) {

@@ -136,6 +136,95 @@
   }
 
   /**
+   * POST 并以 SSE 逐段读取，返回 Promise<payload|null>。
+   *
+   * 与 postJson 的约定一致：401 重载页面并返回会话过期对象；CSRF 令牌同样取自
+   * layout.html 的 <meta>。额外的约定是「null 表示服务端没给流」——旧版后端、
+   * 或被网关缓冲成普通响应的情况，调用方应退回 postJson，功能不降级只是不实时。
+   */
+  function postSse(url, onDelta) {
+    var headers = { 'Accept': 'text/event-stream' };
+    var token = document.querySelector('meta[name="_csrf"]');
+    var header = document.querySelector('meta[name="_csrf_header"]');
+    if (token && header && token.content && header.content) {
+      headers[header.content] = token.content;
+    }
+    return fetch(url, { method: 'POST', headers: headers }).then(function (response) {
+      if (response.status === 401) {
+        window.location.reload();
+        return { success: false, message: 'error.sessionExpired' };
+      }
+      var ctype = response.headers.get('Content-Type') || '';
+      if (ctype.indexOf('text/event-stream') < 0 ||
+          !response.body || !response.body.getReader) {
+        return null;
+      }
+      return readSse(response, onDelta);
+    });
+  }
+
+  /**
+   * 把 SSE 字节流解析成事件：event: 行定种类，data: 行带 JSON。
+   * delta → onDelta(text)；done → resolve(payload) 并取消读取。
+   * 流结束都没等到 done 视为中断，reject 交给调用方善后。
+   */
+  function readSse(response, onDelta) {
+    return new Promise(function (resolve, reject) {
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder('utf-8');
+      var buffer = '';
+      var pendingEvent = null;
+      var settled = false;
+
+      function processLine(line) {
+        if (line === '') { pendingEvent = null; return; }
+        if (line.indexOf('event:') === 0) {
+          pendingEvent = line.substring(6).trim();
+          return;
+        }
+        if (line.indexOf('data:') !== 0) return;
+        var data = line.substring(5).trim();
+        if (!data) return;
+        var parsed;
+        try { parsed = JSON.parse(data); } catch (e) { return; }
+        if (pendingEvent === 'delta') {
+          if (parsed && parsed.text) onDelta(parsed.text);
+        } else if (pendingEvent === 'done') {
+          settled = true;
+          resolve(parsed);
+          reader.cancel().catch(function () { /* 服务端可能已经关了，无所谓 */ });
+        }
+      }
+
+      function pump() {
+        reader.read().then(function (result) {
+          if (settled) return;
+          if (result.done) {
+            if (buffer) processLine(buffer);
+            if (!settled) reject(new Error('stream ended before done'));
+            return;
+          }
+          buffer += decoder.decode(result.value, { stream: true });
+          var idx;
+          while ((idx = buffer.indexOf('\n')) >= 0) {
+            var line = buffer.substring(0, idx);
+            if (line.charAt(line.length - 1) === '\r') {
+              line = line.substring(0, line.length - 1);
+            }
+            buffer = buffer.substring(idx + 1);
+            processLine(line);
+            if (settled) return;
+          }
+          pump();
+        }, function (err) {
+          if (!settled) reject(err);
+        });
+      }
+      pump();
+    });
+  }
+
+  /**
    * 按钮加载态：记下原内容 → 禁用 → 换成转圈 → 任务落定后恢复原样。
    *
    * 恢复用 then 的双参形式而不是 finally：效果相同，但不依赖较新的 Promise 特性，
@@ -514,33 +603,70 @@
   /* ─── 转换复审：AI 起草 + 目标库语法检查 ──────────────────── */
 
   /**
-   * 渲染「不保证」清单。
+   * 起草完成后亮出「人工自测」提醒。
    *
-   * 这一份清单比 SQL 本身更值得看：模型对着一段 PL/SQL 一定能吐出语法正确的
-   * MySQL，能不能吐出行为一致的 MySQL 是另一回事。所以清单放在编辑器上方，
-   * 空清单也照样把框显示出来 —— 「模型说它没有疑虑」本身就是一条需要警惕的信息。
+   * AI 对着一段 PL/SQL 一定能吐出语法正确的 MySQL，能不能吐出行为一致的 MySQL
+   * 是另一回事。模型自语的疑虑清单读起来像噪音，真正管用的提醒就这一句：
+   * 保存为覆盖之前，先在目标库跑一遍。
    */
-  function renderUncertainties(entries) {
-    var box = document.getElementById('uncertainty-box');
-    var list = document.getElementById('uncertainty-list');
-    if (!box || !list) return;
-
-    list.innerHTML = '';
-    (entries || []).forEach(function (entry) {
-      var li = document.createElement('li');
-      // 服务端可能给 i18n key（error.ai.*），也可能是模型的原文，t() 两种都能处理
-      li.textContent = t(entry);
-      list.appendChild(li);
-    });
-    if (!entries || !entries.length) {
-      var li = document.createElement('li');
-      li.textContent = t('conversion.noUncertainties');
-      list.appendChild(li);
-    }
-    box.style.display = '';
+  function showDraftNotice() {
+    var box = document.getElementById('draft-notice');
+    if (box) box.style.display = '';
   }
 
-  /** AI 起草：把候选写进编辑器，同时把模型的疑虑摊开 */
+  /**
+   * 从流式原文里实时整理出 SQL，供起草过程中「边生成边看」。
+   *
+   * 系统提示词要求模型只回 SQL，因此原文通常即成品，原样增长即可。留一层容忍：
+   * 模型偶尔仍会套 markdown fence 或 JSON 包装，这里剥掉 fence、或对 JSON 做增量
+   * 提取（找到 "sql" 的值后逐字符反转义，值没写完就返回已到达的前缀，转义序列被
+   * 截断时停在原地等下一段），不让包装壳闪现在编辑器里。
+   */
+  function extractSqlPrefix(raw) {
+    var s = raw;
+    var fence = s.indexOf('```');
+    if (fence >= 0) {
+      var nl = s.indexOf('\n', fence);
+      s = nl >= 0 ? s.substring(nl + 1) : s.substring(fence + 3);
+    }
+    var marker = s.indexOf('"sql"');
+    if (marker < 0) return s;
+    var colon = s.indexOf(':', marker + 5);
+    if (colon < 0) return '';
+    var i = colon + 1;
+    while (i < s.length && /\s/.test(s.charAt(i))) i++;
+    if (s.charAt(i) !== '"') return '';
+    i++;
+    var out = '';
+    while (i < s.length) {
+      var c = s.charAt(i);
+      if (c === '"') break;
+      if (c === '\\') {
+        var n = s.charAt(i + 1);
+        if (n === '') break; // 转义序列被切断，等下一段 delta
+        if (n === 'n') { out += '\n'; i += 2; continue; }
+        if (n === 't') { out += '\t'; i += 2; continue; }
+        if (n === 'r') { i += 2; continue; }
+        if (n === 'u') {
+          if (i + 6 > s.length) break; // \uXXXX 还没到齐
+          out += String.fromCharCode(parseInt(s.substring(i + 2, i + 6), 16));
+          i += 6; continue;
+        }
+        out += n; i += 2; continue;
+      }
+      out += c; i++;
+    }
+    return out;
+  }
+
+  /**
+   * AI 起草：把候选写进编辑器，同时把模型的疑虑摊开。
+   *
+   * 走 SSE 流式（data-action + '/stream'）：模型每写一段，编辑器就长一段 SQL，
+   * 首字延迟从「整个存储过程生成完」降到「第一个网络分片」。done 事件带来的
+   * payload 与一次性接口完全同形，以它解析出的 SQL 为准整体替换编辑器内容。
+   * 服务端没给流（postSse 返回 null）时退回原 /draft 接口，功能不降级。
+   */
   function bindAiDraft(btn) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
@@ -548,21 +674,58 @@
       if (!editor) return;
 
       withBusy(btn, '<span class="spin"></span> ' + (btn.dataset.busyText || ''), function () {
-        return postJson(btn.dataset.action).then(function (payload) {
-          if (!payload.success) {
-            // 模型主动拒绝转换时，理由就在 uncertainties 里，那是这次调用唯一有价值的
-            // 产出。只弹一个 toast 就丢掉，用户会以为是网络错误而反复重试。
-            if (payload.uncertainties && payload.uncertainties.length) {
-              renderUncertainties(payload.uncertainties);
-            }
-            toast(t(payload.message) || t('conversion.draftFailed'), 'danger');
+        var originalValue = editor.value;
+        var streamRaw = '';
+        var syncTimer = null;
+
+        // 流式期间编辑器内容随时在变，高亮底衬靠 input 事件跟着刷；
+        // 每个 delta 都全量重高亮太贵，80ms 合并一次。
+        function flushSync() {
+          if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
+          editor.dispatchEvent(new Event('input'));
+        }
+        function scheduleSync() {
+          if (syncTimer) return;
+          syncTimer = setTimeout(function () {
+            syncTimer = null;
+            editor.value = extractSqlPrefix(streamRaw);
+            editor.scrollTop = editor.scrollHeight;
+            editor.dispatchEvent(new Event('input'));
+          }, 80);
+        }
+        function restoreEditor() {
+          editor.value = originalValue;
+          flushSync();
+        }
+        function applyPayload(payload) {
+          if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
+          if (!payload || !payload.success) {
+            // 失败（含模型拒绝、流中断）：编辑器退回起草前的内容，半成品不留下。
+            // 服务端的 message 是 i18n key 或网关原文，toast 里说清楚，
+            // 用户才不会把「模型拒绝」当成网络错误反复重试。
+            restoreEditor();
+            toast((payload && t(payload.message)) || t('conversion.draftFailed'), 'danger');
             return;
           }
           editor.value = payload.sql || '';
-          renderUncertainties(payload.uncertainties);
+          flushSync();
+          showDraftNotice();
+          // 缓存命中会「秒回」，不标注的话用户会以为根本没调模型
+          var extra = payload.cached ? ' ' + t('conversion.draftCached') : '';
           toast(t('conversion.draftDone') + ' — ' + (payload.model || '') +
-            ' (' + (payload.elapsedMs || 0) + 'ms)', 'ok');
-        }).catch(function (err) {
+            ' (' + (payload.elapsedMs || 0) + 'ms)' + extra, 'ok');
+        }
+
+        return postSse(btn.dataset.action + '/stream', function (text) {
+          streamRaw += text;
+          scheduleSync();
+        }).then(function (payload) {
+          if (payload === null) {
+            return postJson(btn.dataset.action);
+          }
+          return payload;
+        }).then(applyPayload).catch(function (err) {
+          restoreEditor();
           toast(String((err && err.message) || err), 'danger');
         });
       });
@@ -966,5 +1129,10 @@
 
   // 有意暴露的全局入口（承自改名前的 SyncToolUI）：供浏览器控制台调试与后续扩展使用。
   // 仓库内搜不到调用方属预期情况，不是死代码，评审时请勿删除。
-  window.JyncUI = { toast: toast, t: t, icon: icon, iconHtml: iconHtml };
+  // readSse / extractSqlPrefix 一并暴露：流式解析不依赖页面 DOM，控制台里用
+  // 合成的 Response 就能单测，排查「起草不实时」时也用得上。
+  window.JyncUI = {
+    toast: toast, t: t, icon: icon, iconHtml: iconHtml,
+    readSse: readSse, extractSqlPrefix: extractSqlPrefix
+  };
 })();

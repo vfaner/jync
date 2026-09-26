@@ -57,6 +57,23 @@
 
 * { box-sizing: border-box; }
 
+/* 细七彩滚动条：8px 宽、两端胶囊形、轨道透明 */
+/* Firefox 不支持 ::-webkit-scrollbar；标准属性须隔离，否则 Chrome 121+ 会弃用七彩样式 */
+@supports (-moz-appearance: none) {
+  * { scrollbar-width: thin; scrollbar-color: var(--brand) transparent; }
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ef4444, #f59e0b, #facc15, #10b981, #06b6d4, #4f46e5, #ec4899);
+}
+::-webkit-scrollbar-thumb:horizontal {
+  background: linear-gradient(90deg, #ef4444, #f59e0b, #facc15, #10b981, #06b6d4, #4f46e5, #ec4899);
+}
+::-webkit-scrollbar-thumb:hover { filter: saturate(1.3) brightness(1.06); }
+::-webkit-scrollbar-corner { background: transparent; }
+
 html { scroll-behavior: smooth; }
 
 body {
@@ -88,10 +105,6 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
   /* 与相邻文字基线对齐：图标是 1em 方形，略微下移视觉更居中 */
   vertical-align: -.125em;
 }
-/* 尺寸修饰符 */
-.ico-lg { width: 1.35em; height: 1.35em; }
-.ico-xl { width: 1.7em;  height: 1.7em; }
-
 /* 页面主体两侧留白，宽屏不铺满以免行长过长 */
 .shell { max-width: 1440px; margin: 0 auto; padding: 26px 28px 56px; }
 
@@ -195,8 +208,7 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 
 .btn-ok      { background: var(--ok);     color: #fff; box-shadow: 0 8px 26px rgba(16, 185, 129, .26); }
 .btn-warn    { background: var(--warn);   color: #fff; box-shadow: 0 8px 26px rgba(245, 158, 11, .26); }
-.btn-danger  { background: var(--danger); color: #fff; box-shadow: 0 8px 26px rgba(239, 68, 68, .24); }
-.btn-ok:hover:not(:disabled), .btn-warn:hover:not(:disabled), .btn-danger:hover:not(:disabled) {
+.btn-ok:hover:not(:disabled), .btn-warn:hover:not(:disabled) {
   color: #fff; transform: translateY(-2px);
 }
 
@@ -363,6 +375,37 @@ table.tbl th.num { text-align: right; }
   padding: 12px; margin: 0; white-space: pre;
   max-height: 480px; overflow: auto;
 }
+/* SQL 高亮配色（sql-highlight.js 产出的 span），参考 DBeaver 编辑器；深色模式只换变量 */
+:root {
+  --sql-kw: #0033cc; --sql-str: #b000b0; --sql-cmt: #3f7f3f;
+  --sql-num: #b45309; --sql-var: #0e7490; --sql-fn: #6d28d9;
+}
+[data-theme="dark"] {
+  --sql-kw: #8ab4ff; --sql-str: #e57ae5; --sql-cmt: #8fce8f;
+  --sql-num: #e8a15c; --sql-var: #5bc8d6; --sql-fn: #c9a8ff;
+}
+.sql-kw  { color: var(--sql-kw); font-weight: 700; }
+.sql-str { color: var(--sql-str); }
+.sql-cmt { color: var(--sql-cmt); font-style: italic; }
+.sql-num { color: var(--sql-num); }
+.sql-var { color: var(--sql-var); }
+.sql-fn  { color: var(--sql-fn); }
+/* 可编辑 SQL 区：textarea 装不下 span，用透明 textarea 负责输入与光标、
+   底层同度量 pre 垫层负责着色；wrap=off 保证两边逐字符对齐 */
+.sql-edit-wrap { position: relative; }
+.sql-edit-wrap textarea.sql-edit {
+  /* inline-block 会在包裹层行盒里垫出基线空隙，垫层按包裹层定位就会漏出一行；block 后度量严格相等 */
+  display: block;
+  position: relative; z-index: 1;
+  background: transparent; color: transparent; caret-color: var(--ink);
+  line-height: 1.55; white-space: pre;
+}
+.sql-edit-wrap textarea.sql-edit::selection { background: color-mix(in srgb, var(--brand) 25%, transparent); }
+.sql-edit-wrap pre.sql-edit-hl {
+  position: absolute; inset: 1px; z-index: 0;
+  margin: 0; padding: 9px 12px; overflow: hidden; pointer-events: none;
+  font-family: var(--mono); font-size: 13px; line-height: 1.55; white-space: pre;
+}
 .text-danger { color: var(--danger); }
 /* 窄屏下并排会挤成两条不可读的细缝，改成上下 */
 @media (max-width: 900px) {
@@ -503,10 +546,6 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .picker-empty { font-size: 13px; color: var(--ink-mute); padding: 14px; text-align: center; }
 
 /* 滚动条：默认样式在深色下太刺眼 */
-.picker-list::-webkit-scrollbar { width: 8px; }
-.picker-list::-webkit-scrollbar-track { background: transparent; }
-.picker-list::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-.picker-list::-webkit-scrollbar-thumb:hover { background: var(--ink-mute); }
 
 /* ─── 空状态 ────────────────────────────────────────────── */
 .empty { padding: 52px 24px; text-align: center; }

@@ -114,6 +114,12 @@ The key is encrypted like a database password. The probe sends a real request ra
 
 ![Adding a provider](src/main/resources/static/assets/jync_ai_add.png)
 
+### AI drafting — the candidate streams into the editor
+
+`Draft with AI` on the review page sends the source procedure body to the active provider and the candidate streams into the editor as it is produced, instead of arriving in one blob when the timeout is nearly up. When the draft finishes the page shows a single reminder: the output is a candidate only — run it against the target database yourself before saving it as an override. The editor renders SQL with DBeaver-style highlighting (keywords, strings, numbers and comments in separate colours); the green banner in the shot is the target accepting the statement from the temporary-object syntax check.
+
+![AI drafting](src/main/resources/static/assets/jync_xiangmu_suoyin_ai.png)
+
 ### System information — runtime settings and version on one page
 
 Instance ID, Java version, scheduled project count, sync defaults, and the concurrency/recovery safeguards are gathered as read-only info. The version card shows the running version, the latest GitHub release, and this version's release notes. The update check runs in the background and never slows the page down — on an air-gapped intranet, the local version number and bundled notes still render normally.
@@ -185,23 +191,24 @@ Typography uses the system font stack (`PingFang SC` / `Microsoft YaHei` / …) 
 
 ### At a glance
 
+> Basis of comparison: the table below reflects each tool's official documentation / open-source edition in its default deployment (as of 2026-09), and covers only the "out-of-the-box continuous sync across heterogeneous databases" scenario. Every tool has its own positioning and strengths; for scenarios where Jync is the wrong fit, see "When **not** to use Jync" below.
+
 | Dimension | **Jync** | Debezium + Kafka | Canal | Flink CDC | DataX | Kettle | SymmetricDS | Navicat/DBeaver transfer |
 |---|---|---|---|---|---|---|---|---|
 | **Deployment** | **One jar** | Kafka + Connect + ZK/KRaft | Canal Server (+MQ) | Flink cluster (JM/TM) | CLI scripts | Desktop + repository | Engine on every node | Desktop client |
 | **External deps** | **None** | Kafka, ZooKeeper | ZooKeeper (cluster) | Flink, checkpoint store | None (but JSON jobs) | JVM + plugins | Triggers in source DB | None |
 | **How you configure it** | **Click in a web UI** | YAML/REST + consumer code | Config file + client code | SQL/DataStream code | JSON job files | Drag-and-drop ETL | properties + create triggers | Wizard |
-| **Continuous incremental sync** | ✅ polling/Cron | ✅ log-based | ✅ binlog | ✅ log-based | ❌ one-shot batch | ⚠️ roll your own scheduling & delta logic | ✅ trigger-based | ❌ one-shot |
-| **Schema (DDL) sync** | ✅ **auto-creates tables/indexes/views/procs** | ⚠️ emits DDL events; applying them is your job | ⚠️ events only | ⚠️ custom code | ❌ tables must pre-exist | ⚠️ manual mapping | ⚠️ limited | ✅ but one-shot |
-| **Heterogeneous dialect conversion** | ✅ types/functions/quoting/paging/procs | ❌ DIY | ❌ | ⚠️ partial | ⚠️ limited type mapping | ⚠️ manual | ⚠️ limited | ⚠️ one-shot mapping |
-| **Chinese domestic databases** | ✅ **DM / KingBase / OceanBase / TiDB / HighGo / Vastbase / YashanDB / GBase / Oscar / OpenGauss** | ❌ essentially unsupported | ❌ MySQL only | ⚠️ a few | ⚠️ needs custom plugins | ⚠️ generic JDBC only | ⚠️ limited | ⚠️ partial |
+| **Continuous incremental sync** | Supported: polling/Cron | Supported: log-based | Supported: binlog | Supported: log-based | N/A (one-shot batch by design) | Partial (roll your own scheduling & delta logic) | Supported: trigger-based | N/A (one-shot transfer by design) |
+| **Schema (DDL) sync** | Supported: **auto-creates tables/indexes/views/procs** | Partial (emits DDL events; applying them is your job) | Partial (events only) | Partial (custom code) | Not supported (tables must pre-exist) | Partial (manual mapping) | Partial | Supported (one-shot only) |
+| **Heterogeneous dialect conversion** | Supported: types/functions/quoting/paging/procs | Not supported (positioned as event output; conversion is the consumer's job) | Not supported (positioned as binlog subscription; no dialect conversion) | Partial | Partial (limited type mapping) | Partial (manual) | Partial | Partial (one-shot mapping) |
+| **Chinese domestic databases** | Supported: **DM / KingBase / OceanBase / TiDB / HighGo / Vastbase / YashanDB / GBase / Oscar / OpenGauss** | Partial (no official domestic-DB connector; community or DIY) | Not supported (MySQL family only, binlog-based by design) | Partial (a few) | Partial (needs custom plugins) | Partial (generic JDBC only) | Partial | Partial |
 | **Intrusiveness to source** | **Read-only queries, zero intrusion** | binlog/WAL + replication privileges | binlog required | binlog/WAL required | read-only | read-only | **must create triggers** | read-only |
-| **Idempotency / resume** | ✅ PK upsert + persisted cursor | ✅ offsets | ✅ | ✅ checkpoints | ❌ | ❌ DIY | ✅ | ❌ |
-| **Built-in monitoring** | ✅ dashboard + change log | Prometheus/Grafana required | DIY | Flink UI (job-level) | logs | limited | Web console | ❌ |
-| **Time to first sync** | **Minutes** | High | Medium-high | High | Medium | Medium | Medium-high | Low (but no continuous sync) |
-| **Air-gapped** | ✅ no outbound calls | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Idempotency / resume** | Supported: PK upsert + persisted cursor | Supported: offsets | Supported | Supported: checkpoints | N/A (one-shot batch) | Partial (roll your own delta logic) | Supported | N/A (one-shot transfer) |
+| **Built-in monitoring** | Supported: dashboard + change log | Prometheus/Grafana required | DIY | Flink UI (job-level) | logs | limited | Web console | N/A (one-shot transfer, no continuous monitoring) |
+| **Air-gapped** | Supported: no outbound calls | Supported | Supported | Supported | Supported | Supported | Supported | Supported |
 | **Best fit** | Small/medium, departmental, domestic-DB migration | Large-scale streaming | MySQL ecosystem | Large-scale streaming | Bulk offline loads | Complex ETL | Multi-master replication | Ad-hoc data moves |
 
-> Legend: ✅ native support　⚠️ partial / extra work required　❌ not supported
+> Legend: Supported = capability provided out of the box　Partial = partial support or extra work required　Not supported = capability not provided　N/A = dimension outside that tool's positioning
 
 ### Five differences that actually matter
 
@@ -215,7 +222,7 @@ Most CDC tools solve only the data stream; the target tables are yours to create
 
 **3. Built for Chinese domestic databases and localization migrations**
 
-Dameng (DM), KingBase, OceanBase, TiDB, HighGo, Vastbase, YashanDB, GBase, Oscar, and OpenGauss are preset first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly where the Debezium and Canal ecosystems are weakest.
+Dameng (DM), KingBase, OceanBase, TiDB, HighGo, Vastbase, YashanDB, GBase, Oscar, and OpenGauss are preset first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly the scenario the Debezium and Canal ecosystems were not designed for — their official domestic-DB support is relatively limited.
 
 **4. Zero intrusion into the source database**
 
@@ -720,7 +727,7 @@ com.qqmu.jync
 mvn test
 ```
 
-410 unit tests, covering:
+417 unit tests, covering:
 
 - **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
 - **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself

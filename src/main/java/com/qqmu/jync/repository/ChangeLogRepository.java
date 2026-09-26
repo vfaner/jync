@@ -26,8 +26,6 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
 
     long countByOccurredAtAfter(Instant after);
 
-    long countByProjectIdAndSuccessFalse(Long projectId);
-
     @Query("select coalesce(sum(c.affectedRows), 0) from ChangeLog c where c.occurredAt > :after")
     long sumAffectedRowsSince(@Param("after") Instant after);
 

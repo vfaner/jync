@@ -22,7 +22,8 @@
     <script th:replace="~{fragments/theme-bootstrap :: script}"></script>
 
     <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
-    <link rel="stylesheet" th:href="@{/css/app.css}">
+    <!--/* 带版本号防缓存：发版后浏览器若沿用旧 app.js，新接口会被静默退回旧路径 */-->
+    <link rel="stylesheet" th:href="@{/css/app.css(v=${appVersion})}">
 
     <!--/* CSRF 令牌给 app.js 的 postJson 用。表单不需要这个 —— Thymeleaf 见到
            th:action 会自动注入隐藏域，全部 14 个表单都符合。只有 fetch() 要自己带头。 */-->
@@ -202,7 +203,7 @@
 <footer class="foot">
     <span>
         <span th:text="#{app.title}">Jync</span>
-        <span class="mx-1">·</span>
+        <span>·</span>
         <span th:text="#{app.subtitle}">Real-time database synchronization</span>
         <small class="foot-ver mono" th:if="${appVersion}" th:text="${appVersion}">vX.Y.Z</small>
     </span>
@@ -325,16 +326,15 @@
         'ai.testSuccess': /*[[#{ai.testSuccess}]]*/ '',
         'ai.testFailed': /*[[#{ai.testFailed}]]*/ '',
         'conversion.draftDone': /*[[#{conversion.draftDone}]]*/ '',
+        'conversion.draftCached': /*[[#{conversion.draftCached}]]*/ '',
         'conversion.draftFailed': /*[[#{conversion.draftFailed}]]*/ '',
         'conversion.validateOk': /*[[#{conversion.validateOk}]]*/ '',
         'conversion.validateFailed': /*[[#{conversion.validateFailed}]]*/ '',
-        'conversion.noUncertainties': /*[[#{conversion.noUncertainties}]]*/ '',
         'error.override.empty': /*[[#{error.override.empty}]]*/ '',
         'error.ai.notAvailable': /*[[#{error.ai.notAvailable}]]*/ '',
         'error.ai.noSourceBody': /*[[#{error.ai.noSourceBody}]]*/ '',
         'error.ai.emptyReply': /*[[#{error.ai.emptyReply}]]*/ '',
         'error.ai.declined': /*[[#{error.ai.declined}]]*/ '',
-        'error.ai.unstructuredReply': /*[[#{error.ai.unstructuredReply}]]*/ '',
         'error.ai.model.required': /*[[#{error.ai.model.required}]]*/ '',
         'error.validate.empty': /*[[#{error.validate.empty}]]*/ '',
         'error.validate.noHeader': /*[[#{error.validate.noHeader}]]*/ '',
@@ -350,7 +350,8 @@
     };
 </script>
 <script th:src="@{/js/theme.js}"></script>
-<script th:src="@{/js/app.js}"></script>
+<script th:src="@{/js/app.js(v=${appVersion})}"></script>
+<script th:src="@{/js/sql-highlight.js(v=${appVersion})}"></script>
 <th:block th:replace="${scripts} ?: _"></th:block>
 </body>
 </html>

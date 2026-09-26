@@ -123,18 +123,6 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         }
     }
 
-    /**
-     * Clamps an implausible precision. Some drivers report a huge COLUMN_SIZE for
-     * unconstrained numerics (Oracle NUMBER without precision reports 0 or 38+), which the
-     * target would reject.
-     */
-    protected int effectivePrecision(int size) {
-        if (size <= 0 || size > maxNumericPrecision()) {
-            return defaultNumericPrecision();
-        }
-        return size;
-    }
-
     protected int maxNumericPrecision() {
         return 38;
     }

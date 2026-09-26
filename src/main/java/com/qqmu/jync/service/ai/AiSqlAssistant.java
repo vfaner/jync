@@ -1,12 +1,9 @@
 package com.qqmu.jync.service.ai;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.DatabaseType;
 
@@ -23,10 +20,9 @@ import lombok.extern.slf4j.Slf4j;
  * and the failure mode of accepting that silently is far worse than the mechanical converter's
  * habit of refusing outright — a refusal is visible, a plausible wrong cursor is not.
  *
- * <p>The prompt therefore demands two things: the SQL, and a list of what the model could not
- * guarantee. The second is the more valuable output. A model that returns an empty uncertainty
- * list for a 200-line package body is telling you it did not look carefully, and the UI shows
- * the list next to the SQL so the reviewer knows where to concentrate.
+ * <p>The prompt therefore demands one thing — the converted statement — and the page demands
+ * the other half of the safety case: an AI draft is a candidate, and the reviewer is told in
+ * plain words to test it against the target before saving it as an override.
  */
 @Service
 @Slf4j
@@ -38,12 +34,17 @@ public class AiSqlAssistant {
      * <p>Written as constraints rather than encouragement. "Do not invent" is load-bearing:
      * asked to convert a body referencing a table it cannot see, a model will otherwise supply a
      * plausible column list, and a reviewer skimming the diff will not catch it.
+     *
+     * <p>The reply is the statement alone — no JSON wrapper, no self-reported caveat list. The
+     * wrapper cost output tokens on every draft for a list the reviewer read as noise, and the
+     * honest safeguard is the one the page states instead: an AI draft is a candidate a human
+     * must test against the target before it is saved.
      */
     private static final String SYSTEM_PROMPT = """
             You convert stored procedures, functions and views between SQL database products.
 
-            Reply with a single JSON object and nothing else. No prose, no markdown fence:
-            {"sql": "<the converted statement>", "uncertainties": ["<one concern per entry>"]}
+            Reply with the converted CREATE statement and nothing else. No prose, no
+            markdown fence, no JSON wrapper.
 
             Rules:
             1. Output one complete, runnable CREATE statement for the target product. Do not
@@ -52,20 +53,12 @@ public class AiSqlAssistant {
                reformat beyond what the target's syntax requires.
             3. Never invent a table, column, parameter or function you were not shown. If the
                body references something whose definition you do not have, keep the reference
-               exactly as written and add an entry to "uncertainties".
-            4. "uncertainties" must list every behavioural difference you cannot rule out.
-               Cover at least these when relevant: cursor and loop semantics, implicit
-               transaction boundaries, NO_DATA_FOUND and other exception handling, NULL
-               concatenation, integer versus decimal division, date arithmetic and format
-               strings, row ordering where none is specified, and identifier case folding.
-               An empty list means you are certain, so use it only when the body is trivial.
-            5. If the conversion is not possible, set "sql" to an empty string and explain why
-               in "uncertainties".
+               exactly as written.
+            4. If the conversion is not possible, reply with nothing at all.
             """;
 
     private final AiProviderService providerService;
     private final AiChatClient client;
-    private final ObjectMapper mapper = new ObjectMapper();
 
     public AiSqlAssistant(AiProviderService providerService, AiChatClient client) {
         this.providerService = providerService;
@@ -89,6 +82,26 @@ public class AiSqlAssistant {
      */
     public Candidate draft(String objectType, String name, String sourceSql, String mechanicalSql,
                            DatabaseType sourceType, DatabaseType targetType) {
+        return run(objectType, name, sourceSql, mechanicalSql, sourceType, targetType,
+                (provider, key, prompt, budget, sink) -> client.complete(provider, key,
+                        SYSTEM_PROMPT, prompt, budget));
+    }
+
+    /**
+     * As {@link #draft}, but each text delta reaches {@code sink} as the model emits it, so the
+     * reviewer watches the candidate being written instead of watching a spinner.
+     */
+    public Candidate draftStream(String objectType, String name, String sourceSql,
+                                 String mechanicalSql, DatabaseType sourceType,
+                                 DatabaseType targetType,
+                                 java.util.function.Consumer<String> sink) {
+        return run(objectType, name, sourceSql, mechanicalSql, sourceType, targetType,
+                (provider, key, prompt, budget, ignored) -> client.stream(provider, key,
+                        SYSTEM_PROMPT, prompt, budget, sink));
+    }
+
+    private Candidate run(String objectType, String name, String sourceSql, String mechanicalSql,
+                          DatabaseType sourceType, DatabaseType targetType, Call call) {
         AiProvider provider = providerService.activeProvider()
                 .orElseThrow(() -> new IllegalStateException("error.ai.notAvailable"));
 
@@ -101,8 +114,8 @@ public class AiSqlAssistant {
         int budget = provider.getMaxTokens() == null || provider.getMaxTokens() <= 0
                 ? 4096 : provider.getMaxTokens();
 
-        AiChatClient.ChatResult result = client.complete(provider,
-                providerService.decryptKey(provider), SYSTEM_PROMPT, userPrompt, budget);
+        AiChatClient.ChatResult result = call.invoke(provider,
+                providerService.decryptKey(provider), userPrompt, budget, text -> { });
 
         if (!result.isSuccess()) {
             return Candidate.failure(result.getMessage(), result.effectiveModel(),
@@ -111,6 +124,12 @@ public class AiSqlAssistant {
         log.info("Drafted a {} candidate for '{}' ({} -> {}) using {}",
                 objectType, name, sourceType, targetType, result.effectiveModel());
         return parse(result);
+    }
+
+    /** The one difference between the buffered and the streaming call. */
+    private interface Call {
+        AiChatClient.ChatResult invoke(AiProvider provider, String apiKey, String userPrompt,
+                                       int budget, java.util.function.Consumer<String> sink);
     }
 
     private String buildPrompt(String objectType, String name, String sourceSql,
@@ -124,7 +143,12 @@ public class AiSqlAssistant {
         sb.append("Original definition as stored by the source:\n");
         sb.append("```sql\n").append(sourceSql.strip()).append("\n```\n");
 
-        if (mechanicalSql != null && !mechanicalSql.isBlank()
+        // Within one dialect family the mechanical pass is nearly a no-op and the page says so;
+        // sending a second copy of the same body would double the input tokens for nothing.
+        boolean sameFamily = sourceType != null && targetType != null
+                && sourceType.getFamily() == targetType.getFamily();
+        if (!sameFamily
+                && mechanicalSql != null && !mechanicalSql.isBlank()
                 && !mechanicalSql.strip().equals(sourceSql.strip())) {
             // The mechanical pass already mapped function names and syntax markers correctly.
             // Showing it saves the model that work and, more usefully, anchors it to the
@@ -146,13 +170,11 @@ public class AiSqlAssistant {
     }
 
     /**
-     * Reads the model's reply.
+     * Reads the model's reply, which is the statement itself.
      *
-     * <p>Models emit a markdown fence around JSON often enough that stripping one is not a
-     * workaround but part of the contract. A reply that is not JSON at all is still used — the
-     * SQL is usually fine and only the wrapper was ignored — but that fact becomes an
-     * uncertainty of its own, because a model that ignored the output format may have ignored
-     * the "do not invent" rule too.
+     * <p>Models still wrap the statement in a markdown fence often enough that stripping one is
+     * not a workaround but part of the contract. What is left after stripping is used verbatim;
+     * nothing is parsed, because there is no wrapper to parse.
      */
     private Candidate parse(AiChatClient.ChatResult result) {
         String text = result.getText() == null ? "" : result.getText().strip();
@@ -161,36 +183,15 @@ public class AiSqlAssistant {
                     result.getElapsedMs());
         }
 
-        String json = stripFence(text);
-        try {
-            JsonNode root = mapper.readTree(json);
-            String sql = root.path("sql").asText("").strip();
-            List<String> uncertainties = new ArrayList<>();
-            for (JsonNode node : root.path("uncertainties")) {
-                String entry = node.asText("").strip();
-                if (!entry.isEmpty()) {
-                    uncertainties.add(entry);
-                }
-            }
-            if (sql.isEmpty()) {
-                // Rule 5: the model declined. Its reasons are in the uncertainty list, so this
-                // is a genuine answer rather than a transport failure -- report it as such.
-                return Candidate.declined(uncertainties, result.effectiveModel(),
-                        result.getElapsedMs());
-            }
-            return Candidate.success(sql, uncertainties, result.effectiveModel(),
-                    result.getElapsedMs());
-
-        } catch (com.fasterxml.jackson.core.JacksonException e) {
-            log.debug("AI reply was not the requested JSON; treating it as bare SQL");
-            List<String> uncertainties = new ArrayList<>();
-            uncertainties.add("error.ai.unstructuredReply");
-            return Candidate.success(stripFence(text), uncertainties, result.effectiveModel(),
-                    result.getElapsedMs());
+        String sql = stripFence(text);
+        if (sql.isEmpty()) {
+            // Rule 4: the model answered nothing usable, which is its way of declining.
+            return Candidate.declined(List.of(), result.effectiveModel(), result.getElapsedMs());
         }
+        return Candidate.success(sql, List.of(), result.effectiveModel(), result.getElapsedMs());
     }
 
-    /** Removes a surrounding ```json / ```sql fence if present, leaving the content alone. */
+    /** Removes a surrounding markdown fence if present, leaving the content alone. */
     private String stripFence(String text) {
         String t = text.strip();
         if (!t.startsWith("```")) {
@@ -215,36 +216,45 @@ public class AiSqlAssistant {
         /** The drafted statement, empty when the model declined or the call failed. */
         private final String sql;
         /**
-         * What the model could not guarantee. Entries beginning with {@code error.} are message
-         * keys; the rest is free text from the model and is escaped, not interpreted, by the view.
+         * Per-draft caveats. The prompt no longer asks the model for any — the page states the
+         * one that matters, "test this yourself" — so this stays empty and reserved.
          */
         private final List<String> uncertainties;
         /** Failure detail, or null on success. */
         private final String message;
         private final String model;
         private final long elapsedMs;
+        /** True when served from the short-lived draft cache rather than a fresh model call. */
+        private final boolean cached;
 
         private Candidate(boolean success, String sql, List<String> uncertainties, String message,
-                          String model, long ms) {
+                          String model, long ms, boolean cached) {
             this.success = success;
             this.sql = sql;
             this.uncertainties = List.copyOf(uncertainties);
             this.message = message;
             this.model = model;
             this.elapsedMs = ms;
+            this.cached = cached;
         }
 
         static Candidate success(String sql, List<String> uncertainties, String model, long ms) {
-            return new Candidate(true, sql, uncertainties, null, model, ms);
+            return new Candidate(true, sql, uncertainties, null, model, ms, false);
+        }
+
+        /** Re-serves an earlier candidate; the elapsed time of the original call no longer applies. */
+        static Candidate cached(Candidate original) {
+            return new Candidate(original.success, original.sql, original.uncertainties,
+                    original.message, original.model, 0, true);
         }
 
         /** The model answered but refused to convert; its reasons are the uncertainties. */
         static Candidate declined(List<String> uncertainties, String model, long ms) {
-            return new Candidate(false, "", uncertainties, "error.ai.declined", model, ms);
+            return new Candidate(false, "", uncertainties, "error.ai.declined", model, ms, false);
         }
 
         static Candidate failure(String message, String model, long ms) {
-            return new Candidate(false, "", List.of(), message, model, ms);
+            return new Candidate(false, "", List.of(), message, model, ms, false);
         }
     }
 }

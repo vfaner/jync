@@ -233,8 +233,6 @@ public class GenericMetadataReader implements MetadataReader {
                 TableMeta.ForeignKeyMeta fk = new TableMeta.ForeignKeyMeta();
                 fk.setName(rs.getString("FK_NAME"));
                 fk.setColumnName(rs.getString("FKCOLUMN_NAME"));
-                fk.setReferencedTable(rs.getString("PKTABLE_NAME"));
-                fk.setReferencedColumn(rs.getString("PKCOLUMN_NAME"));
                 fks.add(fk);
             }
         } catch (SQLException e) {
@@ -342,9 +340,6 @@ public class GenericMetadataReader implements MetadataReader {
                                 boolean includeViews, boolean includeProcedures) throws SQLException {
         DatabaseMeta meta = new DatabaseMeta();
         meta.setSchema(schema);
-        DatabaseMetaData md = conn.getMetaData();
-        meta.setProductName(md.getDatabaseProductName());
-        meta.setProductVersion(md.getDatabaseProductVersion());
 
         List<String> tableNames = tables != null && !tables.isEmpty()
                 ? tables : listTableNames(conn, schema);

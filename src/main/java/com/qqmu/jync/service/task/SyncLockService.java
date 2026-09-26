@@ -119,11 +119,6 @@ public class SyncLockService {
         return store.findTask(projectId).map(SyncTask::getLockOwner).orElse(null);
     }
 
-    /** True when this instance holds the project's lock. */
-    public boolean isHeldByThisInstance(Long projectId) {
-        return ownerId.equals(currentHolder(projectId));
-    }
-
     /** Released via try-with-resources so the lock cannot leak on an exception path. */
     public class LockHandle implements AutoCloseable {
         private final Long projectId;

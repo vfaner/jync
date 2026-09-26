@@ -109,7 +109,7 @@
                         <tbody>
                         <tr th:each="s : ${stats.projectSummaries}">
                             <td>
-                                <a class="fw-semibold" style="font-weight:600"
+                                <a style="font-weight:600"
                                    th:href="@{/projects/{id}(id=${s.project.id})}"
                                    th:text="${s.project.name}">Project</a>
                                 <div class="small muted truncate" th:if="${s.project.description}"

@@ -66,9 +66,5 @@ public class TableMeta {
     public static class ForeignKeyMeta {
         private String name;
         private String columnName;
-        private String referencedTable;
-        private String referencedColumn;
-        private String updateRule;
-        private String deleteRule;
     }
 }

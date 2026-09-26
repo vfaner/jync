@@ -88,7 +88,6 @@ public class SyncTaskStore {
         return taskRepository.findByProjectId(project.getId()).orElseGet(() -> {
             SyncTask task = new SyncTask();
             task.setProjectId(project.getId());
-            task.setTaskName("sync-" + project.getId());
             task.setStatus(TaskStatus.STOPPED);
             task.setConsecutiveFailures(0);
             return taskRepository.save(task);

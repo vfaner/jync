@@ -5,7 +5,9 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
+import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
@@ -240,9 +243,84 @@ public class ConversionAssistService {
      * @throws IllegalStateException when no provider is enabled
      */
     public AiSqlAssistant.Candidate draft(Long projectId, String kind, String name) {
+        return draftInternal(projectId, kind, name, null);
+    }
+
+    /**
+     * As {@link #draft}, but each text delta reaches {@code sink} as the model emits it.
+     */
+    public AiSqlAssistant.Candidate draftStream(Long projectId, String kind, String name,
+                                                java.util.function.Consumer<String> sink) {
+        return draftInternal(projectId, kind, name, sink);
+    }
+
+    private AiSqlAssistant.Candidate draftInternal(Long projectId, String kind, String name,
+                                                   java.util.function.Consumer<String> sink) {
         Detail detail = load(projectId, kind, name);
-        return assistant.draft(detail.routineType, name, detail.sourceSql, detail.mechanicalSql,
-                detail.sourceProduct, detail.targetProduct);
+
+        String key = draftCacheKey(projectId, detail, name);
+        DraftCacheEntry hit = key == null ? null : draftCache.get(key);
+        if (hit != null) {
+            if (hit.expiresAt > System.currentTimeMillis()
+                    && hit.sourceSql.equals(detail.sourceSql)
+                    && hit.mechanicalSql.equals(detail.mechanicalSql)) {
+                return AiSqlAssistant.Candidate.cached(hit.candidate);
+            }
+            draftCache.remove(key);
+        }
+
+        AiSqlAssistant.Candidate candidate = sink == null
+                ? assistant.draft(detail.routineType, name, detail.sourceSql, detail.mechanicalSql,
+                        detail.sourceProduct, detail.targetProduct)
+                : assistant.draftStream(detail.routineType, name, detail.sourceSql,
+                        detail.mechanicalSql, detail.sourceProduct, detail.targetProduct, sink);
+        if (key != null && candidate.isSuccess()) {
+            putDraftCache(key, detail, candidate);
+        }
+        return candidate;
+    }
+
+    /* 草稿短缓存：同一对象同样正文在 TTL 内重复点击秒回，不重复付费等待。
+       键含提供商与两份正文的哈希，命中时再逐字比对正文，哈希 Collision 不会拿错草稿。 */
+    private static final long DRAFT_CACHE_TTL_MS = 10 * 60 * 1000L;
+    private static final int DRAFT_CACHE_MAX = 64;
+    private final Map<String, DraftCacheEntry> draftCache = new ConcurrentHashMap<>();
+
+    private static final class DraftCacheEntry {
+        final AiSqlAssistant.Candidate candidate;
+        final String sourceSql;
+        final String mechanicalSql;
+        final long expiresAt;
+
+        DraftCacheEntry(AiSqlAssistant.Candidate candidate, String sourceSql,
+                        String mechanicalSql, long expiresAt) {
+            this.candidate = candidate;
+            this.sourceSql = sourceSql;
+            this.mechanicalSql = mechanicalSql;
+            this.expiresAt = expiresAt;
+        }
+    }
+
+    /** Null when no provider is enabled — the assistant reports that case as it always has. */
+    private String draftCacheKey(Long projectId, Detail detail, String name) {
+        Long providerId = providerService.activeProvider().map(AiProvider::getId).orElse(null);
+        if (providerId == null) {
+            return null;
+        }
+        return projectId + "|" + detail.kind + "|" + name + "|" + providerId + "|"
+                + detail.sourceSql.hashCode() + "|" + detail.mechanicalSql.hashCode();
+    }
+
+    private void putDraftCache(String key, Detail detail, AiSqlAssistant.Candidate candidate) {
+        if (draftCache.size() >= DRAFT_CACHE_MAX) {
+            long now = System.currentTimeMillis();
+            draftCache.entrySet().removeIf(e -> e.getValue().expiresAt <= now);
+            if (draftCache.size() >= DRAFT_CACHE_MAX) {
+                draftCache.clear();
+            }
+        }
+        draftCache.put(key, new DraftCacheEntry(candidate, detail.sourceSql, detail.mechanicalSql,
+                System.currentTimeMillis() + DRAFT_CACHE_TTL_MS));
     }
 
     /**

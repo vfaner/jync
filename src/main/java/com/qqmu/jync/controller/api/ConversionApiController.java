@@ -1,13 +1,21 @@
 package com.qqmu.jync.controller.api;
 
+import java.io.IOException;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
+import javax.annotation.PreDestroy;
+
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.qqmu.jync.service.ai.AiSqlAssistant;
 import com.qqmu.jync.service.ai.CandidateValidator;
@@ -27,10 +35,28 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class ConversionApiController {
 
+    /**
+     * Generous ceiling for one SSE draft. The provider's own timeout bounds the model call;
+     * this only exists so an emitter can never outlive a forgotten request.
+     */
+    private static final long STREAM_TIMEOUT_MS = 10 * 60 * 1000L;
+
     private final ConversionAssistService assistService;
+
+    /** Small daemon pool: drafts are a one-reviewer-at-a-time workflow, not a throughput path. */
+    private final ExecutorService executor = Executors.newFixedThreadPool(4, r -> {
+        Thread t = new Thread(r, "ai-draft-stream");
+        t.setDaemon(true);
+        return t;
+    });
 
     public ConversionApiController(ConversionAssistService assistService) {
         this.assistService = assistService;
+    }
+
+    @PreDestroy
+    void shutdownExecutor() {
+        executor.shutdownNow();
     }
 
     /**
@@ -47,24 +73,86 @@ public class ConversionApiController {
     public ResponseEntity<?> draft(@PathVariable Long projectId, @PathVariable String kind,
                                    @PathVariable String name) {
         try {
-            AiSqlAssistant.Candidate candidate = assistService.draft(projectId, kind, name);
-            if (!candidate.isSuccess()) {
-                return ResponseEntity.ok(Map.of(
-                        "success", false,
-                        "message", nullToEmpty(candidate.getMessage()),
-                        "uncertainties", candidate.getUncertainties(),
-                        "model", nullToEmpty(candidate.getModel()),
-                        "elapsedMs", candidate.getElapsedMs()));
-            }
-            return ResponseEntity.ok(Map.of(
-                    "success", true,
-                    "sql", candidate.getSql(),
-                    "uncertainties", candidate.getUncertainties(),
-                    "model", nullToEmpty(candidate.getModel()),
-                    "elapsedMs", candidate.getElapsedMs()));
+            return ResponseEntity.ok(payload(assistService.draft(projectId, kind, name)));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return failure(e);
         }
+    }
+
+    /**
+     * Streaming twin of {@link #draft}: the candidate arrives as SSE {@code delta} events while
+     * the model writes it, and a final {@code done} event carries the same payload {@link #draft}
+     * returns (parsed SQL, uncertainties, model, elapsed). The page fills the editor live from
+     * the deltas and replaces it with the parsed SQL on {@code done}.
+     *
+     * <p>Runs on a dedicated pool because the servlet thread must not be occupied for the whole
+     * generation, and the emitter timeout outlives any sane provider timeout.
+     */
+    @PostMapping(value = "/{kind}/{name:.+}/draft/stream",
+                 produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter draftStream(@PathVariable Long projectId, @PathVariable String kind,
+                                  @PathVariable String name) {
+        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
+        emitter.onTimeout(emitter::complete);
+        executor.execute(() -> {
+            Map<String, Object> payload = null;
+            try {
+                payload = payload(assistService.draftStream(projectId, kind, name,
+                        delta -> sendDelta(emitter, delta)));
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                payload = Map.of(
+                        "success", false,
+                        "message", e.getMessage() == null ? "error.unexpected" : e.getMessage(),
+                        "uncertainties", List.of(),
+                        "model", "",
+                        "elapsedMs", 0,
+                        "cached", false);
+            } catch (RuntimeException e) {
+                // The sink aborts the model call once the client is gone; there is then nobody
+                // left to deliver a done event to, so nothing is sent.
+                log.debug("Draft stream aborted: {}", e.toString());
+            }
+            if (payload != null) {
+                try {
+                    emitter.send(SseEmitter.event().name("done")
+                            .data(payload, MediaType.APPLICATION_JSON));
+                    emitter.complete();
+                } catch (IOException | IllegalStateException e) {
+                    log.debug("Draft stream client vanished before done: {}", e.toString());
+                }
+            }
+        });
+        return emitter;
+    }
+
+    private void sendDelta(SseEmitter emitter, String delta) {
+        try {
+            emitter.send(SseEmitter.event().name("delta")
+                    .data(Map.of("text", delta), MediaType.APPLICATION_JSON));
+        } catch (IOException | IllegalStateException e) {
+            // Client gone: unwinding through the model call is the only honest exit.
+            throw new IllegalStateException("draft stream aborted", e);
+        }
+    }
+
+    /** One shape for both draft endpoints, so the page needs a single renderer. */
+    private Map<String, Object> payload(AiSqlAssistant.Candidate candidate) {
+        if (!candidate.isSuccess()) {
+            return Map.of(
+                    "success", false,
+                    "message", nullToEmpty(candidate.getMessage()),
+                    "uncertainties", candidate.getUncertainties(),
+                    "model", nullToEmpty(candidate.getModel()),
+                    "elapsedMs", candidate.getElapsedMs(),
+                    "cached", candidate.isCached());
+        }
+        return Map.of(
+                "success", true,
+                "sql", candidate.getSql(),
+                "uncertainties", candidate.getUncertainties(),
+                "model", nullToEmpty(candidate.getModel()),
+                "elapsedMs", candidate.getElapsedMs(),
+                "cached", candidate.isCached());
     }
 
     /**

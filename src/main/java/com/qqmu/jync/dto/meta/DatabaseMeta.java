@@ -13,10 +13,6 @@ public class DatabaseMeta {
 
     private String schema;
 
-    private String productName;
-
-    private String productVersion;
-
     private List<TableMeta> tables = new ArrayList<>();
 
     private List<ViewMeta> views = new ArrayList<>();

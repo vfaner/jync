@@ -1,9 +1,7 @@
 package com.qqmu.jync.dto;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -62,9 +60,6 @@ public class SyncConfig {
     /** User-edited DDL overrides, keyed by {@code TYPE:NAME}, for objects that cannot be auto-converted. */
     private Map<String, String> ddlOverrides = new HashMap<>();
 
-    /** Additional type mapping overrides, keyed by upper-cased source type name. */
-    private Map<String, String> typeMappingOverrides = new HashMap<>();
-
     /** Temporarily disable target foreign keys during data load. */
     private boolean disableTargetConstraints = true;
 
@@ -116,10 +111,5 @@ public class SyncConfig {
 
     public String ddlOverride(String type, String name) {
         return ddlOverrides.get(type + ":" + name);
-    }
-
-    /** Ordered list form of {@link #tables}, for display. */
-    public List<String> tableList() {
-        return new ArrayList<>(tables);
     }
 }

@@ -30,9 +30,6 @@ public class SyncTask {
     @Column(name = "project_id", nullable = false, unique = true)
     private Long projectId;
 
-    @Column(name = "task_name", length = 128)
-    private String taskName;
-
     /** Optional cron expression; when blank the fixed poll interval is used. */
     @Column(name = "cron_expression", length = 128)
     private String cronExpression;

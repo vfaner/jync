@@ -37,8 +37,7 @@
                     th:title="${pager.page > 1} ? #{log.refresh.firstPageOnly} : null">
                 <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{log.refresh.auto}">Auto</span></button>
             <form method="post" th:if="${isAdmin}" th:action="@{/change-logs/clear}"
-                  th:data-confirm="#{log.clear.confirm}"
-                  data-role="clear-logs-form">
+                  th:data-confirm="#{log.clear.confirm}">
                 <input type="hidden" name="projectId" th:value="${selectedProjectId}">
                 <button type="submit" class="btn btn-ghost btn-sm btn-warn">
                     <svg class="ico"><use href="#trash"/></svg><span th:text="#{log.clear}">Clear</span></button>
