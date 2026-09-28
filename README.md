@@ -10,6 +10,8 @@
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
 
+![Jync 捷同 · 异构数据库实时同步工具](src/main/resources/static/assets/jync.png)
+
 在**异构数据库**之间实时同步**结构与数据**的开箱即用 Web 应用。单个 jar 启动，浏览器点几下即可在**内置 17 种数据库（另支持自定义类型）之间任意两种**建立持续同步链路 —— Oracle → PostgreSQL、MySQL → 达梦只是其中的两个例子 —— 不需要 Kafka、不需要 ZooKeeper、不需要写一行代码。
 
 - 项目地址：<https://github.com/vfaner/jync>
