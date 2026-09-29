@@ -22,12 +22,18 @@ public class DdlExecutor {
     private static final String[] BENIGN_DROP_MARKERS = {
             "does not exist", "doesn't exist", "not exist", "unknown table",
             "cannot drop", "no such table", "not found", "invalid object name",
-            "undefined table", "unknown object"
+            "undefined table", "unknown object",
+            // 达梦 DM / 金仓 KingBase 等国产库的中文"不存在"/"无效对象"错误
+            "不存在", "未找到", "无法找到", "无效的表或视图名"
     };
 
     /** Substrings that indicate "the thing I tried to create is already there". */
     private static final String[] BENIGN_CREATE_MARKERS = {
-            "already exists", "duplicate", "name is already used", "exists"
+            "already exists", "duplicate", "name is already used", "exists",
+            // SQL Server: "There is already an object named 'x' in the database."
+            "already an object named",
+            // 达梦 DM / 金仓 KingBase 等国产库的中文"已存在"错误
+            "已存在", "已被使用"
     };
 
     private final Connection connection;
@@ -128,7 +134,9 @@ public class DdlExecutor {
                 return true;
             }
             if (markers == BENIGN_CREATE_MARKERS
-                    && (state.equals("42S01") || state.equals("42P07") || state.equals("42710"))) {
+                    && (state.equals("42S01") || state.equals("42P07") || state.equals("42710")
+                    // SQL Server: duplicate object name
+                    || state.equals("S0001"))) {
                 return true;
             }
         }
