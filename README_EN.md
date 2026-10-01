@@ -48,85 +48,85 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 
 Username and password, with theme and language switchable from the top-right corner at any time. Until the default password is changed, every page carries a red warning at the top — dismissable for the session, but back as soon as the browser reopens, and gone for good only once the password actually changes.
 
-![Sign-in](src/main/resources/static/assets/jync_login.png)
+![Sign-in](../docs/login.png)
 
 ### Dashboard — the whole sync posture on one screen
 
 Project count, connection count, synced tables, 24-hour change volume, and a recent activity feed. The project overview and the activity feed show **at most five rows each**, so the dashboard never grows with the log; the card headers link through to the full project list and change log.
 
-![Dashboard](src/main/resources/static/assets/jync_kanban.png)
+![Dashboard](../docs/kanban.png)
 
 ### Dark theme — the whole palette moves, not just the background
 
 One toggle in the top-right corner. Dashboard, cards, tables, and icons all follow, instead of a black background left studded with glaring light-mode controls. The toggle's moon / sun icon is fixed golden yellow, legible on either palette.
 
-![Dashboard in dark theme](src/main/resources/static/assets/jync_kanban_anye.png)
+![Dashboard in dark theme](../docs/kanban_anye.png)
 
 ### Bilingual UI — one click switches the whole interface
 
 The "中 / EN" button in the navbar flips every menu, form, status, and error message between Chinese and English; the choice is remembered in the browser. Until the user picks one explicitly, the default language is inferred from the browser timezone.
 
-![English interface](src/main/resources/static/assets/jync_kanban_en.png)
+![English interface](../docs/kanban_en.png)
 
 ### Database connections — sources and targets in separate lists, test before you save
 
 Connections are split by purpose into a Source table and a Target table, each paginated on its own; the project form's source and target selectors only offer connections from the matching list, so the two sides can no longer be mixed up. Pick a database type and the JDBC URL is generated for you — preview it, test it. Nearly every database driver ships inside the distribution; for GBase, Oscar, and custom drivers, just point at a jar and it loads dynamically.
 
-![Database connections](src/main/resources/static/assets/jync_db.png)
+![Database connections](../docs/db.png)
 
 ### Adding a connection — pick the purpose first; the URL writes itself
 
 Choose Source (data is read from it during sync) or Target (data is written into it), then fill in host, port, and database name; the JDBC URL appears as you type, so there is no need to remember each vendor's connection-string shape. The password is encrypted on the way into storage, and the connection can be tested before you commit it.
 
-![Adding a connection](src/main/resources/static/assets/jync_db_add.png)
+![Adding a connection](../docs/db_add.png)
 
 ### Projects — many pipelines in parallel, start and pause at will
 
 Each project is one source → target pair, independently startable and pausable, with status and last-sync time at a glance. The list is paginated — twenty rows per page by default, with 15 / 20 / 30 / 50 / 100 selectable in the footer plus a jump-to-page box; long page ranges collapse into ellipses, and clicking an ellipsis widens that side by five pages in place instead of laying out every number at once.
 
-![Projects](src/main/resources/static/assets/jync_xiangmu.png)
+![Projects](../docs/xiangmu.png)
 
 ### New project — one tested connection per side
 
 Fill in the name and description, pick one tested connection from each of the source and target lists; saving lands you on the project detail page to choose sync objects.
 
-![New project](src/main/resources/static/assets/jync_xiangmu_add.png)
+![New project](../docs/xiangmu_add.png)
 
 ### Project detail — per-table selection with visible cursor strategy
 
 Tables / views / stored procedures grouped for selection, with search and bulk actions. Every table's incremental detection strategy is labeled inline — `IDENTITY` and `NONE` are called out prominently, because they mean updates may not propagate. Clicking "Sync now" while a cycle is in flight is not discarded: one extra round runs automatically once the current round releases the lock, and any number of clicks coalesce into exactly one such rerun.
 
-![Project detail](src/main/resources/static/assets/jync_xiangmu_xiangqing.png)
+![Project detail](../docs/xiangmu_xiangqing.png)
 
 ### Change log — every change is traceable
 
 Object name, change type, affected row count, elapsed time, and full error detail. The same pager as the project list; from page two on, auto-refresh is disabled with the reason in its tooltip — the log is newest-first, so an arriving entry would otherwise shuffle the rows you are reading downwards.
 
-![Change log](src/main/resources/static/assets/jync_log.png)
+![Change log](../docs/log.png)
 
 ### AI providers — several configured, exactly one active
 
 Enabling another switches the current one off. The list shows the protocol, the model, and the last probe result; rendering it never reaches out to the network.
 
-![AI providers](src/main/resources/static/assets/jync_ai.png)
+![AI providers](../docs/ai.png)
 
 ### Adding a provider — probe the endpoint before saving
 
 The key is encrypted like a database password. The probe sends a real request rather than a TCP check — a wrong key, a misspelled model, and a base URL that is one path segment off are invisible to anything less.
 
-![Adding a provider](src/main/resources/static/assets/jync_ai_add.png)
+![Adding a provider](../docs/ai_add.png)
 
 ### AI drafting — the candidate streams into the editor
 
 `Draft with AI` on the review page sends the source procedure body to the active provider and the candidate streams into the editor as it is produced, instead of arriving in one blob when the timeout is nearly up. When the draft finishes the page shows a single reminder: the output is a candidate only — run it against the target database yourself before saving it as an override. The editor renders SQL with DBeaver-style highlighting (keywords, strings, numbers and comments in separate colours); the green banner in the shot is the target accepting the statement from the temporary-object syntax check.
 
-![AI drafting](src/main/resources/static/assets/jync_xiangmu_suoyin_ai.png)
+![AI drafting](../docs/xiangmu_suoyin_ai.png)
 
 ### System information — runtime settings and version on one page
 
 Instance ID, Java version, scheduled project count, sync defaults, and the concurrency/recovery safeguards are gathered as read-only info. The version card shows the running version, the latest GitHub release, and this version's release notes. The update check runs in the background and never slows the page down — on an air-gapped intranet, the local version number and bundled notes still render normally.
 
-![System information](src/main/resources/static/assets/jync_system.png)
+![System information](../docs/system.png)
 
 ---
 

@@ -48,85 +48,85 @@
 
 用户名 + 密码，右上角可随时切换主题与语言。默认口令没改之前，登录后每个页面顶部都会挂一条红色警告 —— 可以临时关掉，但浏览器一关又会回来，直到口令真的改了。
 
-![登录](src/main/resources/static/assets/jync_login.png)
+![登录](../docs/login.png)
 
 ### 看板：全局同步态势一屏掌握
 
 项目数、连接数、同步表数、24 小时变更量与最近活动流。项目概览与最近活动**各最多展示 5 条**，看板不会随日志增多越撑越长；要看全量，点卡片右上角入口进项目列表与完整变更日志。
 
-![看板](src/main/resources/static/assets/jync_kanban.png)
+![看板](../docs/kanban.png)
 
 ### 暗色主题：整套配色一起换
 
 右上角一键切换。看板、卡片、表格、图标都跟着走，不是只把背景刷黑、留下一片刺眼的浅色控件。切换按钮上的月亮 / 太阳图标固定金黄色，昼夜两种底色下都醒目。
 
-![暗色看板](src/main/resources/static/assets/jync_kanban_anye.png)
+![暗色看板](../docs/kanban_anye.png)
 
 ### 英文界面：右上角一键切换
 
 点导航栏的「中 / EN」按钮即可在中英文之间切换，菜单、表单、状态与错误提示整套文案一起换，选择记在浏览器里；首次访问未手动选择时，默认语言按浏览器时区智能推断。
 
-![英文界面](src/main/resources/static/assets/jync_kanban_en.png)
+![英文界面](../docs/kanban_en.png)
 
 ### 数据库连接：源 / 目标分栏，保存前先测通
 
 连接按用途拆成「源数据库连接」「目标数据库连接」两张表，各自独立分页；新建项目时源、目标下拉只列出对应栏目的连接，不会再选错。选择数据库类型后自动生成 JDBC URL，可预览、可测试；绝大多数数据库驱动已随包内置，GBase、神通及自定义驱动填写 jar 路径即可动态加载。
 
-![数据库连接](src/main/resources/static/assets/jync_db.png)
+![数据库连接](../docs/db.png)
 
 ### 新增连接：先定用途，类型选好 URL 自己拼
 
 必选「源数据库连接」（同步时数据读出）或「目标数据库连接」（数据写入）；再填主机、端口、库名，JDBC URL 当场生成，不用记各家数据库的连接串格式。密码加密后入库，测试连接通过再保存。
 
-![新增连接](src/main/resources/static/assets/jync_db_add.png)
+![新增连接](../docs/db_add.png)
 
 ### 项目列表：多任务并行，启停自如
 
 每个项目一组「源库 → 目标库」，独立启动/暂停，状态与最近同步时间一目了然。列表分页展示，默认一页 20 条，页脚可选 15 / 20 / 30 / 50 / 100 条并跳页；页数多时中间以省略号收起，点省略号就地多展开 5 页，不会一次铺满整排页码。
 
-![项目列表](src/main/resources/static/assets/jync_xiangmu.png)
+![项目列表](../docs/xiangmu.png)
 
 ### 新建项目：源与目标各选一条连接
 
 填名称与描述，从源 / 目标两栏里各选一条已测通的连接；保存后直接进入项目详情勾选同步对象。
 
-![新建项目](src/main/resources/static/assets/jync_xiangmu_add.png)
+![新建项目](../docs/xiangmu_add.png)
 
 ### 项目详情：逐表勾选与游标策略可视化
 
 表 / 视图 / 存储过程分组勾选，支持搜索与批量操作；每张表的增量检测策略直接标注，`IDENTITY` 与 `NONE` 会显著提示（意味着更新可能同步不到）。「立即同步」在运行中被再次点击不会丢：本轮结束后自动补跑一轮，连点多次也只补一轮。
 
-![项目详情](src/main/resources/static/assets/jync_xiangmu_xiangqing.png)
+![项目详情](../docs/xiangmu_xiangqing.png)
 
 ### 变更日志：每一次变更都可追溯
 
 对象名、变更类型、影响行数、耗时与完整错误详情。与项目列表同一套分页；第 2 页起自动刷新会禁用并在提示里说明原因 —— 日志按时间倒序，新条目一进来整页下移，自动刷新会让你正在读的那几行一直换位置。
 
-![变更日志](src/main/resources/static/assets/jync_log.png)
+![变更日志](../docs/log.png)
 
 ### AI 配置：多供应商共存，同一时刻只启用一个
 
 启用另一个会自动把当前的关掉。列表直接标出协议、模型与上次探测结果，页面本身不会重新发起请求。
 
-![AI 配置](src/main/resources/static/assets/jync_ai.png)
+![AI 配置](../docs/ai.png)
 
 ### 新增供应商：保存前先探测端点
 
 密钥与数据库密码同样加密存储；探测会发一次真实请求，而非 TCP 探活 —— 密钥错误、模型名写错、Base URL 差一段路径这三类问题只有真发请求才暴露得出来。
 
-![新增供应商](src/main/resources/static/assets/jync_ai_add.png)
+![新增供应商](../docs/ai_add.png)
 
 ### AI 起草：候选 SQL 流式进编辑器
 
 复审页的「用 AI 起草」把源过程体发给启用的供应商，候选边生成边流进编辑器，不再等超时才一次性看到全文。起草完成后页面只留一条提醒：AI 输出仅为候选，保存为覆盖前先在目标库人工自测。编辑器带 DBeaver 风格的 SQL 高亮（关键字、字符串、数字、注释分区着色）；图中绿条是「在目标库做语法检查」用临时名建删一次对象后的接受结果。
 
-![AI 起草](src/main/resources/static/assets/jync_xiangmu_suoyin_ai.png)
+![AI 起草](../docs/xiangmu_suoyin_ai.png)
 
 ### 系统信息：运行参数与版本一目了然
 
 实例标识、Java 版本、已调度项目数、同步默认参数与并发恢复机制集中只读展示；版本信息卡片显示当前版本、GitHub 最新版本和本版更新内容。更新检查在后台进行、不拖慢页面，纯内网环境下本地版本号与更新说明照常显示。
 
-![系统信息](src/main/resources/static/assets/jync_system.png)
+![系统信息](../docs/system.png)
 
 ---
 
