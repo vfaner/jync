@@ -59,16 +59,16 @@ java -jar target/jync.jar
 
 ## 效果截图
 
-![看板](../../docs/kanban.png)
+![看板](jync_kanban.png)
 看板：项目数、连接数、同步表数、24 小时变更量与最近活动一屏掌握
 
-![项目详情](../../docs/xiangmu_xiangqing.png)
+![项目详情](jync_xiangmu_xiangqing.png)
 项目详情：表/视图/存储过程逐表勾选，每张表的增量检测策略直接标注
 
-![新增连接](../../docs/db_add.png)
+![新增连接](jync_db_add.png)
 新增连接：先定源/目标用途，类型选好 JDBC URL 自动拼装，测通再保存
 
-![变更日志](../../docs/log.png)
+![变更日志](jync_log.png)
 变更日志：每次变更的对象、类型、影响行数、耗时与错误详情均可追溯
 
 ## 结语
