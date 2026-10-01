@@ -10,7 +10,7 @@
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
 
-![Jync · Heterogeneous Database Real-time Synchronization Tool](src/main/resources/static/assets/jync.png)
+![Jync · Heterogeneous Database Real-time Synchronization Tool](../docs/jync.png)
 
 A ready-to-run web application that keeps **schema and data** in sync **across heterogeneous databases** in real time. Start a single jar, click a few times in your browser, and **any two of the 17 built-in database types (plus a custom type)** form a continuous sync link — Oracle → PostgreSQL and MySQL → Dameng are just two examples among them — **no Kafka, no ZooKeeper, not a single line of code.**
 
