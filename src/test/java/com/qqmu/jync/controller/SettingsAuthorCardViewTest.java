@@ -38,7 +38,7 @@ import com.qqmu.jync.service.version.VersionService;
         "app.github-url=https://github.com/vfaner/jync",
         "app.gitee-url=https://gitee.com/super_rgh/jync",
         "app.contact-qq=817094/2912167928",
-        "app.contact-wechat=hua47609"})
+        "app.contact-wechat=qqmu66"})
 class SettingsAuthorCardViewTest {
 
     @Autowired
@@ -86,7 +86,7 @@ class SettingsAuthorCardViewTest {
         assertThat(page).contains("/assets/github.svg");
         assertThat(page).contains("/assets/gitee.ico");
         assertThat(page).contains("817094/2912167928");
-        assertThat(page).contains("hua47609");
+        assertThat(page).contains("qqmu66");
         // dt tags: the donate dialog has its own 微信 pay tab, so the bare word proves nothing.
         assertThat(page).contains(">微信</dt>");
         assertThat(page).contains(">QQ</dt>");
