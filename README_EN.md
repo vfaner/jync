@@ -766,6 +766,15 @@ There is also an end-to-end script (H2 source and target, 20 assertions) coverin
 
 ## Contributing
 
+Questions, feature requests and feedback are all welcome:
+
+| Channel | Account |
+|---------|---------|
+| QQ | 817094 |
+| QQ | 2912167928 |
+| QQ Group | 426669837 |
+| WeChat | qqmu66 |
+
 Issues and pull requests are welcome:
 
 - GitHub: <https://github.com/vfaner/jync>
