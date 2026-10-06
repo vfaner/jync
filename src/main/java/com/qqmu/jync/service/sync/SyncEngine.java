@@ -3,6 +3,7 @@ package com.qqmu.jync.service.sync;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -300,11 +301,21 @@ public class SyncEngine {
      * database returns immediately, otherwise it gets built from the source definition using the
      * same DDL generator that structure sync uses (types, keys, indexes all correct).
      *
+     * <p>When the cycle already listed the target's tables, a name found in that listing skips
+     * the CREATE outright: without the listing every table of every poll paid one doomed CREATE
+     * TABLE (plus one CREATE INDEX per secondary index) that existed only to be rejected by the
+     * target with "already exists". A table absent from the listing takes the CREATE path and is
+     * added to the set, so the listing stays true for the rest of the cycle.
+     *
      * @return true on success (table was there or was just created); false on failure.
      */
     private boolean ensureTargetTableExists(TableMeta table, Connection targetConn,
-                                            SyncContext ctx, SyncResult result) {
+                                            SyncContext ctx, SyncResult result,
+                                            Set<String> knownTargetTables) {
         String targetTable = ctx.getConfig().targetTableName(table.getName());
+        if (knownTargetTables != null && knownTargetTables.contains(targetTable.toUpperCase())) {
+            return true;
+        }
         ChangeEvent createEvent = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,
                 table.getName(), "Auto-created before data sync (target table missing)", table);
         StructureSyncService.ApplyOutcome outcome =
@@ -327,6 +338,11 @@ public class SyncEngine {
                     ChangeType.CREATE, outcome.detail, true, 0);
             stateWriter.saveSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName(), table);
         }
+        // 不管这轮是新建的还是本来就在（清单读取失败时才走到这），都登记进清单，
+        // 后面的表若再引用它就不必重复发 CREATE。
+        if (knownTargetTables != null) {
+            knownTargetTables.add(targetTable.toUpperCase());
+        }
         return true;
     }
 
@@ -339,6 +355,20 @@ public class SyncEngine {
         DdlExecutor executor = new DdlExecutor(targetConn);
         if (disableSql != null) {
             executor.executeQuietly(disableSql);
+        }
+
+        // 目标端表清单每周期只读一次：命中的表跳过每轮一次的幂等 CREATE（那是一批注定被
+        // 目标库拒绝的 DDL 往返）。清单本身读不出来时置空，退回到逐表 CREATE 的老路。
+        Set<String> knownTargetTables = null;
+        try {
+            knownTargetTables = new HashSet<>();
+            for (String name : ctx.getTargetReader().listTableNames(targetConn, ctx.getTargetSchema())) {
+                knownTargetTables.add(name.toUpperCase());
+            }
+        } catch (SQLException e) {
+            log.debug("Could not list target tables for project '{}'; falling back to per-table"
+                    + " idempotent CREATE: {}", ctx.projectName(), e.getMessage());
+            knownTargetTables = null;
         }
 
         try {
@@ -360,7 +390,8 @@ public class SyncEngine {
                             ChangeType.ERROR, msg, false, 0);
                     return;
                 }
-                syncOneTable(table, sourceConn, targetConn, ctx, result, blockedTables);
+                syncOneTable(table, sourceConn, targetConn, ctx, result, blockedTables,
+                        knownTargetTables);
             }
         } finally {
             if (disableSql != null) {
@@ -371,14 +402,15 @@ public class SyncEngine {
     }
 
     private void syncOneTable(TableMeta table, Connection sourceConn, Connection targetConn,
-                              SyncContext ctx, SyncResult result, Set<String> blockedTables) {
+                              SyncContext ctx, SyncResult result, Set<String> blockedTables,
+                              Set<String> knownTargetTables) {
         long tableStart = System.currentTimeMillis();
         SyncProgress progress = stateWriter.loadOrCreateProgress(ctx.projectId(), table.getName());
         CursorStrategy strategy = cursorResolver.resolve(table, ctx.getConfig());
 
         // 目标表可能被手动删除了，或者快照与实际状态不同步。
         // 在开始数据同步前确认一下，缺失就用源表结构建一张，避免后续 upsert 整批失败。
-        if (!ensureTargetTableExists(table, targetConn, ctx, result)) {
+        if (!ensureTargetTableExists(table, targetConn, ctx, result, knownTargetTables)) {
             return;
         }
 
@@ -586,5 +618,16 @@ public class SyncEngine {
     /** Clears all progress and snapshots, forcing the next run to do a full reload. */
     public void resetProject(Long projectId) {
         stateWriter.resetProject(projectId);
+        evictProjectCaches(projectId);
+    }
+
+    /**
+     * Drops this project's in-memory throttle entries. The audit map is keyed
+     * {@code projectId:tableName} and only ever grows otherwise — project deletion and table
+     * renames would strand their entries for the life of the process.
+     */
+    public void evictProjectCaches(Long projectId) {
+        String prefix = projectId + ":";
+        lastRowCountAudit.keySet().removeIf(key -> key.startsWith(prefix));
     }
 }

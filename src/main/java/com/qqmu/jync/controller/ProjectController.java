@@ -1,7 +1,6 @@
 package com.qqmu.jync.controller;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -50,19 +49,16 @@ public class ProjectController {
                        @RequestParam(required = false) Integer spanR,
                        Model model) {
         Pager pager = Pager.of(page, size, projectService.count(), spanL, spanR);
-        List<Project> projects = pager.slice(projectService.findAll());
+        List<Project> projects = projectService.findPage(pager.firstIndex(), pager.getSize());
 
-        // Collectors.toMap rejects null values, and a project has no task row until its first
-        // save completes, so the map is built explicitly to allow absent entries.
-        Map<Long, SyncTask> taskLookup = new LinkedHashMap<>();
-        for (Project project : projects) {
-            taskLookup.put(project.getId(), projectService.findTask(project.getId()).orElse(null));
-        }
+        // One IN query for the whole page; a project has no task row until its first save
+        // completes, so its key is simply absent and the template renders that as empty.
+        Map<Long, SyncTask> taskLookup = projectService.findTasks(
+                projects.stream().map(Project::getId).toList());
 
         model.addAttribute("projects", projects);
         model.addAttribute("taskLookup", taskLookup);
         model.addAttribute("pager", pager);
-        model.addAttribute("activeNav", "projects");
         return "projects";
     }
 
@@ -71,7 +67,6 @@ public class ProjectController {
         Project project = new Project();
         model.addAttribute("project", project);
         addDatabaseOptions(model, project);
-        model.addAttribute("activeNav", "projects");
         return "project-form";
     }
 
@@ -80,7 +75,6 @@ public class ProjectController {
         return projectService.findById(id).map(project -> {
             model.addAttribute("project", project);
             addDatabaseOptions(model, project);
-            model.addAttribute("activeNav", "projects");
             return "project-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.project.not.found");
@@ -145,7 +139,6 @@ public class ProjectController {
         model.addAttribute("task", projectService.findTask(id).orElse(null));
         model.addAttribute("progressList", projectService.findProgress(id));
         model.addAttribute("scheduled", projectService.isScheduled(id));
-        model.addAttribute("activeNav", "projects");
 
         try {
             ProjectService.SourceObjects objects = projectService.listSourceObjects(id);

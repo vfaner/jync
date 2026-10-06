@@ -1,6 +1,7 @@
 package com.qqmu.jync.repository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,6 +16,9 @@ import com.qqmu.jync.model.TaskStatus;
 public interface SyncTaskRepository extends JpaRepository<SyncTask, Long> {
 
     Optional<SyncTask> findByProjectId(Long projectId);
+
+    /** Batch fetch for list pages, so rendering N projects costs one query instead of N. */
+    List<SyncTask> findByProjectIdIn(Collection<Long> projectIds);
 
     List<SyncTask> findByStatus(TaskStatus status);
 

@@ -5,9 +5,12 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.quartz.CronExpression;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,6 +28,7 @@ import com.qqmu.jync.service.metadata.MetadataReaderFactory;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
 import com.qqmu.jync.service.sync.SyncEngine;
 import com.qqmu.jync.service.task.SyncContextFactory;
+import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.task.SyncTaskRunner;
 import com.qqmu.jync.service.task.SyncTaskStore;
@@ -49,6 +53,7 @@ public class ProjectService {
     private final SyncTaskRunner taskRunner;
     private final SyncTaskStore taskStore;
     private final SyncEngine syncEngine;
+    private final SyncLockService lockService;
 
     public ProjectService(ProjectRepository projectRepository,
                           DatabaseConfigRepository databaseConfigRepository,
@@ -61,7 +66,8 @@ public class ProjectService {
                           SyncScheduler scheduler,
                           SyncTaskRunner taskRunner,
                           SyncTaskStore taskStore,
-                          SyncEngine syncEngine) {
+                          SyncEngine syncEngine,
+                          SyncLockService lockService) {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
         this.progressRepository = progressRepository;
@@ -74,10 +80,22 @@ public class ProjectService {
         this.taskRunner = taskRunner;
         this.taskStore = taskStore;
         this.syncEngine = syncEngine;
+        this.lockService = lockService;
     }
 
     public List<Project> findAll() {
         return projectRepository.findAll();
+    }
+
+    /**
+     * One page of projects for the list view, ordered by id so pagination is stable.
+     * Loading everything and slicing in memory meant the list page read the whole table
+     * (and the database re-sorted it) on every render.
+     */
+    public List<Project> findPage(int offset, int size) {
+        return projectRepository
+                .findAll(PageRequest.of(offset / size, size, Sort.by("id")))
+                .getContent();
     }
 
     public Optional<Project> findById(Long id) {
@@ -199,6 +217,8 @@ public class ProjectService {
         Project project = require(projectId);
         scheduler.unschedule(projectId);
         taskStore.deleteForProject(projectId);
+        syncEngine.evictProjectCaches(projectId);
+        lockService.evictProject(projectId);
         progressRepository.deleteByProjectId(projectId);
         snapshotService.deleteAllForProject(projectId);
         changeLogRepository.deleteByProjectId(projectId);
@@ -282,6 +302,11 @@ public class ProjectService {
 
     public Optional<SyncTask> findTask(Long projectId) {
         return taskStore.find(projectId);
+    }
+
+    /** Batch variant of {@link #findTask} for list pages: one query for the whole page. */
+    public Map<Long, SyncTask> findTasks(java.util.Collection<Long> projectIds) {
+        return taskStore.findByProjectIds(projectIds);
     }
 
     public List<com.qqmu.jync.model.SyncProgress> findProgress(Long projectId) {

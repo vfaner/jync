@@ -2,6 +2,7 @@ package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -9,7 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,7 +69,16 @@ class ProjectPagerViewTest {
         }
         when(projectService.count()).thenReturn((long) count);
         when(projectService.findAll()).thenReturn(all);
-        when(projectService.findTask(any())).thenReturn(Optional.empty());
+        // 分页已下沉到数据库层：mock 按 offset/size 切片，模拟 Pageable 查询的返回。
+        when(projectService.findPage(anyInt(), anyInt())).thenAnswer(inv -> {
+            int offset = inv.getArgument(0);
+            int size = inv.getArgument(1);
+            if (offset >= all.size()) {
+                return List.of();
+            }
+            return all.subList(offset, Math.min(offset + size, all.size()));
+        });
+        when(projectService.findTasks(any())).thenReturn(Map.of());
     }
 
     private String render(String query) throws Exception {

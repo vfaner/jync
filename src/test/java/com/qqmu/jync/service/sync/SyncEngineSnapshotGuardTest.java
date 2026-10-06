@@ -106,6 +106,10 @@ class SyncEngineSnapshotGuardTest {
                 .thenReturn(meta);
         when(reader.estimateRowCount(any(), any(), anyString())).thenReturn(0L);
 
+        // 目标端 reader：syncData 现在每周期先 listTableNames 一次，命中的表跳过 CREATE。
+        // 默认 mock 返回空清单 = 每张表都走老的 CREATE 路径，测试语义与改造前一致。
+        targetReader = mock(MetadataReader.class);
+
         project = new Project();
         project.setId(PROJECT_ID);
         project.setName("demo");
@@ -122,6 +126,7 @@ class SyncEngineSnapshotGuardTest {
     private DatabaseConfig sourceCfg;
     private DatabaseConfig targetCfg;
     private MetadataReader reader;
+    private MetadataReader targetReader;
 
     @AfterEach
     void tearDown() throws Exception {
@@ -141,6 +146,7 @@ class SyncEngineSnapshotGuardTest {
                 .sourceConfig(sourceCfg)
                 .targetConfig(targetCfg)
                 .sourceReader(reader)
+                .targetReader(targetReader)
                 .sourceDialect(new GenericSqlDialect())
                 .targetDialect(new GenericSqlDialect())
                 .batchSize(50)
@@ -277,6 +283,35 @@ class SyncEngineSnapshotGuardTest {
         // structural change as seen, so turning structure sync on later would apply none
         // of them.
         verify(stateWriter, never()).saveSnapshot(anyLong(), any(), anyString(), any());
+    }
+
+    @Test
+    void aListedTargetTableSkipsThePerCycleCreate() throws Exception {
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        // 目标端清单里有这张表：不该再发那个注定被「已存在」拒绝的 CREATE
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
+
+        SyncResult result = engine.runCycle(ctx(false, true), () -> true);
+
+        assertThat(result.isSuccess()).isTrue();
+        verify(structureSync, never()).apply(any(),
+                argThat(e -> e != null && e.getObjectType() == ObjectType.TABLE), any());
+        verify(dataSync).syncTable(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anUnlistedTargetTableStillTakesTheCreatePath() throws Exception {
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        // 清单为空 = 目标端确实没有这张表（比如被手动删了）：必须走 CREATE 补建
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of());
+
+        engine.runCycle(ctx(false, true), () -> true);
+
+        verify(structureSync).apply(any(),
+                argThat(e -> e != null && e.getObjectType() == ObjectType.TABLE), any());
+        verify(dataSync).syncTable(any(), any(), any(), any(), any(), any());
     }
 
     // --- lock lease ----------------------------------------------------------------------

@@ -84,6 +84,28 @@ class GenericMetadataReaderTest {
         assertThat(table.getColumns()).hasSize(1);
     }
 
+    @Test
+    void theCountFallbackRunsAtMostOncePerTtlWindow() throws Exception {
+        // 统计信息不可用时 estimateRowCount 兜底走 SELECT COUNT(*) —— 全表扫描。
+        // 轮询周期以秒计，兜底结果必须在 TTL 窗口内复用，否则大表每 2 秒被全扫一次。
+        Connection conn = mock(Connection.class);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(conn.getMetaData()).thenReturn(md);
+        when(md.getURL()).thenReturn("jdbc:mock:db");
+        when(md.getIdentifierQuoteString()).thenReturn("\"");
+        java.sql.Statement st = mock(java.sql.Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        ResultSet rs = mock(ResultSet.class);
+        when(st.executeQuery(anyString())).thenReturn(rs);
+        when(rs.next()).thenReturn(true);
+        when(rs.getLong(1)).thenReturn(42L);
+
+        assertThat(reader.estimateRowCount(conn, "S", "T")).isEqualTo(42L);
+        assertThat(reader.estimateRowCount(conn, "S", "T")).isEqualTo(42L);
+
+        org.mockito.Mockito.verify(st, org.mockito.Mockito.times(1)).executeQuery(anyString());
+    }
+
     private ResultSet emptyResultSet() throws Exception {
         ResultSet rs = mock(ResultSet.class);
         when(rs.next()).thenReturn(false);

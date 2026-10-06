@@ -77,6 +77,7 @@ public class SyncTaskRunner {
         Project project = maybeProject.get();
         taskStore.ensureTask(project);
 
+        SyncResult result;
         try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
             if (lock == null) {
                 // Another runner holds the lock, so the work is already happening — but this
@@ -85,10 +86,13 @@ public class SyncTaskRunner {
                 queuedReruns.add(projectId);
                 return Outcome.queued();
             }
-            SyncResult result = execute(project, lock);
-            startQueuedRerun(projectId);
-            return Outcome.executed(result);
+            result = execute(project, lock);
         }
+        // 队列检查必须排在锁释放之后。持锁时检查的话，"检查为空 → 释放锁"这个窗口里到达的
+        // 请求 tryAcquire 失败、入队，却再没有持锁者来消费它——条目会一直残留到该项目
+        // 下一次运行时被幽灵触发（对手动项目可能是很久以后）。
+        startQueuedRerun(projectId);
+        return Outcome.executed(result);
     }
 
     /**

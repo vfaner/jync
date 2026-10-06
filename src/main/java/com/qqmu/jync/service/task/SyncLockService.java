@@ -100,6 +100,18 @@ public class SyncLockService {
     }
 
     /**
+     * Drops the in-process lock entry of a deleted project.
+     *
+     * <p>Entries are created on demand and never removed on their own, so a long-lived
+     * process watching projects come and go would grow the map forever. Safe to call once
+     * the project can no longer be scheduled: an in-flight cycle holds its own reference
+     * to the lock object and unlocks it as usual.
+     */
+    public void evictProject(Long projectId) {
+        jvmLocks.remove(projectId);
+    }
+
+    /**
      * Clears locks this instance left behind after an unclean shutdown.
      *
      * <p>Runs at startup and touches only this owner's rows, so a genuinely live peer keeps its

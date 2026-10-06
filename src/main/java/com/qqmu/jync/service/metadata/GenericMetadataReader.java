@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.DatabaseMeta;
@@ -33,6 +34,26 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public class GenericMetadataReader implements MetadataReader {
+
+    /**
+     * Short-lived cache for the {@code COUNT(*)} fallback of {@link #estimateRowCount}.
+     *
+     * <p>Product readers that can ask the optimizer's statistics do so on every poll — those
+     * catalog queries are cheap. The fallback here is a full {@code COUNT(*)}, the most
+     * expensive statement the sync can issue against a source, and it was running on every
+     * poll cycle (seconds apart) for any table whose statistics were unavailable. The
+     * estimate only steers strategy choice (the full-compare ceiling, deletion-sync
+     * eligibility), so a value a few minutes stale changes nothing that matters.
+     */
+    private static final long COUNT_CACHE_TTL_MS = 5 * 60 * 1000L;
+
+    /** Hard cap against unbounded growth; expired entries are purged before this is hit. */
+    private static final int COUNT_CACHE_MAX = 1000;
+
+    private final Map<String, TimedCount> countCache = new ConcurrentHashMap<>();
+
+    private record TimedCount(long at, long count) {
+    }
 
     @Override
     public boolean supports(DatabaseType type) {
@@ -393,13 +414,42 @@ public class GenericMetadataReader implements MetadataReader {
 
     @Override
     public long estimateRowCount(Connection conn, String schema, String tableName) throws SQLException {
+        // Keyed by JDBC URL as well: one reader instance serves every project of its product,
+        // and the same schema.table name means different tables on different servers. A
+        // driver that reports no URL (the spec allows null, and some custom drivers do)
+        // gets no caching at all: without the URL component two servers' tables would share
+        // one key, and a wrong count is worse than a repeated COUNT(*).
+        String url = conn.getMetaData().getURL();
+        String cacheKey = url == null ? null : url + "|" + schema + "|" + tableName;
+        long now = System.currentTimeMillis();
+        if (cacheKey != null) {
+            TimedCount cached = countCache.get(cacheKey);
+            if (cached != null && now - cached.at() < COUNT_CACHE_TTL_MS) {
+                return cached.count();
+            }
+        }
+
         String qualified = schema == null || schema.isBlank()
                 ? quote(conn, tableName)
                 : quote(conn, schema) + "." + quote(conn, tableName);
+        long count;
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + qualified)) {
-            return rs.next() ? rs.getLong(1) : 0L;
+            count = rs.next() ? rs.getLong(1) : 0L;
         }
+
+        if (cacheKey == null) {
+            return count;
+        }
+        if (countCache.size() >= COUNT_CACHE_MAX) {
+            // 上限只防无界增长：先清过期项，仍超就全清——重建代价不过是下一轮再 COUNT 一次。
+            countCache.entrySet().removeIf(e -> now - e.getValue().at() >= COUNT_CACHE_TTL_MS);
+            if (countCache.size() >= COUNT_CACHE_MAX) {
+                countCache.clear();
+            }
+        }
+        countCache.put(cacheKey, new TimedCount(now, count));
+        return count;
     }
 
     protected String quote(Connection conn, String identifier) throws SQLException {

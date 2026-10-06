@@ -1,7 +1,10 @@
 package com.qqmu.jync.service.task;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
@@ -109,6 +112,19 @@ public class SyncTaskStore {
     @Transactional(readOnly = true)
     public Optional<SyncTask> find(Long projectId) {
         return taskRepository.findByProjectId(projectId);
+    }
+
+    /** Tasks for the given projects, keyed by project id; projects without a row are absent. */
+    @Transactional(readOnly = true)
+    public Map<Long, SyncTask> findByProjectIds(Collection<Long> projectIds) {
+        Map<Long, SyncTask> map = new LinkedHashMap<>();
+        if (projectIds.isEmpty()) {
+            return map;
+        }
+        for (SyncTask task : taskRepository.findByProjectIdIn(projectIds)) {
+            map.put(task.getProjectId(), task);
+        }
+        return map;
     }
 
     @Transactional(readOnly = true)

@@ -29,6 +29,7 @@ import com.qqmu.jync.service.metadata.MetadataReaderFactory;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
 import com.qqmu.jync.service.sync.SyncEngine;
 import com.qqmu.jync.service.task.SyncContextFactory;
+import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.task.SyncTaskRunner;
 import com.qqmu.jync.service.task.SyncTaskStore;
@@ -55,6 +56,7 @@ class ProjectServiceTest {
     @Mock private SyncTaskRunner taskRunner;
     @Mock private SyncTaskStore taskStore;
     @Mock private SyncEngine syncEngine;
+    @Mock private SyncLockService lockService;
 
     private ProjectService service;
 
@@ -62,7 +64,8 @@ class ProjectServiceTest {
     void setUp() {
         service = new ProjectService(projectRepository, databaseConfigRepository,
                 progressRepository, changeLogRepository, dataSourceManager, readerFactory,
-                snapshotService, contextFactory, scheduler, taskRunner, taskStore, syncEngine);
+                snapshotService, contextFactory, scheduler, taskRunner, taskStore, syncEngine,
+                lockService);
     }
 
     private Project project(Long id) {

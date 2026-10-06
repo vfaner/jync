@@ -224,7 +224,13 @@ public class DataSyncService {
             selectSql += " WHERE " + sourceDialect.quoteIdentifier(strategy.getColumn()) + " <= ?";
         }
 
-        log.info("Full load of {} -> {}", table.getName(), targetTable);
+        // full-compare 表没有游标，每一轮都会走这条全量路径，逐轮 info 是纯粹的日志噪音；
+        // 增量表只在首次加载走一次，那条 info 值得留下。
+        if (strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE) {
+            log.debug("Full load of {} -> {}", table.getName(), targetTable);
+        } else {
+            log.info("Full load of {} -> {}", table.getName(), targetTable);
+        }
         WriteStats stats = copyRows(sourceConn, targetConn, selectSql,
                 watermark != null ? List.of(upperBound) : List.of(),
                 table, targetTable, ctx);
@@ -799,6 +805,15 @@ public class DataSyncService {
         }
     }
 
+    /** Sums a batch's update counts, treating SUCCESS_NO_INFO as one affected row. */
+    private int sumCounts(int[] counts) {
+        int total = 0;
+        for (int count : counts) {
+            total += count == Statement.SUCCESS_NO_INFO ? 1 : Math.max(count, 0);
+        }
+        return total;
+    }
+
     /**
      * Deletes target rows whose keys no longer exist in the source.
      *
@@ -861,12 +876,22 @@ public class DataSyncService {
         int deleted = 0;
         String deleteSql = targetDialect.getDeleteByPkSql(ctx.getTargetSchema(), targetTable, pk);
         try (PreparedStatement ps = targetConn.prepareStatement(deleteSql)) {
+            // 与写入路径同一套批处理：逐行 executeUpdate 意味着每删一行一次网络往返。
+            int inBatch = 0;
             for (List<Object> keyValues : toDelete) {
                 for (int i = 0; i < keyValues.size(); i++) {
                     ps.setObject(i + 1, keyValues.get(i));
                 }
                 // Keyed delete: repeating it is a no-op, so this stays idempotent.
-                deleted += ps.executeUpdate();
+                ps.addBatch();
+                if (++inBatch >= ctx.getBatchSize()) {
+                    deleted += sumCounts(ps.executeBatch());
+                    targetConn.commit();
+                    inBatch = 0;
+                }
+            }
+            if (inBatch > 0) {
+                deleted += sumCounts(ps.executeBatch());
             }
             targetConn.commit();
         } catch (SQLException e) {
