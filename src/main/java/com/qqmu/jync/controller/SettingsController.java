@@ -22,6 +22,7 @@ public class SettingsController {
     private final String giteeUrl;
     private final String siteUrl;
     private final String contactQq;
+    private final String contactQqGroup;
     private final String contactWechat;
 
     public SettingsController(SyncProperties properties, SyncScheduler scheduler,
@@ -29,6 +30,7 @@ public class SettingsController {
                               @Value("${app.gitee-url:}") String giteeUrl,
                               @Value("${app.site-url:}") String siteUrl,
                               @Value("${app.contact-qq:}") String contactQq,
+                              @Value("${app.contact-qq-group:}") String contactQqGroup,
                               @Value("${app.contact-wechat:}") String contactWechat) {
         this.properties = properties;
         this.scheduler = scheduler;
@@ -37,6 +39,7 @@ public class SettingsController {
         this.giteeUrl = giteeUrl;
         this.siteUrl = siteUrl;
         this.contactQq = contactQq;
+        this.contactQqGroup = contactQqGroup;
         this.contactWechat = contactWechat;
     }
 
@@ -51,6 +54,7 @@ public class SettingsController {
         model.addAttribute("giteeUrl", giteeUrl);
         model.addAttribute("siteUrl", siteUrl);
         model.addAttribute("contactQq", contactQq);
+        model.addAttribute("contactQqGroup", contactQqGroup);
         model.addAttribute("contactWechat", contactWechat);
         model.addAttribute("activeNav", "settings");
         return "settings";
