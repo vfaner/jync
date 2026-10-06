@@ -38,7 +38,8 @@ import com.qqmu.jync.service.version.VersionService;
         "app.github-url=https://github.com/vfaner/jync",
         "app.gitee-url=https://gitee.com/super_rgh/jync",
         "app.contact-qq=817094/2912167928",
-        "app.contact-wechat=qqmu66"})
+        "app.contact-wechat=qqmu66",
+        "app.site-url=https://jync.qqmu.com"})
 class SettingsAuthorCardViewTest {
 
     @Autowired
@@ -91,6 +92,15 @@ class SettingsAuthorCardViewTest {
         assertThat(page).contains(">微信</dt>");
         assertThat(page).contains(">QQ</dt>");
         assertThat(page).doesNotContain("??settings.");
+    }
+
+    @Test
+    void theWebsiteRowSharesTheGridWithWeChatInsteadOfSpanningIt() throws Exception {
+        String page = render();
+
+        // 官网是第三行的右半格（与微信同排）：wide 通栏会让它另起一行，卡片凭空多一排。
+        assertThat(page).contains("https://jync.qqmu.com");
+        assertThat(page).containsPattern("<div class=\"kv\">\\s*<dt>官网</dt>");
     }
 
     @Test

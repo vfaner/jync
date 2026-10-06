@@ -14,8 +14,6 @@ public class SyncProperties {
     /** Default polling interval in milliseconds. */
     private long pollInterval = 2000L;
 
-    private String snapshotDir = "./snapshots";
-
     private int maxRetries = 3;
 
     private int batchSize = 500;

@@ -39,10 +39,6 @@
                                       th:text="${#strings.listJoin(scheduledProjectIds, ', ')}">1, 2</span>
                             </dd>
                         </div>
-                        <div class="kv">
-                            <dt th:text="#{settings.snapshotDir}">Snapshots</dt>
-                            <dd><span class="chip" th:text="${properties.snapshotDir}">./snapshots</span></dd>
-                        </div>
                     </dl>
                 </div>
             </div>
@@ -53,7 +49,7 @@
                     <h2><svg class="ico"><use href="#code-square"/></svg>
                         <span th:text="#{settings.projectAuthor}">Project &amp; author</span></h2>
                 </div>
-                <!-- 五个配对进一张双列 dl：仓库一行、联系方式两格半；
+                <!-- 六个配对进双列 dl 恰好三行：仓库一行、联系方式两行；
                      kv 值列 minmax(0,1fr) 允许收缩，长 URL 走省略号而不是撑爆轨道 -->
                 <div class="card-body">
                     <dl class="dl pairs authors">
@@ -88,8 +84,8 @@
                             <dt th:text="#{settings.contactWechat}">WeChat</dt>
                             <dd class="mono" th:text="${contactWechat}">wechat</dd>
                         </div>
-                        <!-- 官网行通栏垫底，链接再长也不用省略号 -->
-                        <div class="kv wide" th:if="${not #strings.isEmpty(siteUrl)}">
+                        <!-- 官网与微信配对成第三行；链接长时同仓库行一样格内省略号 -->
+                        <div class="kv" th:if="${not #strings.isEmpty(siteUrl)}">
                             <dt th:text="#{settings.website}">Website</dt>
                             <dd>
                                 <a class="repo-link" th:href="${siteUrl}" target="_blank" rel="noopener noreferrer">

@@ -626,8 +626,7 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   grid-template-columns: minmax(40px, auto) minmax(0, 1fr);
   align-items: center;
 }
-/* 通栏行：值与说明并排成一条长行跨满双列，不再挤在右半栏的窄格子里；
-   作者卡的官网行也用它垫底，链接再长也只在自己行内出省略号 */
+/* 通栏行：值与说明并排成一条长行跨满双列，不再挤在右半栏的窄格子里 */
 .dl.pairs .kv.wide { grid-column: 1 / -1; }
 .dl.pairs .kv.wide dd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .dl.pairs .kv.wide dd .help { margin-top: 0; max-width: none; }
