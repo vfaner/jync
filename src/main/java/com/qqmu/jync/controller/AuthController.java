@@ -52,7 +52,6 @@ public class AuthController {
 
     @GetMapping("/account/password")
     public String passwordForm(Model model) {
-        model.addAttribute("activeNav", "account");
         return "account-password";
     }
 
@@ -79,7 +78,6 @@ public class AuthController {
             // about to invalidate on the success path, and two different mechanisms for the two
             // outcomes is more moving parts than this page deserves.
             model.addAttribute("errorKey", e.getMessage());
-            model.addAttribute("activeNav", "account");
             return "account-password";
         }
 

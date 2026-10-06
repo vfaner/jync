@@ -31,7 +31,7 @@ import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.UserRole;
-import com.qqmu.jync.repository.ChangeLogRepository;
+import com.qqmu.jync.service.ChangeLogService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 
@@ -49,7 +49,7 @@ class ChangeLogPagerViewTest {
     private MockMvc mvc;
 
     @MockBean
-    private ChangeLogRepository changeLogRepository;
+    private ChangeLogService changeLogService;
 
     @MockBean
     private ProjectService projectService;
@@ -74,9 +74,8 @@ class ChangeLogPagerViewTest {
         entry.setSuccess(true);
         entry.setOccurredAt(Instant.now());
         Page<ChangeLog> page = new PageImpl<>(List.of(entry), echo, totalEntries);
-        when(changeLogRepository.count()).thenReturn(totalEntries);
-        when(changeLogRepository.findAllByOrderByOccurredAtDesc(any(Pageable.class)))
-                .thenReturn(page);
+        when(changeLogService.count(any())).thenReturn(totalEntries);
+        when(changeLogService.page(any(), any(Pageable.class))).thenReturn(page);
         when(projectService.findAll()).thenReturn(List.of());
     }
 
@@ -93,7 +92,7 @@ class ChangeLogPagerViewTest {
         String html = render("?size=15&page=2");
 
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(changeLogRepository).findAllByOrderByOccurredAtDesc(captor.capture());
+        verify(changeLogService).page(any(), captor.capture());
         assertThat(captor.getValue().getPageSize()).isEqualTo(15);
         assertThat(captor.getValue().getPageNumber()).isEqualTo(1);
 
@@ -112,7 +111,7 @@ class ChangeLogPagerViewTest {
         String html = render("?page=999");
 
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(changeLogRepository).findAllByOrderByOccurredAtDesc(captor.capture());
+        verify(changeLogService).page(any(), captor.capture());
         assertThat(captor.getValue().getPageNumber()).isEqualTo(19);
         assertThat(html).contains("is-current\">20</span>");
     }

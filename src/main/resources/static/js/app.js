@@ -242,6 +242,12 @@
     return task().then(restore, restore);
   }
 
+  /** 加载态按钮 HTML：spinner + data-busy-text（无文案时不留尾随空格） */
+  function busyLabel(btn) {
+    var text = btn.dataset.busyText;
+    return '<span class="spin"></span>' + (text ? ' ' + text : '');
+  }
+
   /** 带加载态的动作按钮，完成后可选刷新页面 */
   function bindActionButton(btn) {
     btn.addEventListener('click', function (e) {
@@ -252,8 +258,7 @@
       // 保持加载态直到页面刷新，避免重载前按钮文案闪回原样
       var original = btn.innerHTML;
       btn.disabled = true;
-      btn.innerHTML = '<span class="spin"></span>' +
-        (btn.dataset.busyText ? ' ' + btn.dataset.busyText : '');
+      btn.innerHTML = busyLabel(btn);
 
       postJson(btn.dataset.action).then(function (payload) {
         var text = payload.summary
@@ -293,7 +298,7 @@
 
       var out = document.getElementById('test-result');
 
-      withBusy(btn, '<span class="spin"></span> ' + (btn.dataset.busyText || ''), function () {
+      withBusy(btn, busyLabel(btn), function () {
         return postJson(btn.dataset.action, new FormData(form)).then(function (p) {
           if (!out) {
             toast(t(p.success ? (btn.dataset.okKey || 'db.testSuccess')
@@ -673,7 +678,7 @@
       var editor = document.getElementById('override-sql');
       if (!editor) return;
 
-      withBusy(btn, '<span class="spin"></span> ' + (btn.dataset.busyText || ''), function () {
+      withBusy(btn, busyLabel(btn), function () {
         var originalValue = editor.value;
         var streamRaw = '';
         var syncTimer = null;
@@ -752,7 +757,7 @@
 
       if (out) out.innerHTML = '';
 
-      withBusy(btn, '<span class="spin"></span> ' + (btn.dataset.busyText || ''), function () {
+      withBusy(btn, busyLabel(btn), function () {
         return postJson(btn.dataset.action, JSON.stringify({
           kind: btn.dataset.kind,
           name: btn.dataset.name,

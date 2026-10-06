@@ -19,7 +19,6 @@ public class DashboardController {
     @GetMapping({"/", "/dashboard"})
     public String dashboard(Model model) {
         model.addAttribute("stats", dashboardService.collect());
-        model.addAttribute("activeNav", "dashboard");
         return "dashboard";
     }
 }

@@ -56,7 +56,6 @@ public class SettingsController {
         model.addAttribute("contactQq", contactQq);
         model.addAttribute("contactQqGroup", contactQqGroup);
         model.addAttribute("contactWechat", contactWechat);
-        model.addAttribute("activeNav", "settings");
         return "settings";
     }
 }

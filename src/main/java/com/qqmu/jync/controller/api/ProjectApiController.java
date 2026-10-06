@@ -59,7 +59,6 @@ public class ProjectApiController {
                 // Accepted, not executed: amber rather than green or red, and no reload —
                 // the page would refresh while the cycle the click queued behind is running.
                 Map<String, Object> body = ok("msg.sync.rerun.queued");
-                body.put("success", true);
                 body.put("toastKind", "warn");
                 body.put("noReload", true);
                 return ResponseEntity.ok(body);

@@ -29,7 +29,7 @@ import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.UserRole;
-import com.qqmu.jync.repository.ChangeLogRepository;
+import com.qqmu.jync.service.ChangeLogService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 
@@ -56,7 +56,7 @@ class ChangeLogRefreshViewTest {
     private MockMvc mvc;
 
     @MockBean
-    private ChangeLogRepository changeLogRepository;
+    private ChangeLogService changeLogService;
 
     @MockBean
     private ProjectService projectService;
@@ -83,8 +83,8 @@ class ChangeLogRefreshViewTest {
         entry.setOccurredAt(Instant.now());
         Pageable pageable = PageRequest.of(pageNumber, 50);
         Page<ChangeLog> page = new PageImpl<>(List.of(entry), pageable, totalEntries);
-        when(changeLogRepository.count()).thenReturn((long) totalEntries);
-        when(changeLogRepository.findAllByOrderByOccurredAtDesc(any(Pageable.class))).thenReturn(page);
+        when(changeLogService.count(any())).thenReturn((long) totalEntries);
+        when(changeLogService.page(any(), any(Pageable.class))).thenReturn(page);
         when(projectService.findAll()).thenReturn(List.of());
     }
 

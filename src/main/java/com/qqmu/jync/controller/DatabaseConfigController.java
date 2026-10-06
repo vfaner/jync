@@ -40,7 +40,6 @@ public class DatabaseConfigController {
                 service.findPageByRole(ConnectionRole.SOURCE, sourcePage, PAGE_SIZE));
         model.addAttribute("targets",
                 service.findPageByRole(ConnectionRole.TARGET, targetPage, PAGE_SIZE));
-        model.addAttribute("activeNav", "databases");
         return "database-configs";
     }
 
@@ -54,7 +53,6 @@ public class DatabaseConfigController {
         model.addAttribute("config", config);
         model.addAttribute("types", DatabaseType.values());
         model.addAttribute("jarCardVisible", jarCardVisible(config.getType()));
-        model.addAttribute("activeNav", "databases");
         return "database-config-form";
     }
 
@@ -64,7 +62,6 @@ public class DatabaseConfigController {
             model.addAttribute("config", config);
             model.addAttribute("types", DatabaseType.values());
             model.addAttribute("jarCardVisible", jarCardVisible(config.getType()));
-            model.addAttribute("activeNav", "databases");
             return "database-config-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.connection.missing");

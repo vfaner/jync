@@ -52,15 +52,6 @@ public final class Pager {
         return Math.min(s, pages);
     }
 
-    /** The rows of {@code all} belonging to this page, for in-memory lists. */
-    public <T> List<T> slice(List<T> all) {
-        int from = firstIndex();
-        if (from >= all.size()) {
-            return List.of();
-        }
-        return all.subList(from, (int) Math.min((long) from + size, all.size()));
-    }
-
     /** Zero-based offset of this page's first row, for pageable repository queries. */
     public int firstIndex() {
         return (page - 1) * size;

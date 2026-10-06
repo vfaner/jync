@@ -24,7 +24,6 @@ spring:
         jdbc:
           time_zone: UTC
   thymeleaf:
-    cache: false
     encoding: UTF-8
   messages:
     basename: i18n/messages
@@ -33,6 +32,9 @@ spring:
   web:
     resources:
       cache:
+        # 保持 0 是有意的：发布走"同版本覆盖"（v1.3.1 被重传过多次），URL 上的
+        # v=${appVersion} 参数在覆盖后不变，长缓存期会让浏览器拿着旧 app.js 不放。
+        # 0 = 每次都带条件请求，未变返回 304，代价只是一次往返。
         period: 0
   quartz:
     job-store-type: memory
@@ -68,8 +70,6 @@ app:
 sync:
   # Default polling interval in milliseconds for change detection
   poll-interval: 2000
-  # Directory for optional on-disk metadata snapshot dumps
-  snapshot-dir: ./snapshots
   # Max retry attempts for a failed sync unit before it is logged as an error
   max-retries: 3
   # JDBC batch size for data synchronization
@@ -104,7 +104,6 @@ sync:
 logging:
   level:
     root: INFO
-    com.qqmu.jync: INFO
     org.hibernate.SQL: WARN
   file:
     name: ./logs/jync.log

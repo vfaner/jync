@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.Test;
 
@@ -84,11 +83,11 @@ class PagerTest {
     }
 
     @Test
-    void sliceReturnsThePageWindow() {
-        List<Integer> all = IntStream.rangeClosed(1, 45).boxed().collect(Collectors.toList());
+    void firstIndexIsTheZeroBasedOffsetOfThePagesFirstRow() {
+        // The offset feeds PageRequest in the pageable repository queries; slice() is gone —
+        // every list page now pages in the database instead of in memory.
         Pager pager = Pager.of(3, 20, 45, null, null);
 
         assertThat(pager.firstIndex()).isEqualTo(40);
-        assertThat(pager.slice(all)).containsExactly(41, 42, 43, 44, 45);
     }
 }

@@ -35,8 +35,10 @@ public class ApiExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> onUnexpected(Exception e) {
         log.error("Unhandled API error", e);
+        // Never echo the raw exception: SQL errors and file paths are internals, and the
+        // browser can localize the fixed key just as well.
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(body(false, e.getMessage() == null ? e.toString() : e.getMessage()));
+                .body(body(false, "error.unexpected"));
     }
 
     private Map<String, Object> body(boolean success, String message) {

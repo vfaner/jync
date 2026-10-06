@@ -32,7 +32,6 @@ public class AiProviderController {
     public String list(Model model) {
         model.addAttribute("providers", service.findAll());
         model.addAttribute("assistAvailable", service.isAssistAvailable());
-        model.addAttribute("activeNav", "ai");
         return "ai-providers";
     }
 
@@ -43,7 +42,6 @@ public class AiProviderController {
         provider.setBaseUrl(AiProtocol.OPENAI.getDefaultBaseUrl());
         model.addAttribute("provider", provider);
         model.addAttribute("protocols", AiProtocol.values());
-        model.addAttribute("activeNav", "ai");
         return "ai-provider-form";
     }
 
@@ -52,7 +50,6 @@ public class AiProviderController {
         return service.findById(id).map(provider -> {
             model.addAttribute("provider", provider);
             model.addAttribute("protocols", AiProtocol.values());
-            model.addAttribute("activeNav", "ai");
             return "ai-provider-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.ai.provider.missing");

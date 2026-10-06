@@ -40,7 +40,6 @@ public class ConversionController {
         try {
             model.addAttribute("overview", assistService.overview(projectId));
             model.addAttribute("projectId", projectId);
-            model.addAttribute("activeNav", "projects");
             return "conversion-list";
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -61,7 +60,6 @@ public class ConversionController {
         try {
             model.addAttribute("detail", assistService.load(projectId, kind, name));
             model.addAttribute("projectId", projectId);
-            model.addAttribute("activeNav", "projects");
             return "conversion-detail";
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
