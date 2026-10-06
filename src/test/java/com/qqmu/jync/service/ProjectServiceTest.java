@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -161,6 +162,41 @@ class ProjectServiceTest {
         service.save(project(null));
 
         verify(projectRepository, never()).findById(any());
+    }
+
+    // --- delete guard -----------------------------------------------------------------------
+
+    @Test
+    void deleteRefusesWhileASyncCycleHoldsTheLock() {
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
+        when(lockService.tryAcquire(1L)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.delete(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.sync.in.progress");
+        // The refusal must precede every state purge: a half-deleted project coexisting
+        // with a cycle that still writes to it is worse than either alone.
+        verify(taskStore, never()).deleteForProject(any());
+        verify(projectRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void deletePurgesEveryStateStoreWhileHoldingTheSyncLock() {
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lockService.tryAcquire(1L)).thenReturn(lock);
+
+        service.delete(1L);
+
+        verify(scheduler).unschedule(1L);
+        verify(taskStore).deleteForProject(1L);
+        verify(syncEngine).evictProjectCaches(1L);
+        verify(lockService).evictProject(1L);
+        verify(progressRepository).deleteByProjectId(1L);
+        verify(snapshotService).deleteAllForProject(1L);
+        verify(changeLogRepository).deleteByProjectId(1L);
+        verify(projectRepository).deleteById(1L);
+        verify(lock).close();
     }
 
     // --- cursor candidates -----------------------------------------------------------------

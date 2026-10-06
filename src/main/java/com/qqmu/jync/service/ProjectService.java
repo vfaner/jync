@@ -212,17 +212,33 @@ public class ProjectService {
         syncEngine.resetProject(projectId);
     }
 
+    /**
+     * Deletes a project together with all of its sync state.
+     *
+     * <p>Takes the project's sync lock first: a cycle still in flight would otherwise
+     * re-create progress and snapshot rows after this method cleared them (those tables
+     * carry no foreign key to the project), leaving orphan state nobody can see or clean.
+     * Holding the lock also blocks syncNow and the Quartz job for the duration, and
+     * unscheduling first stops new fires, so the purge runs against a quiet project.
+     */
     @Transactional
     public void delete(Long projectId) {
         Project project = require(projectId);
         scheduler.unschedule(projectId);
-        taskStore.deleteForProject(projectId);
-        syncEngine.evictProjectCaches(projectId);
-        lockService.evictProject(projectId);
-        progressRepository.deleteByProjectId(projectId);
-        snapshotService.deleteAllForProject(projectId);
-        changeLogRepository.deleteByProjectId(projectId);
-        projectRepository.deleteById(projectId);
+        // tryAcquire returns null when the lock is unavailable; a try-with-resources on a
+        // null resource simply skips close(), so the refusal is just an early throw.
+        try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
+            if (lock == null) {
+                throw new IllegalStateException("error.project.sync.in.progress");
+            }
+            taskStore.deleteForProject(projectId);
+            syncEngine.evictProjectCaches(projectId);
+            lockService.evictProject(projectId);
+            progressRepository.deleteByProjectId(projectId);
+            snapshotService.deleteAllForProject(projectId);
+            changeLogRepository.deleteByProjectId(projectId);
+            projectRepository.deleteById(projectId);
+        }
         log.info("Deleted project '{}' and all its sync state", project.getName());
     }
 
