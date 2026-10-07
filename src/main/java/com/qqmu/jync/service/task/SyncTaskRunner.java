@@ -5,6 +5,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 import javax.annotation.PreDestroy;
 
@@ -43,8 +44,20 @@ public class SyncTaskRunner {
     /** Projects whose in-flight cycle should be followed by exactly one more cycle. */
     private final Set<Long> queuedReruns = ConcurrentHashMap.newKeySet();
 
-    /** Runs a queued rerun off the requesting thread, so no click ever waits for two cycles. */
-    private final ExecutorService rerunExecutor = Executors.newSingleThreadExecutor(runnable -> {
+    /**
+     * Wait before a self-served rerun retries a still-busy lock, so a lock held by another
+     * instance is polled instead of busy-spun.
+     */
+    private static final long RERUN_RETRY_MS = 1000L;
+
+    /**
+     * Runs queued reruns off the requesting thread, so no click ever waits for two cycles.
+     *
+     * <p>A cached pool rather than a single thread: one project's delayed retry (or a slow
+     * cycle) must not block another project's queued rerun behind it. Submissions are rare
+     * and short, and the threads are daemons.
+     */
+    private final ExecutorService rerunExecutor = Executors.newCachedThreadPool(runnable -> {
         Thread thread = new Thread(runnable, "jync-rerun");
         thread.setDaemon(true);
         return thread;
@@ -84,6 +97,9 @@ public class SyncTaskRunner {
                 // click may know about changes the running cycle's window no longer covers.
                 // Remember it as at most one rerun instead of dropping it.
                 queuedReruns.add(projectId);
+                // The holder may have released in the gap before this add; serve the entry
+                // ourselves if no local holder remains to drain it.
+                selfServeQueuedRerun(projectId);
                 return Outcome.queued();
             }
             result = execute(project, lock);
@@ -99,13 +115,82 @@ public class SyncTaskRunner {
      * Hands a coalesced rerun to the background executor now that a cycle has finished.
      *
      * <p>The rerun re-acquires the lock over there; if a scheduled fire grabbed it in between,
-     * the request re-registers and is served when that cycle finishes in turn.
+     * the task re-registers and is served when that cycle finishes in turn.
      */
     private void startQueuedRerun(Long projectId) {
         if (queuedReruns.remove(projectId)) {
             log.info("Sync of project {} finished; running the queued extra cycle", projectId);
-            rerunExecutor.submit(() -> runOnce(projectId));
+            scheduleRerun(projectId, 0L);
         }
+    }
+
+    /**
+     * Serves a queued entry from the background pool when no local holder is left to drain
+     * it: the holder released in the gap between the failed tryAcquire and the queue add,
+     * or another instance holds the database lock.
+     *
+     * <p>Claims the entry before scheduling so two observers racing here collapse into one
+     * task; with a live holder the entry stays put for its post-cycle drain.
+     */
+    private void selfServeQueuedRerun(Long projectId) {
+        if (lockService.isLockedInThisJvm(projectId)) {
+            return;
+        }
+        if (queuedReruns.remove(projectId)) {
+            scheduleRerun(projectId, RERUN_RETRY_MS);
+        }
+    }
+
+    /**
+     * Submits a claimed rerun to the background pool, waiting {@code delayMs} first. The
+     * delay keeps a database lock held by another instance from turning into a busy retry.
+     */
+    private void scheduleRerun(Long projectId, long delayMs) {
+        if (rerunExecutor.isShutdown()) {
+            return;
+        }
+        try {
+            rerunExecutor.submit(() -> {
+                if (delayMs > 0) {
+                    try {
+                        Thread.sleep(delayMs);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+                runClaimedRerun(projectId);
+            });
+        } catch (RejectedExecutionException e) {
+            log.debug("Queued rerun for project {} was not accepted by the executor", projectId);
+        }
+    }
+
+    /**
+     * Runs one cycle for an already-claimed entry, or hands the entry back to a holder that
+     * appeared in the meantime.
+     */
+    private void runClaimedRerun(Long projectId) {
+        Optional<Project> maybeProject = projectRepository.findById(projectId);
+        if (maybeProject.isEmpty()) {
+            log.debug("Dropping queued rerun: project {} no longer exists", projectId);
+            return;
+        }
+        Project project = maybeProject.get();
+        try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
+            if (lock == null) {
+                // A holder is active; return the entry for its drain, re-checking the gap.
+                queuedReruns.add(projectId);
+                selfServeQueuedRerun(projectId);
+                return;
+            }
+            execute(project, lock);
+        }
+    }
+
+    /** Whether a project row still exists; an orphaned Quartz job uses it to self-delete. */
+    public boolean projectExists(Long projectId) {
+        return projectRepository.existsById(projectId);
     }
 
     @PreDestroy

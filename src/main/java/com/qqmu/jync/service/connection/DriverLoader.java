@@ -36,6 +36,12 @@ public class DriverLoader {
     private final Map<String, URLClassLoader> loaderCache = new ConcurrentHashMap<>();
 
     /**
+     * Separates the driver class name from the canonical jar path inside a registration
+     * key. U+0001 cannot appear in either part (a class name or file path).
+     */
+    private static final String KEY_SEPARATOR = "";
+
+    /**
      * Driver class name + a U+0001 separator + canonical jar path -> shim registered with
      * DriverManager. The jar path is part of the key so editing a connection's jar path
      * actually loads the new jar; a class-name-only key would keep serving the old one.
@@ -51,7 +57,7 @@ public class DriverLoader {
      * @return the class loader that owns the driver, for callers that must set the
      *         thread context loader before opening a connection
      */
-    public ClassLoader ensureDriverLoaded(String driverClassName, String jarPath) {
+    public synchronized ClassLoader ensureDriverLoaded(String driverClassName, String jarPath) {
         if (!StringUtils.hasText(driverClassName)) {
             throw new IllegalArgumentException("driver.class.required");
         }
@@ -69,9 +75,7 @@ public class DriverLoader {
                 log.debug("Driver {} found on the application classpath", driverClassName);
                 return getClass().getClassLoader();
             } catch (ClassNotFoundException e) {
-                throw new IllegalStateException(
-                        "Driver " + driverClassName + " is not on the classpath and no jar path was "
-                                + "supplied. Provide the driver jar path in the connection settings.", e);
+                throw new IllegalStateException("error.driver.absent", e);
             }
         }
 
@@ -95,13 +99,11 @@ public class DriverLoader {
             }
             return loader;
         } catch (ClassNotFoundException e) {
-            throw new IllegalStateException("Driver class " + driverClassName
-                    + " was not found inside " + jarPath, e);
+            throw new IllegalStateException("error.driver.class.not.found", e);
         } catch (SQLException e) {
-            throw new IllegalStateException("Failed to register driver " + driverClassName, e);
+            throw new IllegalStateException("error.driver.register.failed", e);
         } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to instantiate driver " + driverClassName
-                    + "; it may require a different loading strategy", e);
+            throw new IllegalStateException("error.driver.instantiate.failed", e);
         }
     }
 
@@ -114,12 +116,12 @@ public class DriverLoader {
             }
             File file = new File(trimmed);
             if (!file.exists()) {
-                throw new IllegalArgumentException("Driver jar path does not exist: " + trimmed);
+                throw new IllegalArgumentException("error.driver.jar.nonexistent");
             }
             if (file.isDirectory()) {
                 File[] jars = file.listFiles(f -> f.getName().toLowerCase().endsWith(".jar"));
                 if (jars == null || jars.length == 0) {
-                    throw new IllegalArgumentException("No jar files found in directory: " + trimmed);
+                    throw new IllegalArgumentException("error.driver.directory.empty");
                 }
                 for (File jar : jars) {
                     urls.add(toUrl(jar));
@@ -129,7 +131,7 @@ public class DriverLoader {
             }
         }
         if (urls.isEmpty()) {
-            throw new IllegalArgumentException("No usable driver jars in: " + jarPath);
+            throw new IllegalArgumentException("error.driver.jars.empty");
         }
         // Parent is this application's loader so the driver can see java.sql.*.
         return new URLClassLoader(urls.toArray(new URL[0]), getClass().getClassLoader());
@@ -139,7 +141,7 @@ public class DriverLoader {
         try {
             return file.toURI().toURL();
         } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid driver jar path: " + file, e);
+            throw new IllegalArgumentException("error.driver.jar.invalid", e);
         }
     }
 
@@ -154,7 +156,7 @@ public class DriverLoader {
     /** Key for {@link #registered}: class name plus the canonical jar path it came from. */
     private String registeredKey(String driverClassName, String jarPath) {
         String suffix = StringUtils.hasText(jarPath) ? canonical(jarPath) : "";
-        return driverClassName + "\\u0001" + suffix;
+        return driverClassName + KEY_SEPARATOR + suffix;
     }
 
     /**
@@ -165,7 +167,7 @@ public class DriverLoader {
      */
     private List<ClassLoader> deregisterStaleShims(String driverClassName) {
         List<ClassLoader> retiredLoaders = new ArrayList<>();
-        String prefix = driverClassName + "\\u0001";
+        String prefix = driverClassName + KEY_SEPARATOR;
         for (String key : registered.keySet()) {
             if (!key.startsWith(prefix)) {
                 continue;

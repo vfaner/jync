@@ -29,9 +29,6 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     @Query("select coalesce(sum(c.affectedRows), 0) from ChangeLog c where c.occurredAt > :after")
     long sumAffectedRowsSince(@Param("after") Instant after);
 
-    @Query("select coalesce(sum(c.affectedRows), 0) from ChangeLog c where c.projectId = :projectId")
-    long sumAffectedRowsByProject(@Param("projectId") Long projectId);
-
     /** Per-project row totals in one query, instead of one query per project on the dashboard. */
     @Query("select c.projectId, coalesce(sum(c.affectedRows), 0) "
             + "from ChangeLog c group by c.projectId")

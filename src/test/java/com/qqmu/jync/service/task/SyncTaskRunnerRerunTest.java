@@ -39,16 +39,18 @@ class SyncTaskRunnerRerunTest {
 
     private SyncEngine syncEngine;
     private SyncTaskStore taskStore;
+    private SyncLockStore lockStore;
+    private ProjectRepository projectRepository;
     private SyncTaskRunner runner;
     private final AtomicInteger cycles = new AtomicInteger();
     private CountDownLatch cycleEntered;
 
     @BeforeEach
     void setUp() {
-        ProjectRepository projectRepository = mock(ProjectRepository.class);
+        projectRepository = mock(ProjectRepository.class);
         SyncContextFactory contextFactory = mock(SyncContextFactory.class);
         syncEngine = mock(SyncEngine.class);
-        SyncLockStore lockStore = mock(SyncLockStore.class);
+        lockStore = mock(SyncLockStore.class);
         taskStore = mock(SyncTaskStore.class);
         SyncLockService lockService = new SyncLockService(lockStore, new SyncProperties(), 8080);
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
@@ -163,6 +165,30 @@ class SyncTaskRunnerRerunTest {
         verify(syncEngine, never()).runCycle(any());
         // ...but the bookkeeping failure did not strand the queued extra request.
         awaitQueueDrained();
+    }
+
+    @Test
+    void aClickWhileAnotherInstanceHoldsTheDbLockSelfServesOnceItFrees() throws Exception {
+        // No local holder: the database lock is held by another instance, which will never
+        // drain OUR queue. The queued entry must retry on the background pool until the
+        // lock frees, then run the cycle itself.
+        when(lockStore.acquire(eq(1L), anyString(), anyLong()))
+                .thenReturn(false, false, true);
+        stubEngine(0);
+
+        assertThat(runner.runOnce(1L).kind())
+                .isEqualTo(SyncTaskRunner.Outcome.Kind.QUEUED);
+
+        awaitCycles(1);
+        awaitQueueDrained();
+    }
+
+    @Test
+    void projectExistsReflectsTheRepository() {
+        when(projectRepository.existsById(7L)).thenReturn(true);
+
+        assertThat(runner.projectExists(7L)).isTrue();
+        assertThat(runner.projectExists(8L)).isFalse();
     }
 
     @SuppressWarnings("unchecked")

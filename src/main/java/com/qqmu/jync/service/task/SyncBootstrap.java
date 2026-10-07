@@ -15,16 +15,12 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Restores sync state after a restart.
  *
- * <p>This is what makes "resume after a crash" work end to end. On startup:
- *
- * <ol>
- *   <li>Locks left behind by this instance's previous run are released. They would otherwise
- *       block their projects until the lease expired, because the process that held them is
- *       gone and cannot release them itself.
- *   <li>Every project marked enabled is rescheduled. Quartz is configured with an in-memory
- *       job store, so no schedule survives a restart; the durable truth is the {@code enabled}
- *       flag on the project, and the schedule is rebuilt from it.
- * </ol>
+ * <p>This is what makes "resume after a crash" work end to end. On startup every project
+ * marked enabled is rescheduled: Quartz is configured with an in-memory job store, so no
+ * schedule survives a restart; the durable truth is the {@code enabled} flag on the project,
+ * and the schedule is rebuilt from it. Locks a crashed instance left behind are not cleared
+ * here — each owner gets a random id, so no startup process can match them; they clear on
+ * their own by lease expiry (lockTtlMs).
  *
  * <p>No sync progress is reset. Each table's cursor and each object's snapshot are already
  * durable, so a resumed project picks up exactly where it left off — and because the cursor is
@@ -37,13 +33,10 @@ public class SyncBootstrap {
 
     private final ProjectRepository projectRepository;
     private final SyncScheduler scheduler;
-    private final SyncLockService lockService;
 
-    public SyncBootstrap(ProjectRepository projectRepository, SyncScheduler scheduler,
-                         SyncLockService lockService) {
+    public SyncBootstrap(ProjectRepository projectRepository, SyncScheduler scheduler) {
         this.projectRepository = projectRepository;
         this.scheduler = scheduler;
-        this.lockService = lockService;
     }
 
     /**
@@ -56,8 +49,6 @@ public class SyncBootstrap {
     @EventListener(ApplicationReadyEvent.class)
     @Order(100)
     public void onReady() {
-        lockService.releaseStaleLocksOfThisOwner();
-
         List<Project> enabled = projectRepository.findByEnabledTrue();
         if (enabled.isEmpty()) {
             log.info("No enabled projects to resume");

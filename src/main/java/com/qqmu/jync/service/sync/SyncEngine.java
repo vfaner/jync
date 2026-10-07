@@ -75,13 +75,6 @@ public class SyncEngine {
     }
 
     /**
-     * Runs one complete cycle.
-     *
-     * <p>The caller must already hold the project's sync lock. Exceptions are folded into the
-     * result rather than propagated, so one failing project reports its error instead of
-     * taking down the scheduler.
-     */
-    /**
      * Overrides the lease renewer carried on the context for this cycle, then runs it. Mainly
      * used by tests simulating a lost lease; production passes the renewer in via the context.
      */
@@ -99,7 +92,6 @@ public class SyncEngine {
      * taking down the scheduler.
      */
     public SyncResult runCycle(SyncContext ctx) {
-        long start = System.currentTimeMillis();
         SyncResult result = new SyncResult();
 
         try (Connection sourceConn = dataSourceManager.getConnection(ctx.getSourceConfig());
@@ -134,7 +126,8 @@ public class SyncEngine {
                     ChangeType.ERROR, String.valueOf(e.getMessage()), false, 0);
         }
 
-        result.setDurationMs(System.currentTimeMillis() - start);
+        // The runner stamps duration over the whole execute() span (bookkeeping included);
+        // setting it here too just overwrote the same field with a near-identical value.
         return result;
     }
 

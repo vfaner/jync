@@ -210,7 +210,10 @@ public class ConversionAssistService {
                         target.getType(), targetDialect);
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("Cannot read " + name + ": " + e.getMessage(), e);
+            // The flash handler renders the key; keep the driver's raw detail server-side.
+            log.debug("Cannot read source definition of '{}' for project {}",
+                    name, projectId, e);
+            throw new IllegalStateException("error.source.object.read.failed", e);
         }
         return detail;
     }

@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -61,7 +62,9 @@ public class DashboardService {
         stats.setEnabledProjectCount(projectRepository.countByEnabledTrue());
         stats.setDatabaseCount(databaseConfigRepository.count());
 
-        List<Project> projects = projectRepository.findAll();
+        // Ordered by id: both the selected-table counting and the first-five overview
+        // rows below depend on the order, and findAll() without a Sort is unspecified.
+        List<Project> projects = projectRepository.findAll(Sort.by("id"));
 
         // Tracked-table counts for every project in ONE grouped query. Reused both for the
         // synced-tables total below and for the per-project overview rows, instead of issuing

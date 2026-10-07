@@ -5,6 +5,7 @@ import org.quartz.Job;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
 import org.quartz.PersistJobDataAfterExecution;
+import org.quartz.SchedulerException;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,18 @@ public class SyncJob implements Job {
     @Override
     public void execute(JobExecutionContext context) throws JobExecutionException {
         Long projectId = context.getMergedJobDataMap().getLong(PROJECT_ID);
+        if (!runner.projectExists(projectId)) {
+            // The project was deleted but a delete-vs-schedule race left the Quartz job
+            // behind; delete the orphan instead of firing forever into a warn-only log.
+            log.warn("Scheduled sync found no project {}; deleting the orphaned job", projectId);
+            try {
+                context.getScheduler().deleteJob(context.getJobDetail().getKey());
+            } catch (SchedulerException e) {
+                log.error("Could not delete the orphaned job for project {}: {}",
+                        projectId, e.getMessage());
+            }
+            return;
+        }
         try {
             runner.runOnce(projectId)
                     .result()

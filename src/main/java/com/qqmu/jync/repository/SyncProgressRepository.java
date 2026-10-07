@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -24,5 +25,8 @@ public interface SyncProgressRepository extends JpaRepository<SyncProgress, Long
             + "where p.objectType = :objectType group by p.projectId")
     List<Object[]> countByObjectTypeGroupedByProject(@Param("objectType") ObjectType objectType);
 
-    void deleteByProjectId(Long projectId);
+    // Bulk, not a derived delete: a derived delete loads each entity before removing it.
+    @Modifying
+    @Query("delete from SyncProgress p where p.projectId = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 }

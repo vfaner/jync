@@ -12,12 +12,15 @@ import static org.mockito.Mockito.when;
 import java.time.Instant;
 import java.util.Optional;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.Project;
@@ -197,6 +200,74 @@ class ProjectServiceTest {
         verify(changeLogRepository).deleteByProjectId(1L);
         verify(projectRepository).deleteById(1L);
         verify(lock).close();
+    }
+
+    // --- transaction follow-ups -------------------------------------------------------------
+
+    @AfterEach
+    void clearSynchronizations() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void aRolledBackDeleteRestoresTheScheduleAndTheRunningStatus() {
+        Project enabled = project(1L);
+        enabled.setEnabled(true);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(enabled));
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lockService.tryAcquire(1L)).thenReturn(lock);
+
+        TransactionSynchronizationManager.initSynchronization();
+        service.delete(1L);
+
+        // Simulate the outer transaction rolling back after delete() returned.
+        for (TransactionSynchronization synchronization
+                : TransactionSynchronizationManager.getSynchronizations()) {
+            synchronization.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+        }
+        // unschedule() committed STOPPED in its own transaction; restore both halves.
+        verify(taskStore).markRunning(1L);
+        verify(scheduler).schedule(enabled);
+    }
+
+    @Test
+    void aCommittedDeleteDoesNotRestoreTheSchedule() {
+        Project enabled = project(1L);
+        enabled.setEnabled(true);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(enabled));
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lockService.tryAcquire(1L)).thenReturn(lock);
+
+        TransactionSynchronizationManager.initSynchronization();
+        service.delete(1L);
+
+        for (TransactionSynchronization synchronization
+                : TransactionSynchronizationManager.getSynchronizations()) {
+            synchronization.afterCompletion(TransactionSynchronization.STATUS_COMMITTED);
+        }
+        verify(taskStore, never()).markRunning(any());
+        verify(scheduler, never()).schedule(any());
+    }
+
+    @Test
+    void aFailingPostCommitRescheduleIsContained() {
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // Spring's afterCommit dispatcher would otherwise swallow this with a framework
+        // line only; the guarded callback must log it with the project id and not throw.
+        org.mockito.Mockito.doThrow(new IllegalStateException("scheduler down"))
+                .when(scheduler).reschedule(any());
+
+        TransactionSynchronizationManager.initSynchronization();
+        service.saveConfig(1L, new SyncConfig());
+
+        for (TransactionSynchronization synchronization
+                : TransactionSynchronizationManager.getSynchronizations()) {
+            assertThatCode(synchronization::afterCommit).doesNotThrowAnyException();
+        }
     }
 
     // --- cursor candidates -----------------------------------------------------------------

@@ -22,7 +22,11 @@ public interface SyncTaskRepository extends JpaRepository<SyncTask, Long> {
 
     List<SyncTask> findByStatus(TaskStatus status);
 
-    void deleteByProjectId(Long projectId);
+    // Bulk, not a derived delete: a derived delete loads each entity before removing it.
+    // Project deletion needs only the row gone.
+    @Modifying
+    @Query("delete from SyncTask t where t.projectId = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 
     /**
      * Atomically claims the sync lock for a project. Returns 1 when the lock was
@@ -52,9 +56,4 @@ public interface SyncTaskRepository extends JpaRepository<SyncTask, Long> {
     int renewLock(@Param("projectId") Long projectId,
                   @Param("owner") String owner,
                   @Param("expiresAt") Instant expiresAt);
-
-    /** Clears locks left behind by this node's previous, unclean shutdown. */
-    @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("update SyncTask t set t.lockOwner = null, t.lockExpiresAt = null where t.lockOwner = :owner")
-    int releaseAllLocksOfOwner(@Param("owner") String owner);
 }

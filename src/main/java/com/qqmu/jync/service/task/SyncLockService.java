@@ -2,6 +2,10 @@ package com.qqmu.jync.service.task;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.springframework.stereotype.Service;
@@ -43,6 +47,24 @@ public class SyncLockService {
     private final SyncProperties properties;
 
     private final Map<Long, ReentrantLock> jvmLocks = new ConcurrentHashMap<>();
+
+    /**
+     * Renews held leases in the background. Renewal at commit boundaries alone leaves a
+     * single JDBC batch longer than the TTL unprotected, so the watchdog renews every
+     * TTL/3 for the lifetime of a handle.
+     */
+    private static final ScheduledExecutorService WATCHDOG = createWatchdog();
+
+    private static ScheduledExecutorService createWatchdog() {
+        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(2, runnable -> {
+            Thread thread = new Thread(runnable, "jync-lock-watchdog");
+            thread.setDaemon(true);
+            return thread;
+        });
+        // Cancelled handles are common (every finished cycle); drop their tasks immediately.
+        executor.setRemoveOnCancelPolicy(true);
+        return executor;
+    }
 
     public SyncLockService(SyncLockStore store, SyncProperties properties,
                            @org.springframework.beans.factory.annotation.Value("${server.port:8080}") int serverPort) {
@@ -129,29 +151,56 @@ public class SyncLockService {
     }
 
     /**
-     * Clears locks this instance left behind after an unclean shutdown.
-     *
-     * <p>Runs at startup and touches only this owner's rows, so a genuinely live peer keeps its
-     * lock.
+     * Says whether a local cycle currently holds this project's JVM lock. Queued reruns use
+     * it to distinguish a live holder — whose post-cycle drain will serve the queue — from
+     * the gap in which the holder already released and drained and nobody is left.
      */
-    public int releaseStaleLocksOfThisOwner() {
-        int released = store.releaseAllOf(ownerId);
-        if (released > 0) {
-            log.info("Released {} sync lock(s) left over from a previous run of this instance",
-                    released);
-        }
-        return released;
+    public boolean isLockedInThisJvm(Long projectId) {
+        ReentrantLock lock = jvmLocks.get(projectId);
+        return lock != null && lock.isLocked();
     }
+
+    /**
+     * A live lease is watchdog-renewed at most this many TTLs. The cap stops a wedged
+     * holder (frozen thread, deadlocked batch) from extending its lease forever — explicit
+     * renewal at commit boundaries still applies while the cycle keeps making progress.
+     */
+    private static final int MAX_WATCHDOG_TTLS = 10;
 
     /** Released via try-with-resources so the lock cannot leak on an exception path. */
     public class LockHandle implements AutoCloseable {
         private final Long projectId;
         private final ReentrantLock jvmLock;
+        private final ScheduledFuture<?> watchdogTask;
+        private final long watchdogDeadlineMs;
         private boolean closed;
 
         LockHandle(Long projectId, ReentrantLock jvmLock) {
             this.projectId = projectId;
             this.jvmLock = jvmLock;
+            long ttlMs = properties.getLockTtlMs();
+            this.watchdogDeadlineMs = System.currentTimeMillis()
+                    + (long) MAX_WATCHDOG_TTLS * ttlMs;
+            long intervalMs = Math.max(1000L, ttlMs / 3);
+            this.watchdogTask = WATCHDOG.scheduleAtFixedRate(this::watchdogRenew,
+                    intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+        }
+
+        /** Renews on a timer; stops after the TTL cap or once the lease has been lost. */
+        private void watchdogRenew() {
+            if (closed) {
+                return;
+            }
+            if (System.currentTimeMillis() >= watchdogDeadlineMs) {
+                log.warn("Watchdog for project {} reached the {}x TTL hold limit; stopping "
+                        + "automatic renewal so the lease can expire",
+                        projectId, MAX_WATCHDOG_TTLS);
+                watchdogTask.cancel(false);
+                return;
+            }
+            if (!renew()) {
+                watchdogTask.cancel(false);
+            }
         }
 
         public Long projectId() {
@@ -192,6 +241,7 @@ public class SyncLockService {
                 return;
             }
             closed = true;
+            watchdogTask.cancel(false);
             try {
                 store.release(projectId, ownerId);
             } catch (RuntimeException e) {

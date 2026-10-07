@@ -269,7 +269,7 @@
 
         // 逐条列出错误，比只给一句「失败」有用
         if (payload.errors && payload.errors.length) {
-          payload.errors.slice(0, 3).forEach(function (err) { toast(err, 'danger'); });
+          payload.errors.slice(0, 3).forEach(function (err) { toast(t(err), 'danger'); });
         }
 
         // noReload：请求被接受但没有真正执行完（如补跑排队），页面不该刷新
@@ -280,7 +280,7 @@
         btn.disabled = false;
         btn.innerHTML = original;
       }).catch(function (err) {
-        toast(String(err && err.message || err), 'danger');
+        toast(t(String(err && err.message || err)), 'danger');
         btn.disabled = false;
         btn.innerHTML = original;
       });
@@ -345,7 +345,7 @@
           out.appendChild(body);
           out.hidden = false;
         }).catch(function (err) {
-          toast(String(err && err.message || err), 'danger');
+          toast(t(String(err && err.message || err)), 'danger');
         });
       });
     });
@@ -439,7 +439,7 @@
               toast(t(p.message || 'msg.no.drivers.declared'), 'warn');
             }
           })
-          .catch(function (err) { toast(String(err && err.message || err), 'danger'); });
+          .catch(function (err) { toast(t(String(err && err.message || err)), 'danger'); });
       });
     });
   }
@@ -740,7 +740,7 @@
           return payload;
         }).then(applyPayload).catch(function (err) {
           restoreEditor();
-          toast(String((err && err.message) || err), 'danger');
+          toast(t(String((err && err.message) || err)), 'danger');
         });
       });
     });
@@ -810,7 +810,7 @@
           alert.appendChild(body);
           out.appendChild(alert);
         }).catch(function (err) {
-          toast(String((err && err.message) || err), 'danger');
+          toast(t(String((err && err.message) || err)), 'danger');
         });
       });
     });

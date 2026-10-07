@@ -113,17 +113,30 @@ public class ProjectService {
      * must wait for commit: a Quartz trigger that fired pre-commit could read stale or
      * absent rows, and a rolled-back save would leave a live schedule with no project.
      * Outside a transaction the action runs immediately.
+     *
+     * <p>{@code actionName} names the follow-up for logs: Spring's afterCommit dispatcher
+     * would otherwise swallow a failure with only a framework line, leaving an
+     * {@code enabled=true} row with no Quartz job and no way to diagnose it.
      */
-    private void afterCommit(Runnable action) {
+    private void afterCommit(Long projectId, String actionName, Runnable action) {
+        Runnable guarded = () -> {
+            try {
+                action.run();
+            } catch (RuntimeException e) {
+                log.error("Post-commit action '{}' failed for project {}; the transaction "
+                        + "committed but its follow-up work may be missing",
+                        actionName, projectId, e);
+            }
+        };
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    action.run();
+                    guarded.run();
                 }
             });
         } else {
-            action.run();
+            guarded.run();
         }
     }
 
@@ -139,11 +152,26 @@ public class ProjectService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {
-                if (status == TransactionSynchronization.STATUS_ROLLED_BACK) {
-                    projectRepository.findById(projectId)
-                            .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
-                            .ifPresent(scheduler::schedule);
+                // STATUS_UNKNOWN needs the same path: whether the delete actually committed
+                // is undecided, but findById answers it — a missing row means nothing to
+                // restore, a present one needs its schedule back.
+                if (status != TransactionSynchronization.STATUS_ROLLED_BACK
+                        && status != TransactionSynchronization.STATUS_UNKNOWN) {
+                    return;
                 }
+                projectRepository.findById(projectId)
+                        .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
+                        .ifPresent(p -> {
+                            try {
+                                // unschedule() already committed STOPPED in its own
+                                // transaction; flip the status back with the schedule.
+                                taskStore.markRunning(projectId);
+                                scheduler.schedule(p);
+                            } catch (RuntimeException e) {
+                                log.error("Failed to restore the schedule for project {} after "
+                                        + "transaction outcome {}", projectId, status, e);
+                            }
+                        });
             }
         });
     }
@@ -180,7 +208,7 @@ public class ProjectService {
         taskStore.ensureTask(saved);
 
         // Keep the schedule consistent with the flag on every save, not just on start/stop.
-        afterCommit(() -> scheduler.reschedule(saved));
+        afterCommit(saved.getId(), "reschedule", () -> scheduler.reschedule(saved));
         log.info("{} project '{}'", isNew ? "Created" : "Updated", saved.getName());
         return saved;
     }
@@ -199,7 +227,7 @@ public class ProjectService {
         project.setSyncConfig(contextFactory.serializeConfig(config));
         Project saved = projectRepository.save(project);
         // Interval or cron may have changed, so rebuild the trigger.
-        afterCommit(() -> scheduler.reschedule(saved));
+        afterCommit(saved.getId(), "reschedule", () -> scheduler.reschedule(saved));
         return saved;
     }
 
@@ -217,7 +245,7 @@ public class ProjectService {
         project.setEnabled(true);
         Project saved = projectRepository.save(project);
         taskStore.ensureTask(saved);
-        afterCommit(() -> {
+        afterCommit(projectId, "start", () -> {
             scheduler.schedule(saved);
             // Fire once now so the user sees immediate feedback rather than waiting a full interval.
             scheduler.triggerNow(projectId);
@@ -231,7 +259,7 @@ public class ProjectService {
         Project project = require(projectId);
         project.setEnabled(false);
         projectRepository.save(project);
-        afterCommit(() -> scheduler.unschedule(projectId));
+        afterCommit(projectId, "stop", () -> scheduler.unschedule(projectId));
         log.info("Stopped sync for project '{}'", project.getName());
     }
 
@@ -350,8 +378,10 @@ public class ProjectService {
             }
             return candidates;
         } catch (SQLException e) {
-            throw new IllegalStateException("Cannot read columns of " + tableName + ": "
-                    + e.getMessage(), e);
+            // Keep the driver's raw detail server-side; callers only surface the message key.
+            log.debug("Cannot read columns of '{}' for project '{}': {}",
+                    tableName, project.getName(), e.toString());
+            throw new IllegalStateException("error.source.columns.read.failed", e);
         }
     }
 

@@ -62,12 +62,6 @@ public class SyncLockStore {
         return taskRepository.renewLock(projectId, owner, expiresAt) > 0;
     }
 
-    /** Clears every lock held by one owner; used to clean up after an unclean shutdown. */
-    @Transactional
-    public int releaseAllOf(String owner) {
-        return taskRepository.releaseAllLocksOfOwner(owner);
-    }
-
     @Transactional(readOnly = true)
     public Optional<SyncTask> findTask(Long projectId) {
         return taskRepository.findByProjectId(projectId);

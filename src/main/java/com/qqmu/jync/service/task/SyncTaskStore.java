@@ -104,7 +104,7 @@ public class SyncTaskStore {
             // The lease is deliberately NOT cleared here: a cycle may still be in
             // flight, and dropping its lock would let another instance acquire it and
             // run concurrently. The runner releases the lock when the cycle ends; a
-            // crashed owner's lease is reaped at startup (stable owner id) or via TTL.
+            // crashed owner's lease clears on its own by TTL expiry.
             taskRepository.save(task);
         });
     }
