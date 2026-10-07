@@ -85,10 +85,14 @@ public class DriverLoader {
             // edited the connection). It must go BEFORE the new registration: DriverManager
             // hands a URL to the first driver that accepts it, so a leftover old shim would
             // keep routing connections through the old jar.
-            deregisterStaleShims(driverClassName);
+            List<ClassLoader> retiredLoaders = deregisterStaleShims(driverClassName);
             DriverManager.registerDriver(shim);
             registered.put(registeredKey(driverClassName, jarPath), shim);
             log.info("Registered dynamically loaded driver {} from {}", driverClassName, jarPath);
+            // Close the retired shims' loaders now that the replacement is registered.
+            for (ClassLoader retired : retiredLoaders) {
+                closeIfUnused(retired);
+            }
             return loader;
         } catch (ClassNotFoundException e) {
             throw new IllegalStateException("Driver class " + driverClassName
@@ -153,8 +157,14 @@ public class DriverLoader {
         return driverClassName + "\\u0001" + suffix;
     }
 
-    /** Removes and deregisters every shim previously registered for this driver class. */
-    private void deregisterStaleShims(String driverClassName) {
+    /**
+     * Removes and deregisters every shim previously registered for this driver class.
+     *
+     * @return the class loaders that owned the removed shims, so the caller can close them
+     *         once the replacement is registered
+     */
+    private List<ClassLoader> deregisterStaleShims(String driverClassName) {
+        List<ClassLoader> retiredLoaders = new ArrayList<>();
         String prefix = driverClassName + "\\u0001";
         for (String key : registered.keySet()) {
             if (!key.startsWith(prefix)) {
@@ -164,6 +174,7 @@ public class DriverLoader {
             if (stale == null) {
                 continue;
             }
+            retiredLoaders.add(stale.getDelegate().getClass().getClassLoader());
             try {
                 DriverManager.deregisterDriver(stale);
                 log.info("Deregistered driver {} previously loaded from a different jar path",
@@ -173,6 +184,56 @@ public class DriverLoader {
                         driverClassName, e.getMessage());
             }
         }
+        return retiredLoaders;
+    }
+
+    /**
+     * Closes a retired loader and drops it from the cache, but only while no remaining shim
+     * still uses it: several driver classes can come from the same jar (and hence loader).
+     * Closing releases the open jar handles (which lock the file on Windows) and stops the
+     * loader leaking per jar replacement.
+     */
+    private void closeIfUnused(ClassLoader loader) {
+        if (!(loader instanceof URLClassLoader urlLoader)) {
+            return;
+        }
+        for (DriverShim shim : registered.values()) {
+            if (shim.getDelegate().getClass().getClassLoader() == loader) {
+                return;
+            }
+        }
+        loaderCache.values().removeIf(cached -> cached == urlLoader);
+        try {
+            urlLoader.close();
+            log.debug("Closed retired driver class loader");
+        } catch (java.io.IOException e) {
+            log.warn("Could not close a retired driver class loader: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Deregisters every shim and closes every loader on context shutdown. Without this a
+     * web-app redeploy (or an embedded restart in tests) leaks the loaders and their jar
+     * handles along with this bean.
+     */
+    @javax.annotation.PreDestroy
+    public void shutdown() {
+        for (DriverShim shim : registered.values()) {
+            try {
+                DriverManager.deregisterDriver(shim);
+            } catch (SQLException e) {
+                log.debug("Could not deregister driver on shutdown: {}", e.getMessage());
+            }
+        }
+        registered.clear();
+        for (URLClassLoader loader : loaderCache.values()) {
+            try {
+                loader.close();
+            } catch (java.io.IOException e) {
+                log.debug("Could not close driver class loader on shutdown: {}", e.getMessage());
+            }
+        }
+        loaderCache.clear();
     }
 
     /** Lists candidate driver class names found in a jar, to help the user fill the form. */

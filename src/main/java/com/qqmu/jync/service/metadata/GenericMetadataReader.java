@@ -150,6 +150,12 @@ public class GenericMetadataReader implements MetadataReader {
         Map<Short, String> pkBySeq = new TreeMap<>();
         try (ResultSet rs = md.getPrimaryKeys(catalog, schemaPattern(schema), tableName)) {
             while (rs.next()) {
+                // tableName is a SQL LIKE pattern to the driver ('_' matches any char), so a
+                // name like A_B also matches AXB. Keep only rows for the table we asked for.
+                if (!isRequestedObject(rs.getString("TABLE_NAME"), tableName,
+                        rs.getString("TABLE_SCHEM"), schema)) {
+                    continue;
+                }
                 pkBySeq.put(rs.getShort("KEY_SEQ"), rs.getString("COLUMN_NAME"));
             }
         } catch (SQLException e) {
@@ -210,6 +216,12 @@ public class GenericMetadataReader implements MetadataReader {
                 if (rs.getShort("TYPE") == DatabaseMetaData.tableIndexStatistic) {
                     continue;
                 }
+                // Same LIKE-pattern guard as getPrimaryKeys: the third argument may match more
+                // than the one table requested, so discard rows belonging to another table.
+                if (!isRequestedObject(rs.getString("TABLE_NAME"), tableName,
+                        rs.getString("TABLE_SCHEM"), schema)) {
+                    continue;
+                }
                 String indexName = rs.getString("INDEX_NAME");
                 String columnName = rs.getString("COLUMN_NAME");
                 if (indexName == null || columnName == null) {
@@ -251,6 +263,12 @@ public class GenericMetadataReader implements MetadataReader {
         try (ResultSet rs = conn.getMetaData().getImportedKeys(
                 catalogFor(conn, schema), schemaPattern(schema), tableName)) {
             while (rs.next()) {
+                // LIKE-pattern guard again: the rows describing this table are its imported
+                // (foreign) keys, so match on the FKTABLE_* columns, not the referenced table.
+                if (!isRequestedObject(rs.getString("FKTABLE_NAME"), tableName,
+                        rs.getString("FKTABLE_SCHEM"), schema)) {
+                    continue;
+                }
                 TableMeta.ForeignKeyMeta fk = new TableMeta.ForeignKeyMeta();
                 fk.setName(rs.getString("FK_NAME"));
                 fk.setColumnName(rs.getString("FKCOLUMN_NAME"));
@@ -369,7 +387,10 @@ public class GenericMetadataReader implements MetadataReader {
                 meta.getTables().add(readTable(conn, schema, name));
             } catch (SQLException e) {
                 // One unreadable table (e.g. permissions) must not abort the whole pass.
+                // Record it as unreadable (not absent): it demonstrably exists, so the change
+                // detector must not read its absence here as a source-side DROP.
                 log.warn("Skipping table {} — could not read metadata: {}", name, e.getMessage());
+                meta.addUnreadableTable(name);
             }
         }
 
@@ -380,7 +401,10 @@ public class GenericMetadataReader implements MetadataReader {
                 try {
                     meta.getViews().add(readView(conn, schema, name));
                 } catch (SQLException e) {
+                    // Marked unreadable, not absent: a view the dictionary fails to return this
+                    // pass must not be dropped at the target under allowDrop.
                     log.warn("Skipping view {} — could not read definition: {}", name, e.getMessage());
+                    meta.addUnreadableView(name);
                 }
             }
         }
@@ -392,7 +416,9 @@ public class GenericMetadataReader implements MetadataReader {
                 try {
                     meta.getProcedures().add(readProcedure(conn, schema, name));
                 } catch (SQLException e) {
+                    // Same unreadable-not-absent contract as tables/views above.
                     log.warn("Skipping routine {} — could not read definition: {}", name, e.getMessage());
+                    meta.addUnreadableProcedure(name);
                 }
             }
         }
@@ -457,7 +483,9 @@ public class GenericMetadataReader implements MetadataReader {
         if (q == null || q.isBlank() || " ".equals(q)) {
             return identifier;
         }
-        return q + identifier + q;
+        // Double any quote chars inside the identifier, or an embedded one closes the quoted
+        // name early — a table named a"b would otherwise break the generated identifier.
+        return q + identifier.replace(q, q + q) + q;
     }
 
     /**

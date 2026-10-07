@@ -91,10 +91,15 @@ public class ChangeDetector {
             }
         }
 
-        // Tables that vanished from the source.
+        // Tables that vanished from the source. A table the reader listed but failed to load
+        // this pass is in current.getUnreadableTables(), not in seen: it exists, it just could
+        // not be read, so it must never be dropped (a permissions change or a transient error
+        // is unrecoverable once the target table and snapshot are gone).
         if (config.isAllowDrop()) {
             for (Map.Entry<String, TableMeta> e : snapshots.entrySet()) {
-                if (!seen.contains(e.getKey()) && config.includesTable(e.getValue().getName())) {
+                if (!seen.contains(e.getKey())
+                        && !current.getUnreadableTables().contains(e.getKey())
+                        && config.includesTable(e.getValue().getName())) {
                     events.add(ChangeEvent.of(ObjectType.TABLE, ChangeType.DROP,
                             e.getValue().getName(), "Table no longer exists in source",
                             e.getValue()));
@@ -217,7 +222,9 @@ public class ChangeDetector {
 
         if (config.isAllowDrop()) {
             for (Map.Entry<String, ViewMeta> e : snapshots.entrySet()) {
-                if (!seen.contains(e.getKey()) && config.includesView(e.getValue().getName())) {
+                if (!seen.contains(e.getKey())
+                        && !current.getUnreadableViews().contains(e.getKey())
+                        && config.includesView(e.getValue().getName())) {
                     events.add(ChangeEvent.of(ObjectType.VIEW, ChangeType.DROP,
                             e.getValue().getName(), "View no longer exists in source", e.getValue()));
                 }
@@ -256,7 +263,9 @@ public class ChangeDetector {
 
         if (config.isAllowDrop()) {
             for (Map.Entry<String, ProcedureMeta> e : snapshots.entrySet()) {
-                if (!seen.contains(e.getKey()) && config.includesProcedure(e.getValue().getName())) {
+                if (!seen.contains(e.getKey())
+                        && !current.getUnreadableProcedures().contains(e.getKey())
+                        && config.includesProcedure(e.getValue().getName())) {
                     events.add(ChangeEvent.of(ObjectType.PROCEDURE, ChangeType.DROP,
                             e.getValue().getName(), "Routine no longer exists in source", e.getValue()));
                 }

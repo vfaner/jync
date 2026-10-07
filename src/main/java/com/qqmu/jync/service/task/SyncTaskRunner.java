@@ -115,14 +115,15 @@ public class SyncTaskRunner {
 
     private SyncResult execute(Project project, SyncLockService.LockHandle lock) {
         long start = System.currentTimeMillis();
-        taskStore.markRunning(project.getId());
-
         SyncResult result;
         try {
-            SyncContext ctx = contextFactory.build(project, lock.owner());
-            // The lease is renewed between tables; a failed renewal aborts the cycle before
-            // the next table's writes, because the lock may now belong to another instance.
-            result = syncEngine.runCycle(ctx, lock::renew);
+            // markRunning lives INSIDE the try: throwing before it used to escape execute()
+            // entirely, so runOnce never reached the queued-rerun drain.
+            taskStore.markRunning(project.getId());
+            // The renewer rides on the context: the structure phase and each committed data
+            // batch renew through it, so a lost lease aborts the cycle before further writes.
+            SyncContext ctx = contextFactory.build(project, lock.owner(), lock::renew);
+            result = syncEngine.runCycle(ctx);
         } catch (IllegalStateException e) {
             // Configuration problems — missing endpoint, unreachable database — land here.
             log.error("Cannot run sync for project '{}': {}", project.getName(), e.getMessage());
@@ -135,7 +136,14 @@ public class SyncTaskRunner {
         }
         result.setDurationMs(System.currentTimeMillis() - start);
 
-        taskStore.recordOutcome(project.getId(), result);
+        // Outcome recording must not escape execute() either: a failure here previously
+        // skipped startQueuedRerun, leaving the coalesced request stuck in the queue.
+        try {
+            taskStore.recordOutcome(project.getId(), result);
+        } catch (RuntimeException e) {
+            log.error("Failed to record sync outcome for project '{}'",
+                    project.getName(), e);
+        }
         if (result.hasChanges() || !result.isSuccess()) {
             log.info("Sync of '{}' finished: {}", project.getName(), result.summary());
         }

@@ -144,8 +144,10 @@ public class ProjectController {
             ProjectService.SourceObjects objects = projectService.listSourceObjects(id);
             model.addAttribute("sourceObjects", objects);
         } catch (RuntimeException e) {
-            log.debug("Could not list source objects for project {}: {}", id, e.getMessage());
-            model.addAttribute("sourceWarning", e.getMessage());
+            // Keep the raw detail (SQL/connection internals) server-side; the page only ever sees
+            // this bundle key, which the template already knows how to resolve.
+            log.debug("Could not list source objects for project {}: {}", id, e.toString());
+            model.addAttribute("sourceWarning", "msg.source.objects.unavailable");
         }
         return "project-detail";
     }
@@ -178,6 +180,17 @@ public class ProjectController {
             // would otherwise silently mean "all tables", which is not what unchecking implies.
             if (tables == null || tables.isEmpty()) {
                 flash.addFlashAttribute("error", "error.select.at.least.one.table");
+                return "redirect:/projects/" + id;
+            }
+            // Only when the feature is on: an empty selection must not be stored, because an
+            // empty set means "include all" elsewhere (readSourceMetadata), so unchecking every
+            // view/routine would silently sync all of them — the opposite of the click.
+            if (syncViews && (views == null || views.isEmpty())) {
+                flash.addFlashAttribute("error", "error.select.at.least.one.view");
+                return "redirect:/projects/" + id;
+            }
+            if (syncProcedures && (procedures == null || procedures.isEmpty())) {
+                flash.addFlashAttribute("error", "error.select.at.least.one.procedure");
                 return "redirect:/projects/" + id;
             }
 

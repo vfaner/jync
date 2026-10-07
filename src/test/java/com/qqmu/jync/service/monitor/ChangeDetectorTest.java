@@ -14,6 +14,7 @@ import com.qqmu.jync.dto.ChangeEvent;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
@@ -82,6 +83,64 @@ class ChangeDetectorTest {
 
         SyncConfig config = config();
         config.setSyncProcedures(true);
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        assertThat(events).isEmpty();
+    }
+
+    @Test
+    void aTableThatFailedToLoadIsNotReportedAsDropped() {
+        // readTable() threw for a table the listing proved exists (revoked grant, lock timeout):
+        // readAll records it as unreadable. allowDrop must not destroy the target table.
+        TableMeta stored = new TableMeta();
+        stored.setName("ORDERS");
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", stored));
+
+        DatabaseMeta current = new DatabaseMeta();
+        current.addUnreadableTable("ORDERS");
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        assertThat(events).isEmpty();
+    }
+
+    @Test
+    void aTableThatReallyDisappearedIsStillDropped() {
+        // The guard must not disable legitimate table drop detection.
+        TableMeta stored = new TableMeta();
+        stored.setName("ORDERS");
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", stored));
+
+        DatabaseMeta current = new DatabaseMeta(); // genuinely absent, not merely unreadable
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getChangeType()).isEqualTo(ChangeType.DROP);
+        assertThat(events.get(0).getObjectName()).isEqualTo("ORDERS");
+    }
+
+    @Test
+    void aViewWhoseWholeReadFailedIsNotReportedAsDropped() {
+        // Distinct from an unreadable body: readView() itself threw, so readAll recorded it as
+        // unreadable rather than adding it to the views list.
+        ViewMeta stored = new ViewMeta();
+        stored.setName("V_ORDERS");
+        stored.setDefinition("SELECT 1");
+        when(snapshotService.loadAll(1L, ObjectType.VIEW, ViewMeta.class))
+                .thenReturn(Map.of("V_ORDERS", stored));
+
+        DatabaseMeta current = new DatabaseMeta();
+        current.addUnreadableView("V_ORDERS");
+
+        SyncConfig config = config();
+        config.setSyncViews(true);
         List<ChangeEvent> events = detector.detect(1L, current, config);
 
         assertThat(events).isEmpty();

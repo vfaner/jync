@@ -166,9 +166,8 @@ public class ConversionApiController {
                                       @RequestBody Map<String, String> body) {
         String name = body.get("name");
         String sql = body.get("sql");
-        String kind = body.get("kind");
 
-        if (name == null || sql == null || kind == null) {
+        if (name == null || sql == null) {
             return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Missing parameters"));
         }
 

@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -34,7 +35,16 @@ public interface MetadataSnapshotRepository extends JpaRepository<MetadataSnapsh
     List<NameAndHash> findNameAndHashByProjectIdAndObjectType(
             @Param("projectId") Long projectId, @Param("type") ObjectType type);
 
-    void deleteByProjectId(Long projectId);
+    // Bulk deletes: a derived deleteByProjectId first SELECTs and loads every entity — including
+    // the @Lob JSON snapshot — just to remove it. The JPQL deletes remove the rows directly.
+    @Modifying
+    @Query("delete from MetadataSnapshot s where s.projectId = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 
-    void deleteByProjectIdAndObjectTypeAndObjectName(Long projectId, ObjectType objectType, String objectName);
+    @Modifying
+    @Query("delete from MetadataSnapshot s where s.projectId = :projectId "
+            + "and s.objectType = :objectType and s.objectName = :objectName")
+    void deleteByProjectIdAndObjectTypeAndObjectName(@Param("projectId") Long projectId,
+                                                     @Param("objectType") ObjectType objectType,
+                                                     @Param("objectName") String objectName);
 }

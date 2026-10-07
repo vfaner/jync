@@ -137,11 +137,54 @@ class ConversionAssistServiceTest {
     }
 
     @Test
-    @DisplayName("an unknown kind is treated as a routine rather than creating a third namespace")
-    void anUnknownKindFallsBackToProcedure() {
-        service.saveOverride(1L, "TRIGGER", "T1", "CREATE TRIGGER whatever");
+    @DisplayName("an unknown kind is refused rather than silently becoming a PROCEDURE override")
+    void anUnknownKindIsRefused() {
+        assertThatThrownBy(() -> service.saveOverride(1L, "TRIGGER", "T1", "CREATE TRIGGER whatever"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.override.kind.invalid");
 
-        assertThat(savedConfig().getDdlOverrides()).containsOnlyKeys("PROCEDURE:T1");
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("a blank object name is refused")
+    void aBlankNameIsRefused() {
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "  ", "CREATE VIEW V AS SELECT 1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.override.name.required");
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("a body whose CREATE header does not match the kind is refused")
+    void aHeaderThatDoesNotMatchTheKindIsRefused() {
+        // Chosen as VIEW but the statement creates a procedure: saving it would store the wrong
+        // DDL under the view key and break view sync.
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", "CREATE PROCEDURE V() BEGIN END"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.override.header.mismatch");
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("a statement with no CREATE header is refused even if the kind is valid")
+    void aNonCreateBodyIsRefused() {
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", "SELECT 1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.override.header.mismatch");
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("a MySQL-style CREATE with DEFINER/OR REPLACE prefixes still matches its kind")
+    void aCreateWithDialectPrefixesIsAccepted() {
+        service.saveOverride(1L, "VIEW", "V_SALES",
+                "CREATE OR REPLACE DEFINER = `admin`@`%` SQL SECURITY INVOKER VIEW V_SALES AS SELECT 1");
+
+        assertThat(savedConfig().ddlOverride("VIEW", "V_SALES")).isNotNull();
     }
 
     @Test

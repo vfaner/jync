@@ -45,6 +45,18 @@ public class AiChatClient {
     /** Cap on how much of an error body is kept, so a stack-trace HTML page cannot fill the UI. */
     private static final int MAX_ERROR_CHARS = 300;
 
+    /**
+     * One client for every call. An {@link HttpClient} owns its own selector and thread pool;
+     * building one per request spins those up and discards them, which both costs latency and
+     * leaks threads until GC. The connection timeout is therefore fixed here; the per-provider
+     * timeout still applies to each request (set on the {@link HttpRequest} itself), and redirects
+     * are never followed so a cross-host hop cannot silently shed the auth header.
+     */
+    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
+
     private final ObjectMapper mapper = new ObjectMapper();
 
     /**
@@ -73,12 +85,7 @@ public class AiChatClient {
                 || provider.getTimeoutSeconds() <= 0 ? 30 : provider.getTimeoutSeconds());
 
         try {
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(timeout)
-                    // A redirect would silently drop the auth header on a cross-host hop, so
-                    // report it instead and let the user configure the final URL.
-                    .followRedirects(HttpClient.Redirect.NEVER)
-                    .build();
+            HttpClient client = HTTP_CLIENT;
 
             HttpRequest request = buildRequest(protocol, endpoint, model, apiKey, timeout,
                     system, user, maxTokens);
@@ -142,10 +149,7 @@ public class AiChatClient {
         long deadline = timeout.toMillis();
 
         try {
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(timeout)
-                    .followRedirects(HttpClient.Redirect.NEVER)
-                    .build();
+            HttpClient client = HTTP_CLIENT;
             HttpRequest request = buildRequest(protocol, endpoint, model, apiKey, timeout,
                     system, user, maxTokens, true);
             HttpResponse<java.io.InputStream> response =

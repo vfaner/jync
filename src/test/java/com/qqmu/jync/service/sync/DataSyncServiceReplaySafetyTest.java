@@ -98,6 +98,131 @@ class DataSyncServiceReplaySafetyTest {
     }
 
     @Test
+    void aKeylessFullCompareTableSeedsOnceThenSkipsInsteadOfDuplicating() throws SQLException {
+        CursorStrategy fullCompare = CursorStrategy.fullCompare("no usable cursor");
+
+        exec(source, "CREATE TABLE LOGS (LINE VARCHAR(50))");
+        exec(target, "CREATE TABLE LOGS (LINE VARCHAR(50))");
+        exec(source, "INSERT INTO LOGS VALUES ('a'), ('b'), ('c'), ('d'), ('e')");
+
+        TableMeta table = new TableMeta();
+        table.setName("LOGS"); // deliberately no primary key
+
+        SyncProgress progress = new SyncProgress();
+        DataSyncService.TableSyncResult first =
+                service.syncTable(source, target, table, fullCompare, progress, ctx);
+        assertThat(first.isSuccess()).isTrue();
+        assertThat(count("LOGS")).isEqualTo(5);
+
+        // Simulate the engine persisting the outcome: initial load done, fc: fingerprint stored.
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(first.getNewCursorValue());
+
+        DataSyncService.TableSyncResult second =
+                service.syncTable(source, target, table, fullCompare, progress, ctx);
+
+        assertThat(second.isSkipped()).isTrue();
+        // Before the fix every cycle plain-inserted all five rows again: 10, 15, 20, ...
+        assertThat(count("LOGS")).isEqualTo(5);
+    }
+
+    @Test
+    void aLeaseLostAfterACommittedBatchAbortsAndKeepsOnlyThatBatch() throws SQLException {
+        // Small batches force a commit (and hence a renewal) after every two rows. The emulated
+        // upsert path is used because GenericSqlDialect has no native upsert.
+        ctx = ctx.toBuilder().batchSize(2).lockRenewer(() -> false).build();
+
+        exec(source, "CREATE TABLE ITEMS (ID BIGINT PRIMARY KEY, NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE ITEMS (ID BIGINT PRIMARY KEY, NAME VARCHAR(50))");
+        exec(source, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'), (5,'e')");
+
+        TableMeta table = new TableMeta();
+        table.setName("ITEMS");
+        table.setPrimaryKeys(List.of("ID"));
+
+        assertThatThrownBy(() -> service.syncTable(source, target, table, IDENTITY,
+                new SyncProgress(), ctx))
+                .isInstanceOf(LockLostException.class);
+
+        // Only the first, already-committed batch survives; the uncommitted tail is rolled back
+        // rather than reaching the target, and (in the engine) the cursor is never advanced.
+        assertThat(count("ITEMS")).isEqualTo(2);
+    }
+
+    @Test
+    void aNullCursorRowOnAKeyedTableIsSeededAndKeptInLaterWindows() throws SQLException {
+        // The cursor column is UPDATED_AT, which a legacy row leaves NULL.
+        CursorStrategy timestamp =
+                CursorStrategy.timestamp("UPDATED_AT", Types.TIMESTAMP, "update time");
+
+        exec(source, "CREATE TABLE AUDIT (ID BIGINT PRIMARY KEY, LINE VARCHAR(20),"
+                + " UPDATED_AT TIMESTAMP)");
+        exec(target, "CREATE TABLE AUDIT (ID BIGINT PRIMARY KEY, LINE VARCHAR(20),"
+                + " UPDATED_AT TIMESTAMP)");
+        exec(source, "INSERT INTO AUDIT VALUES (1, 'a', TIMESTAMP '2026-01-01 00:00:00'),"
+                + " (2, 'legacy', NULL)");
+
+        TableMeta table = new TableMeta();
+        table.setName("AUDIT");
+        table.setPrimaryKeys(List.of("ID"));
+
+        SyncProgress progress = new SyncProgress();
+        DataSyncService.TableSyncResult seed =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(seed.isSuccess()).isTrue();
+        // Before the fix the seed bounded the read by the watermark and the NULL row vanished.
+        assertThat(count("AUDIT")).isEqualTo(2);
+
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(seed.getNewCursorValue());
+        exec(source, "INSERT INTO AUDIT VALUES (3, 'b', TIMESTAMP '2026-02-01 00:00:00')");
+
+        DataSyncService.TableSyncResult next =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(next.isSuccess()).isTrue();
+        // The new window row arrives and the NULL row is re-delivered (upsert absorbs it),
+        // so the count grows by exactly one, never by two and never to four.
+        assertThat(count("AUDIT")).isEqualTo(3);
+    }
+
+    @Test
+    void aNullCursorRowOnAKeylessTableIsSeededOnceAndNotReinserted() throws SQLException {
+        CursorStrategy timestamp =
+                CursorStrategy.timestamp("UPDATED_AT", Types.TIMESTAMP, "update time");
+
+        exec(source, "CREATE TABLE NOTES (LINE VARCHAR(20), UPDATED_AT TIMESTAMP)");
+        exec(target, "CREATE TABLE NOTES (LINE VARCHAR(20), UPDATED_AT TIMESTAMP)");
+        exec(source, "INSERT INTO NOTES VALUES ('a', TIMESTAMP '2026-01-01 00:00:00'),"
+                + " ('legacy', NULL)");
+
+        TableMeta table = new TableMeta();
+        table.setName("NOTES"); // no primary key
+
+        // Lag 0 keeps the old row 'a' out of the next window; with the default lag a
+        // keyless table would re-insert it (plain insert cannot converge).
+        SyncProperties noLag = new SyncProperties();
+        noLag.setSafetyLagMs(0);
+        DataSyncService keylessService = new DataSyncService(noLag);
+
+        SyncProgress progress = new SyncProgress();
+        DataSyncService.TableSyncResult seed =
+                keylessService.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(seed.isSuccess()).isTrue();
+        assertThat(count("NOTES")).isEqualTo(2);
+
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(seed.getNewCursorValue());
+        exec(source, "INSERT INTO NOTES VALUES ('b', TIMESTAMP '2026-02-01 00:00:00')");
+
+        DataSyncService.TableSyncResult next =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(next.isSuccess()).isTrue();
+        // The NULL row stays out of the keyless window instead of being inserted again;
+        // only the genuinely new row reaches the target.
+        assertThat(count("NOTES")).isEqualTo(3);
+    }
+
+    @Test
     void truncateEmptiesTheTargetOnTheHappyPath() throws SQLException {
         exec(target, "CREATE TABLE ITEMS (ID BIGINT PRIMARY KEY, NAME VARCHAR(50))");
         exec(target, "INSERT INTO ITEMS VALUES (1, 'old')");

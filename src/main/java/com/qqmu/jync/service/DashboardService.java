@@ -3,7 +3,9 @@ package com.qqmu.jync.service;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,6 +63,14 @@ public class DashboardService {
 
         List<Project> projects = projectRepository.findAll();
 
+        // Tracked-table counts for every project in ONE grouped query. Reused both for the
+        // synced-tables total below and for the per-project overview rows, instead of issuing
+        // one findByProjectIdAndObjectType per project (twice over).
+        Map<Long, Long> trackedCountByProject = new HashMap<>();
+        for (Object[] row : progressRepository.countByObjectTypeGroupedByProject(ObjectType.TABLE)) {
+            trackedCountByProject.put((Long) row[0], (Long) row[1]);
+        }
+
         // Count selected tables across projects. An empty selection means "all tables", which
         // cannot be counted without connecting, so those fall back to the number of tables
         // actually synced so far.
@@ -70,8 +80,7 @@ public class DashboardService {
             if (!config.getTables().isEmpty()) {
                 selectedTables += config.getTables().size();
             } else {
-                selectedTables += progressRepository
-                        .findByProjectIdAndObjectType(project.getId(), ObjectType.TABLE).size();
+                selectedTables += trackedCountByProject.getOrDefault(project.getId(), 0L);
             }
         }
         stats.setSyncedTableCount(selectedTables);
@@ -83,23 +92,36 @@ public class DashboardService {
         stats.setErrorTaskCount(taskStore.findByStatus(TaskStatus.ERROR).size());
         stats.setRecentChanges(changeLogRepository.findTop5ByOrderByOccurredAtDesc());
 
-        // Per-project rows for the overview table.
-        List<ProjectSummary> summaries = new ArrayList<>();
-        for (Project project : projects) {
+        // Only the rows actually shown (the first five) need per-project data, so slice first
+        // and batch-fetch their tasks and row totals — the old code built every project's row
+        // then threw the rest away, one query per project each.
+        List<Project> overviewProjects = projects.size() > OVERVIEW_ROWS
+                ? new ArrayList<>(projects.subList(0, OVERVIEW_ROWS)) : projects;
+
+        List<Long> overviewIds = new ArrayList<>(overviewProjects.size());
+        for (Project project : overviewProjects) {
+            overviewIds.add(project.getId());
+        }
+        Map<Long, SyncTask> taskByProject = taskStore.findByProjectIds(overviewIds);
+
+        Map<Long, Long> rowsByProject = new HashMap<>();
+        for (Object[] row : changeLogRepository.sumAffectedRowsGroupedByProject()) {
+            rowsByProject.put((Long) row[0], (Long) row[1]);
+        }
+
+        List<ProjectSummary> summaries = new ArrayList<>(overviewProjects.size());
+        for (Project project : overviewProjects) {
             ProjectSummary summary = new ProjectSummary();
             summary.setProject(project);
-            summary.setTask(taskStore.find(project.getId()).orElse(null));
-            summary.setTrackedTableCount(progressRepository
-                    .findByProjectIdAndObjectType(project.getId(), ObjectType.TABLE).size());
-            summary.setTotalRowsSynced(changeLogRepository
-                    .sumAffectedRowsByProject(project.getId()));
+            summary.setTask(taskByProject.get(project.getId()));
+            summary.setTrackedTableCount(
+                    trackedCountByProject.getOrDefault(project.getId(), 0L).intValue());
+            summary.setTotalRowsSynced(rowsByProject.getOrDefault(project.getId(), 0L));
             summaries.add(summary);
         }
         // Same rule as the activity feed: five rows keep the card a fixed height no matter
         // how many projects exist; the card header links to the paged full list.
-        stats.setProjectSummaries(summaries.size() > OVERVIEW_ROWS
-                ? new ArrayList<>(summaries.subList(0, OVERVIEW_ROWS))
-                : summaries);
+        stats.setProjectSummaries(summaries);
         return stats;
     }
 

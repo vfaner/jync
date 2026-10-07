@@ -178,6 +178,19 @@ public class DataSyncService {
                 return fullLoad(sourceConn, targetConn, table, targetTable, strategy, ctx, result);
             }
             if (strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE) {
+                if (!table.hasPrimaryKey()) {
+                    // The one-time seed above already copied current contents. Re-running the
+                    // full load on every later cycle would plain-INSERT every row (no key means
+                    // no idempotent upsert), so the target grows without bound — and without a
+                    // key inserts cannot be told from updates anyway. Skip until a key exists.
+                    result.skipped = true;
+                    result.skipReason = "Recurring full load skipped for keyless table "
+                            + table.getName() + ": add a primary key to keep it in sync";
+                    log.warn("Table {} has no primary key under FULL_COMPARE: only the one-time"
+                            + " seed is applied; later cycles skip it to avoid duplicating rows."
+                            + " Add a primary key to keep the table in sync.", table.getName());
+                    return result;
+                }
                 return fullLoad(sourceConn, targetConn, table, targetTable, strategy, ctx, result);
             }
             return incrementalLoad(sourceConn, targetConn, table, targetTable, strategy,
@@ -221,7 +234,12 @@ public class DataSyncService {
                 + sourceDialect.qualify(ctx.getSourceSchema(), table.getName());
         // Bound the read by the same watermark, so the load and the cursor agree exactly.
         if (watermark != null) {
-            selectSql += " WHERE " + sourceDialect.quoteIdentifier(strategy.getColumn()) + " <= ?";
+            // NULL cursor rows fall outside every window comparison. Pull them in with the
+            // bounded rows so they are not silently lost: on a keyed table the incremental
+            // path keeps re-delivering them (the upsert absorbs the replay), while here in
+            // the seed they are delivered exactly once even for a keyless table.
+            String quotedCursor = sourceDialect.quoteIdentifier(strategy.getColumn());
+            selectSql += " WHERE " + quotedCursor + " <= ? OR " + quotedCursor + " IS NULL";
         }
 
         // full-compare 表没有游标，每一轮都会走这条全量路径，逐轮 info 是纯粹的日志噪音；
@@ -288,8 +306,18 @@ public class DataSyncService {
         // writes arriving mid-read.
         String selectSql = "SELECT * FROM "
                 + sourceDialect.qualify(ctx.getSourceSchema(), table.getName())
-                + " WHERE " + cursorCol + " > ? AND " + cursorCol + " <= ?"
-                + " ORDER BY " + cursorCol;
+                + " WHERE (" + cursorCol + " > ? AND " + cursorCol + " <= ?)";
+        if (table.hasPrimaryKey()) {
+            // NULL cursor rows cannot belong to any window. Re-deliver them every cycle;
+            // with a primary key the upsert makes the replay a no-op. A NOT NULL cursor
+            // column (or a generated timestamp) removes this cost entirely.
+            selectSql += " OR " + cursorCol + " IS NULL";
+        } else {
+            // A keyless replay would duplicate those rows, so they are left to the
+            // one-time seed; surface the limitation instead of dropping it silently.
+            warnNullCursorRows(sourceConn, table, strategy, ctx);
+        }
+        selectSql += " ORDER BY " + cursorCol;
 
         List<Object> params = new ArrayList<>();
         params.add(lastCursor);
@@ -358,6 +386,32 @@ public class DataSyncService {
             }
         }
         return null;
+    }
+
+    /**
+     * Counts rows whose cursor column is NULL, so a keyless incremental table's uncovered
+     * rows produce a visible warning instead of vanishing silently. Cheap (one indexed
+     * NULL-range lookup) and only run on the keyless path.
+     */
+    private void warnNullCursorRows(Connection sourceConn, TableMeta table,
+                                    CursorStrategy strategy, SyncContext ctx) {
+        SqlDialect dialect = ctx.getSourceDialect();
+        String sql = "SELECT COUNT(*) FROM "
+                + dialect.qualify(ctx.getSourceSchema(), table.getName())
+                + " WHERE " + dialect.quoteIdentifier(strategy.getColumn()) + " IS NULL";
+        try (Statement st = sourceConn.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            if (rs.next() && rs.getLong(1) > 0) {
+                log.warn("Table {} has {} row(s) with a NULL cursor column {} and no primary"
+                                + " key: the seed delivers them once but later cycles cannot"
+                                + " re-deliver them without duplicating. Fill the column or add"
+                                + " a primary key.",
+                        table.getName(), rs.getLong(1), strategy.getColumn());
+            }
+        } catch (SQLException e) {
+            log.debug("Could not count NULL-cursor rows for {}: {}",
+                    table.getName(), e.getMessage());
+        }
     }
 
     private Object parseCursor(String stored, CursorStrategy strategy) {
@@ -594,6 +648,16 @@ public class DataSyncService {
                                 rs, columns, jdbcTypes, ctx);
             }
             targetConn.commit();
+        } catch (LockLostException e) {
+            // Discard the uncommitted tail before autocommit is restored (which would otherwise
+            // commit it). The committed batches are idempotent and replay to a no-op.
+            try {
+                targetConn.rollback();
+            } catch (SQLException rollbackError) {
+                log.error("Rollback after lost lease failed for {}: {}",
+                        targetTable, rollbackError.getMessage());
+            }
+            throw e;
         } catch (SQLException e) {
             try {
                 targetConn.rollback();
@@ -716,6 +780,9 @@ public class DataSyncService {
                 stats.read++;
                 if (++sinceCommit >= ctx.getBatchSize()) {
                     targetConn.commit();
+                    // Same renewal point as the native-batch path: abort before more rows once
+                    // the lease is lost. The committed tail stays; the rest replays next time.
+                    ctx.requireLease();
                     sinceCommit = 0;
                 }
             }
@@ -773,6 +840,9 @@ public class DataSyncService {
         try {
             int[] counts = ps.executeBatch();
             conn.commit();
+            // The batch is a commit boundary and hence a safe renewal point: the rows it holds
+            // are durable and idempotent. Stop now if the lease was lost, before the next batch.
+            ctx.requireLease();
             boolean classify = ctx.getTargetType() != null
                     && ctx.getTargetType().upsertCountsDistinguishInsertFromUpdate();
             for (int count : counts) {
@@ -887,6 +957,7 @@ public class DataSyncService {
                 if (++inBatch >= ctx.getBatchSize()) {
                     deleted += sumCounts(ps.executeBatch());
                     targetConn.commit();
+                    ctx.requireLease();
                     inBatch = 0;
                 }
             }

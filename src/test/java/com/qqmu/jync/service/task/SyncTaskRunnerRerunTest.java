@@ -5,12 +5,15 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Field;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -35,6 +38,7 @@ import com.qqmu.jync.service.sync.SyncEngine;
 class SyncTaskRunnerRerunTest {
 
     private SyncEngine syncEngine;
+    private SyncTaskStore taskStore;
     private SyncTaskRunner runner;
     private final AtomicInteger cycles = new AtomicInteger();
     private CountDownLatch cycleEntered;
@@ -45,7 +49,7 @@ class SyncTaskRunnerRerunTest {
         SyncContextFactory contextFactory = mock(SyncContextFactory.class);
         syncEngine = mock(SyncEngine.class);
         SyncLockStore lockStore = mock(SyncLockStore.class);
-        SyncTaskStore taskStore = mock(SyncTaskStore.class);
+        taskStore = mock(SyncTaskStore.class);
         SyncLockService lockService = new SyncLockService(lockStore, new SyncProperties(), 8080);
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
                 lockService, taskStore);
@@ -66,7 +70,7 @@ class SyncTaskRunnerRerunTest {
 
     /** Engine stub that counts cycles, signals entry and holds the lock for {@code holdMs}. */
     private void stubEngine(long holdMs) {
-        when(syncEngine.runCycle(any(), any())).thenAnswer(invocation -> {
+        when(syncEngine.runCycle(any())).thenAnswer(invocation -> {
             cycles.incrementAndGet();
             if (cycleEntered != null) {
                 cycleEntered.countDown();
@@ -127,6 +131,58 @@ class SyncTaskRunnerRerunTest {
 
         assertThat(runner.runOnce(2L).kind())
                 .isEqualTo(SyncTaskRunner.Outcome.Kind.NO_PROJECT);
-        verify(syncEngine, never()).runCycle(any(), any());
+        verify(syncEngine, never()).runCycle(any());
+    }
+
+    @Test
+    void aRecordOutcomeFailureStillDrainsTheQueuedRerun() throws Exception {
+        // The finished cycle cannot be recorded (meta DB hiccup); the coalesced request
+        // must still be served instead of getting stuck in the queue forever.
+        doThrow(new RuntimeException("meta db down"))
+                .when(taskStore).recordOutcome(eq(1L), any());
+        queuedReruns().add(1L);
+        stubEngine(0);
+
+        assertThat(runner.runOnce(1L).kind())
+                .isEqualTo(SyncTaskRunner.Outcome.Kind.EXECUTED);
+
+        awaitCycles(2);
+        awaitQueueDrained();
+    }
+
+    @Test
+    void aMarkRunningFailureIsContainedAndStillDrainsTheQueuedRerun() throws Exception {
+        doThrow(new RuntimeException("meta db down"))
+                .when(taskStore).markRunning(1L);
+        queuedReruns().add(1L);
+
+        assertThat(runner.runOnce(1L).kind())
+                .isEqualTo(SyncTaskRunner.Outcome.Kind.EXECUTED);
+
+        // The failing cycle itself was not attempted...
+        verify(syncEngine, never()).runCycle(any());
+        // ...but the bookkeeping failure did not strand the queued extra request.
+        awaitQueueDrained();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<Long> queuedReruns() throws ReflectiveOperationException {
+        Field field = SyncTaskRunner.class.getDeclaredField("queuedReruns");
+        field.setAccessible(true);
+        return (Set<Long>) field.get(runner);
+    }
+
+    private void awaitQueueDrained() throws InterruptedException {
+        Set<Long> queued;
+        try {
+            queued = queuedReruns();
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+        long deadline = System.currentTimeMillis() + 3000;
+        while (!queued.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(25);
+        }
+        assertThat(queued).isEmpty();
     }
 }

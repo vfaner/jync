@@ -12,6 +12,7 @@ import javax.sql.DataSource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.util.CryptoUtil;
@@ -33,12 +34,15 @@ public class DataSourceManager {
 
     private final DriverLoader driverLoader;
     private final CryptoUtil cryptoUtil;
+    private final SyncProperties properties;
 
     private final Map<Long, CachedDataSource> cache = new ConcurrentHashMap<>();
 
-    public DataSourceManager(DriverLoader driverLoader, CryptoUtil cryptoUtil) {
+    public DataSourceManager(DriverLoader driverLoader, CryptoUtil cryptoUtil,
+                             SyncProperties properties) {
         this.driverLoader = driverLoader;
         this.cryptoUtil = cryptoUtil;
+        this.properties = properties;
     }
 
     /** Returns the pooled data source for a saved configuration, creating it on first use. */
@@ -66,7 +70,8 @@ public class DataSourceManager {
             // serving. Closing first and creating second would leave a closed pool in the
             // cache under an unchanged fingerprint — every later call then fails with
             // "pool has been closed" until restart.
-            HikariDataSource ds = createDataSource(config, 10);
+            HikariDataSource ds = createDataSource(config,
+                    Math.max(2, properties.getMaxPoolSize()));
             CachedDataSource previous = cache.put(config.getId(), new CachedDataSource(fingerprint, ds));
             if (previous != null) {
                 log.info("Connection settings for '{}' changed; rebuilding its pool", config.getName());

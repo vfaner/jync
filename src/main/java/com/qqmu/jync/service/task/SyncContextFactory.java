@@ -2,6 +2,7 @@ package com.qqmu.jync.service.task;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.function.BooleanSupplier;
 
 import org.springframework.stereotype.Service;
 
@@ -51,7 +52,7 @@ public class SyncContextFactory {
      * @throws IllegalStateException when either endpoint is unconfigured or unreachable, since
      *                              a cycle cannot start without both
      */
-    public SyncContext build(Project project, String lockOwner) {
+    public SyncContext build(Project project, String lockOwner, BooleanSupplier lockRenewer) {
         if (project.getSourceDbId() == null || project.getTargetDbId() == null) {
             throw new IllegalStateException(
                     "Project '" + project.getName() + "' has no source or target database configured");
@@ -90,6 +91,7 @@ public class SyncContextFactory {
                 .targetDialect(dialectFactory.forType(target.getType()))
                 .batchSize(batchSize)
                 .lockOwner(lockOwner)
+                .lockRenewer(lockRenewer)
                 .build();
     }
 

@@ -111,12 +111,10 @@ public class StructureSyncService {
             return ApplyOutcome.ok("Dropped table " + targetTable);
         }
 
-        // A user-supplied DDL override takes precedence over generated SQL.
-        String override = ctx.getConfig().ddlOverride("TABLE", table.getName());
-        String createSql = override != null && !override.isBlank()
-                ? override
-                : dialect.getCreateTableSql(table, ctx.getTargetSchema(), targetTable,
-                        ctx.getSourceType());
+        // Tables have no override: the review/override feature only covers views and routines,
+        // and saveOverride rejects every other kind, so a TABLE key can never be created.
+        String createSql = dialect.getCreateTableSql(table, ctx.getTargetSchema(), targetTable,
+                ctx.getSourceType());
 
         // Tolerate "already exists": the target may have been created by a previous run that
         // crashed before its snapshot was written.

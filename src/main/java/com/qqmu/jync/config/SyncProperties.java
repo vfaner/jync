@@ -35,6 +35,16 @@ public class SyncProperties {
     /** Tables without a usable cursor column are full-compared only below this row count. */
     private long fullCompareMaxRows = 20000L;
 
+    /**
+     * Maximum size of each per-database connection pool.
+     *
+     * <p>A running cycle borrows only one connection per side, but the pool must also absorb
+     * the on-demand "sync now", the admin UI and concurrent test connections. A hard-coded
+     * value of 10 per database multiplied across many configured databases could exhaust a
+     * database server's connection limit, hence the externalized, smaller default.
+     */
+    private int maxPoolSize = 5;
+
     /** Lifetime of a per-project sync lock, after which a crashed owner's lock is stealable. */
     private long lockTtlMs = 300_000L;
 

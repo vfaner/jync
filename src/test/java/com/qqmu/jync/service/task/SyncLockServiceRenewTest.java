@@ -50,6 +50,20 @@ class SyncLockServiceRenewTest {
     }
 
     @Test
+    void twoInstancesOnTheSamePortStillGetDistinctOwnerIds() {
+        // Two nodes that resolve to the same hostname and run on the same port (cloned VM /
+        // container template) must not share an owner id, or each could act on the other's locks.
+        SyncLockService other = new SyncLockService(mock(SyncLockStore.class),
+                new SyncProperties(), 8080);
+
+        assertThat(service.getOwnerId()).isNotEqualTo(other.getOwnerId());
+        // The shared, still-readable host:port prefix remains; only the suffix disambiguates.
+        String prefix = service.getOwnerId()
+                .substring(0, service.getOwnerId().lastIndexOf(':') + 1);
+        assertThat(other.getOwnerId()).startsWith(prefix);
+    }
+
+    @Test
     void renewSurvivesAStoreFailure() {
         // An unreachable lock store means the lease cannot be proven alive; the safe answer
         // is "lost", reported rather than thrown so the engine can abort cleanly.

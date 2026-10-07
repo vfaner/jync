@@ -13,6 +13,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -106,6 +108,46 @@ public class ProjectService {
         return projectRepository.count();
     }
 
+    /**
+     * Runs {@code action} only after the surrounding transaction commits. Scheduling work
+     * must wait for commit: a Quartz trigger that fired pre-commit could read stale or
+     * absent rows, and a rolled-back save would leave a live schedule with no project.
+     * Outside a transaction the action runs immediately.
+     */
+    private void afterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
+        }
+    }
+
+    /**
+     * Re-schedules an enabled project if the current transaction rolls back. Used only by
+     * {@link #delete}, which unschedules <em>before</em> taking the lock (so the purge runs
+     * against a quiet project) and therefore needs a rollback path back to a live schedule.
+     */
+    private void restoreScheduleOnRollback(Long projectId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == TransactionSynchronization.STATUS_ROLLED_BACK) {
+                    projectRepository.findById(projectId)
+                            .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
+                            .ifPresent(scheduler::schedule);
+                }
+            }
+        });
+    }
+
     /** Creates or updates a project. Rescheduling follows the enabled flag automatically. */
     @Transactional
     public Project save(Project project) {
@@ -138,7 +180,7 @@ public class ProjectService {
         taskStore.ensureTask(saved);
 
         // Keep the schedule consistent with the flag on every save, not just on start/stop.
-        scheduler.reschedule(saved);
+        afterCommit(() -> scheduler.reschedule(saved));
         log.info("{} project '{}'", isNew ? "Created" : "Updated", saved.getName());
         return saved;
     }
@@ -157,7 +199,7 @@ public class ProjectService {
         project.setSyncConfig(contextFactory.serializeConfig(config));
         Project saved = projectRepository.save(project);
         // Interval or cron may have changed, so rebuild the trigger.
-        scheduler.reschedule(saved);
+        afterCommit(() -> scheduler.reschedule(saved));
         return saved;
     }
 
@@ -175,9 +217,11 @@ public class ProjectService {
         project.setEnabled(true);
         Project saved = projectRepository.save(project);
         taskStore.ensureTask(saved);
-        scheduler.schedule(saved);
-        // Fire once now so the user sees immediate feedback rather than waiting a full interval.
-        scheduler.triggerNow(projectId);
+        afterCommit(() -> {
+            scheduler.schedule(saved);
+            // Fire once now so the user sees immediate feedback rather than waiting a full interval.
+            scheduler.triggerNow(projectId);
+        });
         log.info("Started sync for project '{}'", saved.getName());
     }
 
@@ -187,7 +231,7 @@ public class ProjectService {
         Project project = require(projectId);
         project.setEnabled(false);
         projectRepository.save(project);
-        scheduler.unschedule(projectId);
+        afterCommit(() -> scheduler.unschedule(projectId));
         log.info("Stopped sync for project '{}'", project.getName());
     }
 
@@ -225,6 +269,9 @@ public class ProjectService {
     public void delete(Long projectId) {
         Project project = require(projectId);
         scheduler.unschedule(projectId);
+        // Delete can still roll back (lock busy, a failing delete, ...). Restore an enabled
+        // project's schedule on rollback rather than leaving it silently unmonitored.
+        restoreScheduleOnRollback(projectId);
         // tryAcquire returns null when the lock is unavailable; a try-with-resources on a
         // null resource simply skips close(), so the refusal is just an early throw.
         try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
@@ -267,7 +314,10 @@ public class ProjectService {
             objects.procedures = reader.listProcedureNames(conn, schema);
             return objects;
         } catch (SQLException e) {
-            throw new IllegalStateException("Cannot read source objects: " + e.getMessage(), e);
+            // Keep the driver's raw detail server-side; callers only surface the message key.
+            log.debug("Cannot read source objects for project '{}': {}",
+                    project.getName(), e.toString());
+            throw new IllegalStateException("error.source.objects.read.failed", e);
         }
     }
 

@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -55,6 +57,18 @@ public class ConversionAssistService {
     /** Override key prefix for routines. Functions fold into PROCEDURE, as the sync path does. */
     public static final String KIND_PROCEDURE = "PROCEDURE";
     public static final String KIND_VIEW = "VIEW";
+    public static final String KIND_FUNCTION = "FUNCTION";
+
+    /**
+     * Pulls the object type out of a CREATE header, tolerating the optional prefixes dialects
+     * allow before it: OR REPLACE, and MySQL's DEFINER / ALGORITHM / SQL SECURITY clauses. It is
+     * anchored at the start so a CREATE word buried in the body cannot satisfy it.
+     */
+    private static final Pattern CREATE_HEADER = Pattern.compile(
+            "\\ACREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:(?:DEFINER\\s*=\\s*\\S+"
+            + "|ALGORITHM\\s*=\\s*\\w+|SQL\\s+SECURITY\\s+\\w+)\\s+)*"
+            + "(?<type>VIEW|PROCEDURE|FUNCTION)\\b",
+            Pattern.CASE_INSENSITIVE);
 
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
@@ -121,7 +135,9 @@ public class ConversionAssistService {
                 }
             }
         } catch (SQLException e) {
-            throw new IllegalStateException("Cannot read source objects: " + e.getMessage(), e);
+            // Raw connection detail stays in the log; the UI resolves the message key.
+            log.debug("Cannot read source objects for project {}: {}", projectId, e.toString());
+            throw new IllegalStateException("error.source.objects.read.failed", e);
         }
 
         // An override for an object no longer in the source, or no longer selected, is dead
@@ -342,13 +358,38 @@ public class ConversionAssistService {
         if (sql == null || sql.isBlank()) {
             throw new IllegalArgumentException("error.override.empty");
         }
+        // Validate the key parts before touching config. Without this a blank/garbage name was
+        // stored under "PROCEDURE:null", and any unrecognized kind was silently turned into a
+        // PROCEDURE override by normalizeKind.
+        String objectName = name == null ? null : name.trim();
+        if (objectName == null || objectName.isEmpty()) {
+            throw new IllegalArgumentException("error.override.name.required");
+        }
+        String normalizedKind = resolveKind(kind);
+
+        String statement = sql.strip();
+        String headerType = createHeaderType(statement);
+        boolean headerMatches = KIND_VIEW.equals(normalizedKind)
+                ? KIND_VIEW.equals(headerType)
+                // A FUNCTION body is filed under the PROCEDURE key, so accept either.
+                : KIND_PROCEDURE.equals(headerType) || KIND_FUNCTION.equals(headerType);
+        if (headerType == null || !headerMatches) {
+            throw new IllegalArgumentException("error.override.header.mismatch");
+        }
+
         Project project = require(projectId);
         SyncConfig config = projectService.loadConfig(project);
-        String key = normalizeKind(kind) + ":" + name;
-        config.getDdlOverrides().put(key, sql.strip());
+        String key = normalizedKind + ":" + objectName;
+        config.getDdlOverrides().put(key, statement);
         projectService.saveConfig(projectId, config);
         log.info("Saved a DDL override for {} on project '{}' ({} chars)",
-                key, project.getName(), sql.strip().length());
+                key, project.getName(), statement.length());
+    }
+
+    /** The CREATE-header object type (VIEW/PROCEDURE/FUNCTION), or null when none is present. */
+    private static String createHeaderType(String sql) {
+        Matcher matcher = CREATE_HEADER.matcher(sql);
+        return matcher.find() ? matcher.group("type").toUpperCase() : null;
     }
 
     /** Removes an override, restoring automatic conversion for that object. */
@@ -361,6 +402,21 @@ public class ConversionAssistService {
             log.info("Removed the DDL override for {} on project '{}'",
                     overrideKey, project.getName());
         }
+    }
+
+    /**
+     * Validates the supplied kind and folds FUNCTION into PROCEDURE, matching the key the sync
+     * path looks up. Unlike {@link #normalizeKind} an unrecognized kind is rejected rather than
+     * silently becoming a PROCEDURE override.
+     */
+    private String resolveKind(String kind) {
+        if (KIND_VIEW.equalsIgnoreCase(kind)) {
+            return KIND_VIEW;
+        }
+        if (KIND_PROCEDURE.equalsIgnoreCase(kind) || KIND_FUNCTION.equalsIgnoreCase(kind)) {
+            return KIND_PROCEDURE;
+        }
+        throw new IllegalArgumentException("error.override.kind.invalid");
     }
 
     /** Folds FUNCTION into PROCEDURE, matching the key the sync path looks up. */

@@ -81,19 +81,24 @@ public class SyncEngine {
      * result rather than propagated, so one failing project reports its error instead of
      * taking down the scheduler.
      */
-    public SyncResult runCycle(SyncContext ctx) {
-        return runCycle(ctx, () -> true);
+    /**
+     * Overrides the lease renewer carried on the context for this cycle, then runs it. Mainly
+     * used by tests simulating a lost lease; production passes the renewer in via the context.
+     */
+    public SyncResult runCycle(SyncContext ctx, BooleanSupplier lockRenewer) {
+        return runCycle(ctx.toBuilder().lockRenewer(lockRenewer).build());
     }
 
     /**
-     * Runs one cycle while keeping the project's distributed lock lease alive.
+     * Runs one complete cycle.
      *
-     * @param lockRenewer extends the database lease between tables; a {@code false} return
-     *                    means the lease was lost — expired and possibly reclaimed by another
-     *                    instance — so the cycle stops before the next table's writes rather
-     *                    than risk two engines writing the same target concurrently
+     * <p>The caller must already hold the project's sync lock. The lease is renewed at each
+     * structural event and after every committed data batch (via the renewer on the context);
+     * a failed renewal aborts the cycle before further writes. Exceptions are folded into the
+     * result rather than propagated, so one failing project reports its error instead of
+     * taking down the scheduler.
      */
-    public SyncResult runCycle(SyncContext ctx, BooleanSupplier lockRenewer) {
+    public SyncResult runCycle(SyncContext ctx) {
         long start = System.currentTimeMillis();
         SyncResult result = new SyncResult();
 
@@ -109,13 +114,17 @@ public class SyncEngine {
             }
 
             if (ctx.getConfig().isSyncData()) {
-                syncData(sourceMeta, sourceConn, targetConn, ctx, result, blockedTables,
-                        lockRenewer);
+                syncData(sourceMeta, sourceConn, targetConn, ctx, result, blockedTables);
             }
 
         } catch (SQLException e) {
             log.error("Sync cycle failed for project '{}': {}", ctx.projectName(), e.getMessage());
             result.addError("Connection or query failure: " + e.getMessage());
+            stateWriter.recordLog(ctx.projectId(), ObjectType.PROJECT, ctx.projectName(),
+                    ChangeType.ERROR, e.getMessage(), false, 0);
+        } catch (LockLostException e) {
+            log.error("Project '{}': {}", ctx.projectName(), e.getMessage());
+            result.addError(e.getMessage());
             stateWriter.recordLog(ctx.projectId(), ObjectType.PROJECT, ctx.projectName(),
                     ChangeType.ERROR, e.getMessage(), false, 0);
         } catch (RuntimeException e) {
@@ -187,6 +196,11 @@ public class SyncEngine {
         Map<String, Runnable> deferredTableSnapshots = new LinkedHashMap<>();
 
         for (ChangeEvent event : events) {
+            // A long DDL batch (many events for many new tables) can outlive the lease. Renew
+            // before applying each event; a lost lease aborts via LockLostException. Events
+            // already applied have their non-table snapshots saved; the table-shaped ones are
+            // still deferred and therefore simply re-detect and replay next time.
+            ctx.requireLease();
             long eventStart = System.currentTimeMillis();
             StructureSyncService.ApplyOutcome outcome = structureSync.apply(targetConn, event, ctx);
 
@@ -348,8 +362,7 @@ public class SyncEngine {
 
     /** Synchronizes rows for every selected table, one table at a time. */
     private void syncData(DatabaseMeta sourceMeta, Connection sourceConn, Connection targetConn,
-                          SyncContext ctx, SyncResult result, Set<String> blockedTables,
-                          BooleanSupplier lockRenewer) {
+                          SyncContext ctx, SyncResult result, Set<String> blockedTables) {
         String disableSql = ctx.getConfig().isDisableTargetConstraints()
                 ? ctx.getTargetDialect().getDisableConstraintsSql() : null;
         DdlExecutor executor = new DdlExecutor(targetConn);
@@ -376,28 +389,45 @@ public class SyncEngine {
                 if (!ctx.getConfig().includesTable(table.getName())) {
                     continue;
                 }
-                // A cycle may run far longer than the lock lease. Renewing per table keeps the
-                // lease alive, and a failed renewal ends the cycle: without it a peer instance
-                // may have taken over, and two engines writing one target corrupts it. Tables
-                // already processed keep their advanced cursors; the rest are simply picked up
-                // by whichever instance holds the lock next.
-                if (!lockRenewer.getAsBoolean()) {
-                    String msg = "Sync lock lost mid-cycle (lease expired or reclaimed by"
-                            + " another instance); aborting before " + table.getName();
-                    log.error("Project '{}': {}", ctx.projectName(), msg);
-                    result.addError(msg);
-                    stateWriter.recordLog(ctx.projectId(), ObjectType.PROJECT, ctx.projectName(),
-                            ChangeType.ERROR, msg, false, 0);
-                    return;
-                }
+                // Backstop for tables that write nothing (empty result) yet still take time:
+                // deep write paths renew at every commit, but a table with no commits reaches
+                // none, so renew once per table as well. A failed renewal throws and aborts the
+                // whole cycle; processed tables keep their advanced cursors and the rest are
+                // picked up by whichever instance holds the lock next.
+                ctx.requireLease();
                 syncOneTable(table, sourceConn, targetConn, ctx, result, blockedTables,
                         knownTargetTables);
             }
         } finally {
             if (disableSql != null) {
-                // Always restore enforcement, even when a table failed part-way through.
-                executor.executeQuietly(ctx.getTargetDialect().getEnableConstraintsSql());
+                // Restore enforcement, even when a table failed part-way through. This must
+                // not be quiet: a failed re-enable would return the connection to the pool
+                // with checks still off, so the next borrower (this app's next cycle, or any
+                // other client of the pool) would silently skip foreign-key enforcement.
+                try {
+                    executor.execute(ctx.getTargetDialect().getEnableConstraintsSql(), false);
+                } catch (SQLException e) {
+                    log.error("Could not re-enable target constraints for project '{}': {};"
+                            + " aborting the physical connection so it cannot be recycled"
+                            + " with constraint checks still disabled",
+                            ctx.projectName(), e.getMessage());
+                    abortPhysicalConnection(targetConn);
+                }
             }
+        }
+    }
+
+    /**
+     * Kills the underlying physical connection of a pooled handle ({@code Connection.abort},
+     * JDBC 4.1). A pooled proxy's {@code close()} would normally recycle it; an aborted
+     * handle is detected dead on recycle and evicted instead of being handed out again.
+     */
+    private void abortPhysicalConnection(Connection conn) {
+        try {
+            conn.abort(Runnable::run);
+        } catch (SQLException | RuntimeException abortError) {
+            log.error("Aborting the poisoned connection also failed: {}",
+                    abortError.getMessage());
         }
     }
 
@@ -482,8 +512,6 @@ public class SyncEngine {
         // on every cycle, and each of those upserts is a no-op when nothing moved — logging the
         // scan size instead would post an identical "51 row(s)" entry every couple of seconds.
         if (changed > 0) {
-            result.addTableRows(table.getName(), changed);
-
             int inserted = tableResult.getRowsInserted();
             int updated = tableResult.getRowsUpdated();
             // Rows the target changed without saying how. Attribute them by phase, which is the
@@ -565,11 +593,12 @@ public class SyncEngine {
         if (previous != null && now - previous < interval) {
             return progress;
         }
-        lastRowCountAudit.put(key, now);
-
         try {
             DataSyncService.RowCountAudit audit = dataSync.auditSyncedRowCounts(
                     sourceConn, targetConn, table, strategy, progress, ctx);
+            // Stamp only after the audit actually ran: a pre-written stamp would throttle
+            // away the retry for a whole interval when the check itself errored.
+            lastRowCountAudit.put(key, now);
             if (audit == null || !audit.isTargetShort()) {
                 return progress;
             }

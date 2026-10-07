@@ -164,13 +164,15 @@
                     <div class="field">
                         <label for="customUrl" th:text="#{db.customUrl}">JDBC URL</label>
                         <input type="text" class="input mono" id="customUrl" th:field="*{customUrl}"
-                               placeholder="jdbc:other://host:5236/DBNAME">
+                               placeholder="jdbc:other://host:5236/DBNAME"
+                               th:disabled="${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'disabled'">
                         <div class="help" th:text="#{db.customUrlHelp}">help</div>
                     </div>
                     <div class="field">
                         <label for="customDriver" th:text="#{db.customDriver}">Driver class</label>
                         <input type="text" class="input mono" id="customDriver" th:field="*{customDriver}"
-                               list="driver-options" placeholder="com.example.jdbc.Driver">
+                               list="driver-options" placeholder="com.example.jdbc.Driver"
+                               th:disabled="${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'disabled'">
                         <datalist id="driver-options"></datalist>
                         <div class="help mono" id="driver-hint"></div>
                     </div>

@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -43,7 +44,7 @@ class CandidateValidatorTest {
         private RuntimeException unchecked;
 
         LocalH2Manager(String url) {
-            super(null, null);
+            super(null, null, new SyncProperties());
             this.url = url;
         }
 

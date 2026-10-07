@@ -1,6 +1,5 @@
 package com.qqmu.jync.service.auth;
 
-import java.util.List;
 
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -79,11 +78,6 @@ public class AppUserService implements UserDetailsService {
         // Resolved here, at sign-in, and carried on the principal for the life of the session.
         boolean isDefault = passwordEncoder.matches(DEFAULT_PASSWORD, user.getPasswordHash());
         return new SyncUserDetails(user, isDefault);
-    }
-
-    @Transactional(readOnly = true)
-    public List<AppUser> findAll() {
-        return repository.findAllByOrderByUsernameAsc();
     }
 
     /**

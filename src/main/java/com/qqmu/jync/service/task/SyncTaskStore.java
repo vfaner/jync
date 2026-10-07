@@ -137,14 +137,6 @@ public class SyncTaskStore {
         taskRepository.deleteByProjectId(projectId);
     }
 
-    @Transactional
-    public void updateCron(Long projectId, String cronExpression) {
-        taskRepository.findByProjectId(projectId).ifPresent(task -> {
-            task.setCronExpression(cronExpression);
-            taskRepository.save(task);
-        });
-    }
-
     private String truncate(String value) {
         if (value == null) {
             return null;

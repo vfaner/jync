@@ -76,6 +76,8 @@ sync:
   batch-size: 500
   # Fetch size hint applied to source result sets
   fetch-size: 1000
+  # Maximum connections in each per-database pool; a cycle borrows one connection per side
+  max-pool-size: 5
   # Subtracted from the timestamp high-watermark so in-flight source transactions
   # that commit slightly out of clock order are not skipped. See SyncProperties.
   safety-lag-ms: 1000

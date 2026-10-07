@@ -1,9 +1,7 @@
 package com.qqmu.jync.dto;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -29,17 +27,9 @@ public class SyncResult {
 
     private List<String> errors = new ArrayList<>();
 
-    private Map<String, Integer> rowsPerTable = new LinkedHashMap<>();
-
     public void addError(String message) {
         this.success = false;
         this.errors.add(message);
-    }
-
-    public void addTableRows(String table, int rows) {
-        if (rows > 0) {
-            rowsPerTable.merge(table, rows, Integer::sum);
-        }
     }
 
     public int totalRows() {
@@ -60,18 +50,5 @@ public class SyncResult {
         return String.format("DDL=%d, rows +%d ~%d -%d, tables=%d, %dms",
                 structureChanges, rowsInserted, rowsUpdated, rowsDeleted,
                 tablesProcessed, durationMs);
-    }
-
-    public void merge(SyncResult other) {
-        this.structureChanges += other.structureChanges;
-        this.rowsInserted += other.rowsInserted;
-        this.rowsUpdated += other.rowsUpdated;
-        this.rowsDeleted += other.rowsDeleted;
-        this.tablesProcessed += other.tablesProcessed;
-        this.errors.addAll(other.errors);
-        other.rowsPerTable.forEach((k, v) -> this.rowsPerTable.merge(k, v, Integer::sum));
-        if (!other.success) {
-            this.success = false;
-        }
     }
 }

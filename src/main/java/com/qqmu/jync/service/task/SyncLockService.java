@@ -7,7 +7,6 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.config.SyncProperties;
-import com.qqmu.jync.model.SyncTask;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -60,11 +59,29 @@ public class SyncLockService {
         } catch (Exception e) {
             host = "unknown-host";
         }
-        // host:port, NOT host:pid — the id must be STABLE across restarts so a fresh
-        // instance reaps the locks its crashed predecessor left behind (releaseAllOf
-        // matches by owner). The port still distinguishes two instances on one machine;
-        // a pid would differ on every restart and orphan those locks until TTL expiry.
-        return host + ":" + serverPort;
+        // host:port:instance. The random per-process suffix is the collision guard: container
+        // images and cloned VMs can answer getLocalHost() with the same name (and run on the same
+        // port), so host:port alone is not unique across nodes — two genuine instances would then
+        // read as one owner, letting one reclaim or release the other's locks.
+        //
+        // This drops the old "stable across restarts" property on purpose: a fresh process gets a
+        // new suffix and no longer reaps its predecessor's locks by matching owner. A crashed
+        // owner's locks clear by LEASE EXPIRY (lockTtlMs) — the TTL exists precisely for owners
+        // that never return — so crash recovery is unchanged; only the instant reap on a clean
+        // restart is lost.
+        return host + ":" + serverPort + ":" + instanceSuffix();
+    }
+
+    /** Twelve hex chars from a strong generator, so distinct processes never share an owner id. */
+    private static String instanceSuffix() {
+        byte[] bytes = new byte[6];
+        new java.security.SecureRandom().nextBytes(bytes);
+        StringBuilder sb = new StringBuilder(12);
+        for (byte b : bytes) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16))
+                    .append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
     }
 
     public String getOwnerId() {
@@ -124,11 +141,6 @@ public class SyncLockService {
                     released);
         }
         return released;
-    }
-
-    /** Reports who currently holds a project's lock, for display in the UI. */
-    public String currentHolder(Long projectId) {
-        return store.findTask(projectId).map(SyncTask::getLockOwner).orElse(null);
     }
 
     /** Released via try-with-resources so the lock cannot leak on an exception path. */

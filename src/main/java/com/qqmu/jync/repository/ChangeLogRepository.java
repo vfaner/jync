@@ -32,7 +32,16 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     @Query("select coalesce(sum(c.affectedRows), 0) from ChangeLog c where c.projectId = :projectId")
     long sumAffectedRowsByProject(@Param("projectId") Long projectId);
 
-    void deleteByProjectId(Long projectId);
+    /** Per-project row totals in one query, instead of one query per project on the dashboard. */
+    @Query("select c.projectId, coalesce(sum(c.affectedRows), 0) "
+            + "from ChangeLog c group by c.projectId")
+    List<Object[]> sumAffectedRowsGroupedByProject();
+
+    // Bulk, not a derived delete: a derived delete loads each entity (including the @Lob detail
+    // text) before removing it. Project deletion needs only the rows gone, not their contents.
+    @Modifying
+    @Query("delete from ChangeLog c where c.projectId = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 
     /** Remove every entry in bulk; returns the number of rows deleted. */
     @Modifying

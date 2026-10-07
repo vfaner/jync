@@ -332,10 +332,14 @@
               body.appendChild(div);
             });
 
-          var ms = document.createElement('div');
-          ms.className = 'small muted';
-          ms.textContent = p.elapsedMs + ' ms';
-          body.appendChild(ms);
+          // Omit the timing line when the payload carries no elapsedMs — otherwise it renders
+          // the literal "undefined ms".
+          if (typeof p.elapsedMs === 'number') {
+            var ms = document.createElement('div');
+            ms.className = 'small muted';
+            ms.textContent = p.elapsedMs + ' ms';
+            body.appendChild(ms);
+          }
 
           out.appendChild(iconEl);
           out.appendChild(body);
@@ -458,7 +462,12 @@
             }
           }
           var custom = document.getElementById('custom-section');
-          if (custom) custom.hidden = !p.custom;
+          if (custom) {
+            custom.hidden = !p.custom;
+            // hidden alone still submits the inputs: a stale CUSTOM URL/driver would ride along
+            // under another type. Disable them, the same way the jar-card inputs are handled.
+            custom.querySelectorAll('input').forEach(function (el) { el.disabled = !p.custom; });
+          }
           // 未内置的预设（如 GBase / 神通）也要填 jar；bundled 由服务端查 classpath 得出
           var jarCard = document.getElementById('jar-card');
           if (jarCard) {
@@ -897,6 +906,10 @@
             return;
           }
           card.innerHTML = freshCard.innerHTML;
+          // The pager lives inside this card, so replacing innerHTML discards its bound
+          // listeners (size dropdown, jump input). Re-bind the freshly inserted bar or those
+          // controls silently stop working after the first refresh.
+          card.querySelectorAll('[data-role="pager"]').forEach(bindPager);
           var freshCount = fresh.getElementById('log-count');
           if (countEl && freshCount) countEl.textContent = freshCount.textContent;
           stamp();
@@ -1110,7 +1123,11 @@
     // 提交前确认（删除等不可逆操作）
     document.querySelectorAll('form[data-confirm]').forEach(function (form) {
       form.addEventListener('submit', function (e) {
-        if (!window.confirm(form.dataset.confirm)) e.preventDefault();
+        // A second click after confirmation must not submit twice (an accidental double-click
+        // on a delete button) — stop the duplicate POST.
+        if (form.dataset.submitted === '1') { e.preventDefault(); return; }
+        if (!window.confirm(form.dataset.confirm)) { e.preventDefault(); return; }
+        form.dataset.submitted = '1';
       });
     });
   });

@@ -81,7 +81,7 @@ public class DatabaseConfigService {
 
         if (config.getId() != null) {
             DatabaseConfig existing = repository.findById(config.getId())
-                    .orElseThrow(() -> new IllegalArgumentException("Connection not found"));
+                    .orElseThrow(() -> new IllegalArgumentException("error.connection.not.found"));
             if (existing.getRole() != null && existing.getRole() != config.getRole()) {
                 // Reclassifying a connection that projects already depend on would silently
                 // remove it from the project form's selector on the other side.
@@ -180,7 +180,7 @@ public class DatabaseConfigService {
     /** Tests a saved connection. */
     public ConnectionTestService.TestResult test(Long id) {
         DatabaseConfig config = repository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Connection not found"));
+                .orElseThrow(() -> new IllegalArgumentException("error.connection.not.found"));
         return connectionTestService.test(config);
     }
 

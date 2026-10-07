@@ -597,13 +597,9 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .toast > .ico { width: 17px; height: 17px; flex-shrink: 0; margin-top: 2px; }
 .toast-msg { flex: 1; min-width: 0; word-break: break-word; }
 .toast-ok     { border-left: 3px solid var(--ok); }
-.toast-ok i     { color: var(--ok); }
 .toast-danger { border-left: 3px solid var(--danger); }
-.toast-danger i { color: var(--danger); }
 .toast-warn   { border-left: 3px solid var(--warn); }
-.toast-warn i   { color: var(--warn); }
 .toast-info   { border-left: 3px solid var(--info); }
-.toast-info i   { color: var(--info); }
 @keyframes toast-in  { from { opacity: 0; transform: translateX(24px) scale(.97); } to { opacity: 1; transform: none; } }
 @keyframes toast-out { to   { opacity: 0; transform: translateX(24px); } }
 
