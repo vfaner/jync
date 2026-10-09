@@ -264,7 +264,7 @@ MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**达梦 
 | Maven | 3.6+（仅构建时需要） |
 | 内存 | 建议 ≥ 512MB 堆 |
 | 端口 | 默认 `8080` |
-| 磁盘 | 元数据库 + 日志 + 快照，建议预留 1GB |
+| 磁盘 | 元数据库 + 日志，建议预留 1GB |
 
 ### 一、构建
 
@@ -291,9 +291,8 @@ java -jar target/jync.jar
 
 | 目录 | 内容 |
 |---|---|
-| `./data` | 工具自身的元数据（H2 文件库：连接、项目、游标、锁、变更日志） |
+| `./data` | 工具自身的元数据（H2 文件库：连接、项目、游标、锁、变更日志、元数据快照） |
 | `./logs` | 运行日志 |
-| `./snapshots` | 元数据快照目录（可通过 `sync.snapshot-dir` 修改） |
 
 > ⚠️ 这些是**相对路径**。请固定在同一目录下启动，或用绝对路径覆盖配置，否则重启后会找不到原有数据。
 
@@ -311,7 +310,6 @@ spring:
 
 sync:
   poll-interval: 2000              # 轮询间隔（毫秒）
-  snapshot-dir: /opt/jync/snapshots
   batch-size: 500
   fetch-size: 1000
   safety-lag-ms: 1000
@@ -391,6 +389,20 @@ sudo systemctl start jync
 ```
 
 元数据库使用 `ddl-auto: update`，表结构会自动演进。**升级前请备份 `./data` 目录。** 停机期间源库产生的变更会在重启后由游标机制自动补齐，不会丢失。
+
+### 七、容器部署（Docker / Kubernetes）
+
+仓库自带多阶段构建的 `Dockerfile`、`docker-compose.yml` 与 `deploy/k8s/` 清单（Kustomize）：
+
+```bash
+# Docker Compose：一条命令起服务，数据落在宿主机 ./data 与 ./logs
+docker compose up -d --build
+
+# Kubernetes：镜像推到集群可访问的仓库后
+kubectl apply -k deploy/k8s/
+```
+
+容器内约定：元数据在 `/app/data`、日志在 `/app/logs`，以非 root 用户（uid 10001）运行，健康检查打匿名可访问的 `/login`。默认 H2 文件库只支持**单副本**；要多副本先把元数据库换成外部 MySQL（`SPRING_DATASOURCE_URL` 等环境变量覆盖即可，无需改镜像），应用内置的调度对账与分布式同步锁会处理多实例协同。完整说明（环境变量表、TLS、升级、排障）见 [docs/deploy-container.md](docs/deploy-container.md)。
 
 ---
 
@@ -587,7 +599,6 @@ ALTER TABLE 你的表 ADD COLUMN update_time DATETIME
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `poll-interval` | `2000` | 轮询间隔（毫秒） |
-| `snapshot-dir` | `./snapshots` | 元数据快照目录 |
 | `batch-size` | `500` | 每个 JDBC 批次行数 |
 | `fetch-size` | `1000` | 源库结果集读取批量 |
 | `max-retries` | `3` | 连续失败多少次后标记任务为 ERROR |

@@ -1,0 +1,27 @@
+# Jync 捷同 · 单机 Docker Compose 部署
+#   docker compose up -d --build
+#   浏览器打开 http://localhost:8080 (默认账号 admin / view,密码 123456,登录后请立即修改)
+# 数据落在宿主机 ./data 与 ./logs,升级镜像或重建容器不丢数据。
+services:
+  jync:
+    build: .
+    image: jync:1.3.2
+    container_name: jync
+    ports:
+      - "8080:8080"
+    volumes:
+      # H2 元数据库(项目/连接/日志)——最重要,务必持久化
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      TZ: Asia/Shanghai
+      # JAVA_OPTS: "-XX:MaxRAMPercentage=75"
+      # 走 HTTPS 反向代理时打开,让会话 Cookie 带 Secure 标记:
+      # JYN_COOKIE_SECURE: "true"
+      # 多实例共享元数据库时,把 H2 换成外部 MySQL(此时 replicas 才可以 > 1):
+      # SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/jync?useSSL=false&serverTimezone=UTC"
+      # SPRING_DATASOURCE_USERNAME: "jync"
+      # SPRING_DATASOURCE_PASSWORD: "change-me"
+    restart: unless-stopped
+    # 单机部署不设内存限制也行;限制后 JVM 会按 75% 取堆:
+    # mem_limit: 1g

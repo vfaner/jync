@@ -76,6 +76,40 @@ class JdbcRowMapperCursorTest {
     }
 
     @Test
+    void dateCursorRoundTripsAsWallDateRegardlessOfTimezone() {
+        // 旧实现把 DATE 编成"UTC 零点时刻的 instant"，再经目标端时区解码，可能差一天。
+        java.sql.Date source = java.sql.Date.valueOf("2026-01-01");
+
+        String stored = JdbcRowMapper.cursorToString(source);
+        Object restored = JdbcRowMapper.cursorFromString(stored, Types.DATE);
+
+        assertThat(stored).isEqualTo("2026-01-01");
+        assertThat(restored).isInstanceOf(java.sql.Date.class);
+        assertThat(restored.toString()).isEqualTo("2026-01-01");
+    }
+
+    @Test
+    void aLegacyDateInstantStillParses() {
+        // Pre-fix cursors were midnight-UTC instants; they must decode in UTC, not shift.
+        Object restored = JdbcRowMapper.cursorFromString("2026-01-01T00:00:00Z", Types.DATE);
+        assertThat(restored).isInstanceOf(java.sql.Date.class);
+        assertThat(restored.toString()).isEqualTo("2026-01-01");
+    }
+
+    @Test
+    void localDateTimeCursorKeepsWallTimeInsteadOfInventingUtc() {
+        // A zone-less 08:00 wall time must not be serialized as 08:00Z and rebound through
+        // another zone — that is the DATETIME window shift that silently dropped rows.
+        java.time.LocalDateTime source = java.time.LocalDateTime.of(2026, 1, 1, 8, 0, 0);
+
+        String stored = JdbcRowMapper.cursorToString(source);
+        Timestamp restored = (Timestamp) JdbcRowMapper.cursorFromString(stored, Types.TIMESTAMP);
+
+        assertThat(stored).doesNotEndWith("Z");
+        assertThat(restored.toLocalDateTime()).isEqualTo(source);
+    }
+
+    @Test
     void numericCursorRoundTrips() {
         String stored = JdbcRowMapper.cursorToString(123456789L);
         Object restored = JdbcRowMapper.cursorFromString(stored, Types.BIGINT);

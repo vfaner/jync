@@ -75,4 +75,22 @@ class DdlExecutorIdempotentCreateTest {
         assertThatThrownBy(() -> exec.executeIdempotentCreate("CREATE TABLE X (id INT)"))
                 .isInstanceOf(SQLException.class);
     }
+
+    @Test
+    void anUnrelatedMessageMerelyMentioningExistsIsNotBenign() throws SQLException {
+        // Bare "exists" used to match: a failed FK reference must not look like "created".
+        DdlExecutor exec = executorThrowing(
+                "Cannot add foreign key constraint: referenced table does not exist", "42000", 1215);
+        assertThatThrownBy(() -> exec.executeIdempotentCreate("CREATE TABLE X (id INT)"))
+                .isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void sqlserverS0001WithoutADuplicateCodeOrTextIsNotBenign() throws SQLException {
+        // S0001 is generic on SQL Server (e.g. 8152 string truncation) — must propagate.
+        DdlExecutor exec = executorThrowing(
+                "String or binary data would be truncated.", "S0001", 8152);
+        assertThatThrownBy(() -> exec.executeIdempotentCreate("CREATE TABLE X (id INT)"))
+                .isInstanceOf(SQLException.class);
+    }
 }

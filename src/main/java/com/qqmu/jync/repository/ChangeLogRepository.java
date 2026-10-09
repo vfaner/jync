@@ -24,6 +24,17 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
 
     long countByProjectId(Long projectId);
 
+    // Failure-only view of the log: the operator triaging problems wants the error rows
+    // without the successful traffic around them.
+    Page<ChangeLog> findByProjectIdAndSuccessFalseOrderByOccurredAtDesc(Long projectId,
+                                                                        Pageable pageable);
+
+    Page<ChangeLog> findBySuccessFalseOrderByOccurredAtDesc(Pageable pageable);
+
+    long countByProjectIdAndSuccessFalse(Long projectId);
+
+    long countBySuccessFalse();
+
     long countByOccurredAtAfter(Instant after);
 
     @Query("select coalesce(sum(c.affectedRows), 0) from ChangeLog c where c.occurredAt > :after")
@@ -38,7 +49,7 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     // text) before removing it. Project deletion needs only the rows gone, not their contents.
     @Modifying
     @Query("delete from ChangeLog c where c.projectId = :projectId")
-    void deleteByProjectId(@Param("projectId") Long projectId);
+    int deleteByProjectId(@Param("projectId") Long projectId);
 
     /** Remove every entry in bulk; returns the number of rows deleted. */
     @Modifying

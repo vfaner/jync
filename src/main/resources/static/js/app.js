@@ -13,6 +13,28 @@
     return messages[key] || key;
   }
 
+  /**
+   * 把 fetch 的 rejection 转成可展示文案。
+   *
+   * 网络中断/服务器不可达时，浏览器抛 TypeError，文案随浏览器语言版本各不相同且本应用无法
+   * 本地化（Chrome "Failed to fetch"、Firefox "NetworkError when attempting to fetch
+   * resource"、Safari "Load failed"、Edge "Network request failed"）。这里统一映射到
+   * error.network；其它异常（驱动报错等真实信息）仍按 i18n key 解析、原文兜底。
+   */
+  function describeError(err) {
+    var raw = String((err && err.message) || err);
+    if (err instanceof TypeError) {
+      var lower = raw.toLowerCase();
+      if (lower.indexOf('failed to fetch') >= 0
+          || lower.indexOf('networkerror') >= 0
+          || lower.indexOf('network request failed') >= 0
+          || lower === 'load failed') {
+        return t('error.network');
+      }
+    }
+    return t(raw);
+  }
+
   /* ─── Toast ─────────────────────────────────────────────── */
 
   var ICONS = {
@@ -155,11 +177,15 @@
         return { success: false, message: 'error.sessionExpired' };
       }
       var ctype = response.headers.get('Content-Type') || '';
-      if (ctype.indexOf('text/event-stream') < 0 ||
-          !response.body || !response.body.getReader) {
-        return null;
+      if (ctype.indexOf('text/event-stream') >= 0
+          && response.body && response.body.getReader) {
+        return readSse(response, onDelta);
       }
-      return readSse(response, onDelta);
+      // The stream was buffered into a plain response (proxy/gateway) or the browser lacks a
+      // streaming body. That response already carries the finished payload — returning null
+      // here would make the caller POST /draft a second time and the server would run the AI
+      // generation twice. Parse it; null (fall back to a fresh POST) only when it is not JSON.
+      return response.json().catch(function () { return null; });
     });
   }
 
@@ -272,6 +298,13 @@
           payload.errors.slice(0, 3).forEach(function (err) { toast(t(err), 'danger'); });
         }
 
+        // 跳过的表不是错误，但必须点名：否则「表一直不动」和「本轮无事发生」无法区分
+        if (payload.skippedTables && payload.skippedTables.length) {
+          payload.skippedTables.slice(0, 3).forEach(function (s) {
+            toast(t('msg.sync.skipped') + ' ' + s.table + ': ' + s.reason, 'warn');
+          });
+        }
+
         // noReload：请求被接受但没有真正执行完（如补跑排队），页面不该刷新
         if (payload.success && payload.noReload !== true && btn.dataset.reload === 'true') {
           setTimeout(function () { window.location.reload(); }, 850);
@@ -280,7 +313,7 @@
         btn.disabled = false;
         btn.innerHTML = original;
       }).catch(function (err) {
-        toast(t(String(err && err.message || err)), 'danger');
+        toast(describeError(err), 'danger');
         btn.disabled = false;
         btn.innerHTML = original;
       });
@@ -345,7 +378,7 @@
           out.appendChild(body);
           out.hidden = false;
         }).catch(function (err) {
-          toast(t(String(err && err.message || err)), 'danger');
+          toast(describeError(err), 'danger');
         });
       });
     });
@@ -439,7 +472,7 @@
               toast(t(p.message || 'msg.no.drivers.declared'), 'warn');
             }
           })
-          .catch(function (err) { toast(t(String(err && err.message || err)), 'danger'); });
+          .catch(function (err) { toast(describeError(err), 'danger'); });
       });
     });
   }
@@ -692,6 +725,13 @@
         var streamRaw = '';
         var syncTimer = null;
 
+        // 流式期间内容每 80ms 整体重写一次。编辑器若仍可输入，用户敲入的内容会被定时器
+        // 静默覆盖、光标也被拽到底部。起草期间临时只读（仍可滚动与选中复制），结束后
+        // 恢复原状态 —— view 账号本来就是只读，不能无条件写成 false。
+        var wasReadOnly = editor.readOnly;
+        editor.readOnly = true;
+        function unlockEditor() { editor.readOnly = wasReadOnly; }
+
         // 流式期间编辑器内容随时在变，高亮底衬靠 input 事件跟着刷；
         // 每个 delta 都全量重高亮太贵，80ms 合并一次。
         function flushSync() {
@@ -709,6 +749,7 @@
         }
         function restoreEditor() {
           editor.value = originalValue;
+          unlockEditor();
           flushSync();
         }
         function applyPayload(payload) {
@@ -722,6 +763,7 @@
             return;
           }
           editor.value = payload.sql || '';
+          unlockEditor();
           flushSync();
           showDraftNotice();
           // 缓存命中会「秒回」，不标注的话用户会以为根本没调模型
@@ -740,7 +782,7 @@
           return payload;
         }).then(applyPayload).catch(function (err) {
           restoreEditor();
-          toast(t(String((err && err.message) || err)), 'danger');
+          toast(describeError(err), 'danger');
         });
       });
     });
@@ -810,7 +852,7 @@
           alert.appendChild(body);
           out.appendChild(alert);
         }).catch(function (err) {
-          toast(t(String((err && err.message) || err)), 'danger');
+          toast(describeError(err), 'danger');
         });
       });
     });
@@ -879,9 +921,17 @@
       stampEl.hidden = false;
     }
 
-    function refresh() {
+    function refresh(isAuto) {
       // 上一轮还没回来就跳过这一轮：网络慢的时候不该把请求越堆越多
       if (inFlight) return;
+      // 自动刷新每 5 秒整体替换卡片内容。用户正在跳页输入框里打字、或刚展开每页条数
+      // 下拉时，替换 innerHTML 会抹掉输入到一半的数字、关掉下拉、抢走焦点 —— 分页条
+      // 等于周期性「失灵」。交互期间跳过这一拍：翻页/改条数本来就会整页跳转，这里
+      // 只需不打断尚未提交的操作。
+      if (isAuto) {
+        var active = document.activeElement;
+        if (active && card.contains(active)) return;
+      }
       inFlight = true;
       if (icon) icon.classList.add('spinning');
 
@@ -945,7 +995,9 @@
       if (autoBtn) autoBtn.classList.toggle('is-on', on);
       stop();
       // 页面在后台时刷新纯属浪费流量，切回来再补
-      if (on && !document.hidden) timer = setInterval(refresh, LOG_AUTO_INTERVAL);
+      if (on && !document.hidden) {
+        timer = setInterval(function () { refresh(true); }, LOG_AUTO_INTERVAL);
+      }
     }
 
     btn.addEventListener('click', function () { refresh(); });
@@ -1129,6 +1181,21 @@
         if (!window.confirm(form.dataset.confirm)) { e.preventDefault(); return; }
         form.dataset.submitted = '1';
       });
+    });
+
+    // role-pick 选中态兜底：CSS 里 .role-pick:has(input:checked) 需 Chromium 105 /
+    // Firefox 121+，老内核整条丢弃，选中的角色卡片将没有任何视觉反馈。这里同步一个
+    // .is-checked class，配合 CSS 的并列选择器 .role-pick.is-checked 保证新旧内核一致。
+    var syncRolePicks = function () {
+      document.querySelectorAll('.role-pick').forEach(function (pick) {
+        var input = pick.querySelector('input');
+        if (input) { pick.classList.toggle('is-checked', input.checked); }
+      });
+    };
+    syncRolePicks();
+    document.addEventListener('change', function (e) {
+      var el = e.target;
+      if (el && el.matches && el.matches('.role-pick input')) { syncRolePicks(); }
     });
   });
 

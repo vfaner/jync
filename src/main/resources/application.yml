@@ -52,6 +52,14 @@ server:
     encoding:
       charset: UTF-8
       force: true
+    session:
+      cookie:
+        http-only: true
+        # Lax lets top-level navigations carry the cookie but blocks CSRF-prone cross-site posts.
+        same-site: lax
+        # HTTPS deployments should set JYN_COOKIE_SECURE=true; left overridable so a plain
+        # http://localhost deployment keeps working out of the box.
+        secure: ${JYN_COOKIE_SECURE:false}
 
 app:
   # Repository link behind the nav GitHub icon and the donate dialog buttons.
@@ -90,6 +98,17 @@ sync:
   full-compare-max-rows: 20000
   # TTL for the per-project sync lock; a crashed node's lock expires after this
   lock-ttl-ms: 300000
+  # 多实例控制面：每个节点定期把本地 Quartz 调度与数据库里的 enabled 标志对账，
+  # 别的节点上启动/停用的项目最多经过一个间隔就会在本节点生效。单实例部署时
+  # 对账始终无差异，纯属保险。
+  reconcile-interval-ms: 30000
+  # Statement timeout for data-plane queries; a lock wait or a dead socket otherwise parks the
+  # worker forever. 0 disables. Metadata enumeration uses the shorter metadata-query-timeout.
+  query-timeout-seconds: 300
+  metadata-query-timeout-seconds: 60
+  # Grace period for in-flight cycles when the application shuts down; after this the
+  # scheduler stops without waiting and open batches are rolled back. 0 skips the wait.
+  shutdown-wait-ms: 20000
   # Encryption key for stored database passwords. OVERRIDE THIS IN PRODUCTION.
   # NOTE: the default value is deliberately kept at its pre-rename literal — stored
   # connection passwords were AES-encrypted with it, and changing it would make

@@ -58,6 +58,13 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         if (mapped != null) {
             return mapped;
         }
+        // PostgreSQL reports uuid/json/jsonb/xml/arrays/enums as Types.OTHER; a non-PG target
+        // cannot create a column named after the PG type ("uuid", "jsonb", "_int4"), so map
+        // them onto portable types instead of passing the raw name through.
+        if (sourceType == DatabaseType.POSTGRESQL
+                && column.getJdbcType() == java.sql.Types.OTHER) {
+            return postgresOtherType(column);
+        }
         // Unclassified type: pass the source name through and let the target complain.
         // This is preferable to guessing, and the failure names the exact column.
         log.warn("No type mapping for column {} (type {} / JDBC {}); passing through as-is",
@@ -120,6 +127,30 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                 return clobType();
             default:
                 return null;
+        }
+    }
+
+    /** Target JSON column type; dialects without native JSON keep JSON as a character large
+     *  object, which preserves the text. */
+    protected String jsonType() {
+        return clobType();
+    }
+
+    /** Maps a PostgreSQL Types.OTHER column onto types the target can create. */
+    protected String postgresOtherType(ColumnMeta column) {
+        String name = column.getTypeName();
+        if (name == null) {
+            return clobType();
+        }
+        switch (name.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "uuid":
+                return varcharType(36);
+            case "json":
+            case "jsonb":
+                return jsonType();
+            default:
+                // xml, enums and PG arrays (type names like "_int4") move as text.
+                return clobType();
         }
     }
 
@@ -320,6 +351,16 @@ public abstract class AbstractSqlDialect implements SqlDialect {
             sb.append(mapType(col, sourceType));
         }
 
+        // The auto-increment clause must follow the type IMMEDIATELY. T-SQL rejected the
+        // old "type NOT NULL IDENTITY(1,1)" order — IDENTITY has to precede NOT NULL;
+        // MySQL accepts AUTO_INCREMENT in this position too.
+        if (col.isAutoIncrement()) {
+            String clause = autoIncrementClause();
+            if (clause != null && !clause.isEmpty()) {
+                sb.append(' ').append(clause);
+            }
+        }
+
         // A primary key column is implicitly NOT NULL; stating it is harmless and clearer.
         if (!col.isNullable()) {
             sb.append(" NOT NULL");
@@ -328,13 +369,6 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         String def = renderDefaultValue(col);
         if (def != null) {
             sb.append(" DEFAULT ").append(def);
-        }
-
-        if (col.isAutoIncrement()) {
-            String clause = autoIncrementClause();
-            if (clause != null && !clause.isEmpty()) {
-                sb.append(' ').append(clause);
-            }
         }
         return sb.toString();
     }

@@ -109,21 +109,48 @@ class ChangeDetectorTest {
 
     @Test
     void aTableThatReallyDisappearedIsStillDropped() {
-        // The guard must not disable legitimate table drop detection.
+        // The guard must not disable legitimate drop detection: one table vanishing while
+        // the enumeration still returns others is unambiguous, so the DROP goes through.
         TableMeta stored = new TableMeta();
         stored.setName("ORDERS");
         when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
                 .thenReturn(Map.of("ORDERS", stored));
 
-        DatabaseMeta current = new DatabaseMeta(); // genuinely absent, not merely unreadable
+        // A surviving table proves the enumeration itself worked. It is excluded from the
+        // project's selection so it produces no CREATE event.
+        TableMeta survivor = new TableMeta();
+        survivor.setName("OTHER");
+        DatabaseMeta current = new DatabaseMeta();
+        current.setTables(List.of(survivor));
 
         SyncConfig config = config();
         config.setSyncStructure(true);
+        config.setTables(new java.util.LinkedHashSet<>(List.of("ORDERS")));
         List<ChangeEvent> events = detector.detect(1L, current, config);
 
         assertThat(events).hasSize(1);
         assertThat(events.get(0).getChangeType()).isEqualTo(ChangeType.DROP);
         assertThat(events.get(0).getObjectName()).isEqualTo("ORDERS");
+    }
+
+    @Test
+    void anEmptyTableEnumerationSuppressesEveryDrop() {
+        // P0-5: 改名后的 schema / 被收回的权限让枚举返回空集 —— 旧逻辑把"读不到"当成
+        // "全部已删除"，allowDrop 下目标端所有表被 DROP。
+        TableMeta a = new TableMeta();
+        a.setName("T1");
+        TableMeta b = new TableMeta();
+        b.setName("T2");
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("T1", a, "T2", b));
+
+        DatabaseMeta current = new DatabaseMeta(); // enumeration empty, no unreadable rows
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        assertThat(events).isEmpty();
     }
 
     @Test
@@ -148,22 +175,58 @@ class ChangeDetectorTest {
 
     @Test
     void aViewThatReallyDisappearedIsStillDropped() {
-        // The guard must not disable legitimate drop detection.
+        // As with tables: the enumeration still returns a surviving view, so dropping the
+        // one that vanished is unambiguous.
         ViewMeta stored = new ViewMeta();
         stored.setName("V_GONE");
         stored.setDefinition("SELECT 1");
         when(snapshotService.loadAll(1L, ObjectType.VIEW, ViewMeta.class))
                 .thenReturn(Map.of("V_GONE", stored));
 
-        DatabaseMeta current = new DatabaseMeta(); // the view is absent from the source read
+        ViewMeta survivor = new ViewMeta();
+        survivor.setName("V_OTHER");
+        survivor.setDefinition("SELECT 2");
+        DatabaseMeta current = new DatabaseMeta();
+        current.setViews(List.of(survivor));
 
         SyncConfig config = config();
         config.setSyncViews(true);
+        config.setViews(new java.util.LinkedHashSet<>(List.of("V_GONE")));
         List<ChangeEvent> events = detector.detect(1L, current, config);
 
         assertThat(events).hasSize(1);
         assertThat(events.get(0).getChangeType()).isEqualTo(ChangeType.DROP);
         assertThat(events.get(0).getObjectName()).isEqualTo("V_GONE");
+    }
+
+    @Test
+    void anEmptyViewEnumerationSuppressesEveryDrop() {
+        ViewMeta stored = new ViewMeta();
+        stored.setName("V_ORDERS");
+        stored.setDefinition("SELECT 1");
+        when(snapshotService.loadAll(1L, ObjectType.VIEW, ViewMeta.class))
+                .thenReturn(Map.of("V_ORDERS", stored));
+
+        DatabaseMeta current = new DatabaseMeta(); // zero views listed
+
+        SyncConfig config = config();
+        config.setSyncViews(true);
+        assertThat(detector.detect(1L, current, config)).isEmpty();
+    }
+
+    @Test
+    void anEmptyRoutineEnumerationSuppressesEveryDrop() {
+        ProcedureMeta stored = new ProcedureMeta();
+        stored.setName("P_CALC");
+        stored.setDefinition("BEGIN END");
+        when(snapshotService.loadAll(1L, ObjectType.PROCEDURE, ProcedureMeta.class))
+                .thenReturn(Map.of("P_CALC", stored));
+
+        DatabaseMeta current = new DatabaseMeta(); // zero routines listed
+
+        SyncConfig config = config();
+        config.setSyncProcedures(true);
+        assertThat(detector.detect(1L, current, config)).isEmpty();
     }
 
     @Test

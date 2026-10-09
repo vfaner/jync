@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -95,6 +96,75 @@ class DataSyncServiceReplaySafetyTest {
                 .isTrue();
         assertThat(replay.getNewCursorValue()).isEqualTo("2");
         assertThat(count("KEYONLY")).isEqualTo(2);
+    }
+
+    @Test
+    void sourceStatementsReceiveTheConfiguredQueryTimeout() throws SQLException {
+        SyncProperties properties = new SyncProperties();
+        properties.setQueryTimeoutSeconds(123);
+        DataSyncService svc = new DataSyncService(properties);
+
+        exec(source, "CREATE TABLE TIMEOUT_T (ID BIGINT PRIMARY KEY)");
+        exec(target, "CREATE TABLE TIMEOUT_T (ID BIGINT PRIMARY KEY)");
+        exec(source, "INSERT INTO TIMEOUT_T VALUES (1)");
+
+        TableMeta table = new TableMeta();
+        table.setName("TIMEOUT_T");
+        table.setPrimaryKeys(List.of("ID"));
+
+        TimeoutSpy spy = TimeoutSpy.wrap(source);
+        DataSyncService.TableSyncResult result = svc.syncTable(
+                spy.connection(), target, table, IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(spy.timeouts()).contains(123);
+    }
+
+    /** Connection proxy that records query timeouts set on statements it hands out. */
+    private static final class TimeoutSpy {
+        private final java.util.List<Integer> timeouts = new java.util.ArrayList<>();
+        private final Connection connection;
+
+        private TimeoutSpy(Connection delegate) {
+            this.connection = (Connection) java.lang.reflect.Proxy.newProxyInstance(
+                    Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
+                    (proxy, method, args) -> {
+                        if ("createStatement".equals(method.getName())) {
+                            return statementSpy(delegate.createStatement());
+                        }
+                        if ("prepareStatement".equals(method.getName())) {
+                            return statementSpy(delegate.prepareStatement((String) args[0]));
+                        }
+                        return method.invoke(delegate, args);
+                    });
+        }
+
+        static TimeoutSpy wrap(Connection connection) {
+            return new TimeoutSpy(connection);
+        }
+
+        Connection connection() {
+            return connection;
+        }
+
+        java.util.List<Integer> timeouts() {
+            return timeouts;
+        }
+
+        private Statement statementSpy(Statement statement) {
+            // A PreparedStatement must stay a PreparedStatement to the caller.
+            Class<?>[] interfaces = statement instanceof PreparedStatement
+                    ? new Class<?>[] {PreparedStatement.class}
+                    : new Class<?>[] {Statement.class};
+            return (Statement) java.lang.reflect.Proxy.newProxyInstance(
+                    Statement.class.getClassLoader(), interfaces,
+                    (proxy, method, args) -> {
+                        if ("setQueryTimeout".equals(method.getName())) {
+                            timeouts.add((Integer) args[0]);
+                        }
+                        return method.invoke(statement, args);
+                    });
+        }
     }
 
     @Test
@@ -198,17 +268,16 @@ class DataSyncServiceReplaySafetyTest {
         TableMeta table = new TableMeta();
         table.setName("NOTES"); // no primary key
 
-        // Lag 0 keeps the old row 'a' out of the next window; with the default lag a
-        // keyless table would re-insert it (plain insert cannot converge).
-        SyncProperties noLag = new SyncProperties();
-        noLag.setSafetyLagMs(0);
-        DataSyncService keylessService = new DataSyncService(noLag);
-
         SyncProgress progress = new SyncProgress();
         DataSyncService.TableSyncResult seed =
-                keylessService.syncTable(source, target, table, timestamp, progress, ctx);
+                service.syncTable(source, target, table, timestamp, progress, ctx);
         assertThat(seed.isSuccess()).isTrue();
         assertThat(count("NOTES")).isEqualTo(2);
+        // The keyless seed must store the watermark exactly: with the default 1s lag the
+        // old code rewound it, and the very next window plain-inserted row 'a' again.
+        String expectedWatermark = java.sql.Timestamp.valueOf("2026-01-01 00:00:00")
+                .toInstant().toString();
+        assertThat(seed.getNewCursorValue()).isEqualTo(expectedWatermark);
 
         progress.setInitialLoadDone(true);
         progress.setLastSyncValue(seed.getNewCursorValue());
@@ -217,9 +286,95 @@ class DataSyncServiceReplaySafetyTest {
         DataSyncService.TableSyncResult next =
                 service.syncTable(source, target, table, timestamp, progress, ctx);
         assertThat(next.isSuccess()).isTrue();
-        // The NULL row stays out of the keyless window instead of being inserted again;
-        // only the genuinely new row reaches the target.
+        // The NULL row stays out of the keyless window and the lag no longer replays 'a';
+        // before the fix this was 4 (and grew by one more every cycle).
         assertThat(count("NOTES")).isEqualTo(3);
+    }
+
+    @Test
+    void aTimeCursorColumnSyncsIncrementallyAcrossCycles() throws SQLException {
+        // P0-4: 高水位线对 TIME 列错误地走 getTimestamp，存成 ISO instant，解析端只认
+        // HH:mm:ss —— 每轮都报 "Unparseable high-watermark"，TIME 游标表永远同步不了。
+        CursorStrategy timeCursor =
+                CursorStrategy.timestamp("SLOT", Types.TIME, "explicit time cursor");
+
+        exec(source, "CREATE TABLE SHIFTS (ID BIGINT PRIMARY KEY, SLOT TIME)");
+        exec(target, "CREATE TABLE SHIFTS (ID BIGINT PRIMARY KEY, SLOT TIME)");
+        exec(source, "INSERT INTO SHIFTS VALUES (1, TIME '08:00:00')");
+
+        TableMeta table = new TableMeta();
+        table.setName("SHIFTS");
+        table.setPrimaryKeys(List.of("ID"));
+
+        SyncProgress progress = new SyncProgress();
+        DataSyncService.TableSyncResult seed =
+                service.syncTable(source, target, table, timeCursor, progress, ctx);
+        assertThat(seed.isSuccess())
+                .as("TIME cursor seed failed: %s", seed.getError()).isTrue();
+        assertThat(seed.getNewCursorValue()).isEqualTo("08:00:00");
+
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(seed.getNewCursorValue());
+        exec(source, "INSERT INTO SHIFTS VALUES (2, TIME '09:30:00')");
+
+        DataSyncService.TableSyncResult next =
+                service.syncTable(source, target, table, timeCursor, progress, ctx);
+        assertThat(next.isSuccess())
+                .as("TIME cursor incremental failed: %s", next.getError()).isTrue();
+        assertThat(count("SHIFTS")).isEqualTo(2);
+    }
+
+    @Test
+    void aDateCursorColumnKeepsWallDateAcrossCycles() throws SQLException {
+        // P0-3 的 DATE 变体：旧实现把日期编成 UTC 零点 instant，再经时区解码可能错一天。
+        CursorStrategy dateCursor =
+                CursorStrategy.timestamp("EVENT_DAY", Types.DATE, "explicit date cursor");
+
+        exec(source, "CREATE TABLE EVENTS (ID BIGINT PRIMARY KEY, EVENT_DAY DATE)");
+        exec(target, "CREATE TABLE EVENTS (ID BIGINT PRIMARY KEY, EVENT_DAY DATE)");
+        exec(source, "INSERT INTO EVENTS VALUES (1, DATE '2026-01-01')");
+
+        TableMeta table = new TableMeta();
+        table.setName("EVENTS");
+        table.setPrimaryKeys(List.of("ID"));
+
+        SyncProgress progress = new SyncProgress();
+        DataSyncService.TableSyncResult seed =
+                service.syncTable(source, target, table, dateCursor, progress, ctx);
+        assertThat(seed.isSuccess()).as("DATE cursor seed failed: %s", seed.getError()).isTrue();
+        assertThat(seed.getNewCursorValue()).isEqualTo("2026-01-01");
+
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(seed.getNewCursorValue());
+        exec(source, "INSERT INTO EVENTS VALUES (2, DATE '2026-02-01')");
+
+        DataSyncService.TableSyncResult next =
+                service.syncTable(source, target, table, dateCursor, progress, ctx);
+        assertThat(next.isSuccess()).isTrue();
+        assertThat(count("EVENTS")).isEqualTo(2);
+    }
+
+    @Test
+    void theSafetyLagStillRewindsAKeyedTableWatermark() throws SQLException {
+        // 对照用例：有主键时回退必须保留，迟到事务保护不能丢。
+        CursorStrategy timestamp =
+                CursorStrategy.timestamp("UPDATED_AT", Types.TIMESTAMP, "update time");
+
+        exec(source, "CREATE TABLE AUDIT (ID BIGINT PRIMARY KEY, UPDATED_AT TIMESTAMP)");
+        exec(target, "CREATE TABLE AUDIT (ID BIGINT PRIMARY KEY, UPDATED_AT TIMESTAMP)");
+        exec(source, "INSERT INTO AUDIT VALUES (1, TIMESTAMP '2026-01-01 00:00:00')");
+
+        TableMeta table = new TableMeta();
+        table.setName("AUDIT");
+        table.setPrimaryKeys(List.of("ID"));
+
+        DataSyncService.TableSyncResult seed =
+                service.syncTable(source, target, table, timestamp, new SyncProgress(), ctx);
+        assertThat(seed.isSuccess()).isTrue();
+        // 默认 lag 1000ms：存储游标比水位线早一秒（用与生产一致的时区换算推导期望值）。
+        String expected = java.sql.Timestamp.valueOf("2026-01-01 00:00:00")
+                .toInstant().minusMillis(1000).toString();
+        assertThat(seed.getNewCursorValue()).isEqualTo(expected);
     }
 
     @Test

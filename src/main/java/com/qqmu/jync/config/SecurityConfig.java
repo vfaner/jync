@@ -13,11 +13,20 @@ import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.authentication.SavedRequestAwareAuthenticationSuccessHandler;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.util.matcher.AnyRequestMatcher;
+
+import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.auth.LoginAttemptService;
+import com.qqmu.jync.service.auth.LoginLockoutFilter;
+import com.qqmu.jync.util.ClientIpResolver;
 
 /**
  * Login, roles, and CSRF.
@@ -50,7 +59,10 @@ public class SecurityConfig {
             "/databases/new", "/databases/*/edit",
             "/projects/new", "/projects/*/edit",
             "/ai/new", "/ai/*/edit",
-            "/api/databases/discover-drivers"
+            "/api/databases/discover-drivers",
+            // The audit trail is about what admins did; a viewer has no use for it, and
+            // showing one would advertise that their own actions are never in it.
+            "/audits"
     };
 
     @Bean
@@ -58,9 +70,47 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * Declared here rather than {@code @Service}: in a {@code @WebMvcTest} slice, generic
+     * {@code @Service} beans are not scanned, but this configuration is — and the lockout
+     * filter in the chain below needs the service present in every servlet context.
+     */
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public LoginAttemptService loginAttemptService() {
+        return new LoginAttemptService();
+    }
+
+    /**
+     * Declared here rather than {@code @Component}: a {@code @WebMvcTest} slice scans Filter
+     * beans but not this configuration, so a component-scanned filter was instantiated there
+     * without its service and failed the whole slice. Security is off in such tests — the
+     * default auto-config chain is used — so the filter need not exist there at all.
+     */
+    @Bean
+    public LoginLockoutFilter loginLockoutFilter(LoginAttemptService attemptService) {
+        return new LoginLockoutFilter(attemptService);
+    }
+
+    /**
+     * Keeps the lockout filter out of Boot's automatic servlet-chain registration. It is added to
+     * the Spring Security chain manually below; registered twice it would run twice per request.
+     */
+    @Bean
+    public FilterRegistrationBean<LoginLockoutFilter> loginLockoutFilterRegistration(
+            LoginLockoutFilter filter) {
+        FilterRegistrationBean<LoginLockoutFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http,
+                                           LoginAttemptService attemptService,
+                                           LoginLockoutFilter loginLockoutFilter,
+                                           AdminAuditService auditService) throws Exception {
         http
+                .addFilterBefore(loginLockoutFilter, UsernamePasswordAuthenticationFilter.class)
+
                 .authorizeHttpRequests(reg -> reg
                         .antMatchers(PUBLIC).permitAll()
 
@@ -80,8 +130,8 @@ public class SecurityConfig {
                 .formLogin(form -> form
                         .loginPage("/login")
                         .loginProcessingUrl("/login")
-                        .defaultSuccessUrl("/", false)
-                        .failureUrl("/login?error")
+                        .successHandler(authenticationSuccessHandler(attemptService, auditService))
+                        .failureHandler(authenticationFailureHandler(attemptService, auditService))
                         .permitAll())
 
                 .logout(out -> out
@@ -107,6 +157,53 @@ public class SecurityConfig {
         // field into every form that uses th:action -- which is all 14 of them -- and layout.html
         // publishes the token in a <meta> tag for postJson() in app.js.
         return http.build();
+    }
+
+    /**
+     * Clears the failed-attempt counter, then performs the default saved-request redirect so that
+     * a deep link is not lost on login.
+     */
+    private org.springframework.security.web.authentication.AuthenticationSuccessHandler
+            authenticationSuccessHandler(LoginAttemptService attemptService,
+                                         AdminAuditService auditService) {
+        SavedRequestAwareAuthenticationSuccessHandler delegate =
+                new SavedRequestAwareAuthenticationSuccessHandler();
+        delegate.setDefaultTargetUrl("/");
+        return (request, response, authentication) -> {
+            attemptService.recordSuccess(attemptKey(request));
+            // Audit before the redirect: a failure here must not lose the sign-in record,
+            // and the delegate commits the response.
+            auditService.record(AuditAction.LOGIN,
+                    "Signed in from " + ClientIpResolver.resolve(request),
+                    authentication.getName());
+            delegate.onAuthenticationSuccess(request, response, authentication);
+        };
+    }
+
+    /**
+     * Records the failed password; the fifth consecutive failure lands the user on the lockout
+     * message instead of the ordinary error message.
+     */
+    private org.springframework.security.web.authentication.AuthenticationFailureHandler
+            authenticationFailureHandler(LoginAttemptService attemptService,
+                                         AdminAuditService auditService) {
+        return (request, response, exception) -> {
+            String key = attemptKey(request);
+            attemptService.recordFailure(key);
+            // The typed-in username is attacker-controlled; the audit service sanitizes and
+            // caps it before it becomes a row.
+            auditService.record(AuditAction.LOGIN_FAILED,
+                    exception.getClass().getSimpleName() + " from "
+                            + ClientIpResolver.resolve(request),
+                    request.getParameter("username"));
+            String target = attemptService.isBlocked(key) ? "/login?locked" : "/login?error";
+            response.sendRedirect(request.getContextPath() + target);
+        };
+    }
+
+    private static String attemptKey(HttpServletRequest request) {
+        return LoginAttemptService.key(
+                request.getParameter("username"), ClientIpResolver.resolve(request));
     }
 
     /**

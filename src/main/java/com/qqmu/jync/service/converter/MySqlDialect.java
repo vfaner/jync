@@ -118,6 +118,12 @@ public class MySqlDialect extends AbstractSqlDialect {
     }
 
     @Override
+    protected String jsonType() {
+        // Native JSON: PG json/jsonb text is valid JSON input.
+        return "JSON";
+    }
+
+    @Override
     protected int maxVarcharLength() {
         // The real ceiling depends on row size and charset; 16383 is safe for utf8mb4.
         return 16383;

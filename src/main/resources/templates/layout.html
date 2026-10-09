@@ -70,6 +70,12 @@
             <a th:href="@{/change-logs}" th:classappend="${activeNav == 'change-logs'} ? 'active' : ''">
                 <svg class="ico"><use href="#clock-history"/></svg><span th:text="#{nav.changeLogs}">Change Log</span>
             </a>
+            <!--/* 管理审计只对管理员可见：/audits 在 SecurityConfig 里也是 ADMIN-only，
+                   给访客渲染一个必然 403 的链接没有意义。 */-->
+            <a th:if="${isAdmin}" th:href="@{/audits}"
+               th:classappend="${activeNav == 'audits'} ? 'active' : ''">
+                <svg class="ico"><use href="#shield-check"/></svg><span th:text="#{nav.audits}">Admin audit</span>
+            </a>
             <a th:href="@{/settings}" th:classappend="${activeNav == 'settings'} ? 'active' : ''">
                 <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">System info</span>
             </a>
@@ -174,6 +180,40 @@
     </script>
 </th:block>
 
+<!--/* 连接口令仍在用随 jar 公开的默认密钥加密时的警告。拿到数据文件和这个
+       公开密钥就能解开所有连接口令；但它又不能在界面上「一键更换」——
+       改密钥必须在首次使用前通过配置完成（旧密文没有重加密迁移），
+       所以这条只告知、不挂操作按钮。关闭语义与口令横幅一致：只本次会话。 */-->
+<th:block th:if="${usingDefaultCryptoKey}">
+    <div class="default-key-banner" id="default-key-banner">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <span th:text="#{warn.defaultCryptoKey}">Connection passwords are encrypted with the default key.</span>
+        <button type="button" class="banner-close" id="default-key-banner-close"
+                th:title="#{common.close}" th:aria-label="#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+    </div>
+    <script>
+        (function () {
+            var el = document.getElementById('default-key-banner');
+            if (!el) return;
+            // 已在本次会话关过：直接移除（隐私模式读不到就照常提示）。
+            try {
+                if (sessionStorage.getItem('jync-key-banner-dismissed') === '1') {
+                    el.remove();
+                    return;
+                }
+            } catch (e) { /* ignore */ }
+            document.getElementById('default-key-banner-close')
+                .addEventListener('click', function () {
+                    try { sessionStorage.setItem('jync-key-banner-dismissed', '1'); }
+                    catch (e) { /* ignore */ }
+                    el.remove();
+                });
+        })();
+    </script>
+</th:block>
+
 <div id="toasts"></div>
 
 <main class="shell">
@@ -184,14 +224,27 @@
         <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
     </div>
     <!--/* 服务端抛出的错误可能是「i18n key:附加上下文」（如被占用的项目名列表），
-           msgOrNull 对整串取不到时，退而解析冒号前的 key 前缀，再把上下文拼回。 */-->
-    <div th:if="${error}" class="alert alert-danger">
+           msgOrNull 对整串取不到时，退而解析冒号前的 key 前缀，再把上下文拼回。
+           注意：Thymeleaf 的 #strings.substringBefore 在「找不到分隔符」时返回 null
+           （与 commons-lang 不同），而 msgOrNull(null) 会直接抛异常导致整页渲染失败，
+           所以这里先用 indexOf 判位再截取。 */-->
+    <div th:if="${error != null}" class="alert alert-danger">
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
         <div class="alert-body"
-             th:with="head=${#messages.msgOrNull(#strings.substringBefore(error, ':'))},
-                      suffix=${#strings.substringAfter(error, ':')}"
+             th:with="err=${error.toString()},
+                      colon=${#strings.indexOf(err, ':')},
+                      headKey=${colon >= 0 ? err.substring(0, colon) : err},
+                      head=${#messages.msgOrNull(headKey)},
+                      suffix=${colon >= 0 ? err.substring(colon + 1) : ''}"
              th:text="${head != null} ? ${head + (#strings.isEmpty(suffix) ? '' : ' ' + suffix)}
-                                      : ${#messages.msgOrNull(error) ?: error}">Error</div>
+                                      : ${#messages.msgOrNull(err) ?: err}">Error</div>
+        <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
+    </div>
+    <!--/* view 账号 POST 写操作被拒：AccessDeniedHandler 重定向到 /?denied，必须给可见反馈。
+           id 供测试与脚本区分该横幅（error.forbidden 文案也存在于内联 JS 消息表里）。 */-->
+    <div id="denied-alert" th:if="${param.denied}" class="alert alert-danger">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <div class="alert-body" th:text="#{error.forbidden}">Forbidden</div>
         <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
     </div>
 
@@ -317,6 +370,7 @@
         'msg.sync.completed': /*[[#{msg.sync.completed}]]*/ '',
         'msg.sync.completed.errors': /*[[#{msg.sync.completed.errors}]]*/ '',
         'msg.sync.rerun.queued': /*[[#{msg.sync.rerun.queued}]]*/ '',
+        'msg.sync.skipped': /*[[#{msg.sync.skipped}]]*/ '',
         'msg.progress.reset': /*[[#{msg.progress.reset}]]*/ '',
         'msg.no.drivers.declared': /*[[#{msg.no.drivers.declared}]]*/ '',
         'db.testSuccess': /*[[#{db.testSuccess}]]*/ '',
@@ -359,7 +413,8 @@
         'error.project.endpoints.required': /*[[#{error.project.endpoints.required}]]*/ '',
         'error.project.stop.before.reset': /*[[#{error.project.stop.before.reset}]]*/ '',
         'error.forbidden': /*[[#{error.forbidden}]]*/ '',
-        'error.sessionExpired': /*[[#{error.sessionExpired}]]*/ ''
+        'error.sessionExpired': /*[[#{error.sessionExpired}]]*/ '',
+        'error.network': /*[[#{error.network}]]*/ ''
     };
 </script>
 <script th:src="@{/js/theme.js}"></script>

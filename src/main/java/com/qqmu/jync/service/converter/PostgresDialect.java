@@ -241,8 +241,10 @@ public class PostgresDialect extends AbstractSqlDialect {
 
     @Override
     public String getTruncateSql(String schema, String table) {
-        // CASCADE so a referenced table can still be truncated before a full reload.
-        return "TRUNCATE TABLE " + qualify(schema, table) + " CASCADE";
+        // No CASCADE: truncating one selected table must not silently wipe OTHER tables that
+        // reference it (possibly tables this project never selected). A referenced table
+        // makes TRUNCATE fail, and DataSyncService falls back to DELETE FROM.
+        return "TRUNCATE TABLE " + qualify(schema, table);
     }
 
     @Override

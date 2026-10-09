@@ -157,6 +157,59 @@ class GenericMetadataReaderTest {
         org.mockito.Mockito.verify(st, org.mockito.Mockito.times(1)).executeQuery(anyString());
     }
 
+    @Test
+    void businessTablesWhoseNamesStartWithSysOrPgAreNotSystemObjects() {
+        // RuoYi 等框架的业务表普遍叫 sys_user / sys_role / sys_menu；PG_ 前缀同理。
+        // 旧逻辑按表名前缀过滤，既漏同步，又在 allowDrop 下把目标端这些表 DROP 掉。
+        assertThat(reader.isSystemObject(null, "ruoyi", "sys_user")).isFalse();
+        assertThat(reader.isSystemObject(null, "ruoyi", "sys_role")).isFalse();
+        assertThat(reader.isSystemObject(null, "ruoyi", "sys_menu")).isFalse();
+        assertThat(reader.isSystemObject(null, "public", "pg_jobs")).isFalse();
+        assertThat(reader.isSystemObject(null, "app", "system_config")).isFalse();
+    }
+
+    @Test
+    void engineOwnedSchemasAndCatalogsAreSystemObjects() {
+        // Oracle SYS/SYSTEM owner, SQL Server sys schema, PG pg_catalog, 标准 information_schema.
+        assertThat(reader.isSystemObject(null, "SYS", "USER$")).isTrue();
+        assertThat(reader.isSystemObject(null, "sys", "databases")).isTrue();
+        assertThat(reader.isSystemObject(null, "pg_catalog", "pg_class")).isTrue();
+        assertThat(reader.isSystemObject(null, "information_schema", "tables")).isTrue();
+        assertThat(reader.isSystemObject(null, "pg_temp_3", "x")).isTrue();
+        assertThat(reader.isSystemObject(null, "pg_toast", "x")).isTrue();
+        assertThat(reader.isSystemObject(null, "SYSIBM", "SYSTABLES")).isTrue();
+        // MySQL-family: the engine owns the catalog, schema is reported null.
+        assertThat(reader.isSystemObject("mysql", null, "user")).isTrue();
+        assertThat(reader.isSystemObject("information_schema", null, "tables")).isTrue();
+        assertThat(reader.isSystemObject(null, "APEX_030200", "wwv_flow_users")).isTrue();
+    }
+
+    @Test
+    void recycleBinAndEngineGeneratedNamesAreSystemObjectsWhereverTheyLive() {
+        // 这些是引擎在用户 schema 内自己生成的对象，只能按名字识别。
+        assertThat(reader.isSystemObject(null, "APP", "BIN$abc==$0")).isTrue();
+        assertThat(reader.isSystemObject(null, "APP", "MLOG$_T1")).isTrue();
+        assertThat(reader.isSystemObject(null, "main", "sqlite_sequence")).isTrue();
+    }
+
+    @Test
+    void listTableNamesKeepsRuoYiTablesAndDropsEngineSchemas() throws Exception {
+        Connection conn = mock(Connection.class);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(conn.getMetaData()).thenReturn(md);
+        when(conn.getCatalog()).thenReturn("ruoyi");
+
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.next()).thenReturn(true, true, true, false);
+        when(rs.getString("TABLE_NAME")).thenReturn("sys_user", "sys_role", "biz_order");
+        when(rs.getString("TABLE_CAT")).thenReturn(null, null, null);
+        when(rs.getString("TABLE_SCHEM")).thenReturn("ruoyi", "ruoyi", "ruoyi");
+        when(md.getTables(any(), any(), anyString(), any(String[].class))).thenReturn(rs);
+
+        assertThat(reader.listTableNames(conn, "ruoyi"))
+                .containsExactly("biz_order", "sys_role", "sys_user");
+    }
+
     private ResultSet emptyResultSet() throws Exception {
         ResultSet rs = mock(ResultSet.class);
         when(rs.next()).thenReturn(false);

@@ -8,7 +8,6 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -143,8 +142,11 @@ public final class JdbcRowMapper {
             return ((Timestamp) value).toInstant().toString();
         }
         if (value instanceof java.sql.Date) {
-            return ((java.sql.Date) value).toLocalDate().atStartOfDay()
-                    .toInstant(ZoneOffset.UTC).toString();
+            // ISO date text, not an instant: a DATE column has no time of day, so encoding
+            // midnight UTC and decoding the instant through the target's timezone could move
+            // the wall date a day. The string round-trips through Date.valueOf with no
+            // timezone anywhere.
+            return ((java.sql.Date) value).toLocalDate().toString();
         }
         if (value instanceof java.sql.Time) {
             // "HH:mm:ss" — no date part to disambiguate; this is what cursorFromString
@@ -157,13 +159,19 @@ public final class JdbcRowMapper {
             return java.sql.Time.valueOf((java.time.LocalTime) value).toString();
         }
         if (value instanceof java.time.LocalDate) {
-            return ((java.time.LocalDate) value).atStartOfDay().toInstant(ZoneOffset.UTC).toString();
+            return value.toString();
         }
         if (value instanceof Instant) {
             return value.toString();
         }
         if (value instanceof LocalDateTime) {
-            return ((LocalDateTime) value).toInstant(ZoneOffset.UTC).toString();
+            // Keep the wall-clock text itself. A LocalDateTime is explicitly zone-less: the
+            // old toInstant(UTC) invented a UTC zone on write, but on bind the Timestamp went
+            // back through the driver in its own session/JVM zone, so the window edge shifted
+            // by that offset and rows fell out of the window. Normalize through
+            // Timestamp.valueOf: LocalDateTime.toString() omits a zero seconds component,
+            // which the parser would then reject.
+            return Timestamp.valueOf((LocalDateTime) value).toString();
         }
         return String.valueOf(value);
     }
@@ -188,12 +196,30 @@ public final class JdbcRowMapper {
                     return null;
                 }
             }
+            if (jdbcType == Types.DATE) {
+                // DATE columns are ISO date text ("2026-01-01").
+                try {
+                    return java.sql.Date.valueOf(stored.trim());
+                } catch (Exception ignored) {
+                    // Tolerate a pre-fix cursor written as a midnight-UTC instant; decode it
+                    // in UTC, symmetric with how the old writer encoded it.
+                    try {
+                        return java.sql.Date.valueOf(Instant.parse(stored.trim())
+                                .atZone(java.time.ZoneOffset.UTC).toLocalDate());
+                    } catch (Exception e) {
+                        log.warn("Unparseable stored date cursor '{}'; treating as absent", stored);
+                        return null;
+                    }
+                }
+            }
             try {
                 return Timestamp.from(Instant.parse(stored));
             } catch (Exception e) {
-                // Tolerate a value written as a plain SQL timestamp by an older version.
+                // Tolerate wall-clock forms: a plain SQL timestamp ("yyyy-MM-dd HH:mm:ss")
+                // written by an older version, or ISO LocalDateTime text ("...T...").
                 try {
-                    return Timestamp.valueOf(stored);
+                    String spaced = stored.trim().replace('T', ' ');
+                    return Timestamp.valueOf(spaced);
                 } catch (Exception ignored) {
                     log.warn("Unparseable stored cursor '{}'; treating as absent", stored);
                     return null;

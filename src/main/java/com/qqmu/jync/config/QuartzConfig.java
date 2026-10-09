@@ -29,11 +29,19 @@ public class QuartzConfig {
     public SchedulerFactoryBean schedulerFactoryBean(SpringBeanJobFactory jobFactory) {
         SchedulerFactoryBean scheduler = new SchedulerFactoryBean();
         scheduler.setJobFactory(jobFactory);
-        // Let in-flight cycles finish rather than being cut off mid-transaction on shutdown.
-        scheduler.setWaitForJobsToCompleteOnShutdown(true);
+        // Shutdown does not block here: an unbounded wait let a wedged cycle hang process
+        // exit forever. BoundedQuartzShutdown (a context-closed listener) gives in-flight
+        // cycles a configured grace period before this non-blocking shutdown runs.
+        scheduler.setWaitForJobsToCompleteOnShutdown(false);
         scheduler.setOverwriteExistingJobs(true);
         scheduler.setAutoStartup(true);
         return scheduler;
+    }
+
+    @Bean
+    public BoundedQuartzShutdown boundedQuartzShutdown(org.quartz.Scheduler scheduler,
+                                                       SyncProperties properties) {
+        return new BoundedQuartzShutdown(scheduler, properties);
     }
 
     /** Applies Spring autowiring to every Quartz-created job instance. */

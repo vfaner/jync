@@ -269,6 +269,14 @@ class AiProviderServiceTest {
     }
 
     @Test
+    void aBaseUrlAtCloudMetadataIsRejected() {
+        AiProvider p = newProvider("p");
+        p.setBaseUrl("http://169.254.169.254/latest/meta-data");
+        assertThatThrownBy(() -> service.save(p, "k"))
+                .hasMessage("error.ai.baseUrl.blocked");
+    }
+
+    @Test
     void aDuplicateNameIsRejectedButRenamingItselfIsNot() {
         service.save(newProvider("taken"), "k");
         assertThatThrownBy(() -> service.save(newProvider("taken"), "k"))

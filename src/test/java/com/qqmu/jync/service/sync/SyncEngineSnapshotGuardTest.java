@@ -97,7 +97,15 @@ class SyncEngineSnapshotGuardTest {
         orders.setName("ORDERS");
         ColumnMeta id = new ColumnMeta();
         id.setName("ID");
+        id.setJdbcType(Types.BIGINT);
         orders.setColumns(List.of(id));
+
+        // Physical target: ensureTargetTableExists now verifies column shapes against the real
+        // target, so a mock listing saying "ORDERS exists" needs an actual compatible table.
+        try (java.sql.Statement st = targetConn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS ORDERS");
+            st.execute("CREATE TABLE ORDERS (ID BIGINT)");
+        }
         meta = new DatabaseMeta();
         meta.setTables(List.of(orders));
 
@@ -312,6 +320,95 @@ class SyncEngineSnapshotGuardTest {
         verify(structureSync).apply(any(),
                 argThat(e -> e != null && e.getObjectType() == ObjectType.TABLE), any());
         verify(dataSync).syncTable(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aListedTableMissingASourceColumnIsBlockedBeforeDataMoves() throws Exception {
+        // A pre-existing table of the right name but wrong shape: source gained NAME,
+        // the manually-created target never had it.
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
+        orders.setColumns(List.of(orders.getColumns().get(0), name));
+
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
+
+        SyncResult result = engine.runCycle(ctx(false, true), () -> true);
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(dataSync, never()).syncTable(any(), any(), any(), any(), any(), any());
+        verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.TABLE), eq("ORDERS"),
+                eq(ChangeType.ERROR), contains("missing column NAME"), eq(false), eq(0L));
+    }
+
+    @Test
+    void aListedTableWithAnIncompatibleColumnTypeIsBlockedBeforeDataMoves() throws Exception {
+        ColumnMeta amount = new ColumnMeta();
+        amount.setName("AMOUNT");
+        amount.setJdbcType(Types.VARCHAR);
+        orders.setColumns(List.of(orders.getColumns().get(0), amount));
+        try (java.sql.Statement st = targetConn.createStatement()) {
+            st.execute("ALTER TABLE ORDERS ADD COLUMN AMOUNT INT");
+        }
+
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
+
+        SyncResult result = engine.runCycle(ctx(false, true), () -> true);
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(dataSync, never()).syncTable(any(), any(), any(), any(), any(), any());
+        verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.TABLE), eq("ORDERS"),
+                eq(ChangeType.ERROR), contains("incompatible type"), eq(false), eq(0L));
+    }
+
+    @Test
+    void aTableSkippedByDataSyncIsNamedInTheResultWithoutFailingIt() throws Exception {
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        com.qqmu.jync.service.sync.DataSyncService.TableSyncResult skipped =
+                mock(com.qqmu.jync.service.sync.DataSyncService.TableSyncResult.class);
+        when(skipped.isSkipped()).thenReturn(true);
+        when(skipped.getSkipReason()).thenReturn("No incremental cursor column available");
+        when(dataSync.syncTable(any(), any(), any(), any(), any(), any())).thenReturn(skipped);
+
+        SyncResult result = engine.runCycle(ctx(false, true), () -> true);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getSkippedTables())
+                .extracting(SyncResult.SkippedTable::table, SyncResult.SkippedTable::reason)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(
+                        "ORDERS", "No incremental cursor column available"));
+        // A skipped table is not processed, and the cursor must not be advanced.
+        verify(stateWriter, never()).advanceCursor(any(), any(), any());
+    }
+
+    // --- name-mapping collision guard ----------------------------------------------------
+
+    @Test
+    void aMappingCollisionAgainstRealSourceTablesAbortsBeforeAnyWrite() throws Exception {
+        // Source also holds ARCHIVE_ORDERS, mapped onto ORDERS: both tables would write the
+        // same target. The save-time check cannot see this (the unmapped source exists only
+        // in the live database), so the cycle must catch it after metadata is read.
+        TableMeta archive = new TableMeta();
+        archive.setName("ARCHIVE_ORDERS");
+        archive.setColumns(orders.getColumns());
+        meta.setTables(List.of(orders, archive));
+
+        SyncContext ctx = ctx(false, true);
+        ctx.getConfig().getTableNameMapping().put("ARCHIVE_ORDERS", "ORDERS");
+
+        SyncResult result = engine.runCycle(ctx, () -> true);
+
+        assertThat(result.isSuccess()).isFalse();
+        // Nothing may run: no structural events, no data movement.
+        verify(changeDetector, never()).detect(anyLong(), any(), any());
+        verify(dataSync, never()).syncTable(any(), any(), any(), any(), any(), any());
+        verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.TABLE), eq("demo"),
+                eq(ChangeType.ERROR), contains("same target table"), eq(false), eq(0L));
     }
 
     // --- lock lease ----------------------------------------------------------------------

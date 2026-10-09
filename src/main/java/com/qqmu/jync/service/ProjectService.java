@@ -3,7 +3,6 @@ package com.qqmu.jync.service;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -11,13 +10,19 @@ import java.util.Optional;
 import org.quartz.CronExpression;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.model.ChangeLog;
+import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.repository.ChangeLogRepository;
@@ -56,6 +61,7 @@ public class ProjectService {
     private final SyncTaskStore taskStore;
     private final SyncEngine syncEngine;
     private final SyncLockService lockService;
+    private final AdminAuditService auditService;
 
     public ProjectService(ProjectRepository projectRepository,
                           DatabaseConfigRepository databaseConfigRepository,
@@ -69,7 +75,8 @@ public class ProjectService {
                           SyncTaskRunner taskRunner,
                           SyncTaskStore taskStore,
                           SyncEngine syncEngine,
-                          SyncLockService lockService) {
+                          SyncLockService lockService,
+                          AdminAuditService auditService) {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
         this.progressRepository = progressRepository;
@@ -83,6 +90,7 @@ public class ProjectService {
         this.taskStore = taskStore;
         this.syncEngine = syncEngine;
         this.lockService = lockService;
+        this.auditService = auditService;
     }
 
     public List<Project> findAll() {
@@ -206,6 +214,10 @@ public class ProjectService {
         }
         Project saved = projectRepository.save(project);
         taskStore.ensureTask(saved);
+        // Inside the same transaction: the audit row commits with the change it describes
+        // and rolls back with it, so the trail never claims a save that did not happen.
+        auditService.record(AuditAction.PROJECT_SAVE,
+                (isNew ? "Created" : "Updated") + " project '" + saved.getName() + "'");
 
         // Keep the schedule consistent with the flag on every save, not just on start/stop.
         afterCommit(saved.getId(), "reschedule", () -> scheduler.reschedule(saved));
@@ -223,6 +235,15 @@ public class ProjectService {
         // every other setting the same form submitted.
         if (cron != null && !cron.isBlank() && !CronExpression.isValidExpression(cron.trim())) {
             throw new IllegalArgumentException("error.project.cron.invalid");
+        }
+        // Refuse a mapping that points two source tables at one target before it is persisted:
+        // running it would interleave rows and let one source's truncate wipe the other's.
+        List<String> mappingConflicts = config.getTables().isEmpty()
+                ? config.tableMappingConflicts(null)
+                : config.tableMappingConflicts(config.getTables());
+        if (!mappingConflicts.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "error.project.tablemapping.duplicate:" + mappingConflicts.get(0));
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         Project saved = projectRepository.save(project);
@@ -285,6 +306,50 @@ public class ProjectService {
     }
 
     /**
+     * Admin override: drops a project's sync lease whoever holds it.
+     *
+     * <p>Exists for the wedge TTL expiry already covers but slowly — a crashed or hung owner
+     * keeps its lease until it expires, and meanwhile start/sync-now/delete all refuse with
+     * "a cycle is still running". Forcing is safe in the same way expiry is: the holder
+     * notices its lost lease at the next renewal and aborts before further writes.
+     *
+     * <p>The action is audited in the change log with the previous holder, its lease expiry
+     * and the acting admin, because it can stop a cycle that was still alive.
+     *
+     * @throws IllegalStateException when the project does not exist, or no lease is held
+     *                               (nothing to force — the UI should not offer the button)
+     */
+    @Transactional
+    public void forceUnlock(Long projectId) {
+        Project project = require(projectId);
+        SyncTask task = taskStore.find(projectId).orElse(null);
+        String previousOwner = task == null ? null : task.getLockOwner();
+        if (previousOwner == null) {
+            throw new IllegalStateException("error.project.lock.not.held");
+        }
+        String previousExpiry = task.getLockExpiresAt() == null ? "unknown"
+                : task.getLockExpiresAt().toString();
+        boolean cleared = lockService.forceUnlock(projectId);
+        String actor = currentUsername();
+        String detail = "Sync lock force-released by " + actor
+                + " (previous holder " + previousOwner + ", lease until " + previousExpiry + ")";
+        ChangeLog entry = ChangeLog.of(projectId, ObjectType.PROJECT, project.getName(),
+                ChangeType.INFO, detail);
+        entry.setSuccess(cleared);
+        changeLogRepository.save(entry);
+        // The change log for this project can itself be cleared later; the admin audit
+        // trail is append-only, so the force-unlock record outlives it.
+        auditService.record(AuditAction.PROJECT_FORCE_UNLOCK, detail);
+        log.warn("Project '{}': {}", project.getName(), detail);
+    }
+
+    /** The signed-in username for audit entries, or "unknown" outside a request context. */
+    private static String currentUsername() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth == null || !auth.isAuthenticated() ? "unknown" : auth.getName();
+    }
+
+    /**
      * Deletes a project together with all of its sync state.
      *
      * <p>Takes the project's sync lock first: a cycle still in flight would otherwise
@@ -313,6 +378,8 @@ public class ProjectService {
             snapshotService.deleteAllForProject(projectId);
             changeLogRepository.deleteByProjectId(projectId);
             projectRepository.deleteById(projectId);
+            auditService.record(AuditAction.PROJECT_DELETE,
+                    "Deleted project '" + project.getName() + "' and all its sync state");
         }
         log.info("Deleted project '{}' and all its sync state", project.getName());
     }
@@ -383,17 +450,6 @@ public class ProjectService {
                     tableName, project.getName(), e.toString());
             throw new IllegalStateException("error.source.columns.read.failed", e);
         }
-    }
-
-    /** Selects every source object, matching the default "all tables" behaviour. */
-    public SyncConfig selectAll(Long projectId) {
-        SourceObjects objects = listSourceObjects(projectId);
-        Project project = require(projectId);
-        SyncConfig config = loadConfig(project);
-        config.setTables(new LinkedHashSet<>(objects.tables));
-        config.setViews(new LinkedHashSet<>(objects.views));
-        config.setProcedures(new LinkedHashSet<>(objects.procedures));
-        return config;
     }
 
     public Optional<SyncTask> findTask(Long projectId) {

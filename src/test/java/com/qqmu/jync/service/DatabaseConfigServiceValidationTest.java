@@ -3,6 +3,8 @@ package com.qqmu.jync.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -17,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -40,13 +43,14 @@ class DatabaseConfigServiceValidationTest {
     @Mock private DataSourceManager dataSourceManager;
     @Mock private ConnectionTestService connectionTestService;
     @Mock private CryptoUtil cryptoUtil;
+    @Mock private AdminAuditService auditService;
 
     private DatabaseConfigService service;
 
     @BeforeEach
     void setUp() {
         service = new DatabaseConfigService(repository, projectRepository,
-                dataSourceManager, connectionTestService, cryptoUtil);
+                dataSourceManager, connectionTestService, cryptoUtil, auditService);
     }
 
     private DatabaseConfig preset(DatabaseType type, String jarPath) {
@@ -206,7 +210,9 @@ class DatabaseConfigServiceValidationTest {
 
     @Test
     void deletingAMissingConnectionIsRejectedWithAnI18nKey() {
-        when(repository.existsById(42L)).thenReturn(false);
+        // findById rather than existsById: delete() loads the row so the audit entry can
+        // name the connection it destroyed.
+        when(repository.findById(42L)).thenReturn(Optional.empty());
 
         // deleteById would throw EmptyResultDataAccessException, which a double-clicked or
         // two-tab delete would surface as a 500 instead of a plain "already gone" message.
@@ -214,5 +220,19 @@ class DatabaseConfigServiceValidationTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.connection.missing");
         verify(repository, never()).deleteById(any());
+    }
+
+    @Test
+    void deletingAConnectionIsAuditedByName() {
+        DatabaseConfig existing = preset(DatabaseType.MYSQL, null);
+        existing.setId(7L);
+        when(repository.findById(7L)).thenReturn(Optional.of(existing));
+        when(projectRepository.findBySourceDbIdOrTargetDbId(7L, 7L)).thenReturn(List.of());
+
+        service.delete(7L);
+
+        verify(repository).deleteById(7L);
+        // The audit trail is the only place left that names a destroyed connection.
+        verify(auditService).record(eq(AuditAction.DB_DELETE), contains("conn-MYSQL"));
     }
 }

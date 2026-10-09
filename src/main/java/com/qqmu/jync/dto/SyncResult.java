@@ -27,9 +27,20 @@ public class SyncResult {
 
     private List<String> errors = new ArrayList<>();
 
+    /** Tables that moved no rows this cycle and why; a skip is not a failure. */
+    private List<SkippedTable> skippedTables = new ArrayList<>();
+
+    /** A table skipped by the engine with the reason, surfaced in the run summary. */
+    public record SkippedTable(String table, String reason) {
+    }
+
     public void addError(String message) {
         this.success = false;
         this.errors.add(message);
+    }
+
+    public void addSkipped(String table, String reason) {
+        this.skippedTables.add(new SkippedTable(table, reason));
     }
 
     public int totalRows() {
@@ -45,10 +56,15 @@ public class SyncResult {
             return "FAILED: " + String.join("; ", errors.subList(0, Math.min(3, errors.size())));
         }
         if (!hasChanges()) {
-            return "No changes";
+            return skippedTables.isEmpty() ? "No changes"
+                    : "No changes, skipped " + skippedTables.size() + " table(s)";
         }
-        return String.format("DDL=%d, rows +%d ~%d -%d, tables=%d, %dms",
+        String summary = String.format("DDL=%d, rows +%d ~%d -%d, tables=%d, %dms",
                 structureChanges, rowsInserted, rowsUpdated, rowsDeleted,
                 tablesProcessed, durationMs);
+        if (!skippedTables.isEmpty()) {
+            summary += ", skipped=" + skippedTables.size();
+        }
+        return summary;
     }
 }

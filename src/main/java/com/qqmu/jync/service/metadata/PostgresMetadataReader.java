@@ -39,12 +39,14 @@ public class PostgresMetadataReader extends GenericMetadataReader {
 
     @Override
     public String resolveDefaultSchema(Connection conn) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT current_schema()");
-             ResultSet rs = ps.executeQuery()) {
-            if (rs.next()) {
-                String schema = rs.getString(1);
-                if (schema != null && !schema.isBlank()) {
-                    return schema;
+        try (PreparedStatement ps = conn.prepareStatement("SELECT current_schema()")) {
+            MetadataTimeouts.apply(ps);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String schema = rs.getString(1);
+                    if (schema != null && !schema.isBlank()) {
+                        return schema;
+                    }
                 }
             }
         } catch (SQLException e) {
@@ -63,6 +65,7 @@ public class PostgresMetadataReader extends GenericMetadataReader {
                 + "JOIN pg_namespace n ON n.oid = c.relnamespace "
                 + "WHERE n.nspname = ? AND c.relname = ? AND c.relkind IN ('v','m')";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, viewName);
             try (ResultSet rs = ps.executeQuery()) {
@@ -86,6 +89,7 @@ public class PostgresMetadataReader extends GenericMetadataReader {
                 + "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
                 + "WHERE n.nspname = ? AND p.proname = ? LIMIT 1";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, procedureName);
             try (ResultSet rs = ps.executeQuery()) {
@@ -111,6 +115,7 @@ public class PostgresMetadataReader extends GenericMetadataReader {
                 + "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
                 + "WHERE n.nspname = ? AND p.proname = ? LIMIT 1";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, procedureName);
             try (ResultSet rs = ps.executeQuery()) {
@@ -131,6 +136,7 @@ public class PostgresMetadataReader extends GenericMetadataReader {
                 + "JOIN pg_namespace n ON n.oid = c.relnamespace "
                 + "WHERE n.nspname = ? AND c.relname = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, tableName);
             try (ResultSet rs = ps.executeQuery()) {

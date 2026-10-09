@@ -143,6 +143,11 @@ public class SqlServerDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public String getSetIdentityInsertSql(String schema, String table, boolean on) {
+        return "SET IDENTITY_INSERT " + qualify(schema, table) + (on ? " ON" : " OFF");
+    }
+
+    @Override
     protected String currentTimestampFunction() {
         return "GETDATE()";
     }
@@ -250,12 +255,42 @@ public class SqlServerDialect extends AbstractSqlDialect {
 
     @Override
     public String getDisableConstraintsSql() {
-        return "EXEC sp_MSforeachtable \"ALTER TABLE ? NOCHECK CONSTRAINT ALL\"";
+        // No database-wide form; callers must use the table-scoped variant.
+        return null;
     }
 
     @Override
     public String getEnableConstraintsSql() {
-        return "EXEC sp_MSforeachtable \"ALTER TABLE ? WITH CHECK CHECK CONSTRAINT ALL\"";
+        return null;
+    }
+
+    @Override
+    public String getDisableConstraintsSql(String schema, List<String> tables) {
+        // Per-table DDL, never sp_MSforeachtable: that undocumented proc walked EVERY table
+        // in the database, disabling constraints on tables belonging to other applications
+        // sharing the target, and the change persists beyond our connection.
+        return perTableConstraintSql(schema, tables, "NOCHECK CONSTRAINT ALL");
+    }
+
+    @Override
+    public String getEnableConstraintsSql(String schema, List<String> tables) {
+        // WITH CHECK makes re-enable validate the existing data, so a failed re-enable is a
+        // real signal the engine handles by not recycling the connection.
+        return perTableConstraintSql(schema, tables, "WITH CHECK CHECK CONSTRAINT ALL");
+    }
+
+    private String perTableConstraintSql(String schema, List<String> tables, String action) {
+        if (tables == null || tables.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String table : tables) {
+            if (sb.length() > 0) {
+                sb.append(';');
+            }
+            sb.append("ALTER TABLE ").append(qualify(schema, table)).append(' ').append(action);
+        }
+        return sb.toString();
     }
 
     @Override

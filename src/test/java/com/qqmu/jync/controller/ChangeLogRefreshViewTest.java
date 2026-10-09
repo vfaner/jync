@@ -1,6 +1,7 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -83,8 +84,8 @@ class ChangeLogRefreshViewTest {
         entry.setOccurredAt(Instant.now());
         Pageable pageable = PageRequest.of(pageNumber, 50);
         Page<ChangeLog> page = new PageImpl<>(List.of(entry), pageable, totalEntries);
-        when(changeLogService.count(any())).thenReturn((long) totalEntries);
-        when(changeLogService.page(any(), any(Pageable.class))).thenReturn(page);
+        when(changeLogService.count(any(), anyBoolean())).thenReturn((long) totalEntries);
+        when(changeLogService.page(any(), anyBoolean(), any(Pageable.class))).thenReturn(page);
         when(projectService.findAll()).thenReturn(List.of());
     }
 

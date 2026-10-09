@@ -56,6 +56,19 @@ public class SyncLockStore {
         taskRepository.releaseLock(projectId, owner);
     }
 
+    /**
+     * Admin override: drops the lease whoever holds it.
+     *
+     * <p>The holder — on this node or another — finds out at its next renewal, which matches
+     * on owner and then updates zero rows, aborting the cycle via LockLostException. Returns
+     * the number of rows cleared, so the caller can tell "released a held lock" from "there
+     * was nothing to release" without a second read.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int forceRelease(Long projectId) {
+        return taskRepository.clearLock(projectId);
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean renew(Long projectId, String owner, long ttlMs) {
         Instant expiresAt = Instant.now().plusMillis(ttlMs);

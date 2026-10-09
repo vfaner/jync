@@ -2,10 +2,13 @@ package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
@@ -74,8 +77,8 @@ class ChangeLogPagerViewTest {
         entry.setSuccess(true);
         entry.setOccurredAt(Instant.now());
         Page<ChangeLog> page = new PageImpl<>(List.of(entry), echo, totalEntries);
-        when(changeLogService.count(any())).thenReturn(totalEntries);
-        when(changeLogService.page(any(), any(Pageable.class))).thenReturn(page);
+        when(changeLogService.count(any(), anyBoolean())).thenReturn(totalEntries);
+        when(changeLogService.page(any(), anyBoolean(), any(Pageable.class))).thenReturn(page);
         when(projectService.findAll()).thenReturn(List.of());
     }
 
@@ -92,7 +95,7 @@ class ChangeLogPagerViewTest {
         String html = render("?size=15&page=2");
 
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(changeLogService).page(any(), captor.capture());
+        verify(changeLogService).page(any(), anyBoolean(), captor.capture());
         assertThat(captor.getValue().getPageSize()).isEqualTo(15);
         assertThat(captor.getValue().getPageNumber()).isEqualTo(1);
 
@@ -111,8 +114,47 @@ class ChangeLogPagerViewTest {
         String html = render("?page=999");
 
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(changeLogService).page(any(), captor.capture());
+        verify(changeLogService).page(any(), anyBoolean(), captor.capture());
         assertThat(captor.getValue().getPageNumber()).isEqualTo(19);
         assertThat(html).contains("is-current\">20</span>");
+    }
+
+    @Test
+    void theFailureFilterIsThreadedToTheServiceAndShownChecked() throws Exception {
+        stubLogOf(3, PageRequest.of(0, 20));
+
+        String html = render("?failedOnly=true");
+
+        verify(changeLogService).count(any(), org.mockito.ArgumentMatchers.eq(true));
+        verify(changeLogService).page(any(), org.mockito.ArgumentMatchers.eq(true),
+                any(Pageable.class));
+        assertThat(html).contains("name=\"failedOnly\"")
+                .contains("checked=\"checked\"");
+        // Paging must not drop the filter.
+        assertThat(html).contains("failedOnly=true");
+    }
+
+    @Test
+    void clearingKeepsTheFailureFilterInTheRedirect() throws Exception {
+        mvc.perform(post("/change-logs/clear")
+                        .with(org.springframework.security.test.web.servlet.request
+                                .SecurityMockMvcRequestPostProcessors.csrf())
+                        .param("failedOnly", "true").with(asAdmin()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/change-logs?failedOnly=true"));
+    }
+
+    @Test
+    void withoutTheFilterTheCheckboxIsUncheckedAndTheFlagIsFalse() throws Exception {
+        stubLogOf(3, PageRequest.of(0, 20));
+
+        String html = render("");
+
+        verify(changeLogService).count(any(), org.mockito.ArgumentMatchers.eq(false));
+        int checkbox = html.indexOf("name=\"failedOnly\"");
+        assertThat(checkbox).as("the filter control is rendered").isGreaterThan(-1);
+        assertThat(html.substring(checkbox, html.indexOf('>', checkbox)))
+                .doesNotContain("checked");
+        assertThat(html).doesNotContain("failedOnly=true");
     }
 }

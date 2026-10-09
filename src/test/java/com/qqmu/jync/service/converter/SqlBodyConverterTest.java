@@ -187,4 +187,67 @@ class SqlBodyConverterTest {
                 .isEqualTo("SELECT 1 FROM t");
         assertThat(converter.extractViewBody("SELECT 1 FROM t")).isEqualTo("SELECT 1 FROM t");
     }
+
+    // --- NOW(fsp): the precision argument must not dangle after a rename ---------------
+
+    /**
+     * MySQL {@code NOW(6)} renamed with the plain "NOW → SYSDATE" rule would become
+     * {@code SYSDATE(6)}, which Oracle rejects. Precision time maps to SYSTIMESTAMP.
+     */
+    @Test
+    void nowWithPrecisionBecomesSystimestampOnOracle() {
+        String out = converter.convert("SELECT NOW(6) FROM t",
+                DatabaseType.MYSQL, DatabaseType.ORACLE);
+        assertThat(out).contains("SYSTIMESTAMP");
+        assertThat(out).doesNotContain("SYSDATE(6)", "SYSTIMESTAMP(", "NOW(6)");
+    }
+
+    /** SQL Server cannot take the argument either: GETDATE()(6) would be emitted otherwise. */
+    @Test
+    void nowWithPrecisionBecomesSysdatetimeOnSqlServer() {
+        String out = converter.convert("SELECT NOW(3) FROM t",
+                DatabaseType.MYSQL, DatabaseType.SQLSERVER);
+        assertThat(out).contains("SYSDATETIME()");
+        assertThat(out).doesNotContain("GETDATE()(3)", "NOW(3)");
+    }
+
+    /** MySQL/PostgreSQL NOW(fsp) is native and stays; Oracle SYSTIMESTAMP to MySQL keeps ms. */
+    @Test
+    void nowPrecisionIsNativeOnMysqlAndPostgresAndSystimestampKeepsIt() {
+        assertThat(converter.convert("SELECT NOW(6) FROM t",
+                DatabaseType.POSTGRESQL, DatabaseType.MYSQL)).contains("NOW(6)");
+        assertThat(toMysql("SELECT SYSTIMESTAMP FROM t")).contains("NOW(6)");
+    }
+
+    // --- LIMIT / FROM DUAL rewrites skip literals --------------------------------------
+
+    /** A view body ending in a literal containing "LIMIT 5" must not gain a FETCH FIRST. */
+    @Test
+    void limitInsideALiteralIsNotRewritten() {
+        String sql = "SELECT 'x LIMIT 5' AS note FROM t";
+        String out = converter.convert(sql, DatabaseType.MYSQL, DatabaseType.ORACLE);
+        assertThat(out).isEqualTo(sql);
+        assertThat(out).doesNotContain("FETCH FIRST");
+    }
+
+    /** Removing a real FROM DUAL must leave a literal that merely mentions it intact. */
+    @Test
+    void fromDualInsideALiteralIsNotRemoved() {
+        String out = toMysql("SELECT 'x FROM DUAL y' AS note FROM DUAL");
+        assertThat(out).contains("'x FROM DUAL y'");
+        // The real trailing FROM DUAL is gone; only the literal's mention remains.
+        assertThat(out).endsWith("AS note");
+    }
+
+    /**
+     * A bare SELECT whose literal mentions FROM must still gain FROM DUAL for Oracle; the old
+     * blind regex saw the literal's FROM and skipped it, producing invalid Oracle SQL.
+     */
+    @Test
+    void bareSelectWithFromInsideALiteralStillGainsDual() {
+        String out = converter.convert("SELECT 'FROM X' AS note",
+                DatabaseType.MYSQL, DatabaseType.ORACLE);
+        assertThat(out).contains("FROM DUAL");
+        assertThat(out).contains("'FROM X'");
+    }
 }

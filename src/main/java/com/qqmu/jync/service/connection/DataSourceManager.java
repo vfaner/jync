@@ -2,8 +2,11 @@ package com.qqmu.jync.service.connection;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import javax.annotation.PreDestroy;
@@ -156,19 +159,83 @@ public class DataSourceManager {
         return appendExtraParams(String.format(template, host, port, dbName), config);
     }
 
+    /**
+     * JDBC property keys that can turn a connection string into code execution or file
+     * exfiltration. MySQL-family: {@code autoDeserialize} + {@code queryInterceptors}
+     * instantiate attacker-named classes (gadget chains / property injection);
+     * {@code allowLoadLocalInfile*} reads server-side files; {@code allowMultiQueries}
+     * enables stacked statements; {@code socketFactory}/{@code sslSocketFactory}/
+     * {@code loadBalanceStrategy} likewise name instantiable classes.
+     */
+    private static final Set<String> BLOCKED_PARAM_KEYS = Set.of(
+            "AUTODESERIALIZE", "ALLOWLOADLOCALINFILE", "ALLOWURLINLOCALINFILE",
+            "ALLOWLOADLOCALINFILEINPATH", "QUERYINTERCEPTORS", "STATEMENTINTERCEPTORS",
+            "EXCEPTIONINTERCEPTORS", "ALLOWMULTIQUERIES", "CONNECTIONATTRIBUTES",
+            "AUTHENTICATIONPLUGINS", "SOCKETFACTORY", "SSLSOCKETFACTORY",
+            "LOADBALANCESTRATEGY", "HA.LOADBALANCESTRATEGY");
+
     private String appendExtraParams(String url, DatabaseConfig config) {
         String extra = config.getExtraParams();
         if (!StringUtils.hasText(extra)) {
             return url;
         }
-        String trimmed = extra.trim();
+        // Tokenize on BOTH separator styles, so a user who pasted '&' params into a ';'
+        // URL still gets per-key validation instead of one opaque rejected blob.
+        String[] tokens = extra.trim().split("[&;]");
+
         // SQL Server and DB2-style URLs use ';' separators; the rest use '?'/'&'.
-        char separator = url.contains(";") && !url.contains("?") ? ';'
-                : (url.contains("?") ? '&' : '?');
-        if (trimmed.charAt(0) == separator) {
-            return url + trimmed;
+        boolean semicolonUrl = url.contains(";") && !url.contains("?");
+        String firstSep = url.contains("?") ? "&" : (semicolonUrl ? ";" : "?");
+        String restSep = "?".equals(firstSep) ? "&" : firstSep;
+
+        List<String> accepted = new ArrayList<>();
+        for (String token : tokens) {
+            int eq = token.indexOf('=');
+            String key = (eq >= 0 ? token.substring(0, eq) : token).trim();
+            String value = eq >= 0 ? token.substring(eq + 1).trim() : "";
+            String safe = sanitizeExtraParam(config.getName(), key, value);
+            if (safe != null) {
+                accepted.add(safe);
+            }
         }
-        return url + separator + trimmed;
+        if (accepted.isEmpty()) {
+            return url;
+        }
+        StringBuilder sb = new StringBuilder(url);
+        for (int i = 0; i < accepted.size(); i++) {
+            sb.append(i == 0 ? firstSep : restSep).append(accepted.get(i));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Validates one {@code key=value} pair, returning the rendered pair or null when it
+     * must be dropped. Blocked keys are refused even if the driver would ignore them, and
+     * values carrying separator or control characters are refused because they would
+     * smuggle additional properties past the per-key validation.
+     */
+    private String sanitizeExtraParam(String connectionName, String key, String value) {
+        if (!StringUtils.hasText(key) || BLOCKED_PARAM_KEYS.contains(key.toUpperCase())) {
+            log.warn("Refused unsafe JDBC property '{}' on connection '{}'", key, connectionName);
+            return null;
+        }
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            if (Character.isWhitespace(c) || c <= 0x1f || c == 0x7f) {
+                log.warn("Refused JDBC property with illegal characters in key '{}' on '{}'",
+                        key, connectionName);
+                return null;
+            }
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '&' || c == ';' || c <= 0x1f || c == 0x7f) {
+                log.warn("Refused JDBC property '{}' — value contains separator/control"
+                        + " characters on connection '{}'", key, connectionName);
+                return null;
+            }
+        }
+        return value.isEmpty() ? key : key + "=" + value;
     }
 
     /**

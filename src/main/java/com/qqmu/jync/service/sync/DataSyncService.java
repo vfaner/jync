@@ -23,6 +23,7 @@ import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
+import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -255,11 +256,11 @@ public class DataSyncService {
 
         result.rowsWritten = stats.read;
         applyStats(result, stats);
-        // Same rewind as the incremental path: a source transaction whose in-window
-        // timestamp commits after the SELECT snapshot above would otherwise be skipped
-        // forever, because the next window starts after this watermark. applySafetyLag
-        // passes non-timestamp watermarks through untouched.
-        result.newCursorValue = watermark == null ? null : applySafetyLag(watermark);
+        // Same rewind as the incremental path — but only on keyed tables: without a
+        // primary key there is no upsert to absorb the replayed margin rows, so the lag
+        // would duplicate them every cycle.
+        result.newCursorValue = watermark == null ? null
+                : applySafetyLagIfKeyed(table, watermark);
 
         // 非增量策略（full-compare）没有真正的游标，我们存一个"行数指纹"到 lastSyncValue，
         // 让下一轮知道初始加载已经做过了，否则 lastSyncValue == null 会让每一轮都当成首次加载。
@@ -338,8 +339,26 @@ public class DataSyncService {
         // Decided by the watermark's VALUE, not the strategy kind: a temporal column
         // resolved as IDENTITY (e.g. a create-time column) still parses as an instant and
         // gets the lag; a numeric identity watermark does not parse and passes through.
-        result.newCursorValue = applySafetyLag(watermark);
+        // The lag itself is keyed-table only: replaying margin rows into a keyless target
+        // duplicates them, which is the bug this used to cause every cycle.
+        result.newCursorValue = applySafetyLagIfKeyed(table, watermark);
         return result;
+    }
+
+    /**
+     * Rewinds a timestamp watermark for a <em>keyed</em> table only.
+     *
+     * <p>On a keyless table the safety lag is deliberately skipped: its margin rows would
+     * be plain INSERTs (the emulated upsert cannot match them), so every cycle would add
+     * duplicates. Keeping the exact watermark loses the late-commit protection instead —
+     * the lesser evil, since duplicates are silently wrong while the uncovered window is
+     * bounded by the lag and rows only miss when they commit after the read snapshot.
+     */
+    private String applySafetyLagIfKeyed(TableMeta table, String watermark) {
+        if (!table.hasPrimaryKey()) {
+            return watermark;
+        }
+        return applySafetyLag(watermark);
     }
 
     /**
@@ -374,18 +393,45 @@ public class DataSyncService {
         SqlDialect dialect = ctx.getSourceDialect();
         String sql = "SELECT MAX(" + dialect.quoteIdentifier(strategy.getColumn()) + ") FROM "
                 + dialect.qualify(ctx.getSourceSchema(), table.getName());
-        try (Statement st = sourceConn.createStatement();
-             ResultSet rs = st.executeQuery(sql)) {
-            if (rs.next()) {
-                Object value = strategy.getKind() == CursorStrategy.Kind.TIMESTAMP
-                        ? rs.getTimestamp(1)
-                        : rs.getObject(1);
-                if (!rs.wasNull() && value != null) {
-                    return JdbcRowMapper.cursorToString(value);
+        try (Statement st = sourceConn.createStatement()) {
+            JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
+            try (ResultSet rs = st.executeQuery(sql)) {
+                if (rs.next()) {
+                    Object value = readWatermarkValue(rs, strategy);
+                    if (!rs.wasNull() && value != null) {
+                        return JdbcRowMapper.cursorToString(value);
+                    }
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * Reads the aggregate value using the accessor matching the cursor column's type.
+     *
+     * <p>The strategy {@link CursorStrategy.Kind Kind} says how window semantics work; it
+     * must not decide the JDBC read. In particular a TIME (or DATE) column the user picked
+     * explicitly is still Kind TIMESTAMP, and reading it with {@code getTimestamp} produced
+     * an instant the TIME parser could not round-trip ("Unparseable high-watermark" every
+     * cycle), while a temporal creation column with Kind IDENTITY went through
+     * {@code getObject} and came back as a driver-specific {@code LocalDateTime} whose
+     * UTC-instant encoding shifted the window by the server timezone.
+     */
+    private Object readWatermarkValue(ResultSet rs, CursorStrategy strategy) throws SQLException {
+        switch (strategy.getJdbcType()) {
+            case java.sql.Types.TIME:
+            case java.sql.Types.TIME_WITH_TIMEZONE:
+                return rs.getTime(1);
+            case java.sql.Types.DATE:
+                return rs.getDate(1);
+            case java.sql.Types.TIMESTAMP:
+            case java.sql.Types.TIMESTAMP_WITH_TIMEZONE:
+                return rs.getTimestamp(1);
+            default:
+                // Kind IDENTITY with a numeric column.
+                return rs.getObject(1);
+        }
     }
 
     /**
@@ -399,14 +445,16 @@ public class DataSyncService {
         String sql = "SELECT COUNT(*) FROM "
                 + dialect.qualify(ctx.getSourceSchema(), table.getName())
                 + " WHERE " + dialect.quoteIdentifier(strategy.getColumn()) + " IS NULL";
-        try (Statement st = sourceConn.createStatement();
-             ResultSet rs = st.executeQuery(sql)) {
-            if (rs.next() && rs.getLong(1) > 0) {
-                log.warn("Table {} has {} row(s) with a NULL cursor column {} and no primary"
-                                + " key: the seed delivers them once but later cycles cannot"
-                                + " re-deliver them without duplicating. Fill the column or add"
-                                + " a primary key.",
-                        table.getName(), rs.getLong(1), strategy.getColumn());
+        try (Statement st = sourceConn.createStatement()) {
+            JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
+            try (ResultSet rs = st.executeQuery(sql)) {
+                if (rs.next() && rs.getLong(1) > 0) {
+                    log.warn("Table {} has {} row(s) with a NULL cursor column {} and no primary"
+                                    + " key: the seed delivers them once but later cycles cannot"
+                                    + " re-deliver them without duplicating. Fill the column or add"
+                                    + " a primary key.",
+                            table.getName(), rs.getLong(1), strategy.getColumn());
+                }
             }
         } catch (SQLException e) {
             log.debug("Could not count NULL-cursor rows for {}: {}",
@@ -563,6 +611,7 @@ public class DataSyncService {
                                 Object cursor) throws SQLException {
         String sql = "SELECT COUNT(*) FROM " + qualifiedTable + " WHERE " + quotedColumn + " <= ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             ps.setObject(1, cursor);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getLong(1) : 0L;
@@ -579,6 +628,13 @@ public class DataSyncService {
         }
         if (candidate instanceof Timestamp && reference instanceof Timestamp) {
             return ((Timestamp) candidate).after((Timestamp) reference);
+        }
+        if (candidate instanceof java.sql.Date && reference instanceof java.sql.Date) {
+            return ((java.sql.Date) candidate).toLocalDate()
+                    .isAfter(((java.sql.Date) reference).toLocalDate());
+        }
+        if (candidate instanceof java.sql.Time && reference instanceof java.sql.Time) {
+            return ((java.sql.Time) candidate).after((java.sql.Time) reference);
         }
         if (candidate instanceof Number && reference instanceof Number) {
             return new BigDecimal(candidate.toString())
@@ -604,8 +660,24 @@ public class DataSyncService {
         boolean originalAutoCommit = targetConn.getAutoCommit();
         targetConn.setAutoCommit(false);
 
+        // SQL Server rejects explicit identity-column values with error 544 unless the
+        // session has run SET IDENTITY_INSERT ON for the target table. Only one table per
+        // session can be armed, so it is switched off again in the finally below.
+        boolean hasIdentityColumn = table.getColumns().stream().anyMatch(c -> c.isAutoIncrement());
+        String identityOn = hasIdentityColumn
+                ? targetDialect.getSetIdentityInsertSql(ctx.getTargetSchema(), targetTable, true)
+                : null;
+
         WriteStats total = new WriteStats();
+        boolean identityArmed = false;
         try (PreparedStatement select = sourceConn.prepareStatement(selectSql)) {
+            JdbcUtil.applyQueryTimeout(select, properties.getQueryTimeoutSeconds());
+            if (identityOn != null) {
+                try (Statement idStmt = targetConn.createStatement()) {
+                    idStmt.execute(identityOn);
+                }
+                identityArmed = true;
+            }
             // The dialect decides how to ask its driver for a streamed read: MySQL-protocol
             // sources need the Integer.MIN_VALUE sentinel, everyone else honors the
             // configured fetch size.
@@ -666,6 +738,20 @@ public class DataSyncService {
             }
             throw e;
         } finally {
+            if (identityArmed) {
+                String identityOff = targetDialect.getSetIdentityInsertSql(
+                        ctx.getTargetSchema(), targetTable, false);
+                if (identityOff != null) {
+                    try (Statement idStmt = targetConn.createStatement()) {
+                        idStmt.execute(identityOff);
+                    } catch (SQLException e) {
+                        // Session-scoped: a connection returned to the pool could otherwise
+                        // stay armed, but the pool hands this connection out per table; log.
+                        log.debug("Could not switch IDENTITY_INSERT off for {}: {}",
+                                targetTable, e.getMessage());
+                    }
+                }
+            }
             try {
                 targetConn.setAutoCommit(originalAutoCommit);
             } catch (SQLException e) {
@@ -685,6 +771,7 @@ public class DataSyncService {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
+            JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
             while (rs.next()) {
                 Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes);
                 JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn);
@@ -738,6 +825,8 @@ public class DataSyncService {
         try (PreparedStatement insert = targetConn.prepareStatement(insertSql);
              PreparedStatement update = updateSql == null ? null
                      : targetConn.prepareStatement(updateSql)) {
+            JdbcUtil.applyQueryTimeout(insert, properties.getQueryTimeoutSeconds());
+            JdbcUtil.applyQueryTimeout(update, properties.getQueryTimeoutSeconds());
             int sinceCommit = 0;
             while (rs.next()) {
                 Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes);
@@ -913,10 +1002,12 @@ public class DataSyncService {
         String sourceSql = "SELECT " + pk.stream().map(sourceDialect::quoteIdentifier)
                 .reduce((a, b) -> a + ", " + b).orElseThrow()
                 + " FROM " + sourceDialect.qualify(ctx.getSourceSchema(), table.getName());
-        try (Statement st = sourceConn.createStatement();
-             ResultSet rs = st.executeQuery(sourceSql)) {
-            while (rs.next()) {
-                sourceKeys.add(keyOf(rs, pk.size()));
+        try (Statement st = sourceConn.createStatement()) {
+            JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
+            try (ResultSet rs = st.executeQuery(sourceSql)) {
+                while (rs.next()) {
+                    sourceKeys.add(keyOf(rs, pk.size()));
+                }
             }
         }
 
@@ -924,15 +1015,17 @@ public class DataSyncService {
         String targetSql = "SELECT " + pk.stream().map(targetDialect::quoteIdentifier)
                 .reduce((a, b) -> a + ", " + b).orElseThrow()
                 + " FROM " + targetDialect.qualify(ctx.getTargetSchema(), targetTable);
-        try (Statement st = targetConn.createStatement();
-             ResultSet rs = st.executeQuery(targetSql)) {
-            while (rs.next()) {
-                if (!sourceKeys.contains(keyOf(rs, pk.size()))) {
-                    List<Object> values = new ArrayList<>(pk.size());
-                    for (int i = 1; i <= pk.size(); i++) {
-                        values.add(rs.getObject(i));
+        try (Statement st = targetConn.createStatement()) {
+            JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
+            try (ResultSet rs = st.executeQuery(targetSql)) {
+                while (rs.next()) {
+                    if (!sourceKeys.contains(keyOf(rs, pk.size()))) {
+                        List<Object> values = new ArrayList<>(pk.size());
+                        for (int i = 1; i <= pk.size(); i++) {
+                            values.add(rs.getObject(i));
+                        }
+                        toDelete.add(values);
                     }
-                    toDelete.add(values);
                 }
             }
         }
@@ -946,6 +1039,7 @@ public class DataSyncService {
         int deleted = 0;
         String deleteSql = targetDialect.getDeleteByPkSql(ctx.getTargetSchema(), targetTable, pk);
         try (PreparedStatement ps = targetConn.prepareStatement(deleteSql)) {
+            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             // 与写入路径同一套批处理：逐行 executeUpdate 意味着每删一行一次网络往返。
             int inBatch = 0;
             for (List<Object> keyValues : toDelete) {

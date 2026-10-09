@@ -1,0 +1,87 @@
+# 副本数说明:
+#   默认元数据是 H2 文件库(ReadWriteOnce PVC),replicas 必须为 1。
+#   要多副本,先把元数据换成外部 MySQL/PostgreSQL(SPRING_DATASOURCE_URL 等三个
+#   环境变量即可,无需改镜像),再把 replicas 调大 —— 应用内置的调度对账器
+#   (ScheduleReconciler)会让每个节点在 30 秒内对齐项目的启停状态,
+#   同一项目的并发执行由数据库里的分布式同步锁(sync_lock)互斥。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jync
+  labels:
+    app.kubernetes.io/name: jync
+spec:
+  replicas: 1
+  # Recreate:H2 的 PVC 是 RWO,滚动更新会出现新旧 Pod 抢挂载/抢文件锁的窗口
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jync
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jync
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        # 关键:新建 PVC 默认 root 属主,fsGroup 让 kubelet 把挂载卷的属组改成
+        # 该 gid 并置 setgid,uid 10001 的运行用户才能写 H2 库文件
+        fsGroup: 10001
+      containers:
+        - name: jync
+          # 推到自己的镜像仓库后改这里(或用 kustomization.yaml 的 images 变换)
+          image: jync:1.3.2
+          # 私有仓库拉取改 Always;本地 kind/minikube 直接用 docker build 的镜像时保持 IfNotPresent
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: TZ
+              value: Asia/Shanghai
+            # 走 Ingress HTTPS 时打开:
+            # - name: JYN_COOKIE_SECURE
+            #   value: "true"
+            # 外部元数据库示例(建议放 Secret,再用 secretKeyRef 引用):
+            # - name: SPRING_DATASOURCE_URL
+            #   value: "jdbc:mysql://mysql:3306/jync?useSSL=false&serverTimezone=UTC"
+            # - name: SPRING_DATASOURCE_USERNAME
+            #   value: "jync"
+            # - name: SPRING_DATASOURCE_PASSWORD
+            #   valueFrom:
+            #     secretKeyRef: { name: jync-db, key: password }
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          # /login 匿名可访问,返回 200 即健康
+          startupProbe:
+            httpGet: { path: /login, port: http }
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: logs
+              mountPath: /app/logs
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: jync-data
+        # 日志用 emptyDir 即可(排障时 kubectl logs 也能看 stdout);
+        # 需要持久化就再建一个 PVC 换掉这里
+        - name: logs
+          emptyDir: {}

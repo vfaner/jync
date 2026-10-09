@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, null, 'error.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="empty">
+        <div class="empty-ico"><svg class="ico"><use href="#exclamation-triangle-fill"/></svg></div>
+        <h3>
+            <span th:text="#{error.page.heading}">Something went wrong</span><span
+                th:if="${status}" th:text="' · HTTP ' + ${status}"> · HTTP 500</span>
+        </h3>
+        <p th:text="#{error.page.text}">The page could not be displayed.</p>
+        <a class="btn btn-primary" th:href="@{/}" th:text="#{error.page.home}">Back to home</a>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

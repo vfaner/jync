@@ -37,12 +37,14 @@ public class Db2MetadataReader extends GenericMetadataReader {
     @Override
     public String resolveDefaultSchema(Connection conn) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT CURRENT SCHEMA FROM SYSIBM.SYSDUMMY1");
-             ResultSet rs = ps.executeQuery()) {
-            if (rs.next()) {
-                String s = rs.getString(1);
-                if (s != null && !s.isBlank()) {
-                    return s.trim();
+                "SELECT CURRENT SCHEMA FROM SYSIBM.SYSDUMMY1")) {
+            MetadataTimeouts.apply(ps);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String s = rs.getString(1);
+                    if (s != null && !s.isBlank()) {
+                        return s.trim();
+                    }
                 }
             }
         } catch (SQLException e) {
@@ -59,6 +61,7 @@ public class Db2MetadataReader extends GenericMetadataReader {
         String sql = "SELECT TEXT FROM SYSCAT.VIEWS WHERE VIEWSCHEMA = COALESCE(?, CURRENT SCHEMA) "
                 + "AND VIEWNAME = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, viewName.toUpperCase());
             try (ResultSet rs = ps.executeQuery()) {
@@ -78,6 +81,7 @@ public class Db2MetadataReader extends GenericMetadataReader {
         String sql = "SELECT TEXT, ROUTINETYPE FROM SYSCAT.ROUTINES "
                 + "WHERE ROUTINESCHEMA = COALESCE(?, CURRENT SCHEMA) AND ROUTINENAME = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, procedureName.toUpperCase());
             try (ResultSet rs = ps.executeQuery()) {
@@ -99,6 +103,7 @@ public class Db2MetadataReader extends GenericMetadataReader {
         String sql = "SELECT CARD FROM SYSCAT.TABLES WHERE TABSCHEMA = COALESCE(?, CURRENT SCHEMA) "
                 + "AND TABNAME = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, tableName.toUpperCase());
             try (ResultSet rs = ps.executeQuery()) {

@@ -45,10 +45,12 @@ public class OracleMetadataReader extends GenericMetadataReader {
 
     @Override
     public String resolveDefaultSchema(Connection conn) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT USER FROM DUAL");
-             ResultSet rs = ps.executeQuery()) {
-            if (rs.next()) {
-                return rs.getString(1);
+        try (PreparedStatement ps = conn.prepareStatement("SELECT USER FROM DUAL")) {
+            MetadataTimeouts.apply(ps);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
             }
         } catch (SQLException e) {
             log.debug("SELECT USER failed: {}", e.getMessage());
@@ -63,6 +65,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
         view.setSchema(schema);
         String sql = "SELECT TEXT FROM ALL_VIEWS WHERE OWNER = NVL(?, USER) AND VIEW_NAME = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
             ps.setString(2, viewName.toUpperCase());
             try (ResultSet rs = ps.executeQuery()) {
@@ -85,6 +88,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
                 + "WHERE OWNER = NVL(?, USER) AND OBJECT_NAME = ? "
                 + "AND OBJECT_TYPE IN ('PROCEDURE','FUNCTION')";
         try (PreparedStatement ps = conn.prepareStatement(typeSql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
             ps.setString(2, procedureName.toUpperCase());
             try (ResultSet rs = ps.executeQuery()) {
@@ -99,6 +103,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
                 + "AND NAME = ? AND TYPE = ? ORDER BY LINE";
         StringBuilder body = new StringBuilder();
         try (PreparedStatement ps = conn.prepareStatement(srcSql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
             ps.setString(2, procedureName.toUpperCase());
             ps.setString(3, proc.getRoutineType() == null ? "PROCEDURE" : proc.getRoutineType());
@@ -123,6 +128,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
     public long estimateRowCount(Connection conn, String schema, String tableName) throws SQLException {
         String sql = "SELECT NUM_ROWS FROM ALL_TABLES WHERE OWNER = NVL(?, USER) AND TABLE_NAME = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
             ps.setString(2, tableName.toUpperCase());
             try (ResultSet rs = ps.executeQuery()) {

@@ -48,7 +48,8 @@ public class SqlBodyConverter {
         Map<String, String> toMysql = new LinkedHashMap<>();
         toMysql.put("NVL", "IFNULL");
         toMysql.put("SYSDATE", "NOW()");
-        toMysql.put("SYSTIMESTAMP", "NOW()");
+        // SYSTIMESTAMP carries microsecond precision; plain NOW() would silently drop it.
+        toMysql.put("SYSTIMESTAMP", "NOW(6)");
         toMysql.put("GETDATE", "NOW()");
         toMysql.put("SUBSTR", "SUBSTRING");
         toMysql.put("LEN", "LENGTH");
@@ -288,7 +289,9 @@ public class SqlBodyConverter {
         // Only real code is rewritten: a literal or a quoted identifier that happens to spell
         // a function name is left alone.
         return applyOutsideLiterals(sql, from, to, code -> {
-            String result = code;
+            // NOW(fsp) needs a precision-aware replacement before the plain name rule, which
+            // would otherwise leave a dangling precision (SYSDATE(6), GETDATE()(6)).
+            String result = rewriteNowPrecision(code, to);
             for (Map.Entry<String, String> e : map.entrySet()) {
                 String value = e.getValue();
                 boolean valueIsCompleteCall = value.endsWith(")");
@@ -314,6 +317,36 @@ public class SqlBodyConverter {
         });
     }
 
+    /** {@code NOW(3)} and friends — the precision argument must not survive a plain rename. */
+    private static final Pattern NOW_WITH_PRECISION = Pattern.compile(
+            "(?i)\\bNOW\\s*\\(\\s*(\\d+)\\s*\\)");
+
+    /**
+     * Replaces precision-qualified {@code NOW(fsp)} calls for the two families whose entry
+     * point cannot take that argument.
+     *
+     * <p>Oracle's {@code SYSTIMESTAMP} (unlike {@code SYSDATE}) keeps fractional seconds, and
+     * SQL Server's {@code SYSDATETIME()} carries more precision than {@code GETDATE()} (which
+     * is rounded to 1/300 s). MySQL and PostgreSQL use {@code NOW(fsp)} natively, and a later
+     * DB2 name rename produces {@code CURRENT TIMESTAMP(fsp)}, which DB2 accepts — so those
+     * families need nothing here.
+     */
+    private String rewriteNowPrecision(String code, DatabaseType.DialectFamily to) {
+        if (to != DatabaseType.DialectFamily.ORACLE
+                && to != DatabaseType.DialectFamily.SQLSERVER) {
+            return code;
+        }
+        java.util.regex.Matcher m = NOW_WITH_PRECISION.matcher(code);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String replacement = to == DatabaseType.DialectFamily.ORACLE
+                    ? "SYSTIMESTAMP" : "SYSDATETIME()";
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
     /**
      * Applies {@code transform} to the executable parts of {@code sql}, leaving string
      * literals, quoted identifiers and comments untouched.
@@ -330,6 +363,25 @@ public class SqlBodyConverter {
     String applyOutsideLiterals(String sql, DatabaseType.DialectFamily from,
                                 DatabaseType.DialectFamily to,
                                 UnaryOperator<String> transform) {
+        return scan(sql, from, to, transform, false);
+    }
+
+    /**
+     * Returns {@code sql} with every literal, quoted identifier and comment replaced by
+     * spaces (newlines preserved); executable code is kept verbatim.
+     *
+     * <p>Used to test whole-body structural questions ("is there a FROM anywhere?") without a
+     * blind regex matching words hidden inside literals or comments. Keeping positions and line
+     * breaks lets anchors like {@code $} keep working against the masked text.
+     */
+    String maskNonCode(String sql, DatabaseType.DialectFamily from,
+                       DatabaseType.DialectFamily to) {
+        return scan(sql, from, to, null, true);
+    }
+
+    private String scan(String sql, DatabaseType.DialectFamily from,
+                        DatabaseType.DialectFamily to,
+                        UnaryOperator<String> transform, boolean maskQuoted) {
         // Quoting is checked against both families: this runs after convertIdentifierQuotes,
         // so a body may already carry the target's delimiters. Over-protecting only skips a
         // substitution; under-protecting corrupts a literal.
@@ -353,7 +405,7 @@ public class SqlBodyConverter {
                 flushCode(out, code, transform);
                 int end = sql.indexOf('\n', i);
                 end = end < 0 ? n : end + 1;
-                out.append(sql, i, end);
+                appendSpan(out, sql, i, end, maskQuoted);
                 i = end;
                 continue;
             }
@@ -361,7 +413,7 @@ public class SqlBodyConverter {
                 flushCode(out, code, transform);
                 int end = sql.indexOf("*/", i + 2);
                 end = end < 0 ? n : end + 2;
-                out.append(sql, i, end);
+                appendSpan(out, sql, i, end, maskQuoted);
                 i = end;
                 continue;
             }
@@ -391,7 +443,7 @@ public class SqlBodyConverter {
                     j++;
                 }
                 int end = Math.min(j, n);
-                out.append(sql, i, end);
+                appendSpan(out, sql, i, end, maskQuoted);
                 i = end;
                 continue;
             }
@@ -403,10 +455,23 @@ public class SqlBodyConverter {
         return out.toString();
     }
 
+    /** Emits a non-code span verbatim, or — when masking — as spaces with line breaks kept. */
+    private void appendSpan(StringBuilder out, String sql, int start, int end,
+                            boolean maskQuoted) {
+        if (!maskQuoted) {
+            out.append(sql, start, end);
+            return;
+        }
+        for (int k = start; k < end; k++) {
+            char c = sql.charAt(k);
+            out.append(c == '\n' || c == '\r' ? c : ' ');
+        }
+    }
+
     private void flushCode(StringBuilder out, StringBuilder code,
                            UnaryOperator<String> transform) {
         if (code.length() > 0) {
-            out.append(transform.apply(code.toString()));
+            out.append(transform == null ? code : transform.apply(code.toString()));
             code.setLength(0);
         }
     }
@@ -414,35 +479,49 @@ public class SqlBodyConverter {
     /** Rewrites row-limiting syntax between LIMIT, ROWNUM, TOP and FETCH FIRST. */
     String convertLimitClause(String sql, DatabaseType.DialectFamily from,
                               DatabaseType.DialectFamily to) {
-        String result = sql;
-        if (to == DatabaseType.DialectFamily.ORACLE) {
-            // LIMIT n -> FETCH FIRST n ROWS ONLY (12c+).
-            result = result.replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s*$", "FETCH FIRST $1 ROWS ONLY");
-        } else if (to == DatabaseType.DialectFamily.SQLSERVER) {
-            result = result.replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s*$", "");
+        if (to == DatabaseType.DialectFamily.ORACLE || to == DatabaseType.DialectFamily.DB2) {
+            // LIMIT n -> FETCH FIRST n ROWS ONLY (Oracle 12c+, DB2). Literal-aware: a view
+            // body ending in the text "LIMIT 5" inside a string must not be rewritten.
+            return applyOutsideLiterals(sql, from, to,
+                    code -> code.replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s*$",
+                            "FETCH FIRST $1 ROWS ONLY"));
+        }
+        if (to == DatabaseType.DialectFamily.SQLSERVER) {
+            boolean[] removed = {false};
+            String result = applyOutsideLiterals(sql, from, to, code -> {
+                String replaced = code.replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s*$", "");
+                if (!replaced.equals(code)) {
+                    removed[0] = true;
+                }
+                return replaced;
+            });
             // A TOP clause must go next to SELECT, which needs real parsing; warn instead.
-            if (!result.equals(sql)) {
+            if (removed[0]) {
                 log.warn("Removed a LIMIT clause while converting to SQL Server; add TOP or "
                         + "OFFSET/FETCH manually if row limiting was intended.");
             }
-        } else if (to == DatabaseType.DialectFamily.DB2) {
-            result = result.replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s*$", "FETCH FIRST $1 ROWS ONLY");
+            return result;
         }
-        return result;
+        return sql;
     }
 
     /** Oracle's {@code FROM DUAL} has no equivalent elsewhere and must be dropped. */
     String convertDualTable(String sql, DatabaseType.DialectFamily from,
                             DatabaseType.DialectFamily to) {
         if (from == DatabaseType.DialectFamily.ORACLE && to != DatabaseType.DialectFamily.ORACLE) {
-            if (to == DatabaseType.DialectFamily.DB2) {
-                return sql.replaceAll("(?i)\\bFROM\\s+DUAL\\b", "FROM SYSIBM.SYSDUMMY1");
-            }
-            return sql.replaceAll("(?i)\\s+FROM\\s+DUAL\\b", "");
+            return applyOutsideLiterals(sql, from, to, code -> {
+                if (to == DatabaseType.DialectFamily.DB2) {
+                    return code.replaceAll("(?i)\\bFROM\\s+DUAL\\b",
+                            "FROM SYSIBM.SYSDUMMY1");
+                }
+                return code.replaceAll("(?i)\\s+FROM\\s+DUAL\\b", "");
+            });
         }
         if (to == DatabaseType.DialectFamily.ORACLE && from != DatabaseType.DialectFamily.ORACLE) {
-            // A bare SELECT without FROM is invalid in Oracle.
-            if (sql.matches("(?is)^\\s*SELECT\\s+(?!.*\\bFROM\\b).*$")) {
+            // A bare SELECT without FROM is invalid in Oracle. Test the masked text so a FROM
+            // mentioned inside a literal or comment is not mistaken for a real FROM clause.
+            String masked = maskNonCode(sql, from, to);
+            if (masked.matches("(?is)^\\s*SELECT\\s+(?!.*\\bFROM\\b).*$")) {
                 return sql.trim() + " FROM DUAL";
             }
         }

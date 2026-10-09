@@ -27,6 +27,7 @@ import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.monitor.ChangeDetector;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 import com.qqmu.jync.service.monitor.CursorStrategyResolver;
+import com.qqmu.jync.util.TargetTableVerifier;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -57,6 +58,17 @@ public class SyncEngine {
      * is a good moment to run one anyway.
      */
     private final Map<String, Long> lastRowCountAudit = new ConcurrentHashMap<>();
+
+    /**
+     * Tables already confirmed column-compatible with their source, keyed
+     * {@code projectId:targetTableName} (upper-cased).
+     *
+     * <p>In-memory on purpose: the check is one round of {@code DatabaseMetaData.getColumns}
+     * per table, so it runs once per process lifetime, not once per poll. A table fixed
+     * manually after being flagged is picked up after a restart (or by resetting the project,
+     * which evicts the key).
+     */
+    private final Set<String> verifiedTables = ConcurrentHashMap.newKeySet();
 
     public SyncEngine(DataSourceManager dataSourceManager,
                       ChangeDetector changeDetector,
@@ -98,6 +110,26 @@ public class SyncEngine {
              Connection targetConn = dataSourceManager.getConnection(ctx.getTargetConfig())) {
 
             DatabaseMeta sourceMeta = readSourceMetadata(sourceConn, ctx);
+
+            // Validate the name mapping against the tables that actually exist: the save-time
+            // check cannot see an unmapped source table whose name another table maps onto
+            // (e.g. A -> B while B exists). Such a pair writes one shared target, so the cycle
+            // stops here, before any structure or data change is attempted.
+            List<String> mappingConflicts = ctx.getConfig().tableMappingConflicts(
+                    sourceMeta.getTables().stream().map(TableMeta::getName).toList());
+            if (!mappingConflicts.isEmpty()) {
+                for (String conflict : mappingConflicts) {
+                    log.error("Project '{}': {}", ctx.projectName(), conflict);
+                    result.addError(conflict);
+                    stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE, ctx.projectName(),
+                            ChangeType.ERROR, conflict, false, 0);
+                }
+                return result;
+            }
+
+            if (ctx.getConfig().isSyncStructure() && ctx.getConfig().isSyncIndexes()) {
+                retryFailedIndexes(targetConn, ctx, result);
+            }
 
             Set<String> blockedTables = Set.of();
             if (ctx.getConfig().isSyncStructure() || ctx.getConfig().isSyncViews()
@@ -157,6 +189,18 @@ public class SyncEngine {
             }
         }
         return meta;
+    }
+
+    /** Retries secondary indexes that failed during table creation in earlier cycles. */
+    private void retryFailedIndexes(Connection targetConn, SyncContext ctx, SyncResult result) {
+        ctx.requireLease();
+        for (String detail : structureSync.retryPendingIndexes(targetConn, ctx)) {
+            log.info("Project '{}': {}", ctx.projectName(), detail);
+            stateWriter.recordLog(ctx.projectId(), ObjectType.INDEX,
+                    detail.contains(" on ") ? detail.substring(detail.indexOf(" on ") + 4)
+                            : ctx.projectName(),
+                    ChangeType.CREATE, detail, true, 0);
+        }
     }
 
     /**
@@ -321,7 +365,8 @@ public class SyncEngine {
                                             Set<String> knownTargetTables) {
         String targetTable = ctx.getConfig().targetTableName(table.getName());
         if (knownTargetTables != null && knownTargetTables.contains(targetTable.toUpperCase())) {
-            return true;
+            // 名字在清单里只证明"有这张表"，不证明形状对：手工预建的表可能缺列或类型不对。
+            return verifyShapeIfNeeded(table, targetConn, ctx, result, targetTable);
         }
         ChangeEvent createEvent = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,
                 table.getName(), "Auto-created before data sync (target table missing)", table);
@@ -344,6 +389,13 @@ public class SyncEngine {
             stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE, table.getName(),
                     ChangeType.CREATE, outcome.detail, true, 0);
             stateWriter.saveSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName(), table);
+            verifiedTables.add(verifiedKey(ctx.projectId(), targetTable));
+        } else if (outcome.applied && outcome.detail != null
+                && outcome.detail.startsWith("Table already present")) {
+            // 表已存在但不是我们这轮建的：核对列形状，不合规就拦住数据同步。
+            if (!verifyShapeIfNeeded(table, targetConn, ctx, result, targetTable)) {
+                return false;
+            }
         }
         // 不管这轮是新建的还是本来就在（清单读取失败时才走到这），都登记进清单，
         // 后面的表若再引用它就不必重复发 CREATE。
@@ -353,11 +405,61 @@ public class SyncEngine {
         return true;
     }
 
+    /**
+     * Verifies that an existing target table's columns can receive the source table, unless
+     * this process already verified that pair.
+     *
+     * @return false (with an error logged and added to the result) when the shape is
+     *     incompatible; true when compatible or the metadata query itself could not run
+     *     (the check is a safety net, so a driver that cannot answer must not block sync).
+     */
+    private boolean verifyShapeIfNeeded(TableMeta table, Connection targetConn, SyncContext ctx,
+                                        SyncResult result, String targetTable) {
+        String key = verifiedKey(ctx.projectId(), targetTable);
+        if (verifiedTables.contains(key)) {
+            return true;
+        }
+        String schema = ctx.getTargetSchema();
+        if (schema != null && schema.isBlank()) {
+            schema = null;
+        }
+        String reason;
+        try {
+            reason = TargetTableVerifier.verify(targetConn, schema, targetTable, table);
+        } catch (SQLException e) {
+            log.debug("Could not verify target table {} columns: {}", targetTable, e.getMessage());
+            return true;
+        }
+        if (reason != null) {
+            log.error("Project '{}': {}", ctx.projectName(), reason);
+            stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE, table.getName(),
+                    ChangeType.ERROR, reason, false, 0);
+            result.addError(table.getName() + ": " + reason);
+            return false;
+        }
+        verifiedTables.add(key);
+        return true;
+    }
+
+    private static String verifiedKey(long projectId, String targetTable) {
+        return projectId + ":" + targetTable.toUpperCase();
+    }
+
     /** Synchronizes rows for every selected table, one table at a time. */
     private void syncData(DatabaseMeta sourceMeta, Connection sourceConn, Connection targetConn,
                           SyncContext ctx, SyncResult result, Set<String> blockedTables) {
+        // Scoped to the tables this cycle actually writes, so persistent per-table toggles
+        // (SQL Server) cannot touch unrelated tables in a shared target database.
+        List<String> toggledTables = ctx.getConfig().isDisableTargetConstraints()
+                ? sourceMeta.getTables().stream()
+                        .filter(t -> ctx.getConfig().includesTable(t.getName()))
+                        .map(t -> ctx.getConfig().targetTableName(t.getName()))
+                        .collect(java.util.stream.Collectors.toList())
+                : List.of();
         String disableSql = ctx.getConfig().isDisableTargetConstraints()
-                ? ctx.getTargetDialect().getDisableConstraintsSql() : null;
+                ? ctx.getTargetDialect().getDisableConstraintsSql(
+                        ctx.getTargetSchema(), toggledTables)
+                : null;
         DdlExecutor executor = new DdlExecutor(targetConn);
         if (disableSql != null) {
             executor.executeQuietly(disableSql);
@@ -398,7 +500,8 @@ public class SyncEngine {
                 // with checks still off, so the next borrower (this app's next cycle, or any
                 // other client of the pool) would silently skip foreign-key enforcement.
                 try {
-                    executor.execute(ctx.getTargetDialect().getEnableConstraintsSql(), false);
+                    executor.execute(ctx.getTargetDialect().getEnableConstraintsSql(
+                            ctx.getTargetSchema(), toggledTables), false);
                 } catch (SQLException e) {
                     log.error("Could not re-enable target constraints for project '{}': {};"
                             + " aborting the physical connection so it cannot be recycled"
@@ -463,7 +566,11 @@ public class SyncEngine {
                 sourceConn, targetConn, table, strategy, progress, ctx);
 
         if (tableResult.isSkipped()) {
-            log.debug("Skipping data sync for {}: {}", table.getName(), tableResult.getSkipReason());
+            // Previously this was a debug-only line: a table silently standing still looked
+            // identical to a table with nothing to do. Carry it on the result so the run
+            // summary and the sync-now response name the table and the reason.
+            log.info("Skipping data sync for {}: {}", table.getName(), tableResult.getSkipReason());
+            result.addSkipped(table.getName(), tableResult.getSkipReason());
             return;
         }
 
@@ -651,5 +758,7 @@ public class SyncEngine {
     public void evictProjectCaches(Long projectId) {
         String prefix = projectId + ":";
         lastRowCountAudit.keySet().removeIf(key -> key.startsWith(prefix));
+        verifiedTables.removeIf(key -> key.startsWith(prefix));
+        structureSync.evictProject(projectId);
     }
 }

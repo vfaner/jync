@@ -264,7 +264,7 @@ Every driver above except **GBase** and **Oscar** ships inside the distribution,
 | Maven | 3.6+ (build time only) |
 | Memory | ≥ 512 MB heap recommended |
 | Port | `8080` by default |
-| Disk | Metadata store + logs + snapshots; reserve ~1 GB |
+| Disk | Metadata store + logs; reserve ~1 GB |
 
 ### 1. Build
 
@@ -291,9 +291,8 @@ The first launch creates the following under the **current working directory**:
 
 | Directory | Contents |
 |---|---|
-| `./data` | The tool's own metadata (H2 file DB: connections, projects, cursors, locks, change log) |
+| `./data` | The tool's own metadata (H2 file DB: connections, projects, cursors, locks, change log, metadata snapshots) |
 | `./logs` | Runtime logs |
-| `./snapshots` | Metadata snapshot directory (override with `sync.snapshot-dir`) |
 
 > ⚠️ These are **relative paths**. Always start from the same directory, or override them with absolute paths — otherwise a restart won't find your existing data.
 
@@ -311,7 +310,6 @@ spring:
 
 sync:
   poll-interval: 2000              # polling interval in ms
-  snapshot-dir: /opt/jync/snapshots
   batch-size: 500
   fetch-size: 1000
   safety-lag-ms: 1000
@@ -587,7 +585,6 @@ Under `sync.*` in `application.yml`:
 | Key | Default | Description |
 |---|---|---|
 | `poll-interval` | `2000` | Polling interval (ms) |
-| `snapshot-dir` | `./snapshots` | Metadata snapshot directory |
 | `batch-size` | `500` | Rows per JDBC batch |
 | `fetch-size` | `1000` | Source result-set fetch size |
 | `max-retries` | `3` | Consecutive failures before a task is marked ERROR |

@@ -69,7 +69,8 @@ public class GenericMetadataReader implements MetadataReader {
                 new String[]{"TABLE"})) {
             while (rs.next()) {
                 String name = rs.getString("TABLE_NAME");
-                if (name != null && !isSystemObject(name)) {
+                if (name != null && !isSystemObject(rs.getString("TABLE_CAT"),
+                        rs.getString("TABLE_SCHEM"), name)) {
                     names.add(name);
                 }
             }
@@ -86,7 +87,8 @@ public class GenericMetadataReader implements MetadataReader {
                 new String[]{"VIEW"})) {
             while (rs.next()) {
                 String name = rs.getString("TABLE_NAME");
-                if (name != null && !isSystemObject(name)) {
+                if (name != null && !isSystemObject(rs.getString("TABLE_CAT"),
+                        rs.getString("TABLE_SCHEM"), name)) {
                     names.add(name);
                 }
             }
@@ -103,8 +105,10 @@ public class GenericMetadataReader implements MetadataReader {
         try (ResultSet rs = md.getProcedures(catalogFor(conn, schema), schemaPattern(schema), "%")) {
             while (rs.next()) {
                 String name = rs.getString("PROCEDURE_NAME");
-                if (name != null && !isSystemObject(name)) {
-                    names.add(stripPackagePrefix(name));
+                if (name != null && !isSystemObject(rs.getString("PROCEDURE_CAT"),
+                        rs.getString("PROCEDURE_SCHEM"), name)
+                        && isStandaloneRoutine(name)) {
+                    names.add(name);
                 }
             }
         } catch (SQLException e) {
@@ -113,8 +117,10 @@ public class GenericMetadataReader implements MetadataReader {
         try (ResultSet rs = md.getFunctions(catalogFor(conn, schema), schemaPattern(schema), "%")) {
             while (rs.next()) {
                 String name = rs.getString("FUNCTION_NAME");
-                if (name != null && !isSystemObject(name)) {
-                    names.add(stripPackagePrefix(name));
+                if (name != null && !isSystemObject(rs.getString("FUNCTION_CAT"),
+                        rs.getString("FUNCTION_SCHEM"), name)
+                        && isStandaloneRoutine(name)) {
+                    names.add(name);
                 }
             }
         } catch (SQLException e) {
@@ -299,6 +305,7 @@ public class GenericMetadataReader implements MetadataReader {
         String sql = "SELECT VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS "
                 + "WHERE TABLE_NAME = ? AND (? IS NULL OR TABLE_SCHEMA = ?)";
         try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             String schemaArg = schema == null || schema.isBlank() ? null : schema;
             ps.setString(1, viewName);
             ps.setString(2, schemaArg);
@@ -319,6 +326,7 @@ public class GenericMetadataReader implements MetadataReader {
         // Retry unqualified: some products reject the schema predicate above.
         String fallback = "SELECT VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_NAME = ?";
         try (java.sql.PreparedStatement ps = conn.prepareStatement(fallback)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, viewName);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
@@ -459,9 +467,11 @@ public class GenericMetadataReader implements MetadataReader {
                 ? quote(conn, tableName)
                 : quote(conn, schema) + "." + quote(conn, tableName);
         long count;
-        try (Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + qualified)) {
-            count = rs.next() ? rs.getLong(1) : 0L;
+        try (Statement st = conn.createStatement()) {
+            MetadataTimeouts.apply(st);
+            try (ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + qualified)) {
+                count = rs.next() ? rs.getLong(1) : 0L;
+            }
         }
 
         if (cacheKey == null) {
@@ -529,22 +539,106 @@ public class GenericMetadataReader implements MetadataReader {
                 || reportedSchema.equals(schemaPattern(requestedSchema));
     }
 
-    /** Filters out recycle-bin and system-generated objects that must never be synced. */
-    protected boolean isSystemObject(String name) {
+    /**
+     * Catalogs the MySQL-family server itself owns ({@code mysql}, {@code sys},
+     * {@code information_schema}, {@code performance_schema}). A business database never
+     * has these names, and {@code getTables} with a null catalog can otherwise return rows
+     * from all of them.
+     */
+    private static final Set<String> SYSTEM_CATALOGS = Set.of(
+            "MYSQL", "SYS", "INFORMATION_SCHEMA", "PERFORMANCE_SCHEMA");
+
+    /**
+     * Schemas/owners that ship database-engine objects rather than user data.
+     *
+     * <p>Membership is deliberately by <em>schema/owner</em>, never by table-name prefix:
+     * business schemas are full of tables like RuoYi's {@code sys_user}, {@code sys_role},
+     * {@code pg_...}, and filtering those by name both skipped them on sync and, worse,
+     * dropped them at the target under allowDrop.
+     */
+    private static final Set<String> SYSTEM_SCHEMAS = Set.of(
+            // Cross-product standard catalog views.
+            "INFORMATION_SCHEMA",
+            // SQL Server built-in schemas.
+            "SYS", "GUEST",
+            // PostgreSQL-family: the pg_catalog namespace (pg_temp/pg_toast are prefixes).
+            "PG_CATALOG",
+            // Oracle-family built-in administrative users.
+            "SYSTEM", "OUTLN", "DBSNMP", "APPQOSSYS", "AUDSYS",
+            "GSMADMIN_INTERNAL", "GSMUSER", "GSMROOTUSER",
+            "SYSBACKUP", "SYSDG", "SYSKM", "SYSRAC", "REMOTE_SCHEDULER_AGENT",
+            "MDSYS", "XDB", "CTXSYS", "WMSYS", "EXFSYS", "OLAPSYS",
+            "ORDSYS", "ORDPLUGINS", "ORDDATA", "SI_INFORMTN_SCHEMA",
+            "DVSYS", "LBACSYS", "ANONYMOUS", "SYSMAN", "MGMT_VIEW",
+            "OWBSYS", "OWBSYS_AUDIT", "ORACLE_OCM", "SYS$UMF",
+            "FLOWS_FILES", "APEX_PUBLIC_USER", "APEX_INSTANCE_ADMIN_USER",
+            // DB2 built-in schemas.
+            "SYSIBM", "SYSCAT", "SYSSTAT", "SYSFUN", "SYSPROC");
+
+    /** Oracle APEX versioned schemas ({@code APEX_030200}, {@code APEX_040200}…) and
+     *  old HTMLDB {@code FLOWS_} schemas. */
+    private static final List<String> SYSTEM_SCHEMA_PREFIXES = List.of(
+            "APEX_", "FLOWS_",
+            // PostgreSQL session temp schemas (pg_temp_<oid>) and TOAST namespaces; pg_toast
+            // is covered by the same prefix. The un-suffixed pg_catalog is in the set.
+            "PG_TEMP", "PG_TOAST");
+
+    /**
+     * Filters out recycle-bin and engine-owned objects that must never be synced.
+     *
+     * <p>Engine ownership is judged from the catalog/schema the row was reported in; the
+     * only name-prefix filters left are objects the database itself generates inside a
+     * user schema: Oracle's recycle bin ({@code BIN$}), materialized-view logs
+     * ({@code MLOG$}) and SQLite's internal tables ({@code sqlite_}).
+     */
+    protected boolean isSystemObject(String catalog, String schema, String name) {
         if (name == null) {
             return true;
         }
-        String upper = name.toUpperCase();
-        return upper.startsWith("BIN$")          // Oracle recycle bin
-                || upper.startsWith("MLOG$")     // Oracle materialized view logs
-                || upper.startsWith("SYS_")
-                || upper.startsWith("PG_")       // PostgreSQL internals
-                || upper.startsWith("SQLITE_");
+        String upperName = name.toUpperCase();
+        if (upperName.startsWith("BIN$")           // Oracle recycle bin
+                || upperName.startsWith("MLOG$")   // Oracle materialized view logs
+                || upperName.startsWith("SQLITE_")) { // SQLite internal tables
+            return true;
+        }
+        if (catalog != null && SYSTEM_CATALOGS.contains(catalog.toUpperCase())) {
+            return true;
+        }
+        if (schema != null) {
+            String upperSchema = schema.toUpperCase();
+            if (SYSTEM_SCHEMAS.contains(upperSchema)) {
+                return true;
+            }
+            for (String prefix : SYSTEM_SCHEMA_PREFIXES) {
+                if (upperSchema.startsWith(prefix)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
-    /** Oracle reports package routines as {@code PKG.PROC}; keep only the routine name. */
+    /** Oracle reports package routines as {@code PKG.PROC}. */
     protected String stripPackagePrefix(String name) {
+        // PROCEDURE_NAME is nullable per the JDBC spec; some drivers report a null row.
+        if (name == null) {
+            return null;
+        }
         int dot = name.lastIndexOf('.');
         return dot >= 0 ? name.substring(dot + 1) : name;
+    }
+
+    /**
+     * Whether a JDBC-reported routine name denotes a standalone routine.
+     *
+     * <p>Oracle (and DM/Yashan) report members of a package as {@code PKG.PROC}. They are not
+     * independently creatable on targets without packages (MySQL, SQL Server), and listing them
+     * under the stripped name collides with same-named members of other packages and with the
+     * standalone routine — the body lookup then returns nothing and the object silently skips.
+     * Exclude them from selection instead; package member tests (line 351) still use
+     * {@link #stripPackagePrefix} for configs saved before this change.
+     */
+    protected boolean isStandaloneRoutine(String name) {
+        return name.indexOf('.') < 0;
     }
 }

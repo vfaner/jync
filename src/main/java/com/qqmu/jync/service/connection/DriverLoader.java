@@ -79,24 +79,29 @@ public class DriverLoader {
             }
         }
 
-        URLClassLoader loader = loaderCache.computeIfAbsent(canonical(jarPath), key -> buildLoader(jarPath));
+        URLClassLoader loader = loaderCache.computeIfAbsent(canonical(jarPath),
+                key -> buildLoader(jarPath));
 
+        boolean success = false;
+        List<ClassLoader> retiredLoaders = List.of();
         try {
             Class<?> driverClass = Class.forName(driverClassName, true, loader);
             Driver driver = (Driver) driverClass.getDeclaredConstructor().newInstance();
+            // Many drivers self-register the raw instance from their class's static block.
+            // DriverManager hides that registration from callers that cannot see the child
+            // loader, but the entry still pins the loader and resurfaces when it is closed;
+            // drop it so only our shim remains.
+            dropSelfRegistration(driver);
             DriverShim shim = new DriverShim(driver);
             // Retire a shim for the same class that came from a different jar path (the user
             // edited the connection). It must go BEFORE the new registration: DriverManager
             // hands a URL to the first driver that accepts it, so a leftover old shim would
             // keep routing connections through the old jar.
-            List<ClassLoader> retiredLoaders = deregisterStaleShims(driverClassName);
+            retiredLoaders = deregisterStaleShims(driverClassName);
             DriverManager.registerDriver(shim);
             registered.put(registeredKey(driverClassName, jarPath), shim);
             log.info("Registered dynamically loaded driver {} from {}", driverClassName, jarPath);
-            // Close the retired shims' loaders now that the replacement is registered.
-            for (ClassLoader retired : retiredLoaders) {
-                closeIfUnused(retired);
-            }
+            success = true;
             return loader;
         } catch (ClassNotFoundException e) {
             throw new IllegalStateException("error.driver.class.not.found", e);
@@ -104,6 +109,30 @@ public class DriverLoader {
             throw new IllegalStateException("error.driver.register.failed", e);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("error.driver.instantiate.failed", e);
+        } finally {
+            // On failure the freshly built loader (and any loaders orphaned by the partial
+            // replacement) would otherwise stay cached with open jar handles and no shim to
+            // ever retire them; on success only the retired loaders need closing.
+            if (!success) {
+                closeIfUnused(loader);
+                for (ClassLoader retired : retiredLoaders) {
+                    closeIfUnused(retired);
+                }
+            } else {
+                for (ClassLoader retired : retiredLoaders) {
+                    closeIfUnused(retired);
+                }
+            }
+        }
+    }
+
+    /** Best-effort removal of a driver's own static-block registration. */
+    private void dropSelfRegistration(Driver driver) {
+        try {
+            DriverManager.deregisterDriver(driver);
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Could not remove the driver's self-registration (it may not have"
+                    + " registered): {}", e.getMessage());
         }
     }
 

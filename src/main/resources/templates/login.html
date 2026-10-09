@@ -47,6 +47,12 @@
 
     <div class="login-card">
 
+        <div class="alert alert-danger" th:if="${param.locked}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.locked}">
+                Too many failed attempts. Try again later.
+            </div>
+        </div>
         <div class="alert alert-danger" th:if="${param.error}">
             <svg class="ico"><use href="#x-circle-fill"/></svg>
             <div class="alert-body" th:text="#{login.failed}">Wrong username or password.</div>

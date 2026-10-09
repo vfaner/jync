@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -19,11 +21,18 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.model.ChangeLog;
+import com.qqmu.jync.model.ChangeType;
+import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
@@ -61,6 +70,7 @@ class ProjectServiceTest {
     @Mock private SyncTaskStore taskStore;
     @Mock private SyncEngine syncEngine;
     @Mock private SyncLockService lockService;
+    @Mock private AdminAuditService auditService;
 
     private ProjectService service;
 
@@ -69,7 +79,7 @@ class ProjectServiceTest {
         service = new ProjectService(projectRepository, databaseConfigRepository,
                 progressRepository, changeLogRepository, dataSourceManager, readerFactory,
                 snapshotService, contextFactory, scheduler, taskRunner, taskStore, syncEngine,
-                lockService);
+                lockService, auditService);
     }
 
     private Project project(Long id) {
@@ -120,6 +130,21 @@ class ProjectServiceTest {
         config.setCronExpression("   ");
 
         assertThatCode(() -> service.saveConfig(1L, config)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void saveConfigRejectsAMappingThatPointsTwoTablesAtOneTarget() {
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
+
+        SyncConfig config = new SyncConfig();
+        config.getTableNameMapping().put("A", "X");
+        config.getTableNameMapping().put("B", "X");
+
+        assertThatThrownBy(() -> service.saveConfig(1L, config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("error.project.tablemapping.duplicate:");
+        verify(projectRepository, never()).save(any());
+        verify(scheduler, never()).reschedule(any());
     }
 
     // --- lost-update guard on save ---------------------------------------------------------
@@ -200,6 +225,56 @@ class ProjectServiceTest {
         verify(changeLogRepository).deleteByProjectId(1L);
         verify(projectRepository).deleteById(1L);
         verify(lock).close();
+        verify(auditService).record(eq(AuditAction.PROJECT_DELETE), contains("proj"));
+    }
+
+    // --- force unlock ------------------------------------------------------------------------
+
+    @Test
+    void forceUnlockClearsTheLeaseAndAuditsActorAndPreviousHolder() {
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
+        SyncTask task = new SyncTask();
+        task.setLockOwner("node-A");
+        task.setLockExpiresAt(Instant.parse("2026-01-01T00:00:00Z"));
+        when(taskStore.find(1L)).thenReturn(Optional.of(task));
+        when(lockService.forceUnlock(1L)).thenReturn(true);
+        // Three-arg constructor: the two-arg one stays unauthenticated, and the audit
+        // deliberately records "unknown" for an unauthenticated context.
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("admin", null, java.util.List.of()));
+
+        service.forceUnlock(1L);
+
+        verify(lockService).forceUnlock(1L);
+        // Both trails get the event: the change log can be cleared per project, the
+        // append-only audit trail cannot.
+        verify(auditService).record(eq(AuditAction.PROJECT_FORCE_UNLOCK),
+                contains("node-A"));
+        // The audit entry is the only record that a live lease was dropped by hand, so it
+        // must name the actor, the previous holder and the lease that was cut short.
+        ArgumentCaptor<ChangeLog> captor = ArgumentCaptor.forClass(ChangeLog.class);
+        verify(changeLogRepository).save(captor.capture());
+        ChangeLog entry = captor.getValue();
+        assertThat(entry.getProjectId()).isEqualTo(1L);
+        assertThat(entry.getObjectType()).isEqualTo(ObjectType.PROJECT);
+        assertThat(entry.getChangeType()).isEqualTo(ChangeType.INFO);
+        assertThat(entry.getSuccess()).isTrue();
+        assertThat(entry.getDetails())
+                .contains("admin")
+                .contains("node-A")
+                .contains("2026-01-01T00:00:00Z");
+    }
+
+    @Test
+    void forceUnlockIsRefusedWhenNoLeaseIsHeld() {
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.forceUnlock(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.lock.not.held");
+        verify(lockService, never()).forceUnlock(1L);
+        verify(changeLogRepository, never()).save(any());
     }
 
     // --- transaction follow-ups -------------------------------------------------------------
@@ -209,6 +284,7 @@ class ProjectServiceTest {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.clearSynchronization();
         }
+        SecurityContextHolder.clearContext();
     }
 
     @Test

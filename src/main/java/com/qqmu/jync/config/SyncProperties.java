@@ -2,6 +2,8 @@ package com.qqmu.jync.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import com.qqmu.jync.service.metadata.MetadataTimeouts;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -57,13 +59,45 @@ public class SyncProperties {
      */
     private long rowCountAuditIntervalMs = 60_000L;
 
-    /** Deliberately still the pre-rename (SyncTool) literal — see the NOTE in application.yml. */
-    private String cryptoPassword = "synctool-default-key-change-me";
+    /**
+     * How long a data-plane statement may run before the driver aborts it.
+     *
+     * <p>Without a bound, a locked table or a broken network stack parks the sync worker (and the
+     * Quartz thread it runs on) indefinitely. 0 disables the timeout for drivers that do not
+     * support it.
+     */
+    private int queryTimeoutSeconds = 300;
 
-    private String cryptoSalt = "5c0744940b5c369b";
+    /** Same bound for short metadata enumeration queries, which have no reason to run for minutes. */
+    private int metadataQueryTimeoutSeconds = 60;
+
+    /**
+     * Upper bound on waiting for in-flight sync cycles during application shutdown.
+     *
+     * <p>Shutdown gives running cycles this long to finish; cycles still executing afterwards
+     * are abandoned (the scheduler shuts without waiting, and the database rolls back any
+     * open batch). 0 skips the wait. The bound exists because waiting unconditionally makes a
+     * stuck cycle (up to the data-plane timeout, or a wedged driver) hang process shutdown.
+     */
+    private long shutdownWaitMs = 20_000L;
+
+    /** Built-in crypto password. Deliberately still the pre-rename (SyncTool) literal — see the NOTE in application.yml. */
+    public static final String DEFAULT_CRYPTO_PASSWORD = "synctool-default-key-change-me";
+
+    public static final String DEFAULT_CRYPTO_SALT = "5c0744940b5c369b";
+
+    private String cryptoPassword = DEFAULT_CRYPTO_PASSWORD;
+
+    private String cryptoSalt = DEFAULT_CRYPTO_SALT;
 
     /** Days of change-log history to keep; 0 disables pruning. */
     private int changeLogRetentionDays = 30;
+
+    /** Pushes the configured metadata timeout to readers once binding is done. */
+    @javax.annotation.PostConstruct
+    void configureMetadataTimeouts() {
+        MetadataTimeouts.configure(metadataQueryTimeoutSeconds);
+    }
 
     private final Ai ai = new Ai();
 

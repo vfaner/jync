@@ -68,7 +68,7 @@
                                    th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
                                 <form method="post" style="display:inline"
                                       th:action="@{/databases/{id}/delete(id=${config.id})}"
-                                      th:attr="data-confirm=#{common.confirm}">
+                                      th:attr="data-confirm=#{common.confirm.delete(${config.name})}">
                                     <button type="submit" class="btn-icon is-danger" th:title="#{common.delete}">
                                         <svg class="ico"><use href="#trash"/></svg>
                                     </button>
@@ -80,11 +80,10 @@
                 </table>
             </div>
         </div>
-        <div class="card-foot" th:if="${sources.totalPages > 1}"
-             style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="card-foot pager-foot" th:if="${sources.totalPages > 1}">
             <span class="small muted"
                   th:text="#{log.page(${sources.number + 1}, ${sources.totalPages})}">Page 1 of 1</span>
-            <div style="display:flex;gap:7px">
+            <div class="pager-btns">
                 <a class="btn btn-ghost btn-sm"
                    th:if="${!sources.first}"
                    th:href="@{/databases(sourcePage=${sources.number - 1}, targetPage=${targets.number})}">
@@ -155,7 +154,7 @@
                                    th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
                                 <form method="post" style="display:inline"
                                       th:action="@{/databases/{id}/delete(id=${config.id})}"
-                                      th:attr="data-confirm=#{common.confirm}">
+                                      th:attr="data-confirm=#{common.confirm.delete(${config.name})}">
                                     <button type="submit" class="btn-icon is-danger" th:title="#{common.delete}">
                                         <svg class="ico"><use href="#trash"/></svg>
                                     </button>
@@ -167,11 +166,10 @@
                 </table>
             </div>
         </div>
-        <div class="card-foot" th:if="${targets.totalPages > 1}"
-             style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="card-foot pager-foot" th:if="${targets.totalPages > 1}">
             <span class="small muted"
                   th:text="#{log.page(${targets.number + 1}, ${targets.totalPages})}">Page 1 of 1</span>
-            <div style="display:flex;gap:7px">
+            <div class="pager-btns">
                 <a class="btn btn-ghost btn-sm"
                    th:if="${!targets.first}"
                    th:href="@{/databases(targetPage=${targets.number - 1}, sourcePage=${sources.number})}">

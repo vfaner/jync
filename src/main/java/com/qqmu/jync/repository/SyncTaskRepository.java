@@ -49,6 +49,19 @@ public interface SyncTaskRepository extends JpaRepository<SyncTask, Long> {
             + "where t.projectId = :projectId and t.lockOwner = :owner")
     int releaseLock(@Param("projectId") Long projectId, @Param("owner") String owner);
 
+    /**
+     * Admin override: clears the lock row regardless of owner.
+     *
+     * <p>The running cycle (wherever it runs) notices at its next lease renewal — renewLock
+     * matches on owner and then updates zero rows — and aborts via LockLostException. So this
+     * is the manual form of what TTL expiry does for a crashed owner: it unblocks the project
+     * without waiting out the lease, at the cost of stopping a cycle that may still be alive.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update SyncTask t set t.lockOwner = null, t.lockExpiresAt = null "
+            + "where t.projectId = :projectId and t.lockOwner is not null")
+    int clearLock(@Param("projectId") Long projectId);
+
     /** Extends a held lock so long-running syncs are not considered crashed. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update SyncTask t set t.lockExpiresAt = :expiresAt "

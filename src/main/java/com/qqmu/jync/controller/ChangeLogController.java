@@ -30,21 +30,25 @@ public class ChangeLogController {
 
     @GetMapping("/change-logs")
     public String list(@RequestParam(required = false) Long projectId,
+                       @RequestParam(required = false, defaultValue = "false") Boolean failedOnly,
                        @RequestParam(defaultValue = "1") Integer page,
                        @RequestParam(required = false) Integer size,
                        @RequestParam(required = false) Integer spanL,
                        @RequestParam(required = false) Integer spanR,
                        Model model) {
+        boolean errorsOnly = Boolean.TRUE.equals(failedOnly);
         // Count first: the pager clamps the requested page to the real page count, and the
         // clamped value is what the row query must use.
-        Pager pager = Pager.of(page, size, changeLogService.count(projectId), spanL, spanR);
+        Pager pager = Pager.of(page, size,
+                changeLogService.count(projectId, errorsOnly), spanL, spanR);
         Pageable pageable = PageRequest.of(pager.getPage() - 1, pager.getSize());
-        Page<ChangeLog> logs = changeLogService.page(projectId, pageable);
+        Page<ChangeLog> logs = changeLogService.page(projectId, errorsOnly, pageable);
 
         model.addAttribute("logs", logs);
         model.addAttribute("pager", pager);
         model.addAttribute("projects", projectService.findAll());
         model.addAttribute("selectedProjectId", projectId);
+        model.addAttribute("failedOnly", errorsOnly);
         return "change-logs";
     }
 
@@ -54,9 +58,18 @@ public class ChangeLogController {
      */
     @PostMapping("/change-logs/clear")
     public String clear(@RequestParam(required = false) Long projectId,
+                        @RequestParam(required = false, defaultValue = "false") Boolean failedOnly,
                         RedirectAttributes flash) {
         changeLogService.clear(projectId);
         flash.addFlashAttribute("message", "log.clear.success");
-        return "redirect:/change-logs" + (projectId != null ? "?projectId=" + projectId : "");
+        StringBuilder url = new StringBuilder("/change-logs");
+        boolean hasProject = projectId != null;
+        if (hasProject) {
+            url.append("?projectId=").append(projectId);
+        }
+        if (Boolean.TRUE.equals(failedOnly)) {
+            url.append(hasProject ? '&' : '?').append("failedOnly=true");
+        }
+        return "redirect:" + url;
     }
 }

@@ -239,7 +239,10 @@
                                 <resource>
                                     <directory>${project.basedir}</directory>
                                     <includes>
-                                        <include>RELEASE_NOTES_v*.md</include>
+                                        <!-- Only the running version's notes are ever read
+                                             (VersionService looks up this exact name); older
+                                             notes stay in the repo but must not bloat the jar. -->
+                                        <include>RELEASE_NOTES_v${project.version}.md</include>
                                     </includes>
                                 </resource>
                             </resources>

@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.task;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,6 +44,21 @@ public class SyncTaskRunner {
 
     /** Projects whose in-flight cycle should be followed by exactly one more cycle. */
     private final Set<Long> queuedReruns = ConcurrentHashMap.newKeySet();
+
+    /**
+     * How many consecutive background attempts each queued entry has made against a lock
+     * held outside this JVM.
+     *
+     * <p>Without a cap a stuck lock (dead instance within its TTL, long maintenance window)
+     * turns one click into an endless chain: failed acquire → requeue → 1 second later,
+     * failed acquire → ... Reset whenever the lock is taken or a holder inside this JVM is
+     * found instead.
+     */
+    private final Map<Long, Integer> rerunAttempts = new ConcurrentHashMap<>();
+
+    /** Max background attempts against an out-of-JVM holder before the click is dropped;
+     *  the next scheduled poll or manual click starts a fresh chain. */
+    private static final int MAX_RERUN_ATTEMPTS = 5;
 
     /**
      * Wait before a self-served rerun retries a still-busy lock, so a lock held by another
@@ -174,23 +190,64 @@ public class SyncTaskRunner {
         Optional<Project> maybeProject = projectRepository.findById(projectId);
         if (maybeProject.isEmpty()) {
             log.debug("Dropping queued rerun: project {} no longer exists", projectId);
+            rerunAttempts.remove(projectId);
             return;
         }
         Project project = maybeProject.get();
+        if (!Boolean.TRUE.equals(project.getEnabled())) {
+            // The project was stopped (or deleted-then-recreated into a disabled state) after
+            // the click coalesced. Do not sneak a cycle past the user's stop.
+            log.info("Dropping queued rerun for project '{}': the project is stopped",
+                    project.getName());
+            queuedReruns.remove(projectId);
+            rerunAttempts.remove(projectId);
+            return;
+        }
         try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
             if (lock == null) {
+                // A holder inside this JVM drains us when its cycle finishes; do not spend
+                // retry attempts on that ordinary wait.
+                if (lockService.isLockedInThisJvm(projectId)) {
+                    queuedReruns.add(projectId);
+                    return;
+                }
+                int attempt = rerunAttempts.merge(projectId, 1, Integer::sum);
+                if (attempt >= MAX_RERUN_ATTEMPTS) {
+                    log.info("Queued rerun for project '{}' gave up after {} attempts to take"
+                            + " a lock held outside this process; it will run at the next"
+                            + " scheduled or manual trigger", project.getName(), attempt);
+                    queuedReruns.remove(projectId);
+                    rerunAttempts.remove(projectId);
+                    return;
+                }
                 // A holder is active; return the entry for its drain, re-checking the gap.
                 queuedReruns.add(projectId);
                 selfServeQueuedRerun(projectId);
                 return;
             }
             execute(project, lock);
+            rerunAttempts.remove(projectId);
         }
     }
 
     /** Whether a project row still exists; an orphaned Quartz job uses it to self-delete. */
     public boolean projectExists(Long projectId) {
         return projectRepository.existsById(projectId);
+    }
+
+    /**
+     * Whether the project exists <em>and</em> its durable enabled flag is set.
+     *
+     * <p>Asked at every scheduled fire rather than trusted from the local schedule: with
+     * several instances sharing one database, a stop processed on another node leaves this
+     * node's Quartz trigger alive, and the database flag is the only truth all nodes see.
+     * Manual sync-now deliberately does not consult this — running one deliberate cycle on a
+     * stopped project stays a feature, not a leak.
+     */
+    public boolean projectEnabled(Long projectId) {
+        return projectRepository.findById(projectId)
+                .map(p -> Boolean.TRUE.equals(p.getEnabled()))
+                .orElse(false);
     }
 
     @PreDestroy

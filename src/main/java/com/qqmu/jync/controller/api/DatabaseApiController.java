@@ -54,15 +54,6 @@ public class DatabaseApiController {
         return ResponseEntity.ok(body);
     }
 
-    /** The JDBC URL that the current settings would produce. */
-    @PostMapping("/preview-url")
-    public ResponseEntity<Map<String, Object>> previewUrl(@ModelAttribute DatabaseConfig config) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("success", true);
-        body.put("jdbcUrl", service.previewUrl(config));
-        return ResponseEntity.ok(body);
-    }
-
     /** Driver class names advertised inside a jar, so the user need not know them. */
     @GetMapping("/discover-drivers")
     public ResponseEntity<Map<String, Object>> discoverDrivers(@RequestParam String jarPath) {

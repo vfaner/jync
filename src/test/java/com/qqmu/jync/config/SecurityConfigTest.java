@@ -72,6 +72,19 @@ class SecurityConfigTest {
     @Autowired
     private RequestMappingHandlerMapping handlerMapping;
 
+    @Autowired
+    private org.springframework.boot.autoconfigure.web.ServerProperties serverProperties;
+
+    @Test
+    void sessionCookieCarriesHardeningFlagsByDefault() {
+        org.springframework.boot.web.servlet.server.Session.Cookie cookie =
+                serverProperties.getServlet().getSession().getCookie();
+        assertThat(cookie.getHttpOnly()).isTrue();
+        assertThat(String.valueOf(cookie.getSameSite()).toLowerCase()).isEqualTo("lax");
+        // Secure stays opt-in (JYN_COOKIE_SECURE) so plain-HTTP local installs keep working.
+        assertThat(cookie.getSecure()).isFalse();
+    }
+
     private int statusOf(org.springframework.test.web.servlet.RequestBuilder request) throws Exception {
         return mvc.perform(request).andReturn().getResponse().getStatus();
     }
@@ -195,6 +208,59 @@ class SecurityConfigTest {
     void aViewerCanOpenTheChangePasswordPage() throws Exception {
         assertThat(statusOf(get("/account/password").with(asViewer())))
                 .isEqualTo(200);
+    }
+
+    // ── Admin audit trail ──────────────────────────────────────────────────────
+
+    @Autowired
+    private com.qqmu.jync.repository.AuditEventRepository auditRepository;
+
+    /** The trail is about admins; a viewer is not even offered the page (see ADMIN_ONLY_GET). */
+    @Test
+    void theAuditPageIsAdminOnly() throws Exception {
+        assertThat(statusOf(get("/audits").with(asViewer()))).isEqualTo(302);
+        assertThat(statusOf(get("/audits").with(asAdmin()))).isEqualTo(200);
+    }
+
+    private com.qqmu.jync.model.AuditEvent latestAudit() {
+        return auditRepository.findAll(org.springframework.data.domain.PageRequest.of(
+                        0, 1, org.springframework.data.domain.Sort.by(
+                                org.springframework.data.domain.Sort.Direction.DESC, "id")))
+                .getContent().get(0);
+    }
+
+    /**
+     * A rejected sign-in must leave a row even though the session never existed: the failed
+     * username is attacker-controlled, so the audit service is the thing that sanitizes it.
+     */
+    @Test
+    void aFailedLoginIsRecordedInTheAuditTrail() throws Exception {
+        long before = auditRepository.count();
+
+        mvc.perform(post("/login").with(csrf())
+                        .param("username", "admin")
+                        .param("password", "definitely-wrong"))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(auditRepository.count()).isGreaterThan(before);
+        com.qqmu.jync.model.AuditEvent event = latestAudit();
+        assertThat(event.getAction()).isEqualTo(com.qqmu.jync.model.AuditAction.LOGIN_FAILED);
+        assertThat(event.getActor()).isEqualTo("admin");
+    }
+
+    @Test
+    void aSuccessfulLoginIsRecordedInTheAuditTrail() throws Exception {
+        long before = auditRepository.count();
+
+        mvc.perform(post("/login").with(csrf())
+                        .param("username", "admin")
+                        .param("password", "123456"))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(auditRepository.count()).isGreaterThan(before);
+        com.qqmu.jync.model.AuditEvent event = latestAudit();
+        assertThat(event.getAction()).isEqualTo(com.qqmu.jync.model.AuditAction.LOGIN);
+        assertThat(event.getActor()).isEqualTo("admin");
     }
 
     // ── 前提本身 ───────────────────────────────────────────────────────────────

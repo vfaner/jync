@@ -60,11 +60,28 @@ class SyncJobOrphanTest {
     @Test
     void anExistingProjectRunsTheCycleAsUsual() {
         when(runner.projectExists(1L)).thenReturn(true);
+        when(runner.projectEnabled(1L)).thenReturn(true);
         when(runner.runOnce(1L)).thenReturn(
                 SyncTaskRunner.Outcome.executed(new SyncResult()));
 
         assertThatCode(() -> job.execute(context)).doesNotThrowAnyException();
 
         verify(runner).runOnce(1L);
+    }
+
+    /**
+     * Multi-instance guard: a stop processed on another node leaves this node's trigger
+     * alive. The fire must consult the durable enabled flag, drop the stale schedule and
+     * run nothing — a stopped project may not keep syncing from one node's point of view.
+     */
+    @Test
+    void aDisabledProjectDeletesTheStaleJobWithoutRunningACycle() throws Exception {
+        when(runner.projectExists(1L)).thenReturn(true);
+        when(runner.projectEnabled(1L)).thenReturn(false);
+
+        assertThatCode(() -> job.execute(context)).doesNotThrowAnyException();
+
+        verify(scheduler).deleteJob(jobKey);
+        verify(runner, never()).runOnce(1L);
     }
 }

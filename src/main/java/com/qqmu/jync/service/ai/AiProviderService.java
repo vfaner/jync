@@ -13,6 +13,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.repository.AiProviderRepository;
+import com.qqmu.jync.util.AiEndpointValidator;
 import com.qqmu.jync.util.CryptoUtil;
 
 import lombok.extern.slf4j.Slf4j;
@@ -145,10 +146,7 @@ public class AiProviderService {
             throw new IllegalArgumentException("error.ai.baseUrl.required");
         }
         provider.setBaseUrl(provider.getBaseUrl().trim());
-        if (!provider.getBaseUrl().startsWith("http://")
-                && !provider.getBaseUrl().startsWith("https://")) {
-            throw new IllegalArgumentException("error.ai.baseUrl.scheme");
-        }
+        AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
         if (provider.getModel() == null || provider.getModel().isBlank()) {
             throw new IllegalArgumentException("error.ai.model.required");
         }

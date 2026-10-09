@@ -51,6 +51,20 @@ public class SyncJob implements Job {
             }
             return;
         }
+        if (!runner.projectEnabled(projectId)) {
+            // Stopped — possibly on another instance sharing the database, which cannot
+            // remove this node's trigger. The enabled flag is the durable truth, so drop
+            // the stale local schedule instead of running cycles for a stopped project.
+            log.info("Scheduled sync found project {} disabled; removing the stale local job",
+                    projectId);
+            try {
+                context.getScheduler().deleteJob(context.getJobDetail().getKey());
+            } catch (SchedulerException e) {
+                log.error("Could not remove the stale schedule for disabled project {}: {}",
+                        projectId, e.getMessage());
+            }
+            return;
+        }
         try {
             runner.runOnce(projectId)
                     .result()

@@ -1,0 +1,15 @@
+# H2 元数据库(项目/连接/变更日志)落在 /app/data,升级、重建 Pod 不丢数据。
+# 注意访问模式是 ReadWriteOnce:配合默认 H2 存储时副本数必须为 1(见 deployment.yaml)。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jync-data
+  labels:
+    app.kubernetes.io/name: jync
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  # storageClassName: <按集群情况填写,留空用默认 StorageClass>

@@ -56,9 +56,24 @@
                     <dt th:text="#{common.details}">Result</dt>
                     <dd><span class="chip" th:text="${task.lastSyncResult}">result</span></dd>
                 </th:block>
+                <!--/* 锁可见性：持有者 + 租约到期时间。过期的租约标红 —— 持有者已经
+                       消失，行还没被回收，管理员可以强制解锁而不必等 TTL。 */-->
+                <th:block th:if="${lockHeld}">
+                    <dt th:text="#{project.lock}">Sync lock</dt>
+                    <dd>
+                        <span class="badge" th:classappend="${lockExpired} ? 'badge-danger' : 'badge-warn'">
+                            <svg class="ico"><use href="#lock-fill"/></svg>
+                            <span th:text="${lockExpired} ? #{project.lock.expired} : #{project.lock.held}">Held</span>
+                        </span>
+                        <span class="small mono" th:text="${task.lockOwner}">owner</span>
+                        <span class="small muted" th:if="${task.lockExpiresAt != null}"
+                              th:text="#{project.lock.until} + ' '
+                                       + ${#temporals.format(task.lockExpiresAt, 'yyyy-MM-dd HH:mm:ss')}">until</span>
+                    </dd>
+                </th:block>
             </dl>
 
-            <div style="display:flex;gap:9px;flex-wrap:wrap" th:if="${isAdmin}">
+            <div class="btn-row" th:if="${isAdmin}">
                 <button type="button" class="btn btn-ok btn-sm" th:unless="${project.enabled}"
                         data-role="api-btn" data-reload="true"
                         th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
@@ -80,10 +95,20 @@
                 <button type="button" class="btn btn-outline-danger btn-sm"
                         data-role="api-btn" data-reload="true"
                         th:attr="data-action=@{/api/projects/{id}/reset(id=${project.id})},
-                                 data-confirm=#{common.confirm},
+                                 data-confirm=#{common.confirm.reset(${project.name})},
                                  data-busy-text=#{common.loading}">
                     <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
                     <span th:text="#{project.reset}">Reset progress</span>
+                </button>
+                <!--/* 强制解锁只在锁被持有时出现；持有者会在下一次续约时发现租约没了并中止。
+                       二次确认说明后果，因为这个操作可能停掉一轮还活着的同步。 */-->
+                <button type="button" class="btn btn-outline-danger btn-sm" th:if="${lockHeld}"
+                        data-role="api-btn" data-reload="true"
+                        th:attr="data-action=@{/api/projects/{id}/force-unlock(id=${project.id})},
+                                 data-confirm=#{project.confirm.forceUnlock(${task.lockOwner})},
+                                 data-busy-text=#{common.loading}">
+                    <svg class="ico"><use href="#unlock-fill"/></svg>
+                    <span th:text="#{project.lock.forceUnlock}">Force unlock</span>
                 </button>
             </div>
             <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin}"

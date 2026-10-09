@@ -12,7 +12,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.qqmu.jync.dto.SyncResult;
-import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.task.SyncTaskRunner;
 
@@ -79,6 +78,7 @@ public class ProjectApiController {
         body.put("tablesProcessed", result.getTablesProcessed());
         body.put("durationMs", result.getDurationMs());
         body.put("errors", result.getErrors());
+        body.put("skippedTables", result.getSkippedTables());
         body.put("success", result.isSuccess());
         return ResponseEntity.ok(body);
     }
@@ -90,36 +90,18 @@ public class ProjectApiController {
         return ResponseEntity.ok(ok("msg.progress.reset"));
     }
 
-    /** Current status, for the auto-refreshing badges in the UI. */
-    @GetMapping("/{id}/status")
-    public ResponseEntity<Map<String, Object>> status(@PathVariable Long id) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        var project = projectService.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
-        SyncTask task = projectService.findTask(id).orElse(null);
-
-        body.put("success", true);
-        body.put("enabled", Boolean.TRUE.equals(project.getEnabled()));
-        body.put("scheduled", projectService.isScheduled(id));
-        body.put("status", task == null || task.getStatus() == null
-                ? "STOPPED" : task.getStatus().name());
-        body.put("lastSyncTime", task == null || task.getLastSyncTime() == null
-                ? null : task.getLastSyncTime().toString());
-        body.put("lastSyncResult", task == null ? null : task.getLastSyncResult());
-        body.put("consecutiveFailures", task == null ? 0 : task.getConsecutiveFailures());
-        return ResponseEntity.ok(body);
-    }
-
-    /** Objects available in the source database, for the selection tree. */
-    @GetMapping("/{id}/source-objects")
-    public ResponseEntity<Map<String, Object>> sourceObjects(@PathVariable Long id) {
-        ProjectService.SourceObjects objects = projectService.listSourceObjects(id);
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("success", true);
-        body.put("schema", objects.getSchema());
-        body.put("tables", objects.getTables());
-        body.put("views", objects.getViews());
-        body.put("procedures", objects.getProcedures());
+    /**
+     * Admin override: drops the project's sync lease whoever holds it.
+     *
+     * <p>POST endpoints are already ADMIN-only in the filter chain, so no extra role check
+     * here. The action is audited in the change log by the service.
+     */
+    @PostMapping("/{id}/force-unlock")
+    public ResponseEntity<Map<String, Object>> forceUnlock(@PathVariable Long id) {
+        projectService.forceUnlock(id);
+        Map<String, Object> body = ok("msg.lock.forced");
+        // A forced unlock can stop a live cycle; reload so the badge and buttons reflect it.
+        body.put("toastKind", "warn");
         return ResponseEntity.ok(body);
     }
 
@@ -130,28 +112,6 @@ public class ProjectApiController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);
         body.put("columns", projectService.listCursorCandidates(id, table));
-        return ResponseEntity.ok(body);
-    }
-
-    /** Per-table sync progress, including the resolved cursor strategy. */
-    @GetMapping("/{id}/progress")
-    public ResponseEntity<Map<String, Object>> progress(@PathVariable Long id) {
-        var list = projectService.findProgress(id).stream().map(p -> {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("objectName", p.getObjectName());
-            row.put("cursorColumn", p.getCursorColumn());
-            row.put("cursorStrategy", p.getCursorStrategy());
-            row.put("lastSyncValue", p.getLastSyncValue());
-            row.put("lastSyncTime", p.getLastSyncTime() == null ? null
-                    : p.getLastSyncTime().toString());
-            row.put("rowsSyncedTotal", p.getRowsSyncedTotal());
-            row.put("initialLoadDone", p.getInitialLoadDone());
-            return row;
-        }).toList();
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("success", true);
-        body.put("progress", list);
         return ResponseEntity.ok(body);
     }
 

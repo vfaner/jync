@@ -161,6 +161,27 @@ public class SyncLockService {
     }
 
     /**
+     * Admin override: drops the database lease whoever holds it, so a wedged or crashed
+     * owner's project can be unlocked without waiting out the TTL.
+     *
+     * <p>Only the database row is cleared here — the JVM {@link ReentrantLock} of a cycle
+     * running <em>on this node</em> stays held until that cycle notices its lost lease at the
+     * next renewal and unwinds. That is deliberate: the in-flight thread must keep owning its
+     * lock until it stops writing, or a second local cycle could start on top of it. The
+     * holder aborts via {@code LockLostException}; the audit trail records who forced it.
+     *
+     * @return true when a lease was actually cleared; false when the lock was already free
+     */
+    public boolean forceUnlock(Long projectId) {
+        int cleared = store.forceRelease(projectId);
+        if (cleared > 0) {
+            log.warn("Admin force-unlocked the sync lease for project {}", projectId);
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * A live lease is watchdog-renewed at most this many TTLs. The cap stops a wedged
      * holder (frozen thread, deadlocked batch) from extending its lease forever — explicit
      * renewal at commit boundaries still applies while the cycle keeps making progress.

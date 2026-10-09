@@ -110,6 +110,22 @@ public class GlobalModelAdvice {
     }
 
     /**
+     * Drives the banner warning that stored connection passwords are protected by the
+     * publicly shipped default key.
+     *
+     * <p>Both password and salt are checked: either one left at the default keeps the key
+     * derivable from the downloadable jar. Authenticated only, like the password banner —
+     * on the login page there are no secrets shown yet.
+     */
+    @ModelAttribute("usingDefaultCryptoKey")
+    public boolean usingDefaultCryptoKey() {
+        Authentication auth = authentication();
+        return auth != null
+                && (SyncProperties.DEFAULT_CRYPTO_PASSWORD.equals(properties.getCryptoPassword())
+                        || SyncProperties.DEFAULT_CRYPTO_SALT.equals(properties.getCryptoSalt()));
+    }
+
+    /**
      * The current authentication, or {@code null} when there is effectively nobody signed in.
      *
      * <p>Anonymous authentication is folded into {@code null} deliberately: it is a real

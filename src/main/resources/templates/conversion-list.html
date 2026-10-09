@@ -150,7 +150,7 @@
                                    不为了一个按钮引入带 body 的 fetch */-->
                             <form method="post" style="display:inline"
                                   th:action="@{/projects/{id}/conversions/cleanup(id=${projectId})}"
-                                  th:attr="data-confirm=#{common.confirm}">
+                                  th:attr="data-confirm=#{common.confirm.cleanup(${ok})}">
                                 <input type="hidden" name="overrideKey" th:value="${ok}">
                                 <button type="submit" class="btn btn-ghost btn-sm">
                                     <svg class="ico"><use href="#trash"/></svg>

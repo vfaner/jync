@@ -80,25 +80,50 @@ public class SyncScheduler {
         SyncTask task = taskStore.ensureTask(project);
         SyncConfig config = contextFactory.parseConfig(project);
 
+        // Capture the previous registration so a failed replacement can be rolled back:
+        // delete-first used to leave an enabled project with no job at all when the new
+        // trigger/registration failed.
+        JobDetail oldJob = null;
+        Trigger oldTrigger = null;
+        try {
+            oldJob = scheduler.getJobDetail(jobKey(projectId));
+            oldTrigger = oldJob == null ? null : scheduler.getTrigger(triggerKey(projectId));
+        } catch (SchedulerException e) {
+            throw new IllegalStateException("Could not inspect the existing schedule for project '"
+                    + project.getName() + "': " + e.getMessage(), e);
+        }
+
+        // Build both objects before touching the scheduler: bad cron etc. fail here with the
+        // old registration still intact.
+        JobDetail job = JobBuilder.newJob(SyncJob.class)
+                .withIdentity(jobKey(projectId))
+                .withDescription("Sync project " + project.getName())
+                .usingJobData(SyncJob.PROJECT_ID, projectId)
+                .storeDurably()
+                .build();
+        Trigger trigger = buildTrigger(projectId, task, config);
+
         try {
             // Remove first so a changed interval or cron actually takes effect.
-            if (scheduler.checkExists(jobKey(projectId))) {
+            if (oldJob != null) {
                 scheduler.deleteJob(jobKey(projectId));
             }
-
-            JobDetail job = JobBuilder.newJob(SyncJob.class)
-                    .withIdentity(jobKey(projectId))
-                    .withDescription("Sync project " + project.getName())
-                    .usingJobData(SyncJob.PROJECT_ID, projectId)
-                    .storeDurably()
-                    .build();
-
-            Trigger trigger = buildTrigger(projectId, task, config);
             scheduler.scheduleJob(job, trigger);
 
             log.info("Scheduled sync for project '{}' ({})", project.getName(),
                     describeTrigger(task, config));
         } catch (SchedulerException e) {
+            if (oldJob != null) {
+                try {
+                    scheduler.scheduleJob(oldJob, oldTrigger);
+                    log.warn("Failed to replace the schedule for project '{}'; restored the"
+                            + " previous registration", project.getName());
+                } catch (SchedulerException restoreError) {
+                    log.error("Failed to replace the schedule for project '{}' AND could not"
+                            + " restore the previous registration: {}",
+                            project.getName(), restoreError.getMessage());
+                }
+            }
             throw new IllegalStateException("Could not schedule sync for project '"
                     + project.getName() + "': " + e.getMessage(), e);
         }

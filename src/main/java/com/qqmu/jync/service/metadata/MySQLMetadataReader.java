@@ -67,6 +67,7 @@ public class MySQLMetadataReader extends GenericMetadataReader {
         String sql = "SELECT VIEW_DEFINITION FROM information_schema.VIEWS "
                 + "WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, blankToNull(schema));
             ps.setString(2, viewName);
             try (ResultSet rs = ps.executeQuery()) {
@@ -88,6 +89,7 @@ public class MySQLMetadataReader extends GenericMetadataReader {
                 + "FROM information_schema.ROUTINES "
                 + "WHERE ROUTINE_SCHEMA = COALESCE(?, DATABASE()) AND ROUTINE_NAME = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, blankToNull(schema));
             ps.setString(2, procedureName);
             try (ResultSet rs = ps.executeQuery()) {
@@ -107,6 +109,7 @@ public class MySQLMetadataReader extends GenericMetadataReader {
         String sql = "SELECT TABLE_ROWS FROM information_schema.TABLES "
                 + "WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, blankToNull(schema));
             ps.setString(2, tableName);
             try (ResultSet rs = ps.executeQuery()) {

@@ -29,7 +29,9 @@ public class DdlExecutor {
 
     /** Substrings that indicate "the thing I tried to create is already there". */
     private static final String[] BENIGN_CREATE_MARKERS = {
-            "already exists", "duplicate", "name is already used", "exists",
+            // No bare "exists": an unrelated error merely mentioning existence ("foreign key
+            // target does not exist") must not be laundered into "create succeeded".
+            "already exists", "duplicate", "name is already used",
             // SQL Server: "There is already an object named 'x' in the database."
             "already an object named",
             // 达梦 DM / 金仓 KingBase 等国产库的中文"已存在"错误
@@ -59,7 +61,7 @@ public class DdlExecutor {
             st.execute(sql);
             return true;
         } catch (SQLException e) {
-            if (tolerateMissing && isBenign(e, BENIGN_DROP_MARKERS)) {
+            if (tolerateMissing && isBenign(e, false)) {
                 log.debug("Tolerating expected DDL failure: {}", e.getMessage());
                 return false;
             }
@@ -94,7 +96,7 @@ public class DdlExecutor {
             st.execute(sql);
             return true;
         } catch (SQLException e) {
-            if (isBenign(e, BENIGN_CREATE_MARKERS)) {
+            if (isBenign(e, true)) {
                 log.debug("Object already exists, treating as success: {}", e.getMessage());
                 return false;
             }
@@ -115,32 +117,36 @@ public class DdlExecutor {
         }
     }
 
-    private boolean isBenign(SQLException e, String[] markers) {
+    /**
+     * @param create true for the CREATE path ("already there" is benign), false for a
+     *               tolerated DROP ("was not there" is benign)
+     */
+    private boolean isBenign(SQLException e, boolean create) {
         String message = e.getMessage();
-        if (message == null) {
-            return false;
-        }
-        String lower = message.toLowerCase();
+        String lower = message == null ? "" : message.toLowerCase();
+        String[] markers = create ? BENIGN_CREATE_MARKERS : BENIGN_DROP_MARKERS;
         for (String marker : markers) {
             if (lower.contains(marker)) {
                 return true;
             }
         }
-        // SQLState 42S02 / 42P01: undefined table. 42S01 / 42P07: duplicate table.
+        // SQLState 42S02 / 42P01 / 42704: undefined object. 42S01 / 42P07 / 42710: duplicate.
         String state = e.getSQLState();
-        if (state != null) {
-            if (markers == BENIGN_DROP_MARKERS
-                    && (state.equals("42S02") || state.equals("42P01") || state.equals("42704"))) {
-                return true;
-            }
-            if (markers == BENIGN_CREATE_MARKERS
-                    && (state.equals("42S01") || state.equals("42P07") || state.equals("42710")
-                    // SQL Server: duplicate object name
-                    || state.equals("S0001"))) {
-                return true;
-            }
+        if (state == null) {
+            return false;
         }
-        return false;
+        if (!create) {
+            return state.equals("42S02") || state.equals("42P01") || state.equals("42704");
+        }
+        if (state.equals("42S01") || state.equals("42P07") || state.equals("42710")) {
+            return true;
+        }
+        // SQL Server maps vendor errors 2714/2759 ("already an object named") to S0001, but
+        // S0001 is also returned for unrelated table errors — accept it only with the vendor
+        // code or the "already" text that identifies the duplicate case.
+        return state.equals("S0001")
+                && (e.getErrorCode() == 2714 || e.getErrorCode() == 2759
+                || lower.contains("already"));
     }
 
     private String abbreviate(String sql) {

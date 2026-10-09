@@ -92,7 +92,7 @@
                         th:attr="data-action=@{/api/projects/{id}/conversions/validate(id=${projectId})},
                                  data-kind=${detail.kind},
                                  data-name=${detail.name},
-                                 data-confirm=#{conversion.validateConfirm},
+                                 data-confirm=#{conversion.validateConfirm(${detail.name})},
                                  data-busy-text=#{conversion.validating}">
                     <svg class="ico"><use href="#shield-check"/></svg>
                     <span th:text="#{conversion.validate}">Syntax check</span>
@@ -132,7 +132,7 @@
             <form method="post" style="margin-top:10px"
                   th:if="${isAdmin and !#strings.isEmpty(detail.override)}"
                   th:action="@{/projects/{id}/conversions/{kind}/{name}/delete-override(id=${projectId}, kind=${detail.kind}, name=${detail.name})}"
-                  th:attr="data-confirm=#{common.confirm}">
+                  th:attr="data-confirm=#{common.confirm.deleteOverride(${detail.name})}">
                 <button type="submit" class="btn btn-outline-danger btn-sm">
                     <svg class="ico"><use href="#trash"/></svg>
                     <span th:text="#{conversion.deleteOverride}">Remove override</span>

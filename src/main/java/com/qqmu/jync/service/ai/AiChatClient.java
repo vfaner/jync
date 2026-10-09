@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
+import com.qqmu.jync.util.AiEndpointValidator;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -80,6 +81,11 @@ public class AiChatClient {
         if (model.isEmpty()) {
             return ChatResult.failure("error.ai.model.required", endpoint, model, 0);
         }
+        try {
+            AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
+        } catch (IllegalArgumentException e) {
+            return ChatResult.failure(e.getMessage(), endpoint, model, 0);
+        }
 
         Duration timeout = Duration.ofSeconds(provider.getTimeoutSeconds() == null
                 || provider.getTimeoutSeconds() <= 0 ? 30 : provider.getTimeoutSeconds());
@@ -141,6 +147,11 @@ public class AiChatClient {
 
         if (model.isEmpty()) {
             return ChatResult.failure("error.ai.model.required", endpoint, model, 0);
+        }
+        try {
+            AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
+        } catch (IllegalArgumentException e) {
+            return ChatResult.failure(e.getMessage(), endpoint, model, 0);
         }
         Duration timeout = Duration.ofSeconds(provider.getTimeoutSeconds() == null
                 || provider.getTimeoutSeconds() <= 0 ? 30 : provider.getTimeoutSeconds());

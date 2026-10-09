@@ -94,7 +94,7 @@
                                    th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
                                 <form method="post" style="display:inline"
                                       th:action="@{/projects/{id}/delete(id=${project.id})}"
-                                      th:attr="data-confirm=#{common.confirm}">
+                                      th:attr="data-confirm=#{common.confirm.delete(${project.name})}">
                                     <button type="submit" class="btn-icon is-danger" th:title="#{common.delete}">
                                         <svg class="ico"><use href="#trash"/></svg>
                                     </button>

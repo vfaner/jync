@@ -130,7 +130,7 @@ class SqlDialectTest {
         assertThat(oracle.mapType(wide, DatabaseType.MYSQL)).isEqualTo("CLOB");
 
         ColumnMeta narrow = column("code", "VARCHAR", Types.VARCHAR, 50);
-        assertThat(oracle.mapType(narrow, DatabaseType.MYSQL)).isEqualTo("VARCHAR2(50)");
+        assertThat(oracle.mapType(narrow, DatabaseType.MYSQL)).isEqualTo("VARCHAR2(50 CHAR)");
     }
 
     @Test
@@ -223,8 +223,21 @@ class SqlDialectTest {
                 .contains("AUTO_INCREMENT");
         assertThat(postgres.getCreateTableSql(table, null, "t", DatabaseType.MYSQL))
                 .contains("BIGSERIAL");
-        assertThat(sqlServer.getCreateTableSql(table, null, "t", DatabaseType.MYSQL))
-                .contains("IDENTITY");
+        String sqlServerDdl = sqlServer.getCreateTableSql(table, null, "t", DatabaseType.MYSQL);
+        assertThat(sqlServerDdl).contains("IDENTITY");
+        // T-SQL requires IDENTITY before NOT NULL: the old "INT NOT NULL IDENTITY(1,1)"
+        // made CREATE TABLE fail with a syntax error.
+        assertThat(sqlServerDdl).contains("[id] BIGINT IDENTITY(1,1) NOT NULL");
+
+        // The dialect supplies the session switch that lets the source's own id through
+        // (without it every explicit insert fails with SQL Server error 544).
+        assertThat(sqlServer.getSetIdentityInsertSql("dbo", "t", true))
+                .isEqualTo("SET IDENTITY_INSERT [dbo].[t] ON");
+        assertThat(sqlServer.getSetIdentityInsertSql("dbo", "t", false))
+                .isEqualTo("SET IDENTITY_INSERT [dbo].[t] OFF");
+        // Every other dialect needs nothing.
+        assertThat(mysql.getSetIdentityInsertSql(null, "t", true)).isNull();
+        assertThat(postgres.getSetIdentityInsertSql(null, "t", true)).isNull();
     }
 
     @Test

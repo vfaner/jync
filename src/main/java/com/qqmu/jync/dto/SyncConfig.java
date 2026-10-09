@@ -1,7 +1,11 @@
 package com.qqmu.jync.dto;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -98,6 +102,68 @@ public class SyncConfig {
             }
         }
         return sourceTable;
+    }
+
+    /**
+     * Finds source tables that would be synced into the same target table.
+     *
+     * <p>Two mappings such as {@code A -> X} and {@code B -> X} make both sources write the
+     * same target: rows interleave, cursors advance against the wrong table, and truncation
+     * wipes one source's data — a configuration that must be refused rather than run.
+     *
+     * @param knownSourceTables the source tables actually present (or selected). When null or
+     *                         empty, only the explicitly mapped source names are checked,
+     *                         which still catches two mappings to one target.
+     * @return human-readable conflict descriptions; an empty list means no collision
+     */
+    public List<String> tableMappingConflicts(Collection<String> knownSourceTables) {
+        // Effective target per distinct source name, preserving the first spelling seen.
+        LinkedHashMap<String, String> targetBySource = new LinkedHashMap<>();
+        if (knownSourceTables != null && !knownSourceTables.isEmpty()) {
+            for (String source : knownSourceTables) {
+                if (source != null && !source.isBlank()) {
+                    targetBySource.putIfAbsent(source.trim(), targetTableName(source.trim()));
+                }
+            }
+        } else {
+            for (String source : tableNameMapping.keySet()) {
+                if (source != null && !source.isBlank()) {
+                    targetBySource.putIfAbsent(source.trim(), targetTableName(source.trim()));
+                }
+            }
+        }
+
+        // Target name (upper-case) -> every source spelling that resolves to it. Identifiers
+        // are compared case-insensitistically, matching targetTableName: this is deliberately
+        // conservative, since a target that folds name case (MySQL on Windows, H2) would
+        // collide even where a case-sensitive database would not.
+        LinkedHashMap<String, List<String>> sourcesByTarget = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : targetBySource.entrySet()) {
+            sourcesByTarget
+                    .computeIfAbsent(e.getValue().toUpperCase(), k -> new ArrayList<>())
+                    .add(e.getKey());
+        }
+
+        List<String> conflicts = new ArrayList<>();
+        for (Map.Entry<String, List<String>> e : sourcesByTarget.entrySet()) {
+            if (e.getValue().size() > 1) {
+                String target = targetTableName(e.getValue().get(0));
+                conflicts.add("Source tables " + quoteJoined(e.getValue())
+                        + " all sync to the same target table \"" + target + "\"");
+            }
+        }
+        return conflicts;
+    }
+
+    private static String quoteJoined(List<String> names) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < names.size(); i++) {
+            if (i > 0) {
+                sb.append(i == names.size() - 1 ? " and " : ", ");
+            }
+            sb.append('"').append(names.get(i)).append('"');
+        }
+        return sb.toString();
     }
 
     public String cursorColumnFor(String table) {

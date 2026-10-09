@@ -1,0 +1,27 @@
+# 可选:没有 Ingress Controller 的集群删掉此文件(或从 kustomization.yaml 移除)。
+# 域名、TLS、注解按集群实际情况修改。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jync
+  labels:
+    app.kubernetes.io/name: jync
+  annotations:
+    # 同步大表时接口耗时较长,放宽代理超时(nginx-ingress 示例):
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  rules:
+    - host: jync.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: jync
+                port:
+                  name: http
+  # tls:
+  #   - hosts: [jync.example.com]
+  #     secretName: jync-tls

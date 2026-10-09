@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -61,6 +62,7 @@ class SyncTaskRunnerRerunTest {
         Project project = new Project();
         project.setId(1L);
         project.setName("p");
+        project.setEnabled(true);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
         when(projectRepository.findById(2L)).thenReturn(Optional.empty());
     }
@@ -184,6 +186,48 @@ class SyncTaskRunnerRerunTest {
     }
 
     @Test
+    void aQueuedRerunForAStoppedProjectIsDroppedWithoutACycle() throws Exception {
+        // The project was stopped after the click coalesced: no cycle may sneak past stop.
+        Project stopped = new Project();
+        stopped.setId(3L);
+        stopped.setName("stopped");
+        stopped.setEnabled(false);
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(stopped));
+        queuedReruns().add(3L);
+
+        Method runClaimed = SyncTaskRunner.class.getDeclaredMethod(
+                "runClaimedRerun", Long.class);
+        runClaimed.setAccessible(true);
+        runClaimed.invoke(runner, 3L);
+
+        verify(syncEngine, never()).runCycle(any());
+        assertThat(queuedReruns()).doesNotContain(3L);
+    }
+
+    @Test
+    void aStuckOutsideLockStopsAmplifyingAfterTheAttemptCap() throws Exception {
+        // Lock always unavailable (dead remote owner within TTL). One click must not turn
+        // into an endless retry chain; after the cap the entry is dropped silently.
+        when(lockStore.acquire(eq(4L), anyString(), anyLong())).thenReturn(false);
+        Project stuck = new Project();
+        stuck.setId(4L);
+        stuck.setName("stuck");
+        stuck.setEnabled(true);
+        when(projectRepository.findById(4L)).thenReturn(Optional.of(stuck));
+
+        assertThat(runner.runOnce(4L).kind())
+                .isEqualTo(SyncTaskRunner.Outcome.Kind.QUEUED);
+
+        Set<Long> queued = queuedReruns();
+        long deadline = System.currentTimeMillis() + 9000;
+        while (queued.contains(4L) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100);
+        }
+        assertThat(queued).doesNotContain(4L);
+        assertThat(cycles.get()).isZero();
+    }
+
+    @Test
     void projectExistsReflectsTheRepository() {
         when(projectRepository.existsById(7L)).thenReturn(true);
 
@@ -210,5 +254,20 @@ class SyncTaskRunnerRerunTest {
             Thread.sleep(25);
         }
         assertThat(queued).isEmpty();
+    }
+
+    /** The scheduled-fire gate reads the durable flag, never the local schedule. */
+    @Test
+    void projectEnabledReflectsTheDurableFlag() {
+        Project stopped = new Project();
+        stopped.setId(3L);
+        stopped.setEnabled(false);
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(stopped));
+
+        assertThat(runner.projectEnabled(1L)).isTrue();
+        assertThat(runner.projectEnabled(3L)).isFalse();
+        // A missing row must never answer true: SyncJob checks existence first, but the
+        // gate itself stays safe on its own.
+        assertThat(runner.projectEnabled(2L)).isFalse();
     }
 }

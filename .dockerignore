@@ -1,0 +1,20 @@
+# 构建上下文只留构建所需(pom.xml、src、RELEASE_NOTES_v*.md),其余不进镜像
+.git
+.idea
+.vscode
+target
+data
+logs
+docs
+deploy
+*.png
+*.py
+docker-compose.yml
+Dockerfile
+.dockerignore
+# 根目录文档不进上下文;但 RELEASE_NOTES_v*.md 必须保留——
+# copy-release-notes 会把当前版本的那份打进 jar(设置页「本版本更新内容」用),
+# 且文件名随版本号变,不做排除以免升版本时静默失效
+README.md
+README_EN.md
+THIRD_PARTY_LICENSES.md

@@ -143,6 +143,8 @@ class ConversionControllerViewTest {
         assertThat(html)
                 .contains("PROCEDURE:DELETED_FROM_SOURCE")
                 .contains("/projects/1/conversions/cleanup")
+                // The confirm names the exact dead key being removed.
+                .contains("Remove the override key &quot;PROCEDURE:DELETED_FROM_SOURCE&quot;?")
                 .doesNotContain("??");
     }
 
@@ -174,6 +176,9 @@ class ConversionControllerViewTest {
         assertThat(html)
                 .contains("hand-written")
                 .contains("delete-override")
+                // Both confirm dialogs on this page name the object they act on.
+                .contains("Remove the saved override for &quot;GET_TOTAL&quot;?")
+                .contains("This creates &quot;GET_TOTAL&quot;")
                 .doesNotContain("??");
     }
 

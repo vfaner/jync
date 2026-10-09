@@ -33,12 +33,14 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
 
     @Override
     public String resolveDefaultSchema(Connection conn) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT SCHEMA_NAME()");
-             ResultSet rs = ps.executeQuery()) {
-            if (rs.next()) {
-                String s = rs.getString(1);
-                if (s != null && !s.isBlank()) {
-                    return s;
+        try (PreparedStatement ps = conn.prepareStatement("SELECT SCHEMA_NAME()")) {
+            MetadataTimeouts.apply(ps);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String s = rs.getString(1);
+                    if (s != null && !s.isBlank()) {
+                        return s;
+                    }
                 }
             }
         } catch (SQLException e) {
@@ -57,6 +59,7 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
                 + "JOIN sys.schemas s ON s.schema_id = v.schema_id "
                 + "WHERE s.name = ? AND v.name = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, viewName);
             try (ResultSet rs = ps.executeQuery()) {
@@ -79,6 +82,7 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
                 + "WHERE s.name = ? AND o.name = ? "
                 + "AND o.type IN ('P','FN','IF','TF')";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, procedureName);
             try (ResultSet rs = ps.executeQuery()) {
@@ -104,6 +108,7 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
                 + "JOIN sys.schemas s ON s.schema_id = t.schema_id "
                 + "WHERE s.name = ? AND t.name = ? AND p.index_id IN (0,1)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
             ps.setString(2, tableName);
             try (ResultSet rs = ps.executeQuery()) {

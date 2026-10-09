@@ -136,7 +136,14 @@ public class ProjectController {
         model.addAttribute("project", project);
         model.addAttribute("config", config);
         model.addAttribute("databases", databaseConfigService.findAll());
-        model.addAttribute("task", projectService.findTask(id).orElse(null));
+        SyncTask task = projectService.findTask(id).orElse(null);
+        model.addAttribute("task", task);
+        // Lock visibility: a held lease explains why start/sync-now/delete may refuse, and an
+        // expired one tells the admin the holder is gone but the row has not been reclaimed.
+        boolean lockHeld = task != null && task.getLockOwner() != null;
+        model.addAttribute("lockHeld", lockHeld);
+        model.addAttribute("lockExpired", lockHeld && task.getLockExpiresAt() != null
+                && task.getLockExpiresAt().isBefore(java.time.Instant.now()));
         model.addAttribute("progressList", projectService.findProgress(id));
         model.addAttribute("scheduled", projectService.isScheduled(id));
 
@@ -252,18 +259,5 @@ public class ProjectController {
             flash.addFlashAttribute("error", e.getMessage());
         }
         return "redirect:/projects";
-    }
-
-    /** Selects every object in the source, matching the documented select-all default. */
-    @PostMapping("/{id}/select-all")
-    public String selectAll(@PathVariable Long id, RedirectAttributes flash) {
-        try {
-            SyncConfig config = projectService.selectAll(id);
-            projectService.saveConfig(id, config);
-            flash.addFlashAttribute("message", "msg.selected.all");
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            flash.addFlashAttribute("error", e.getMessage());
-        }
-        return "redirect:/projects/" + id;
     }
 }

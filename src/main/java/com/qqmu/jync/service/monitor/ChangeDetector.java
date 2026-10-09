@@ -96,13 +96,24 @@ public class ChangeDetector {
         // not be read, so it must never be dropped (a permissions change or a transient error
         // is unrecoverable once the target table and snapshot are gone).
         if (config.isAllowDrop()) {
-            for (Map.Entry<String, TableMeta> e : snapshots.entrySet()) {
-                if (!seen.contains(e.getKey())
-                        && !current.getUnreadableTables().contains(e.getKey())
-                        && config.includesTable(e.getValue().getName())) {
-                    events.add(ChangeEvent.of(ObjectType.TABLE, ChangeType.DROP,
-                            e.getValue().getName(), "Table no longer exists in source",
-                            e.getValue()));
+            // An EMPTY enumeration is ambiguous: it matches both "every table was dropped"
+            // and "the schema was renamed / grants were revoked / the dictionary hiccuped".
+            // With snapshots on record the latter is the catastrophic reading, so suppress
+            // every DROP this pass rather than erase the whole target.
+            if (current.getTables().isEmpty() && current.getUnreadableTables().isEmpty()
+                    && !snapshots.isEmpty()) {
+                log.warn("Project {}: source table enumeration came back empty while {} table(s)"
+                        + " are snapshotted — suppressing drops this cycle (check the configured"
+                        + " schema and account grants).", projectId, snapshots.size());
+            } else {
+                for (Map.Entry<String, TableMeta> e : snapshots.entrySet()) {
+                    if (!seen.contains(e.getKey())
+                            && !current.getUnreadableTables().contains(e.getKey())
+                            && config.includesTable(e.getValue().getName())) {
+                        events.add(ChangeEvent.of(ObjectType.TABLE, ChangeType.DROP,
+                                e.getValue().getName(), "Table no longer exists in source",
+                                e.getValue()));
+                    }
                 }
             }
         }
@@ -221,12 +232,21 @@ public class ChangeDetector {
         }
 
         if (config.isAllowDrop()) {
-            for (Map.Entry<String, ViewMeta> e : snapshots.entrySet()) {
-                if (!seen.contains(e.getKey())
-                        && !current.getUnreadableViews().contains(e.getKey())
-                        && config.includesView(e.getValue().getName())) {
-                    events.add(ChangeEvent.of(ObjectType.VIEW, ChangeType.DROP,
-                            e.getValue().getName(), "View no longer exists in source", e.getValue()));
+            // Same empty-enumeration guard as tables.
+            if (current.getViews().isEmpty() && current.getUnreadableViews().isEmpty()
+                    && !snapshots.isEmpty()) {
+                log.warn("Project {}: source view enumeration came back empty while {} view(s)"
+                        + " are snapshotted — suppressing drops this cycle.",
+                        projectId, snapshots.size());
+            } else {
+                for (Map.Entry<String, ViewMeta> e : snapshots.entrySet()) {
+                    if (!seen.contains(e.getKey())
+                            && !current.getUnreadableViews().contains(e.getKey())
+                            && config.includesView(e.getValue().getName())) {
+                        events.add(ChangeEvent.of(ObjectType.VIEW, ChangeType.DROP,
+                                e.getValue().getName(), "View no longer exists in source",
+                                e.getValue()));
+                    }
                 }
             }
         }
@@ -262,12 +282,21 @@ public class ChangeDetector {
         }
 
         if (config.isAllowDrop()) {
-            for (Map.Entry<String, ProcedureMeta> e : snapshots.entrySet()) {
-                if (!seen.contains(e.getKey())
-                        && !current.getUnreadableProcedures().contains(e.getKey())
-                        && config.includesProcedure(e.getValue().getName())) {
-                    events.add(ChangeEvent.of(ObjectType.PROCEDURE, ChangeType.DROP,
-                            e.getValue().getName(), "Routine no longer exists in source", e.getValue()));
+            // Same empty-enumeration guard as tables/views.
+            if (current.getProcedures().isEmpty() && current.getUnreadableProcedures().isEmpty()
+                    && !snapshots.isEmpty()) {
+                log.warn("Project {}: source routine enumeration came back empty while {} routine(s)"
+                        + " are snapshotted — suppressing drops this cycle.",
+                        projectId, snapshots.size());
+            } else {
+                for (Map.Entry<String, ProcedureMeta> e : snapshots.entrySet()) {
+                    if (!seen.contains(e.getKey())
+                            && !current.getUnreadableProcedures().contains(e.getKey())
+                            && config.includesProcedure(e.getValue().getName())) {
+                        events.add(ChangeEvent.of(ObjectType.PROCEDURE, ChangeType.DROP,
+                                e.getValue().getName(), "Routine no longer exists in source",
+                                e.getValue()));
+                    }
                 }
             }
         }

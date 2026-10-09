@@ -33,6 +33,15 @@ public interface SqlDialect {
         return configured;
     }
 
+    /**
+     * Statement that switches explicit-value inserts into an identity column for one table
+     * ({@code SET IDENTITY_INSERT ... ON/OFF}); null when the product needs nothing. Only
+     * SQL Server requires it — without it inserting the source's own id fails with error 544.
+     */
+    default String getSetIdentityInsertSql(String schema, String table, boolean on) {
+        return null;
+    }
+
     /** Wraps an identifier so reserved words and mixed case survive. */
     String quoteIdentifier(String name);
 
@@ -106,6 +115,22 @@ public interface SqlDialect {
     String getDisableConstraintsSql();
 
     String getEnableConstraintsSql();
+
+    /**
+     * Scoped variant toggling constraints only on the given target tables.
+     *
+     * <p>Default keeps the unscoped form for toggles that are connection-session scoped
+     * (MySQL's {@code FOREIGN_KEY_CHECKS}). Dialects whose toggle is persistent DDL
+     * (SQL Server) override it so unrelated tables in a shared database are untouched.
+     * Returns null when the table list is empty.
+     */
+    default String getDisableConstraintsSql(String schema, List<String> tables) {
+        return getDisableConstraintsSql();
+    }
+
+    default String getEnableConstraintsSql(String schema, List<String> tables) {
+        return getEnableConstraintsSql();
+    }
 
     String getTruncateSql(String schema, String table);
 

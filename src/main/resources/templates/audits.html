@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'audits', 'audit.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{audit.title}">Admin audit</h1>
+            <p class="sub">
+                <span th:text="${pager.totalItems}">0</span>
+                <span th:text="#{audit.entries}">entries</span>
+            </p>
+        </div>
+        <!--/* 没有清除按钮，也不会加：这张表存在的意义就是管理员也删不掉。 */-->
+    </div>
+
+    <div class="card" th:with="pagerBase=@{/audits}">
+        <div class="card-body tight">
+            <div th:if="${events.totalElements == 0}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#shield-check"/></svg></div>
+                <h3 th:text="#{audit.empty}">Nothing recorded yet.</h3>
+            </div>
+
+            <div th:unless="${events.totalElements == 0}" class="tbl-wrap">
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{audit.occurredAt}">Time</th>
+                        <th th:text="#{audit.actor}">User</th>
+                        <th th:text="#{audit.action}">Action</th>
+                        <th th:text="#{common.details}">Details</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="e : ${events.content}" th:with="an=${e.action.name()}">
+                        <td class="small mono" style="white-space:nowrap"
+                            th:text="${#temporals.format(e.occurredAt, 'yyyy-MM-dd HH:mm:ss')}">time</td>
+                        <td class="mono small" th:text="${e.actor}">actor</td>
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${an == 'LOGIN_FAILED'} ? 'badge-danger'
+                                                : (${an == 'LOGIN'} ? 'badge-ok'
+                                                : (${an == 'PROJECT_DELETE' or an == 'DB_DELETE'
+                                                   or an == 'CHANGELOG_CLEAR' or an == 'PROJECT_FORCE_UNLOCK'}
+                                                   ? 'badge-warn' : 'badge-mute'))"
+                                  th:text="#{'audit.action.' + ${an}}">Action</span>
+                        </td>
+                        <td><div class="wrap-detail muted" th:text="${e.detail ?: ''}">detail</div></td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div th:replace="~{fragments/pager :: pager(${pager}, ${pagerBase})}"></div>
+    </div>
+
+    <p class="small muted" style="margin:11px 0 0" th:text="#{audit.help}">Append-only help</p>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

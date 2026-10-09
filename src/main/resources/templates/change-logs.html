@@ -18,13 +18,19 @@
             </p>
         </div>
         <div class="page-actions">
-            <form method="get" th:action="@{/change-logs}">
+            <form method="get" th:action="@{/change-logs}" class="inline-form">
                 <select class="select" name="projectId" onchange="this.form.submit()" style="min-width:210px">
                     <option value="" th:text="#{log.allProjects}">All projects</option>
                     <option th:each="p : ${projects}" th:value="${p.id}"
                             th:selected="${selectedProjectId != null and selectedProjectId == p.id}"
                             th:text="${p.name}">Project</option>
                 </select>
+                <label class="check-inline" title="">
+                    <input type="checkbox" name="failedOnly" value="true"
+                           onchange="this.form.submit()"
+                           th:checked="${failedOnly}">
+                    <span th:text="#{log.failedOnly}">Errors only</span>
+                </label>
             </form>
             <!--/* 刷新是读操作，两个角色都该有 —— 所以放在下面 isAdmin 那层外面。 */-->
             <button type="button" class="btn btn-ghost btn-sm" data-role="log-refresh">
@@ -39,6 +45,7 @@
             <form method="post" th:if="${isAdmin}" th:action="@{/change-logs/clear}"
                   th:data-confirm="#{log.clear.confirm}">
                 <input type="hidden" name="projectId" th:value="${selectedProjectId}">
+                <input type="hidden" name="failedOnly" th:if="${failedOnly}" value="true">
                 <button type="submit" class="btn btn-ghost btn-sm btn-warn">
                     <svg class="ico"><use href="#trash"/></svg><span th:text="#{log.clear}">Clear</span></button>
             </form>
@@ -49,11 +56,12 @@
            @{/x}(k=v) 这种带参链接表达式（括号配对会把签名解析搞崩），
            所以在外层 th:with 里先展开成普通字符串再传进去。 */-->
     <div class="card" id="log-card"
-         th:with="pagerBase=@{/change-logs(projectId=${selectedProjectId})}">
+         th:with="pagerBase=@{/change-logs(projectId=${selectedProjectId},
+                                            failedOnly=${failedOnly} ? 'true' : null)}">
         <div class="card-body tight">
             <div th:if="${logs.totalElements == 0}" class="empty">
                 <div class="empty-ico"><svg class="ico"><use href="#clock-history"/></svg></div>
-                <h3 th:text="#{log.noLogs}">No changes recorded.</h3>
+                <h3 th:text="${failedOnly} ? #{log.noErrors} : #{log.noLogs}">No changes recorded.</h3>
             </div>
 
             <div th:unless="${logs.totalElements == 0}" class="tbl-wrap">

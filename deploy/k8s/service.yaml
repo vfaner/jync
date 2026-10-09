@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: jync
+  labels:
+    app.kubernetes.io/name: jync
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: jync
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

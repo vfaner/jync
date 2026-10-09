@@ -114,6 +114,17 @@ class ProjectPagerViewTest {
     }
 
     @Test
+    void deleteConfirmNamesTheProject() throws Exception {
+        stubProjects(1);
+
+        String html = render("");
+
+        // The confirm must name the object being deleted rather than ask a generic question.
+        assertThat(html).contains("Delete &quot;p1&quot;?");
+        assertThat(html).doesNotContain("Are you sure?");
+    }
+
+    @Test
     void pageAndSizeParamsSelectTheSliceAndTheDropdownEntry() throws Exception {
         stubProjects(45);
 

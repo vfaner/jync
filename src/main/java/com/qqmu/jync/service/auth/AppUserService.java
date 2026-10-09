@@ -5,6 +5,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +34,14 @@ public class AppUserService implements UserDetailsService {
 
     public static final String ADMIN_USERNAME = "admin";
     public static final String VIEWER_USERNAME = "view";
+
+    /**
+     * A precomputed BCrypt hash compared against whenever the username does not exist, so a
+     * missing-user request spends the same time as a real one. Without it, the instant
+     * {@code UsernameNotFoundException} reply is a username-enumeration oracle.
+     */
+    private static final String TIMING_DUMMY_HASH =
+            new BCryptPasswordEncoder().encode("timing-equalization-dummy");
 
     private final AppUserRepository repository;
     private final PasswordEncoder passwordEncoder;
@@ -73,8 +82,12 @@ public class AppUserService implements UserDetailsService {
     @Override
     @Transactional(readOnly = true)
     public SyncUserDetails loadUserByUsername(String username) {
-        AppUser user = repository.findByUsername(username)
-                .orElseThrow(() -> new UsernameNotFoundException("No such user: " + username));
+        AppUser user = repository.findByUsername(username).orElse(null);
+        if (user == null) {
+            // Burn one BCrypt verification so this branch costs as much as the real one below.
+            passwordEncoder.matches(username, TIMING_DUMMY_HASH);
+            throw new UsernameNotFoundException("No such user");
+        }
         // Resolved here, at sign-in, and carried on the principal for the life of the session.
         boolean isDefault = passwordEncoder.matches(DEFAULT_PASSWORD, user.getPasswordHash());
         return new SyncUserDetails(user, isDefault);

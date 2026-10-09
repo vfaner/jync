@@ -108,6 +108,21 @@ class AppUserServiceTest {
     }
 
     @Test
+    void unknownUserStillRunsOnePasswordComparison() {
+        // A missing user must cost one BCrypt verification, else reply timing enumerates users.
+        org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder encoder =
+                org.mockito.Mockito.spy(new BCryptPasswordEncoder());
+        AppUserService svc = new AppUserService(repository, encoder);
+
+        assertThatThrownBy(() -> svc.loadUserByUsername("ghost"))
+                .isInstanceOf(UsernameNotFoundException.class);
+
+        org.mockito.Mockito.verify(encoder)
+                .matches(org.mockito.ArgumentMatchers.anyString(),
+                         org.mockito.ArgumentMatchers.startsWith("$2"));
+    }
+
+    @Test
     void defaultPasswordFlagIsFalseAfterChange() {
         service.seedIfEmpty();
         service.changeOwnPassword("admin", "123456", "newPw1", "newPw1");

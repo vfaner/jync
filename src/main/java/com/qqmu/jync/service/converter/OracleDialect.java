@@ -95,16 +95,22 @@ public class OracleDialect extends AbstractSqlDialect {
 
     @Override
     protected String charType(int size) {
-        return "CHAR(" + Math.min(size, 2000) + ")";
+        // CHAR likewise defaults to BYTE semantics; declare CHAR semantics so CJK data fits.
+        // 500 chars stays within the 2000-byte CHAR ceiling even with 4-byte characters.
+        return "CHAR(" + Math.min(Math.max(size, 1), 500) + " CHAR)";
     }
 
     @Override
     protected String varcharType(int size) {
-        // VARCHAR2 caps at 4000 bytes unless extended types are enabled.
-        if (size <= 0 || size > 4000) {
-            return clobType();
+        // VARCHAR2 defaults to BYTE semantics: VARCHAR2(100) holds 100 bytes, so a CJK value
+        // of 34 characters overflows it. CHAR semantics measure in characters instead, but
+        // still consume up to 4 bytes/char against the 4000-byte ceiling — only sizes that
+        // stay within that bound are safe on a non-EXTENDED database; anything larger (and
+        // unknown/zero sizes) becomes a CLOB, which holds the content regardless.
+        if (size > 0 && size <= 1000) {
+            return "VARCHAR2(" + size + " CHAR)";
         }
-        return "VARCHAR2(" + size + ")";
+        return clobType();
     }
 
     @Override

@@ -12,6 +12,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -35,17 +36,20 @@ public class DatabaseConfigService {
     private final DataSourceManager dataSourceManager;
     private final ConnectionTestService connectionTestService;
     private final CryptoUtil cryptoUtil;
+    private final AdminAuditService auditService;
 
     public DatabaseConfigService(DatabaseConfigRepository repository,
                                  ProjectRepository projectRepository,
                                  DataSourceManager dataSourceManager,
                                  ConnectionTestService connectionTestService,
-                                 CryptoUtil cryptoUtil) {
+                                 CryptoUtil cryptoUtil,
+                                 AdminAuditService auditService) {
         this.repository = repository;
         this.projectRepository = projectRepository;
         this.dataSourceManager = dataSourceManager;
         this.connectionTestService = connectionTestService;
         this.cryptoUtil = cryptoUtil;
+        this.auditService = auditService;
     }
 
     public List<DatabaseConfig> findAll() {
@@ -78,6 +82,7 @@ public class DatabaseConfigService {
     @Transactional
     public DatabaseConfig save(DatabaseConfig config, String rawPassword) {
         validate(config);
+        boolean isNew = config.getId() == null;
 
         if (config.getId() != null) {
             DatabaseConfig existing = repository.findById(config.getId())
@@ -113,6 +118,10 @@ public class DatabaseConfigService {
         DatabaseConfig saved = repository.save(config);
         // Drop the cached pool so the next connection picks up the new settings.
         dataSourceManager.evict(saved.getId());
+        // Names and types only — never the password, encrypted or raw, and no host details
+        // beyond what the connection's own name already says.
+        auditService.record(AuditAction.DB_SAVE, (isNew ? "Created" : "Updated")
+                + " connection '" + saved.getName() + "' (" + saved.getType() + ")");
         log.info("Saved database connection '{}' ({})", saved.getName(), saved.getType());
         return saved;
     }
@@ -163,17 +172,19 @@ public class DatabaseConfigService {
      */
     @Transactional
     public void delete(Long id) {
-        if (!repository.existsById(id)) {
-            // deleteById on a missing row throws EmptyResultDataAccessException, which a
-            // double-clicked or two-tab delete would surface as a 500.
-            throw new IllegalArgumentException("error.connection.missing");
-        }
+        // findById rather than existsById: the audit entry should name what was destroyed.
+        DatabaseConfig victim = repository.findById(id)
+                // deleteById on a missing row throws EmptyResultDataAccessException, which a
+                // double-clicked or two-tab delete would surface as a 500.
+                .orElseThrow(() -> new IllegalArgumentException("error.connection.missing"));
         List<Project> dependents = projectRepository.findBySourceDbIdOrTargetDbId(id, id);
         if (!dependents.isEmpty()) {
             throw new IllegalStateException("error.connection.in.use:" + joinNames(dependents));
         }
         dataSourceManager.evict(id);
         repository.deleteById(id);
+        auditService.record(AuditAction.DB_DELETE,
+                "Deleted connection '" + victim.getName() + "' (" + victim.getType() + ")");
         log.info("Deleted database connection {}", id);
     }
 
