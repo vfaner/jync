@@ -15,11 +15,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.model.ChunkCheckpoint;
 import com.qqmu.jync.model.SyncProgress;
+import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
@@ -61,8 +64,20 @@ public class DataSyncService {
 
     private final SyncProperties properties;
 
+    /**
+     * Intra-table resume points of chunked full loads. Null only in hand-built instances
+     * (unit tests); when null, initial loads keep using the single streamed read.
+     */
+    private final ChunkCheckpointRepository checkpoints;
+
     public DataSyncService(SyncProperties properties) {
+        this(properties, null);
+    }
+
+    @Autowired
+    public DataSyncService(SyncProperties properties, ChunkCheckpointRepository checkpoints) {
         this.properties = properties;
+        this.checkpoints = checkpoints;
     }
 
     /** Outcome of synchronizing one table. */
@@ -227,6 +242,16 @@ public class DataSyncService {
             log.warn("Cannot parse high-watermark '{}' for {} (column {}); skipping this cycle",
                     watermark, table.getName(), strategy.getColumn());
             result.error = "Unparseable high-watermark: " + watermark;
+            return result;
+        }
+
+        // Initial loads of keyed tables run as a chain of short keyset chunks, each committed
+        // and checkpointed on its own, so an interrupted load resumes mid-table instead of
+        // re-reading everything. Chunk-size 0, a keyless table, or a missing checkpoint
+        // repository keeps the classic single streamed read below.
+        if (result.initialLoad
+                && chunkedInitialLoad(sourceConn, targetConn, table, targetTable, strategy,
+                        watermark, upperBound, ctx, result)) {
             return result;
         }
 
@@ -654,6 +679,19 @@ public class DataSyncService {
     private WriteStats copyRows(Connection sourceConn, Connection targetConn, String selectSql,
                                 List<Object> params, TableMeta table, String targetTable,
                                 SyncContext ctx) throws SQLException {
+        return copyRows(sourceConn, targetConn, selectSql, params, table, targetTable, ctx,
+                null, null);
+    }
+
+    /**
+     * @param pkTrack primary-key column names to observe per row, or null to not track
+     * @param sink    receives the key values of the last row read; the chunked full load
+     *                persists them as its resume boundary
+     */
+    private WriteStats copyRows(Connection sourceConn, Connection targetConn, String selectSql,
+                                List<Object> params, TableMeta table, String targetTable,
+                                SyncContext ctx, List<String> pkTrack, PkCursor sink)
+            throws SQLException {
         SqlDialect targetDialect = ctx.getTargetDialect();
         List<String> pkColumns = table.getPrimaryKeys();
 
@@ -715,9 +753,9 @@ public class DataSyncService {
 
                 total = emulateUpsert && !pkColumns.isEmpty()
                         ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
-                                typeByColumn, rs, jdbcTypes, ctx)
+                                typeByColumn, rs, jdbcTypes, ctx, pkTrack, sink)
                         : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
-                                rs, columns, jdbcTypes, ctx);
+                                rs, columns, jdbcTypes, ctx, pkTrack, sink);
             }
             targetConn.commit();
         } catch (LockLostException e) {
@@ -767,13 +805,17 @@ public class DataSyncService {
                                              Map<String, Integer> typeByColumn,
                                              ResultSet rs, List<String> columns,
                                              List<Integer> jdbcTypes,
-                                             SyncContext ctx) throws SQLException {
+                                             SyncContext ctx, List<String> pkTrack, PkCursor sink)
+            throws SQLException {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
             JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
             while (rs.next()) {
                 Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes);
+                if (sink != null) {
+                    sink.values = extractPk(row, pkTrack);
+                }
                 JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn);
                 upsert.addBatch();
                 inBatch++;
@@ -798,7 +840,8 @@ public class DataSyncService {
     private WriteStats writeWithEmulatedUpsert(Connection targetConn, String targetTable,
                                                List<String> columns, List<String> pkColumns,
                                                Map<String, Integer> typeByColumn, ResultSet rs,
-                                               List<Integer> jdbcTypes, SyncContext ctx)
+                                               List<Integer> jdbcTypes, SyncContext ctx,
+                                               List<String> pkTrack, PkCursor sink)
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
         GenericSqlDialect generic = dialect instanceof GenericSqlDialect
@@ -830,6 +873,9 @@ public class DataSyncService {
             int sinceCommit = 0;
             while (rs.next()) {
                 Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes);
+                if (sink != null) {
+                    sink.values = extractPk(row, pkTrack);
+                }
                 int updated = 0;
                 if (update != null) {
                     JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn);
@@ -877,6 +923,108 @@ public class DataSyncService {
             }
         }
         return stats;
+    }
+
+    /** Mutable single-slot holder: primary-key values of the last row a copy pass read. */
+    private static final class PkCursor {
+        private List<Object> values;
+    }
+
+    /**
+     * Pulls the tracked key columns out of one mapped row. Column names may differ in case
+     * between the result set and the metadata-derived PK list (Oracle reports upper case),
+     * so the lookup falls back to a case-insensitive scan.
+     */
+    private static List<Object> extractPk(Map<String, Object> row, List<String> pkColumns) {
+        List<Object> values = new ArrayList<>(pkColumns.size());
+        for (String pk : pkColumns) {
+            Object value = row.get(pk);
+            if (value == null && !row.containsKey(pk)) {
+                for (Map.Entry<String, Object> e : row.entrySet()) {
+                    if (e.getKey().equalsIgnoreCase(pk)) {
+                        value = e.getValue();
+                        break;
+                    }
+                }
+            }
+            values.add(value);
+        }
+        return values;
+    }
+
+    /**
+     * Keyset-chunked initial full load with an intra-table resume point.
+     *
+     * <p>Instead of one table-long streamed read, the table is walked as a chain of short
+     * bounded pages ({@code WHERE pk > last ORDER BY pk LIMIT chunkSize}). Each page is copied
+     * through {@link #copyRows}, which commits it on the target, and only then is the page's
+     * boundary persisted to {@code chunk_checkpoint}. A crash therefore costs at most one page
+     * of re-read work: the restarted load resumes after the last checkpointed boundary, and
+     * the replayed partial page is absorbed by the idempotent upserts.
+     *
+     * <p>Skips itself (returns false, caller keeps the classic path) when the table has no PK,
+     * chunking is switched off, or no checkpoint repository is wired. On success it fills the
+     * result exactly like the classic full load does — row counts, the safety-lagged cursor for
+     * keyed incremental strategies, the {@code fc:} fingerprint for FULL_COMPARE — and clears
+     * the table's checkpoints, which only ever describe an in-flight load. Note that after a
+     * resumed load {@code rowsWritten} counts this pass's rows, not the whole table's.
+     */
+    private boolean chunkedInitialLoad(Connection sourceConn, Connection targetConn,
+                                       TableMeta table, String targetTable,
+                                       CursorStrategy strategy, String watermark,
+                                       Object upperBound, SyncContext ctx,
+                                       TableSyncResult result) throws SQLException {
+        if (checkpoints == null || properties.getChunkSize() <= 0
+                || FullLoadRoute.route(table) == FullLoadRoute.STREAMING_FALLBACK) {
+            return false;
+        }
+        List<String> pk = table.getPrimaryKeys();
+        int chunkSize = properties.getChunkSize();
+
+        List<ChunkCheckpoint> done = checkpoints
+                .findByProjectIdAndTableNameOrderByChunkIndexDesc(ctx.projectId(), table.getName());
+        List<Object> lastPk = done.isEmpty()
+                ? null : KeysetChunker.decodePk(done.get(0).getLastPkJson());
+        int chunkIndex = done.isEmpty() ? 0 : done.get(0).getChunkIndex() + 1;
+        if (lastPk != null) {
+            log.info("Resuming chunked full load of {} from chunk {} (keyset boundary kept)",
+                    table.getName(), chunkIndex);
+        }
+
+        int totalRead = 0;
+        while (true) {
+            List<Object> params = new ArrayList<>();
+            String pageSql = KeysetChunker.pageSql(ctx.getSourceDialect(), ctx.getSourceSchema(),
+                    table.getName(), pk, lastPk, strategy, upperBound, chunkSize, params);
+            PkCursor sink = new PkCursor();
+            WriteStats stats = copyRows(sourceConn, targetConn, pageSql, params,
+                    table, targetTable, ctx, pk, sink);
+            if (stats.read == 0) {
+                break;
+            }
+            totalRead += stats.read;
+            result.rowsInserted += stats.inserted;
+            result.rowsUpdated += stats.updated;
+            result.rowsChangedUnclassified += stats.unclassified;
+            // Checkpoint only after the page's rows are committed on the target: a page that
+            // died mid-write leaves no boundary behind and is simply re-read next time.
+            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), chunkIndex,
+                    KeysetChunker.encodePk(sink.values), stats.read));
+            lastPk = sink.values;
+            chunkIndex++;
+            if (stats.read < chunkSize) {
+                break;
+            }
+            ctx.requireLease();
+        }
+
+        // The load finished (or the table turned out empty): resume points served their purpose.
+        checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+        result.rowsWritten = totalRead;
+        result.newCursorValue = strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE
+                ? CursorStrategy.FULL_COMPARE_ROWCOUNT_PREFIX + totalRead
+                : (watermark == null ? null : applySafetyLagIfKeyed(table, watermark));
+        return true;
     }
 
     private boolean containsIgnoreCase(List<String> list, String value) {

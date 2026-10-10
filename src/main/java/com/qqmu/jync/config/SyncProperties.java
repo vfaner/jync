@@ -23,6 +23,16 @@ public class SyncProperties {
     private int fetchSize = 1000;
 
     /**
+     * Rows per keyset chunk of an initial full load; 0 disables chunking.
+     *
+     * <p>Chunking turns one table-long streamed read into a chain of short bounded reads, each
+     * committed and checkpointed on its own, so a crash mid-table costs at most one chunk of
+     * re-read work instead of the whole table. Only tables with a primary key can be chunked;
+     * keyless tables always keep the single streamed read.
+     */
+    private int chunkSize = 100_000;
+
+    /**
      * Slack subtracted from the timestamp high-watermark before it is persisted.
      *
      * <p>A row's timestamp is assigned when the statement runs, but the row only becomes

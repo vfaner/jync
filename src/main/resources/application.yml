@@ -84,6 +84,10 @@ sync:
   batch-size: 500
   # Fetch size hint applied to source result sets
   fetch-size: 1000
+  # Rows per keyset chunk of an initial full load; each chunk commits and checkpoints on its
+  # own, so a crash mid-table resumes at the last chunk instead of re-reading everything.
+  # 0 disables chunking (classic single streamed read). Keyless tables never chunk.
+  chunk-size: 100000
   # Maximum connections in each per-database pool; a cycle borrows one connection per side
   max-pool-size: 5
   # Subtracted from the timestamp high-watermark so in-flight source transactions
