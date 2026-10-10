@@ -3,6 +3,7 @@ package com.qqmu.jync.service;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -21,11 +22,13 @@ import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
+import com.qqmu.jync.model.ChunkCheckpoint;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.repository.ChangeLogRepository;
+import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
@@ -52,6 +55,7 @@ public class ProjectService {
     private final DatabaseConfigRepository databaseConfigRepository;
     private final SyncProgressRepository progressRepository;
     private final ChangeLogRepository changeLogRepository;
+    private final ChunkCheckpointRepository checkpointRepository;
     private final DataSourceManager dataSourceManager;
     private final MetadataReaderFactory readerFactory;
     private final MetadataSnapshotService snapshotService;
@@ -67,6 +71,7 @@ public class ProjectService {
                           DatabaseConfigRepository databaseConfigRepository,
                           SyncProgressRepository progressRepository,
                           ChangeLogRepository changeLogRepository,
+                          ChunkCheckpointRepository checkpointRepository,
                           DataSourceManager dataSourceManager,
                           MetadataReaderFactory readerFactory,
                           MetadataSnapshotService snapshotService,
@@ -81,6 +86,7 @@ public class ProjectService {
         this.databaseConfigRepository = databaseConfigRepository;
         this.progressRepository = progressRepository;
         this.changeLogRepository = changeLogRepository;
+        this.checkpointRepository = checkpointRepository;
         this.dataSourceManager = dataSourceManager;
         this.readerFactory = readerFactory;
         this.snapshotService = snapshotService;
@@ -463,6 +469,61 @@ public class ProjectService {
 
     public List<com.qqmu.jync.model.SyncProgress> findProgress(Long projectId) {
         return progressRepository.findByProjectId(projectId);
+    }
+
+    /**
+     * In-flight chunked full-load state per table, for the project detail page.
+     *
+     * <p>Checkpoint rows only exist while a load is running or lies interrupted (a completed
+     * load clears them), so an entry here means exactly "this table's initial full load has
+     * not finished"; the counts tell how far it got and whether it will resume.
+     */
+    public Map<String, FullLoadProgress> findFullLoadProgress(Long projectId) {
+        Map<String, List<ChunkCheckpoint>> byTable = new LinkedHashMap<>();
+        for (ChunkCheckpoint c : checkpointRepository.findByProjectId(projectId)) {
+            byTable.computeIfAbsent(c.getTableName(), k -> new ArrayList<>()).add(c);
+        }
+        Map<String, FullLoadProgress> result = new LinkedHashMap<>();
+        byTable.forEach((table, rows) -> result.put(table, FullLoadProgress.of(rows)));
+        return result;
+    }
+
+    /** One table's chunked full-load state, derived from its checkpoint rows. */
+    @Getter
+    public static class FullLoadProgress {
+        /** Chunks committed on the target so far (across all ranges). */
+        private final int chunksDone;
+        /** Key ranges the load has touched; more than one means a parallel load. */
+        private final int rangesSeen;
+        /** Ranges already finished; a resumed load skips them entirely. */
+        private final int rangesDone;
+
+        FullLoadProgress(int chunksDone, int rangesSeen, int rangesDone) {
+            this.chunksDone = chunksDone;
+            this.rangesSeen = rangesSeen;
+            this.rangesDone = rangesDone;
+        }
+
+        public static FullLoadProgress of(List<ChunkCheckpoint> rows) {
+            int chunks = 0;
+            int rangesDone = 0;
+            int rangesSeen = 0;
+            for (ChunkCheckpoint c : rows) {
+                if (ChunkCheckpoint.STATUS_RANGE_DONE.equals(c.getStatus())) {
+                    rangesDone++;
+                } else {
+                    chunks++;
+                }
+                int range = c.getRangeIndex() == null ? 0 : c.getRangeIndex();
+                rangesSeen = Math.max(rangesSeen, range + 1);
+            }
+            return new FullLoadProgress(chunks, rangesSeen, rangesDone);
+        }
+
+        /** True when the load split the key span across parallel workers. */
+        public boolean isParallel() {
+            return rangesSeen > 1;
+        }
     }
 
     public boolean isScheduled(Long projectId) {

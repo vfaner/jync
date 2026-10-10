@@ -368,7 +368,22 @@
                     </thead>
                     <tbody>
                     <tr th:each="p : ${progressList}" th:with="strat=${p.cursorStrategy ?: 'NONE'}">
-                        <td class="mono" style="font-weight:600" th:text="${p.objectName}">table</td>
+                        <td class="mono" style="font-weight:600">
+                            <span th:text="${p.objectName}">table</span>
+                            <!-- 进行中的分块全量:切分方式、已完成块数、断点续传提示(任务书 A5)。
+                                 断点行只在装载未完成时存在,完成即清,所以有徽章 = 该表全量仍在途。 -->
+                            <div th:if="${fullLoadProgress != null and fullLoadProgress.containsKey(p.objectName)}"
+                                 th:with="flp=${fullLoadProgress.get(p.objectName)}"
+                                 class="small" style="font-weight:400;margin-top:2px">
+                                <span class="badge badge-info" th:title="#{fullload.resumeHint}">
+                                    <span th:if="${flp.parallel}"
+                                          th:text="#{fullload.parallel(${flp.rangesDone}, ${flp.rangesSeen})}">parallel</span>
+                                    <span th:unless="${flp.parallel}"
+                                          th:text="#{fullload.sequential}">sequential</span>
+                                </span>
+                                <span class="muted" th:text="#{fullload.chunks(${flp.chunksDone})}">chunks</span>
+                            </div>
+                        </td>
                         <td>
                             <span class="badge"
                                   th:classappend="${strat == 'TIMESTAMP'} ? 'badge-ok'

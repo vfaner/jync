@@ -145,6 +145,9 @@ public class ProjectController {
         model.addAttribute("lockExpired", lockHeld && task.getLockExpiresAt() != null
                 && task.getLockExpiresAt().isBefore(java.time.Instant.now()));
         model.addAttribute("progressList", projectService.findProgress(id));
+        // In-flight chunked full loads (checkpoints exist only while a load is unfinished):
+        // lets the page show chunk progress and the resume promise per table.
+        model.addAttribute("fullLoadProgress", projectService.findFullLoadProgress(id));
         model.addAttribute("scheduled", projectService.isScheduled(id));
 
         try {

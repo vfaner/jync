@@ -61,6 +61,7 @@ class ProjectServiceTest {
     @Mock private DatabaseConfigRepository databaseConfigRepository;
     @Mock private SyncProgressRepository progressRepository;
     @Mock private ChangeLogRepository changeLogRepository;
+    @Mock private com.qqmu.jync.repository.ChunkCheckpointRepository checkpointRepository;
     @Mock private DataSourceManager dataSourceManager;
     @Mock private MetadataReaderFactory readerFactory;
     @Mock private MetadataSnapshotService snapshotService;
@@ -77,9 +78,9 @@ class ProjectServiceTest {
     @BeforeEach
     void setUp() {
         service = new ProjectService(projectRepository, databaseConfigRepository,
-                progressRepository, changeLogRepository, dataSourceManager, readerFactory,
-                snapshotService, contextFactory, scheduler, taskRunner, taskStore, syncEngine,
-                lockService, auditService);
+                progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
+                readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
+                syncEngine, lockService, auditService);
     }
 
     private Project project(Long id) {
@@ -87,6 +88,38 @@ class ProjectServiceTest {
         p.setId(id);
         p.setName("proj");
         return p;
+    }
+
+    // --- full-load progress (A5 UI panel) -------------------------------------------------
+
+    @Test
+    void fullLoadProgressGroupsCheckpointsPerTableAndCountsRanges() {
+        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of(
+                new com.qqmu.jync.model.ChunkCheckpoint(1L, "A", 0, 0, "[1]", 2,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK),
+                new com.qqmu.jync.model.ChunkCheckpoint(1L, "A", 0, 1, "[3]", 2,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK),
+                new com.qqmu.jync.model.ChunkCheckpoint(1L, "B", 0, 2, null, 0,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_RANGE_DONE),
+                new com.qqmu.jync.model.ChunkCheckpoint(1L, "B", 1, 0, "[9]", 2,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK)));
+
+        java.util.Map<String, ProjectService.FullLoadProgress> progress =
+                service.findFullLoadProgress(1L);
+
+        assertThat(progress).containsOnlyKeys("A", "B");
+        assertThat(progress.get("A").getChunksDone()).isEqualTo(2);
+        assertThat(progress.get("A").isParallel()).isFalse();
+        assertThat(progress.get("B").isParallel()).isTrue();
+        assertThat(progress.get("B").getRangesDone()).isEqualTo(1);
+        assertThat(progress.get("B").getChunksDone()).isEqualTo(1);
+    }
+
+    @Test
+    void fullLoadProgressIsEmptyWhenNoLoadIsInFlight() {
+        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
+
+        assertThat(service.findFullLoadProgress(1L)).isEmpty();
     }
 
     // --- cron pre-validation -------------------------------------------------------------

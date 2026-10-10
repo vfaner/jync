@@ -16,6 +16,9 @@ public interface ChunkCheckpointRepository extends JpaRepository<ChunkCheckpoint
      */
     List<ChunkCheckpoint> findByProjectIdAndTableName(Long projectId, String tableName);
 
+    /** Every in-flight load of the project, for the detail page's progress panel. */
+    List<ChunkCheckpoint> findByProjectId(Long projectId);
+
     @Transactional
     void deleteByProjectIdAndTableName(Long projectId, String tableName);
 }
