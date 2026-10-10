@@ -331,8 +331,10 @@ logging:
 启动时指定：
 
 ```bash
-java -jar jync.jar --spring.config.location=file:./application.yml
+java -jar jync.jar --spring.config.additional-location=file:./application.yml
 ```
+
+> ⚠️ **必须用 `additional-location`（叠加覆盖），不要用 `spring.config.location`**：后者会**替换**全部默认配置位置，jar 内置的 `application.yml` 将不再被读取——国际化（`spring.messages.basename`）、自动建表（`spring.jpa.hibernate.ddl-auto`）、`app.github-url` 等内置键全部丢失，症状是登录页显示 `??login.title_zh_CN??` 之类标记、全新部署不建表，甚至直接启动失败。外部文件只需写你要**覆盖**的键。
 
 > 🔐 **安全提示**：`sync.crypto-password` 与 `sync.crypto-salt` 用于加密存储的数据库连接密码，**发行包带有默认值，生产环境必须修改**。修改后已存储的旧密码将无法解密，需在界面上重新填写。`crypto-salt` 必须是合法的十六进制字符串。
 
@@ -363,7 +365,7 @@ Type=simple
 User=jync
 WorkingDirectory=/opt/jync
 ExecStart=/usr/bin/java -Xms512m -Xmx1g -jar /opt/jync/jync.jar \
-  --spring.config.location=file:/opt/jync/application.yml
+  --spring.config.additional-location=file:/opt/jync/application.yml
 Restart=always
 RestartSec=10
 

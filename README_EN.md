@@ -331,8 +331,10 @@ logging:
 Start with:
 
 ```bash
-java -jar jync.jar --spring.config.location=file:./application.yml
+java -jar jync.jar --spring.config.additional-location=file:./application.yml
 ```
+
+> ⚠️ **Use `additional-location` (additive overlay), never `spring.config.location`**: the latter *replaces* all default config locations, so the jar-internal `application.yml` is no longer read — built-in keys such as i18n (`spring.messages.basename`), schema auto-creation (`spring.jpa.hibernate.ddl-auto`) and `app.github-url` are all lost. The symptoms are markers like `??login.title_zh_CN??` on the login page, no tables on a fresh install, or outright startup failure. The external file only needs the keys you want to **override**.
 
 > 🔐 **Security note:** `sync.crypto-password` and `sync.crypto-salt` encrypt the stored database passwords. **The distribution ships with defaults; you must change them in production.** After changing them, previously stored passwords can no longer be decrypted and must be re-entered in the UI. `crypto-salt` must be a valid hexadecimal string.
 
@@ -363,7 +365,7 @@ Type=simple
 User=jync
 WorkingDirectory=/opt/jync
 ExecStart=/usr/bin/java -Xms512m -Xmx1g -jar /opt/jync/jync.jar \
-  --spring.config.location=file:/opt/jync/application.yml
+  --spring.config.additional-location=file:/opt/jync/application.yml
 Restart=always
 RestartSec=10
 
