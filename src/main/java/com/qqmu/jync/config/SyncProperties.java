@@ -33,6 +33,17 @@ public class SyncProperties {
     private int chunkSize = 100_000;
 
     /**
+     * Worker threads for one chunked initial full load; 1 keeps the load fully sequential.
+     *
+     * <p>Parallel workers split the primary-key span into disjoint ranges (MIN/MAX bounds)
+     * and copy them concurrently; requires a single-column integer PK, other tables stay
+     * sequential. Each worker borrows its own source/target connection per chunk, so the
+     * effective concurrency is also bounded by {@link #maxPoolSize} — parallelism beyond the
+     * pool size simply queues on it. Values above 8 are clamped.
+     */
+    private int fullLoadParallelism = 1;
+
+    /**
      * Slack subtracted from the timestamp high-watermark before it is persisted.
      *
      * <p>A row's timestamp is assigned when the statement runs, but the row only becomes

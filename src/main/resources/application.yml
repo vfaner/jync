@@ -88,6 +88,11 @@ sync:
   # own, so a crash mid-table resumes at the last chunk instead of re-reading everything.
   # 0 disables chunking (classic single streamed read). Keyless tables never chunk.
   chunk-size: 100000
+  # Worker threads for one chunked initial full load; 1 = sequential (the classic behavior).
+  # Requires a single-column integer primary key (MIN/MAX range split); other tables stay
+  # sequential. Workers borrow their own connections per chunk, so parallelism above
+  # max-pool-size just queues on the pool. Clamped to 8.
+  full-load-parallelism: 1
   # Maximum connections in each per-database pool; a cycle borrows one connection per side
   max-pool-size: 5
   # Subtracted from the timestamp high-watermark so in-flight source transactions

@@ -96,8 +96,9 @@ class DataSyncServiceChunkedLoadTest {
         // Simulate the state a crash left behind: chunks 0 and 1 (ids 1-4) already committed
         // on the target, the newest checkpoint recording the boundary at id 4.
         exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d')");
-        when(checkpoints.findByProjectIdAndTableNameOrderByChunkIndexDesc(7L, "ITEMS"))
-                .thenReturn(List.of(new ChunkCheckpoint(7L, "ITEMS", 1, "[4]", 2)));
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS"))
+                .thenReturn(List.of(new ChunkCheckpoint(7L, "ITEMS", 0, 1, "[4]", 2,
+                        ChunkCheckpoint.STATUS_CHUNK)));
         DataSyncService service = service(2);
 
         DataSyncService.TableSyncResult result = service.syncTable(

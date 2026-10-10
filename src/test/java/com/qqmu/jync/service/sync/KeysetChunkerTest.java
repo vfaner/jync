@@ -30,10 +30,22 @@ class KeysetChunkerTest {
     void firstPageHasNoKeysetPredicateAndCapsWithTheDialectLimit() {
         List<Object> params = new ArrayList<>();
         String sql = KeysetChunker.pageSql(new MySqlDialect(), null, "ITEMS",
-                List.of("ID"), null, IDENTITY, null, 50, params);
+                List.of("ID"), null, null, IDENTITY, null, 50, params);
 
         assertThat(sql).isEqualTo("SELECT * FROM `ITEMS` ORDER BY `ID` LIMIT 50 OFFSET 0");
         assertThat(params).isEmpty();
+    }
+
+    @Test
+    void aParallelRangePageIsBoundedOnBothKeyEdges() {
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.pageSql(new MySqlDialect(), null, "ITEMS",
+                List.of("ID"), List.of(4L), 8L, IDENTITY, null, 50, params);
+
+        // The worker's slice of the key span: (4, 8] — disjoint from its siblings' pages.
+        assertThat(sql).isEqualTo("SELECT * FROM `ITEMS`"
+                + " WHERE (`ID` > ?) AND (`ID` <= ?) ORDER BY `ID` LIMIT 50 OFFSET 0");
+        assertThat(params).containsExactly(4L, 8L);
     }
 
     @Test
@@ -44,7 +56,7 @@ class KeysetChunkerTest {
 
         List<Object> params = new ArrayList<>();
         String sql = KeysetChunker.pageSql(new MySqlDialect(), null, "LEDGER",
-                List.of("TENANT", "ID"), List.of("acme", 41), timestamp, upper, 10, params);
+                List.of("TENANT", "ID"), List.of("acme", 41), null, timestamp, upper, 10, params);
 
         // Row comparison as OR-chain (SQL Server rejects the (a,b) > (?,?) tuple form), plus
         // the same watermark bound — including the NULL-cursor rescue — as the classic load.
@@ -59,7 +71,7 @@ class KeysetChunkerTest {
     void oraclePagesThroughTheRownumWrapperWithTheKeysetSeekInside() {
         List<Object> params = new ArrayList<>();
         String sql = KeysetChunker.pageSql(new OracleDialect(), "HR", "EMP",
-                List.of("EMPNO"), List.of(7), IDENTITY, null, 100, params);
+                List.of("EMPNO"), List.of(7), null, IDENTITY, null, 100, params);
 
         assertThat(sql)
                 .startsWith("SELECT * FROM (SELECT a.*, ROWNUM rnum_ FROM (")
@@ -74,7 +86,7 @@ class KeysetChunkerTest {
     void sqlServerGetsBracketQuotingAndOffsetFetchPaging() {
         List<Object> params = new ArrayList<>();
         String sql = KeysetChunker.pageSql(new SqlServerDialect(), "dbo", "ORDERS",
-                List.of("ORDER_ID"), List.of(9L), IDENTITY, null, 25, params);
+                List.of("ORDER_ID"), List.of(9L), null, IDENTITY, null, 25, params);
 
         assertThat(sql).isEqualTo("SELECT * FROM [dbo].[ORDERS]"
                 + " WHERE ([ORDER_ID] > ?) ORDER BY [ORDER_ID]"
@@ -94,14 +106,15 @@ class KeysetChunkerTest {
     @Test
     void keylessTablesAreRejectedInsteadOfPagingUnbounded() {
         assertThatThrownBy(() -> KeysetChunker.pageSql(new MySqlDialect(), null, "LOGS",
-                List.of(), null, IDENTITY, null, 50, new ArrayList<>()))
+                List.of(), null, null, IDENTITY, null, 50, new ArrayList<>()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void aBoundaryWhoseWidthDoesNotMatchTheKeyIsRejected() {
         assertThatThrownBy(() -> KeysetChunker.pageSql(new MySqlDialect(), null, "LEDGER",
-                List.of("TENANT", "ID"), List.of("acme"), IDENTITY, null, 50, new ArrayList<>()))
+                List.of("TENANT", "ID"), List.of("acme"), null, IDENTITY, null, 50,
+                new ArrayList<>()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

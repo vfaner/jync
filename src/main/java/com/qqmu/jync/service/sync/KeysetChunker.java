@@ -44,6 +44,9 @@ public final class KeysetChunker {
      * @param pkColumns  primary-key columns in key order; must not be empty
      * @param lastPk     boundary values of the previous chunk's last row, or null for the
      *                   first chunk (same order as {@code pkColumns})
+     * @param pkUpper    inclusive upper edge of this worker's key range, or null for an
+     *                   unbounded (sequential) load; only meaningful on the first key column,
+     *                   which is all a range-split load ever has
      * @param strategy   cursor strategy; when it names a column and {@code upperBound} is set,
      *                   the page is also bounded by the watermark exactly like the classic
      *                   full load, so load and stored cursor keep agreeing
@@ -52,7 +55,7 @@ public final class KeysetChunker {
      * @param paramsOut  receives the bind values in statement order (appended, not cleared)
      */
     public static String pageSql(SqlDialect dialect, String schema, String table,
-                                 List<String> pkColumns, List<Object> lastPk,
+                                 List<String> pkColumns, List<Object> lastPk, Object pkUpper,
                                  CursorStrategy strategy, Object upperBound,
                                  int limit, List<Object> paramsOut) {
         if (pkColumns == null || pkColumns.isEmpty()) {
@@ -66,6 +69,13 @@ public final class KeysetChunker {
         StringBuilder where = new StringBuilder();
         if (lastPk != null) {
             where.append(keysetWhere(dialect, pkColumns, lastPk, paramsOut));
+        }
+        if (pkUpper != null) {
+            if (where.length() > 0) {
+                where.append(" AND ");
+            }
+            where.append('(').append(dialect.quoteIdentifier(pkColumns.get(0))).append(" <= ?)");
+            paramsOut.add(pkUpper);
         }
         if (upperBound != null && strategy != null && strategy.getColumn() != null) {
             if (where.length() > 0) {

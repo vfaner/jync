@@ -54,6 +54,14 @@ public class SyncContext {
      */
     private final BooleanSupplier lockRenewer;
 
+    /**
+     * Opens additional pooled connections for parallel work inside one cycle (each parallel
+     * full-load worker borrows its own source and target connection per chunk). May be
+     * {@code null} for runs that never parallelize (e.g. unit tests); parallel features
+     * degrade to sequential then.
+     */
+    private final ConnectionProvider connectionProvider;
+
     public Long projectId() {
         return project.getId();
     }

@@ -9,11 +9,16 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -974,18 +979,50 @@ public class DataSyncService {
                                        CursorStrategy strategy, String watermark,
                                        Object upperBound, SyncContext ctx,
                                        TableSyncResult result) throws SQLException {
+        FullLoadRoute route = FullLoadRoute.route(table);
         if (checkpoints == null || properties.getChunkSize() <= 0
-                || FullLoadRoute.route(table) == FullLoadRoute.STREAMING_FALLBACK) {
+                || route == FullLoadRoute.STREAMING_FALLBACK) {
             return false;
+        }
+        List<ChunkCheckpoint> saved = checkpoints
+                .findByProjectIdAndTableName(ctx.projectId(), table.getName());
+        int parallelism = resolveParallelism(route, table, ctx);
+        if (parallelism > 1) {
+            return parallelChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
+                    watermark, upperBound, ctx, result, saved, parallelism);
+        }
+        return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
+                watermark, upperBound, ctx, result, saved);
+    }
+
+    /**
+     * One worker walking the whole key span: each page starts where the previous page's
+     * checkpoint ended, so a resume never re-reads more than the one interrupted page.
+     */
+    private boolean sequentialChunkedLoad(Connection sourceConn, Connection targetConn,
+                                          TableMeta table, String targetTable,
+                                          CursorStrategy strategy, String watermark,
+                                          Object upperBound, SyncContext ctx,
+                                          TableSyncResult result, List<ChunkCheckpoint> saved)
+            throws SQLException {
+        // Checkpoints left by an earlier parallel run are organized into key ranges this path
+        // does not walk; dropping them and reloading is safe (idempotent upserts) and keeps the
+        // sequential resume model single-valued.
+        boolean foreignModel = saved.stream().anyMatch(c ->
+                (c.getRangeIndex() != null && c.getRangeIndex() != 0)
+                        || ChunkCheckpoint.STATUS_RANGE_DONE.equals(c.getStatus()));
+        if (foreignModel) {
+            log.info("Discarding parallel-range checkpoints for {}: reloading sequentially",
+                    table.getName());
+            checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+            saved = List.of();
         }
         List<String> pk = table.getPrimaryKeys();
         int chunkSize = properties.getChunkSize();
 
-        List<ChunkCheckpoint> done = checkpoints
-                .findByProjectIdAndTableNameOrderByChunkIndexDesc(ctx.projectId(), table.getName());
-        List<Object> lastPk = done.isEmpty()
-                ? null : KeysetChunker.decodePk(done.get(0).getLastPkJson());
-        int chunkIndex = done.isEmpty() ? 0 : done.get(0).getChunkIndex() + 1;
+        RangeResume resume = resumePoint(saved, 0);
+        List<Object> lastPk = resume.boundary;
+        int chunkIndex = resume.nextChunkIndex;
         if (lastPk != null) {
             log.info("Resuming chunked full load of {} from chunk {} (keyset boundary kept)",
                     table.getName(), chunkIndex);
@@ -995,7 +1032,7 @@ public class DataSyncService {
         while (true) {
             List<Object> params = new ArrayList<>();
             String pageSql = KeysetChunker.pageSql(ctx.getSourceDialect(), ctx.getSourceSchema(),
-                    table.getName(), pk, lastPk, strategy, upperBound, chunkSize, params);
+                    table.getName(), pk, lastPk, null, strategy, upperBound, chunkSize, params);
             PkCursor sink = new PkCursor();
             WriteStats stats = copyRows(sourceConn, targetConn, pageSql, params,
                     table, targetTable, ctx, pk, sink);
@@ -1008,8 +1045,8 @@ public class DataSyncService {
             result.rowsChangedUnclassified += stats.unclassified;
             // Checkpoint only after the page's rows are committed on the target: a page that
             // died mid-write leaves no boundary behind and is simply re-read next time.
-            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), chunkIndex,
-                    KeysetChunker.encodePk(sink.values), stats.read));
+            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), 0, chunkIndex,
+                    KeysetChunker.encodePk(sink.values), stats.read, ChunkCheckpoint.STATUS_CHUNK));
             lastPk = sink.values;
             chunkIndex++;
             if (stats.read < chunkSize) {
@@ -1021,10 +1058,292 @@ public class DataSyncService {
         // The load finished (or the table turned out empty): resume points served their purpose.
         checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
         result.rowsWritten = totalRead;
-        result.newCursorValue = strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE
+        result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, totalRead);
+        return true;
+    }
+
+    /** Same cursor semantics as the classic full load, computed over the chunks' totals. */
+    private String fullLoadCursorTail(TableMeta table, CursorStrategy strategy,
+                                      String watermark, int totalRead) {
+        return strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE
                 ? CursorStrategy.FULL_COMPARE_ROWCOUNT_PREFIX + totalRead
                 : (watermark == null ? null : applySafetyLagIfKeyed(table, watermark));
+    }
+
+    /**
+     * How many workers one table's chunked load may use. Stays at 1 (fully sequential, the
+     * pre-parallelism behavior) unless the operator asked for more, the context can open extra
+     * connections, and the key is a single integer column whose span can be split into
+     * disjoint ranges. Clamped to 8 per the capacity plan.
+     */
+    private int resolveParallelism(FullLoadRoute route, TableMeta table, SyncContext ctx) {
+        int configured = properties.getFullLoadParallelism();
+        if (configured <= 1) {
+            return 1;
+        }
+        if (ctx.getConnectionProvider() == null || ctx.getSourceConfig() == null
+                || ctx.getTargetConfig() == null) {
+            return 1;
+        }
+        if (route != FullLoadRoute.KEYSET_NUMERIC || !hasIntegerPk(table)) {
+            log.info("Parallel full load needs a single-column integer primary key;"
+                    + " loading {} sequentially in chunks", table.getName());
+            return 1;
+        }
+        return Math.min(configured, 8);
+    }
+
+    /** True when the single PK column is a plain integer type, so its span can be split. */
+    private static boolean hasIntegerPk(TableMeta table) {
+        return table.column(table.getPrimaryKeys().get(0)).map(c -> {
+            int t = c.getJdbcType();
+            return t == Types.INTEGER || t == Types.BIGINT
+                    || t == Types.SMALLINT || t == Types.TINYINT;
+        }).orElse(false);
+    }
+
+    /**
+     * Parallel variant: the key span [MIN(pk), MAX(pk)] (within the watermark bound) is split
+     * into disjoint ranges and one worker per range walks its slice with the same
+     * chunk-and-checkpoint rhythm as the sequential path. Ranges complete independently and
+     * out of order — correctness rests on the ranges being disjoint and every write being an
+     * idempotent upsert, never on completion order.
+     */
+    private boolean parallelChunkedLoad(Connection sourceConn, Connection targetConn,
+                                        TableMeta table, String targetTable,
+                                        CursorStrategy strategy, String watermark,
+                                        Object upperBound, SyncContext ctx,
+                                        TableSyncResult result, List<ChunkCheckpoint> saved,
+                                        int parallelism) throws SQLException {
+        String pk = table.getPrimaryKeys().get(0);
+        long[] bounds = readPkBounds(sourceConn, table, pk, strategy, upperBound, ctx);
+        if (bounds == null) {
+            // Empty table (within the watermark bound): finalize like the sequential path
+            // finalizes an empty load.
+            checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+            result.rowsWritten = 0;
+            result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, 0);
+            return true;
+        }
+        List<long[]> ranges = splitRanges(bounds[0], bounds[1], parallelism);
+        if (ranges == null) {
+            // Key span too wide to split without overflow; sequential chunking spans anything.
+            return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
+                    watermark, upperBound, ctx, result, saved);
+        }
+        log.info("Parallel full load of {}: key span [{}, {}] split into {} ranges ({} workers)",
+                table.getName(), bounds[0], bounds[1], ranges.size(), parallelism);
+
+        ExecutorService pool = Executors.newFixedThreadPool(ranges.size(), r -> {
+            Thread t = new Thread(r, "full-load-" + table.getName());
+            t.setDaemon(true);
+            return t;
+        });
+        WriteStats total = new WriteStats();
+        try {
+            List<Future<WriteStats>> futures = new ArrayList<>(ranges.size());
+            for (int i = 0; i < ranges.size(); i++) {
+                final int rangeIndex = i;
+                final long[] range = ranges.get(i);
+                futures.add(pool.submit(() -> copyRange(table, targetTable, strategy, upperBound,
+                        ctx, range, rangeIndex, resumePoint(saved, rangeIndex))));
+            }
+            // Waiting for every future (even after one failed) means no worker is still
+            // writing by the time this method throws or clears the checkpoints.
+            LockLostException leaseLost = null;
+            SQLException failure = null;
+            for (Future<WriteStats> future : futures) {
+                try {
+                    WriteStats w = future.get();
+                    total.read += w.read;
+                    total.inserted += w.inserted;
+                    total.updated += w.updated;
+                    total.unclassified += w.unclassified;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    if (failure == null) {
+                        failure = new SQLException("Parallel full load interrupted", e);
+                    }
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof LockLostException) {
+                        if (leaseLost == null) {
+                            leaseLost = (LockLostException) cause;
+                        }
+                    } else if (failure == null) {
+                        failure = cause instanceof SQLException ? (SQLException) cause
+                                : new SQLException("Parallel full load failed: "
+                                        + cause.getMessage(), cause);
+                    }
+                }
+            }
+            if (leaseLost != null) {
+                // Checkpoints stay: every committed chunk survives, and whoever holds the
+                // lock next resumes instead of reloading the whole table.
+                throw leaseLost;
+            }
+            if (failure != null) {
+                // Same contract as a failed sequential load: checkpoints stay, the cursor is
+                // not advanced, and the next cycle resumes where the ranges left off.
+                throw failure;
+            }
+        } finally {
+            pool.shutdown();
+        }
+
+        checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+        result.rowsWritten = total.read;
+        result.rowsInserted += total.inserted;
+        result.rowsUpdated += total.updated;
+        result.rowsChangedUnclassified += total.unclassified;
+        result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, total.read);
         return true;
+    }
+
+    /** One parallel worker: walks its own {@code (lo, hi]} key slice, checkpointing per chunk. */
+    private WriteStats copyRange(TableMeta table, String targetTable, CursorStrategy strategy,
+                                 Object upperBound, SyncContext ctx, long[] range, int rangeIndex,
+                                 RangeResume resume) throws SQLException {
+        WriteStats totals = new WriteStats();
+        if (resume.done) {
+            return totals;
+        }
+        String pk = table.getPrimaryKeys().get(0);
+        List<String> pkColumns = List.of(pk);
+        int chunkSize = properties.getChunkSize();
+        List<Object> lastPk = resume.boundary != null ? resume.boundary : List.of(range[0]);
+        int chunkIndex = resume.nextChunkIndex;
+        while (true) {
+            List<Object> params = new ArrayList<>();
+            String pageSql = KeysetChunker.pageSql(ctx.getSourceDialect(), ctx.getSourceSchema(),
+                    table.getName(), pkColumns, lastPk, range[1], strategy, upperBound,
+                    chunkSize, params);
+            PkCursor sink = new PkCursor();
+            WriteStats stats;
+            // Borrow per chunk, not per range: a worker never holds pooled connections while
+            // queued, so parallelism above the pool size degrades to waiting in line.
+            try (Connection src = ctx.getConnectionProvider().open(ctx.getSourceConfig());
+                 Connection tgt = ctx.getConnectionProvider().open(ctx.getTargetConfig())) {
+                stats = copyRows(src, tgt, pageSql, params, table, targetTable, ctx,
+                        pkColumns, sink);
+            }
+            if (stats.read == 0) {
+                break;
+            }
+            totals.read += stats.read;
+            totals.inserted += stats.inserted;
+            totals.updated += stats.updated;
+            totals.unclassified += stats.unclassified;
+            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
+                    chunkIndex++, KeysetChunker.encodePk(sink.values), stats.read,
+                    ChunkCheckpoint.STATUS_CHUNK));
+            lastPk = sink.values;
+            if (stats.read < chunkSize) {
+                break;
+            }
+            ctx.requireLease();
+        }
+        // Marks the slice complete: a resumed load skips this range without reading it again.
+        checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
+                chunkIndex, null, 0, ChunkCheckpoint.STATUS_RANGE_DONE));
+        return totals;
+    }
+
+    /**
+     * The inclusive {@code [MIN(pk), MAX(pk)]} span of the rows this load may see (the same
+     * watermark bound the pages use), or null when that set is empty.
+     */
+    private long[] readPkBounds(Connection sourceConn, TableMeta table, String pkColumn,
+                                CursorStrategy strategy, Object upperBound, SyncContext ctx)
+            throws SQLException {
+        SqlDialect dialect = ctx.getSourceDialect();
+        String quotedPk = dialect.quoteIdentifier(pkColumn);
+        StringBuilder sql = new StringBuilder("SELECT MIN(").append(quotedPk)
+                .append("), MAX(").append(quotedPk).append(") FROM ")
+                .append(dialect.qualify(ctx.getSourceSchema(), table.getName()));
+        List<Object> params = new ArrayList<>();
+        if (upperBound != null && strategy != null && strategy.getColumn() != null) {
+            String cursor = dialect.quoteIdentifier(strategy.getColumn());
+            sql.append(" WHERE (").append(cursor).append(" <= ? OR ")
+                    .append(cursor).append(" IS NULL)");
+            params.add(upperBound);
+        }
+        try (PreparedStatement st = sourceConn.prepareStatement(sql.toString())) {
+            JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
+            for (int i = 0; i < params.size(); i++) {
+                st.setObject(i + 1, params.get(i));
+            }
+            try (ResultSet rs = st.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                long min = rs.getLong(1);
+                if (rs.wasNull()) {
+                    return null;
+                }
+                return new long[] {min, rs.getLong(2)};
+            }
+        }
+    }
+
+    /**
+     * Splits the inclusive key span {@code [min, max]} into at most {@code parts} contiguous
+     * {@code (lo, hi]} ranges covering exactly that span. Returns null when the span is too
+     * wide to split without arithmetic overflow; the caller falls back to sequential chunking,
+     * which handles any span. Ranges can come out sparse-keyed and uneven — that only affects
+     * load balance, never correctness.
+     */
+    static List<long[]> splitRanges(long min, long max, int parts) {
+        try {
+            long lo = Math.subtractExact(min, 1);
+            long total = Math.subtractExact(max, lo); // = max - min + 1
+            if (total <= 0) {
+                return null;
+            }
+            long width = parts <= 1 ? total
+                    : Math.addExact(total, parts - 1) / parts; // ceil, overflow-checked
+            List<long[]> ranges = new ArrayList<>();
+            while (lo < max) {
+                long hi = Math.min(Math.addExact(lo, width), max);
+                ranges.add(new long[] {lo, hi});
+                lo = hi;
+            }
+            return ranges.isEmpty() ? null : ranges;
+        } catch (ArithmeticException e) {
+            return null;
+        }
+    }
+
+    /** Where one range continues: after its newest completed chunk, or not at all. */
+    private static final class RangeResume {
+        private final boolean done;
+        private final List<Object> boundary;
+        private final int nextChunkIndex;
+
+        private RangeResume(boolean done, List<Object> boundary, int nextChunkIndex) {
+            this.done = done;
+            this.boundary = boundary;
+            this.nextChunkIndex = nextChunkIndex;
+        }
+    }
+
+    /** Reads a range's resume state from the table's checkpoints (newest chunk wins). */
+    private static RangeResume resumePoint(List<ChunkCheckpoint> saved, int rangeIndex) {
+        ChunkCheckpoint latest = null;
+        for (ChunkCheckpoint c : saved) {
+            if (c.getRangeIndex() != null && c.getRangeIndex() == rangeIndex
+                    && (latest == null || c.getChunkIndex() > latest.getChunkIndex())) {
+                latest = c;
+            }
+        }
+        if (latest == null) {
+            return new RangeResume(false, null, 0);
+        }
+        if (ChunkCheckpoint.STATUS_RANGE_DONE.equals(latest.getStatus())) {
+            return new RangeResume(true, null, latest.getChunkIndex() + 1);
+        }
+        return new RangeResume(false, KeysetChunker.decodePk(latest.getLastPkJson()),
+                latest.getChunkIndex() + 1);
     }
 
     private boolean containsIgnoreCase(List<String> list, String value) {

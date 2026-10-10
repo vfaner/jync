@@ -92,6 +92,7 @@ public class SyncContextFactory {
                 .batchSize(batchSize)
                 .lockOwner(lockOwner)
                 .lockRenewer(lockRenewer)
+                .connectionProvider(dataSourceManager::getConnection)
                 .build();
     }
 
