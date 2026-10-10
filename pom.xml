@@ -196,6 +196,33 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Real-database integration tests (Oracle XE migration harness; MySQL binlog CDC
+             later). The IT class is named *IT so surefire's default includes skip it, and
+             @Testcontainers(disabledWithoutDocker = true) makes even an explicit run skip
+             cleanly where Docker is absent (task book D2). -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>1.21.3</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Oracle 23ai Free, not XE 21: XE publishes no arm64 build, and the amd64 image
+             dies with ORA-00443 (PMON) under Apple-Silicon emulation. 23 Free is arm64
+             native and behaves the same for everything the harness asserts (product name,
+             NUMBER keys, ROWDEPENDENCIES/ORA_ROWSCN). -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>oracle-free</artifactId>
+            <version>1.21.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>1.21.3</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

@@ -275,6 +275,13 @@ public class OracleDialect extends AbstractSqlDialect {
     @Override
     public String getPaginationSql(String baseSql, long offset, int limit) {
         // OFFSET/FETCH requires 12c; ROWNUM nesting works on every supported release.
+        // offset 0 (the keyset page-cap case) must not use the rnum_ helper: the wrapper
+        // would project it into the outer SELECT *, and the data copy builds its INSERT
+        // column list from the result metadata — a leaked RNUM_ column lands in the target
+        // statement and every chunk fails with "column not found".
+        if (offset <= 0) {
+            return "SELECT * FROM (" + baseSql + ") WHERE ROWNUM <= " + limit;
+        }
         return "SELECT * FROM (SELECT a.*, ROWNUM rnum_ FROM (" + baseSql + ") a "
                 + "WHERE ROWNUM <= " + (offset + limit) + ") WHERE rnum_ > " + offset;
     }

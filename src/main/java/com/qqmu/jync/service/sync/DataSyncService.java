@@ -1129,8 +1129,19 @@ public class DataSyncService {
     private static boolean hasIntegerPk(TableMeta table) {
         return table.column(table.getPrimaryKeys().get(0)).map(c -> {
             int t = c.getJdbcType();
-            return t == Types.INTEGER || t == Types.BIGINT
-                    || t == Types.SMALLINT || t == Types.TINYINT;
+            if (t == Types.INTEGER || t == Types.BIGINT
+                    || t == Types.SMALLINT || t == Types.TINYINT) {
+                return true;
+            }
+            // Exact-numeral with scale zero and precision that fits a long is still an
+            // integer domain — this is what a real Oracle NUMBER(18) primary key reports
+            // (NUMERIC, digits 0), and without it Oracle sources could never range-split.
+            // Scale > 0 and precision > 18 (NUMBER(19) can exceed Long.MAX_VALUE) are
+            // refused: truncating either to a long span would break the disjointness
+            // the parallel workers rely on.
+            return (t == Types.NUMERIC || t == Types.DECIMAL)
+                    && c.getDecimalDigits() != null && c.getDecimalDigits() == 0
+                    && c.getSize() != null && c.getSize() <= 18;
         }).orElse(false);
     }
 

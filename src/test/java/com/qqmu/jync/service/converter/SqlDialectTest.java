@@ -311,6 +311,11 @@ class SqlDialectTest {
         assertThat(mysql.getPaginationSql(base, 100, 50)).contains("LIMIT 50").contains("OFFSET 100");
         // Oracle's ROWNUM nesting works on releases without OFFSET/FETCH.
         assertThat(oracle.getPaginationSql(base, 100, 50)).contains("ROWNUM");
+        // But the offset-0 page cap must not project the rnum_ helper column: the data
+        // copy builds its INSERT column list from the result metadata, so a leaked helper
+        // would be written to the target and fail every chunk.
+        assertThat(oracle.getPaginationSql(base, 0, 50))
+                .contains("ROWNUM <= 50").doesNotContain("rnum_");
         assertThat(sqlServer.getPaginationSql(base, 100, 50)).contains("OFFSET 100").contains("FETCH NEXT 50");
     }
 

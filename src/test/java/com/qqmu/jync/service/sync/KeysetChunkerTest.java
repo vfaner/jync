@@ -73,12 +73,16 @@ class KeysetChunkerTest {
         String sql = KeysetChunker.pageSql(new OracleDialect(), "HR", "EMP",
                 List.of("EMPNO"), List.of(7), null, IDENTITY, null, 100, params);
 
+        // offset 0 pages cap with plain ROWNUM — no rnum_ helper column, because the copy
+        // path derives its INSERT column list from the result metadata and a leaked helper
+        // would be written to the target.
         assertThat(sql)
-                .startsWith("SELECT * FROM (SELECT a.*, ROWNUM rnum_ FROM (")
+                .startsWith("SELECT * FROM (SELECT * FROM ")
                 .contains("\"HR\".\"EMP\"")
                 .contains("\"EMPNO\" > ?")
                 .contains("ORDER BY \"EMPNO\"")
-                .endsWith(") a WHERE ROWNUM <= 100) WHERE rnum_ > 0");
+                .endsWith(") WHERE ROWNUM <= 100")
+                .doesNotContain("rnum_");
         assertThat(params).containsExactly(7);
     }
 

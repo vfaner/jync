@@ -187,6 +187,48 @@ class DataSyncServiceParallelLoadTest {
     }
 
     @Test
+    void aZeroScaleNumberKeyIsRangeSplitLikeAnInteger() throws SQLException {
+        // A real Oracle NUMBER(18) primary key reports as NUMERIC with scale 0 — an exact
+        // integer domain. Without the gate accepting it, Oracle sources could never use
+        // the parallel path at all (task book M5).
+        exec(source, "CREATE TABLE ITEMS (ID NUMERIC(18) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE ITEMS (ID NUMERIC(18) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(source, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'), (5,'e')");
+
+        DataSyncService.TableSyncResult result = service(2, 2).syncTable(
+                source, target, numericItemsMeta(18, 0), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(count(target, "ITEMS")).isEqualTo(5);
+        ArgumentCaptor<ChunkCheckpoint> captor = ArgumentCaptor.forClass(ChunkCheckpoint.class);
+        verify(checkpoints, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getAllValues())
+                .anyMatch(c -> c.getRangeIndex() != null && c.getRangeIndex() > 0);
+    }
+
+    @Test
+    void aFractionalNumberKeyStaysSequential() throws SQLException {
+        // Scale > 0: truncating fractional keys to long range boundaries would break the
+        // disjointness the parallel workers rely on, so the gate must refuse and the load
+        // keeps the sequential model (every checkpoint in range 0).
+        exec(source, "CREATE TABLE ITEMS (ID NUMERIC(10,2) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE ITEMS (ID NUMERIC(10,2) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(source, "INSERT INTO ITEMS VALUES (1.5,'a'), (2.5,'b'), (3.5,'c'), (4.5,'d')");
+
+        DataSyncService.TableSyncResult result = service(4, 2).syncTable(
+                source, target, numericItemsMeta(10, 2), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(count(target, "ITEMS")).isEqualTo(4);
+        ArgumentCaptor<ChunkCheckpoint> captor = ArgumentCaptor.forClass(ChunkCheckpoint.class);
+        verify(checkpoints, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(c -> {
+            assertThat(c.getRangeIndex()).isZero();
+            assertThat(c.getStatus()).isEqualTo(ChunkCheckpoint.STATUS_CHUNK);
+        });
+    }
+
+    @Test
     void withoutAConnectionProviderTheLoadDegradesToSequential() throws SQLException {
         createItems(5);
         SyncContext noProvider = ctx.toBuilder().connectionProvider(null).build();
@@ -261,6 +303,23 @@ class DataSyncServiceParallelLoadTest {
         name.setName("NAME");
         name.setJdbcType(Types.VARCHAR);
 
+        TableMeta table = new TableMeta();
+        table.setName("ITEMS");
+        table.setPrimaryKeys(List.of("ID"));
+        table.setColumns(List.of(id, name));
+        return table;
+    }
+
+    /** ITEMS whose single-column PK is NUMERIC(size, digits) — what Oracle NUMBER reports. */
+    private static TableMeta numericItemsMeta(int size, int digits) {
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(Types.NUMERIC);
+        id.setSize(size);
+        id.setDecimalDigits(digits);
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
         TableMeta table = new TableMeta();
         table.setName("ITEMS");
         table.setPrimaryKeys(List.of("ID"));
