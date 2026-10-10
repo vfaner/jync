@@ -143,6 +143,8 @@ Instance ID, Java version, scheduled project count, sync defaults, and the concu
 | **SQL dialect adaptation** | Type mapping, function-name conversion, identifier quoting, pagination syntax, stored-procedure wrapping |
 | **Real-time sync** | Polling (2s default), or precise orchestration via Cron expressions |
 | **Crash recovery** | Resumes from the last cursor after a restart; changes made while down are backfilled |
+| **Chunked initial load** | The full load commits and checkpoints per primary-key keyset chunk; an interruption resumes at the last chunk instead of re-reading the whole table |
+| **Parallel full load** | Single-column integer-PK tables split into disjoint MIN/MAX ranges copied in parallel (`sync.full-load-parallelism`, capped at 8) |
 | **Start/stop control** | Start or pause anytime; manual "Sync Now" supported |
 | **Sync-now rerun** | A click during a run is not discarded: one extra round follows automatically, and repeated clicks coalesce into one |
 | **Change records** | Object, change type, row count, duration, and error detail for every run |
@@ -312,6 +314,8 @@ sync:
   poll-interval: 2000              # polling interval in ms
   batch-size: 500
   fetch-size: 1000
+  chunk-size: 100000               # rows per full-load chunk; each commits + checkpoints; 0 = no chunking
+  full-load-parallelism: 1         # parallel workers (single-column integer-PK tables only, capped at 8)
   safety-lag-ms: 1000
   row-count-audit-interval-ms: 60000
   full-compare-max-rows: 20000
@@ -436,6 +440,17 @@ Login passwords are stored as one-way BCrypt hashes, unlike the database and AI 
 
 This is the heart of the tool and deserves its own section.
 
+### Initial full load: chunked, resumable, parallel
+
+The initial full load is no longer "one big query that reads the whole table". Tables with a primary key are paged by keyset (`WHERE pk > ? ORDER BY pk` — no OFFSET, so deep pagination does not decay); every `sync.chunk-size` rows (100,000 by default) are committed and the page boundary is written to the `chunk_checkpoint` table:
+
+- **Crash / killed process** → on restart, committed chunks are skipped and the load resumes at the checkpoint boundary; the small overlap at the boundary converges through the idempotent upsert
+- **A completed full load** → the table's checkpoints are deleted; checkpoint rows exist only while a load is in flight
+- `sync.chunk-size: 0` disables chunking and restores the classic single streamed read
+- **Keyless tables** cannot chunk (no key to page on, no idempotency): they are still streamed in one read and an interruption restarts the table from the beginning — the project detail page badges them "no checkpointed resume"
+
+On top of chunking, tables with a **single-column integer primary key** (including Oracle `NUMBER(p≤18,0)` zero-scale keys) can also load in parallel: `SELECT MIN(pk), MAX(pk)` bounds the key space, which is split into disjoint ranges that up to `sync.full-load-parallelism` workers (capped at 8) page through independently. Workers borrow and return their connection per chunk, so parallelism beyond `sync.max-pool-size` (5 by default) simply queues on the pool. A key span wider than a long can safely express, or bounds that cannot be read, fall back to sequential; composite-key and keyless tables stay sequential — parallelism is enabled only where splitting is provably safe. While a load runs, the project detail page shows "x of y ranges done, n chunks committed" live.
+
 ### The incremental window is a closed interval
 
 Each cycle, when syncing table data:
@@ -534,9 +549,12 @@ Chosen in descending order of reliability:
 | Strategy | Trigger | Inserts | Updates |
 |---|---|:---:|---|
 | `TIMESTAMP` | A temporal-typed column matching the **last-modified** naming convention | ✅ | ✅ provided that column really is updated |
+| `ROW_SCN` | Oracle source, and the table was created `WITH ROWDEPENDENCIES` (row-level `ORA_ROWSCN`) | ✅ | ✅ deletes are not detected; each cycle reads `MAX(ORA_ROWSCN)`, a full scan |
 | `IDENTITY` | A column matching the **creation-time** convention, or a single numeric primary key | ✅ | ❌ never detected |
 | `FULL_COMPARE` | No usable cursor column, and row count ≤ `sync.full-compare-max-rows` (default 20000) | ✅ | ✅ full-table upsert every cycle |
 | `NONE` | No usable cursor column and the table is too large | ❌ | ❌ initial full load only, then skipped with a stated reason |
+
+`ROW_SCN` is the Oracle-only fallback: a table with no timestamp columns at all can still use per-row commit SCNs as its cursor when it was created `WITH ROWDEPENDENCIES` — no DBA table change required. A real last-modified column still wins (portable, index-friendly). Block-level SCNs (tables built without `ROWDEPENDENCIES`) are too coarse and are **never** offered; DM and YashanDB reuse the Oracle metadata reader, but the probe is whitelisted by product name to real Oracle only.
 
 Names accepted as **last-modified** (16, resolve to `TIMESTAMP`):
 
@@ -587,6 +605,9 @@ Under `sync.*` in `application.yml`:
 | `poll-interval` | `2000` | Polling interval (ms) |
 | `batch-size` | `500` | Rows per JDBC batch |
 | `fetch-size` | `1000` | Source result-set fetch size |
+| `chunk-size` | `100000` | Rows per chunk of the initial full load; each chunk commits and checkpoints on its own; `0` disables chunking (classic streamed read) |
+| `full-load-parallelism` | `1` | Parallel workers per full load; single-column integer-PK tables only, capped at 8; values above `max-pool-size` queue on the connection pool |
+| `max-pool-size` | `5` | Maximum connections per database connection pool |
 | `max-retries` | `3` | Consecutive failures before a task is marked ERROR |
 | `safety-lag-ms` | `1000` | Timestamp watermark rollback; see above |
 | `row-count-audit-interval-ms` | `60000` | Row-count audit interval (ms) |
@@ -726,11 +747,11 @@ com.qqmu.jync
 mvn test
 ```
 
-425 unit tests, covering:
+675 unit tests, covering:
 
 - **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
 - **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself
-- **Cursor strategies** — resolution priority; `IDENTITY` correctly flagged as "may miss updates"; graceful downgrade rather than an error when a configured column becomes invalid; a `VARCHAR` `update_time` is never misused
+- **Cursor strategies** — resolution priority; `IDENTITY` correctly flagged as "may miss updates"; graceful downgrade rather than an error when a configured column becomes invalid; a `VARCHAR` `update_time` is never misused; Oracle row-level SCN probing (`ROWDEPENDENCIES` whitelist, block-level never offered, DM/Yashan not probed)
 - **Cursor serialization** — timestamps round-trip as UTC ISO-8601 without losing millisecond precision; oversized numbers downgrade to `BigDecimal`; corrupt values are treated as "not yet synced" instead of throwing
 - **Password encryption** — round-trip, no double encryption, backward compatibility with legacy plaintext, distinct ciphertexts for identical passwords
 - **AI configuration** — enabling one provider necessarily disables every other (the enabled set is asserted to be exactly one); the global switch masks even an enabled provider; keys are stored encrypted, a blank field on edit keeps the stored one, and the probe receives the plaintext rather than the ciphertext; changing the endpoint clears a stale "reachable" badge; the key appears neither in the probe result nor in the edit page source; OpenAI sends `Authorization: Bearer` while Anthropic sends `x-api-key` and no `Authorization`; a trailing slash or an already-complete endpoint path never produces a doubled path
@@ -744,6 +765,9 @@ mvn test
 - **Pager window** — an unusable page size falls back to the default and an out-of-range page clamps to the last; an ellipsis widens only its own side by five pages; the chosen page size really reaches the repository query; a single page renders just that one number
 - **Sync-now rerun** — repeated clicks during a run produce exactly one extra round; a click with nothing in flight executes immediately and queues nothing; a request for a missing project runs nothing
 - **Dialect defaults** — a MySQL temporal column's default must carry the column's fractional precision (`CURRENT_TIMESTAMP(6)`), or MySQL rejects the CREATE TABLE with error 1067
+
+- **Chunked full load & resume** (real H2) — keyset paging SQL shapes (composite-PK OR chains, watermark upper bound, the `ORA_ROWSCN` pseudo-column emitted unquoted and without the IS NULL rescue, Oracle offset-0 pagination never leaking the `RNUM_` helper column); checkpoint lifecycle (per-chunk commits, completed ranges/chunks skipped, cleared on success); parallel range splits disjoint and contiguous, with a long-overflow-safe fallback; the parallelism gate (zero-scale `NUMERIC(18,0)` admitted, fractional keys refused, composite keys stay sequential); keyless tables keep the streamed full pull and get the "no checkpointed resume" badge; `chunk-size: 0` disables chunking entirely; the row-count audit bows out for pseudo-column cursors
+- **Real-Oracle integration test** — `OracleMigrationHarnessIT` (testcontainers + an Oracle 23ai Free container; named `*IT` so the default suite skips it, and it disables itself without Docker) proves against a live database: parallel ranged full load of a `NUMBER(18)` key, resume from a checkpoint after an interruption, and the complete `ORA_ROWSCN` chain on a `ROWDEPENDENCIES` table (probe → strategy resolution → an incremental cycle delivering an UPDATE to an already-synced row); run explicitly with `mvn test -Dtest=OracleMigrationHarnessIT` (add `-Dapi.version=1.44` on Docker Engine ≥ 29)
 
 There is also an end-to-end script (H2 source and target, 20 assertions) covering initial full load, incremental inserts, incremental updates, idempotency across repeated syncs, DDL column-addition propagation, **matching row counts with no duplicates under concurrent writes**, concurrent invocations rejected by the lock, **writes made during downtime backfilled after restart**, automatic polling, and change-log / cursor-strategy reporting.
 
