@@ -85,6 +85,8 @@ class DataSyncServiceChunkedLoadTest {
         assertThat(result.getRowsWritten()).isEqualTo(5);
         // Cursor semantics are unchanged: identity watermark stored as-is.
         assertThat(result.getNewCursorValue()).isEqualTo("5");
+        // The chunked path ran, so the UI may promise checkpointed resume for this table.
+        assertThat(result.getResumableLoad()).isTrue();
         // Chunks of 2+2+1: one checkpoint per completed chunk, all cleared at the end.
         verify(checkpoints, times(3)).save(any(ChunkCheckpoint.class));
         verify(checkpoints).deleteByProjectIdAndTableName(7L, "ITEMS");
@@ -146,6 +148,9 @@ class DataSyncServiceChunkedLoadTest {
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
         assertThat(count("LOGS")).isEqualTo(5);
         verifyNoInteractions(checkpoints);
+        // Task book A1: a PK-less table's streamed load cannot resume, and the UI must say so
+        // explicitly instead of leaving the user to discover it after an interruption.
+        assertThat(result.getResumableLoad()).isFalse();
     }
 
     @Test
@@ -160,6 +165,22 @@ class DataSyncServiceChunkedLoadTest {
         assertThat(count("ITEMS")).isEqualTo(5);
         assertThat(result.getNewCursorValue()).isEqualTo("5");
         verifyNoInteractions(checkpoints);
+        // Chunking is a global switch here: with it off the resume question was never asked,
+        // so no per-table claim is recorded either way.
+        assertThat(result.getResumableLoad()).isNull();
+    }
+
+    @Test
+    void theRowCountAuditBowsOutForAPseudoColumnCursor() throws SQLException {
+        createItems(5);
+        DataSyncService service = service(2);
+        SyncProgress progress = new SyncProgress();
+        progress.setLastSyncValue("1234567");
+
+        // ORA_ROWSCN exists only on the source; the target (H2 here, any real target in
+        // production) has no such column to bound the comparison with.
+        assertThat(service.auditSyncedRowCounts(source, target, itemsMeta(),
+                CursorStrategy.rowScn("row-level SCN"), progress, ctx)).isNull();
     }
 
     private DataSyncService service(int chunkSize) {

@@ -383,10 +383,16 @@
                                 </span>
                                 <span class="muted" th:text="#{fullload.chunks(${flp.chunksDone})}">chunks</span>
                             </div>
+                            <!-- 无主键表的全量只能流式整拉,中断即整表重来(任务书 A1:UI 明示)。 -->
+                            <div th:if="${p.resumableLoad != null and !p.resumableLoad}"
+                                 class="small" style="font-weight:400;margin-top:2px">
+                                <span class="badge badge-warn" th:title="#{fullload.noResumeHint}"
+                                      th:text="#{fullload.noResume}">no resume</span>
+                            </div>
                         </td>
                         <td>
                             <span class="badge"
-                                  th:classappend="${strat == 'TIMESTAMP'} ? 'badge-ok'
+                                  th:classappend="${strat == 'TIMESTAMP' or strat == 'ROW_SCN'} ? 'badge-ok'
                                                 : (${strat == 'IDENTITY'} ? 'badge-info'
                                                 : (${strat == 'FULL_COMPARE'} ? 'badge-warn' : 'badge-danger'))"
                                   th:title="#{'cursor.strategy.' + ${strat} + '.help'}">

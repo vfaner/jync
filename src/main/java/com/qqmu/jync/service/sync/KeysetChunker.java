@@ -81,11 +81,17 @@ public final class KeysetChunker {
             if (where.length() > 0) {
                 where.append(" AND ");
             }
-            // Same NULL-cursor inclusion as the classic full load: rows with a NULL cursor
-            // value fall outside every comparison and would be silently lost otherwise.
-            String cursor = dialect.quoteIdentifier(strategy.getColumn());
-            where.append('(').append(cursor).append(" <= ? OR ")
-                    .append(cursor).append(" IS NULL)");
+            String cursor = sqlRef(dialect, strategy);
+            if (strategy.isPseudoColumn()) {
+                // ORA_ROWSCN is never NULL, so the NULL-margin inclusion below would be
+                // dead weight (and quoting the pseudo-column would be a syntax error).
+                where.append('(').append(cursor).append(" <= ?)");
+            } else {
+                // Same NULL-cursor inclusion as the classic full load: rows with a NULL cursor
+                // value fall outside every comparison and would be silently lost otherwise.
+                where.append('(').append(cursor).append(" <= ? OR ")
+                        .append(cursor).append(" IS NULL)");
+            }
             paramsOut.add(upperBound);
         }
 
@@ -128,6 +134,17 @@ public final class KeysetChunker {
     }
 
     /** Serializes one chunk's boundary (its last row's PK values) for the checkpoint table. */
+    /**
+     * SQL reference to a strategy's cursor: the quoted identifier for a real column, the
+     * bare name for a pseudo-column like {@code ORA_ROWSCN} (quoting a pseudo-column is a
+     * syntax error on Oracle).
+     */
+    public static String sqlRef(SqlDialect dialect, CursorStrategy strategy) {
+        return strategy.isPseudoColumn()
+                ? strategy.getColumn()
+                : dialect.quoteIdentifier(strategy.getColumn());
+    }
+
     public static String encodePk(List<Object> values) {
         try {
             return JSON.writeValueAsString(values);

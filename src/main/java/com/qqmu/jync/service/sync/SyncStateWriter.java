@@ -57,6 +57,10 @@ public class SyncStateWriter {
         }
         progress.setCursorColumn(strategy.getColumn());
         progress.setCursorStrategy(strategy.getKind().name());
+        // Only full-load cycles decide this; incremental cycles leave the recorded value alone.
+        if (result.getResumableLoad() != null) {
+            progress.setResumableLoad(result.getResumableLoad());
+        }
         progress.setInitialLoadDone(true);
         progress.setLastSyncTime(Instant.now());
         // Counts rows the target actually changed, not rows scanned. A full-compare table is

@@ -33,6 +33,14 @@ public class TableMeta {
     /** Approximate row count, used to decide whether full comparison is affordable. */
     private Long approximateRowCount;
 
+    /**
+     * Oracle only: the table was created {@code WITH ROWDEPENDENCIES}, so every row carries
+     * its own {@code ORA_ROWSCN} commit SCN and the pseudo-column is usable as an incremental
+     * cursor. {@code false} means block-level SCNs only (too coarse to poll on), {@code null}
+     * means not probed — either the source is not Oracle or the dictionary query failed.
+     */
+    private Boolean rowLevelScn;
+
     public Optional<ColumnMeta> column(String columnName) {
         return columns.stream()
                 .filter(c -> c.getName().equalsIgnoreCase(columnName))

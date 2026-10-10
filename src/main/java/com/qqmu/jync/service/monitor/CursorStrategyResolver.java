@@ -20,6 +20,8 @@ import lombok.extern.slf4j.Slf4j;
  *       the schema's semantics better than any heuristic.
  *   <li>A column whose name matches a last-modified convention and whose type is temporal.
  *       This is the only case that reliably catches updates.
+ *   <li>Oracle's row-level {@code ORA_ROWSCN} on a table probed as {@code ROWDEPENDENCIES}:
+ *       catches inserts and updates without a schema column, but only exists on Oracle.
  *   <li>A creation-timestamp column, which catches inserts but not updates.
  *   <li>A single-column integral primary key, which catches inserts only.
  *   <li>Full comparison, if the table is small enough to afford it.
@@ -64,6 +66,15 @@ public class CursorStrategyResolver {
             ColumnMeta c = modified.get();
             return CursorStrategy.timestamp(c.getName(), c.getJdbcType(),
                     "Auto-detected last-modified column");
+        }
+
+        // Oracle row-level SCN: like a last-modified column it sees inserts and updates, but
+        // it needs no schema column — only that the table was created WITH ROWDEPENDENCIES.
+        // A real timestamp column still wins above: its semantics are portable and indexable,
+        // while MAX(ORA_ROWSCN) is a full scan per cycle.
+        if (Boolean.TRUE.equals(table.getRowLevelScn())) {
+            return CursorStrategy.rowScn("Oracle row-level ORA_ROWSCN (table created WITH "
+                    + "ROWDEPENDENCIES): detects inserts and updates, not deletes");
         }
 
         // A creation timestamp: inserts only, but still far cheaper than full comparison.

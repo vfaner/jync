@@ -169,6 +169,67 @@ class CursorStrategyResolverTest {
         assertThat(strategy.getColumn()).isEqualTo("id");
     }
 
+    // --- Oracle row-level SCN (ORA_ROWSCN) --------------------------------------------------
+
+    @Test
+    void oracleRowLevelScnIsUsedWhenNoLastModifiedColumnExists() {
+        TableMeta t = table(List.of(
+                col("id", Types.BIGINT),
+                col("name", Types.VARCHAR)), List.of("id"), 1_000_000L);
+        t.setRowLevelScn(true);
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.ROW_SCN);
+        assertThat(strategy.getColumn()).isEqualTo("ORA_ROWSCN");
+        assertThat(strategy.isIncremental()).isTrue();
+        // The whole point of SCN over the integral PK that would otherwise be chosen:
+        // updates to existing rows become visible.
+        assertThat(strategy.isMissesUpdates()).isFalse();
+        assertThat(strategy.getRationale()).contains("ROWDEPENDENCIES");
+    }
+
+    @Test
+    void aLastModifiedColumnStillWinsOverRowScn() {
+        // A real timestamp column is portable and indexable; MAX(ORA_ROWSCN) is a full scan.
+        TableMeta t = table(List.of(
+                col("id", Types.BIGINT),
+                col("update_time", Types.TIMESTAMP)), List.of("id"), 1000L);
+        t.setRowLevelScn(true);
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.TIMESTAMP);
+        assertThat(strategy.getColumn()).isEqualTo("update_time");
+    }
+
+    @Test
+    void aConfiguredCursorColumnStillWinsOverRowScn() {
+        TableMeta t = table(List.of(
+                col("id", Types.INTEGER),
+                col("audit_ts", Types.TIMESTAMP)), List.of("id"), 1000L);
+        t.setRowLevelScn(true);
+        config.getCursorColumns().put("orders", "audit_ts");
+
+        assertThat(resolver.resolve(t, config).getKind())
+                .isEqualTo(CursorStrategy.Kind.TIMESTAMP);
+    }
+
+    @Test
+    void blockLevelScnIsNotOfferedAsACursor() {
+        // Without ROWDEPENDENCIES the SCN is tracked per block, so an unrelated row's update
+        // bumps it for the whole block: too coarse to poll on. Falls through to the PK.
+        TableMeta t = table(List.of(
+                col("id", Types.BIGINT),
+                col("name", Types.VARCHAR)), List.of("id"), 1000L);
+        t.setRowLevelScn(false);
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.IDENTITY);
+        assertThat(strategy.getColumn()).isEqualTo("id");
+    }
+
     @Test
     void temporalAndIntegralTypeChecksCoverTheUsualJdbcTypes() {
         assertThat(CursorStrategy.isTemporalType(Types.TIMESTAMP)).isTrue();

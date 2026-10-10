@@ -133,4 +133,25 @@ class SyncStateWriterCursorContractTest {
                 CursorStrategy.identity("id", Types.INTEGER, "test")))
                 .isInstanceOf(OptimisticLockingFailureException.class);
     }
+
+    /**
+     * The resume verdict (task book A1's UI signal) is decided by full-load cycles only:
+     * recorded when the result carries one, preserved when a later incremental cycle does not.
+     */
+    @Test
+    void theResumeVerdictOfAFullLoadIsRecordedAndIncrementalCyclesLeaveItAlone() {
+        SyncProgress progress = seededProgress(903L, "orders", "41");
+
+        DataSyncService.TableSyncResult fullLoad = new DataSyncService.TableSyncResult();
+        fullLoad.setResumableLoad(false);
+        writer.advanceCursor(progress, fullLoad,
+                CursorStrategy.identity("id", Types.INTEGER, "test"));
+        assertThat(reload(903L, "orders").getResumableLoad()).isFalse();
+
+        SyncProgress fresh = writer.loadOrCreateProgress(903L, "orders");
+        writer.advanceCursor(fresh, new DataSyncService.TableSyncResult(),
+                CursorStrategy.identity("id", Types.INTEGER, "test"));
+        // The incremental result decided nothing; the recorded verdict must survive.
+        assertThat(reload(903L, "orders").getResumableLoad()).isFalse();
+    }
 }

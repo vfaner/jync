@@ -110,6 +110,14 @@ public class DataSyncService {
         /** The cursor value to persist, or null to leave the cursor untouched. */
         private String newCursorValue;
         private boolean initialLoad;
+        /**
+         * Whether this table's full load is checkpointed and therefore resumable: true when
+         * the keyset-chunked path ran, false when a PK-less table fell back to the single
+         * streamed read (task book A1: the UI must say such tables cannot resume), null when
+         * the question was not decided this cycle (incremental cycle, chunking switched off).
+         */
+        @lombok.Setter
+        private Boolean resumableLoad;
 
         /**
          * Total rows the target actually inserted or updated. This is the number worth showing a
@@ -265,12 +273,17 @@ public class DataSyncService {
                 + sourceDialect.qualify(ctx.getSourceSchema(), table.getName());
         // Bound the read by the same watermark, so the load and the cursor agree exactly.
         if (watermark != null) {
-            // NULL cursor rows fall outside every window comparison. Pull them in with the
-            // bounded rows so they are not silently lost: on a keyed table the incremental
-            // path keeps re-delivering them (the upsert absorbs the replay), while here in
-            // the seed they are delivered exactly once even for a keyless table.
-            String quotedCursor = sourceDialect.quoteIdentifier(strategy.getColumn());
-            selectSql += " WHERE " + quotedCursor + " <= ? OR " + quotedCursor + " IS NULL";
+            String quotedCursor = KeysetChunker.sqlRef(sourceDialect, strategy);
+            if (strategy.isPseudoColumn()) {
+                // ORA_ROWSCN is never NULL; quoting the pseudo-column would be a syntax error.
+                selectSql += " WHERE " + quotedCursor + " <= ?";
+            } else {
+                // NULL cursor rows fall outside every window comparison. Pull them in with the
+                // bounded rows so they are not silently lost: on a keyed table the incremental
+                // path keeps re-delivering them (the upsert absorbs the replay), while here in
+                // the seed they are delivered exactly once even for a keyless table.
+                selectSql += " WHERE " + quotedCursor + " <= ? OR " + quotedCursor + " IS NULL";
+            }
         }
 
         // full-compare 表没有游标，每一轮都会走这条全量路径，逐轮 info 是纯粹的日志噪音；
@@ -331,14 +344,17 @@ public class DataSyncService {
         }
 
         SqlDialect sourceDialect = ctx.getSourceDialect();
-        String cursorCol = sourceDialect.quoteIdentifier(strategy.getColumn());
+        String cursorCol = KeysetChunker.sqlRef(sourceDialect, strategy);
         // Half-open lower bound, closed upper bound: each row is delivered exactly once per
         // window, and the closed upper bound is what makes the window immune to concurrent
         // writes arriving mid-read.
         String selectSql = "SELECT * FROM "
                 + sourceDialect.qualify(ctx.getSourceSchema(), table.getName())
                 + " WHERE (" + cursorCol + " > ? AND " + cursorCol + " <= ?)";
-        if (table.hasPrimaryKey()) {
+        if (strategy.isPseudoColumn()) {
+            // ORA_ROWSCN is never NULL: no margin rows to re-deliver and no keyless-table
+            // warning to raise.
+        } else if (table.hasPrimaryKey()) {
             // NULL cursor rows cannot belong to any window. Re-deliver them every cycle;
             // with a primary key the upsert makes the replay a no-op. A NOT NULL cursor
             // column (or a generated timestamp) removes this cost entirely.
@@ -421,7 +437,7 @@ public class DataSyncService {
             return null;
         }
         SqlDialect dialect = ctx.getSourceDialect();
-        String sql = "SELECT MAX(" + dialect.quoteIdentifier(strategy.getColumn()) + ") FROM "
+        String sql = "SELECT MAX(" + KeysetChunker.sqlRef(dialect, strategy) + ") FROM "
                 + dialect.qualify(ctx.getSourceSchema(), table.getName());
         try (Statement st = sourceConn.createStatement()) {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
@@ -471,6 +487,10 @@ public class DataSyncService {
      */
     private void warnNullCursorRows(Connection sourceConn, TableMeta table,
                                     CursorStrategy strategy, SyncContext ctx) {
+        if (strategy.isPseudoColumn()) {
+            // ORA_ROWSCN is never NULL; counting NULLs would be a pointless full scan.
+            return;
+        }
         SqlDialect dialect = ctx.getSourceDialect();
         String sql = "SELECT COUNT(*) FROM "
                 + dialect.qualify(ctx.getSourceSchema(), table.getName())
@@ -543,7 +563,10 @@ public class DataSyncService {
                                               TableMeta table, CursorStrategy strategy,
                                               SyncProgress progress, SyncContext ctx)
             throws SQLException {
-        if (!strategy.isIncremental() || strategy.getColumn() == null) {
+        // A pseudo-column cursor (ORA_ROWSCN) exists only on the source; the target has no
+        // column to bound the comparison with, so the bounded audit cannot run for it.
+        if (!strategy.isIncremental() || strategy.getColumn() == null
+                || strategy.isPseudoColumn()) {
             return null;
         }
         Object cursor = parseCursor(progress.getLastSyncValue(), strategy);
@@ -980,6 +1003,12 @@ public class DataSyncService {
                                        Object upperBound, SyncContext ctx,
                                        TableSyncResult result) throws SQLException {
         FullLoadRoute route = FullLoadRoute.route(table);
+        if (checkpoints != null && properties.getChunkSize() > 0
+                && route == FullLoadRoute.STREAMING_FALLBACK) {
+            // No key to chunk on: the classic streamed read runs instead and cannot resume.
+            // Recorded for the UI rather than left implicit (task book A1).
+            result.resumableLoad = false;
+        }
         if (checkpoints == null || properties.getChunkSize() <= 0
                 || route == FullLoadRoute.STREAMING_FALLBACK) {
             return false;
@@ -987,12 +1016,15 @@ public class DataSyncService {
         List<ChunkCheckpoint> saved = checkpoints
                 .findByProjectIdAndTableName(ctx.projectId(), table.getName());
         int parallelism = resolveParallelism(route, table, ctx);
-        if (parallelism > 1) {
-            return parallelChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                    watermark, upperBound, ctx, result, saved, parallelism);
+        boolean done = parallelism > 1
+                ? parallelChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
+                        watermark, upperBound, ctx, result, saved, parallelism)
+                : sequentialChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
+                        watermark, upperBound, ctx, result, saved);
+        if (done) {
+            result.resumableLoad = true;
         }
-        return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                watermark, upperBound, ctx, result, saved);
+        return done;
     }
 
     /**
@@ -1263,9 +1295,12 @@ public class DataSyncService {
                 .append(dialect.qualify(ctx.getSourceSchema(), table.getName()));
         List<Object> params = new ArrayList<>();
         if (upperBound != null && strategy != null && strategy.getColumn() != null) {
-            String cursor = dialect.quoteIdentifier(strategy.getColumn());
-            sql.append(" WHERE (").append(cursor).append(" <= ? OR ")
-                    .append(cursor).append(" IS NULL)");
+            String cursor = KeysetChunker.sqlRef(dialect, strategy);
+            sql.append(" WHERE (").append(cursor).append(" <= ?");
+            if (!strategy.isPseudoColumn()) {
+                sql.append(" OR ").append(cursor).append(" IS NULL");
+            }
+            sql.append(')');
             params.add(upperBound);
         }
         try (PreparedStatement st = sourceConn.prepareStatement(sql.toString())) {

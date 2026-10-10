@@ -17,6 +17,10 @@ import lombok.Getter;
  * <ul>
  *   <li>{@link Kind#TIMESTAMP} — a last-modified column. Detects inserts <em>and</em>
  *       updates. This is the only strategy that gives genuine incremental replication.
+ *   <li>{@link Kind#ROW_SCN} — Oracle's {@code ORA_ROWSCN} pseudo-column on a table created
+ *       {@code WITH ROWDEPENDENCIES}. Detects inserts <em>and</em> updates without needing a
+ *       schema column, so it ranks just below a real last-modified timestamp. Like every
+ *       polling strategy it cannot see deletes.
  *   <li>{@link Kind#IDENTITY} — a monotonically increasing key. Detects inserts only;
  *       updates to existing rows are invisible. Chosen only when no timestamp exists.
  *   <li>{@link Kind#FULL_COMPARE} — re-reads the whole table each cycle and upserts every
@@ -30,10 +34,14 @@ public class CursorStrategy {
 
     public enum Kind {
         TIMESTAMP,
+        ROW_SCN,
         IDENTITY,
         FULL_COMPARE,
         NONE
     }
+
+    /** Name of the Oracle pseudo-column a {@link Kind#ROW_SCN} strategy polls on. */
+    public static final String ORA_ROWSCN = "ORA_ROWSCN";
 
     /**
      * Prefix used when storing a full-compare "fingerprint" in the progress table's
@@ -69,6 +77,14 @@ public class CursorStrategy {
         return new CursorStrategy(Kind.IDENTITY, column, jdbcType, rationale, true);
     }
 
+    /**
+     * Oracle row-level {@code ORA_ROWSCN}. Only offered for tables probed as created
+     * {@code WITH ROWDEPENDENCIES}; the SCN is a NUMBER, hence the {@code NUMERIC} jdbc type.
+     */
+    public static CursorStrategy rowScn(String rationale) {
+        return new CursorStrategy(Kind.ROW_SCN, ORA_ROWSCN, Types.NUMERIC, rationale, false);
+    }
+
     public static CursorStrategy fullCompare(String rationale) {
         return new CursorStrategy(Kind.FULL_COMPARE, null, Types.NULL, rationale, false);
     }
@@ -78,7 +94,16 @@ public class CursorStrategy {
     }
 
     public boolean isIncremental() {
-        return kind == Kind.TIMESTAMP || kind == Kind.IDENTITY;
+        return kind == Kind.TIMESTAMP || kind == Kind.IDENTITY || kind == Kind.ROW_SCN;
+    }
+
+    /**
+     * True when the "column" is really a source-side pseudo-column ({@code ORA_ROWSCN}):
+     * it must be emitted unquoted in SQL, is never NULL, and does not exist on the target —
+     * so NULL-margin handling and the bounded row-count audit do not apply to it.
+     */
+    public boolean isPseudoColumn() {
+        return kind == Kind.ROW_SCN;
     }
 
     /** Column-name fragments that conventionally mark a last-modified timestamp. */

@@ -68,9 +68,18 @@ public class SyncProgress {
     @Column(name = "cursor_column", length = 128)
     private String cursorColumn;
 
-    /** Strategy that produced {@link #lastSyncValue}: TIMESTAMP, IDENTITY, FULL_COMPARE or NONE. */
+    /** Strategy that produced {@link #lastSyncValue}: TIMESTAMP, ROW_SCN, IDENTITY, FULL_COMPARE or NONE. */
     @Column(name = "cursor_strategy", length = 32)
     private String cursorStrategy;
+
+    /**
+     * Whether the initial full load of this table ran through the checkpointed keyset-chunked
+     * path (true) or the single streamed read of a PK-less table (false — such a load cannot
+     * resume, and the UI says so). {@code null} while no initial load has completed or when
+     * chunking is switched off.
+     */
+    @Column(name = "resumable_load")
+    private Boolean resumableLoad;
 
     /** True once the initial full load for this object has completed. */
     @Column(name = "initial_load_done")

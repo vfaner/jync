@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.dto.meta.ProcedureMeta;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
@@ -56,6 +57,53 @@ public class OracleMetadataReader extends GenericMetadataReader {
             log.debug("SELECT USER failed: {}", e.getMessage());
         }
         return super.resolveDefaultSchema(conn);
+    }
+
+    /**
+     * Adds the {@code ROWDEPENDENCIES} probe to the generic table read.
+     *
+     * <p>Only real Oracle is whitelisted: 达梦 and 崖山 mimic the dictionary layout (this
+     * reader serves all three), but {@code ORA_ROWSCN} row-level semantics are an Oracle
+     * guarantee, so on the look-alikes the flag stays null and the cursor resolver never
+     * offers the SCN strategy. The probe failure is non-fatal for the same reason — an
+     * unreadable dictionary must not fail the whole metadata read.
+     */
+    @Override
+    public TableMeta readTable(Connection conn, String schema, String tableName) throws SQLException {
+        TableMeta table = super.readTable(conn, schema, tableName);
+        if (table != null && isOracleProduct(conn)) {
+            table.setRowLevelScn(probeRowDependencies(conn, schema, tableName));
+        }
+        return table;
+    }
+
+    private boolean isOracleProduct(Connection conn) {
+        try {
+            String product = conn.getMetaData().getDatabaseProductName();
+            return product != null && product.toLowerCase().contains("oracle");
+        } catch (SQLException e) {
+            log.debug("Could not read database product name: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** {@code ALL_TABLES.DEPENDENCIES}: ENABLED = row-level SCN, DISABLED = block-level. */
+    private Boolean probeRowDependencies(Connection conn, String schema, String tableName) {
+        String sql = "SELECT DEPENDENCIES FROM ALL_TABLES "
+                + "WHERE OWNER = NVL(?, USER) AND TABLE_NAME = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, upperOrNull(schema));
+            ps.setString(2, tableName.toUpperCase());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return "ENABLED".equalsIgnoreCase(rs.getString(1));
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("ROWDEPENDENCIES probe failed for {}: {}", tableName, e.getMessage());
+        }
+        return null;
     }
 
     @Override

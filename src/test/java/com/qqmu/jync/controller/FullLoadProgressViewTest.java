@@ -120,6 +120,31 @@ class FullLoadProgressViewTest {
         assertThat(html).doesNotContain("Chunked full load");
     }
 
+    @Test
+    void aPkLessTableCarriesTheNoResumeBadge() throws Exception {
+        stubDetail(Map.of());
+        SyncProgress keyless = new SyncProgress();
+        keyless.setObjectName("LOGS");
+        keyless.setResumableLoad(false);
+        when(projectService.findProgress(1L)).thenReturn(List.of(keyless));
+
+        String html = render();
+
+        // Task book A1: the streamed load of a PK-less table cannot resume; the page must
+        // say so, with the remedy (add a primary key) in the tooltip.
+        assertThat(html).contains("No checkpointed resume");
+        assertThat(html).contains("Add a primary key to enable chunked, resumable loading");
+    }
+
+    @Test
+    void aResumableOrLegacyRowShowsNoResumeBadge() throws Exception {
+        stubDetail(Map.of());
+
+        // The stubbed ITEMS row has resumableLoad == null (a pre-feature progress row):
+        // absence of knowledge must not render as a warning.
+        assertThat(render()).doesNotContain("No checkpointed resume");
+    }
+
     private static ChunkCheckpoint checkpoint(int range, int chunk, String status) {
         return new ChunkCheckpoint(7L, "ITEMS", range, chunk, null, 100, status);
     }

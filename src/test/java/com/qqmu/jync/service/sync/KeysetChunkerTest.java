@@ -83,6 +83,21 @@ class KeysetChunkerTest {
     }
 
     @Test
+    void aRowScnWatermarkIsEmittedUnquotedAndWithoutTheNullRescue() {
+        CursorStrategy rowScn = CursorStrategy.rowScn("row-level SCN");
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.pageSql(new OracleDialect(), "HR", "EMP",
+                List.of("EMPNO"), List.of(7), null, rowScn, 1234567L, 100, params);
+
+        // ORA_ROWSCN is a pseudo-column: quoting it is a syntax error on Oracle, and it is
+        // never NULL, so the NULL-cursor rescue of a real column must not appear.
+        assertThat(sql).contains("(ORA_ROWSCN <= ?)");
+        assertThat(sql).doesNotContain("\"ORA_ROWSCN\"");
+        assertThat(sql).doesNotContain("IS NULL");
+        assertThat(params).containsExactly(7, 1234567L);
+    }
+
+    @Test
     void sqlServerGetsBracketQuotingAndOffsetFetchPaging() {
         List<Object> params = new ArrayList<>();
         String sql = KeysetChunker.pageSql(new SqlServerDialect(), "dbo", "ORDERS",
