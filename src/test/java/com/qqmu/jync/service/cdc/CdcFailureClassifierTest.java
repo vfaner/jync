@@ -90,6 +90,11 @@ class CdcFailureClassifierTest {
         assertThat(CdcFailureClassifier.classify(
                 new java.sql.SQLException("ORA-01031: insufficient privileges")))
                 .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+        // ORA-65040: mining session started in the wrong container (CDB vs PDB). Same
+        // connection will never succeed — park it, don't hot-loop.
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-65040: operation not allowed in this container")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
         // describe() preserves the ORA code verbatim for UI display.
         assertThat(CdcFailureClassifier.describe(
                 new java.sql.SQLException("ORA-01291: missing logfile"))).contains("ORA-01291");

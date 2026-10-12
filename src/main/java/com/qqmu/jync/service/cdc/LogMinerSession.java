@@ -47,7 +47,7 @@ public class LogMinerSession implements AutoCloseable {
                     + " AND NAME IS NOT NULL ORDER BY FIRST_CHANGE#";
 
     static final String Q_CONTENTS =
-            "SELECT RS_ID, CSN, XID, OPERATION, SEG_OWNER, TABLE_NAME, SQL_REDO, TIMESTAMP"
+            "SELECT RS_ID, CSN, XID, OPERATION, SEG_OWNER, TABLE_NAME, SQL_REDO, TIMESTAMP, SRC_CON_ID"
                     + " FROM V$LOGMNR_CONTENTS"
                     + " WHERE CSCN > ? AND OPERATION IN ('INSERT','UPDATE','DELETE','DDL')"
                     + " ORDER BY CSCN, RS_ID";
@@ -96,6 +96,9 @@ public class LogMinerSession implements AutoCloseable {
             String tableName = rows.getString(6);
             String sqlRedo = rows.getString(7);
             Timestamp rowTime = rows.getTimestamp(8);
+            // SRC_CON_ID: only meaningful on a CDB (12c+); NULL/0 on non-CDB. The consumer
+            // uses it to filter rows belonging to other PDBs when mining from CDB$ROOT.
+            int srcConId = rows.getInt(9);
             if (sqlRedo == null) {
                 continue;
             }
@@ -104,7 +107,7 @@ public class LogMinerSession implements AutoCloseable {
                 continue;                                   // fragment only, wait for more
             }
             out.add(new Row(rsId, csn, xid, operation, segOwner, tableName,
-                    accumulated, rowTime));
+                    accumulated, rowTime, srcConId));
             if (++read >= batchCap()) {
                 break;
             }
@@ -182,9 +185,12 @@ public class LogMinerSession implements AutoCloseable {
         public final String tableName;
         public final String sqlRedo;
         public final Timestamp rowTime;
+        /** Container ID (CDB only); 0 on non-CDB. */
+        public final int srcConId;
 
         public Row(String rsId, long csn, String xid, String operation,
-                   String segOwner, String tableName, String sqlRedo, Timestamp rowTime) {
+                   String segOwner, String tableName, String sqlRedo, Timestamp rowTime,
+                   int srcConId) {
             this.rsId = rsId;
             this.csn = csn;
             this.xid = xid;
@@ -193,6 +199,7 @@ public class LogMinerSession implements AutoCloseable {
             this.tableName = tableName;
             this.sqlRedo = sqlRedo;
             this.rowTime = rowTime;
+            this.srcConId = srcConId;
         }
     }
 

@@ -48,7 +48,12 @@ public final class CdcFailureClassifier {
                     || message.contains("ora-00308")) { // cannot open archived log
                 return Kind.PURGED;
             }
-            if (message.contains("ora-01031")) {        // insufficient privileges
+            if (message.contains("ora-01031")        // insufficient privileges
+                    // ORA-65040: wrong container — mining session started in CDB$ROOT but
+                    // executing against a PDB, or vice versa. Retrying with the same
+                    // connection will never succeed; park it for the user to fix the
+                    // connection config.
+                    || message.contains("ora-65040")) {
                 return Kind.AUTH_FAILURE;
             }
         }

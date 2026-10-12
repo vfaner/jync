@@ -74,6 +74,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     private volatile boolean running = true;
     private volatile Connection currentSource;
     private volatile LogMinerSession currentSession;
+    /**
+     * CON_ID of the connection's current container. On a non-CDB this is 0/1 and the
+     * SRC_CON_ID filter below is a no-op. On a CDB mined from CDB$ROOT, only rows with
+     * this con_id are in scope; rows from other PDBs are discarded.
+     */
+    private volatile int ownConId = -1;
 
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
     private final AtomicInteger parseFailures = new AtomicInteger();
@@ -133,6 +139,9 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 try {
                     Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig());
                     currentSource = conn;
+                    if (ownConId < 0) {
+                        ownConId = readOwnConId(conn);
+                    }
                     int batchSize = (int) Math.min(Integer.MAX_VALUE,
                             properties.getCdc().getLogminer().getBatchSize());
                     LogMinerSession session = sessionFactory.open(conn, lastScn, batchSize);
@@ -211,6 +220,23 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
+     * Read the connection's current container ID (V$DATABASE.OPEND_MODES context). On a
+     * non-CDB this returns 0; SRC_CON_ID filtering then passes every row.
+     */
+    private int readOwnConId(Connection conn) {
+        try (java.sql.Statement st = conn.createStatement();
+             java.sql.ResultSet rs = st.executeQuery(
+                     "SELECT SYS_CONTEXT('USERENV', 'CON_ID') FROM DUAL")) {
+            if (rs.next()) {
+                return rs.getInt(1);
+            }
+        } catch (java.sql.SQLException e) {
+            log.debug("Could not read CON_ID (non-CDB?): {}", e.getMessage());
+        }
+        return 0;
+    }
+
+    /**
      * Drain one session: accumulate rows per transaction key (CSCN) and flush on CSCN change
      * (target commit → lease renew → advanceScn). Empty drain means the session found nothing
      * past lastScn — the caller idles.
@@ -227,6 +253,13 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 break;
             }
             for (LogMinerSession.Row row : batch) {
+                // CDB isolation: on a CDB mined from CDB$ROOT, rows from other PDBs carry
+                // a different SRC_CON_ID. Drop them here so cross-PDB same-name tables
+                // cannot leak through the owner+table match below. On non-CDB ownConId=0
+                // and every row passes (SRC_CON_ID is NULL/0 in V$LOGMNR_CONTENTS).
+                if (ownConId > 0 && row.srcConId > 0 && row.srcConId != ownConId) {
+                    continue;
+                }
                 if (!"DDL".equals(row.operation)
                         && !"INSERT".equals(row.operation)
                         && !"UPDATE".equals(row.operation)
@@ -242,6 +275,10 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     log.warn("Skipping DDL in LogMiner stream ({}): {}", row.segOwner,
                             sql.length() > DDL_LOG_SQL_CHARS
                                     ? sql.substring(0, DDL_LOG_SQL_CHARS) + "..." : sql);
+                    // Invalidate the cached binding for this table so the next DML event
+                    // re-reads the source column list. Without this, a source-side ADD
+                    // COLUMN would be invisible to the parser until consumer restart.
+                    supplier.invalidate(row.segOwner, row.tableName);
                     continue;
                 }
                 CdcTableBinding binding = supplier.binding(row.segOwner, row.tableName);
@@ -316,6 +353,14 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     private boolean matchesProjectTable(String owner, String table) {
         if (owner == null || table == null) {
+            return false;
+        }
+        // Schema gate: two schemas with same-named tables must not both flow into CDC.
+        // Oracle delivers SEG_OWNER in uppercase; the connection's source schema is
+        // configured by the user and may have been entered in any case.
+        String expected = ctx.getSourceSchema();
+        if (expected != null && !expected.isBlank()
+                && !owner.equalsIgnoreCase(expected)) {
             return false;
         }
         return ctx.getConfig().includesTable(table);
@@ -413,6 +458,16 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             } catch (java.sql.SQLException e) {
                 throw new IllegalStateException("LogMiner metadata read failed for "
                         + owner + "." + table, e);
+            }
+        }
+
+        /** Drop the cached binding so the next DML on this table re-reads source columns. */
+        void invalidate(String owner, String table) {
+            String key = (owner + "." + table).toUpperCase(Locale.ROOT);
+            CdcTableBinding removed = cache.remove(key);
+            if (removed != null) {
+                log.info("Invalidated LogMiner binding for {}.{} after DDL event",
+                        owner, table);
             }
         }
     }
