@@ -218,9 +218,15 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         Map<CdcTableBinding, List<Map<String, Object>>> deletes = new LinkedHashMap<>();
         String lastCommitLsn = null;
         String currentTxLsn = null; // LSN of the latest row in the buffered transaction
+        // The options argument of pg_logical_slot_get_changes is VARIADIC text[], which a
+        // PreparedStatement cannot bind directly (a bound text parameter does not coerce to
+        // text[]). The option names/values are internal constants, so inline-quoting them is
+        // injection-safe. The slot name parameter needs an explicit ::name cast — the
+        // driver binds it as varchar, and PG does not implicitly coerce varchar to name when
+        // the call also carries a VARIADIC array (overload resolution fails).
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT lsn::text, data FROM pg_logical_slot_get_changes("
-                        + "?, NULL, ?, 'include-xids', '1')")) {
+                        + "?::name, NULL::pg_lsn, ?::integer, VARIADIC ARRAY['include-xids', '1']::text[])")) {
             ps.setString(1, slotName);
             ps.setLong(2, batchSize);
             try (ResultSet rs = ps.executeQuery()) {
@@ -288,16 +294,13 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
-     * Coerce string values from the test_decoding payload into the Java types the binding
-     * expects. We deliberately keep this minimal: strings stay strings, numbers parse to
-     * Long/Double when possible, NULL stays null. The target dialect's upsert SQL binds
-     * via {@code setObject} — PG/MySQL/Oracle all accept string representations for the
-     * JDBC driver to coerce.
+     * Type coercion happens in {@link PgTestDecodingParser#parseColumns} — values come back
+     * as Integer/Long/Double/Boolean/String matching the test_decoding type tag. This hook
+     * remains for binding-level overrides (e.g. target-side column mapping) but is a no-op
+     * for the default flow.
      */
     private void applyTyped(CdcTableBinding binding, Map<String, Object> row) {
-        // Placeholder for future typed coercions; for now raw strings are sufficient
-        // because CdcEventApplier.bindRow uses PreparedStatement.setObject(i, value)
-        // which the JDBC driver coerces into the target column type.
+        // No-op: parser already coerced by jdbc type tag.
     }
 
     private void flushTransaction(long projectId, String commitLsn,
