@@ -23,6 +23,21 @@ public final class CdcProbeResult {
     public static final String REPLICATION_GRANTS = "REPLICATION_GRANTS";
     public static final String BINLOG_RETENTION = "BINLOG_RETENTION";
 
+    // —— v1.6.0 Oracle LogMiner checks ——
+
+    /** Source must be literal Oracle (not a look-alike such as DM / OceanBase Oracle mode). */
+    public static final String ORACLE_SOURCE = "ORACLE_SOURCE";
+    /** LOG_MODE = ARCHIVELOG — LogMiner needs archived redo. */
+    public static final String ARCHIVELOG = "ARCHIVELOG";
+    /** SUPPLEMENTAL_LOG_DATA_MIN != NO — database-level minimal supplemental logging. */
+    public static final String SUPPLEMENTAL_DB = "SUPPLEMENTAL_DB";
+    /** Per-table ALL COLUMN LOGGING group — upsert needs the full after-image. */
+    public static final String SUPPLEMENTAL_TABLES = "SUPPLEMENTAL_TABLES";
+    /** Mining role present (LOGMINING on 12c+, EXECUTE_CATALOG on 11g). */
+    public static final String MINING_PRIVILEGES = "MINING_PRIVILEGES";
+    /** LONG / LONG RAW columns — pass-with-warning: their DML is skipped and counted. */
+    public static final String LONG_COLUMNS = "LONG_COLUMNS";
+
     public static final class Check {
         private final String name;
         private final boolean passed;
