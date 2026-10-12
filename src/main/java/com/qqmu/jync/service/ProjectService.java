@@ -322,6 +322,14 @@ public class ProjectService {
                     && (source == null || source.getType() != DatabaseType.ORACLE)) {
                 throw new IllegalArgumentException("error.project.cdc.not.oracle");
             }
+            if (requested == CaptureStrategy.PG_LOGICAL_CDC
+                    && (source == null || source.getType() != DatabaseType.POSTGRESQL)) {
+                throw new IllegalArgumentException("error.project.cdc.not.postgres");
+            }
+            if (requested == CaptureStrategy.SQLSERVER_CDC
+                    && (source == null || source.getType() != DatabaseType.SQLSERVER)) {
+                throw new IllegalArgumentException("error.project.cdc.not.sqlserver");
+            }
             config.setCaptureStrategy(requested);
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));

@@ -175,24 +175,35 @@ public class ProjectController {
                 : databaseConfigService.findById(project.getSourceDbId()).orElse(null);
         boolean isMysqlSource = source != null && source.getType() == DatabaseType.MYSQL;
         boolean isOracleSource = source != null && source.getType() == DatabaseType.ORACLE;
+        boolean isPostgresSource = source != null && source.getType() == DatabaseType.POSTGRESQL;
+        boolean isSqlServerSource = source != null && source.getType() == DatabaseType.SQLSERVER;
         model.addAttribute("isMysqlSource", isMysqlSource);
         model.addAttribute("isOracleSource", isOracleSource);
+        model.addAttribute("isPostgresSource", isPostgresSource);
+        model.addAttribute("isSqlServerSource", isSqlServerSource);
 
         CaptureStrategy current = config.getCaptureStrategyOrDefault();
         CdcProbeResult cdcProbe = null;
         boolean cdcRecommended = false;
         CaptureStrategy recommendedStrategy = null;
-        if ((isMysqlSource || isOracleSource)
+        if ((isMysqlSource || isOracleSource || isPostgresSource || isSqlServerSource)
                 && current == CaptureStrategy.POLLING && progressList.isEmpty()) {
-            // A brand-new MySQL/Oracle project that never synced: probe live and preselect
-            // the CDC card when it passes. A failing probe must never block rendering —
-            // same rule as B2 (a failed probe does not block saving).
+            // A brand-new MySQL/Oracle/PG/SQLServer project that never synced: probe live
+            // and preselect the CDC card when it passes. A failing probe must never block
+            // rendering — same rule as B2 (a failed probe does not block saving).
             try {
                 cdcProbe = cdcOperationsService.probeProject(id);
                 cdcRecommended = cdcProbe != null && cdcProbe.passed();
                 if (cdcRecommended) {
-                    recommendedStrategy = isMysqlSource
-                            ? CaptureStrategy.BINLOG_CDC : CaptureStrategy.LOGMINER_CDC;
+                    if (isMysqlSource) {
+                        recommendedStrategy = CaptureStrategy.BINLOG_CDC;
+                    } else if (isOracleSource) {
+                        recommendedStrategy = CaptureStrategy.LOGMINER_CDC;
+                    } else if (isPostgresSource) {
+                        recommendedStrategy = CaptureStrategy.PG_LOGICAL_CDC;
+                    } else if (isSqlServerSource) {
+                        recommendedStrategy = CaptureStrategy.SQLSERVER_CDC;
+                    }
                 }
             } catch (RuntimeException e) {
                 log.debug("CDC probe failed for project {}; rendering without recommendation: {}",

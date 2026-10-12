@@ -165,6 +165,7 @@
                   posFile=${livePos ? stats.positionFile : (cdcPosition != null ? cdcPosition.binlogFile : null)},
                   posPos=${livePos ? stats.positionPos : (cdcPosition != null ? cdcPosition.binlogPos : null)},
                   scn=${stats != null and stats.positionScn != null ? stats.positionScn : (cdcPosition != null ? cdcPosition.scn : null)},
+                  lsn=${stats != null and stats.positionLsn != null ? stats.positionLsn : (cdcPosition != null ? cdcPosition.lsn : null)},
                   gtid=${stats != null and stats.gtidSet != null ? stats.gtidSet : (cdcPosition != null ? cdcPosition.gtidSet : null)},
                   gtidShort=${gtid != null and #strings.length(gtid) > 40 ? #strings.substring(gtid, 0, 40) + '…' : gtid},
                   lastError=${stats != null ? stats.lastError : null},
@@ -187,7 +188,9 @@
                           th:text="${posFile} + ':' + ${posPos}">file:pos</span>
                     <span class="chip mono" th:if="${posFile == null and scn != null}"
                           th:text="${'SCN ' + scn}">SCN 123</span>
-                    <span th:if="${posFile == null and scn == null}">—</span>
+                    <span class="chip mono" th:if="${posFile == null and scn == null and lsn != null}"
+                          th:text="${'LSN ' + lsn}">LSN 0/167D3F8</span>
+                    <span th:if="${posFile == null and scn == null and lsn == null}">—</span>
                     <div class="small muted mono" th:if="${gtidShort != null}"
                          th:text="'GTID ' + ${gtidShort}">gtid</div>
                     <!--/* 位点年龄:持久化位点的落库时间,不持有消费者的节点也能看 */-->
@@ -302,6 +305,46 @@
                         </span>
                         <span class="strategy-desc" th:text="#{project.strategy.logminer.desc}">desc</span>
                         <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'LOGMINER_CDC'}">
+                            <span th:text="#{project.strategy.cdc.missing}">missing</span>
+                            <ul>
+                                <li th:each="chk : ${cdcMissingChecks}">✗ <span
+                                        th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
+                                        th:text="${chk.detail}">detail</span></li>
+                            </ul>
+                            <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
+                        </span>
+                    </label>
+                    <label class="strategy-card" th:if="${isPostgresSource}"
+                           th:classappend="${sel == 'PG_LOGICAL_CDC'} ? 'picked'">
+                        <input type="radio" name="captureStrategy" value="PG_LOGICAL_CDC"
+                               th:checked="${sel == 'PG_LOGICAL_CDC'}">
+                        <span class="strategy-name">
+                            <span th:text="#{project.strategy.pg.name}">PG Logical CDC</span>
+                            <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'PG_LOGICAL_CDC'}"
+                                th:text="#{project.strategy.cdc.recommended}">recommended</em>
+                        </span>
+                        <span class="strategy-desc" th:text="#{project.strategy.pg.desc}">desc</span>
+                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'PG_LOGICAL_CDC'}">
+                            <span th:text="#{project.strategy.cdc.missing}">missing</span>
+                            <ul>
+                                <li th:each="chk : ${cdcMissingChecks}">✗ <span
+                                        th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
+                                        th:text="${chk.detail}">detail</span></li>
+                            </ul>
+                            <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
+                        </span>
+                    </label>
+                    <label class="strategy-card" th:if="${isSqlServerSource}"
+                           th:classappend="${sel == 'SQLSERVER_CDC'} ? 'picked'">
+                        <input type="radio" name="captureStrategy" value="SQLSERVER_CDC"
+                               th:checked="${sel == 'SQLSERVER_CDC'}">
+                        <span class="strategy-name">
+                            <span th:text="#{project.strategy.sqlserver.name}">SQL Server CDC</span>
+                            <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'SQLSERVER_CDC'}"
+                                th:text="#{project.strategy.cdc.recommended}">recommended</em>
+                        </span>
+                        <span class="strategy-desc" th:text="#{project.strategy.sqlserver.desc}">desc</span>
+                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'SQLSERVER_CDC'}">
                             <span th:text="#{project.strategy.cdc.missing}">missing</span>
                             <ul>
                                 <li th:each="chk : ${cdcMissingChecks}">✗ <span
