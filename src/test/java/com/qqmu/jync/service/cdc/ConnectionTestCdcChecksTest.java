@@ -60,7 +60,8 @@ class ConnectionTestCdcChecksTest {
             throw new IllegalStateException(e);
         }
         return new ConnectionTestService(dsm, new BinlogCdcProbe(), new LogMinerCdcProbe(),
-                new PgLogicalReplicationCdcProbe(), new SyncProperties());
+                new PgLogicalReplicationCdcProbe(), new SqlServerCdcProbe(),
+                new SyncProperties());
     }
 
     private DatabaseConfig savedMysql() {

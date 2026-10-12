@@ -218,6 +218,10 @@ public class CdcConsumerManager {
                 consumer = new PgLogicalCdcConsumer(project, lock, ctx, positionStore,
                         baselineService, taskStore, stateWriter, dataSourceManager,
                         stats, properties);
+            } else if (strategy == CaptureStrategy.SQLSERVER_CDC) {
+                consumer = new SqlServerCdcConsumer(project, lock, ctx, positionStore,
+                        baselineService, taskStore, stateWriter, dataSourceManager,
+                        stats, properties);
             } else {
                 consumer = new CdcConsumer(project, lock, ctx, clientFactory,
                         positionStore, baselineService, taskStore, stateWriter,

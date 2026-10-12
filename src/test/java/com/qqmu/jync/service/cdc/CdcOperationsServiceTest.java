@@ -61,6 +61,7 @@ class CdcOperationsServiceTest {
     @Mock private BinlogCdcProbe probe;
     @Mock private LogMinerCdcProbe logMinerProbe;
     @Mock private PgLogicalReplicationCdcProbe pgProbe;
+    @Mock private SqlServerCdcProbe mssqlProbe;
     @Mock private BinlogClientFactory clientFactory;
     @Mock private CdcConsumerManager cdcManager;
     @Mock private CdcPositionStore positionStore;
@@ -75,9 +76,9 @@ class CdcOperationsServiceTest {
     @BeforeEach
     void setUp() {
         service = new CdcOperationsService(projectRepository, databaseConfigRepository,
-                dataSourceManager, probe, logMinerProbe, pgProbe, clientFactory, cdcManager,
-                positionStore, stateWriter, taskStore, auditService, changeLogRepository,
-                lockService);
+                dataSourceManager, probe, logMinerProbe, pgProbe, mssqlProbe,
+                clientFactory, cdcManager, positionStore, stateWriter, taskStore,
+                auditService, changeLogRepository, lockService);
     }
 
     private Project project() {

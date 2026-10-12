@@ -39,6 +39,7 @@ class ConnectionTestServiceTest {
         return new ConnectionTestService(dataSourceManager, new BinlogCdcProbe(),
                 new com.qqmu.jync.service.cdc.LogMinerCdcProbe(),
                 new com.qqmu.jync.service.cdc.PgLogicalReplicationCdcProbe(),
+                new com.qqmu.jync.service.cdc.SqlServerCdcProbe(),
                 new SyncProperties());
     }
 

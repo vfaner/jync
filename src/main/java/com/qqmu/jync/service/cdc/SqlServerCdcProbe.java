@@ -1,0 +1,173 @@
+package com.qqmu.jync.service.cdc;
+
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+import org.springframework.stereotype.Component;
+
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * v1.7.0 SQL Server CDC readiness probe — the MSSQL twin of {@link LogMinerCdcProbe}
+ * and {@link PgLogicalReplicationCdcProbe}.
+ *
+ * <p>Itemized, never throws. Checks:
+ * <ol>
+ *   <li>literal Microsoft SQL Server;</li>
+ *   <li>database-level CDC enabled ({@code sys.databases.is_cdc_enabled});</li>
+ *   <li>SQL Server Agent running (required for capture / cleanup jobs);</li>
+ *   <li>current user is in {@code cdc_admin} / {@code cdc_reader} (or {@code sysadmin});</li>
+ *   <li>per-table capture instance exists in {@code cdc.change_tables}.</li>
+ * </ol>
+ */
+@Component
+@Slf4j
+public class SqlServerCdcProbe {
+
+    /**
+     * @param conn        live source connection (already opened by the caller)
+     * @param schemaTables each element is {@code [schema, table]} — the tables the project
+     *                    intends to capture; may be empty (connection test before any
+     *                    project is configured) in which case the table-level check is skipped.
+     */
+    public CdcProbeResult probe(Connection conn, List<String[]> schemaTables) {
+        List<CdcProbeResult.Check> checks = new ArrayList<>();
+        checks.add(checkMssqlSource(conn));
+        checks.add(checkCdcDbEnabled(conn));
+        checks.add(checkAgentRunning(conn));
+        checks.add(checkCdcRole(conn));
+        if (schemaTables != null && !schemaTables.isEmpty()) {
+            checks.add(checkCaptureInstances(conn, schemaTables));
+        }
+        return CdcProbeResult.of(checks);
+    }
+
+    // —— ① literal SQL Server ——
+
+    private CdcProbeResult.Check checkMssqlSource(Connection conn) {
+        try {
+            String product = conn.getMetaData().getDatabaseProductName();
+            if (product == null
+                    || !product.toUpperCase(Locale.ROOT).contains("SQL SERVER")) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_SOURCE, false,
+                        "product=" + product + " — SQL Server CDC requires literal"
+                                + " Microsoft SQL Server");
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_SOURCE, true, product);
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_SOURCE, false, msg(e));
+        }
+    }
+
+    // —— ② database CDC enabled ——
+
+    private CdcProbeResult.Check checkCdcDbEnabled(Connection conn) {
+        String sql = "SELECT is_cdc_enabled FROM sys.databases WHERE name = DB_NAME()";
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            boolean enabled = rs.next() && rs.getBoolean(1);
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_DB_ENABLED, enabled,
+                    enabled ? "is_cdc_enabled=1"
+                            : "is_cdc_enabled=0 — enable with: EXEC sys.sp_cdc_enable_db;");
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_DB_ENABLED, false, msg(e));
+        }
+    }
+
+    // —— ③ SQL Server Agent running ——
+
+    private CdcProbeResult.Check checkAgentRunning(Connection conn) {
+        // On Linux SQL Server (mssql-server >= 2019) the Agent is optional; on Windows it
+        // is a service. dm_server_services lists it when present; absent means Agent is
+        // not installed (required for CDC capture/cleanup jobs).
+        String sql = "SELECT status_desc FROM sys.dm_server_services"
+                + " WHERE servicename LIKE N'SQL Server Agent%'";
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            boolean running = false;
+            String status = null;
+            while (rs.next()) {
+                status = rs.getString(1);
+                if ("RUNNING".equalsIgnoreCase(status)) running = true;
+            }
+            if (status == null) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_AGENT_RUNNING, false,
+                        "SQL Server Agent service not found — install/start it"
+                                + " (capture and cleanup jobs require the Agent)");
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_AGENT_RUNNING, running,
+                    "Agent status=" + status
+                            + (running ? "" : " — start the SQL Server Agent service"));
+        } catch (SQLException e) {
+            // dm_server_services requires VIEW SERVER STATE; degrade to pass-with-warning.
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_AGENT_RUNNING, true,
+                    "Agent status unknown (VIEW SERVER STATE missing?): " + msg(e));
+        }
+    }
+
+    // —— ④ CDC role ——
+
+    private CdcProbeResult.Check checkCdcRole(Connection conn) {
+        String sql = "SELECT IS_MEMBER('cdc_Admin') AS is_admin, IS_MEMBER('cdc_reader') AS is_reader,"
+                + " IS_SRVROLEMEMBER('sysadmin') AS is_sa";
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            boolean admin = false, reader = false, sa = false;
+            if (rs.next()) {
+                admin = rs.getInt(1) == 1;
+                reader = rs.getInt(2) == 1;
+                sa = rs.getInt(3) == 1;
+            }
+            boolean ok = admin || reader || sa;
+            String detail = "cdc_Admin=" + admin + ", cdc_reader=" + reader + ", sysadmin=" + sa;
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, ok,
+                    ok ? detail
+                            : detail + " — grant with: CREATE ROLE cdc_reader;"
+                                    + " ALTER ROLE cdc_reader ADD MEMBER [<user>];");
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, false, msg(e));
+        }
+    }
+
+    // —— ⑤ per-table capture instance ——
+
+    private CdcProbeResult.Check checkCaptureInstances(Connection conn, List<String[]> schemaTables) {
+        List<String> missing = new ArrayList<>();
+        for (String[] st : schemaTables) {
+            String schema = st[0];
+            String table = st[1];
+            try (java.sql.PreparedStatement ps = conn.prepareStatement(
+                    "SELECT capture_instance FROM cdc.change_tables"
+                            + " WHERE source_schema_name = ? AND source_table_name = ?")) {
+                ps.setString(1, schema);
+                ps.setString(2, table);
+                ResultSet rs = ps.executeQuery();
+                if (!rs.next()) {
+                    missing.add(schema + "." + table);
+                }
+            } catch (SQLException e) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
+                        msg(e));
+            }
+        }
+        if (missing.isEmpty()) {
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, true,
+                    schemaTables.size() + " table(s) with CDC capture instance");
+        }
+        return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
+                "missing CDC capture instance on: " + String.join(", ", missing)
+                        + " — enable with: EXEC sys.sp_cdc_enable_table"
+                        + " @source_schema=N'<schema>', @source_name=N'<table>',"
+                        + " @role_name=N'cdc_Admin', @capture_instance=N'<schema>_<table>';");
+    }
+
+    private static String msg(SQLException e) {
+        String m = e.getMessage();
+        return m == null ? e.getClass().getSimpleName() : m;
+    }
+}

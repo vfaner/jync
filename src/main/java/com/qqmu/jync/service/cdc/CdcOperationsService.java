@@ -59,6 +59,7 @@ public class CdcOperationsService {
     private final BinlogCdcProbe probe;
     private final LogMinerCdcProbe logMinerProbe;
     private final PgLogicalReplicationCdcProbe pgProbe;
+    private final SqlServerCdcProbe mssqlProbe;
     private final BinlogClientFactory clientFactory;
     private final CdcConsumerManager cdcManager;
     private final CdcPositionStore positionStore;
@@ -74,6 +75,7 @@ public class CdcOperationsService {
                                 BinlogCdcProbe probe,
                                 LogMinerCdcProbe logMinerProbe,
                                 PgLogicalReplicationCdcProbe pgProbe,
+                                SqlServerCdcProbe mssqlProbe,
                                 BinlogClientFactory clientFactory,
                                 CdcConsumerManager cdcManager,
                                 CdcPositionStore positionStore,
@@ -88,6 +90,7 @@ public class CdcOperationsService {
         this.probe = probe;
         this.logMinerProbe = logMinerProbe;
         this.pgProbe = pgProbe;
+        this.mssqlProbe = mssqlProbe;
         this.clientFactory = clientFactory;
         this.cdcManager = cdcManager;
         this.positionStore = positionStore;
@@ -118,7 +121,8 @@ public class CdcOperationsService {
         if (source == null || source.getType() == null
                 || (source.getType() != DatabaseType.MYSQL
                         && source.getType() != DatabaseType.ORACLE
-                        && source.getType() != DatabaseType.POSTGRESQL)) {
+                        && source.getType() != DatabaseType.POSTGRESQL
+                        && source.getType() != DatabaseType.SQLSERVER)) {
             throw new IllegalArgumentException("cdc.probe.unsupported");
         }
         try (Connection conn = dataSourceManager.getConnection(source)) {
@@ -127,9 +131,10 @@ public class CdcOperationsService {
                 return probe.probe(conn, plannedServerId);
             }
             if (source.getType() == DatabaseType.POSTGRESQL) {
-                // Table-level REPLICA IDENTITY check requires the project's table list;
-                // deferred to a later iteration — here we run the database-level probe.
                 return pgProbe.probe(conn, List.of());
+            }
+            if (source.getType() == DatabaseType.SQLSERVER) {
+                return mssqlProbe.probe(conn, List.of());
             }
             // Connection-test-time probe has no project context — table-level checks
             // (supplemental logging per table, LONG columns) are skipped when empty.
@@ -144,6 +149,8 @@ public class CdcOperationsService {
                 anchor = CdcProbeResult.ORACLE_SOURCE;
             } else if (source.getType() == DatabaseType.POSTGRESQL) {
                 anchor = CdcProbeResult.PG_SOURCE;
+            } else if (source.getType() == DatabaseType.SQLSERVER) {
+                anchor = CdcProbeResult.MSSQL_SOURCE;
             } else {
                 anchor = CdcProbeResult.VERSION;
             }

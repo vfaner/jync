@@ -15,6 +15,7 @@ import com.qqmu.jync.service.cdc.BinlogCdcProbe;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.cdc.LogMinerCdcProbe;
 import com.qqmu.jync.service.cdc.PgLogicalReplicationCdcProbe;
+import com.qqmu.jync.service.cdc.SqlServerCdcProbe;
 import com.zaxxer.hikari.HikariDataSource;
 
 import lombok.Getter;
@@ -29,16 +30,19 @@ public class ConnectionTestService {
     private final BinlogCdcProbe cdcProbe;
     private final LogMinerCdcProbe logMinerProbe;
     private final PgLogicalReplicationCdcProbe pgProbe;
+    private final SqlServerCdcProbe mssqlProbe;
     private final SyncProperties properties;
 
     public ConnectionTestService(DataSourceManager dataSourceManager, BinlogCdcProbe cdcProbe,
                                  LogMinerCdcProbe logMinerProbe,
                                  PgLogicalReplicationCdcProbe pgProbe,
+                                 SqlServerCdcProbe mssqlProbe,
                                  SyncProperties properties) {
         this.dataSourceManager = dataSourceManager;
         this.cdcProbe = cdcProbe;
         this.logMinerProbe = logMinerProbe;
         this.pgProbe = pgProbe;
+        this.mssqlProbe = mssqlProbe;
         this.properties = properties;
     }
 
@@ -108,6 +112,12 @@ public class ConnectionTestService {
                 cdcChecks = pgProbe.probe(conn, List.of()).getChecks();
             } catch (RuntimeException e) {
                 log.warn("PG logical probe failed during connection test; reporting none", e);
+            }
+        } else if (config.getType() == DatabaseType.SQLSERVER) {
+            try {
+                cdcChecks = mssqlProbe.probe(conn, List.of()).getChecks();
+            } catch (RuntimeException e) {
+                log.warn("SQL Server CDC probe failed during connection test; reporting none", e);
             }
         }
         TestResult result = TestResult.success(product, driver, conn.getCatalog(),
