@@ -65,11 +65,15 @@ class CdcConsumerManagerTest {
     }
 
     private Project cdcProject(long id, boolean enabled) {
+        return projectWithStrategy(id, enabled, CaptureStrategy.BINLOG_CDC);
+    }
+
+    private Project projectWithStrategy(long id, boolean enabled, CaptureStrategy strategy) {
         Project project = new Project();
         project.setId(id);
         project.setEnabled(enabled);
         SyncConfig config = new SyncConfig();
-        config.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+        config.setCaptureStrategy(strategy);
         // config JSON 按 SyncContextFactory.parseConfig 期望的序列化格式塞进 project.setSyncConfig(...)
         // (Project 实体字段名是 syncConfig,已核实)
         project.setSyncConfig(new com.fasterxml.jackson.databind.ObjectMapper()
@@ -99,9 +103,12 @@ class CdcConsumerManagerTest {
         starter = new RecordingStarter();
         // SyncProperties 默认值即测试期望值:cdc.lockTtlMs=30_000(Task 1 钉死);
         // taskRepository.findByProjectId 未 stub → Mockito 默认 Optional.empty → 无 ERROR 帽子,不挡启动
+        LogMinerSessionFactory sessionFactory = (source, startScn, batchSize) -> {
+            throw new UnsupportedOperationException("session factory not exercised here");
+        };
         manager = new CdcConsumerManager(projectRepository, taskRepository, lockService,
                 contextFactory, clientFactory, positionStore, baselineService, taskStore,
-                stateWriter, dataSourceManager, new SyncProperties(), starter);
+                stateWriter, dataSourceManager, new SyncProperties(), starter, sessionFactory);
     }
 
     @Test
@@ -195,7 +202,10 @@ class CdcConsumerManagerTest {
         CdcConsumerManager deadThreadManager = new CdcConsumerManager(projectRepository,
                 taskRepository, lockService, contextFactory, clientFactory, positionStore,
                 baselineService, taskStore, stateWriter, dataSourceManager, new SyncProperties(),
-                (consumer, threadName) -> new Thread(consumer, threadName)); // 从不 start → isAlive()==false
+                (consumer, threadName) -> new Thread(consumer, threadName),
+                (source, startScn, batchSize) -> {
+                    throw new UnsupportedOperationException();
+                }); // 从不 start → isAlive()==false
         when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
         when(taskRepository.findByProjectId(9L)).thenReturn(Optional.empty());
         Project project = cdcProject(9L, true);
@@ -205,5 +215,56 @@ class CdcConsumerManagerTest {
         deadThreadManager.supervise();                               // 除名 → 重新抢锁 → 重启
 
         verify(lockService, times(2)).tryAcquireForDaemon(9L, 30_000L);
+    }
+
+    // —— v1.6.0 双策略分派(LOGMINER_CDC) ——
+
+    @Test
+    void ensureStartedDispatchesLogMinerConsumerForLogMinerCdcStrategy() {
+        // Task 5 Step 1(红→绿):LOGMINER_CDC 项目必须得到 LogMinerCdcConsumer,
+        // 而不是 BINLOG_CDC 专属的 CdcConsumer;线程名前缀保持不变(中断纪律依赖它)。
+        when(lockService.tryAcquireForDaemon(11L, 30_000L)).thenReturn(lock);
+        Project oracle = projectWithStrategy(11L, true, CaptureStrategy.LOGMINER_CDC);
+
+        manager.ensureStarted(oracle);
+
+        assertThat(starter.last).isInstanceOf(LogMinerCdcConsumer.class);
+        assertThat(starter.lastName).isEqualTo("jync-cdc-11");
+        manager.ensureStopped(11L);
+    }
+
+    @Test
+    void ensureStartedStillDispatchesBinlogConsumerForBinlogCdcStrategy() {
+        // 对照:BINLOG_CDC 分派不变——接口抽取零行为变化的硬证明之一。
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+
+        manager.ensureStarted(cdcProject(9L, true));
+
+        assertThat(starter.last).isInstanceOf(CdcConsumer.class);
+        assertThat(starter.lastName).isEqualTo("jync-cdc-9");
+        manager.ensureStopped(9L);
+    }
+
+    @Test
+    void superviseStartsBothLogCdcStrategiesButNotPolling() {
+        // supervise 门已泛化(isLogCdc()):两种日志级策略都补起,POLLING 一概不建消费者。
+        when(lockService.tryAcquireForDaemon(20L, 30_000L)).thenReturn(lock);
+        when(lockService.tryAcquireForDaemon(21L, 30_000L)).thenReturn(lock);
+        Project binlog = projectWithStrategy(20L, true, CaptureStrategy.BINLOG_CDC);
+        Project oracle = projectWithStrategy(21L, true, CaptureStrategy.LOGMINER_CDC);
+        Project polling = projectWithStrategy(22L, true, CaptureStrategy.POLLING);
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(binlog, oracle, polling));
+
+        manager.supervise();
+
+        assertThat(starter.last).isNotNull();
+        // 两种日志策略都启动(顺序按 repository 返回序:20 后 21,最后一轮 starter.last=21)
+        verify(lockService, times(1)).tryAcquireForDaemon(20L, 30_000L);
+        verify(lockService, times(1)).tryAcquireForDaemon(21L, 30_000L);
+        verify(lockService, never()).tryAcquireForDaemon(
+                org.mockito.ArgumentMatchers.eq(22L),
+                org.mockito.ArgumentMatchers.anyLong());
+        manager.ensureStopped(20L);
+        manager.ensureStopped(21L);
     }
 }

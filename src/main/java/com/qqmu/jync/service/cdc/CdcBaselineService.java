@@ -102,15 +102,43 @@ public class CdcBaselineService {
         return null;
     }
 
+    /**
+     * Oracle LogMiner: current SCN of the source database — the baseline anchor and the
+     * resume watermark ({@code CSCN > scn} from the next mining session).
+     */
+    public long readCurrentScn(DatabaseConfig source) {
+        try (Connection conn = dataSourceManager.getConnection(source);
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT CURRENT_SCN FROM V$DATABASE")) {
+            if (!rs.next()) {
+                throw new IllegalStateException("Could not read CURRENT_SCN from V$DATABASE");
+            }
+            return rs.getLong(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to read Oracle SCN: " + e.getMessage(), e);
+        }
+    }
+
     public void runBaseline(SyncContext ctx, BooleanSupplier lockRenewer) {
         long projectId = ctx.getProject().getId();
+        boolean logMiner = ctx.getConfig() != null
+                && ctx.getConfig().getCaptureStrategyOrDefault()
+                        == com.qqmu.jync.model.CaptureStrategy.LOGMINER_CDC;
         try {
-            CdcPositionMark mark = readCurrentPosition(ctx.getSourceConfig());
-            positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
-                    mark.getGtidSet(), clientFactory.serverIdFor(projectId));
-            stateWriter.resetProject(projectId);
-            log.info("CDC baseline for project {}: full load from position {}:{}",
-                    projectId, mark.getFile(), mark.getPos());
+            if (logMiner) {
+                long scn = readCurrentScn(ctx.getSourceConfig());
+                positionStore.recordBaselineStartScn(projectId, scn);
+                stateWriter.resetProject(projectId);
+                log.info("CDC baseline for project {}: full load from SCN {} (LogMiner)",
+                        projectId, scn);
+            } else {
+                CdcPositionMark mark = readCurrentPosition(ctx.getSourceConfig());
+                positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
+                        mark.getGtidSet(), clientFactory.serverIdFor(projectId));
+                stateWriter.resetProject(projectId);
+                log.info("CDC baseline for project {}: full load from position {}:{}",
+                        projectId, mark.getFile(), mark.getPos());
+            }
             SyncResult result = engine.runCycle(ctx.toBuilder().cdcBaselineRun(true).build());
             // runCycle 把 SQLException/LockLost/RuntimeException 折进 result 而不外抛:
             // 失败的全量必须在这里转成异常,否则残缺快照会被标成 baseline_done,流从

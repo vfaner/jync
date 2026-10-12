@@ -461,9 +461,9 @@ public class SyncEngine {
         // CDC 项目的数据只允许从基线全量 + binlog 回放两条路进目标库:常规轮询周期若也
         // 跑数据阶段,会和流式回放双写同一张表,DELETE 语义直接冲突(B6/B8)。
         CaptureStrategy strategy = ctx.getConfig().getCaptureStrategyOrDefault();
-        if (strategy == CaptureStrategy.BINLOG_CDC && !ctx.isCdcBaselineRun()) {
-            log.info("Project {} uses BINLOG_CDC capture; skipping polling data phase",
-                    ctx.getProject() == null ? "?" : ctx.getProject().getId());
+        if (strategy.isLogCdc() && !ctx.isCdcBaselineRun()) {
+            log.info("Project {} uses {} capture; skipping polling data phase",
+                    ctx.getProject() == null ? "?" : ctx.getProject().getId(), strategy);
             return;
         }
         // Scoped to the tables this cycle actually writes, so persistent per-table toggles

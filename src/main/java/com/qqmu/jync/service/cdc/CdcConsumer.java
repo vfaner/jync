@@ -61,7 +61,7 @@ import lombok.extern.slf4j.Slf4j;
  * replays the transaction against idempotent upserts.
  */
 @Slf4j
-public final class CdcConsumer implements Runnable {
+public final class CdcConsumer implements ManagedCdcConsumer {
 
     /** Consecutive deserialization failures above this count, with no successful
      * transaction in between, are treated as fatal (data corruption / version skew). */
@@ -266,6 +266,7 @@ public final class CdcConsumer implements Runnable {
      * buffered in the handler is dropped with its position un-advanced — the next start
      * replays it (zero loss).
      */
+    @Override
     public void requestStop() {
         running = false;
         BinaryLogClient current = this.client;

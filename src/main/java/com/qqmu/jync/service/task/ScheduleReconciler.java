@@ -72,7 +72,7 @@ public class ScheduleReconciler {
 
     private void reconcileOne(Project project) {
         CaptureStrategy strategy = cdcManager.strategyOf(project);   // syncConfig JSON 解析归口 manager
-        if (strategy == CaptureStrategy.BINLOG_CDC) {
+        if (strategy != null && strategy.isLogCdc()) {
             // CDC 项目归 CdcConsumerManager 管,永不建 Quartz job;残留的轮询 job(例如
             // 策略刚从 POLLING 切过来)在这里幂等清掉,避免双引擎双写。
             scheduler.removePollingJob(project.getId());   // 幂等:没有 job 也无害

@@ -75,11 +75,11 @@ public class CdcConsumerManager {
 
     /** One live consumer of this node: its stop handle, its thread (for join) and its stats. */
     private static final class Registration {
-        final CdcConsumer consumer;
+        final ManagedCdcConsumer consumer;
         final Thread thread;
         final CdcRuntimeStats stats;
 
-        Registration(CdcConsumer consumer, Thread thread, CdcRuntimeStats stats) {
+        Registration(ManagedCdcConsumer consumer, Thread thread, CdcRuntimeStats stats) {
             this.consumer = consumer;
             this.thread = thread;
             this.stats = stats;
@@ -98,6 +98,7 @@ public class CdcConsumerManager {
     private final DataSourceManager dataSourceManager;
     private final SyncProperties properties;
     private final ConsumerStarter starter;
+    private final LogMinerSessionFactory logMinerSessionFactory;
 
     /**
      * Own mapper for {@link #strategyOf}: the reconciler and supervise call it per project
@@ -122,10 +123,11 @@ public class CdcConsumerManager {
                               SyncTaskStore taskStore,
                               SyncStateWriter stateWriter,
                               DataSourceManager dataSourceManager,
-                              SyncProperties properties) {
+                              SyncProperties properties,
+                              LogMinerSessionFactory logMinerSessionFactory) {
         this(projectRepository, taskRepository, lockService, contextFactory, clientFactory,
                 positionStore, baselineService, taskStore, stateWriter, dataSourceManager,
-                properties, DEFAULT_STARTER);
+                properties, DEFAULT_STARTER, logMinerSessionFactory);
     }
 
     public CdcConsumerManager(ProjectRepository projectRepository,
@@ -139,7 +141,8 @@ public class CdcConsumerManager {
                               SyncStateWriter stateWriter,
                               DataSourceManager dataSourceManager,
                               SyncProperties properties,
-                              ConsumerStarter starter) {
+                              ConsumerStarter starter,
+                              LogMinerSessionFactory logMinerSessionFactory) {
         this.projectRepository = projectRepository;
         this.taskRepository = taskRepository;
         this.lockService = lockService;
@@ -152,6 +155,7 @@ public class CdcConsumerManager {
         this.dataSourceManager = dataSourceManager;
         this.properties = properties;
         this.starter = starter;
+        this.logMinerSessionFactory = logMinerSessionFactory;
     }
 
     /**
@@ -204,12 +208,21 @@ public class CdcConsumerManager {
         try {
             SyncContext ctx = contextFactory.build(project, lock.owner(), lock::renew);
             CdcRuntimeStats stats = new CdcRuntimeStats();
-            CdcConsumer consumer = new CdcConsumer(project, lock, ctx, clientFactory,
-                    positionStore, baselineService, taskStore, stateWriter, dataSourceManager,
-                    stats, properties);
+            CaptureStrategy strategy = strategyOf(project);
+            ManagedCdcConsumer consumer;
+            if (strategy == CaptureStrategy.LOGMINER_CDC) {
+                consumer = new LogMinerCdcConsumer(project, lock, ctx, positionStore,
+                        baselineService, taskStore, stateWriter, dataSourceManager,
+                        stats, properties, logMinerSessionFactory);
+            } else {
+                consumer = new CdcConsumer(project, lock, ctx, clientFactory,
+                        positionStore, baselineService, taskStore, stateWriter,
+                        dataSourceManager, stats, properties);
+            }
             Thread thread = starter.start(consumer, "jync-cdc-" + projectId);
             registry.put(projectId, new Registration(consumer, thread, stats));
-            log.info("CDC consumer for project {} started on this node as {}", projectId, lock.owner());
+            log.info("CDC consumer ({}) for project {} started on this node as {}",
+                    strategy, projectId, lock.owner());
         } catch (RuntimeException e) {
             lock.close();                                        // 先放租约:他节点可接管
             parkQuietly(projectId, project.getName(), e);        // ERROR 帽子,防跨节点重启风暴
@@ -311,7 +324,7 @@ public class CdcConsumerManager {
         Set<Long> wanted = new HashSet<>();
         try {
             for (Project project : projectRepository.findByEnabledTrue()) {
-                if (strategyOf(project) != CaptureStrategy.BINLOG_CDC) {
+                if (!strategyOf(project).isLogCdc()) {
                     continue;
                 }
                 wanted.add(project.getId());

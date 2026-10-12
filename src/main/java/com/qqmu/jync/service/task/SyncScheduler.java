@@ -78,11 +78,12 @@ public class SyncScheduler {
      */
     public synchronized void schedule(Project project) {
         SyncConfig config = contextFactory.parseConfig(project);
-        if (config.getCaptureStrategyOrDefault() == CaptureStrategy.BINLOG_CDC) {
+        if (config.getCaptureStrategyOrDefault().isLogCdc()) {
             // CDC 项目永不进 Quartz:长驻消费者由 CdcConsumerManager 独占(B6)。
             // 轮询与流式双引擎并行 = 目标库双写,守卫放在最前,任何调用方都拦得住。
-            log.info("Project '{}' captures via BINLOG_CDC; not scheduling a Quartz polling job"
-                    + " (CdcConsumerManager owns it)", project.getName());
+            log.info("Project '{}' captures via {}; not scheduling a Quartz polling job"
+                    + " (CdcConsumerManager owns it)", project.getName(),
+                    config.getCaptureStrategyOrDefault());
             return;
         }
         Long projectId = project.getId();

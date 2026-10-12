@@ -74,7 +74,7 @@ public class SyncBootstrap {
         // 让重启后的续流快一拍;ensureStarted 幂等,三方重叠无副作用。
         int consumers = 0;
         for (Project project : enabled) {
-            if (cdcManager.strategyOf(project) != CaptureStrategy.BINLOG_CDC) {
+            if (!cdcManager.strategyOf(project).isLogCdc()) {
                 continue;
             }
             try {
