@@ -240,4 +240,50 @@ class CursorStrategyResolverTest {
         assertThat(CursorStrategy.isIntegralType(Types.NUMERIC)).isTrue();
         assertThat(CursorStrategy.isIntegralType(Types.VARCHAR)).isFalse();
     }
+
+    @Test
+    void sqlServerRowversionIsRecognizedAsCursorCandidate() {
+        // mssql-jdbc reports rowversion / timestamp columns as Types.BINARY with TYPE_NAME
+        // "timestamp". These must pass the candidate filter even though BINARY is not a
+        // temporal or integral jdbc type.
+        ColumnMeta rv = col("x", Types.BINARY);
+        rv.setTypeName("timestamp");
+        assertThat(CursorStrategy.isSqlServerRowversion(rv)).isTrue();
+        assertThat(CursorStrategy.isCursorCandidate(rv)).isTrue();
+
+        // A generic BINARY blob is not rowversion and must stay excluded.
+        ColumnMeta blob = col("x", Types.BINARY);
+        blob.setTypeName("VARBINARY");
+        assertThat(CursorStrategy.isSqlServerRowversion(blob)).isFalse();
+        assertThat(CursorStrategy.isCursorCandidate(blob)).isFalse();
+
+        // VARBINARY with typeName "timestamp" — same column reported through a different
+        // driver version — must still qualify.
+        ColumnMeta rvVarbin = col("x", Types.VARBINARY);
+        rvVarbin.setTypeName("timestamp");
+        assertThat(CursorStrategy.isSqlServerRowversion(rvVarbin)).isTrue();
+        assertThat(CursorStrategy.isCursorCandidate(rvVarbin)).isTrue();
+    }
+
+    @Test
+    void sqlServerRowversionColumnIsAutoResolvedAsTimestampKind() {
+        // A rowversion column named with the conventional ROWVERSION hint should be picked
+        // as a TIMESTAMP-kind cursor (bumps on every UPDATE, so catches updates — unlike a
+        // plain integral identity column).
+        TableMeta t = new TableMeta();
+        t.setName("T");
+        t.setApproximateRowCount(1000L);
+        ColumnMeta rv = new ColumnMeta();
+        rv.setName("row_version");
+        rv.setJdbcType(Types.BINARY);
+        rv.setTypeName("timestamp");
+        t.setColumns(List.of(rv));
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.TIMESTAMP);
+        assertThat(strategy.getColumn()).isEqualTo("row_version");
+        // TIMESTAMP-kind must not be flagged as missing updates — rowversion bumps on UPDATE.
+        assertThat(strategy.isMissesUpdates()).isFalse();
+    }
 }

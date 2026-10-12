@@ -135,6 +135,43 @@ public class CursorStrategy {
                 || jdbcType == Types.DECIMAL;
     }
 
+    /**
+     * SQL Server {@code timestamp} / {@code rowversion} column. The name is misleading:
+     * it is not a datetime, it is an 8-byte binary counter that SQL Server bumps on every
+     * UPDATE (and sets once on INSERT). That is exactly the semantics a last-modified
+     * cursor needs, so it should rank alongside {@link Kind#TIMESTAMP}.
+     *
+     * <p>The mssql-jdbc driver reports it as {@link Types#BINARY} (or sometimes
+     * {@link Types#VARBINARY}) with {@code TYPE_NAME = "timestamp"}, so the plain
+     * {@code jdbcType}-only predicates above miss it. Watermark values are round-tripped
+     * as hex strings by {@code JdbcRowMapper}.
+     */
+    public static boolean isSqlServerRowversion(ColumnMeta column) {
+        if (column == null) {
+            return false;
+        }
+        int t = column.getJdbcType();
+        boolean binaryType = t == Types.BINARY || t == Types.VARBINARY || t == Types.LONGVARBINARY;
+        String typeName = column.getTypeName() == null ? "" : column.getTypeName().trim();
+        return binaryType && "timestamp".equalsIgnoreCase(typeName);
+    }
+
+    /**
+     * Union of {@link #isTemporalType(int)}, {@link #isIntegralType(int)} and
+     * {@link #isSqlServerRowversion(ColumnMeta)} — the predicates that decide whether a
+     * column may be offered as a cursor candidate or auto-resolved as an incremental
+     * cursor. Call sites that already have the full {@link ColumnMeta} should use this
+     * overload so driver quirk cases (SQL Server rowversion) are not silently dropped.
+     */
+    public static boolean isCursorCandidate(ColumnMeta column) {
+        if (column == null) {
+            return false;
+        }
+        return isTemporalType(column.getJdbcType())
+                || isIntegralType(column.getJdbcType())
+                || isSqlServerRowversion(column);
+    }
+
     /** True when the column is a single-column integral primary key, i.e. usable as a cursor. */
     static boolean isSingleIntegralPk(TableMeta table, ColumnMeta column) {
         return table.getPrimaryKeys().size() == 1

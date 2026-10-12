@@ -51,9 +51,15 @@ public class CursorStrategyResolver {
             Optional<ColumnMeta> col = table.column(configured);
             if (col.isPresent()) {
                 ColumnMeta c = col.get();
-                if (CursorStrategy.isTemporalType(c.getJdbcType())) {
+                if (CursorStrategy.isTemporalType(c.getJdbcType())
+                        || CursorStrategy.isSqlServerRowversion(c)) {
+                    // SQL Server rowversion: bumps on every UPDATE, so it catches inserts
+                    // AND updates just like a real timestamp. Round-tripped as hex by
+                    // JdbcRowMapper.
                     return CursorStrategy.timestamp(c.getName(), c.getJdbcType(),
-                            "Configured by user");
+                            CursorStrategy.isSqlServerRowversion(c)
+                                    ? "Configured by user (SQL Server rowversion: bumps on every update)"
+                                    : "Configured by user");
                 }
                 if (CursorStrategy.isIntegralType(c.getJdbcType())) {
                     return CursorStrategy.identity(c.getName(), c.getJdbcType(),
@@ -117,7 +123,9 @@ public class CursorStrategyResolver {
      * Finds a column whose name contains one of the hints.
      *
      * @param requireTemporal when true, only temporal-typed columns qualify; a VARCHAR named
-     *                        "update_time" is not safely comparable
+     *                        "update_time" is not safely comparable. SQL Server rowversion
+     *                        columns (jdbcType=BINARY, typeName="timestamp") also pass this
+     *                        gate because they bump on every UPDATE like a timestamp would.
      */
     private Optional<ColumnMeta> findByHints(TableMeta table, java.util.List<String> hints,
                                              boolean requireTemporal) {
@@ -129,7 +137,9 @@ public class CursorStrategyResolver {
                 if (!upper.contains(hint)) {
                     continue;
                 }
-                if (requireTemporal && !CursorStrategy.isTemporalType(c.getJdbcType())) {
+                if (requireTemporal
+                        && !CursorStrategy.isTemporalType(c.getJdbcType())
+                        && !CursorStrategy.isSqlServerRowversion(c)) {
                     log.debug("Column {}.{} matches hint {} but is not a temporal type",
                             table.getName(), c.getName(), hint);
                     continue;

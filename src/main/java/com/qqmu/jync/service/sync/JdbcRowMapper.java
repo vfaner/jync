@@ -142,6 +142,18 @@ public final class JdbcRowMapper {
         if (value == null) {
             return null;
         }
+        if (value instanceof byte[]) {
+            // SQL Server rowversion / timestamp watermarks arrive as 8-byte arrays.
+            // Store the canonical hex text so cursorFromString can rebind the same bytes
+            // back into the binary column on the next cycle.
+            byte[] bytes = (byte[]) value;
+            StringBuilder hex = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16))
+                        .append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        }
         if (value instanceof Timestamp) {
             // ISO-8601 in UTC, so the stored value is unambiguous across restarts and
             // across a server timezone change.
@@ -190,6 +202,32 @@ public final class JdbcRowMapper {
     public static Object cursorFromString(String stored, int jdbcType) {
         if (stored == null || stored.isBlank()) {
             return null;
+        }
+        // SQL Server rowversion / timestamp watermarks: stored as a hex string, bound back
+        // as byte[]. Hex text is 0-9a-f only; reject anything else so a corrupted value
+        // fails safe (warn + null) rather than throwing mid-cycle.
+        if (jdbcType == Types.BINARY || jdbcType == Types.VARBINARY
+                || jdbcType == Types.LONGVARBINARY) {
+            String hex = stored.trim();
+            if (hex.length() % 2 != 0) {
+                log.warn("Unparseable stored binary cursor '{}'; treating as absent", stored);
+                return null;
+            }
+            try {
+                byte[] bytes = new byte[hex.length() / 2];
+                for (int i = 0; i < bytes.length; i++) {
+                    int hi = Character.digit(hex.charAt(i * 2), 16);
+                    int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
+                    if (hi < 0 || lo < 0) {
+                        throw new NumberFormatException("non-hex char");
+                    }
+                    bytes[i] = (byte) ((hi << 4) | lo);
+                }
+                return bytes;
+            } catch (NumberFormatException e) {
+                log.warn("Unparseable stored binary cursor '{}'; treating as absent", stored);
+                return null;
+            }
         }
         if (CursorTypes.isTemporal(jdbcType)) {
             if (jdbcType == Types.TIME) {

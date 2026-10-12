@@ -607,9 +607,10 @@ public class ProjectService {
             var table = reader.readTable(conn, schema, tableName);
             List<String> candidates = new ArrayList<>();
             for (var column : table.getColumns()) {
-                if (com.qqmu.jync.service.monitor.CursorStrategy.isTemporalType(column.getJdbcType())
-                        || com.qqmu.jync.service.monitor.CursorStrategy
-                            .isIntegralType(column.getJdbcType())) {
+                // Union of temporal/integral candidates plus SQL Server rowversion columns
+                // (which the driver reports as Types.BINARY but behave as a bump-on-update
+                // 8-byte counter — see CursorStrategy.isSqlServerRowversion).
+                if (com.qqmu.jync.service.monitor.CursorStrategy.isCursorCandidate(column)) {
                     candidates.add(column.getName());
                 }
             }

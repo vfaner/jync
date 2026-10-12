@@ -193,4 +193,25 @@ class JdbcRowMapperCursorTest {
         Object restored = JdbcRowMapper.cursorFromString("2026-06-01 12:00:00", Types.TIMESTAMP);
         assertThat(restored).isInstanceOf(Timestamp.class);
     }
+
+    @Test
+    void sqlServerRowversionWatermarkRoundTripsAsHex() {
+        // SQL Server rowversion/timestamp columns arrive from mssql-jdbc as byte[].
+        // Stored as lowercase hex, rebound back as the exact same byte[] for the next cycle.
+        byte[] watermark = new byte[]{0x00, 0x00, 0x00, 0x00, 0x00, 0x01, (byte) 0xab, (byte) 0xcd};
+        String hex = JdbcRowMapper.cursorToString(watermark);
+        assertThat(hex).isEqualTo("000000000001abcd");
+
+        Object restored = JdbcRowMapper.cursorFromString(hex, Types.BINARY);
+        assertThat(restored).isInstanceOf(byte[].class);
+        assertThat((byte[]) restored).isEqualTo(watermark);
+    }
+
+    @Test
+    void nonHexBinaryCursorIsRejectedAsAbsent() {
+        // A corrupted watermark (odd-length hex, or non-hex characters) must fail safe
+        // rather than throw mid-cycle.
+        assertThat(JdbcRowMapper.cursorFromString("0000abc", Types.BINARY)).isNull();
+        assertThat(JdbcRowMapper.cursorFromString("zz0011", Types.BINARY)).isNull();
+    }
 }
