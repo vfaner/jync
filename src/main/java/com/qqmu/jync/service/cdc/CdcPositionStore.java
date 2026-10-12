@@ -127,4 +127,41 @@ public class CdcPositionStore {
         position.setUpdatedAt(Instant.now());
         repository.save(position);
     }
+
+    /**
+     * LSN variant of {@link #recordBaselineStart}: captures the current source LSN as the
+     * baseline anchor. Used by {@code PG_LOGICAL_CDC} (pg_lsn) and {@code SQLSERVER_CDC}
+     * (cdc __$start_lsn hex). baselineDone resets to false; other columns left alone.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public CdcPosition recordBaselineStartLsn(Long projectId, String lsn) {
+        CdcPosition position = repository.findByProjectId(projectId).orElseGet(() -> {
+            CdcPosition created = new CdcPosition();
+            created.setProjectId(projectId);
+            return created;
+        });
+        position.setLsn(lsn);
+        position.setBaselineDone(false);
+        position.setUpdatedAt(Instant.now());
+        return repository.save(position);
+    }
+
+    /**
+     * LSN variant of {@link #advance}: post-commit LSN advance with the same
+     * "row vanished → WARN, never throw" semantics.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void advanceLsn(Long projectId, String lsn) {
+        Optional<CdcPosition> existing = repository.findByProjectId(projectId);
+        if (!existing.isPresent()) {
+            log.warn("CDC position for project {} not advanced to LSN {}: no position row"
+                    + " (deleted underneath the consumer?); the transaction replays after"
+                    + " the next reconnect", projectId, lsn);
+            return;
+        }
+        CdcPosition position = existing.get();
+        position.setLsn(lsn);
+        position.setUpdatedAt(Instant.now());
+        repository.save(position);
+    }
 }

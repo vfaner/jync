@@ -37,6 +37,9 @@ public final class CdcRuntimeStats {
     /** LogMiner watermark — populated only for LOGMINER_CDC projects; null otherwise. */
     private volatile Long positionScn;
 
+    /** LSN watermark — populated only for PG_LOGICAL_CDC / SQLSERVER_CDC; null otherwise. */
+    private volatile String positionLsn;
+
     private volatile long lastEventEpochMillis;
     private volatile long startedAtMillis;
 
@@ -118,6 +121,15 @@ public final class CdcRuntimeStats {
         return positionScn;
     }
 
+    /** PG/SQLServer: record the current LSN watermark shown on the status panel. */
+    public void recordPositionLsn(String lsn) {
+        this.positionLsn = lsn;
+    }
+
+    public String getPositionLsn() {
+        return positionLsn;
+    }
+
     public void touchEvent(long epochMillis) {
         this.lastEventEpochMillis = epochMillis;
     }
@@ -172,6 +184,7 @@ public final class CdcRuntimeStats {
         snapshot.put("positionPos", positionPos);
         snapshot.put("gtidSet", gtidSet);
         snapshot.put("positionScn", positionScn);
+        snapshot.put("positionLsn", positionLsn);
         snapshot.put("lagSeconds", lagSeconds());
         snapshot.put("eventsPerSecond", eventsPerSecond());
         snapshot.put("rowsApplied", getRowsApplied());

@@ -23,15 +23,30 @@ public enum CaptureStrategy {
      * CDB$ROOT as a common user and rows are filtered by {@code SRC_CON_ID}; on a
      * non-CDB the project's own source connection mines directly.
      */
-    LOGMINER_CDC;
+    LOGMINER_CDC,
+    /**
+     * PostgreSQL logical replication CDC: polls a {@code test_decoding} slot via JDBC
+     * ({@code pg_logical_slot_get_changes}) and replays row changes. Only offered when
+     * the source {@code DatabaseType == POSTGRESQL} and the probe passes (requires
+     * {@code wal_level=logical}, a replication user, and a reachable slot).
+     */
+    PG_LOGICAL_CDC,
+    /**
+     * SQL Server CDC: reads {@code cdc.<schema>_<table>_CT} change tables via
+     * {@code cdc.fn_cdc_get_all_changes_<capture_instance>} in near-real-time polling.
+     * Only offered when the source {@code DatabaseType == SQLSERVER} and the probe
+     * passes (requires SQL Server Agent running and per-table CDC enabled).
+     */
+    SQLSERVER_CDC;
 
     /**
      * Whether this strategy replays changes from a source-native log stream (binlog /
-     * LogMiner) — as opposed to row-query polling or a full-table compare. Used to gate
-     * long-running consumer threads, skip Quartz scheduling, and drive the CDC-specific
-     * operations (probe / rebaseline).
+     * LogMiner / PG logical slot / SQL Server CDC tables) — as opposed to row-query
+     * polling or a full-table compare. Used to gate long-running consumer threads,
+     * skip Quartz scheduling, and drive the CDC-specific operations (probe / rebaseline).
      */
     public boolean isLogCdc() {
-        return this == BINLOG_CDC || this == LOGMINER_CDC;
+        return this == BINLOG_CDC || this == LOGMINER_CDC
+                || this == PG_LOGICAL_CDC || this == SQLSERVER_CDC;
     }
 }

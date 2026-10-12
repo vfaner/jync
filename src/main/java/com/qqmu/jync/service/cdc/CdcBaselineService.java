@@ -119,25 +119,96 @@ public class CdcBaselineService {
         }
     }
 
+    /**
+     * PostgreSQL: current WAL LSN ({@code pg_current_wal_lsn()}) — the baseline anchor for
+     * the logical-slot consumer. The slot replay resumes from strictly beyond this point
+     * (the full-load overlaps the window; idempotent upsert covers the double-write).
+     */
+    public String readCurrentLsnPg(DatabaseConfig source) {
+        try (Connection conn = dataSourceManager.getConnection(source);
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT pg_current_wal_lsn()::text")) {
+            if (!rs.next()) {
+                throw new IllegalStateException("Could not read pg_current_wal_lsn()");
+            }
+            String lsn = rs.getString(1);
+            if (lsn == null || lsn.isBlank()) {
+                throw new IllegalStateException("pg_current_wal_lsn() returned empty");
+            }
+            return lsn.trim();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to read PostgreSQL LSN: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * SQL Server: max committed LSN across all capture instances
+     * ({@code sys.fn_cdc_get_max_lsn()}) — the baseline anchor; read back as a hex string
+     * because the JDBC driver hands it back as binary(10).
+     */
+    public String readCurrentLsnSqlServer(DatabaseConfig source) {
+        try (Connection conn = dataSourceManager.getConnection(source);
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)")) {
+            if (!rs.next()) {
+                throw new IllegalStateException("Could not read sys.fn_cdc_get_max_lsn()");
+            }
+            String lsn = rs.getString(1);
+            if (lsn == null || lsn.isBlank()) {
+                throw new IllegalStateException(
+                        "fn_cdc_get_max_lsn() returned empty — is SQL Server CDC enabled?");
+            }
+            return lsn.trim();
+        } catch (SQLException e) {
+            throw new IllegalStateException(
+                    "Failed to read SQL Server CDC LSN: " + e.getMessage(), e);
+        }
+    }
+
     public void runBaseline(SyncContext ctx, BooleanSupplier lockRenewer) {
         long projectId = ctx.getProject().getId();
-        boolean logMiner = ctx.getConfig() != null
-                && ctx.getConfig().getCaptureStrategyOrDefault()
-                        == com.qqmu.jync.model.CaptureStrategy.LOGMINER_CDC;
+        com.qqmu.jync.model.CaptureStrategy strategy = ctx.getConfig() == null
+                ? com.qqmu.jync.model.CaptureStrategy.POLLING
+                : ctx.getConfig().getCaptureStrategyOrDefault();
         try {
-            if (logMiner) {
-                long scn = readCurrentScn(ctx.getSourceConfig());
-                positionStore.recordBaselineStartScn(projectId, scn);
-                stateWriter.resetProject(projectId);
-                log.info("CDC baseline for project {}: full load from SCN {} (LogMiner)",
-                        projectId, scn);
-            } else {
-                CdcPositionMark mark = readCurrentPosition(ctx.getSourceConfig());
-                positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
-                        mark.getGtidSet(), clientFactory.serverIdFor(projectId));
-                stateWriter.resetProject(projectId);
-                log.info("CDC baseline for project {}: full load from position {}:{}",
-                        projectId, mark.getFile(), mark.getPos());
+            switch (strategy) {
+                case LOGMINER_CDC: {
+                    long scn = readCurrentScn(ctx.getSourceConfig());
+                    positionStore.recordBaselineStartScn(projectId, scn);
+                    stateWriter.resetProject(projectId);
+                    log.info("CDC baseline for project {}: full load from SCN {} (LogMiner)",
+                            projectId, scn);
+                    break;
+                }
+                case PG_LOGICAL_CDC: {
+                    String lsn = readCurrentLsnPg(ctx.getSourceConfig());
+                    positionStore.recordBaselineStartLsn(projectId, lsn);
+                    stateWriter.resetProject(projectId);
+                    log.info("CDC baseline for project {}: full load from LSN {} (PG logical)",
+                            projectId, lsn);
+                    break;
+                }
+                case SQLSERVER_CDC: {
+                    String lsn = readCurrentLsnSqlServer(ctx.getSourceConfig());
+                    positionStore.recordBaselineStartLsn(projectId, lsn);
+                    stateWriter.resetProject(projectId);
+                    log.info("CDC baseline for project {}: full load from LSN {} (SQL Server CDC)",
+                            projectId, lsn);
+                    break;
+                }
+                case POLLING:
+                case FULL_COMPARE:
+                case BINLOG_CDC:
+                default: {
+                    CdcPositionMark mark = readCurrentPosition(ctx.getSourceConfig());
+                    positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
+                            mark.getGtidSet(), clientFactory.serverIdFor(projectId));
+                    stateWriter.resetProject(projectId);
+                    log.info("CDC baseline for project {}: full load from position {}:{}",
+                            projectId, mark.getFile(), mark.getPos());
+                    break;
+                }
             }
             SyncResult result = engine.runCycle(ctx.toBuilder().cdcBaselineRun(true).build());
             // runCycle 把 SQLException/LockLost/RuntimeException 折进 result 而不外抛:

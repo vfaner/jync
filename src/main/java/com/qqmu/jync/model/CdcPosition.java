@@ -68,6 +68,20 @@ public class CdcPosition {
     @Column(name = "scn")
     private Long scn;
 
+    /**
+     * Generic LSN resume watermark. Populated only for {@code PG_LOGICAL_CDC} and
+     * {@code SQLSERVER_CDC} projects; null otherwise. Stored as a canonical string:
+     * <ul>
+     *   <li>PostgreSQL: {@code pg_lsn} text form, e.g. {@code "0/167D3F8"}.</li>
+     *   <li>SQL Server: {@code __$start_lsn} as a 20-char hex string without prefix
+     *       (e.g. {@code "0000002a43d7e1a50030"}).</li>
+     * </ul>
+     * Both share one column because they never coexist on the same row; the binlog / SCN
+     * columns above remain untouched when this is set.
+     */
+    @Column(name = "lsn", length = 64)
+    private String lsn;
+
     @Getter(AccessLevel.NONE) // the accessor below is isBaselineDone(), per the store contract
     @Column(name = "baseline_done", nullable = false)
     private Boolean baselineDone = false;
