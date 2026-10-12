@@ -37,7 +37,9 @@ class ConnectionTestServiceTest {
 
     private ConnectionTestService service() {
         return new ConnectionTestService(dataSourceManager, new BinlogCdcProbe(),
-                new com.qqmu.jync.service.cdc.LogMinerCdcProbe(), new SyncProperties());
+                new com.qqmu.jync.service.cdc.LogMinerCdcProbe(),
+                new com.qqmu.jync.service.cdc.PgLogicalReplicationCdcProbe(),
+                new SyncProperties());
     }
 
     private DatabaseConfig config(DatabaseType type, String jarPath) {

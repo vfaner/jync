@@ -60,6 +60,7 @@ class CdcOperationsServiceTest {
     @Mock private DataSourceManager dataSourceManager;
     @Mock private BinlogCdcProbe probe;
     @Mock private LogMinerCdcProbe logMinerProbe;
+    @Mock private PgLogicalReplicationCdcProbe pgProbe;
     @Mock private BinlogClientFactory clientFactory;
     @Mock private CdcConsumerManager cdcManager;
     @Mock private CdcPositionStore positionStore;
@@ -74,8 +75,9 @@ class CdcOperationsServiceTest {
     @BeforeEach
     void setUp() {
         service = new CdcOperationsService(projectRepository, databaseConfigRepository,
-                dataSourceManager, probe, logMinerProbe, clientFactory, cdcManager, positionStore,
-                stateWriter, taskStore, auditService, changeLogRepository, lockService);
+                dataSourceManager, probe, logMinerProbe, pgProbe, clientFactory, cdcManager,
+                positionStore, stateWriter, taskStore, auditService, changeLogRepository,
+                lockService);
     }
 
     private Project project() {
@@ -142,9 +144,9 @@ class CdcOperationsServiceTest {
     }
 
     @Test
-    void probeProjectRejectsNonMysql() throws SQLException {
+    void probeProjectRejectsUnsupportedSource() throws SQLException {
         project();
-        source(DatabaseType.POSTGRESQL);
+        source(DatabaseType.DB2);   // DB2 has no CDC integration yet — must be rejected
 
         assertThatThrownBy(() -> service.probeProject(1L))
                 .isInstanceOf(IllegalArgumentException.class)

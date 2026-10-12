@@ -60,7 +60,7 @@ class ConnectionTestCdcChecksTest {
             throw new IllegalStateException(e);
         }
         return new ConnectionTestService(dsm, new BinlogCdcProbe(), new LogMinerCdcProbe(),
-                new SyncProperties());
+                new PgLogicalReplicationCdcProbe(), new SyncProperties());
     }
 
     private DatabaseConfig savedMysql() {
@@ -86,11 +86,11 @@ class ConnectionTestCdcChecksTest {
     }
 
     @Test
-    void nonMysqlTestHasNoCdcChecks() throws SQLException {
+    void unsupportedSourceTypeHasNoCdcChecks() throws SQLException {
         Connection conn = healthyMySqlConnection();
         ConnectionTestService service = serviceReturning(conn);
         DatabaseConfig config = savedMysql();
-        config.setType(DatabaseType.POSTGRESQL);
+        config.setType(DatabaseType.DB2);   // not in (MYSQL, ORACLE, POSTGRESQL) → no probe
         ConnectionTestService.TestResult result = service.test(config);
         assertThat(result.getCdcChecks()).isNull();
     }

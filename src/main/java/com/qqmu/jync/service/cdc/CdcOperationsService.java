@@ -58,6 +58,7 @@ public class CdcOperationsService {
     private final DataSourceManager dataSourceManager;
     private final BinlogCdcProbe probe;
     private final LogMinerCdcProbe logMinerProbe;
+    private final PgLogicalReplicationCdcProbe pgProbe;
     private final BinlogClientFactory clientFactory;
     private final CdcConsumerManager cdcManager;
     private final CdcPositionStore positionStore;
@@ -72,6 +73,7 @@ public class CdcOperationsService {
                                 DataSourceManager dataSourceManager,
                                 BinlogCdcProbe probe,
                                 LogMinerCdcProbe logMinerProbe,
+                                PgLogicalReplicationCdcProbe pgProbe,
                                 BinlogClientFactory clientFactory,
                                 CdcConsumerManager cdcManager,
                                 CdcPositionStore positionStore,
@@ -85,6 +87,7 @@ public class CdcOperationsService {
         this.dataSourceManager = dataSourceManager;
         this.probe = probe;
         this.logMinerProbe = logMinerProbe;
+        this.pgProbe = pgProbe;
         this.clientFactory = clientFactory;
         this.cdcManager = cdcManager;
         this.positionStore = positionStore;
@@ -113,13 +116,20 @@ public class CdcOperationsService {
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
         if (source == null || source.getType() == null
-                || (source.getType() != DatabaseType.MYSQL && source.getType() != DatabaseType.ORACLE)) {
+                || (source.getType() != DatabaseType.MYSQL
+                        && source.getType() != DatabaseType.ORACLE
+                        && source.getType() != DatabaseType.POSTGRESQL)) {
             throw new IllegalArgumentException("cdc.probe.unsupported");
         }
         try (Connection conn = dataSourceManager.getConnection(source)) {
             if (source.getType() == DatabaseType.MYSQL) {
                 long plannedServerId = clientFactory.serverIdFor(projectId);
                 return probe.probe(conn, plannedServerId);
+            }
+            if (source.getType() == DatabaseType.POSTGRESQL) {
+                // Table-level REPLICA IDENTITY check requires the project's table list;
+                // deferred to a later iteration — here we run the database-level probe.
+                return pgProbe.probe(conn, List.of());
             }
             // Connection-test-time probe has no project context — table-level checks
             // (supplemental logging per table, LONG columns) are skipped when empty.
@@ -129,8 +139,14 @@ public class CdcOperationsService {
             // driver's message, mirroring BinlogCdcProbe.checkVersion's own SQLException path.
             log.debug("CDC probe could not reach the source of project {}: {}",
                     projectId, e.toString());
-            String anchor = source.getType() == DatabaseType.ORACLE
-                    ? CdcProbeResult.ORACLE_SOURCE : CdcProbeResult.VERSION;
+            String anchor;
+            if (source.getType() == DatabaseType.ORACLE) {
+                anchor = CdcProbeResult.ORACLE_SOURCE;
+            } else if (source.getType() == DatabaseType.POSTGRESQL) {
+                anchor = CdcProbeResult.PG_SOURCE;
+            } else {
+                anchor = CdcProbeResult.VERSION;
+            }
             return CdcProbeResult.of(List.of(CdcProbeResult.Check.of(anchor,
                     false, String.valueOf(e.getMessage()))));
         }

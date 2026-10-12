@@ -38,6 +38,32 @@ public final class CdcProbeResult {
     /** LONG / LONG RAW columns — pass-with-warning: their DML is skipped and counted. */
     public static final String LONG_COLUMNS = "LONG_COLUMNS";
 
+    // —— v1.7.0 PostgreSQL logical replication checks ——
+
+    /** Source must be literal PostgreSQL (dialect-compatible look-alikes rejected). */
+    public static final String PG_SOURCE = "PG_SOURCE";
+    /** wal_level = logical — required for logical decoding. */
+    public static final String PG_WAL_LEVEL = "PG_WAL_LEVEL";
+    /** Current user has the REPLICATION attribute (or SUPERUSER). */
+    public static final String PG_REPLICATION_ROLE = "PG_REPLICATION_ROLE";
+    /** test_decoding plugin is available (shipped with vanilla PG ≥ 9.4). */
+    public static final String PG_PLUGIN_AVAILABLE = "PG_PLUGIN_AVAILABLE";
+    /** Per-table REPLICA IDENTITY — must be DEFAULT/PARTIAL/FULL for UPDATE/DELETE to yield PK. */
+    public static final String PG_REPLICA_IDENTITY = "PG_REPLICA_IDENTITY";
+
+    // —— v1.7.0 SQL Server CDC checks ——
+
+    /** Source must be literal Microsoft SQL Server. */
+    public static final String MSSQL_SOURCE = "MSSQL_SOURCE";
+    /** Database has CDC enabled (is_cdc_enabled = 1). */
+    public static final String MSSQL_CDC_DB_ENABLED = "MSSQL_CDC_DB_ENABLED";
+    /** SQL Server Agent is running (required for capture/cleanup jobs). */
+    public static final String MSSQL_AGENT_RUNNING = "MSSQL_AGENT_RUNNING";
+    /** Current user is in cdc_admin / cdc_reader (or sysadmin). */
+    public static final String MSSQL_CDC_ROLE = "MSSQL_CDC_ROLE";
+    /** Per-table CDC capture instance exists in cdc.change_tables. */
+    public static final String MSSQL_CAPTURE_INSTANCE = "MSSQL_CAPTURE_INSTANCE";
+
     public static final class Check {
         private final String name;
         private final boolean passed;

@@ -14,6 +14,7 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.cdc.BinlogCdcProbe;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.cdc.LogMinerCdcProbe;
+import com.qqmu.jync.service.cdc.PgLogicalReplicationCdcProbe;
 import com.zaxxer.hikari.HikariDataSource;
 
 import lombok.Getter;
@@ -27,14 +28,17 @@ public class ConnectionTestService {
     private final DataSourceManager dataSourceManager;
     private final BinlogCdcProbe cdcProbe;
     private final LogMinerCdcProbe logMinerProbe;
+    private final PgLogicalReplicationCdcProbe pgProbe;
     private final SyncProperties properties;
 
     public ConnectionTestService(DataSourceManager dataSourceManager, BinlogCdcProbe cdcProbe,
                                  LogMinerCdcProbe logMinerProbe,
+                                 PgLogicalReplicationCdcProbe pgProbe,
                                  SyncProperties properties) {
         this.dataSourceManager = dataSourceManager;
         this.cdcProbe = cdcProbe;
         this.logMinerProbe = logMinerProbe;
+        this.pgProbe = pgProbe;
         this.properties = properties;
     }
 
@@ -97,6 +101,13 @@ public class ConnectionTestService {
                 cdcChecks = logMinerProbe.probe(conn, List.of()).getChecks();
             } catch (RuntimeException e) {
                 log.warn("LogMiner probe failed during connection test; reporting none", e);
+            }
+        } else if (config.getType() == DatabaseType.POSTGRESQL) {
+            try {
+                // 连接页无项目/表上下文 → ownerTables 空集(跳过 REPLICA IDENTITY 检查)
+                cdcChecks = pgProbe.probe(conn, List.of()).getChecks();
+            } catch (RuntimeException e) {
+                log.warn("PG logical probe failed during connection test; reporting none", e);
             }
         }
         TestResult result = TestResult.success(product, driver, conn.getCatalog(),
