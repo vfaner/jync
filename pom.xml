@@ -284,11 +284,12 @@
                             <outputDirectory>${project.build.outputDirectory}/release-notes</outputDirectory>
                             <resources>
                                 <resource>
-                                    <directory>${project.basedir}</directory>
+                                    <!-- Historical notes live under docs/release-notes/;
+                                         only the running version's file is packaged and
+                                         placed at the classpath as release-notes/...
+                                         so VersionService can resolve it. -->
+                                    <directory>${project.basedir}/docs/release-notes</directory>
                                     <includes>
-                                        <!-- Only the running version's notes are ever read
-                                             (VersionService looks up this exact name); older
-                                             notes stay in the repo but must not bloat the jar. -->
                                         <include>RELEASE_NOTES_v${project.version}.md</include>
                                     </includes>
                                 </resource>
