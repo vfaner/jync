@@ -42,4 +42,14 @@ class SyncConfigCaptureStrategyTest {
                 "{\"captureStrategy\":\"FULL_COMPARE\",\"someFutureKey\":42}", SyncConfig.class);
         assertThat(config.getCaptureStrategyOrDefault()).isEqualTo(CaptureStrategy.FULL_COMPARE);
     }
+
+    @Test
+    void logminerCdcRoundTripsAndIsLogCdc() throws Exception {
+        SyncConfig config = mapper.readValue("{\"captureStrategy\":\"LOGMINER_CDC\"}", SyncConfig.class);
+        assertThat(config.getCaptureStrategyOrDefault()).isEqualTo(CaptureStrategy.LOGMINER_CDC);
+        assertThat(CaptureStrategy.LOGMINER_CDC.isLogCdc()).isTrue();
+        assertThat(CaptureStrategy.BINLOG_CDC.isLogCdc()).isTrue();
+        assertThat(CaptureStrategy.POLLING.isLogCdc()).isFalse();
+        assertThat(CaptureStrategy.FULL_COMPARE.isLogCdc()).isFalse();
+    }
 }

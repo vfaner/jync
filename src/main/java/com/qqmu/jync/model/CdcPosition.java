@@ -59,6 +59,15 @@ public class CdcPosition {
     @Column(name = "server_id")
     private Long serverId;
 
+    /**
+     * Oracle LogMiner resume watermark (SCN &lt;= 2^48, safely fits a long). Populated only
+     * for {@code LOGMINER_CDC} projects; null for binlog / polling. The binlog columns
+     * above are left untouched when this is set — both strategies carry their own columns
+     * in the same row, never mixed.
+     */
+    @Column(name = "scn")
+    private Long scn;
+
     @Getter(AccessLevel.NONE) // the accessor below is isBaselineDone(), per the store contract
     @Column(name = "baseline_done", nullable = false)
     private Boolean baselineDone = false;

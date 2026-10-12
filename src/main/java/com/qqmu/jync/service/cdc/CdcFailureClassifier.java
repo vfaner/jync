@@ -41,6 +41,16 @@ public final class CdcFailureClassifier {
             if (typeName.contains("authenticationexception") || message.contains("access denied")) {
                 return Kind.AUTH_FAILURE;
             }
+            // Oracle LogMiner ORA codes (v1.6.0). Scanned after the binlog checks so the
+            // MySQL path is byte-for-byte unchanged; an ORA- prefix is unambiguous to Oracle.
+            if (message.contains("ora-01291")          // missing logfile
+                    || message.contains("ora-00310")    // archived log sequence mismatch
+                    || message.contains("ora-00308")) { // cannot open archived log
+                return Kind.PURGED;
+            }
+            if (message.contains("ora-01031")) {        // insufficient privileges
+                return Kind.AUTH_FAILURE;
+            }
         }
         return Kind.TRANSIENT;
     }

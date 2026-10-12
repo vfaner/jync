@@ -41,4 +41,21 @@ class CdcPropertiesBindingTest {
                     assertThat(props.getCdc().getLockTtlMs()).isEqualTo(5_000L);
                 });
     }
+
+    @Test
+    void logminerDefaultsAndBinding() {
+        SyncProperties.Cdc.Logminer defaults = new SyncProperties().getCdc().getLogminer();
+        assertThat(defaults.getBatchSize()).isEqualTo(10_000L);
+        assertThat(defaults.getIdlePollMs()).isEqualTo(1_000L);
+
+        runner.withPropertyValues(
+                        "sync.cdc.logminer.batch-size=500",
+                        "sync.cdc.logminer.idle-poll-ms=250")
+                .run(context -> {
+                    SyncProperties.Cdc.Logminer lm =
+                            context.getBean(SyncProperties.class).getCdc().getLogminer();
+                    assertThat(lm.getBatchSize()).isEqualTo(500L);
+                    assertThat(lm.getIdlePollMs()).isEqualTo(250L);
+                });
+    }
 }

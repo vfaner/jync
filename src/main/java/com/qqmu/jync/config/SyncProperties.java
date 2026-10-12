@@ -161,5 +161,17 @@ public class SyncProperties {
         private long superviseIntervalMs = 10_000L;
         /** Handshake timeout for BinaryLogClient.connect(). */
         private long connectTimeoutMs = 10_000L;
+
+        /** Oracle LogMiner tuning (v1.6.0) — only consulted when a project runs LOGMINER_CDC. */
+        private final Logminer logminer = new Logminer();
+
+        @Getter
+        @Setter
+        public static class Logminer {
+            /** Rows fetched per V$LOGMNR_CONTENTS batch. */
+            private long batchSize = 10_000L;
+            /** Idle poll interval when the mining session drained the redo stream. */
+            private long idlePollMs = 1_000L;
+        }
     }
 }

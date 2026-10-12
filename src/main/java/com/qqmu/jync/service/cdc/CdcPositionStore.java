@@ -89,4 +89,42 @@ public class CdcPositionStore {
     public void delete(Long projectId) {
         repository.deleteByProjectId(projectId);
     }
+
+    /**
+     * LogMiner variant of {@link #recordBaselineStart}: captures the current SCN as the
+     * baseline anchor (the mining session later resumes from {@code CSCN > this scn}).
+     * Mirrors the binlog contract: baselineDone resets to false; other columns left alone.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public CdcPosition recordBaselineStartScn(Long projectId, long scn) {
+        CdcPosition position = repository.findByProjectId(projectId).orElseGet(() -> {
+            CdcPosition created = new CdcPosition();
+            created.setProjectId(projectId);
+            return created;
+        });
+        position.setScn(scn);
+        position.setBaselineDone(false);
+        position.setUpdatedAt(Instant.now());
+        return repository.save(position);
+    }
+
+    /**
+     * LogMiner variant of {@link #advance}: post-commit SCN advance with the same
+     * "row vanished → WARN, never throw" semantics (the transaction already committed on
+     * the target; the next mining session resumes from whatever survives).
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void advanceScn(Long projectId, long scn) {
+        Optional<CdcPosition> existing = repository.findByProjectId(projectId);
+        if (!existing.isPresent()) {
+            log.warn("CDC position for project {} not advanced to SCN {}: no position row"
+                    + " (deleted underneath the consumer?); the transaction replays after"
+                    + " the next reconnect", projectId, scn);
+            return;
+        }
+        CdcPosition position = existing.get();
+        position.setScn(scn);
+        position.setUpdatedAt(Instant.now());
+        repository.save(position);
+    }
 }

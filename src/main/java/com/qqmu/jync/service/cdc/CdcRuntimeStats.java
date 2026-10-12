@@ -34,6 +34,9 @@ public final class CdcRuntimeStats {
     private volatile long positionPos;
     private volatile String gtidSet;
 
+    /** LogMiner watermark — populated only for LOGMINER_CDC projects; null otherwise. */
+    private volatile Long positionScn;
+
     private volatile long lastEventEpochMillis;
     private volatile long startedAtMillis;
 
@@ -106,6 +109,15 @@ public final class CdcRuntimeStats {
         return gtidSet;
     }
 
+    /** LogMiner: record the current SCN watermark shown on the status panel. */
+    public void recordPositionScn(long scn) {
+        this.positionScn = scn;
+    }
+
+    public Long getPositionScn() {
+        return positionScn;
+    }
+
     public void touchEvent(long epochMillis) {
         this.lastEventEpochMillis = epochMillis;
     }
@@ -159,6 +171,7 @@ public final class CdcRuntimeStats {
         snapshot.put("positionFile", positionFile);
         snapshot.put("positionPos", positionPos);
         snapshot.put("gtidSet", gtidSet);
+        snapshot.put("positionScn", positionScn);
         snapshot.put("lagSeconds", lagSeconds());
         snapshot.put("eventsPerSecond", eventsPerSecond());
         snapshot.put("rowsApplied", getRowsApplied());

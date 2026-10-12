@@ -71,4 +71,45 @@ class CdcPositionRepositoryTest {
         store.delete(13L);
         assertThat(store.find(13L)).isEmpty();
     }
+
+    // —— v1.6.0 LogMiner SCN variants ——
+
+    @Test
+    void recordBaselineStartScnCreatesRowWithoutBinlogColumns() {
+        CdcPosition saved = store.recordBaselineStartScn(21L, 2_100_000L);
+        assertThat(saved.getId()).isNotNull();
+        assertThat(saved.isBaselineDone()).isFalse();
+        assertThat(saved.getScn()).isEqualTo(2_100_000L);
+        // The two strategies carry their own columns — binlog fields stay untouched.
+        assertThat(saved.getBinlogFile()).isNull();
+        assertThat(saved.getBinlogPos()).isNull();
+        assertThat(saved.getGtidSet()).isNull();
+        assertThat(saved.getServerId()).isNull();
+    }
+
+    @Test
+    void advanceScnUpdatesRowAndWarnsWhenMissing() {
+        store.recordBaselineStartScn(7L, 1_234_567L);
+        store.markBaselineDone(7L);
+        store.advanceScn(7L, 1_234_999L);
+
+        CdcPosition pos = store.find(7L).orElseThrow();
+        assertThat(pos.getScn()).isEqualTo(1_234_999L);
+        assertThat(pos.isBaselineDone()).isTrue();
+        // Advance on a deleted row logs WARN but never throws (same contract as advance()).
+        store.delete(7L);
+        store.advanceScn(7L, 1_235_000L);
+    }
+
+    @Test
+    void binlogAndScnColumnsCoexistWithoutPollution() {
+        // A project recorded via binlog must not leak into the SCN column, and vice versa.
+        store.recordBaselineStart(31L, "mysql-bin.000001", 100L, null, 612031L);
+        assertThat(store.find(31L).orElseThrow().getScn()).isNull();
+
+        store.recordBaselineStartScn(32L, 5_000_000L);
+        CdcPosition scnPos = store.find(32L).orElseThrow();
+        assertThat(scnPos.getBinlogFile()).isNull();
+        assertThat(scnPos.getServerId()).isNull();
+    }
 }

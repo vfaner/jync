@@ -75,6 +75,27 @@ class CdcFailureClassifierTest {
     }
 
     @Test
+    void oracleCodesClassify() {
+        // v1.6.0 LogMiner ORA codes — scanned after the MySQL path so binlog semantics
+        // stay byte-identical.
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-01291: missing logfile")))
+                .isEqualTo(CdcFailureClassifier.Kind.PURGED);
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-00310: archived log contains sequence 42; expected 43")))
+                .isEqualTo(CdcFailureClassifier.Kind.PURGED);
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-00308: cannot open archived log '/u01/...'")))
+                .isEqualTo(CdcFailureClassifier.Kind.PURGED);
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-01031: insufficient privileges")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+        // describe() preserves the ORA code verbatim for UI display.
+        assertThat(CdcFailureClassifier.describe(
+                new java.sql.SQLException("ORA-01291: missing logfile"))).contains("ORA-01291");
+    }
+
+    @Test
     void everythingElseTransient() {
         assertThat(CdcFailureClassifier.classify(new IOException("Connection reset")))
                 .isEqualTo(CdcFailureClassifier.Kind.TRANSIENT);
