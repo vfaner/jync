@@ -45,7 +45,9 @@ public final class CdcFailureClassifier {
             // MySQL path is byte-for-byte unchanged; an ORA- prefix is unambiguous to Oracle.
             if (message.contains("ora-01291")          // missing logfile
                     || message.contains("ora-00310")    // archived log sequence mismatch
-                    || message.contains("ora-00308")) { // cannot open archived log
+                    || message.contains("ora-00308")    // cannot open archived log
+                    || message.contains("ora-00313")    // open failed for log member
+                    || message.contains("ora-00312")) { // companion text of 00313
                 return Kind.PURGED;
             }
             if (message.contains("ora-01031")        // insufficient privileges
@@ -53,9 +55,17 @@ public final class CdcFailureClassifier {
                     // executing against a PDB, or vice versa. Retrying with the same
                     // connection will never succeed; park it for the user to fix the
                     // connection config.
-                    || message.contains("ora-65040")) {
+                    || message.contains("ora-65040")
+                    // ORA-01466: "unable to read data — table definition has changed". A
+                    // DDL is mid-flight; the user needs to settle it before retry,
+                    // otherwise we hot-loop against the same dictionary conflict.
+                    || message.contains("ora-01466")) {
                 return Kind.AUTH_FAILURE;
             }
+            // ORA-01466: schema definition changed mid-mine. Retrying will keep hitting
+            // it until the user's DDL settles; park it. Other mid-mine Oracle errors
+            // (01555 snapshot too old, 12801 parallel-query wrap) fall through to
+            // TRANSIENT — backoff handles them and the mining session restarts next cycle.
         }
         return Kind.TRANSIENT;
     }

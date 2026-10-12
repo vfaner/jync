@@ -222,11 +222,14 @@ public class LogMinerSession implements AutoCloseable {
         }
 
         List<String> logfiles = new ArrayList<>();
-        try (Statement st = source.createStatement();
-             ResultSet rs = st.executeQuery(Q_ARCHIVED_LOGS_SINCE.replace("?",
-                     String.valueOf(startScn)))) {
-            while (rs.next()) {
-                logfiles.add(rs.getString(1));
+        // Use a PreparedStatement for the SCN (numeric bind, no injection) — the string
+        // .replace("?", ...) below worked, but a bind keeps the query plan cache stable.
+        try (PreparedStatement ps = source.prepareStatement(Q_ARCHIVED_LOGS_SINCE)) {
+            ps.setLong(1, startScn);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    logfiles.add(rs.getString(1));
+                }
             }
         }
         try (Statement st = source.createStatement();
@@ -244,10 +247,16 @@ public class LogMinerSession implements AutoCloseable {
             boolean first = true;
             for (String path : logfiles) {
                 String flag = first ? "DBMS_LOGMNR.NEW" : "DBMS_LOGMNR.ADDFILE";
-                st.execute("BEGIN DBMS_LOGMNR.ADD_LOGFILE(logfilename => '" + path + "',"
+                // H5: escape single quotes in the logfile path. Oracle-managed / Windows
+                // paths can contain apostrophes (rare, but a single bad path used to
+                // break the whole PL/SQL block with a syntax error).
+                String safePath = path.replace("'", "''");
+                st.execute("BEGIN DBMS_LOGMNR.ADD_LOGFILE(logfilename => '" + safePath + "',"
                         + " options => " + flag + "); END;");
                 first = false;
             }
+            // SCNs are numeric; inline substitution is injection-free (setLong would
+            // also work, but BEGIN ...; blocks don't accept binds for scalar args).
             st.execute("BEGIN DBMS_LOGMNR.START_LOGMNR(startScn => " + startScn + ","
                     + " endScn => " + currentScn + ","
                     + " options => DBMS_LOGMNR.DICT_FROM_ONLINE_CATALOG"

@@ -125,9 +125,37 @@ public class SqlRedoParser {
         String setPart = sql.substring(setIdx + "set".length(), whereIdx);
         String wherePart = sql.substring(whereIdx + "where".length());
 
-        // Build the new-image row from SET.
         Map<String, Integer> types = binding.typeByColumn();
+
+        // Build the new-image row. START from the WHERE clause's old image: when the
+        // target is an upsert we must include EVERY column the binding knows about, not
+        // just the SET columns — otherwise unchanged columns land as NULL on the target
+        // (CdcEventApplier.applyNativeUpserts binds every binding column, and JdbcRowMapper
+        // treats a missing key as setNull). SET assignments then override whatever the
+        // WHERE carried. ROWID is filtered out because it is not a real column.
+        //
+        // WHERE-value coercion is best-effort: if the literal looks malformed (e.g.
+        // trailing semicolon, function call we don't recognise) fall back to the raw
+        // string. The target JDBC driver can usually coerce a String for unchanged
+        // columns; throwing would poison the whole UPDATE even when SET is clean.
+        Map<String, String> whereCols = parseWhereColumns(wherePart);
         Map<String, Object> row = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : whereCols.entrySet()) {
+            String col = e.getKey();
+            if ("ROWID".equals(col)) {
+                continue;
+            }
+            Integer sqlType = types.get(col);
+            if (sqlType == null) {
+                continue;
+            }
+            try {
+                row.put(col, OracleLiteralConverters.convert(e.getValue(), sqlType));
+            } catch (OracleLiteralConverters.UnsupportedLiteralException ule) {
+                row.put(col, e.getValue());
+            }
+        }
+        // SET overrides the old image.
         for (Assignment a : parseAssignments(setPart)) {
             Integer sqlType = types.get(a.column);
             if (sqlType == null) {
@@ -136,8 +164,7 @@ public class SqlRedoParser {
             row.put(a.column, OracleLiteralConverters.convert(a.value, sqlType));
         }
 
-        // Validate WHERE contains all PK columns (ROWID ignored).
-        Map<String, String> whereCols = parseWhereColumns(wherePart);
+        // Validate WHERE contains all PK columns.
         for (String pk : binding.pkNames()) {
             if (!whereCols.containsKey(pk.toUpperCase(Locale.ROOT))) {
                 return ParsedChange.unsupported("update: where missing PK column " + pk);
@@ -381,14 +408,26 @@ public class SqlRedoParser {
         return -1;
     }
 
-    /** Split a WHERE clause on the word " and " (case-insensitive) at top level. */
+    /**
+     * Split a WHERE clause on the word "AND" (case-insensitive) at top level.
+     *
+     * <p>Word-boundary rule (H2 fix): LogMiner on some NLS/driver combos emits
+     * {@code "COL"='val'AND "COL2"='val2'} with NO whitespace between the closing quote
+     * and "AND". Requiring a literal space before "AND" then runs the conjuncts together,
+     * and every column after the first PK is silently dropped — turning
+     * {@code WHERE "ID"='1' AND "NAME"='x'} into a single conjunct whose value is
+     * {@code "'1' AND \"NAME\"='x'"}. So we accept "AND" as a standalone word token:
+     * the char BEFORE it must not be a word char, and the char AFTER must not be a word
+     * char either. A closing quote, whitespace, or semicolon all qualify as non-word.
+     */
     static List<String> splitOnAnd(String wherePart) {
         List<String> out = new ArrayList<>();
         StringBuilder cur = new StringBuilder();
         int depth = 0;
         char quote = 0;
         String lower = wherePart.toLowerCase(Locale.ROOT);
-        for (int i = 0; i < wherePart.length(); i++) {
+        int i = 0;
+        while (i < wherePart.length()) {
             char c = wherePart.charAt(i);
             if (quote != 0) {
                 cur.append(c);
@@ -400,34 +439,43 @@ public class SqlRedoParser {
                     }
                     quote = 0;
                 }
+                i++;
                 continue;
             }
             if (c == '\'' || c == '"') {
                 quote = c;
                 cur.append(c);
+                i++;
                 continue;
             }
             if (c == '(') {
                 depth++;
                 cur.append(c);
+                i++;
                 continue;
             }
             if (c == ')') {
                 depth--;
                 cur.append(c);
+                i++;
                 continue;
             }
-            // Match " and " (with surrounding whitespace) at top level.
-            if (depth == 0 && c == ' ' && lower.startsWith("and", i + 1)) {
+            // Match "and" as a word token at top level — preceded by a non-word char
+            // (start of string, quote, whitespace, semicolon), followed by a non-word char.
+            if (depth == 0 && lower.startsWith("and", i)) {
+                char before = i > 0 ? wherePart.charAt(i - 1) : ' ';
                 char after = i + 4 < wherePart.length() ? wherePart.charAt(i + 4) : ' ';
-                if (Character.isWhitespace(after) || after == ';') {
+                boolean leftOk = !isWordChar(before);
+                boolean rightOk = !isWordChar(after);
+                if (leftOk && rightOk) {
                     out.add(cur.toString());
                     cur.setLength(0);
-                    i += 4; // skip "and"
+                    i += 3; // skip "and" (the loop's i++ moves past the 'd')
                     continue;
                 }
             }
             cur.append(c);
+            i++;
         }
         if (cur.toString().trim().length() > 0) {
             out.add(cur.toString());

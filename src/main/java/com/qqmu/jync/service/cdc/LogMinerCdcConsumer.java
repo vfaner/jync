@@ -151,6 +151,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
                     drained = drain(session);
+                    // C2 fix: advance the watermark to THIS session's high-water so the
+                    // next open does not re-ADD_LOGFILE the entire archive stream from the
+                    // baseline SCN. positionStore.advanceScn already persisted each
+                    // committed CSCN during drain; here we only update the local anchor so
+                    // the next session opens at CURRENT_SCN, not at the baseline.
+                    lastScn = session.highWaterScn();
                     session.close();
                 } catch (Throwable e) {
                     lastFailure.compareAndSet(null, e);
@@ -270,14 +276,14 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     continue;
                 }
                 if ("DDL".equals(row.operation)) {
+                    // L5: matchesProjectTable gate above means only DDL on tracked tables
+                    // reaches here — previously DDL on unrelated tables flooded the WARN
+                    // log and invalidated caches.
                     stats.addSkippedDdl(1);
                     String sql = row.sqlRedo == null ? "" : row.sqlRedo;
                     log.warn("Skipping DDL in LogMiner stream ({}): {}", row.segOwner,
                             sql.length() > DDL_LOG_SQL_CHARS
                                     ? sql.substring(0, DDL_LOG_SQL_CHARS) + "..." : sql);
-                    // Invalidate the cached binding for this table so the next DML event
-                    // re-reads the source column list. Without this, a source-side ADD
-                    // COLUMN would be invisible to the parser until consumer restart.
                     supplier.invalidate(row.segOwner, row.tableName);
                     continue;
                 }
@@ -292,6 +298,20 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     case "UPDATE": op = SqlRedoParser.Op.UPDATE; break;
                     default: op = SqlRedoParser.Op.DELETE; break;
                 }
+                // H1 fix: seed currentCsn from EVERY row BEFORE parsing. Previously the
+                // seed was set only after a successful parse, so a poison first row of a
+                // transaction (parse failure → continue) left currentCsn=-1; the second
+                // row of the SAME transaction then became the seed, and the third row
+                // triggered a CSN change → flush dropped rows 2..n only, losing row 1
+                // forever (retry re-reads the same archived log and skips it again).
+                if (currentCsn < 0) {
+                    currentCsn = row.csn;
+                } else if (row.csn != currentCsn) {
+                    flushTransaction(projectId, currentCsn, upserts, deletes);
+                    upserts.clear();
+                    deletes.clear();
+                    currentCsn = row.csn;
+                }
                 SqlRedoParser.ParsedChange parsed = parser.parse(op, row.sqlRedo, binding);
                 if (parsed.op == null) {
                     parseFailures.incrementAndGet();
@@ -301,14 +321,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                             truncate(row.sqlRedo, 120));
                     continue;
                 }
-                if (currentCsn < 0) {
-                    currentCsn = row.csn;
-                } else if (row.csn != currentCsn) {
-                    flushTransaction(projectId, currentCsn, upserts, deletes);
-                    upserts.clear();
-                    deletes.clear();
-                    currentCsn = row.csn;
-                }
+                // H3 fix: a successfully parsed row resets the consecutive-failure counter.
+                // The javadoc on MAX_PARSE_FAILURES says "5 CONSECUTIVE poison rows";
+                // previously the counter only cleared at flushTransaction, so a single
+                // clean row between poison batches could not save a project from
+                // strike-out parking.
+                parseFailures.set(0);
                 if (op == SqlRedoParser.Op.DELETE) {
                     deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(parsed.row);
                 } else {
@@ -335,7 +353,10 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                                    Map<CdcTableBinding, List<Map<String, Object>>> upserts,
                                    Map<CdcTableBinding, List<Map<String, Object>>> deletes)
             throws Exception {
-        try (Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig())) {
+        Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
+        boolean originalAutoCommit = true;
+        try {
+            originalAutoCommit = target.getAutoCommit();
             target.setAutoCommit(false);
             for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : upserts.entrySet()) {
                 applier.applyUpserts(target, e.getKey(), e.getValue());
@@ -344,6 +365,14 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 applier.applyDeletes(target, e.getKey(), e.getValue());
             }
             target.commit();
+        } catch (Exception e) {
+            try { target.rollback(); } catch (java.sql.SQLException ignored) { }
+            throw e;
+        } finally {
+            try {
+                if (originalAutoCommit) target.setAutoCommit(true);
+            } catch (java.sql.SQLException ignored) { }
+            try { target.close(); } catch (java.sql.SQLException ignored) { }
         }
         ctx.requireLease();
         positionStore.advanceScn(projectId, csn);

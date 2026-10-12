@@ -68,17 +68,21 @@ class SqlRedoParserTest {
     @Test
     void parsesUpdateWithFullWhereImage() {
         // Real fixture shape: SET only the changed column; WHERE carries the full old
-        // image (all columns + ROWID). The parser builds the row from SET and validates
-        // the PK is present in WHERE.
+        // image (all columns + ROWID). v1.7.1 fix: the row map now merges the WHERE
+        // old-image values so unchanged columns are not overwritten with NULL on the
+        // target; SET assignments then override the merged old image. ROWID stays out.
         String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"ID\" = '1'"
                 + " and \"NAME\" = 'Alice' and \"NOTE\" = 'old' and ROWID = 'AAAR4TAAYAAAAAPAAA';";
         SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());
         assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
         assertThat(c.unsupportedReason).isNull();
+        // SET column wins over the WHERE old image.
         assertThat(c.row.get("NOTE")).isEqualTo("x");
-        // The row map carries only the SET columns (the new image); WHERE's PK is
-        // validated but not copied into the row (upsert fills the rest from the binding).
-        assertThat(c.row).containsOnlyKeys("NOTE");
+        // Unchanged columns carry the WHERE old image (no NULL overwrite).
+        assertThat(c.row.get("ID")).isEqualTo("1");
+        assertThat(c.row.get("NAME")).isEqualTo("Alice");
+        // ROWID is never a real column.
+        assertThat(c.row).doesNotContainKey("ROWID");
     }
 
     @Test

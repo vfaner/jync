@@ -36,6 +36,7 @@ class LogMinerSessionTest {
         final Connection conn = mock(Connection.class);
         final Statement st = mock(Statement.class);
         final PreparedStatement cursor = mock(PreparedStatement.class);
+        final PreparedStatement archivePs = mock(PreparedStatement.class);
         final ResultSet rows = mock(ResultSet.class);
         final ResultSet scnRs = mock(ResultSet.class);
         final ResultSet archiveRs = mock(ResultSet.class);
@@ -47,12 +48,14 @@ class LogMinerSessionTest {
             when(scnRs.next()).thenReturn(true);
             when(scnRs.getLong(1)).thenReturn(currentScn);
 
-            // Archived logs query — the SQL has the startScn concatenated in.
-            when(st.executeQuery(Mockito.contains("V$ARCHIVED_LOG"))).thenReturn(archiveRs);
+            // Archived logs query — since v1.7.1 it is a PreparedStatement with the SCN
+            // bound (instead of a string-substituted Statement.executeQuery).
+            when(conn.prepareStatement(LogMinerSession.Q_ARCHIVED_LOGS_SINCE))
+                    .thenReturn(archivePs);
+            when(archivePs.executeQuery()).thenReturn(archiveRs);
             if (archivedLogs.length == 0) {
                 when(archiveRs.next()).thenReturn(false);
             } else {
-                // chained next(): true once per row, then false
                 Boolean[] answers = new Boolean[archivedLogs.length + 1];
                 for (int i = 0; i < archivedLogs.length; i++) {
                     answers[i] = Boolean.TRUE;
