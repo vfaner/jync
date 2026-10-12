@@ -203,7 +203,7 @@ Typography uses the system font stack (`PingFang SC` / `Microsoft YaHei` / …) 
 | **Deployment** | **One jar** | Kafka + Connect + ZK/KRaft | Canal Server (+MQ) | Flink cluster (JM/TM) | CLI scripts | Desktop + repository | Engine on every node | Desktop client |
 | **External deps** | **None** | Kafka, ZooKeeper | ZooKeeper (cluster) | Flink, checkpoint store | None (but JSON jobs) | JVM + plugins | Triggers in source DB | None |
 | **How you configure it** | **Click in a web UI** | YAML/REST + consumer code | Config file + client code | SQL/DataStream code | JSON job files | Drag-and-drop ETL | properties + create triggers | Wizard |
-| **Continuous incremental sync** | Supported: polling/Cron & Binlog CDC (MySQL) | Supported: log-based | Supported: binlog | Supported: log-based | N/A (one-shot batch by design) | Partial (roll your own scheduling & delta logic) | Supported: trigger-based | N/A (one-shot transfer by design) |
+| **Continuous incremental sync** | Supported: polling/Cron & log CDC (MySQL binlog, Oracle LogMiner) | Supported: log-based | Supported: binlog | Supported: log-based | N/A (one-shot batch by design) | Partial (roll your own scheduling & delta logic) | Supported: trigger-based | N/A (one-shot transfer by design) |
 | **Schema (DDL) sync** | Supported: **auto-creates tables/indexes/views/procs** | Partial (emits DDL events; applying them is your job) | Partial (events only) | Partial (custom code) | Not supported (tables must pre-exist) | Partial (manual mapping) | Partial | Supported (one-shot only) |
 | **Heterogeneous dialect conversion** | Supported: types/functions/quoting/paging/procs | Not supported (positioned as event output; conversion is the consumer's job) | Not supported (positioned as binlog subscription; no dialect conversion) | Partial | Partial (limited type mapping) | Partial (manual) | Partial | Partial (one-shot mapping) |
 | **Chinese domestic databases** | Supported: **DM / KingBase / OceanBase / TiDB / HighGo / Vastbase / YashanDB / GBase / Oscar / OpenGauss** | Partial (no official domestic-DB connector; community or DIY) | Not supported (MySQL family only, binlog-based by design) | Partial (a few) | Partial (needs custom plugins) | Partial (generic JDBC only) | Partial | Partial |
@@ -659,6 +659,62 @@ Three things to know about switching:
 
 ---
 
+## Log CDC (Oracle LogMiner)
+
+Since v1.6.0, Oracle sources can switch per project to the **LogMiner CDC** capture strategy: Jync uses Oracle's built-in LogMiner engine to mine redo logs and stream INSERT / UPDATE / DELETE changes into the target — second-level latency. It installs no triggers and writes nothing to the source's business tables; it relies solely on Oracle's official log-mining interface.
+
+The switch entry is the same as for MySQL binlog CDC: the capture-strategy card on the project detail page. A readiness probe runs before switching, listing each prerequisite's status item by item.
+
+### How it works
+
+1. **Record position** — at startup, read the source's current SCN (`V$DATABASE.CURRENT_SCN`) and persist it to the `cdc_position` table. The position is written **before** the full load, so changes that occurred during baseline are covered by the subsequent mining pass.
+2. **Chunked full baseline** — load existing data in primary-key keyset chunks, reusing the same chunking / checkpoint machinery as MySQL binlog CDC.
+3. **Stream replay** — after baseline completes, mine `V$LOGMNR_CONTENTS` from the recorded SCN and replay each transaction (ordered by commit SCN) into the target.
+
+The consistency contract is the same **at-least-once**: each transaction commits to the target, the lease is re-checked, and only then is the SCN position advanced (**data before position**). After a crash, replay resumes from the previous SCN; the overlap window is absorbed by idempotent upserts.
+
+### Source prerequisites
+
+The probe's seven checks correspond one-to-one:
+
+| # | Check | Requirement |
+|---|---|---|
+| 1 | Source reachable | Oracle connection OK, version ≥ 11g |
+| 2 | `ARCHIVELOG` mode | `LOG_MODE = ARCHIVELOG` — LogMiner needs archived redo |
+| 3 | Database-level supplemental logging | `ALTER DATABASE ADD SUPPLEMENTAL LOG DATA` — minimal supplemental (PK + ROWID) |
+| 4 | Table-level supplemental logging | `ALTER TABLE ... ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS` — UPDATE must carry the full after-image of every column |
+| 5 | Mining privileges | Sync account needs `SELECT ANY TRANSACTION` + `EXECUTE ON SYS.DBMS_LOGMNR` + `SELECT ON V_$DATABASE / V_$LOG / V_$LOGFILE / V_$ARCHIVED_LOG / V_$LOGMNR_CONTENTS` |
+| 6 | No LONG columns | Selected tables must not contain LONG columns (unsupported by LogMiner) |
+| 7 | Archive retention | Archived logs retained ≥ 24h (recommended), otherwise the position can be purged |
+
+**CDB-mode note:** in a CDB, `ADD_LOGFILE` / `START_LOGMNR` may only run in CDB$ROOT as a common user (with the `C##` prefix). The sync account must be that common user with mining privileges; a PDB-local account receives `ORA-65040`.
+
+### Scope and limitations
+
+- **Oracle only:** 11g and above (11g uses `EXECUTE_CATALOG_ROLE` / `SELECT_CATALOG_ROLE`; 12c+ uses the `LOGMINING` role plus explicit view grants).
+- **DDL not captured:** DDL rows from LogMiner are logged as WARN and skipped; the cached table metadata is invalidated.
+- **No-PK tables:** seeded once at baseline; row events are skipped during streaming.
+- **LONG columns / oversized LOBs:** LogMiner's support for LONG types and very large LOBs is limited; such tables are skipped and counted.
+- **Archive retention:** archived logs must be retained long enough (≥ 24h recommended), otherwise the position is purged and the project parks in ERROR.
+
+### Failure handling
+
+| Failure | Behavior | Action |
+|---|---|---|
+| Archived log deleted (position lost) | Project parks in **ERROR** immediately | Click **Rebuild baseline** on the detail page: stop consumer, clear position, re-run full load |
+| Network drop / source restart | Exponential backoff reconnect | No manual action — mining resumes from the last SCN |
+| Parse failure > 5 times | Project parks in **ERROR** (defensive circuit breaker) | Investigate the SQL_REDO dialect, then rebuild baseline |
+
+### Multi-instance deployment
+
+Same lease-mutual-exclusion semantics as MySQL binlog CDC: at most one node consumes a given project's LogMiner stream. When the holder crashes, its lease expires, another node supervises and takes over, resuming from the persisted SCN in `cdc_position`.
+
+### Switch semantics
+
+Identical to MySQL binlog CDC: switching triggers a full reload, CDC replicates DELETEs, and switching back to polling retains the position.
+
+---
+
 ## Configuration
 
 Under `sync.*` in `application.yml`:
@@ -682,6 +738,8 @@ Under `sync.*` in `application.yml`:
 | `sync.cdc.lock-ttl-ms` | `30000` | CDC consumer lease TTL (ms); a crashed holder's lease expires within this window so another node can take over |
 | `sync.cdc.supervise-interval-ms` | `10000` | How often each node supervises and grabs wanted CDC leases (ms) |
 | `sync.cdc.connect-timeout-ms` | `10000` | BinaryLogClient handshake timeout (ms) |
+| `sync.cdc.logminer.batch-size` | `10000` | V$LOGMNR_CONTENTS batch fetch size for LogMiner |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | Idle polling interval (ms) when LogMiner has no new data |
 | `crypto-password` | *(default)* | Password encryption key — **must be changed in production** |
 | `crypto-salt` | *(default)* | Encryption salt (hex) — **must be changed in production** |
 | `ai.enabled` | `true` | Whether AI-assisted conversion may be configured. `false` removes the menu and its endpoints |

@@ -203,7 +203,7 @@
 | **部署形态** | **单个 jar** | Kafka + Connect + ZK/KRaft | Canal Server (+MQ) | Flink 集群 (JM/TM) | 客户端脚本 | 桌面 + 资源库 | 每节点部署引擎 | 桌面客户端 |
 | **外部依赖** | **无** | Kafka、ZooKeeper | ZooKeeper（集群） | Flink、Checkpoint 存储 | 无（但需 JSON 作业） | JVM + 插件 | 数据库触发器 | 无 |
 | **配置方式** | **Web 界面点选** | YAML/REST + 代码消费 | 配置文件 + 客户端代码 | SQL/DataStream 代码 | JSON 作业文件 | 图形化 ETL 拖拽 | properties + 建触发器 | 向导 |
-| **持续增量同步** | 支持 轮询/Cron 与 日志 CDC（MySQL binlog） | 支持 日志级 | 支持 binlog | 支持 日志级 | 不适用（一次性批量定位） | 部分（需自建定时与增量逻辑） | 支持 触发器 | 不适用（一次性搬运定位） |
+| **持续增量同步** | 支持 轮询/Cron 与 日志 CDC（MySQL binlog、Oracle LogMiner） | 支持 日志级 | 支持 binlog | 支持 日志级 | 不适用（一次性批量定位） | 部分（需自建定时与增量逻辑） | 支持 触发器 | 不适用（一次性搬运定位） |
 | **结构（DDL）同步** | 支持 **自动建表/索引/视图/存储过程** | 部分（输出 DDL 事件，落库需自写） | 部分（仅事件） | 部分（需自定义） | 不支持（需预建表） | 部分（手工映射） | 部分 | 支持（仅一次性） |
 | **异构方言转换** | 支持 类型/函数/引号/分页/过程 | 不支持（定位为事件输出，转换由消费端负责） | 不支持（定位为 binlog 订阅，无方言转换） | 部分 | 部分（类型映射有限） | 部分（手工） | 部分 | 部分（一次性映射） |
 | **国产数据库** | 支持 **达梦/金仓/OceanBase/TiDB/瀚高/海量/崖山/GBase/神通/OpenGauss** | 部分（无官方国产库 connector，需社区或自研） | 不支持（仅 MySQL 系，binlog 定位） | 部分（少数） | 部分（需自写插件） | 部分（靠通用 JDBC） | 部分 | 部分 |
@@ -673,6 +673,62 @@ CDC 消费者按**租约互斥**：同一项目的 binlog 流同一时刻至多�
 
 ---
 
+## 日志 CDC（Oracle LogMiner）
+
+自 v1.6.0 起，Oracle 源库可以按项目切换到 **LogMiner CDC** 捕获策略：Jync 通过 Oracle 内置的 LogMiner 引擎挖掘 redo 日志，把 INSERT / UPDATE / DELETE 流式回放到目标库 —— 秒级延迟。整个过程不建触发器、不写源库业务表，仅依赖 Oracle 官方的日志挖掘接口。
+
+切换入口与 MySQL binlog CDC 相同：项目详情页的捕获策略卡片。切换前工具会执行一次**就绪探测**，逐项列出前提是否满足。
+
+### 工作原理
+
+1. **记位点** —— 启动时读取源库当前 SCN（`V$DATABASE.CURRENT_SCN`），持久化到 `cdc_position` 表。位点在全量装载**之前**写入，基线期间源库发生的变更已被后续挖掘覆盖。
+2. **分块全量基线** —— 按主键 keyset 分块装载存量数据，与 MySQL binlog CDC 共用同一套分块 / 检查点机制。
+3. **流式回放** —— 基线完成后，从记下的 SCN 开始挖掘 `V$LOGMNR_CONTENTS`，按事务提交顺序（CSCN）逐事务回放到目标库。
+
+一致性契约同为 **at-least-once**：每个事务先提交到目标库，再复检租约，最后推进 SCN 位点（**先数据后位点**）。崩溃后从上一个 SCN 重放，重叠窗口由幂等 upsert 吸收。
+
+### 源库前提清单
+
+探测的七项检查一一对应：
+
+| # | 检查项 | 要求 |
+|---|---|---|
+| 1 | 源库可达 | Oracle 连接正常，版本 ≥ 11g |
+| 2 | `ARCHIVELOG` 模式 | `LOG_MODE = ARCHIVELOG` —— LogMiner 需要归档日志 |
+| 3 | 库级补充日志 | `ALTER DATABASE ADD SUPPLEMENTAL LOG DATA` —— 最小补充日志（PK + ROWID） |
+| 4 | 表级补充日志 | `ALTER TABLE ... ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS` —— UPDATE 必须携带全部列的后镜像 |
+| 5 | 挖掘权限 | 同步账号需 `SELECT ANY TRANSACTION` + `EXECUTE ON SYS.DBMS_LOGMNR` + `SELECT ON V_$DATABASE / V_$LOG / V_$LOGFILE / V_$ARCHIVED_LOG / V_$LOGMNR_CONTENTS` |
+| 6 | 无 LONG 列 | 所选表不得包含 LONG 类型列（LogMiner 不支持） |
+| 7 | 归档保留 | 归档日志保留 ≥ 24 小时（建议），否则位点会被清掉 |
+
+**CDB 模式注意：** 在 CDB 环境下，LogMiner 的 `ADD_LOGFILE` / `START_LOGMNR` 只能在 CDB$ROOT 中以公共用户（`C##` 前缀）执行。同步账号需为该公共用户，且具备挖掘权限。PDB-local 账号会收到 `ORA-65040`。
+
+### 支持范围与限制
+
+- **仅 Oracle**：11g 及以上版本（11g 使用 `EXECUTE_CATALOG_ROLE` / `SELECT_CATALOG_ROLE`，12c+ 使用 `LOGMINING` 角色 + 显式视图权限）。
+- **不捕获 DDL**：LogMiner 输出的 DDL 记 WARN 日志后跳过，同时失效缓存的表结构。
+- **无主键表**：仅在基线阶段一次性播种，流式阶段跳过其行事件。
+- **LONG 列 / 超行内 LOB**：LogMiner 对 LONG 类型和超大 LOB 支持有限，此类表会被跳过并计数。
+- **归档保留**：源库归档日志必须保留足够长时间（≥ 24h 建议），否则位点失效后项目置 ERROR。
+
+### 故障处置
+
+| 故障 | 行为 | 处置 |
+|---|---|---|
+| 归档日志已被删除（位点失效） | 项目立即置 **ERROR**，不再自动重试 | 详情页点**重建基线**：停止消费、清空位点、重新全量 |
+| 网络断线 / 源库重启 | 指数退避自动重连 | 无需人工干预 —— 恢复后从上次 SCN 续挖 |
+| 解析失败超过 5 次 | 项目置 **ERROR**（防御性罢工，避免反复打爆源库） | 人工排查 SQL_REDO 方言后重建基线 |
+
+### 多实例部署
+
+与 MySQL binlog CDC 相同的租约互斥语义：同一项目的 LogMiner 流同一时刻至多一个节点在消费。持锁节点宕机后，租约过期，其余节点巡检抢占并从 `cdc_position` 的持久化 SCN 续挖。
+
+### 切换语义
+
+与 MySQL binlog CDC 的切换语义完全一致：切换即重新全量、CDC 会复制 DELETE、切回轮询保留位点。
+
+---
+
 ## 配置项
 
 `application.yml` 中的 `sync.*`：
@@ -696,6 +752,8 @@ CDC 消费者按**租约互斥**：同一项目的 binlog 流同一时刻至多�
 | `sync.cdc.lock-ttl-ms` | `30000` | CDC 消费者租约时长（毫秒）；持锁节点宕机后租约在此窗口内过期，供其他节点接管 |
 | `sync.cdc.supervise-interval-ms` | `10000` | 各节点巡检并抢占 CDC 租约的周期（毫秒） |
 | `sync.cdc.connect-timeout-ms` | `10000` | BinaryLogClient 握手超时（毫秒） |
+| `sync.cdc.logminer.batch-size` | `10000` | LogMiner V$LOGMNR_CONTENTS 单批读取行数 |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 无数据时的轮询间隔（毫秒） |
 | `crypto-password` | *(默认值)* | 密码加密密钥，**生产环境必须修改** |
 | `crypto-salt` | *(默认值)* | 加密盐值（十六进制），**生产环境必须修改** |
 | `ai.enabled` | `true` | 是否允许配置 AI 辅助转换。置 `false` 则菜单与接口一并下线 |

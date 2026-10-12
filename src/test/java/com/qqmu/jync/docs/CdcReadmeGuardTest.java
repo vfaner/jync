@@ -77,6 +77,39 @@ class CdcReadmeGuardTest {
     }
 
     @Test
+    void bothReadmesDocumentLogMinerCdcPrerequisitesAndConfig() throws IOException {
+        for (String name : new String[]{"README.md", "README_EN.md"}) {
+            String readme = read(name);
+            // 章节标题（双语）
+            assertThat(readme)
+                    .as("%s must have a LogMiner CDC section", name)
+                    .contains("LogMiner");
+            // 七项探测前提关键词（对位 LogMinerCdcProbe）
+            assertThat(readme)
+                    .as("%s must document ARCHIVELOG prerequisite", name)
+                    .contains("ARCHIVELOG");
+            assertThat(readme)
+                    .as("%s must document supplemental logging prerequisite", name)
+                    .contains("SUPPLEMENTAL LOG");
+            assertThat(readme)
+                    .as("%s must document ALL COLUMNS supplemental logging", name)
+                    .contains("(ALL) COLUMNS");
+            // 配置表两新键行（默认值钉死）
+            assertThat(readme)
+                    .as("%s must pair sync.cdc.logminer.batch-size with 10000", name)
+                    .contains("`sync.cdc.logminer.batch-size` | `10000`");
+            assertThat(readme)
+                    .as("%s must pair sync.cdc.logminer.idle-poll-ms with 1000", name)
+                    .contains("`sync.cdc.logminer.idle-poll-ms` | `1000`");
+            // 能力对比行更新：日志级覆盖 MySQL binlog + Oracle LogMiner
+            assertThat(readme)
+                    .as("%s comparison row must mention both MySQL binlog and Oracle LogMiner", name)
+                    .contains("MySQL binlog")
+                    .contains("Oracle LogMiner");
+        }
+    }
+
+    @Test
     void staleNeverTouchesBinlogClaimIsScopedToPolling() throws IOException {
         String zh = read("README.md");
         // 原句以「…」引号形式出现；把断言钉在带右引号的原形上，
