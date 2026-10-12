@@ -34,6 +34,9 @@
 - [并发与一致性设计](#并发与一致性设计)
 - [增量检测策略](#增量检测策略)
 - [日志 CDC（MySQL binlog）](#日志-cdcmysql-binlog)
+- [日志 CDC（Oracle LogMiner）](#日志-cdcoracle-logminer)
+- [日志 CDC（PostgreSQL 逻辑解码）](#日志-cdcpostgresql-逻辑解码)
+- [日志 CDC（SQL Server CDC）](#日志-cdcsql-server-cdc)
 - [配置项](#配置项)
 - [AI 辅助转换（可选）](#ai-辅助转换可选)
 - [架构](#架构)
@@ -726,6 +729,108 @@ CDC 消费者按**租约互斥**：同一项目的 binlog 流同一时刻至多�
 ### 切换语义
 
 与 MySQL binlog CDC 的切换语义完全一致：切换即重新全量、CDC 会复制 DELETE、切回轮询保留位点。
+
+---
+
+## 日志 CDC（PostgreSQL 逻辑解码）
+
+自 v1.7.0 起，PostgreSQL 源库可以按项目切换到 **逻辑解码 CDC** 捕获策略：Jync 通过 PostgreSQL 内置的 logical decoding 机制消费 `test_decoding` 输出插件的文本流，把 INSERT / UPDATE / DELETE 回放到目标库 —— 秒级延迟。整个过程**不建触发器、不写源库业务表**，仅依赖 PostgreSQL 官方的逻辑解码接口。
+
+切换入口与 MySQL / Oracle 相同：项目详情页的捕获策略卡片。切换前工具会执行一次**就绪探测**，逐项列出前提是否满足。
+
+### 工作原理
+
+1. **记位点** —— 启动时读取源库当前 LSN（`pg_current_wal_lsn()` 的文本形式，如 `0/167D3F8`），持久化到 `cdc_position.lsn` 列。位点在全量装载**之前**写入，基线期间源库发生的变更已被后续 slot 读取覆盖。
+2. **分块全量基线** —— 按主键 keyset 分块装载存量数据，与 MySQL binlog / Oracle LogMiner 共用同一套分块 / 检查点机制。
+3. **流式回放** —— 基线完成后，从记下的 LSN 开始，周期性调 `pg_logical_slot_get_changes('jync_<projectId>', NULL, <batch-size>, 'include-xids', '1')` 拉取一批变更，按 `test_decoding` 文本协议逐行解析为行事件（`BEGIN/COMMIT` 事务边界、单引号字符串与 `''` 转义、`NULL` 列、UPDATE 的 `old key-` 旧镜像跳过），逐事务回放到目标库。
+
+一致性契约同为 **at-least-once**：每个事务先提交到目标库，再复检租约，最后推进 LSN 位点（**先数据后位点**）。崩溃后从上一个 LSN 重放，重叠窗口由幂等 upsert 吸收。
+
+### 源库前提清单
+
+探测的五项检查一一对应：
+
+| # | 检查项 | 要求 |
+|---|---|---|
+| 1 | 源库可达 | PostgreSQL 连接正常，版本 ≥ 9.4 |
+| 2 | `wal_level` | `logical` —— 需在 `postgresql.conf` 配置后重启 |
+| 3 | `REPLICATION` 角色 | 同步账号需具备 `REPLICATION` 权限（或 superuser） |
+| 4 | `test_decoding` 插件 | 探测时自动创建并丢弃临时复制槽，验证插件可用 |
+| 5 | 表 `REPLICA IDENTITY` | 所选表不得为 `NOTHING`（UPDATE/DELETE 拿不到旧镜像）；有 PK 时默认即可，无 PK 需 `ALTER TABLE ... REPLICA IDENTITY FULL` |
+
+### 支持范围与限制
+
+- **仅 PostgreSQL**：9.4+ 原生支持 logical decoding；推荐 12+。OpenGauss / 瀚高 / 海量等国产兼容 PG 的变体尚未经过验证。
+- **复制槽生命周期**：consumer 首次连接时自动创建 `jync_<projectId>` 复制槽，**停止时不 drop**（否则位点会与 WAL 一起被丢弃，且长期停跑会让 WAL 无界累积）。长期停跑的项目请 DBA 手动执行 `SELECT pg_drop_replication_slot('jync_<projectId>')` 回收。
+- **不捕获 DDL**：DDL 输出在文本流中降级为 unsupported-table 计数跳过；同时失效缓存的表结构。
+- **无主键表**：仅在基线阶段一次性播种；若表 `REPLICA IDENTITY` 为 `FULL`，UPDATE/DELETE 仍能定位行。
+
+### 故障处置
+
+| 故障 | 行为 | 处置 |
+|---|---|---|
+| WAL 已被回收（LSN 越界） | 项目立即置 **ERROR** | 详情页点**重建基线**：停止消费、清空位点、重新全量 |
+| 网络断线 / 源库重启 | 指数退避自动重连 | 无需人工干预 —— 恢复后从上次 LSN 续读 |
+| 表 `REPLICA IDENTITY` 被改 | 相关行事件降级计数，不影响其他表 | 修正 `REPLICA IDENTITY` 或重建基线 |
+
+### 多实例部署
+
+与 MySQL / Oracle 相同的租约互斥语义：同一项目的 logical slot 流同一时刻至多一个节点在消费（`pg_logical_slot_get_changes` 每次拉取即从 slot 消费侧推进，天然排除并发拉取；jync 层的租约额外保证基线期间不被抢占）。
+
+### 切换语义
+
+与 MySQL binlog / Oracle LogMiner 的切换语义一致：切换即重新全量、CDC 会复制 DELETE、切回轮询保留位点。
+
+---
+
+## 日志 CDC（SQL Server CDC）
+
+自 v1.7.0 起，SQL Server 源库可以按项目切换到 **SQL Server CDC** 捕获策略：Jync 通过 SQL Server 内置的 CDC 变更表（`cdc.<schema>_<table>_CT`）拉取行级变更，经 `cdc.fn_cdc_get_all_changes_<capture_instance>` 按 LSN 区间过滤后回放到目标库 —— 秒级延迟。整个过程**不建触发器、不写源库业务表**，仅依赖 SQL Server 官方的 CDC 接口。
+
+切换入口与其他三种 CDC 相同：项目详情页的捕获策略卡片。切换前工具会执行一次**就绪探测**，逐项列出前提是否满足。
+
+### 工作原理
+
+1. **记位点** —— 启动时读取 `sys.fn_cdc_get_max_lsn()`，以 20 位 hex 字符串（`CONVERT(varchar(32), lsn, 1)`）形式持久化到 `cdc_position.lsn`。位点在全量装载**之前**写入，基线期间源库发生的变更已被后续 CDC 表覆盖。
+2. **分块全量基线** —— 按主键 keyset 分块装载存量数据。
+3. **流式回放** —— 基线完成后，从记下的 LSN 区间开始调 `cdc.fn_cdc_get_all_changes_<capture_instance>(@from, @to, 'all update old')`，按 `__$operation` 分派：`1` = DELETE、`2` = INSERT、`4` = UPDATE-after（走 upsert）、`3` = UPDATE-before（upsert 语义不需要，跳过）。`__$start_lsn` 相等即同一事务，按事务分组 flush。
+
+一致性契约同为 **at-least-once**：每个事务先提交到目标库，再复检租约，最后推进 LSN 位点。
+
+### 源库前提清单
+
+探测的五项检查一一对应：
+
+| # | 检查项 | 要求 |
+|---|---|---|
+| 1 | 源库可达 | SQL Server 连接正常，版本 ≥ 2012 |
+| 2 | 库级 CDC 启用 | `sys.databases.is_cdc_enabled = 1` —— 需 `EXEC sys.sp_cdc_enable_db` |
+| 3 | SQL Server Agent 运行中 | CDC 捕获 / 清理作业依赖 Agent；不运行则变更表不更新 |
+| 4 | CDC 角色 | 同步账号需在 `cdc_Admin` 或 `cdc_reader` 角色（或 sysadmin） |
+| 5 | 每表 capture instance | 所选表需在 `cdc.change_tables` 中已存在 —— 否则提示 `EXEC sys.sp_cdc_enable_table ...` |
+
+### 支持范围与限制
+
+- **仅 SQL Server**：2012+ 原生支持 CDC；推荐 2017+（Linux 上 Agent 已正式支持）。
+- **Agent 依赖**：Agent 停止时变更表不更新，CDC 空转；项目不会 ERROR，但会无延迟积压。
+- **不捕获 DDL**：DDL 导致 capture instance 结构变化时，相关行事件降级计数。
+- **无主键表**：仅在基线阶段一次性播种；CDC 表携带完整镜像时 UPDATE/DELETE 仍可定位行。
+
+### 故障处置
+
+| 故障 | 行为 | 处置 |
+|---|---|---|
+| CDC 保留窗口过短（LSN 已被清理） | 项目置 **ERROR** | 详情页点**重建基线** |
+| Agent 停跑 | 项目空转，CDC 表无新增 | 启动 SQL Server Agent；无需重启项目 |
+| 网络断线 / 源库重启 | 指数退避自动重连 | 恢复后从上次 LSN 续读 |
+
+### 多实例部署
+
+与其他三种 CDC 相同的租约互斥语义：同一项目的 CDC 变更表同一时刻至多一个节点在消费。
+
+### 切换语义
+
+与 MySQL binlog / Oracle LogMiner / PostgreSQL 逻辑解码一致：切换即重新全量、CDC 会复制 DELETE、切回轮询保留位点。
 
 ---
 

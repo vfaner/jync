@@ -13,7 +13,7 @@
 
     <groupId>com.qqmu.jync</groupId>
     <artifactId>jync</artifactId>
-    <version>1.6.0</version>
+    <version>1.7.0</version>
     <name>Jync</name>
     <description>Jync (捷同) - real-time heterogeneous database structure and data synchronization in a single JAR</description>
 
@@ -284,10 +284,11 @@
                             <outputDirectory>${project.build.outputDirectory}/release-notes</outputDirectory>
                             <resources>
                                 <resource>
-                                    <!-- Historical notes live under docs/release-notes/;
-                                         only the running version's file is packaged and
-                                         placed at the classpath as release-notes/...
-                                         so VersionService can resolve it. -->
+                                    <!-- Only the running version's note goes on the classpath
+                                         as release-notes/RELEASE_NOTES_v<ver>.md, so
+                                         VersionService can resolve it. Older notes stay
+                                         under docs/release-notes/ for source history but
+                                         are not bundled. -->
                                     <directory>${project.basedir}/docs/release-notes</directory>
                                     <includes>
                                         <include>RELEASE_NOTES_v${project.version}.md</include>

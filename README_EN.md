@@ -34,6 +34,9 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 - [Concurrency & Consistency Design](#concurrency--consistency-design)
 - [Incremental Detection Strategies](#incremental-detection-strategies)
 - [Binlog CDC (MySQL)](#binlog-cdc-mysql)
+- [Log CDC (Oracle LogMiner)](#log-cdc-oracle-logminer)
+- [Log CDC (PostgreSQL logical decoding)](#log-cdc-postgresql-logical-decoding)
+- [Log CDC (SQL Server CDC)](#log-cdc-sql-server-cdc)
 - [Configuration](#configuration)
 - [AI-Assisted Conversion (optional)](#ai-assisted-conversion-optional)
 - [Architecture](#architecture)
@@ -712,6 +715,102 @@ Same lease-mutual-exclusion semantics as MySQL binlog CDC: at most one node cons
 ### Switch semantics
 
 Identical to MySQL binlog CDC: switching triggers a full reload, CDC replicates DELETEs, and switching back to polling retains the position.
+
+---
+
+## Log CDC (PostgreSQL logical decoding)
+
+Since v1.7.0, PostgreSQL sources can switch per project to a **logical-decoding CDC** capture strategy: Jync consumes the `test_decoding` text stream through PostgreSQL's built-in logical-decoding machinery and replays INSERT / UPDATE / DELETE events into the target — second-level latency. It **installs no triggers and writes nothing to the source's business tables**; it relies solely on PostgreSQL's official logical-decoding interface.
+
+The entry point is the same strategy card as MySQL binlog / Oracle LogMiner. A **readiness probe** enumerates each prerequisite before switching.
+
+### How it works
+
+1. **Record the position** — on start, the current LSN (`pg_current_wal_lsn()` as text, e.g. `0/167D3F8`) is persisted to `cdc_position.lsn` *before* the full load, so changes made during the baseline are already covered by the slot's later reads.
+2. **Chunked full-load baseline** — keyset chunked load of existing rows, reusing the same chunk/checkpoint machinery as MySQL binlog and Oracle LogMiner.
+3. **Streamed replay** — from the recorded LSN, cycle `pg_logical_slot_get_changes('jync_<projectId>', NULL, <batch-size>, 'include-xids', '1')` and parse each row against the `test_decoding` text protocol (`BEGIN/COMMIT` boundaries, single-quoted strings with `''` escapes, `NULL` columns, UPDATE `old key-` image skipped), replaying events transaction by transaction into the target.
+
+The same **at-least-once** contract: commit to target → re-check lease → advance LSN. Crash replay absorbs the overlap window with idempotent upserts.
+
+### Source-side prerequisites
+
+| # | Check | Requirement |
+|---|---|---|
+| 1 | Source reachable | PostgreSQL connection healthy, version ≥ 9.4 |
+| 2 | `wal_level` | `logical` — set in `postgresql.conf` and restart |
+| 3 | `REPLICATION` role | Sync account needs `REPLICATION` privilege (or superuser) |
+| 4 | `test_decoding` plugin | Probe creates and drops a throwaway slot to confirm plugin availability |
+| 5 | Table `REPLICA IDENTITY` | Selected tables must not be `NOTHING` (UPDATE/DELETE would lose the old image); default (PK) suffices when a PK exists, otherwise `ALTER TABLE ... REPLICA IDENTITY FULL` |
+
+### Support and limits
+
+- **PostgreSQL only**: 9.4+ natively supports logical decoding; 12+ recommended. OpenGauss / HighGo / Vastbase PG-compatible variants are not yet validated.
+- **Slot lifecycle**: consumer auto-creates `jync_<projectId>` on first connect and **never drops it on stop** (dropping would lose the watermark and WAL retention becomes unbounded). Long-idle slots should be cleaned up by DBA: `SELECT pg_drop_replication_slot('jync_<projectId>')`.
+- **DDL not captured**: DDL rows degrade to an unsupported-table counter; cached metadata is invalidated.
+- **Keyless tables**: seeded once during baseline; UPDATE/DELETE still locate rows when `REPLICA IDENTITY = FULL`.
+
+### Failure handling
+
+| Failure | Behavior | Action |
+|---|---|---|
+| WAL recycled (LSN out of range) | Project parks in **ERROR** | Click **Rebuild baseline** on the detail page |
+| Network drop / source restart | Exponential backoff reconnect | Auto-resumes from the last LSN |
+| Table `REPLICA IDENTITY` changed | Related row events degrade to a counter, other tables unaffected | Fix the identity or rebuild baseline |
+
+### Multi-instance deployment
+
+Same lease-mutual-exclusion semantics as MySQL / Oracle CDC: at most one node consumes a given project's logical slot stream. `pg_logical_slot_get_changes` also advances the slot's consume-side position, naturally excluding concurrent pulls.
+
+### Switch semantics
+
+Same as MySQL / Oracle: switching triggers a full reload, CDC replicates DELETEs, and switching back to polling retains the position.
+
+---
+
+## Log CDC (SQL Server CDC)
+
+Since v1.7.0, SQL Server sources can switch per project to a **SQL Server CDC** capture strategy: Jync reads the change tables (`cdc.<schema>_<table>_CT`) through `cdc.fn_cdc_get_all_changes_<capture_instance>`, filtered by LSN range, and replays row-level changes into the target — second-level latency. It **installs no triggers and writes nothing to the source's business tables**; it relies solely on SQL Server's official CDC interface.
+
+### How it works
+
+1. **Record the position** — on start, `sys.fn_cdc_get_max_lsn()` is persisted to `cdc_position.lsn` as a 20-character hex string (`CONVERT(varchar(32), lsn, 1)`) *before* the full load.
+2. **Chunked full-load baseline** — keyset chunked load of existing rows.
+3. **Streamed replay** — cycle `cdc.fn_cdc_get_all_changes_<capture_instance>(@from, @to, 'all update old')` and dispatch by `__$operation`: `1` = DELETE, `2` = INSERT, `4` = UPDATE-after (upsert), `3` = UPDATE-before (skipped — upsert semantics do not need it). Rows sharing `__$start_lsn` are flushed as one transaction.
+
+The same **at-least-once** contract applies.
+
+### Source-side prerequisites
+
+| # | Check | Requirement |
+|---|---|---|
+| 1 | Source reachable | SQL Server connection healthy, version ≥ 2012 |
+| 2 | Database-level CDC enabled | `sys.databases.is_cdc_enabled = 1` — requires `EXEC sys.sp_cdc_enable_db` |
+| 3 | SQL Server Agent running | Capture / cleanup jobs depend on Agent; without it the change tables stay empty |
+| 4 | CDC role | Sync account must be in `cdc_Admin` or `cdc_reader` (or sysadmin) |
+| 5 | Per-table capture instance | Selected table must exist in `cdc.change_tables` — otherwise the probe shows the DDL to run: `EXEC sys.sp_cdc_enable_table ...` |
+
+### Support and limits
+
+- **SQL Server only**: 2012+ natively supports CDC; 2017+ recommended (Agent on Linux is officially supported from this release).
+- **Agent dependency**: when Agent stops, the change tables do not grow and the consumer idles. The project does not park in ERROR, but latency grows unbounded.
+- **DDL not captured**: DDL causing capture-instance structure changes degrades related row events to a counter.
+- **Keyless tables**: seeded once during baseline; UPDATE/DELETE still locate rows because the change table carries the full image.
+
+### Failure handling
+
+| Failure | Behavior | Action |
+|---|---|---|
+| CDC retention window expired (LSN purged) | Project parks in **ERROR** | Click **Rebuild baseline** |
+| Agent stopped | Consumer idles, change tables frozen | Start SQL Server Agent; no restart needed |
+| Network drop / source restart | Exponential backoff reconnect | Auto-resumes from the last LSN |
+
+### Multi-instance deployment
+
+Same lease-mutual-exclusion semantics as MySQL / Oracle / PostgreSQL CDC.
+
+### Switch semantics
+
+Same as the other three CDC strategies: switching triggers a full reload, CDC replicates DELETEs, and switching back to polling retains the position.
 
 ---
 
