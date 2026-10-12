@@ -44,7 +44,10 @@ class BinlogClientFactoryTest {
         BinaryLogClient client = factory.createClient(mysqlSource(), 42L, null);
         assertThat(client.getServerId())
                 .isEqualTo(properties.getCdc().getServerIdOffset() + 42L);
-        assertThat(client.isKeepAlive()).isFalse(); // 重连归 CdcConsumer 的退避循环管
+        // keepAlive=true is required to detect NAT-idle / half-open sockets; without it
+        // the consumer thread parks on a dead read and never releases the lease.
+        // Reconnect policy still lives in CdcConsumer's backoff loop.
+        assertThat(client.isKeepAlive()).isTrue();
     }
 
     @Test

@@ -220,9 +220,16 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 stats.setLastError(failure == null
                         ? "stream dropped: no failure recorded"
                         : CdcFailureClassifier.describe(failure));
-                log.warn("CDC stream for project {} dropped ({}), retrying in {} ms",
-                        projectId, failure == null ? "no failure recorded"
-                                : CdcFailureClassifier.describe(failure), delay);
+                // #10 fix: a benign reconnect (no failure recorded) is INFO — it is the
+                // normal lifecycle on DST / idle-NAT / source restart. Only a drop with
+                // a real failure is WARN.
+                if (failure == null) {
+                    log.info("CDC stream for project {} dropped cleanly, retrying in {} ms",
+                            projectId, delay);
+                } else {
+                    log.warn("CDC stream for project {} dropped ({}), retrying in {} ms",
+                            projectId, CdcFailureClassifier.describe(failure), delay);
+                }
                 if (!sleepWhileRunning(delay)) {
                     break;   // requestStop 落在退避期:≤100ms 内退出(分片 sleep)
                 }
@@ -420,13 +427,24 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     private CdcEventStreamHandler.TransactionSink transactionSink() {
         return (changes, mark) -> {
             long projectId = project.getId();
-            try (Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig())) {
+            Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
+            boolean originalAutoCommit = true;
+            try {
+                originalAutoCommit = target.getAutoCommit();
                 target.setAutoCommit(false);
                 for (CdcEventStreamHandler.TableChange tc : changes) {
                     applier.applyUpserts(target, tc.binding, tc.upserts);
                     applier.applyDeletes(target, tc.binding, tc.deletes);
                 }
                 target.commit();
+            } catch (Exception e) {
+                try { target.rollback(); } catch (SQLException ignored) { }
+                throw e instanceof RuntimeException r ? r : new RuntimeException(e);
+            } finally {
+                try {
+                    if (originalAutoCommit) target.setAutoCommit(true);
+                } catch (SQLException ignored) { }
+                try { target.close(); } catch (SQLException ignored) { }
             }
             ctx.requireLease();                                  // 丢租约 → 位点不动,接管方重放
             String file = mark.getFile() != null ? mark.getFile() : lastFile;

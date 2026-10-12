@@ -307,7 +307,10 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                   Map<CdcTableBinding, List<Map<String, Object>>> upserts,
                                   Map<CdcTableBinding, List<Map<String, Object>>> deletes)
             throws Exception {
-        try (Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig())) {
+        Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
+        boolean originalAutoCommit = true;
+        try {
+            originalAutoCommit = target.getAutoCommit();
             target.setAutoCommit(false);
             for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : upserts.entrySet()) {
                 applier.applyUpserts(target, e.getKey(), e.getValue());
@@ -316,6 +319,14 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 applier.applyDeletes(target, e.getKey(), e.getValue());
             }
             target.commit();
+        } catch (Exception e) {
+            try { target.rollback(); } catch (SQLException ignored) { }
+            throw e;
+        } finally {
+            try {
+                if (originalAutoCommit) target.setAutoCommit(true);
+            } catch (SQLException ignored) { }
+            try { target.close(); } catch (SQLException ignored) { }
         }
         ctx.requireLease();
         positionStore.advanceLsn(projectId, commitLsn);

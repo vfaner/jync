@@ -55,7 +55,19 @@ public class BinlogClientFactory {
         BinaryLogClient client = new BinaryLogClient(host, port,
                 source.getUsername(), cryptoUtil.decrypt(source.getPassword()));
         client.setServerId(serverIdFor(projectId));
-        client.setKeepAlive(false);
+        // #3 fix: without a heartbeat, a half-open TCP (NAT idle cut, source crash with
+        // no FIN) leaves the event loop parked on a read — client.isConnected() stays
+        // true, the consumer thread never wakes, and the lease never releases. A 30s
+        // heartbeat forces the socket to see activity even when the source has no
+        // transactions; a missed heartbeat surfaces as a communication failure and the
+        // reconnect loop takes over.
+        client.setKeepAlive(true);
+        try {
+            client.setHeartbeatInterval(30);
+        } catch (java.lang.NoSuchMethodError | RuntimeException ignored) {
+            // Older mysql-binlog-connector forks expose heartbeat only via socket options;
+            // keepAlive(true) alone still lets TCP see dead peers.
+        }
         client.setEventDeserializer(deserializer());
         if (resumeFrom != null) {
             if (resumeFrom.getGtidSet() != null && !resumeFrom.getGtidSet().trim().isEmpty()) {

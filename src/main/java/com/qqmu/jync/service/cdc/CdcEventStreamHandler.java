@@ -263,7 +263,17 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         }
     }
 
-    /** Contract 5: BEGIN/COMMIT are no-ops; anything else is DDL — invalidate and discard. */
+    /**
+     * Contract 5: BEGIN/COMMIT are no-ops; XA / SAVEPOINT / SET / CREATE TEMPORARY TABLE
+     * are treated as no-ops as well (they are NOT DDL against tracked tables); anything
+     * else is DDL — invalidate caches and discard the buffer.
+     *
+     * <p>XA transactions: {@code XA START} opens, DML rows buffer, {@code XA PREPARE}
+     * marks the boundary (the subsequent {@code XA COMMIT} is a QUERY we treat as the
+     * commit equivalent). Previously both XA PREPARE and XA COMMIT hit the "anything
+     * non-BEGIN/COMMIT is DDL" branch: buffered rows were dropped, and the position
+     * advanced on the next XID — silent data loss.
+     */
     private void onQuery(QueryEventData data) {
         String sql = data.getSql();
         String normalized = sql == null ? "" : sql.trim();
@@ -274,20 +284,34 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             return;
         }
         String upper = normalized.toUpperCase(Locale.ROOT);
-        if ("BEGIN".equals(upper) || "COMMIT".equals(upper)) {
+        if ("BEGIN".equals(upper) || "COMMIT".equals(upper) || "ROLLBACK".equals(upper)) {
             return; // transaction control, not DDL: the buffer stays
+        }
+        if (upper.startsWith("XA ") || upper.startsWith("XASTART") || "XASTATE".equals(upper)) {
+            // XA START / XA END / XA PREPARE / XA COMMIT / XA ROLLBACK — transaction
+            // control, not DDL. Rows buffered between XA START and XA PREPARE must stay
+            // in the buffer until the XID event; XA PREPARE/COMMIT do not flush on their
+            // own (MySQL binlog emits an XID after XA COMMIT for the prepared branch).
+            return;
+        }
+        if (upper.startsWith("SAVEPOINT ") || upper.startsWith("RELEASE SAVEPOINT ")
+                || upper.startsWith("ROLLBACK TO SAVEPOINT ")
+                || upper.startsWith("ROLLBACK TO ")) {
+            return; // sub-transaction control: buffer semantics stay
+        }
+        if (upper.startsWith("SET ") || upper.startsWith("SET@@")) {
+            return; // session variable change: no DDL, no buffer impact
+        }
+        if (upper.startsWith("CREATE TEMPORARY TABLE")
+                || upper.startsWith("CREATE/*TEMP*/TABLE")
+                || upper.startsWith("DROP TEMPORARY TABLE")) {
+            return; // TEMPORARY tables are not tracked by CDC
         }
         stats.addSkippedDdl(1);
         log.warn("Skipping DDL in CDC stream (database {}): {}", data.getDatabase(),
                 normalized.length() > DDL_LOG_SQL_CHARS
                         ? normalized.substring(0, DDL_LOG_SQL_CHARS) + "..." : normalized);
-        // QUERY events carry no table (0.41.5 QueryEventData has database+sql only) and SQL
-        // parsing is out (contract 5), so null = invalidate every cached binding (Review
-        // Focus #1). Over-invalidation costs one metadata re-read per table at the next
-        // TABLE_MAP; a stale binding would mis-map every row of the altered table.
         supplier.invalidate(null, null);
-        // Buffered rows were mapped with the pre-DDL column layout — untrustworthy. Drop
-        // them; the position has not advanced, so a reconnect replays the transaction.
         buffered.clear();
     }
 
