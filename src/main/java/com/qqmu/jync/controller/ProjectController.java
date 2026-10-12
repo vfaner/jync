@@ -307,12 +307,19 @@ public class ProjectController {
                             @RequestParam(required = false) Long pollIntervalMs,
                             @RequestParam(required = false) String cronExpression,
                             @RequestParam(required = false) Integer batchSize,
+                            @RequestParam(defaultValue = "false") boolean customSchedule,
                             @RequestParam(name = "captureStrategy", required = false)
                                     String captureStrategy,
                             RedirectAttributes flash) {
         try {
             var project = projectService.findById(id)
                     .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+            // 运行中的项目不允许改配置:改完要下次启动才生效,运行中改完看不到反馈。
+            // 前端 fieldset 已经 disabled,这层是防直接 POST 的兜底。
+            if (Boolean.TRUE.equals(project.getEnabled())) {
+                flash.addFlashAttribute("error", "error.project.stop.before.config");
+                return "redirect:/projects/" + id;
+            }
             SyncConfig config = projectService.loadConfig(project);
 
             // The strategy radio is normalized up front: an unknown value is flagged and
@@ -359,10 +366,18 @@ public class ProjectController {
             config.setSyncDeletes(syncDeletes);
             config.setDisableTargetConstraints(disableTargetConstraints);
             config.setTruncateBeforeInitialLoad(truncateBeforeInitialLoad);
-            config.setPollIntervalMs(pollIntervalMs);
-            config.setCronExpression(cronExpression == null || cronExpression.isBlank()
-                    ? null : cronExpression.trim());
-            config.setBatchSize(batchSize);
+            // 自定义调度开关:关闭时清空三个字段,让引擎回退到全局默认值。
+            // 开启时透传表单值(空字符串 → null,保持"留空=默认"语义)。
+            if (customSchedule) {
+                config.setPollIntervalMs(pollIntervalMs);
+                config.setCronExpression(cronExpression == null || cronExpression.isBlank()
+                        ? null : cronExpression.trim());
+                config.setBatchSize(batchSize);
+            } else {
+                config.setPollIntervalMs(null);
+                config.setCronExpression(null);
+                config.setBatchSize(null);
+            }
 
             CaptureStrategy before = config.getCaptureStrategyOrDefault();
             projectService.saveConfig(id, config, strategyParam);

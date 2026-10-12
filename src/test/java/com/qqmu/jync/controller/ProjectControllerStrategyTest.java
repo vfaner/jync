@@ -65,7 +65,8 @@ class ProjectControllerStrategyTest {
         Project project = new Project();
         project.setId(1L);
         project.setName("proj");
-        project.setEnabled(true);
+        // saveConfig 测试需要 enabled=false:运行中的项目后端会拒绝改配置(兜底保护)。
+        project.setEnabled(false);
         project.setSourceDbId(sourceType == null ? null : 5L);
         when(projectService.findById(1L)).thenReturn(Optional.of(project));
         when(projectService.loadConfig(project)).thenReturn(new SyncConfig());

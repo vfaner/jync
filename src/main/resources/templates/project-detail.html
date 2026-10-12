@@ -37,12 +37,15 @@
     <div class="card">
         <div class="card-head">
             <h2><svg class="ico"><use href="#sliders"/></svg> <span th:text="#{project.controls}">Controls</span></h2>
-            <div th:with="st=${task != null and task.status != null ? task.status.name() : 'STOPPED'}">
+            <!-- 状态徽章以 project.enabled 为准（用户视角的"应该在跑"），不读 sync_task.status:
+                 T13 设计是干净停机后 task.status 残留 RUNNING，读它会出现"绿徽章 + 启动按钮"
+                 这种自相矛盾。ERROR 态仍由 task.status 传递（那是真错误）。 -->
+            <div th:with="err=${task != null and task.status != null and task.status.name() == 'ERROR'}">
                 <span class="badge"
-                      th:classappend="${st == 'RUNNING'} ? 'badge-ok'
-                                    : (${st == 'ERROR'} ? 'badge-danger' : 'badge-mute')">
-                    <span class="dot" th:classappend="${st == 'RUNNING'} ? 'dot-live' : ''"></span>
-                    <span th:text="#{'status.' + ${st}}">Stopped</span>
+                      th:classappend="${project.enabled} ? 'badge-ok'
+                                    : (${err} ? 'badge-danger' : 'badge-mute')">
+                    <span class="dot" th:classappend="${project.enabled} ? 'dot-live' : ''"></span>
+                    <span th:text="${project.enabled} ? #{status.RUNNING} : (${err} ? #{status.ERROR} : #{status.STOPPED})">Stopped</span>
                 </span>
             </div>
         </div>
@@ -74,6 +77,13 @@
             </dl>
 
             <div class="btn-row" th:if="${isAdmin}">
+                <!-- 保存配置按钮放在立即同步前面:它是配置 form 的 submit,但视觉上归在运行控制区。
+                     用 form="config-form" 属性关联到下方的表单,这样按钮可以在 form 外面也能提交它。 -->
+                <button type="submit" form="config-form" class="btn btn-primary btn-sm"
+                        th:disabled="${project.enabled}"
+                        th:title="${project.enabled} ? #{project.config.lockedWhileRunning} : #{common.save}">
+                    <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{project.saveConfig}">保存配置</span>
+                </button>
                 <button type="button" class="btn btn-ok btn-sm" th:unless="${project.enabled}"
                         data-role="api-btn" data-reload="true"
                         th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
@@ -219,12 +229,25 @@
 
     <!--/* data-original-strategy：页面加载时的选中策略，B8 确认框拿它和提交值比对，
            只有「改成 BINLOG_CDC」才弹确认（app.js，ES5）。 */-->
-    <form method="post" th:action="@{/projects/{id}/config(id=${project.id})}"
-          th:attr="data-original-strategy=${selectedStrategy}">
+    <form id="config-form" method="post" th:action="@{/projects/{id}/config(id=${project.id})}"
+          th:attr="data-original-strategy=${selectedStrategy},
+                   data-cdc-active=${cdcActive}">
     <!--/* 访客保留这一整块而不是藏掉：勾选状态本身是有用的只读信息。
            fieldset[disabled] 让浏览器原生置灰全部输入，比逐个加 disabled 可靠，
-           也顺带保证浏览器不会把这些字段提交上去。 */-->
-    <fieldset class="bare" th:attr="disabled=${isAdmin} ? null : 'disabled'">
+           也顺带保证浏览器不会把这些字段提交上去。
+           另外：项目运行中(enabled=true)也禁用整张表单——改策略/改表/改调度必须
+           先停止项目，否则改动要到下次启动才生效，运行中改完还看不到任何反馈。 */-->
+    <fieldset class="bare" th:attr="disabled=${(isAdmin and !project.enabled)} ? null : 'disabled'">
+        <!-- 运行中锁定提示：仅管理员 + 运行中时展示，告诉用户为什么表单是灰的。 -->
+        <div class="card" th:if="${isAdmin and project.enabled}"
+             style="margin-top:18px;border-left:3px solid var(--warn)">
+            <div class="card-body">
+                <div class="help" style="margin:0">
+                    <svg class="ico" style="color:var(--warn);vertical-align:-3px;margin-right:4px"><use href="#exclamation-triangle-fill"/></svg>
+                    <span th:text="#{project.config.lockedWhileRunning}">Project is running. Stop it first to change capture strategy, table selection, or schedule.</span>
+                </div>
+            </div>
+        </div>
         <!-- 捕获策略卡片（C1）：CDC 卡片只对严格 MYSQL 源库渲染（验收 C①）。
              selectedStrategy 是选中态的单一事实源：新建 MySQL 项目探测通过时它已经是
              BINLOG_CDC（cdcRecommended），不会出现两张卡同时 checked。 -->
@@ -319,12 +342,17 @@
                                         th:text="#{common.selectNone}">None</button>
                             </span>
                         </div>
+                        <!-- 空集 = 同步全部(通配),显式勾了哪些就只同步哪些。
+                             在 picker 下面加一行解释,避免用户以为"取消勾选某表就排除它"。 -->
                         <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.tables)}">
                             <label class="pick" th:each="tbl,i : ${sourceObjects.tables}">
                                 <input type="checkbox" name="tables" th:value="${tbl}"
                                        th:checked="${config.tables.isEmpty() or config.includesTable(tbl)}">
                                 <span th:text="${tbl}">table</span>
                             </label>
+                            <div class="help" style="margin:6px 2px 0">
+                                <span th:text="#{project.picker.tablesEmptyMeansAll}">No table checked = sync all. Unchecking some narrows the set; unchecking all resets to sync all.</span>
+                            </div>
                         </div>
                         <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.tables)}"
                            th:text="#{project.noTables}">No tables.</p>
@@ -473,34 +501,59 @@
                     </div>
                 </div>
 
-                <div class="card">
+                <!-- 调度卡片：仅轮询/全量比对模式生效。日志 CDC 模式下由长驻消费者持续流式回放，
+                     Quartz 调度、cron、轮询间隔、批次大小全部是死配置，直接藏掉以避免误导。
+                     data-role="polling-only" 由 app.js 在策略卡片切到 BINLOG_CDC / LOGMINER_CDC 时同步隐藏。
+                     "自定义调度"开关关闭时折叠三个输入框——留空使用全局默认值，这是多数用户的预期。 -->
+                <div class="card" data-role="polling-only"
+                     th:classappend="${cdcActive} ? 'is-hidden' : ''"
+                     th:with="customSched=${config.pollIntervalMs != null
+                                or config.cronExpression != null
+                                or config.batchSize != null}">
                     <div class="card-head">
                         <h2><svg class="ico"><use href="#clock"/></svg> <span th:text="#{project.schedule}">Schedule</span></h2>
                     </div>
                     <div class="card-body">
-                        <div class="field">
-                            <label for="pollIntervalMs" th:text="#{option.pollInterval}">Poll interval</label>
-                            <input type="number" class="input" id="pollIntervalMs" name="pollIntervalMs"
-                                   min="200" step="100" th:value="${config.pollIntervalMs}">
-                            <div class="help" th:text="#{option.pollIntervalHelp}">help</div>
-                        </div>
-                        <div class="field">
-                            <label for="cronExpression" th:text="#{option.cronExpression}">Cron</label>
-                            <input type="text" class="input mono" id="cronExpression" name="cronExpression"
-                                   placeholder="0/5 * * * * ?" th:value="${config.cronExpression}">
-                            <div class="help" th:text="#{option.cronExpressionHelp}">help</div>
-                        </div>
-                        <div class="field">
-                            <label for="batchSize" th:text="#{option.batchSize}">Batch size</label>
-                            <input type="number" class="input" id="batchSize" name="batchSize"
-                                   min="1" step="50" th:value="${config.batchSize}">
-                            <div class="help" th:text="#{option.batchSizeHelp}">help</div>
+                        <label class="switch" data-role="custom-schedule-toggle">
+                            <input type="checkbox" name="customSchedule" value="true"
+                                   th:checked="${customSched}" data-role="custom-schedule-input">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{option.customSchedule}">自定义调度</strong>
+                                <span class="help" th:text="#{option.customScheduleHelp}">开启后自定义轮询间隔 / Cron / 批次大小；关闭则使用全局默认值</span>
+                            </span>
+                        </label>
+                        <div data-role="custom-schedule-fields"
+                             th:classappend="${customSched} ? '' : 'is-hidden'" style="margin-top:14px">
+                            <div class="field">
+                                <label for="pollIntervalMs" th:text="#{option.pollInterval}">Poll interval</label>
+                                <input type="number" class="input" id="pollIntervalMs" name="pollIntervalMs"
+                                       min="200" step="100" th:value="${config.pollIntervalMs}">
+                                <div class="help" th:text="#{option.pollIntervalHelp}">help</div>
+                            </div>
+                            <div class="field">
+                                <label for="cronExpression" th:text="#{option.cronExpression}">Cron</label>
+                                <input type="text" class="input mono" id="cronExpression" name="cronExpression"
+                                       placeholder="0/5 * * * * ?" th:value="${config.cronExpression}">
+                                <div class="help" th:text="#{option.cronExpressionHelp}">help</div>
+                            </div>
+                            <div class="field">
+                                <label for="batchSize" th:text="#{option.batchSize}">Batch size</label>
+                                <input type="number" class="input" id="batchSize" name="batchSize"
+                                       min="1" step="50" th:value="${config.batchSize}">
+                                <div class="help" th:text="#{option.batchSizeHelp}">help</div>
+                            </div>
                         </div>
                     </div>
-                    <div class="card-foot" th:if="${isAdmin}">
-                        <button type="submit" class="btn btn-primary" style="width:100%">
-                            <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{common.save}">Save</span>
-                        </button>
+                </div>
+                <!-- CDC 模式下的占位说明：替代上面整张调度卡片，告诉用户为什么这些配置消失了。 -->
+                <div class="card" data-role="cdc-schedule-hint"
+                     th:classappend="${cdcActive} ? '' : 'is-hidden'">
+                    <div class="card-body">
+                        <div class="help" style="margin:0">
+                            <svg class="ico" style="color:var(--brand);vertical-align:-3px;margin-right:4px"><use href="#info-circle"/></svg>
+                            <span th:text="#{project.schedule.cdcHidden}">Streaming CDC owns the schedule; polling config is ignored.</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -529,7 +582,11 @@
                         <th th:text="#{cursor.lastValue}">Last value</th>
                         <th class="num" th:text="#{cursor.rowsTotal}">Rows</th>
                         <th th:text="#{dashboard.lastSync}">Last sync</th>
-                        <th class="num" th:if="${isAdmin}" th:text="#{cursor.set}">Set cursor</th>
+                        <!-- 「设置游标」列：仅轮询/全量比对模式可用。日志 CDC 下游标列是死配置，
+                             同调度卡片一并隐藏（data-role="polling-only" 由 app.js 联动）。 -->
+                        <th class="num" data-role="polling-only"
+                            th:classappend="${(isAdmin and !cdcActive)} ? '' : 'is-hidden'"
+                            th:text="#{cursor.set}">Set cursor</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -576,7 +633,10 @@
                             th:text="${p.lastSyncTime != null}
                                      ? ${#temporals.format(p.lastSyncTime, 'MM-dd HH:mm:ss')}
                                      : #{common.never}">never</td>
-                        <td th:if="${isAdmin}">
+                        <!-- td 本身不 th:if 藏掉（那样 JS 联动就没法恢复），改为加 is-hidden 类；
+                             isAdmin=false 时始终隐藏（访客态）。 -->
+                        <td data-role="polling-only"
+                            th:classappend="${(isAdmin and !cdcActive)} ? '' : 'is-hidden'">
                             <!-- 每行一个小表单，可为单表覆盖自动识别的游标列。
                                  输入框带 datalist 候选，聚焦时从后端拉取该表可用的游标列
                                  （时间 + 整数类型），免去手动敲列名。 -->

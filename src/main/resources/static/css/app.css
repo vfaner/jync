@@ -1212,3 +1212,6 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   html { scroll-behavior: auto; }
 }
+
+/* 通用隐藏工具：策略卡片切换时由 app.js 加/删（日志 CDC 模式下藏掉轮询专属字段） */
+.is-hidden { display: none !important; }

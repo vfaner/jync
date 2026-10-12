@@ -1335,6 +1335,52 @@
         }
       });
     });
+
+    // 策略联动隐藏：日志 CDC 模式下，轮询专属字段（调度卡片、每表游标列）是死配置，
+    // 直接藏掉避免用户改了却不生效。data-role="polling-only" 标记这些字段；
+    // data-role="cdc-schedule-hint" 是 CDC 模式下的占位说明卡，两者镜像切换。
+    // 初始状态由服务端按 data-cdc-active 渲染的 is-hidden 类决定，这里同步点击后即时联动。
+    var syncPollingOnlyVisibility = function () {
+      var picked = document.querySelector('input[name=captureStrategy]:checked');
+      var isCdc = picked && (picked.value === 'BINLOG_CDC' || picked.value === 'LOGMINER_CDC');
+      document.querySelectorAll('[data-role="polling-only"]').forEach(function (el) {
+        el.classList.toggle('is-hidden', !!isCdc);
+      });
+      document.querySelectorAll('[data-role="cdc-schedule-hint"]').forEach(function (el) {
+        el.classList.toggle('is-hidden', !isCdc);
+      });
+    };
+    syncPollingOnlyVisibility();
+    document.addEventListener('change', function (e) {
+      var el = e.target;
+      if (el && el.matches && el.matches('.strategy-card input')) { syncPollingOnlyVisibility(); }
+    });
+    document.addEventListener('click', function (e) {
+      var el = e.target;
+      while (el && el.nodeType === 1) {
+        if (el.className && String(el.className).indexOf('strategy-card') >= 0) {
+          syncPollingOnlyVisibility();
+          break;
+        }
+        el = el.parentNode;
+      }
+    });
+
+    // 自定义调度开关:开启时展开轮询间隔/Cron/批次大小三个输入框,关闭时折叠。
+    // 初始状态由服务端按已有配置(customSched)渲染 is-hidden,这里联动点击即时切换。
+    var syncCustomScheduleVisibility = function () {
+      var toggle = document.querySelector('[data-role="custom-schedule-input"]');
+      var fields = document.querySelector('[data-role="custom-schedule-fields"]');
+      if (!toggle || !fields) { return; }
+      fields.classList.toggle('is-hidden', !toggle.checked);
+    };
+    syncCustomScheduleVisibility();
+    document.addEventListener('change', function (e) {
+      var el = e.target;
+      if (el && el.matches && el.matches('[data-role="custom-schedule-input"]')) {
+        syncCustomScheduleVisibility();
+      }
+    });
   });
 
   /**
