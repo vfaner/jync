@@ -214,6 +214,10 @@ public class CdcConsumerManager {
                 consumer = new LogMinerCdcConsumer(project, lock, ctx, positionStore,
                         baselineService, taskStore, stateWriter, dataSourceManager,
                         stats, properties, logMinerSessionFactory);
+            } else if (strategy == CaptureStrategy.PG_LOGICAL_CDC) {
+                consumer = new PgLogicalCdcConsumer(project, lock, ctx, positionStore,
+                        baselineService, taskStore, stateWriter, dataSourceManager,
+                        stats, properties);
             } else {
                 consumer = new CdcConsumer(project, lock, ctx, clientFactory,
                         positionStore, baselineService, taskStore, stateWriter,

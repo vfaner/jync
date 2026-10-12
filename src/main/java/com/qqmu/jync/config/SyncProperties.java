@@ -165,12 +165,38 @@ public class SyncProperties {
         /** Oracle LogMiner tuning (v1.6.0) — only consulted when a project runs LOGMINER_CDC. */
         private final Logminer logminer = new Logminer();
 
+        /** PostgreSQL logical slot tuning (v1.7.0) — only consulted when a project runs PG_LOGICAL_CDC. */
+        private final Pg pg = new Pg();
+
+        /** SQL Server CDC tuning (v1.7.0) — only consulted when a project runs SQLSERVER_CDC. */
+        private final Mssql mssql = new Mssql();
+
         @Getter
         @Setter
         public static class Logminer {
             /** Rows fetched per V$LOGMNR_CONTENTS batch. */
             private long batchSize = 10_000L;
             /** Idle poll interval when the mining session drained the redo stream. */
+            private long idlePollMs = 1_000L;
+        }
+
+        @Getter
+        @Setter
+        public static class Pg {
+            /** Rows fetched per pg_logical_slot_get_changes batch. */
+            private long batchSize = 1_000L;
+            /** Idle poll interval when the slot drained (nothing pending). */
+            private long idlePollMs = 500L;
+            /** Prefix for the per-project replication slot name; final name is {@code jync_<projectId>}. */
+            private String slotPrefix = "jync_";
+        }
+
+        @Getter
+        @Setter
+        public static class Mssql {
+            /** Rows fetched per cdc.fn_cdc_get_all_changes batch. */
+            private long batchSize = 1_000L;
+            /** Idle poll interval between change-table reads. */
             private long idlePollMs = 1_000L;
         }
     }
