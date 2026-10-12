@@ -29,9 +29,9 @@ class PgTestDecodingParserTest {
         assertThat(line.txEnd).isFalse();
         assertThat(line.change.op).isEqualTo(PgTestDecodingParser.Op.INSERT);
         assertThat(line.change.qualifiedTable).isEqualTo("public.orders");
-        assertThat(line.change.row.get("id")).isEqualTo("1");
+        assertThat(line.change.row.get("id")).isEqualTo(1);
         assertThat(line.change.row.get("status")).isEqualTo("new");
-        assertThat(line.change.row.get("total")).isEqualTo("9.99");
+        assertThat(line.change.row.get("total")).isEqualTo(9.99);
     }
 
     @Test
@@ -41,7 +41,7 @@ class PgTestDecodingParserTest {
                         + " status[text]:'paid' total[numeric]:19.98");
         assertThat(line.change.op).isEqualTo(PgTestDecodingParser.Op.UPDATE);
         assertThat(line.change.row.get("status")).isEqualTo("paid");
-        assertThat(line.change.row.get("total")).isEqualTo("19.98");
+        assertThat(line.change.row.get("total")).isEqualTo(19.98);
     }
 
     @Test
@@ -49,7 +49,7 @@ class PgTestDecodingParserTest {
         PgTestDecodingParser.SlotLine line = parser.parse(
                 "table public.orders: DELETE: id[integer]:42");
         assertThat(line.change.op).isEqualTo(PgTestDecodingParser.Op.DELETE);
-        assertThat(line.change.row.get("id")).isEqualTo("42");
+        assertThat(line.change.row.get("id")).isEqualTo(42);
     }
 
     @Test
@@ -57,7 +57,7 @@ class PgTestDecodingParserTest {
         PgTestDecodingParser.SlotLine line = parser.parse(
                 "table public.t: INSERT: id[integer]:1 note[text]:NULL");
         assertThat(line.change.row.get("note")).isNull();
-        assertThat(line.change.row.get("id")).isEqualTo("1");
+        assertThat(line.change.row.get("id")).isEqualTo(1);
     }
 
     @Test
@@ -65,6 +65,7 @@ class PgTestDecodingParserTest {
         PgTestDecodingParser.SlotLine line = parser.parse(
                 "table public.t: INSERT: id[integer]:1 body[text]:'it''s a test'");
         assertThat(line.change.row.get("body")).isEqualTo("it's a test");
+        assertThat(line.change.row.get("id")).isEqualTo(1);
     }
 
     @Test

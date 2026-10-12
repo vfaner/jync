@@ -182,7 +182,7 @@ public final class PgTestDecodingParser {
             // read type up to ']'
             int typeEnd = body.indexOf(']', nameEnd + 1);
             if (typeEnd < 0) return null;
-            // String type = body.substring(nameEnd + 1, typeEnd);
+            String type = body.substring(nameEnd + 1, typeEnd);
             i = typeEnd + 1;
             // skip whitespace before ':'
             while (i < n && Character.isWhitespace(body.charAt(i))) i++;
@@ -218,9 +218,77 @@ public final class PgTestDecodingParser {
                 while (i < n && !Character.isWhitespace(body.charAt(i))) i++;
                 value = body.substring(start, i);
             }
+            // Coerce unquoted scalar values by their declared jdbc type. Quoted strings are
+            // left as-is (they came from a text/varchar column). The target JDBC driver
+            // otherwise rejects String → bigint/numeric assignments on PG ("column is of
+            // type bigint but expression is of type character varying").
+            if (value instanceof String s) {
+                value = coerceByType(s, type);
+            }
             row.put(name, value);
         }
         return row;
+    }
+
+    /**
+     * Convert an unquoted scalar literal to the Java type matching the JDBC type tag
+     * emitted by test_decoding (e.g. {@code int4}, {@code int8}, {@code numeric}, {@code float8}).
+     * Strings that fail to parse fall back to their raw text — never throw, because a
+     * malformed value must surface as a skipped row one level up, not crash the consumer.
+     */
+    private static Object coerceByType(String raw, String type) {
+        if (type == null || raw.isEmpty()) {
+            return raw;
+        }
+        String t = type.toLowerCase(Locale.ROOT);
+        try {
+            switch (t) {
+                case "int2":
+                case "smallint":
+                case "int4":
+                case "integer":
+                case "oid":
+                    return Integer.valueOf(raw);
+                case "int8":
+                case "bigint":
+                    return Long.valueOf(raw);
+                case "float4":
+                case "real":
+                case "float8":
+                case "double precision":
+                case "numeric":
+                case "decimal":
+                case "money":
+                    return Double.valueOf(raw);
+                case "bool":
+                case "boolean":
+                    // test_decoding prints bool as 't'/'f' or 'true'/'false'
+                    return raw.equals("t") || raw.equalsIgnoreCase("true");
+                case "timestamp":
+                case "timestamptz":
+                case "timestamp without time zone":
+                case "timestamp with time zone":
+                case "abstime":
+                    // Format: 'YYYY-MM-DD HH:MM:SS.fffffffff' (microsecond precision).
+                    // The PG JDBC driver does not coerce String → timestamp on setObject,
+                    // so we hand it a real java.sql.Timestamp.
+                    return java.sql.Timestamp.valueOf(raw);
+                case "date":
+                    return java.sql.Date.valueOf(raw);
+                case "time":
+                case "timetz":
+                case "time without time zone":
+                case "time with time zone":
+                    return java.sql.Time.valueOf(raw);
+                default:
+                    // text, varchar, bytea, uuid, json, jsonb, unknown — keep as String.
+                    return raw;
+            }
+        } catch (Exception e) {
+            // NumberFormatException / IllegalArgumentException on timestamp parse — fall back
+            // to the raw string rather than crashing the consumer.
+            return raw;
+        }
     }
 
     /** Helper for tests: split a multi-line slot batch into a list of lines. */
