@@ -59,6 +59,7 @@ class CdcOperationsServiceTest {
     @Mock private DatabaseConfigRepository databaseConfigRepository;
     @Mock private DataSourceManager dataSourceManager;
     @Mock private BinlogCdcProbe probe;
+    @Mock private LogMinerCdcProbe logMinerProbe;
     @Mock private BinlogClientFactory clientFactory;
     @Mock private CdcConsumerManager cdcManager;
     @Mock private CdcPositionStore positionStore;
@@ -73,7 +74,7 @@ class CdcOperationsServiceTest {
     @BeforeEach
     void setUp() {
         service = new CdcOperationsService(projectRepository, databaseConfigRepository,
-                dataSourceManager, probe, clientFactory, cdcManager, positionStore,
+                dataSourceManager, probe, logMinerProbe, clientFactory, cdcManager, positionStore,
                 stateWriter, taskStore, auditService, changeLogRepository, lockService);
     }
 
@@ -147,7 +148,7 @@ class CdcOperationsServiceTest {
 
         assertThatThrownBy(() -> service.probeProject(1L))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("cdc.probe.not.mysql");
+                .hasMessage("cdc.probe.unsupported");
         verify(dataSourceManager, never()).getConnection(any());
     }
 

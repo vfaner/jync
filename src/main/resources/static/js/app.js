@@ -1322,13 +1322,14 @@
     // B8：切到日志 CDC 前的确认框。文案（cdc.switch.confirm）明示两个后果——
     // ①目标库全量重建、②源库 DELETE 从此会同步删除目标数据（轮询看不到
     // DELETE）。data-original-strategy 是页面加载时的选中值，只有「值变了
-    // 且新值是 BINLOG_CDC」才拦截；confirm 返回 false 阻止提交。
+    // 且新值是任一日志 CDC（Binlog 或 LogMiner）」才拦截；confirm 返回 false 阻止提交。
     document.querySelectorAll('form[data-original-strategy]').forEach(function (form) {
       form.addEventListener('submit', function (e) {
         var original = form.getAttribute('data-original-strategy');
         var picked = form.querySelector('input[name=captureStrategy]:checked');
         if (!picked) { return; }
-        if (picked.value !== original && picked.value === 'BINLOG_CDC'
+        var isLogCdc = (picked.value === 'BINLOG_CDC' || picked.value === 'LOGMINER_CDC');
+        if (picked.value !== original && isLogCdc
             && !window.confirm(t('cdc.switch.confirm'))) {
           e.preventDefault();
         }

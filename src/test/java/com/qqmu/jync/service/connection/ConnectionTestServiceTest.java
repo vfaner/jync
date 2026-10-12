@@ -36,7 +36,8 @@ class ConnectionTestServiceTest {
     private java.sql.DatabaseMetaData metaData;
 
     private ConnectionTestService service() {
-        return new ConnectionTestService(dataSourceManager, new BinlogCdcProbe(), new SyncProperties());
+        return new ConnectionTestService(dataSourceManager, new BinlogCdcProbe(),
+                new com.qqmu.jync.service.cdc.LogMinerCdcProbe(), new SyncProperties());
     }
 
     private DatabaseConfig config(DatabaseType type, String jarPath) {

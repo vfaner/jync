@@ -318,6 +318,10 @@ public class ProjectService {
                     && (source == null || source.getType() != DatabaseType.MYSQL)) {
                 throw new IllegalArgumentException("error.project.cdc.not.mysql");
             }
+            if (requested == CaptureStrategy.LOGMINER_CDC
+                    && (source == null || source.getType() != DatabaseType.ORACLE)) {
+                throw new IllegalArgumentException("error.project.cdc.not.oracle");
+            }
             config.setCaptureStrategy(requested);
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
@@ -371,7 +375,9 @@ public class ProjectService {
      */
     private void applyStrategySwitch(Project project, CaptureStrategy to) {
         Long projectId = project.getId();
-        if (to == CaptureStrategy.BINLOG_CDC) {
+        if (to.isLogCdc()) {
+            // BINLOG_CDC 与 LOGMINER_CDC 的切换序列完全一致:删 Quartz、清 cursor、
+            // 删位点(下一个消费者无论哪种都从新锚点重跑基线)、摘 ERROR 帽、起消费者。
             scheduler.unschedule(projectId);
             stateWriter.clearCursor(projectId);
             positionStore.delete(projectId);
@@ -413,7 +419,7 @@ public class ProjectService {
         Project saved = projectRepository.save(project);
         taskStore.ensureTask(saved);
         afterCommit(projectId, "start", () -> {
-            if (cdcManager.strategyOf(saved) == CaptureStrategy.BINLOG_CDC) {
+            if (cdcManager.strategyOf(saved).isLogCdc()) {
                 // CDC:启动长驻消费者(抢租约→基线→续流),不进 Quartz、不 triggerNow。
                 cdcManager.ensureStarted(saved);
                 return;
@@ -432,7 +438,7 @@ public class ProjectService {
         project.setEnabled(false);
         projectRepository.save(project);
         afterCommit(projectId, "stop", () -> {
-            if (cdcManager.strategyOf(project) == CaptureStrategy.BINLOG_CDC) {
+            if (cdcManager.strategyOf(project).isLogCdc()) {
                 // CDC:停消费者并同步 join(返回后旧流绝不再写);状态归 CDC 生命周期管,
                 // 不走 unschedule 的 markStopped。
                 cdcManager.ensureStopped(projectId);
@@ -446,7 +452,7 @@ public class ProjectService {
     /** Runs one cycle on demand, contending for the same lock the scheduler uses. */
     public SyncTaskRunner.Outcome syncNow(Long projectId) {
         Project project = require(projectId);
-        if (cdcManager.strategyOf(project) == CaptureStrategy.BINLOG_CDC) {
+        if (cdcManager.strategyOf(project).isLogCdc()) {
             // 「立即同步」对 CDC 无意义:流一直在跑。正确的重放入口是「重建基线」(T17)。
             // 裸 i18n 键:ApiExceptionHandler 原样返回,浏览器端 JyncMessages 本地化。
             throw new IllegalStateException("error.project.cdc.use.rebaseline");

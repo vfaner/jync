@@ -154,6 +154,7 @@
                   livePos=${stats != null and stats.positionFile != null},
                   posFile=${livePos ? stats.positionFile : (cdcPosition != null ? cdcPosition.binlogFile : null)},
                   posPos=${livePos ? stats.positionPos : (cdcPosition != null ? cdcPosition.binlogPos : null)},
+                  scn=${stats != null and stats.positionScn != null ? stats.positionScn : (cdcPosition != null ? cdcPosition.scn : null)},
                   gtid=${stats != null and stats.gtidSet != null ? stats.gtidSet : (cdcPosition != null ? cdcPosition.gtidSet : null)},
                   gtidShort=${gtid != null and #strings.length(gtid) > 40 ? #strings.substring(gtid, 0, 40) + '…' : gtid},
                   lastError=${stats != null ? stats.lastError : null},
@@ -174,7 +175,9 @@
                 <dd>
                     <span class="chip mono" th:if="${posFile != null}"
                           th:text="${posFile} + ':' + ${posPos}">file:pos</span>
-                    <span th:if="${posFile == null}">—</span>
+                    <span class="chip mono" th:if="${posFile == null and scn != null}"
+                          th:text="${'SCN ' + scn}">SCN 123</span>
+                    <span th:if="${posFile == null and scn == null}">—</span>
                     <div class="small muted mono" th:if="${gtidShort != null}"
                          th:text="'GTID ' + ${gtidShort}">gtid</div>
                     <!--/* 位点年龄:持久化位点的落库时间,不持有消费者的节点也能看 */-->
@@ -249,13 +252,33 @@
                                th:checked="${sel == 'BINLOG_CDC'}">
                         <span class="strategy-name">
                             <span th:text="#{project.strategy.cdc.name}">Binlog CDC</span>
-                            <em class="badge-recommend" th:if="${cdcProbePassed}"
+                            <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'BINLOG_CDC'}"
                                 th:text="#{project.strategy.cdc.recommended}">recommended</em>
                         </span>
                         <span class="strategy-desc" th:text="#{project.strategy.cdc.desc}">desc</span>
                         <!-- 探测未通过：逐项列出缺失前提（cdc.check.* 键来自 B2），并给出
                              连接测试页入口。探测抛异常时 cdcProbe 为 null，整块不渲染。 -->
-                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed}">
+                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'BINLOG_CDC'}">
+                            <span th:text="#{project.strategy.cdc.missing}">missing</span>
+                            <ul>
+                                <li th:each="chk : ${cdcMissingChecks}">✗ <span
+                                        th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
+                                        th:text="${chk.detail}">detail</span></li>
+                            </ul>
+                            <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
+                        </span>
+                    </label>
+                    <label class="strategy-card" th:if="${isOracleSource}"
+                           th:classappend="${sel == 'LOGMINER_CDC'} ? 'picked'">
+                        <input type="radio" name="captureStrategy" value="LOGMINER_CDC"
+                               th:checked="${sel == 'LOGMINER_CDC'}">
+                        <span class="strategy-name">
+                            <span th:text="#{project.strategy.logminer.name}">LogMiner CDC</span>
+                            <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'LOGMINER_CDC'}"
+                                th:text="#{project.strategy.cdc.recommended}">recommended</em>
+                        </span>
+                        <span class="strategy-desc" th:text="#{project.strategy.logminer.desc}">desc</span>
+                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'LOGMINER_CDC'}">
                             <span th:text="#{project.strategy.cdc.missing}">missing</span>
                             <ul>
                                 <li th:each="chk : ${cdcMissingChecks}">✗ <span

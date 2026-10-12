@@ -169,23 +169,31 @@ public class ProjectController {
         model.addAttribute("scheduled", projectService.isScheduled(id));
 
         // --- capture-strategy cards (C1) ---------------------------------------------------
-        // The CDC card exists only for a strictly-MySQL source; every other type does not
-        // even render it (acceptance C①).
+        // The CDC card exists only for a strictly-MySQL or Oracle source; every other type
+        // does not even render it (acceptance C①).
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigService.findById(project.getSourceDbId()).orElse(null);
         boolean isMysqlSource = source != null && source.getType() == DatabaseType.MYSQL;
+        boolean isOracleSource = source != null && source.getType() == DatabaseType.ORACLE;
         model.addAttribute("isMysqlSource", isMysqlSource);
+        model.addAttribute("isOracleSource", isOracleSource);
 
         CaptureStrategy current = config.getCaptureStrategyOrDefault();
         CdcProbeResult cdcProbe = null;
         boolean cdcRecommended = false;
-        if (isMysqlSource && current == CaptureStrategy.POLLING && progressList.isEmpty()) {
-            // A brand-new MySQL project that never synced: probe live and preselect the
-            // CDC card when it passes. A failing probe must never block rendering — same
-            // rule as B2 (a failed probe does not block saving).
+        CaptureStrategy recommendedStrategy = null;
+        if ((isMysqlSource || isOracleSource)
+                && current == CaptureStrategy.POLLING && progressList.isEmpty()) {
+            // A brand-new MySQL/Oracle project that never synced: probe live and preselect
+            // the CDC card when it passes. A failing probe must never block rendering —
+            // same rule as B2 (a failed probe does not block saving).
             try {
                 cdcProbe = cdcOperationsService.probeProject(id);
                 cdcRecommended = cdcProbe != null && cdcProbe.passed();
+                if (cdcRecommended) {
+                    recommendedStrategy = isMysqlSource
+                            ? CaptureStrategy.BINLOG_CDC : CaptureStrategy.LOGMINER_CDC;
+                }
             } catch (RuntimeException e) {
                 log.debug("CDC probe failed for project {}; rendering without recommendation: {}",
                         id, e.toString());
@@ -200,7 +208,7 @@ public class ProjectController {
         // data-original-strategy, which the B8 confirm dialog compares against. The
         // recommendation wins over the stored value, so two cards can never both check.
         model.addAttribute("selectedStrategy",
-                cdcRecommended ? CaptureStrategy.BINLOG_CDC.name() : current.name());
+                recommendedStrategy != null ? recommendedStrategy.name() : current.name());
 
         // --- CDC status panel (C3) ------------------------------------------------------
         // Keyed off the STORED strategy, not selectedStrategy: a merely-recommended CDC
@@ -210,7 +218,7 @@ public class ProjectController {
         // the not-holder state plus the persisted position, which is node-independent.
         // Liveness is NEVER read from sync_task.status: a clean stop leaves it RUNNING
         // by design (T13), so holder-ship comes from statsFor and the snapshot alone.
-        boolean cdcActive = current == CaptureStrategy.BINLOG_CDC;
+        boolean cdcActive = current.isLogCdc();
         model.addAttribute("cdcActive", cdcActive);
         CdcPosition cdcPosition = null;
         Map<String, Object> cdcStats = null;
@@ -268,7 +276,7 @@ public class ProjectController {
             // self-contained so the browser can keep polling after adopting fresh markup.
             model.addAttribute("project", project);
             cdcActive = projectService.loadConfig(project)
-                    .getCaptureStrategyOrDefault() == CaptureStrategy.BINLOG_CDC;
+                    .getCaptureStrategyOrDefault().isLogCdc();
             if (cdcActive) {
                 cdcPosition = cdcPositionStore.find(id).orElse(null);
                 CdcRuntimeStats stats = cdcConsumerManager.statsFor(id);

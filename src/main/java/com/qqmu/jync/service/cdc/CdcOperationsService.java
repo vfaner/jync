@@ -57,6 +57,7 @@ public class CdcOperationsService {
     private final DatabaseConfigRepository databaseConfigRepository;
     private final DataSourceManager dataSourceManager;
     private final BinlogCdcProbe probe;
+    private final LogMinerCdcProbe logMinerProbe;
     private final BinlogClientFactory clientFactory;
     private final CdcConsumerManager cdcManager;
     private final CdcPositionStore positionStore;
@@ -70,6 +71,7 @@ public class CdcOperationsService {
                                 DatabaseConfigRepository databaseConfigRepository,
                                 DataSourceManager dataSourceManager,
                                 BinlogCdcProbe probe,
+                                LogMinerCdcProbe logMinerProbe,
                                 BinlogClientFactory clientFactory,
                                 CdcConsumerManager cdcManager,
                                 CdcPositionStore positionStore,
@@ -82,6 +84,7 @@ public class CdcOperationsService {
         this.databaseConfigRepository = databaseConfigRepository;
         this.dataSourceManager = dataSourceManager;
         this.probe = probe;
+        this.logMinerProbe = logMinerProbe;
         this.clientFactory = clientFactory;
         this.cdcManager = cdcManager;
         this.positionStore = positionStore;
@@ -97,8 +100,11 @@ public class CdcOperationsService {
      * the same server id the consumer would later use ({@link BinlogClientFactory#serverIdFor}),
      * so a collision shows up here rather than at connect time.
      *
-     * @throws IllegalArgumentException with the bare key {@code cdc.probe.not.mysql} when
-     *         the project or its source is missing or not strictly MySQL (Task 17's API
+     * <p>Dispatches by source type: MySQL → binlog probe (existing, unchanged); Oracle →
+     * LogMiner probe (v1.6.0); anything else → 400 {@code cdc.probe.unsupported}.
+     *
+     * @throws IllegalArgumentException with the bare key {@code cdc.probe.unsupported} when
+     *         the project's source is missing or neither MySQL nor Oracle (the API
      *         controller turns that into a 400)
      */
     public CdcProbeResult probeProject(Long projectId) {
@@ -106,19 +112,26 @@ public class CdcOperationsService {
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
-        // Strict equality on purpose: MariaDB/OceanBase speak a different binlog dialect.
-        if (source == null || source.getType() != DatabaseType.MYSQL) {
-            throw new IllegalArgumentException("cdc.probe.not.mysql");
+        if (source == null || source.getType() == null
+                || (source.getType() != DatabaseType.MYSQL && source.getType() != DatabaseType.ORACLE)) {
+            throw new IllegalArgumentException("cdc.probe.unsupported");
         }
-        long plannedServerId = clientFactory.serverIdFor(projectId);
         try (Connection conn = dataSourceManager.getConnection(source)) {
-            return probe.probe(conn, plannedServerId);
+            if (source.getType() == DatabaseType.MYSQL) {
+                long plannedServerId = clientFactory.serverIdFor(projectId);
+                return probe.probe(conn, plannedServerId);
+            }
+            // Connection-test-time probe has no project context — table-level checks
+            // (supplemental logging per table, LONG columns) are skipped when empty.
+            return logMinerProbe.probe(conn, List.of());
         } catch (SQLException | RuntimeException e) {
             // Never an exception to the caller: degrade to a failed check carrying the
             // driver's message, mirroring BinlogCdcProbe.checkVersion's own SQLException path.
             log.debug("CDC probe could not reach the source of project {}: {}",
                     projectId, e.toString());
-            return CdcProbeResult.of(List.of(CdcProbeResult.Check.of(CdcProbeResult.VERSION,
+            String anchor = source.getType() == DatabaseType.ORACLE
+                    ? CdcProbeResult.ORACLE_SOURCE : CdcProbeResult.VERSION;
+            return CdcProbeResult.of(List.of(CdcProbeResult.Check.of(anchor,
                     false, String.valueOf(e.getMessage()))));
         }
     }
@@ -177,7 +190,7 @@ public class CdcOperationsService {
     public void rebaseline(Long projectId) {
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
-        if (parseStrategy(project.getSyncConfig()) != CaptureStrategy.BINLOG_CDC) {
+        if (!parseStrategy(project.getSyncConfig()).isLogCdc()) {
             throw new IllegalArgumentException("error.project.cdc.not.cdc");
         }
         // Holder gate (see javadoc). Read-only on purpose: acquire-then-release would race

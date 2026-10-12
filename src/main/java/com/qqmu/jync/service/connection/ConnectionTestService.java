@@ -13,6 +13,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.cdc.BinlogCdcProbe;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
+import com.qqmu.jync.service.cdc.LogMinerCdcProbe;
 import com.zaxxer.hikari.HikariDataSource;
 
 import lombok.Getter;
@@ -25,12 +26,15 @@ public class ConnectionTestService {
 
     private final DataSourceManager dataSourceManager;
     private final BinlogCdcProbe cdcProbe;
+    private final LogMinerCdcProbe logMinerProbe;
     private final SyncProperties properties;
 
     public ConnectionTestService(DataSourceManager dataSourceManager, BinlogCdcProbe cdcProbe,
+                                 LogMinerCdcProbe logMinerProbe,
                                  SyncProperties properties) {
         this.dataSourceManager = dataSourceManager;
         this.cdcProbe = cdcProbe;
+        this.logMinerProbe = logMinerProbe;
         this.properties = properties;
     }
 
@@ -86,6 +90,13 @@ public class ConnectionTestService {
             } catch (RuntimeException e) {
                 // 探测只是附加信息:自身炸掉降级为无检查项,绝不阻断连接测试(B2)
                 log.warn("CDC probe failed during connection test; reporting none", e);
+            }
+        } else if (config.getType() == DatabaseType.ORACLE) {
+            try {
+                // 连接页无项目/表上下文 → ownerTables 空集(跳过表级补充日志检查)
+                cdcChecks = logMinerProbe.probe(conn, List.of()).getChecks();
+            } catch (RuntimeException e) {
+                log.warn("LogMiner probe failed during connection test; reporting none", e);
             }
         }
         TestResult result = TestResult.success(product, driver, conn.getCatalog(),

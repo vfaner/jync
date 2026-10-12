@@ -73,11 +73,11 @@ class CdcApiControllerTest {
     @Test
     void probeNonMysqlBecomes400() throws Exception {
         when(operations.probeProject(1L))
-                .thenThrow(new IllegalArgumentException("cdc.probe.not.mysql"));
+                .thenThrow(new IllegalArgumentException("cdc.probe.unsupported"));
 
         mvc.perform(get("/api/projects/1/cdc-probe"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("cdc.probe.not.mysql"));
+                .andExpect(jsonPath("$.error").value("cdc.probe.unsupported"));
     }
 
     @Test
