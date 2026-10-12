@@ -91,6 +91,15 @@ class CdcBaselineServiceTest {
         return SyncContext.builder().project(project).sourceConfig(source()).build();
     }
 
+    private SyncContext logMinerCtx(long projectId) {
+        com.qqmu.jync.model.Project project = new com.qqmu.jync.model.Project();
+        project.setId(projectId);
+        project.setName("lm-test");
+        com.qqmu.jync.dto.SyncConfig cfg = new com.qqmu.jync.dto.SyncConfig();
+        cfg.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.LOGMINER_CDC);
+        return SyncContext.builder().project(project).sourceConfig(source()).config(cfg).build();
+    }
+
     @Test
     void readsPositionFromModernStatement() throws SQLException {
         // stubSource 先于 when(...) 求值:它自己也在打桩,塞进 thenReturn 实参位会撞上
@@ -205,5 +214,44 @@ class CdcBaselineServiceTest {
         } finally {
             Thread.interrupted();             // 清掉,别影响本线程上的后续测试
         }
+    }
+
+    // —— v1.6.0 LogMiner SCN 分支 ——
+
+    @Test
+    void logMinerBaselineRecordsScnInsteadOfBinlogPosition() throws SQLException {
+        // Oracle 源:CURRENT_SCN 是基线锚点;binlog SHOW 语句在 Oracle 上不存在。
+        Connection oracle = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(oracle.createStatement()).thenReturn(st);
+        ResultSet scnRs = mock(ResultSet.class);
+        when(st.executeQuery("SELECT CURRENT_SCN FROM V$DATABASE")).thenReturn(scnRs);
+        when(scnRs.next()).thenReturn(true);
+        when(scnRs.getLong(1)).thenReturn(77777L);
+        when(dataSourceManager.getConnection(any())).thenReturn(oracle);
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(new SyncResult());
+
+        service.runBaseline(logMinerCtx(12L), () -> true);
+
+        // 关键差异:recordBaselineStartScn(而不是 recordBaselineStart),binlog serverId 不读。
+        verify(positionStore).recordBaselineStartScn(12L, 77777L);
+        verify(positionStore, never()).recordBaselineStart(anyLong(), any(),
+                org.mockito.ArgumentMatchers.anyLong(), any(), anyLong());
+        verify(stateWriter).resetProject(12L);
+        verify(positionStore).markBaselineDone(12L);
+    }
+
+    @Test
+    void readCurrentScnSurfacesSqlExceptionsAsIllegalState() throws SQLException {
+        Connection oracle = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(oracle.createStatement()).thenReturn(st);
+        when(st.executeQuery("SELECT CURRENT_SCN FROM V$DATABASE"))
+                .thenThrow(new SQLException("ORA-00942: table or view does not exist"));
+        when(dataSourceManager.getConnection(any())).thenReturn(oracle);
+
+        assertThatThrownBy(() -> service.readCurrentScn(source()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Oracle SCN");
     }
 }

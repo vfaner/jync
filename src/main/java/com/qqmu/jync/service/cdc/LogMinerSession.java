@@ -36,7 +36,7 @@ import lombok.extern.slf4j.Slf4j;
  * predicate (SRC_CON_ID = the PDB's CON_ID); on a non-CDB every row is in scope.
  */
 @Slf4j
-public final class LogMinerSession implements AutoCloseable {
+public class LogMinerSession implements AutoCloseable {
 
     static final String Q_CURRENT_SCN = "SELECT CURRENT_SCN FROM V$DATABASE";
     static final String Q_CURRENT_REDO_MEMBERS =
@@ -46,7 +46,7 @@ public final class LogMinerSession implements AutoCloseable {
             "SELECT NAME FROM V$ARCHIVED_LOG WHERE DEST_ID = 1 AND NEXT_CHANGE# > ?"
                     + " AND NAME IS NOT NULL ORDER BY FIRST_CHANGE#";
 
-    private static final String Q_CONTENTS =
+    static final String Q_CONTENTS =
             "SELECT RS_ID, CSN, XID, OPERATION, SEG_OWNER, TABLE_NAME, SQL_REDO, TIMESTAMP"
                     + " FROM V$LOGMNR_CONTENTS"
                     + " WHERE CSCN > ? AND OPERATION IN ('INSERT','UPDATE','DELETE','DDL')"

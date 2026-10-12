@@ -1,0 +1,207 @@
+package com.qqmu.jync.service.cdc;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
+import org.mockito.Mockito;
+
+/**
+ * LogMinerSession open-sequence and RS_ID continuation-merge tests. All JDBC is mocked —
+ * the real ARCHIVELOG pipeline is covered by Task 7 ITs.
+ */
+class LogMinerSessionTest {
+
+    /**
+     * Wire a mock connection that answers: CURRENT_SCN, archived-log list (bind?), current
+     * redo members, and the V$LOGMNR_CONTENTS cursor. Returns the cursor so tests can drive
+     * nextBatch.
+     */
+    private static final class Fixture {
+        final Connection conn = mock(Connection.class);
+        final Statement st = mock(Statement.class);
+        final PreparedStatement cursor = mock(PreparedStatement.class);
+        final ResultSet rows = mock(ResultSet.class);
+        final ResultSet scnRs = mock(ResultSet.class);
+        final ResultSet archiveRs = mock(ResultSet.class);
+        final ResultSet redoRs = mock(ResultSet.class);
+
+        Fixture(long currentScn, String[] archivedLogs, String[] redoMembers) throws SQLException {
+            when(conn.createStatement()).thenReturn(st);
+            when(st.executeQuery(LogMinerSession.Q_CURRENT_SCN)).thenReturn(scnRs);
+            when(scnRs.next()).thenReturn(true);
+            when(scnRs.getLong(1)).thenReturn(currentScn);
+
+            // Archived logs query — the SQL has the startScn concatenated in.
+            when(st.executeQuery(Mockito.contains("V$ARCHIVED_LOG"))).thenReturn(archiveRs);
+            if (archivedLogs.length == 0) {
+                when(archiveRs.next()).thenReturn(false);
+            } else {
+                // chained next(): true once per row, then false
+                Boolean[] answers = new Boolean[archivedLogs.length + 1];
+                for (int i = 0; i < archivedLogs.length; i++) {
+                    answers[i] = Boolean.TRUE;
+                }
+                answers[archivedLogs.length] = Boolean.FALSE;
+                when(archiveRs.next()).thenReturn(answers[0],
+                        java.util.Arrays.copyOfRange(answers, 1, answers.length));
+                when(archiveRs.getString(1)).thenReturn(archivedLogs[0],
+                        java.util.Arrays.copyOfRange(archivedLogs, 1, archivedLogs.length));
+            }
+
+            when(st.executeQuery(LogMinerSession.Q_CURRENT_REDO_MEMBERS)).thenReturn(redoRs);
+            if (redoMembers.length == 0) {
+                when(redoRs.next()).thenReturn(false);
+            } else {
+                Boolean[] answers = new Boolean[redoMembers.length + 1];
+                for (int i = 0; i < redoMembers.length; i++) {
+                    answers[i] = Boolean.TRUE;
+                }
+                answers[redoMembers.length] = Boolean.FALSE;
+                when(redoRs.next()).thenReturn(answers[0],
+                        java.util.Arrays.copyOfRange(answers, 1, answers.length));
+                when(redoRs.getString(1)).thenReturn(redoMembers[0],
+                        java.util.Arrays.copyOfRange(redoMembers, 1, redoMembers.length));
+            }
+
+            when(conn.prepareStatement(LogMinerSession.Q_CONTENTS)).thenReturn(cursor);
+            when(cursor.executeQuery()).thenReturn(rows);
+        }
+    }
+
+    @Test
+    void openSequenceReadsScnAddsLogsAndStartsLogmnr() throws SQLException {
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/oracle/arch/1_1.log", "/oracle/arch/1_2.log"},
+                new String[]{"/oracle/redo/current01.log"});
+
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+
+        assertThat(session.startScn()).isEqualTo(500L);
+        assertThat(session.highWaterScn()).isEqualTo(1000L);
+
+        // ADD_LOGFILE called once per logfile (3 total: 2 archives + 1 online), NEW on the first.
+        verify(fx.st, times(3)).execute(Mockito.contains("DBMS_LOGMNR.ADD_LOGFILE"));
+        verify(fx.st).execute(Mockito.contains("NEW"));
+        verify(fx.st, times(2)).execute(Mockito.contains("ADDFILE"));
+        // START_LOGMNR carries startScn, currentScn and the two option flags.
+        verify(fx.st).execute(Mockito.argThat((String sql) ->
+                sql.contains("START_LOGMNR") && sql.contains("startScn => 500")
+                        && sql.contains("endScn => 1000")
+                        && sql.contains("DICT_FROM_ONLINE_CATALOG")
+                        && sql.contains("COMMITTED_DATA_ONLY")));
+        // Cursor bound with CSCN > startScn and fetchSize set.
+        verify(fx.cursor).setLong(1, 500L);
+        verify(fx.cursor).setFetchSize(1000);
+
+        session.close();
+        verify(fx.st).execute(Mockito.contains("END_LOGMNR"));
+    }
+
+    @Test
+    void openWithoutAnyLogfileFails() throws SQLException {
+        // No archived logs AND no current online members → mining has nothing to read.
+        Fixture fx = new Fixture(1000L, new String[0], new String[0]);
+        try {
+            LogMinerSession.openDefault(fx.conn, 500L, 1000);
+            org.assertj.core.api.Assertions.fail("expected SQLException for empty log list");
+        } catch (SQLException e) {
+            assertThat(e.getMessage()).contains("ARCHIVELOG");
+        }
+    }
+
+    @Test
+    void nextBatchEmitsCompleteRows() throws SQLException {
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"});
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+
+        // Two complete rows in the cursor: one INSERT, one UPDATE. Both end with ';'.
+        when(fx.rows.next()).thenReturn(true, true, false);
+        when(fx.rows.getString(1)).thenReturn("100", "101");
+        when(fx.rows.getLong(2)).thenReturn(501L, 502L);
+        when(fx.rows.getString(3)).thenReturn("tx1", "tx2");
+        when(fx.rows.getString(4)).thenReturn("INSERT", "UPDATE");
+        when(fx.rows.getString(5)).thenReturn("SRC", "SRC");
+        when(fx.rows.getString(6)).thenReturn("T", "T");
+        when(fx.rows.getString(7))
+                .thenReturn("insert into \"SRC\".\"T\"(\"ID\") values ('1');",
+                        "update \"SRC\".\"T\" set \"V\" = 'x' where \"ID\" = '1';");
+        when(fx.rows.getTimestamp(8)).thenReturn(new Timestamp(1_000L), new Timestamp(2_000L));
+
+        List<LogMinerSession.Row> batch = session.nextBatch();
+        assertThat(batch).hasSize(2);
+        assertThat(batch.get(0).operation).isEqualTo("INSERT");
+        assertThat(batch.get(0).csn).isEqualTo(501L);
+        assertThat(batch.get(1).operation).isEqualTo("UPDATE");
+        assertThat(batch.get(1).csn).isEqualTo(502L);
+        session.close();
+    }
+
+    @Test
+    void nextBatchMergesContinuationRowsSharingRsId() throws SQLException {
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"});
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+
+        // Same RS_ID on three rows; only the third ends with ';'.
+        when(fx.rows.next()).thenReturn(true, true, true, true, false);
+        // Row A (continuation 1)
+        when(fx.rows.getString(1)).thenReturn("77", "77", "77", "78");
+        when(fx.rows.getLong(2)).thenReturn(510L, 510L, 510L, 511L);
+        when(fx.rows.getString(3)).thenReturn("txA", "txA", "txA", "txB");
+        when(fx.rows.getString(4)).thenReturn("INSERT", "INSERT", "INSERT", "DELETE");
+        when(fx.rows.getString(5)).thenReturn("SRC", "SRC", "SRC", "SRC");
+        when(fx.rows.getString(6)).thenReturn("BIG", "BIG", "BIG", "T");
+        when(fx.rows.getString(7))
+                .thenReturn("insert into \"SRC\".\"BIG\"(\"ID\",\"V\")",
+                        " values ('1', 'a very long value",
+                        " that continues here');",
+                        "delete from \"SRC\".\"T\" where \"ID\" = '9';");
+        when(fx.rows.getTimestamp(8)).thenReturn(new Timestamp(0L));
+
+        List<LogMinerSession.Row> batch = session.nextBatch();
+        assertThat(batch).hasSize(2);
+        // First row: all three fragments concatenated.
+        LogMinerSession.Row big = batch.get(0);
+        assertThat(big.rsId).isEqualTo("77");
+        assertThat(big.sqlRedo).contains("insert into");
+        assertThat(big.sqlRedo).contains("values");
+        assertThat(big.sqlRedo).contains("continues here");
+        assertThat(big.sqlRedo.trim().endsWith(";")).isTrue();
+        // Second row arrives immediately (RS_ID 78 already terminated).
+        assertThat(batch.get(1).rsId).isEqualTo("78");
+        assertThat(batch.get(1).operation).isEqualTo("DELETE");
+        session.close();
+    }
+
+    @Test
+    void closeIsQuietWhenEndLogmnrFails() throws SQLException {
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"});
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+        when(fx.st.execute(Mockito.contains("END_LOGMNR")))
+                .thenThrow(new SQLException("session already ended"));
+
+        // Must not throw.
+        session.close();
+        session.close();   // idempotent
+
+        verify(fx.st, times(1)).execute(Mockito.contains("END_LOGMNR"));
+    }
+}
