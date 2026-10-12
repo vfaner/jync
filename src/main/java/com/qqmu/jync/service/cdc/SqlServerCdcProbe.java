@@ -134,10 +134,11 @@ public class SqlServerCdcProbe {
         }
     }
 
-    // —— ⑤ per-table capture instance ——
+    // —— ⑤ per-table capture instance + actual read permission ——
 
     private CdcProbeResult.Check checkCaptureInstances(Connection conn, List<String[]> schemaTables) {
         List<String> missing = new ArrayList<>();
+        List<String> ciNames = new ArrayList<>();
         for (String[] st : schemaTables) {
             String schema = st[0];
             String table = st[1];
@@ -146,24 +147,46 @@ public class SqlServerCdcProbe {
                             + " WHERE source_schema_name = ? AND source_table_name = ?")) {
                 ps.setString(1, schema);
                 ps.setString(2, table);
-                ResultSet rs = ps.executeQuery();
-                if (!rs.next()) {
-                    missing.add(schema + "." + table);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        missing.add(schema + "." + table);
+                    } else {
+                        ciNames.add(rs.getString(1));
+                    }
                 }
             } catch (SQLException e) {
                 return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
                         msg(e));
             }
         }
-        if (missing.isEmpty()) {
-            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, true,
-                    schemaTables.size() + " table(s) with CDC capture instance");
+        if (!missing.isEmpty()) {
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
+                    "missing CDC capture instance on: " + String.join(", ", missing)
+                            + " — enable with: EXEC sys.sp_cdc_enable_table"
+                            + " @source_schema=N'<schema>', @source_name=N'<table>',"
+                            + " @role_name=N'cdc_Admin', @capture_instance=N'<schema>_<table>';");
         }
-        return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
-                "missing CDC capture instance on: " + String.join(", ", missing)
-                        + " — enable with: EXEC sys.sp_cdc_enable_table"
-                        + " @source_schema=N'<schema>', @source_name=N'<table>',"
-                        + " @role_name=N'cdc_Admin', @capture_instance=N'<schema>_<table>';");
+        // Role membership (check ④) only tells us the user is in cdc_Admin/cdc_reader.
+        // It does NOT prove the user can actually EXECUTE fn_cdc_get_all_changes_<ci> —
+        // that depends on @role_name chosen at enable_table time. Probe with a real
+        // top-1 call; if even this 0-row call throws, runtime will fail on the first
+        // drain, so fail early.
+        for (String ci : ciNames) {
+            String sql = "SELECT TOP(1) * FROM cdc.fn_cdc_get_all_changes_" + ci
+                    + "(sys.fn_cdc_get_min_lsn(?), sys.fn_cdc_get_max_lsn(), 'all')";
+            try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, ci);
+                try (ResultSet rs = ps.executeQuery()) {
+                    // 0 rows is fine — we only care that the function is callable.
+                }
+            } catch (SQLException e) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
+                        "capture instance " + ci + " exists but is not readable: " + msg(e)
+                                + " — check @role_name on sp_cdc_enable_table");
+            }
+        }
+        return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, true,
+                schemaTables.size() + " table(s) with CDC capture instance (readable)");
     }
 
     private static String msg(SQLException e) {

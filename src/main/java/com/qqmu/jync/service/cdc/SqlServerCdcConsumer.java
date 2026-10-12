@@ -6,10 +6,12 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -43,6 +45,24 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>Position discipline (data-first): per-commit transaction → commit target →
  * {@code requireLease} → {@code advanceLsn(maxLsnOfBatch)}.
+ *
+ * <p><b>LSN format invariant (v1.7.1 fix)</b>: every LSN we read, persist, or bind is
+ * produced by {@code CONVERT(varchar(32), lsn, 1)} — a {@code 0x} prefixed, lowercase,
+ * 22-character string (binary(10) = 20 hex chars + "0x"). Binding back uses
+ * {@code CONVERT(binary(10), ?, 1)} which requires that exact shape. Previously we mixed
+ * a self-built uppercase-no-prefix hex() with the SQL-produced form, which made the
+ * second cycle throw "Conversion failed when converting ... to binary".
+ *
+ * <p><b>Interval semantics (v1.7.1 fix)</b>: {@code fn_cdc_get_all_changes_*} is
+ * inclusive-inclusive. To avoid replaying the batch's last committed transaction, the
+ * from_lsn we PASS to the function is {@code sys.fn_cdc_increment_lsn(@from_lsn)} while
+ * the persisted watermark stays the txLsn (so a crash between commit and advance still
+ * replays against idempotent upserts).
+ *
+ * <p><b>Failure semantics (v1.7.1 fix)</b>: if ANY capture instance's ResultSet fails
+ * mid-iteration, the whole drain aborts without advancing the watermark — otherwise the
+ * failed instance's rows in (fromLsn, maxLsn] would be skipped forever. The retry path
+ * re-enters drain() with the same fromLsn.
  */
 @Slf4j
 public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
@@ -131,6 +151,8 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                         fromLsn = result.nextLsn;
                     }
                 } catch (Throwable e) {
+                    // Any drain exception leaves fromLsn unchanged: the next iteration
+                    // re-reads the same interval (data-first at-least-once).
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
                 } finally {
@@ -158,7 +180,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                         : backoff.nextDelayMs();
                 stats.setLastError(failure == null ? "drained"
                         : CdcFailureClassifier.describe(failure));
-                log.warn("SQLServer cycle for project {} ended ({}); next cycle in {} ms",
+                log.info("SQLServer cycle for project {} ended ({}); next cycle in {} ms",
                         projectId, failure == null ? "no failure recorded"
                                 : CdcFailureClassifier.describe(failure), delay);
                 if (!sleepWhileRunning(delay)) break;
@@ -199,6 +221,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * Read the current {@code fn_cdc_get_max_lsn()}, then pull every change between
      * (fromLsn, maxLsn] across all tracked capture instances. Rows are grouped by
      * {@code __$start_lsn} — each group is one committed transaction — and flushed.
+     *
+     * <p>Aborts the whole drain (throws SQLException) if ANY capture instance fails
+     * mid-iteration: the watermark then stays at fromLsn and the retry re-reads the
+     * entire interval — no rows are skipped silently.
      */
     private DrainResult drain(Connection conn, String fromLsn) throws Exception {
         long projectId = project.getId();
@@ -210,6 +236,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         List<CaptureInstance> instances = discoverCaptureInstances(conn);
         if (instances.isEmpty()) {
             stats.addSkippedUnsupported(1);
+            // No capture instance means nothing will ever show up past fromLsn without
+            // DBA action: do NOT advance the watermark — that would hide the gap. Advance
+            // to maxLsn only when at least one tracked instance exists, so the next poll
+            // starts from the current position when the DBA enables CDC mid-stream.
             return out;
         }
         // Group rows by start_lsn so each transaction flushes atomically.
@@ -219,22 +249,29 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 new LinkedHashMap<>();
         String highWater = fromLsn;
         for (CaptureInstance ci : instances) {
+            // from_lsn is INCLUSIVE — pass fn_cdc_increment_lsn to skip the watermark
+            // transaction we already applied on the previous cycle. The persisted value
+            // remains fromLsn; only the SQL interval shifts.
             String sql = "SELECT __$start_lsn, __$operation, *"
                     + " FROM cdc.fn_cdc_get_all_changes_" + ci.captureInstance
-                    + "(CONVERT(binary(10), ?, 1), CONVERT(binary(10), ?, 1),'all update old')";
+                    + "((SELECT sys.fn_cdc_increment_lsn(CONVERT(binary(10), ?, 1))),"
+                    + " CONVERT(binary(10), ?, 1),'all update old')";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, fromLsn);
                 ps.setString(2, maxLsn);
                 try (ResultSet rs = ps.executeQuery()) {
+                    // Cache the real column set of the CT row ONCE per ci — readRow
+                    // consults this to distinguish "not captured" from genuine errors.
+                    Set<String> availableCols = availableColumns(rs);
                     while (running && !Thread.currentThread().isInterrupted() && rs.next()) {
-                        String startLsn = hex(rs.getBytes("__$start_lsn"));
-                        int op = rs.getInt("__$operation");
+                        String startLsn = rs.getString(1); // already CONVERT(varchar, 1) shape
+                        int op = rs.getInt(2);
                         CdcTableBinding binding = supplier.binding(ci);
                         if (binding == null || !binding.isApplicable()) {
                             stats.addUnsupportedTable(ci.schema + "." + ci.table);
                             continue;
                         }
-                        Map<String, Object> row = readRow(rs, binding);
+                        Map<String, Object> row = readRow(rs, binding, availableCols);
                         if (op == 1) { // delete
                             deletesByTx.computeIfAbsent(startLsn, k -> new LinkedHashMap<>())
                                     .computeIfAbsent(binding, k -> new ArrayList<>())
@@ -250,10 +287,18 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     }
                 }
             } catch (SQLException e) {
-                // 228 == "requested LSN interval invalid"; skip this instance, continue.
-                log.warn("SQLServer CDC read failed for {}: {}", ci.captureInstance,
-                        e.getMessage());
-                parseFailures.incrementAndGet();
+                // SQL Server error 22054 == "requested LSN interval invalid" (e.g. this
+                // instance has no rows in the window). Anything else — permission,
+                // network, column drift — aborts the whole drain so we retry instead of
+                // silently skipping this ci.
+                int sqlClass = e.getErrorCode();
+                if (sqlClass == 22054) {
+                    log.debug("SQLServer CDC interval empty for {}: {}",
+                            ci.captureInstance, e.getMessage());
+                    continue;
+                }
+                // Propagate — the caller leaves fromLsn untouched and retries.
+                throw e;
             }
         }
         // Flush per-transaction in LSN order.
@@ -279,7 +324,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                                   Map<CdcTableBinding, List<Map<String, Object>>> deletes)
             throws Exception {
         if (upserts.isEmpty() && deletes.isEmpty()) return;
-        try (Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig())) {
+        Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
+        boolean originalAutoCommit = true;
+        try {
+            originalAutoCommit = target.getAutoCommit();
             target.setAutoCommit(false);
             for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : upserts.entrySet()) {
                 applier.applyUpserts(target, e.getKey(), e.getValue());
@@ -288,6 +336,14 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 applier.applyDeletes(target, e.getKey(), e.getValue());
             }
             target.commit();
+        } catch (Exception e) {
+            try { target.rollback(); } catch (SQLException ignored) { }
+            throw e;
+        } finally {
+            try {
+                if (originalAutoCommit) target.setAutoCommit(true);
+            } catch (SQLException ignored) { }
+            try { target.close(); } catch (SQLException ignored) { }
         }
         ctx.requireLease();
         positionStore.advanceLsn(projectId, txLsn);
@@ -296,6 +352,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     }
 
     private String readMaxLsn(Connection conn) throws SQLException {
+        // CONVERT(varchar(32), lsn, 1) yields the canonical "0x" + lowercase hex form
+        // used everywhere downstream. Never mix in byte[]→hex() or the format check in
+        // drain() (equalsIgnoreCase) will always fail.
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)");
              ResultSet rs = ps.executeQuery()) {
@@ -305,24 +364,28 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     /**
      * Discover every enabled capture instance on this DB and filter to the tables the
-     * project actually wants. Rows not listed in the project are dropped here so the
-     * consumer never wastes cycles on them.
+     * project actually wants. When a source table has MULTIPLE capture instances (schema
+     * change → disable/enable), keep only the one with the highest start_lsn — the
+     * others are historical and would double-apply the same row events.
      */
     private List<CaptureInstance> discoverCaptureInstances(Connection conn) throws SQLException {
-        List<CaptureInstance> all = new ArrayList<>();
-        try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT source_schema_name, source_table_name, capture_instance"
-                        + " FROM cdc.change_tables")) {
-            ResultSet rs = ps.executeQuery();
+        // ORDER BY start_lsn ASC lets the per-table loop pick the LAST (newest) one.
+        String sql = "SELECT source_schema_name, source_table_name, capture_instance"
+                + " FROM cdc.change_tables"
+                + " ORDER BY source_schema_name, source_table_name, start_lsn";
+        Map<String, CaptureInstance> byTable = new LinkedHashMap<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 String schema = rs.getString(1);
                 String table = rs.getString(2);
                 String ci = rs.getString(3);
                 if (!matchesProjectTable(schema, table)) continue;
-                all.add(new CaptureInstance(schema, table, ci));
+                String key = (schema + "." + table).toLowerCase(Locale.ROOT);
+                byTable.put(key, new CaptureInstance(schema, table, ci)); // last one wins
             }
         }
-        return all;
+        return new ArrayList<>(byTable.values());
     }
 
     private boolean matchesProjectTable(String schema, String table) {
@@ -334,25 +397,53 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         return ctx.getConfig().includesTable(table);
     }
 
-    /** Read the captured columns into a map keyed by column name (case-preserved). */
-    private Map<String, Object> readRow(ResultSet rs, CdcTableBinding binding) throws SQLException {
+    /** Column names actually present in the CT ResultSet (lowercased for lookup). */
+    private static Set<String> availableColumns(ResultSet rs) throws SQLException {
+        Set<String> out = new HashSet<>();
+        int n = rs.getMetaData().getColumnCount();
+        for (int i = 1; i <= n; i++) {
+            String name = rs.getMetaData().getColumnName(i);
+            if (name != null) out.add(name.toLowerCase(Locale.ROOT));
+        }
+        return out;
+    }
+
+    /**
+     * Read the captured columns into a map keyed by column name (case-preserved).
+     * Columns the CT does NOT carry (enable_table @captured_column_list subset) are
+     * omitted from the row map entirely — the applier skips them, so the target keeps
+     * its existing value instead of being overwritten with NULL. Previously every
+     * missing column was bound to NULL, which silently overwrote the target.
+     *
+     * <p>True SQLException (connection drop, type mismatch) propagates — the drain
+     * aborts and the watermark does not advance, so the same rows re-read on retry.
+     */
+    private Map<String, Object> readRow(ResultSet rs, CdcTableBinding binding,
+                                        Set<String> availableCols) throws SQLException {
         Map<String, Object> row = new LinkedHashMap<>();
         for (String col : binding.columnNames()) {
-            try {
-                row.put(col, rs.getObject(col));
-            } catch (SQLException e) {
-                // Column not captured by the CDC instance — leave it absent; applier skips it.
-                row.put(col, null);
+            if (!availableCols.contains(col.toLowerCase(Locale.ROOT))) {
+                continue; // not captured by this CDC instance — leave absent
+            }
+            Object value = rs.getObject(col);
+            // Unknown JDBC types (hierarchyid, geography, sqlxml from SQL Server) arrive
+            // as driver-proprietary classes that the target JDBC cannot bind. Fall back
+            // to getString() so the row still flows through — with a string, the target
+            // driver has a known coercion path.
+            if (value != null && looksLikeDriverProprietary(value.getClass().getName())) {
+                row.put(col, rs.getString(col));
+            } else {
+                row.put(col, value);
             }
         }
         return row;
     }
 
-    private static String hex(byte[] bytes) {
-        if (bytes == null) return null;
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02X", b));
-        return sb.toString();
+    private static boolean looksLikeDriverProprietary(String className) {
+        return className.startsWith("com.microsoft.sqlserver.")
+                || className.startsWith("com.microsoft.sqlserver.jdbc.")
+                || className.contains("hierarchyid")
+                || className.contains("SqlXml");
     }
 
     private boolean parseStrikeOut() { return parseFailures.get() > MAX_PARSE_FAILURES; }
@@ -392,11 +483,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     @Override
     public void requestStop() {
+        // Do NOT close the source connection here: ps.executeQuery() would throw
+        // "Connection closed" mid-drain, which classify() might bucket as PERMANENT
+        // and park the project in ERROR over a deliberate stop. Just flip the flag —
+        // the next slice of sleepWhileRunning / drain's running-check exits cleanly.
         running = false;
-        Connection conn = currentSource;
-        if (conn != null) {
-            try { conn.close(); } catch (SQLException ignored) { }
-        }
     }
 
     private static final class CaptureInstance {
@@ -410,20 +501,31 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         }
     }
 
+    /**
+     * Per-table binding cache. Negative results (no PK / metadata missing) are ALSO
+     * cached under a sentinel — otherwise the 1s idle poll re-opens a source connection
+     * and re-reads information_schema every cycle for every un-mappable table.
+     */
     private final class BindingSupplier {
-        private final Map<String, CdcTableBinding> cache =
+        /** Marker in the cache for "this table is not mappable; don't re-read metadata". */
+        private final Object notMappableSentinel = new Object();
+
+        private final Map<String, Object> cache =
                 Collections.synchronizedMap(new LinkedHashMap<>());
 
         CdcTableBinding binding(CaptureInstance ci) {
             String key = (ci.schema + "." + ci.table).toLowerCase(Locale.ROOT);
-            CdcTableBinding cached = cache.get(key);
-            if (cached != null) return cached;
+            Object cached = cache.get(key);
+            if (cached != null) {
+                return cached == notMappableSentinel ? null : (CdcTableBinding) cached;
+            }
             try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                 MetadataReader reader = ctx.getSourceReader();
                 TableMeta meta = reader.readTable(conn, ci.schema, ci.table);
                 if (meta == null || !meta.hasPrimaryKey()) {
-                    log.warn("SQLServer cannot map source table {}.{} (missing or no PK)",
-                            ci.schema, ci.table);
+                    log.warn("SQLServer cannot map source table {}.{} (missing or no PK);"
+                            + " skipping its row events", ci.schema, ci.table);
+                    cache.put(key, notMappableSentinel);
                     return null;
                 }
                 CdcTableBinding b = CdcTableBinding.of(ci.schema, ci.table, meta,
