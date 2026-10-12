@@ -1,0 +1,13 @@
+-- Real SQL_REDO recorded by LogMinerPathSpikeIT on gvenzl/oracle-free:23 (CDB mode: mined from CDB$ROOT as C##MINER,
+-- SRC_CON_ID-filtered to FREEPDB1; ALL COLUMNS supplemental logging, DICT_FROM_ONLINE_CATALOG + COMMITTED_DATA_ONLY).
+-- Format: `-- OPERATION | RS_ID | CSCN` header line, then the SQL_REDO verbatim. Fixture source for the Task 4 parser tests.
+-- INSERT |  0x00000b.000003a6.00d8  | 2111043
+insert into "SRC"."SPIKE_T"("ID","NAME","NOTE","TS") values ('1','Alice','hello 世界',TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午'));
+-- INSERT |  0x00000b.000003a9.0010  | 2111043
+insert into "SRC"."SPIKE_T"("ID","NAME","NOTE","TS") values ('2','Bob','it''s here',TO_TIMESTAMP('12-10月-26 04.29.23.263396 上午'));
+-- UPDATE |  0x00000b.000003b3.0078  | 2111043
+update "SRC"."SPIKE_T" set "NOTE" = '更新后的备注 changed' where "ID" = '1' and "NAME" = 'Alice' and "NOTE" = 'hello 世界' and "TS" = TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午') and ROWID = 'AAAR4TAAYAAAAAPAAA';
+-- DELETE |  0x00000b.000003b4.0010  | 2111043
+delete from "SRC"."SPIKE_T" where "ID" = '2' and "NAME" = 'Bob' and "NOTE" = 'it''s here' and "TS" = TO_TIMESTAMP('12-10月-26 04.29.23.263396 上午') and ROWID = 'AAAR4TAAYAAAAAPAAB';
+-- INSERT |  0x00000b.000003b5.0040  | 2111043
+insert into "SRC"."SPIKE_T"("ID","NAME","NOTE","TS") values ('3','Carol','third row',TO_TIMESTAMP('12-10月-26 04.29.23.267733 上午'));
