@@ -19,12 +19,24 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.oracle.OracleContainer;
 import org.testcontainers.utility.DockerImageName;
+
+import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.model.ConnectionRole;
+import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.model.Project;
+import com.qqmu.jync.repository.DatabaseConfigRepository;
+import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.task.SyncContextFactory;
+import com.qqmu.jync.service.task.SyncTaskStore;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * Shared real-Oracle harness for the LogMiner CDC integration tests (v1.6.0).
@@ -445,5 +457,136 @@ public abstract class OracleCdcHarnessIT {
             }
         }
         return rows;
+    }
+
+    // --- Spring-side wiring (mirrors CdcMySqlContainerHarnessIT) ------------------------------
+
+    @Autowired
+    protected ProjectRepository projectRepository;
+
+    @Autowired
+    protected DatabaseConfigRepository databaseConfigRepository;
+
+    @Autowired
+    protected SyncContextFactory contextFactory;
+
+    @Autowired
+    protected SyncTaskStore taskStore;
+
+    @Autowired
+    protected CryptoUtil cryptoUtil;
+
+    /**
+     * Source connection config: C##MINER (CDB$ROOT common user) — the ONLY connection that
+     * can run LogMiner ADD_LOGFILE/START_LOGMNR on a CDB (measured ORA-65040). The JDBC URL
+     * points at the CDB$ROOT service (dbName, not PDB service). Baseline full-load reads
+     * SRC tables via {@code ctx.getSourceSchema()} = "SRC", so C##MINER needs SELECT on
+     * SRC's tables — granted by {@link #grantMinerSelectOnSrcTables()} after each table
+     * is created by the test.
+     */
+    protected DatabaseConfig sourceConfig() {
+        OracleContainer oracle = createContainer();
+        DatabaseConfig config = new DatabaseConfig();
+        config.setName("oracdc-it-src");
+        config.setType(DatabaseType.ORACLE);
+        config.setRole(ConnectionRole.SOURCE);
+        config.setHost(oracle.getHost());
+        config.setPort(oracle.getMappedPort(1521));
+        config.setDatabaseName(oracle.getDatabaseName());
+        config.setSchemaName(SRC_SCHEMA);
+        config.setUsername(SRC_SCHEMA);
+        config.setPassword(cryptoUtil.encrypt(SRC_PASSWORD));
+        return databaseConfigRepository.save(config);
+    }
+
+    /** Target connection config: TGT (PDB-local user). */
+    protected DatabaseConfig targetConfig() {
+        OracleContainer oracle = createContainer();
+        DatabaseConfig config = new DatabaseConfig();
+        config.setName("oracdc-it-tgt");
+        config.setType(DatabaseType.ORACLE);
+        config.setRole(ConnectionRole.TARGET);
+        config.setHost(oracle.getHost());
+        config.setPort(oracle.getMappedPort(1521));
+        config.setDatabaseName(oracle.getDatabaseName());
+        config.setSchemaName(TGT_SCHEMA);
+        config.setUsername(TGT_SCHEMA);
+        config.setPassword(cryptoUtil.encrypt(TGT_PASSWORD));
+        return databaseConfigRepository.save(config);
+    }
+
+    /** CDB$ROOT service JDBC URL (dbName, not PDB service name). */
+    protected String rootJdbcUrl() {
+        OracleContainer oracle = createContainer();
+        String pdbUrl = oracle.getJdbcUrl();
+        String dbName;
+        try (Connection src = sourceJdbc();
+             Statement st = src.createStatement();
+             ResultSet rs = st.executeQuery("SELECT NAME FROM V$DATABASE")) {
+            rs.next();
+            dbName = rs.getString(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Could not read CDB name", e);
+        }
+        return pdbUrl.substring(0, pdbUrl.lastIndexOf('/') + 1) + dbName;
+    }
+
+    /**
+     * Grants SELECT on all SRC tables to C##MINER — needed because baseline full-load
+     * reads from the root connection. Call after creating each new table.
+     */
+    protected void grantMinerSelectOnSrcTables() {
+        execAsSysdba("GRANT SELECT ANY TABLE TO " + MINER_USER + ";");
+    }
+
+    /** Saves an enabled LOGMINER_CDC-ready project wired to fresh src/tgt configs. */
+    protected Project newProject(String name, SyncConfig config) {
+        return newProject(name, config, true);
+    }
+
+    protected Project newProject(String name, SyncConfig config, boolean enabled) {
+        Project project = new Project();
+        project.setName(name);
+        project.setSourceDbId(sourceConfig().getId());
+        project.setTargetDbId(targetConfig().getId());
+        project.setSyncConfig(contextFactory.serializeConfig(config));
+        project.setEnabled(enabled);
+        Project saved = projectRepository.save(project);
+        taskStore.ensureTask(saved);
+        return saved;
+    }
+
+    protected void disableProject(Project project) {
+        Project fresh = reload(project);
+        fresh.setEnabled(false);
+        projectRepository.save(fresh);
+    }
+
+    protected Project reload(Project project) {
+        return projectRepository.findById(project.getId())
+                .orElseThrow(() -> new AssertionError(
+                        "Project " + project.getId() + " vanished from the repository"));
+    }
+
+    /** Row count of one table in the TGT schema. */
+    protected long countTarget(String table) {
+        String sql = "SELECT COUNT(*) FROM " + table;
+        try (Connection conn = targetJdbc();
+             Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            rs.next();
+            return rs.getLong(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Target count failed: " + sql, e);
+        }
+    }
+
+    /** Runs a query against the TGT schema. */
+    protected List<Map<String, Object>> queryTarget(String sql) {
+        try (Connection conn = targetJdbc()) {
+            return queryAll(conn, sql);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Target query failed: " + sql, e);
+        }
     }
 }
