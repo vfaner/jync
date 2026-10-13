@@ -9,7 +9,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -667,8 +666,4 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             }
         }
     }
-
-    // Silence unused-import Locale warning if the compiler complains; kept for future case work.
-    @SuppressWarnings("unused")
-    private static final Locale KEEP = Locale.ROOT;
 }

@@ -199,6 +199,17 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     }
 
     /**
+     * MySQL-family YEAR columns reach us mislabelled as JDBC DATE (Connector/J metadata
+     * quirk), even though the type name stays "YEAR" and the row values are integers.
+     */
+    private static boolean isMysqlFamilyYear(ColumnMeta c, DatabaseType sourceType) {
+        return sourceType != null
+                && sourceType.getFamily() == DatabaseType.DialectFamily.MYSQL
+                && c.getTypeName() != null
+                && "YEAR".equalsIgnoreCase(c.getTypeName().trim());
+    }
+
+    /**
      * Maps a source DATE column.
      *
      * <p>In the Oracle family (Oracle itself, 达梦 DM, 崖山 YashanDB) DATE is not a date: it
@@ -213,17 +224,6 @@ public abstract class AbstractSqlDialect implements SqlDialect {
      * date-arithmetic semantics for no benefit. That leaves Oracle → 达梦 (DM) unwidened;
      * DM's DATE precision is not verified here, so confirm it before relying on that path.
      */
-    /**
-     * MySQL-family YEAR columns reach us mislabelled as JDBC DATE (Connector/J metadata
-     * quirk), even though the type name stays "YEAR" and the row values are integers.
-     */
-    private static boolean isMysqlFamilyYear(ColumnMeta c, DatabaseType sourceType) {
-        return sourceType != null
-                && sourceType.getFamily() == DatabaseType.DialectFamily.MYSQL
-                && c.getTypeName() != null
-                && "YEAR".equalsIgnoreCase(c.getTypeName().trim());
-    }
-
     protected String dateTypeFor(ColumnMeta c, DatabaseType sourceType) {
         if (sourceType != null
                 && sourceType.getFamily() == DatabaseType.DialectFamily.ORACLE

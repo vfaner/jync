@@ -44,10 +44,6 @@ final class SqlServerTxFold {
     static final class Buffer {
         final List<Map<String, Object>> upserts = new ArrayList<>();
         final List<Map<String, Object>> deletes = new ArrayList<>();
-
-        boolean isEmpty() {
-            return upserts.isEmpty() && deletes.isEmpty();
-        }
     }
 
     /** txLsn (ascending) -> binding -> folded buffer. */

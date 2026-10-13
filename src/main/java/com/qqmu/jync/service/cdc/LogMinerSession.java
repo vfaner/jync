@@ -92,7 +92,6 @@ public class LogMinerSession implements AutoCloseable {
         while (rows.next()) {
             String rsId = rows.getString(1);
             long csn = rows.getLong(2);
-            String xid = rows.getString(3);
             String operation = rows.getString(4);
             String segOwner = rows.getString(5);
             String tableName = rows.getString(6);
@@ -108,7 +107,7 @@ public class LogMinerSession implements AutoCloseable {
             if (accumulated == null) {
                 continue;                                   // fragment only, wait for more
             }
-            out.add(new Row(rsId, csn, xid, operation, segOwner, tableName,
+            out.add(new Row(rsId, csn, operation, segOwner, tableName,
                     accumulated, rowTime, srcConId));
             if (++read >= batchCap()) {
                 break;
@@ -145,10 +144,6 @@ public class LogMinerSession implements AutoCloseable {
             return text;
         }
         return null;
-    }
-
-    public long startScnAnchor() {
-        return startScn;
     }
 
     /** END_LOGMNR quietly; the cursor and result set are closed with the source pooled conn. */
@@ -194,7 +189,6 @@ public class LogMinerSession implements AutoCloseable {
     public static final class Row {
         public final String rsId;
         public final long csn;
-        public final String xid;
         public final String operation;
         public final String segOwner;
         public final String tableName;
@@ -203,12 +197,11 @@ public class LogMinerSession implements AutoCloseable {
         /** Container ID (CDB only); 0 on non-CDB. */
         public final int srcConId;
 
-        public Row(String rsId, long csn, String xid, String operation,
+        public Row(String rsId, long csn, String operation,
                    String segOwner, String tableName, String sqlRedo, Timestamp rowTime,
                    int srcConId) {
             this.rsId = rsId;
             this.csn = csn;
-            this.xid = xid;
             this.operation = operation;
             this.segOwner = segOwner;
             this.tableName = tableName;

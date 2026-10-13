@@ -80,19 +80,17 @@ public final class PgTestDecodingParser {
         public final boolean txEnd;
         public final Long xid;
         public final ParsedChange change; // null when txStart/txEnd
-        public final String raw;
 
-        private SlotLine(boolean start, boolean end, Long xid, ParsedChange change, String raw) {
+        private SlotLine(boolean start, boolean end, Long xid, ParsedChange change) {
             this.txStart = start;
             this.txEnd = end;
             this.xid = xid;
             this.change = change;
-            this.raw = raw;
         }
 
-        static SlotLine start(Long xid, String raw) { return new SlotLine(true, false, xid, null, raw); }
-        static SlotLine commit(Long xid, String raw) { return new SlotLine(false, true, xid, null, raw); }
-        static SlotLine row(ParsedChange change, String raw) { return new SlotLine(false, false, null, change, raw); }
+        static SlotLine start(Long xid) { return new SlotLine(true, false, xid, null); }
+        static SlotLine commit(Long xid) { return new SlotLine(false, true, xid, null); }
+        static SlotLine row(ParsedChange change) { return new SlotLine(false, false, null, change); }
     }
 
     /**
@@ -102,27 +100,27 @@ public final class PgTestDecodingParser {
      */
     public SlotLine parse(String line) {
         if (line == null || line.isBlank()) {
-            return SlotLine.row(ParsedChange.skip("blank line"), line);
+            return SlotLine.row(ParsedChange.skip("blank line"));
         }
         String trimmed = line.trim();
         if (trimmed.startsWith("BEGIN ")) {
-            return SlotLine.start(parseXid(trimmed.substring(6)), line);
+            return SlotLine.start(parseXid(trimmed.substring(6)));
         }
         if (trimmed.startsWith("COMMIT ")) {
-            return SlotLine.commit(parseXid(trimmed.substring(7)), line);
+            return SlotLine.commit(parseXid(trimmed.substring(7)));
         }
         if (!trimmed.startsWith("table ")) {
-            return SlotLine.row(ParsedChange.skip("not a row event: " + trimmed), line);
+            return SlotLine.row(ParsedChange.skip("not a row event: " + trimmed));
         }
         // Format: "table <schema>.<table>: <OP>: <payload>"
         int colonIdx = trimmed.indexOf(':');
         if (colonIdx < 0) {
-            return SlotLine.row(ParsedChange.skip("missing colon after table ref: " + trimmed), line);
+            return SlotLine.row(ParsedChange.skip("missing colon after table ref: " + trimmed));
         }
         String qualified = trimmed.substring(6, colonIdx).trim();
         int opIdx = trimmed.indexOf(':', colonIdx + 1);
         if (opIdx < 0) {
-            return SlotLine.row(ParsedChange.skip("missing colon after op: " + trimmed), line);
+            return SlotLine.row(ParsedChange.skip("missing colon after op: " + trimmed));
         }
         String opToken = trimmed.substring(colonIdx + 1, opIdx).trim().toUpperCase(Locale.ROOT);
         String payload = trimmed.substring(opIdx + 1).trim();
@@ -131,16 +129,16 @@ public final class PgTestDecodingParser {
             case "INSERT": op = Op.INSERT; break;
             case "UPDATE": op = Op.UPDATE; break;
             case "DELETE": op = Op.DELETE; break;
-            default: return SlotLine.row(ParsedChange.skip("unknown op: " + opToken), line);
+            default: return SlotLine.row(ParsedChange.skip("unknown op: " + opToken));
         }
         // For UPDATE, skip the "old key-..." segment; we only need the NEW image (the applier
         // locates rows by PK from the binding, so the old-image values are irrelevant for the
         // upsert semantics. For DELETE, every column pair is the key image — parse as-is.
         Map<String, Object> row = parseColumns(payload, op == Op.UPDATE);
         if (row == null) {
-            return SlotLine.row(ParsedChange.skip("malformed column payload: " + payload), line);
+            return SlotLine.row(ParsedChange.skip("malformed column payload: " + payload));
         }
-        return SlotLine.row(ParsedChange.ok(op, qualified.toLowerCase(Locale.ROOT), row), line);
+        return SlotLine.row(ParsedChange.ok(op, qualified.toLowerCase(Locale.ROOT), row));
     }
 
     private static Long parseXid(String s) {

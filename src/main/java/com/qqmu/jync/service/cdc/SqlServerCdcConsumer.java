@@ -70,7 +70,17 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
-    static final int MAX_PARSE_FAILURES = 5;
+    /**
+     * F-13: consecutive failed drain cycles (target flush rejected, metadata read
+     * failed, …) tolerated before the consumer parks the project in ERROR with an
+     * APPLY_STRIKE_OUT. SQL Server reads typed columns straight off the CT ResultSet —
+     * unlike Oracle there is no per-row SQL_REDO parse stage — so the apply-side counter
+     * is the ONLY strike-out that can ever fire here. Mirrors PgLogicalCdcConsumer (F-10)
+     * and LogMinerCdcConsumer (F-12): without it a target that rejects every flush (e.g.
+     * a column the source added while the project was stopped — the classifier files that
+     * SQLException as TRANSIENT) spins forever, never parking and never advancing.
+     */
+    static final int MAX_APPLY_FAILURES = 5;
 
     /**
      * P1-6: even an idle drain (maxLsn unmoved) re-runs capture-instance discovery at
@@ -103,7 +113,8 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private volatile Connection currentSource;
 
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
-    private final AtomicInteger parseFailures = new AtomicInteger();
+    /** F-13: consecutive failed drain cycles; reset to 0 on every successful flush. */
+    private final AtomicInteger applyFailures = new AtomicInteger();
     private final AtomicLong connectedAtNs = new AtomicLong();
 
     private CdcReconnectBackoff backoff;
@@ -169,6 +180,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 } catch (Throwable e) {
                     // Any drain exception leaves fromLsn unchanged: the next iteration
                     // re-reads the same interval (data-first at-least-once).
+                    applyFailures.incrementAndGet(); // F-13: count the failed cycle
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
                 } finally {
@@ -181,7 +193,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 CdcFailureClassifier.Kind kind = failure == null
                         ? CdcFailureClassifier.Kind.TRANSIENT
                         : CdcFailureClassifier.classify(failure);
-                if (kind != CdcFailureClassifier.Kind.TRANSIENT || parseStrikeOut()) {
+                if (kind != CdcFailureClassifier.Kind.TRANSIENT || applyStrikeOut()) {
                     fatalStop(projectId, failure, kind);
                     break;
                 }
@@ -305,14 +317,23 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     }
                 }
             } catch (SQLException e) {
-                // SQL Server error 22054 == "requested LSN interval invalid" (e.g. this
-                // instance has no rows in the window). Anything else — permission,
-                // network, column drift — aborts the whole drain so we retry instead of
-                // silently skipping this ci.
-                int sqlClass = e.getErrorCode();
-                if (sqlClass == 22054) {
-                    log.debug("SQLServer CDC interval empty for {}: {}",
-                            ci.captureInstance, e.getMessage());
+                // SQL Server error 22054 == "an invalid LSN was specified for the capture
+                // instance": the @from_lsn we passed is BELOW this CI's valid range. It
+                // does NOT mean "no rows in the window" — an empty window returns zero
+                // rows, never an error. 22054 fires when the CI was enabled/re-created
+                // mid-flight (its start_lsn sits above our persisted watermark) or when
+                // the log was purged past the watermark. Skipping the CI leaves the
+                // watermark unadvanced for it, so a persistent 22054 is a silent stall —
+                // logged at WARN, not DEBUG, so a human can see it. The proper remedy is
+                // to clamp @from_lsn to sys.fn_cdc_get_min_lsn(ci) and retry; that needs a
+                // live SQL Server to validate and is raised separately.
+                // Anything else — permission, network, column drift — aborts the whole
+                // drain so we retry instead of silently skipping this ci.
+                if (e.getErrorCode() == 22054) {
+                    log.warn("SQLServer CDC: capture instance {} rejected from_lsn {} as out"
+                            + " of range (error 22054); its changes are NOT synced this cycle"
+                            + " and the watermark will not advance for it until the LSN window"
+                            + " is corrected: {}", ci.captureInstance, fromLsn, e.getMessage());
                     continue;
                 }
                 // Propagate — the caller leaves fromLsn untouched and retries.
@@ -404,7 +425,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         ctx.requireLease();
         positionStore.advanceLsn(projectId, txLsn);
         stats.recordPositionLsn(txLsn);
-        parseFailures.set(0);
+        applyFailures.set(0); // F-13: a landed transaction clears the strike-out tally
     }
 
     private String readMaxLsn(Connection conn) throws SQLException {
@@ -528,11 +549,14 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 || className.contains("SqlXml");
     }
 
-    private boolean parseStrikeOut() { return parseFailures.get() > MAX_PARSE_FAILURES; }
+    private boolean applyStrikeOut() { return applyFailures.get() > MAX_APPLY_FAILURES; }
 
     private void fatalStop(long projectId, Throwable failure, CdcFailureClassifier.Kind kind) {
+        // F-13: SQL Server has no parse stage, so a TRANSIENT park is always the
+        // apply-side strike-out (repeated target-flush failures); anything else keeps
+        // its classifier kind (PURGED / AUTH_FAILURE / SCHEMA_CONFLICT / …).
         String label = kind == CdcFailureClassifier.Kind.TRANSIENT
-                ? "PARSE_STRIKE_OUT" : kind.name();
+                ? "APPLY_STRIKE_OUT" : kind.name();
         String detail = label + ": " + (failure == null
                 ? "repeated SQLServer CDC failures" : CdcFailureClassifier.describe(failure));
         stats.setLastError(detail);

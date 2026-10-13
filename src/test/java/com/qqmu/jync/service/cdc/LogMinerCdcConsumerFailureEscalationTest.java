@@ -115,7 +115,7 @@ class LogMinerCdcConsumerFailureEscalationTest {
         int n = cycle.get() + 1;
         String redo = "insert into \"SRC\".\"ORDERS\"(\"ID\",\"NAME\") values ('"
                 + n + "','row-" + n + "');";
-        LogMinerSession.Row row = new LogMinerSession.Row("rs", 1_000L + n, "01000100",
+        LogMinerSession.Row row = new LogMinerSession.Row("rs", 1_000L + n,
                 "INSERT", "SRC", "ORDERS", redo, new Timestamp(System.currentTimeMillis()), 0);
         return new LogMinerSession(null, 1_000L, 1_000L, null, null) {
             private boolean consumed;
