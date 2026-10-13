@@ -88,7 +88,6 @@ public class LogMinerSession implements AutoCloseable {
      */
     public List<Row> nextBatch() throws SQLException {
         List<Row> out = new ArrayList<>();
-        int read = 0;
         while (rows.next()) {
             String rsId = rows.getString(1);
             long csn = rows.getLong(2);
@@ -109,17 +108,16 @@ public class LogMinerSession implements AutoCloseable {
             }
             out.add(new Row(rsId, csn, operation, segOwner, tableName,
                     accumulated, rowTime, srcConId));
-            if (++read >= batchCap()) {
-                break;
-            }
         }
+        // B1: the former batchCap() "safety valve" returned Integer.MAX_VALUE, so the
+        // `if (++read >= batchCap()) break;` guard never fired — dead code whose comment
+        // ("Default 10_000 rows") contradicted the implementation. Removed as dead code;
+        // runtime behavior is unchanged (the cap never bounded anything). nextBatch
+        // drains the whole cursor into `out`, and the consumer (LogMinerCdcConsumer)
+        // loops nextBatch until it returns empty — so adding a real in-memory cap (e.g.
+        // 10_000) later would be transparent and is the recommended follow-up if a large
+        // mining window ever risks OOM.
         return out;
-    }
-
-    private int batchCap() {
-        // The cursor fetchSize already bounds the JDBC round-trip; the in-memory batch cap
-        // is a safety valve. Default 10_000 rows; the factory leaves this unbounded when 0.
-        return Integer.MAX_VALUE;
     }
 
     /**

@@ -108,6 +108,8 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     /** P1-6: discovery throttle + the CI names this consumer has already logged. */
     private long lastDiscoveryAtMs;
     private final Set<String> knownCaptureInstances = new HashSet<>();
+    /** #4: throttle for the "CDC disabled at DB level" warning (see drain()). */
+    private long lastCdcOffWarnMs;
 
     private volatile boolean running = true;
     private volatile Connection currentSource;
@@ -259,7 +261,21 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         DrainResult out = new DrainResult();
         String maxLsn = readMaxLsn(conn);
         if (maxLsn == null) {
-            return out; // DB-level CDC off — cdc.change_tables would not even exist
+            // #4: sys.fn_cdc_get_max_lsn() returns NULL only when CDC is disabled at the
+            // DB level. The old code returned silently here, so a DBA disabling CDC
+            // mid-flight left the consumer idle-spinning forever with no signal — the
+            // same "silent stall" class as 22054. Warn instead, throttled to once per
+            // DISCOVERY_REFRESH_MS so the 1s idle poll cannot spam, and keep polling:
+            // do NOT park — re-enabling CDC resumes the stream automatically.
+            long now = System.currentTimeMillis();
+            if (now - lastCdcOffWarnMs >= DISCOVERY_REFRESH_MS) {
+                lastCdcOffWarnMs = now;
+                log.warn("SQLServer CDC for project {} is disabled at the database level"
+                        + " (sys.fn_cdc_get_max_lsn() returned NULL); no changes will be"
+                        + " captured until a DBA re-enables CDC. The consumer keeps polling"
+                        + " and resumes automatically once it is back on.", projectId);
+            }
+            return out;
         }
         if (maxLsn.equalsIgnoreCase(fromLsn)) {
             // P1-6: the idle early return must not starve discovery — re-read
