@@ -442,4 +442,26 @@ class ProjectServiceTest {
                 .hasMessage("error.project.source.required");
         verify(databaseConfigRepository, never()).findById(any());
     }
+
+    // --- stop bookkeeping ------------------------------------------------------------------
+
+    /** Stopping a log-CDC project must flip the task row to STOPPED, exactly like the
+     *  polling path does inside {@code SyncScheduler.unschedule}. The consumer manager
+     *  only ever lifts the status to RUNNING (markCdcRunning); without this the row
+     *  stays RUNNING forever after a clean stop and every status badge that reads it
+     *  (project list, dashboard overview) reports a project nobody scheduled. */
+    @Test
+    void stoppingALogCdcProjectMarksTheTaskStopped() {
+        Project project = project(7L);
+        project.setEnabled(true);
+        when(projectRepository.findById(7L)).thenReturn(Optional.of(project));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(cdcManager.strategyOf(project))
+                .thenReturn(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+
+        service.stop(7L);
+
+        verify(cdcManager).ensureStopped(7L);
+        verify(taskStore).markStopped(7L);
+    }
 }

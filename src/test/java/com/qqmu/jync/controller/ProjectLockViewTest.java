@@ -25,6 +25,7 @@ import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
@@ -91,6 +92,27 @@ class ProjectLockViewTest {
         return mvc.perform(get("/projects/1").with(as(role)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
+    }
+
+    /** The detail badge shares one rule with the list and the dashboard: an ERROR hat
+     *  wins over the enabled flag, otherwise enabled is the live state. Reading only
+     *  enabled here used to paint a parked (ERROR) project green "Running". */
+    @Test
+    void theErrorHatWinsOverTheEnabledFlagOnTheDetailBadge() throws Exception {
+        SyncTask task = new SyncTask();
+        task.setStatus(TaskStatus.ERROR);
+        stubDetail(task);
+
+        String page = render(UserRole.ADMIN);
+
+        // First badge on the page is the status badge; later badges (CDC connected,
+        // per-table strategy) carry their own ok/danger classes. No closing quote in
+        // the needle: classappend always appends, so the attribute never ends at "badge".
+        int at = page.indexOf("class=\"badge");
+        assertThat(at).isPositive();
+        String badge = page.substring(at, Math.min(page.length(), at + 240));
+        assertThat(badge).contains("badge-danger").contains(">Error<")
+                .doesNotContain("badge-ok");
     }
 
     @Test

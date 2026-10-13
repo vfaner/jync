@@ -452,9 +452,12 @@ public class ProjectService {
         projectRepository.save(project);
         afterCommit(projectId, "stop", () -> {
             if (cdcManager.strategyOf(project).isLogCdc()) {
-                // CDC:停消费者并同步 join(返回后旧流绝不再写);状态归 CDC 生命周期管,
-                // 不走 unschedule 的 markStopped。
+                // CDC:停消费者并同步 join(返回后旧流绝不再写)。轮询分支的状态回落藏在
+                // unschedule 里,CDC 分支必须在这里自己补:消费者管理器只会把状态抬到
+                // RUNNING(markCdcRunning),不补这一步干净停机后 task 行将永远是 RUNNING,
+                // 读它的看板统计/后续判定会报一个没人调度的项目在跑。
                 cdcManager.ensureStopped(projectId);
+                taskStore.markStopped(projectId);
                 return;
             }
             scheduler.unschedule(projectId);

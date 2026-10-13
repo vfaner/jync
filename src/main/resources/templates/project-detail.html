@@ -37,15 +37,16 @@
     <div class="card">
         <div class="card-head">
             <h2><svg class="ico"><use href="#sliders"/></svg> <span th:text="#{project.controls}">Controls</span></h2>
-            <!-- 状态徽章以 project.enabled 为准（用户视角的"应该在跑"），不读 sync_task.status:
-                 T13 设计是干净停机后 task.status 残留 RUNNING，读它会出现"绿徽章 + 启动按钮"
-                 这种自相矛盾。ERROR 态仍由 task.status 传递（那是真错误）。 -->
+            <!-- 三处状态面（列表/详情/看板）共用一条口径：ERROR 帽优先，其次看
+                 project.enabled，不读 sync_task.status 的 RUNNING —— 干净停机后
+                 该行会残留 RUNNING（CDC 分支尤甚），读它会出现"绿徽章 + 启动按钮"
+                 这种自相矛盾；enabled 与按钮同源，徽章因此永远和按钮一致。 -->
             <div th:with="err=${task != null and task.status != null and task.status.name() == 'ERROR'}">
                 <span class="badge"
-                      th:classappend="${project.enabled} ? 'badge-ok'
-                                    : (${err} ? 'badge-danger' : 'badge-mute')">
-                    <span class="dot" th:classappend="${project.enabled} ? 'dot-live' : ''"></span>
-                    <span th:text="${project.enabled} ? #{status.RUNNING} : (${err} ? #{status.ERROR} : #{status.STOPPED})">Stopped</span>
+                      th:classappend="${err} ? 'badge-danger'
+                                    : (${project.enabled} ? 'badge-ok' : 'badge-mute')">
+                    <span class="dot" th:classappend="${project.enabled and !err} ? 'dot-live' : ''"></span>
+                    <span th:text="${err} ? #{status.ERROR} : (${project.enabled} ? #{status.RUNNING} : #{status.STOPPED})">Stopped</span>
                 </span>
             </div>
         </div>
@@ -239,7 +240,8 @@
     </div>
 
     <!--/* data-original-strategy：页面加载时的选中策略，B8 确认框拿它和提交值比对，
-           只有「改成 BINLOG_CDC」才弹确认（app.js，ES5）。 */-->
+           只有「改成任一日志 CDC」才弹确认（app.js isLogCdcStrategy，与后端
+           CaptureStrategy.isLogCdc() 同口径，含 PG 逻辑复制 / SQL Server CDC）。 */-->
     <form id="config-form" method="post" th:action="@{/projects/{id}/config(id=${project.id})}"
           th:attr="data-original-strategy=${selectedStrategy},
                    data-cdc-active=${cdcActive}">
@@ -554,7 +556,7 @@
 
                 <!-- 调度卡片：仅轮询/全量比对模式生效。日志 CDC 模式下由长驻消费者持续流式回放，
                      Quartz 调度、cron、轮询间隔、批次大小全部是死配置，直接藏掉以避免误导。
-                     data-role="polling-only" 由 app.js 在策略卡片切到 BINLOG_CDC / LOGMINER_CDC 时同步隐藏。
+                     data-role="polling-only" 由 app.js 在策略卡片切到任一日志 CDC 时同步隐藏。
                      "自定义调度"开关关闭时折叠三个输入框——留空使用全局默认值，这是多数用户的预期。 -->
                 <div class="card" data-role="polling-only"
                      th:classappend="${cdcActive} ? 'is-hidden' : ''"

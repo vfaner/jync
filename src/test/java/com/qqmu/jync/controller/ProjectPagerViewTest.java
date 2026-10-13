@@ -24,6 +24,8 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
@@ -137,6 +139,53 @@ class ProjectPagerViewTest {
         // The confirm must name the object being deleted rather than ask a generic question.
         assertThat(html).contains("Delete &quot;p1&quot;?");
         assertThat(html).doesNotContain("Are you sure?");
+    }
+
+    /** The badge must agree with the action button on the same row and with the detail
+     *  page: enabled → Running, disabled → Stopped, and a task-row ERROR hat wins over
+     *  both. Reading sync_task.status for the live state breaks all three — a clean CDC
+     *  stop leaves the row RUNNING (green badge over a start button), and an enabled
+     *  project waiting for its first cycle reads Stopped. */
+    @Test
+    void theStatusBadgeFollowsEnabledAndTheErrorHatNotTheTaskRow() throws Exception {
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("p1");
+        SyncTask task = new SyncTask();
+        task.setProjectId(1L);
+        when(projectService.count()).thenReturn(1L);
+        when(projectService.findPage(0, 20)).thenReturn(List.of(project));
+        when(projectService.findTasks(any())).thenReturn(Map.of(1L, task));
+
+        // Residual RUNNING row over a disabled project (post-stop): Stopped, not Running.
+        project.setEnabled(false);
+        task.setStatus(TaskStatus.RUNNING);
+        String body = tableBody(render(""));
+        assertThat(body).contains("badge-mute").contains(">Stopped<")
+                .doesNotContain("badge-ok").doesNotContain(">Running<");
+
+        // Enabled project whose cycle has not started yet: Running, not Stopped.
+        project.setEnabled(true);
+        task.setStatus(TaskStatus.STOPPED);
+        body = tableBody(render(""));
+        assertThat(body).contains("badge-ok").contains(">Running<")
+                .doesNotContain("badge-mute");
+
+        // The ERROR hat wins over enabled: a parked project must not look healthy.
+        task.setStatus(TaskStatus.ERROR);
+        body = tableBody(render(""));
+        assertThat(body).contains("badge-danger").contains(">Error<")
+                .doesNotContain("badge-ok");
+    }
+
+    /** Badge assertions stay inside the table body: the layout chrome carries its own
+     *  badges (role chips, version), so page-wide contains() would match the wrong one. */
+    private static String tableBody(String html) {
+        int from = html.indexOf("<tbody>");
+        int to = html.indexOf("</tbody>");
+        assertThat(from).isPositive();
+        assertThat(to).isGreaterThan(from);
+        return html.substring(from, to);
     }
 
     @Test

@@ -152,11 +152,17 @@ public class DashboardService {
         private int trackedTableCount;
         private long totalRowsSynced;
 
+        /** Same rule as the list and detail badges (see the projects.html badge comment):
+         *  the ERROR hat wins, otherwise the enabled flag is the live state. The raw task
+         *  status reads RUNNING for a cleanly stopped CDC project. */
         public String statusName() {
-            if (task == null || task.getStatus() == null) {
-                return TaskStatus.STOPPED.name();
+            if (task != null && task.getStatus() == TaskStatus.ERROR) {
+                return TaskStatus.ERROR.name();
             }
-            return task.getStatus().name();
+            if (project != null && Boolean.TRUE.equals(project.getEnabled())) {
+                return TaskStatus.RUNNING.name();
+            }
+            return TaskStatus.STOPPED.name();
         }
     }
 }

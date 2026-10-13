@@ -49,12 +49,15 @@
                             <div class="small muted truncate" th:if="${project.description}"
                                  th:text="${project.description}">description</div>
                         </td>
-                        <td th:with="st=${task != null and task.status != null ? task.status.name() : 'STOPPED'}">
+                        <!-- 与详情页/看板同一条口径：ERROR 帽优先，其次 project.enabled
+                             （与同行按钮同源，徽章永远和按钮一致）。不读 task.status 的
+                             RUNNING：干净停机后该行残留 RUNNING，会画出"绿徽章 + 启动按钮"。 -->
+                        <td th:with="err=${task != null and task.status != null and task.status.name() == 'ERROR'}">
                             <span class="badge"
-                                  th:classappend="${st == 'RUNNING'} ? 'badge-ok'
-                                                : (${st == 'ERROR'} ? 'badge-danger' : 'badge-mute')">
-                                <span class="dot" th:classappend="${st == 'RUNNING'} ? 'dot-live' : ''"></span>
-                                <span th:text="#{'status.' + ${st}}">Stopped</span>
+                                  th:classappend="${err} ? 'badge-danger'
+                                                : (${project.enabled} ? 'badge-ok' : 'badge-mute')">
+                                <span class="dot" th:classappend="${project.enabled and !err} ? 'dot-live' : ''"></span>
+                                <span th:text="${err} ? #{status.ERROR} : (${project.enabled} ? #{status.RUNNING} : #{status.STOPPED})">Stopped</span>
                             </span>
                         </td>
                         <td class="small muted nowrap"
