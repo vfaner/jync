@@ -22,12 +22,19 @@ public class SqlDialectFactory {
         if (type == null) {
             return fallback;
         }
+        // Product-specific dialects win over their family's generic dialect (openGauss
+        // diverges from plain PostgreSQL only on the upsert form).
+        for (SqlDialect dialect : dialects) {
+            if (type.equals(dialect.explicitType())) {
+                return dialect;
+            }
+        }
         DatabaseType.DialectFamily family = type.getFamily();
         if (family == DatabaseType.DialectFamily.GENERIC) {
             return fallback;
         }
         for (SqlDialect dialect : dialects) {
-            if (dialect.family() == family) {
+            if (dialect.explicitType() == null && dialect.family() == family) {
                 return dialect;
             }
         }

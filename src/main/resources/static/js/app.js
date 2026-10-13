@@ -531,6 +531,13 @@
           // 服务名说明只对 Oracle 有意义，其余类型隐藏
           var oracleHelp = document.getElementById('oracle-name-help');
           if (oracleHelp) oracleHelp.hidden = select.value !== 'ORACLE';
+          // P0-2: 挖掘账号同理——hidden 不够，控件必须一起禁用，否则残留值随他类型提交
+          var minerSection = document.getElementById('miner-section');
+          if (minerSection) {
+            var showMiner = select.value === 'ORACLE';
+            minerSection.hidden = !showMiner;
+            minerSection.querySelectorAll('input').forEach(function (el) { el.disabled = !showMiner; });
+          }
           var driverHint = document.getElementById('driver-hint');
           if (driverHint) driverHint.textContent = p.driverClass || '';
         })

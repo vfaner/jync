@@ -8,6 +8,8 @@ import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Parses LogMiner SQL_REDO text into a row event the shared {@link CdcEventApplier}
  * can upsert/delete. Pure function, no IO — every dialect shape has a matrix test.
@@ -33,6 +35,7 @@ import org.springframework.stereotype.Component;
  * </ul>
  */
 @Component
+@Slf4j
 public class SqlRedoParser {
 
     public enum Op { INSERT, UPDATE, DELETE }
@@ -152,6 +155,12 @@ public class SqlRedoParser {
             try {
                 row.put(col, OracleLiteralConverters.convert(e.getValue(), sqlType));
             } catch (OracleLiteralConverters.UnsupportedLiteralException ule) {
+                // P1-8: the raw-string fallback stays (throwing would poison the whole
+                // UPDATE even when SET is clean) but must not be silent — an unconverted
+                // old-image literal landing on the target is otherwise undiagnosable.
+                log.warn("UPDATE old-image literal for column {} could not be converted"
+                        + " ({}); passing the raw string through — the target driver may"
+                        + " coerce or reject it", col, ule.getMessage());
                 row.put(col, e.getValue());
             }
         }
@@ -322,6 +331,47 @@ public class SqlRedoParser {
     // —— splitters that respect quotes, double-quotes and parentheses ——
 
     /**
+     * P2-6: Oracle alternative quoting — {@code q'[...]'} / {@code q'{...}'} /
+     * {@code q'(...)'} / {@code q'<...>'} (and exotic single-char delimiters like
+     * {@code q'!...!'}). The content is VERBATIM: it may hold single quotes, commas,
+     * "and" or "=" with no escaping, so a plain-quote state machine "exits" the string
+     * at the first interior apostrophe and then parses real content as SQL syntax —
+     * splitting SET lists, WHERE conjuncts, or value tuples mid-literal.
+     *
+     * <p>If a q-quote opens at index {@code i} of {@code s} (q/Q, then a quote, then a
+     * delimiter; the q itself must start a token — the preceding char is not a word
+     * char, ruling out an identifier that merely ends in q), return the index just past
+     * the closing quote; -1 when it is not a q-quote or is unterminated (callers then
+     * fall back to plain-quote handling, exactly as before).
+     */
+    static int qQuoteEnd(String s, int i) {
+        if (i + 2 >= s.length()) {
+            return -1;
+        }
+        char c = s.charAt(i);
+        if ((c != 'q' && c != 'Q') || s.charAt(i + 1) != '\'') {
+            return -1;
+        }
+        if (i > 0 && isWordChar(s.charAt(i - 1))) {
+            return -1;
+        }
+        char open = s.charAt(i + 2);
+        char close = switch (open) {
+            case '[' -> ']';
+            case '{' -> '}';
+            case '(' -> ')';
+            case '<' -> '>';
+            default -> open;
+        };
+        for (int j = i + 3; j + 1 < s.length(); j++) {
+            if (s.charAt(j) == close && s.charAt(j + 1) == '\'') {
+                return j + 2;
+            }
+        }
+        return -1;
+    }
+
+    /**
      * Split {@code s} on {@code delimiter} at top level (not inside quotes, double-quotes,
      * or nested parentheses).
      */
@@ -344,6 +394,14 @@ public class SqlRedoParser {
                     quote = 0;
                 }
                 continue;
+            }
+            if (c == 'q' || c == 'Q') {
+                int end = qQuoteEnd(s, i);
+                if (end > 0) {
+                    cur.append(s, i, end);
+                    i = end - 1; // the loop's i++ moves past the closing quote
+                    continue;
+                }
             }
             if (c == '\'' || c == '"') {
                 quote = c;
@@ -388,6 +446,13 @@ public class SqlRedoParser {
                     quote = 0;
                 }
                 continue;
+            }
+            if (c == 'q' || c == 'Q') {
+                int end = qQuoteEnd(s, i);
+                if (end > 0) {
+                    i = end - 1;
+                    continue;
+                }
             }
             if (c == '\'' || c == '"') {
                 quote = c;
@@ -442,6 +507,14 @@ public class SqlRedoParser {
                 i++;
                 continue;
             }
+            if (c == 'q' || c == 'Q') {
+                int end = qQuoteEnd(wherePart, i);
+                if (end > 0) {
+                    cur.append(wherePart, i, end);
+                    i = end;
+                    continue;
+                }
+            }
             if (c == '\'' || c == '"') {
                 quote = c;
                 cur.append(c);
@@ -464,7 +537,11 @@ public class SqlRedoParser {
             // (start of string, quote, whitespace, semicolon), followed by a non-word char.
             if (depth == 0 && lower.startsWith("and", i)) {
                 char before = i > 0 ? wherePart.charAt(i - 1) : ' ';
-                char after = i + 4 < wherePart.length() ? wherePart.charAt(i + 4) : ' ';
+                // "and" occupies i..i+2 — the first char AFTER the token is at i+3.
+                // (Was i+4: an off-by-one that refused to split " and ROWID" — an AND
+                // followed by one space and an unquoted word — gluing the whole tail
+                // onto the preceding column's old-image value.)
+                char after = i + 3 < wherePart.length() ? wherePart.charAt(i + 3) : ' ';
                 boolean leftOk = !isWordChar(before);
                 boolean rightOk = !isWordChar(after);
                 if (leftOk && rightOk) {

@@ -5,15 +5,18 @@ import java.util.Locale;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Classifies binlog stream failures into "retry makes sense" vs "retry is pointless,
- * the user must act" (task book B7). PURGED and SERVER_ID_CONFLICT park the project
- * in ERROR until a human rebaselines or fixes the id offset; everything else backs
- * off and reconnects.
+ * Classifies CDC stream failures across all four engines (MySQL binlog, Oracle
+ * LogMiner, PG logical replication, SQL Server CDC) into "retry makes sense"
+ * ({@code TRANSIENT} — back off and reconnect) vs "retry is pointless, a human must
+ * act" (everything else — the consumer parks the project in ERROR): {@code PURGED} =
+ * re-baseline from a fresh snapshot, {@code SERVER_ID_CONFLICT} = fix the id offset,
+ * {@code AUTH_FAILURE} = fix credentials or grants, {@code SCHEMA_CONFLICT} = settle
+ * the in-flight DDL (P2-13: previously mislabeled AUTH_FAILURE).
  */
 @Slf4j
 public final class CdcFailureClassifier {
 
-    public enum Kind { PURGED, SERVER_ID_CONFLICT, AUTH_FAILURE, TRANSIENT }
+    public enum Kind { PURGED, SERVER_ID_CONFLICT, AUTH_FAILURE, SCHEMA_CONFLICT, TRANSIENT }
 
     private CdcFailureClassifier() { }
 
@@ -47,7 +50,12 @@ public final class CdcFailureClassifier {
                     || message.contains("ora-00310")    // archived log sequence mismatch
                     || message.contains("ora-00308")    // cannot open archived log
                     || message.contains("ora-00313")    // open failed for log member
-                    || message.contains("ora-00312")) { // companion text of 00313
+                    || message.contains("ora-00312")    // companion text of 00313
+                    // P2-5: DBMS_LOGMNR.START_LOG_MNR raises ORA-01403 "no data found"
+                    // when NO redo covers the requested SCN range — the logs were
+                    // recycled. Retry re-asks the same empty range forever; the remedy
+                    // is the PURGED one: re-baseline from a fresh snapshot.
+                    || message.contains("ora-01403")) {
                 return Kind.PURGED;
             }
             if (message.contains("ora-01031")        // insufficient privileges
@@ -55,17 +63,51 @@ public final class CdcFailureClassifier {
                     // executing against a PDB, or vice versa. Retrying with the same
                     // connection will never succeed; park it for the user to fix the
                     // connection config.
-                    || message.contains("ora-65040")
-                    // ORA-01466: "unable to read data — table definition has changed". A
-                    // DDL is mid-flight; the user needs to settle it before retry,
-                    // otherwise we hot-loop against the same dictionary conflict.
-                    || message.contains("ora-01466")) {
+                    || message.contains("ora-65040")) {
                 return Kind.AUTH_FAILURE;
             }
-            // ORA-01466: schema definition changed mid-mine. Retrying will keep hitting
-            // it until the user's DDL settles; park it. Other mid-mine Oracle errors
-            // (01555 snapshot too old, 12801 parallel-query wrap) fall through to
-            // TRANSIENT — backoff handles them and the mining session restarts next cycle.
+            // P2-13: ORA-01466 "unable to read data — table definition has changed" —
+            // a DDL is mid-flight against the dictionary the mining session reads, and
+            // retrying hot-loops on the same conflict until it settles. It is not an
+            // auth problem: parking it under AUTH_FAILURE sent the DBA hunting
+            // credentials. It gets its own kind.
+            if (message.contains("ora-01466")) {
+                return Kind.SCHEMA_CONFLICT;
+            }
+            // P2-5: ORA-01555 (snapshot too old — the undo backing the consistent read
+            // was overwritten under load; a fresh mining session gets a fresh snapshot)
+            // and ORA-00060 (deadlock detected) stay on the TRANSIENT fall-through by
+            // DESIGN: backoff-retry is the correct remedy for both. Deliberately not
+            // matched anywhere here, so nobody "helps" by parking them later.
+
+            // —— PG / SQL Server (P1-2). SQLSTATE first: class 28 is the standard
+            // invalid_authorization on BOTH vendors (PG 28P01 password / 28000, SQL
+            // Server 18456 login failed); 42501 is PG insufficient_privilege.
+            // Deliberately NOT matched: 53300 too_many_connections, 57P03
+            // cannot_connect_now — those are resource exhaustion where backoff-retry
+            // is exactly right, so they fall through to TRANSIENT.
+            if (c instanceof java.sql.SQLException) {
+                String state = ((java.sql.SQLException) c).getSQLState();
+                if (state != null) {
+                    String upperState = state.toUpperCase(Locale.ROOT);
+                    if (upperState.startsWith("28") || upperState.equals("42501")) {
+                        return Kind.AUTH_FAILURE;
+                    }
+                }
+            }
+            if (message.contains("password authentication failed")
+                    || message.contains("no pg_hba.conf entry")
+                    // SQL Server wording (18456 / 229 / 230) — SQLState survives most
+                    // wrappers, but message matching covers the ones that drop it:
+                    || message.contains("login failed for user")
+                    || message.contains("permission was denied")
+                    // PG slot exhaustion: retrying can never succeed; a human must
+                    // drop unused slots (P1-9's quota check catches this earlier).
+                    || message.contains("maximum number of logical replication slots")
+                    || message.contains("number of requested standby slots exceeds")
+                    || message.contains("max_replication_slots")) {
+                return Kind.AUTH_FAILURE;
+            }
         }
         return Kind.TRANSIENT;
     }

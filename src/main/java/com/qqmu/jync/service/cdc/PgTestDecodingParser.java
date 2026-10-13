@@ -159,9 +159,12 @@ public final class PgTestDecodingParser {
     static Map<String, Object> parseColumns(String payload, boolean skipOldImage) {
         String body = payload;
         if (skipOldImage) {
-            int newIdx = body.indexOf(" new ");
+            // P2-2: a bare indexOf(" new ") also fires inside quoted old-image values
+            // (a text column holding 'buy new car' truncated the new image mid-token,
+            // corrupting the row) — locate the " : new " separator quote-aware instead.
+            int newIdx = findNewImageStart(body);
             if (newIdx >= 0) {
-                body = body.substring(newIdx + 5);
+                body = body.substring(newIdx);
             } else {
                 // No "new" marker — the event is only the key image (UPDATE on a row
                 // that didn't change any non-key column? still safe to parse as-is).
@@ -231,6 +234,48 @@ public final class PgTestDecodingParser {
     }
 
     /**
+     * P2-2: locate the start of an UPDATE's new image. test_decoding separates the
+     * old-key segment from the new image with " : new " — a ':' preceded by whitespace
+     * (a column-value colon sits glued to its ']' with none) whose next word is exactly
+     * "new". Scanning quote-aware keeps quoted value text ('see : new doc') from
+     * matching, and a bare enum value that happens to be "new"
+     * ({@code mood[public.mood]:new}) cannot be mistaken either: its ':' has no
+     * preceding whitespace.
+     *
+     * @return index just past the "new" marker word, or -1 when absent
+     */
+    static int findNewImageStart(String body) {
+        boolean inQuote = false;
+        for (int i = 0; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (inQuote) {
+                if (c == '\'') {
+                    if (i + 1 < body.length() && body.charAt(i + 1) == '\'') {
+                        i++; // '' escape — still inside the string
+                    } else {
+                        inQuote = false;
+                    }
+                }
+                continue;
+            }
+            if (c == '\'') {
+                inQuote = true;
+            } else if (c == ':' && i > 0 && Character.isWhitespace(body.charAt(i - 1))) {
+                int j = i + 1;
+                while (j < body.length() && Character.isWhitespace(body.charAt(j))) {
+                    j++;
+                }
+                if (body.startsWith("new", j)
+                        && (j + 3 >= body.length()
+                                || Character.isWhitespace(body.charAt(j + 3)))) {
+                    return j + 3;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /**
      * Convert an unquoted scalar literal to the Java type matching the JDBC type tag
      * emitted by test_decoding (e.g. {@code int4}, {@code int8}, {@code numeric}, {@code float8}).
      * Strings that fail to parse fall back to their raw text — never throw, because a
@@ -256,32 +301,44 @@ public final class PgTestDecodingParser {
                 case "real":
                 case "float8":
                 case "double precision":
+                    return Double.valueOf(raw);
                 case "numeric":
                 case "decimal":
+                    // P1-4: numeric keeps up to 38 digits — a Double would silently
+                    // round it to ~16 and the target row no longer matches the source.
+                    return new java.math.BigDecimal(raw);
                 case "money":
-                    return Double.valueOf(raw);
+                    return parseMoney(raw);
                 case "bool":
                 case "boolean":
-                    // test_decoding prints bool as 't'/'f' or 'true'/'false'
-                    return raw.equals("t") || raw.equalsIgnoreCase("true");
+                    // test_decoding prints bool as 't'/'f' or 'true'/'false' — P2-1:
+                    // case-insensitive; the old equals("t") silently turned 'T' into false.
+                    return raw.equalsIgnoreCase("t") || raw.equalsIgnoreCase("true");
+                case "bytea":
+                    // P2-1: default bytea_output=hex prints \x48656c6c6f — decode to a
+                    // real byte[] so target drivers can bind it; the raw "\x..." string
+                    // fails against bytea/blob columns on every target.
+                    return parseBytea(raw);
                 case "timestamp":
-                case "timestamptz":
                 case "timestamp without time zone":
-                case "timestamp with time zone":
                 case "abstime":
                     // Format: 'YYYY-MM-DD HH:MM:SS.fffffffff' (microsecond precision).
                     // The PG JDBC driver does not coerce String → timestamp on setObject,
                     // so we hand it a real java.sql.Timestamp.
                     return java.sql.Timestamp.valueOf(raw);
+                case "timestamptz":
+                case "timestamp with time zone":
+                    return parseTimestamptz(raw);
                 case "date":
                     return java.sql.Date.valueOf(raw);
                 case "time":
-                case "timetz":
                 case "time without time zone":
-                case "time with time zone":
                     return java.sql.Time.valueOf(raw);
+                case "timetz":
+                case "time with time zone":
+                    return parseTimetz(raw);
                 default:
-                    // text, varchar, bytea, uuid, json, jsonb, unknown — keep as String.
+                    // text, varchar, uuid, json, jsonb, unknown — keep as String.
                     return raw;
             }
         } catch (Exception e) {
@@ -290,6 +347,98 @@ public final class PgTestDecodingParser {
             return raw;
         }
     }
+
+    // —— P1-4 coercion helpers ——
+
+    /**
+     * P2-1: bytea hex output ({@code \x48656c6c6f}, emitted by default
+     * {@code bytea_output=hex}) decodes to byte[]. Anything else — escape-format output,
+     * odd digit count, non-hex characters — returns the raw string (the old behavior):
+     * guessing at binary content is worse than an honest fallback.
+     */
+    private static Object parseBytea(String raw) {
+        String body = raw.trim();
+        if (!body.startsWith("\\x") && !body.startsWith("\\X")) {
+            return raw;
+        }
+        String hex = body.substring(2);
+        if (hex.length() % 2 != 0) {
+            return raw;
+        }
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            int hi = Character.digit(hex.charAt(i * 2), 16);
+            int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
+            if (hi < 0 || lo < 0) {
+                return raw;
+            }
+            out[i] = (byte) ((hi << 4) | lo);
+        }
+        return out;
+    }
+
+    /**
+     * money is printed with the locale's decorations: {@code $9.99}, {@code -$1,234.56},
+     * or {@code ($0.50)} for negatives under some lc_monetary settings. Strip everything
+     * but digits/minus/dot, honor parentheses, keep BigDecimal precision. Unparseable
+     * text propagates to {@link #coerceByType}'s catch → raw fallback.
+     */
+    private static Object parseMoney(String raw) {
+        String body = raw.trim();
+        boolean negative = body.startsWith("(") && body.endsWith(")");
+        if (negative) {
+            body = body.substring(1, body.length() - 1);
+        }
+        StringBuilder digits = new StringBuilder(body.length());
+        for (int i = 0; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if ((c >= '0' && c <= '9') || c == '.') {
+                digits.append(c);
+            } else if (c == '-') {
+                negative = true;
+            }
+        }
+        java.math.BigDecimal value = new java.math.BigDecimal(digits.toString());
+        return negative ? value.negate() : value;
+    }
+
+    /**
+     * test_decoding emits timestamptz with a trailing UTC offset
+     * ({@code 2026-10-13 10:00:00.123456+08}, {@code +05:30}, {@code +0530}) which
+     * {@link java.sql.Timestamp#valueOf(String)} rejects — the old code fell back to the
+     * raw string and the target bind failed. Parse instant-correct (same semantics as the
+     * baseline path's rs.getTimestamp); when no offset is present, fall back to the
+     * wall-time parse.
+     */
+    private static Object parseTimestamptz(String raw) {
+        String body = raw.trim();
+        java.util.regex.Matcher m = TZ_OFFSET_SUFFIX.matcher(body);
+        if (m.find()) {
+            try {
+                java.time.LocalDateTime ldt = java.time.LocalDateTime.parse(
+                        body.substring(0, m.start()).trim().replace(' ', 'T'));
+                java.time.ZoneOffset offset = java.time.ZoneOffset.of(m.group());
+                return java.sql.Timestamp.from(ldt.toInstant(offset));
+            } catch (RuntimeException e) {
+                // malformed offset or body — fall through to the wall-time parse
+            }
+        }
+        return java.sql.Timestamp.valueOf(body);
+    }
+
+    /** timetz: drop the UTC offset (a bare wall time is all Time can carry). */
+    private static Object parseTimetz(String raw) {
+        String body = raw.trim();
+        java.util.regex.Matcher m = TZ_OFFSET_SUFFIX.matcher(body);
+        if (m.find()) {
+            body = body.substring(0, m.start()).trim();
+        }
+        return java.sql.Time.valueOf(body);
+    }
+
+    /** Trailing UTC offset: {@code +HH}, {@code +HHMM} or {@code +HH:MM}. */
+    private static final java.util.regex.Pattern TZ_OFFSET_SUFFIX =
+            java.util.regex.Pattern.compile("[+-]\\d{2}(:?\\d{2})?$");
 
     /** Helper for tests: split a multi-line slot batch into a list of lines. */
     static List<String> splitBatch(String batch) {

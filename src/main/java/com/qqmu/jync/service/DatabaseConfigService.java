@@ -81,6 +81,17 @@ public class DatabaseConfigService {
      */
     @Transactional
     public DatabaseConfig save(DatabaseConfig config, String rawPassword) {
+        return save(config, rawPassword, null);
+    }
+
+    /**
+     * P0-2 variant: {@code rawMinerPassword} follows the same contract as
+     * {@code rawPassword} — encrypted before storage; null/blank on update keeps the
+     * existing secret. The miner credentials only matter for Oracle CDB sources using
+     * LOGMINER_CDC; every other type ignores them.
+     */
+    @Transactional
+    public DatabaseConfig save(DatabaseConfig config, String rawPassword, String rawMinerPassword) {
         validate(config);
         boolean isNew = config.getId() == null;
 
@@ -105,9 +116,17 @@ public class DatabaseConfigService {
             } else {
                 config.setPassword(cryptoUtil.encrypt(rawPassword));
             }
+            if (rawMinerPassword == null || rawMinerPassword.isEmpty()) {
+                config.setMinerPassword(existing.getMinerPassword());
+            } else {
+                config.setMinerPassword(cryptoUtil.encrypt(rawMinerPassword));
+            }
             config.setCreatedAt(existing.getCreatedAt());
         } else {
             config.setPassword(cryptoUtil.encrypt(rawPassword));
+            if (rawMinerPassword != null && !rawMinerPassword.isEmpty()) {
+                config.setMinerPassword(cryptoUtil.encrypt(rawMinerPassword));
+            }
         }
 
         // Default the port from the product when the user left it blank.

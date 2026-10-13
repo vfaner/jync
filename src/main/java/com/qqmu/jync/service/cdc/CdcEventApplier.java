@@ -106,10 +106,10 @@ public final class CdcEventApplier {
                                     List<Map<String, Object>> rows) throws SQLException {
         List<String> columns = binding.columnNames();
         List<String> pkColumns = binding.pkNames();
-        String sql = ctx.getTargetDialect().getUpsertSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns);
-        List<String> bindOrder = ctx.getTargetDialect().upsertBindOrder(columns, pkColumns);
         Map<String, Integer> types = binding.typeByColumn();
+        String sql = ctx.getTargetDialect().getUpsertSql(
+                ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns, types);
+        List<String> bindOrder = ctx.getTargetDialect().upsertBindOrder(columns, pkColumns);
         try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
@@ -141,7 +141,8 @@ public final class CdcEventApplier {
         String updateSql = generic.getUpdateByPkSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns);
         String insertSql = ctx.getTargetDialect().getUpsertSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), columns, List.of());
+                ctx.getTargetSchema(), binding.getTargetTable(), columns, List.of(),
+                binding.typeByColumn());
 
         List<String> updateBindOrder = new ArrayList<>();
         if (updateSql != null) {

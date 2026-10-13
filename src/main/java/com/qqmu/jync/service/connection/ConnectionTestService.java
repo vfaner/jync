@@ -101,8 +101,9 @@ public class ConnectionTestService {
             }
         } else if (config.getType() == DatabaseType.ORACLE) {
             try {
-                // 连接页无项目/表上下文 → ownerTables 空集(跳过表级补充日志检查)
-                cdcChecks = logMinerProbe.probe(conn, List.of()).getChecks();
+                // 连接页无项目/表上下文 → ownerTables 空集(跳过表级补充日志检查);
+                // P0-2:config 随行,CDB 挖掘模式检查据此判断挖掘账号是否已配置
+                cdcChecks = logMinerProbe.probe(conn, List.of(), config).getChecks();
             } catch (RuntimeException e) {
                 log.warn("LogMiner probe failed during connection test; reporting none", e);
             }

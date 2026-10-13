@@ -21,6 +21,16 @@ public interface SqlDialect {
     DatabaseType.DialectFamily family();
 
     /**
+     * When non-null, this dialect serves exactly that product, even though other products
+     * share its {@link #family()} and have a generic family dialect of their own. Used for
+     * a family member whose SQL diverges in one spot — e.g. openGauss shares the PostgreSQL
+     * family but its default compatibility mode needs a MySQL-flavoured upsert.
+     */
+    default DatabaseType explicitType() {
+        return null;
+    }
+
+    /**
      * The fetch size to use when streaming a large SELECT from a source of this dialect.
      *
      * <p>This is the one source-side concern a dialect carries: MySQL-protocol drivers
@@ -97,6 +107,19 @@ public interface SqlDialect {
      *         {@link #upsertBindOrder(List, List)}
      */
     String getUpsertSql(String schema, String table, List<String> columns, List<String> pkColumns);
+
+    /**
+     * Typed variant: {@code columnJdbcTypes} maps a column name to the JDBC type of the
+     * column the bind lands in, so dialects that need one can render an explicit cast on
+     * the placeholder (openGauss/PostgreSQL reject a varchar bind into a TIME column
+     * without {@code ::time}). A null map means plain {@code ?} placeholders, exactly
+     * like the untyped variant.
+     */
+    default String getUpsertSql(String schema, String table, List<String> columns,
+                                List<String> pkColumns,
+                                java.util.Map<String, Integer> columnJdbcTypes) {
+        return getUpsertSql(schema, table, columns, pkColumns);
+    }
 
     /**
      * The order in which values must be bound to the statement from

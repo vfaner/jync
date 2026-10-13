@@ -21,6 +21,13 @@ public final class CdcProbeResult {
     public static final String BINLOG_ROW_IMAGE = "BINLOG_ROW_IMAGE";
     public static final String SERVER_ID = "SERVER_ID";
     public static final String REPLICATION_GRANTS = "REPLICATION_GRANTS";
+    /**
+     * P1-5: the baseline position read (SHOW BINARY LOG STATUS / SHOW MASTER STATUS)
+     * actually executes — proves REPLICATION CLIENT really works (SHOW GRANTS text can
+     * lie about roles/dynamic privileges) and that the server version speaks one of the
+     * two statements (8.4 removed SHOW MASTER STATUS).
+     */
+    public static final String BINLOG_STATUS = "BINLOG_STATUS";
     public static final String BINLOG_RETENTION = "BINLOG_RETENTION";
 
     // —— v1.6.0 Oracle LogMiner checks ——
@@ -38,6 +45,9 @@ public final class CdcProbeResult {
     /** LONG / LONG RAW columns — pass-with-warning: their DML is skipped and counted. */
     public static final String LONG_COLUMNS = "LONG_COLUMNS";
 
+    /** P0-2: emitted only on a CDB — how mining will reach CDB$ROOT (or why it can't). */
+    public static final String CDB_MINING_MODE = "CDB_MINING_MODE";
+
     // —— v1.7.0 PostgreSQL logical replication checks ——
 
     /** Source must be literal PostgreSQL (dialect-compatible look-alikes rejected). */
@@ -46,6 +56,8 @@ public final class CdcProbeResult {
     public static final String PG_WAL_LEVEL = "PG_WAL_LEVEL";
     /** Current user has the REPLICATION attribute (or SUPERUSER). */
     public static final String PG_REPLICATION_ROLE = "PG_REPLICATION_ROLE";
+    /** Free max_replication_slots headroom — an exhausted quota blocks slot creation (P1-9/I6). */
+    public static final String PG_SLOT_HEADROOM = "PG_SLOT_HEADROOM";
     /** test_decoding plugin is available (shipped with vanilla PG ≥ 9.4). */
     public static final String PG_PLUGIN_AVAILABLE = "PG_PLUGIN_AVAILABLE";
     /** Per-table REPLICA IDENTITY — must be DEFAULT/PARTIAL/FULL for UPDATE/DELETE to yield PK. */

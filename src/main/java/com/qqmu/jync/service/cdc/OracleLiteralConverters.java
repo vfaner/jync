@@ -49,6 +49,21 @@ final class OracleLiteralConverters {
             return unquote(trimmed.substring(1));
         }
 
+        // P2-6: q'[...]' alternative quoting — content is verbatim between the
+        // delimiters (no '' escaping), so it may hold quotes/commas/"and". Same
+        // numeric-coercion contract as the plain quoted branch. An unterminated
+        // q-quote is never guessed at: fall through to unsupported.
+        if ((trimmed.startsWith("q'") || trimmed.startsWith("Q'"))
+                && trimmed.length() >= 5) {
+            String text = unquoteAlternative(trimmed);
+            if (text != null) {
+                if (isNumericType(sqlType)) {
+                    return parseNumber(text);
+                }
+                return text;
+            }
+        }
+
         // Quoted string literal: '...' with '' escape.
         if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
             String text = unquote(trimmed);
@@ -117,6 +132,28 @@ final class OracleLiteralConverters {
         // quoted starts and ends with ' (caller guarantees it).
         String inner = quoted.substring(1, quoted.length() - 1);
         return inner.replace("''", "'");
+    }
+
+    /**
+     * P2-6: unwrap q'[...]' / q'{...}' / q'(...)' / q'<...>' (and exotic single-char
+     * delimiter pairs) to their verbatim content. A close-bracket inside the content is
+     * legal when not followed by a quote, so matching is on the terminator pair
+     * {@code close + '}. Null when the terminator is absent — the caller then treats
+     * the literal as unsupported rather than guessing.
+     */
+    private static String unquoteAlternative(String literal) {
+        char open = literal.charAt(2);
+        char close = switch (open) {
+            case '[' -> ']';
+            case '{' -> '}';
+            case '(' -> ')';
+            case '<' -> '>';
+            default -> open;
+        };
+        if (!literal.endsWith(close + "'")) {
+            return null;
+        }
+        return literal.substring(3, literal.length() - 2);
     }
 
     private static boolean isNumericType(int sqlType) {

@@ -84,9 +84,10 @@ public class DatabaseConfigController {
     @PostMapping("/save")
     public String save(@ModelAttribute DatabaseConfig config,
                        @RequestParam(required = false) String rawPassword,
+                       @RequestParam(required = false) String rawMinerPassword,
                        RedirectAttributes flash) {
         try {
-            service.save(config, rawPassword);
+            service.save(config, rawPassword, rawMinerPassword);
             flash.addFlashAttribute("message", "msg.connection.saved");
             return "redirect:/databases";
         } catch (IllegalArgumentException | IllegalStateException e) {

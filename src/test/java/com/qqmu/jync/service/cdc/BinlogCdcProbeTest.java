@@ -15,7 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * B2 能力探测:七项检查,任何一项不过 => passed()==false 且 failures() 指出缺什么。
+ * B2 能力探测:八项检查,任何一项不过 => passed()==false 且 failures() 指出缺什么。
  * 探测失败不抛异常、不阻断保存项目(任务书 B2)。
  *
  * <p>Mock 意图:setUp 用 conn/stmt 两个 mock 拼出一台"一切正常"的 MySQL 8 源库
@@ -44,6 +44,18 @@ class BinlogCdcProbeTest {
         variable("server_id", "1");
         variable("binlog_expire_logs_seconds", "2592000");
         grants("GRANT ALL PRIVILEGES ON *.* TO 'sync'@'%'");
+        binlogStatus("SHOW BINARY LOG STATUS", "mysql-bin.000003", 154L);
+    }
+
+    /** Mock SHOW BINARY LOG STATUS / SHOW MASTER STATUS:一行 File+Position。 */
+    private void binlogStatus(String sql, String file, long pos) throws SQLException {
+        when(stmt.executeQuery(sql)).thenAnswer(invocation -> {
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.next()).thenReturn(true, false);
+            when(rs.getString("File")).thenReturn(file);
+            when(rs.getLong("Position")).thenReturn(pos);
+            return rs;
+        });
     }
 
     /**
@@ -87,7 +99,47 @@ class BinlogCdcProbeTest {
     void healthySourcePassesAllChecks() {
         CdcProbeResult result = probe.probe(conn, 612001L);
         assertThat(result.passed()).isTrue();
-        assertThat(result.getChecks()).hasSize(7);
+        assertThat(result.getChecks()).hasSize(8);
+    }
+
+    // —— P1-5:位点真实可读检查。SHOW GRANTS 文本匹配不等于 REPLICATION CLIENT
+    // 真的可用(角色授权/动态权限都会让文本失真);SHOW MASTER STATUS 在 8.4 已被
+    // 移除,只发 SHOW BINARY LOG STATUS 又打不进 8.0-。基线读位点是流可开的前提,
+    // probe 必须真实执行它。——
+
+    @Test
+    void binlogStatusReadsPositionOnModernServers() {
+        CdcProbeResult.Check status = check(probe.probe(conn, 612001L), "BINLOG_STATUS");
+        assertThat(status.isPassed()).isTrue();
+        assertThat(status.getDetail()).contains("mysql-bin.000003").contains("154");
+    }
+
+    @Test
+    void masterStatusFallbackOnOlderServers() throws SQLException {
+        // 8.0-:SHOW BINARY LOG STATUS 不存在 → 语法错误 → 落到 SHOW MASTER STATUS。
+        when(stmt.executeQuery("SHOW BINARY LOG STATUS"))
+                .thenThrow(new SQLException(
+                        "You have an error in your SQL syntax near 'BINARY LOG STATUS'"));
+        binlogStatus("SHOW MASTER STATUS", "mysql-bin.000007", 888L);
+
+        CdcProbeResult.Check status = check(probe.probe(conn, 612001L), "BINLOG_STATUS");
+        assertThat(status.isPassed()).isTrue();
+        assertThat(status.getDetail()).contains("mysql-bin.000007").contains("888");
+    }
+
+    @Test
+    void bothStatusStatementsFailTheCheck() throws SQLException {
+        // 8.4 上 REPLICATION CLIENT 缺失:两条都报 access denied → 检查失败并带错误详情。
+        when(stmt.executeQuery("SHOW BINARY LOG STATUS"))
+                .thenThrow(new SQLException("Access denied; you need REPLICATION CLIENT privilege"));
+        when(stmt.executeQuery("SHOW MASTER STATUS"))
+                .thenThrow(new SQLException(
+                        "You have an error in your SQL syntax near 'MASTER STATUS'"));
+
+        CdcProbeResult result = probe.probe(conn, 612001L);
+        CdcProbeResult.Check status = check(result, "BINLOG_STATUS");
+        assertThat(status.isPassed()).isFalse();
+        assertThat(result.passed()).isFalse();
     }
 
     @Test

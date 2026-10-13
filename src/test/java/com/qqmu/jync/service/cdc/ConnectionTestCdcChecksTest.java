@@ -49,6 +49,12 @@ class ConnectionTestCdcChecksTest {
         when(grantRs.next()).thenReturn(true, false);
         when(grantRs.getString(1)).thenReturn("GRANT ALL PRIVILEGES ON *.* TO 'sync'@'%'");
         when(stmt.executeQuery("SHOW GRANTS")).thenReturn(grantRs);
+        // P1-5 的 BINLOG_STATUS 检查:具体 stub 覆盖上面的 any(String) 兜底
+        ResultSet statusRs = mock(ResultSet.class);
+        when(statusRs.next()).thenReturn(true, false);
+        when(statusRs.getString("File")).thenReturn("mysql-bin.000003");
+        when(statusRs.getLong("Position")).thenReturn(154L);
+        when(stmt.executeQuery("SHOW BINARY LOG STATUS")).thenReturn(statusRs);
         return conn;
     }
 
@@ -82,7 +88,7 @@ class ConnectionTestCdcChecksTest {
         ConnectionTestService.TestResult result = service.test(savedMysql());
         assertThat(result.isSuccess()).isTrue();
         List<CdcProbeResult.Check> checks = result.getCdcChecks();
-        assertThat(checks).isNotNull().hasSize(7);
+        assertThat(checks).isNotNull().hasSize(8);
         assertThat(checks).allMatch(CdcProbeResult.Check::isPassed);
     }
 

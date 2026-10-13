@@ -247,6 +247,59 @@ class CdcEventStreamHandlerTest {
     }
 
     @Test
+    void xaRollbackDiscardsBufferedRows() {
+        // XA START → DML → XA END → XA PREPARE → XA ROLLBACK:行事件在 PREPARE 时已写入
+        // binlog 并进 buffer,但事务已被源端回滚,ROLLBACK 之后不会再来该事务的 XID。
+        // 若不清空,这些已回滚的行会搭上「下一个正常事务」的 XID 泄漏到目标端。
+        tableMap(11L, "app", "orders");
+        query("XA START 'gtrid1'");
+        write(11L, row(1L, "a"));
+        query("XA END 'gtrid1'");
+        query("XA PREPARE 'gtrid1'");
+        query("XA ROLLBACK 'gtrid1'");
+        // 下一个正常事务:只带自己的行。
+        write(11L, row(2L, "b"));
+        xid(400L);
+        assertThat(sink.changes).hasSize(1);
+        assertThat(sink.changes.get(0).upserts).hasSize(1);
+        assertThat(sink.changes.get(0).upserts.get(0)).containsEntry("id", 2L);
+        assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(0L);
+    }
+
+    @Test
+    void xaCommitQueryItselfFlushesBufferedRows() {
+        // 实测 MySQL 8.0.46 ROW binlog:两阶段 XA 的事件序列是
+        // Query(XA START) → rows → Query(XA END) → XA_prepare → Query(XA COMMIT),
+        // 之后【没有】XID 事件(XA PREPARE 时事务已持久化)。XA COMMIT 这个 Query
+        // 就是提交点:必须在此 flush,否则行永远卡在 buffer,直到搭上下一个无关
+        // 事务的 XID —— 延迟落库还错误地并入别的事务。
+        tableMap(11L, "app", "orders");
+        query("XA START 'gtrid2'");
+        write(11L, row(1L, "a"));
+        query("XA END 'gtrid2'");
+        query("XA PREPARE 'gtrid2'");
+        assertThat(sink.changes).isEmpty(); // PREPARE 不是提交:尚未可见,不能 flush
+        query("XA COMMIT 'gtrid2'");
+        assertThat(sink.changes).hasSize(1);
+        assertThat(sink.changes.get(0).upserts.get(0)).containsEntry("id", 1L);
+        assertThat(sink.marks).hasSize(1);
+        assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(0L);
+
+        // 若某些 binlog 形态在 XA COMMIT 后仍跟一个 XID(如 one-phase 提交),
+        // buffer 已空:不得重复输出或再打一条位点标记。
+        xid(410L);
+        assertThat(sink.changes).hasSize(1);
+        assertThat(sink.marks).hasSize(1);
+    }
+
+    private void query(String sql) {
+        QueryEventData data = new QueryEventData();
+        data.setSql(sql);
+        data.setDatabase("app");
+        handler.onEvent(event(EventType.QUERY, data, 300L));
+    }
+
+    @Test
     void rotateUpdatesFileInMark() {
         tableMap(11L, "app", "orders");
         RotateEventData rotate = new RotateEventData();

@@ -76,6 +76,9 @@ class ProjectServiceTest {
     @Mock private com.qqmu.jync.service.sync.SyncStateWriter stateWriter;
     @Mock private com.qqmu.jync.service.cdc.CdcPositionStore positionStore;
 
+    private final com.qqmu.jync.config.SyncProperties properties =
+            new com.qqmu.jync.config.SyncProperties();
+
     private ProjectService service;
 
     @BeforeEach
@@ -83,7 +86,8 @@ class ProjectServiceTest {
         service = new ProjectService(projectRepository, databaseConfigRepository,
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
-                syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore);
+                syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
+                properties);
     }
 
     private Project project(Long id) {
@@ -262,6 +266,49 @@ class ProjectServiceTest {
         verify(projectRepository).deleteById(1L);
         verify(lock).close();
         verify(auditService).record(eq(AuditAction.PROJECT_DELETE), contains("proj"));
+    }
+
+    @Test
+    void deleteOfPgLogicalProjectStopsConsumerReleasesSlotAndPurgesPosition() throws Exception {
+        // P0-5:slot 是源库上的持久对象,项目删除后不回收 → 源库为它无限保留 WAL,
+        // 磁盘被一个已不存在的项目撑爆。回收前必须先停本节点的消费者(slot 处于
+        // active 状态时 pg_drop_replication_slot 直接报错)。
+        Project p = project(42L);
+        p.setSourceDbId(7L);
+        when(projectRepository.findById(42L)).thenReturn(Optional.of(p));
+        when(cdcManager.strategyOf(p))
+                .thenReturn(com.qqmu.jync.model.CaptureStrategy.PG_LOGICAL_CDC);
+        com.qqmu.jync.model.DatabaseConfig source = new com.qqmu.jync.model.DatabaseConfig();
+        when(databaseConfigRepository.findById(7L)).thenReturn(Optional.of(source));
+        java.sql.Connection conn = mock(java.sql.Connection.class);
+        java.sql.Statement st = mock(java.sql.Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(dataSourceManager.getConnection(source)).thenReturn(conn);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lockService.tryAcquire(42L)).thenReturn(lock);
+
+        service.delete(42L);
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(cdcManager, st);
+        inOrder.verify(cdcManager).ensureStopped(42L);
+        inOrder.verify(st).execute("SELECT pg_drop_replication_slot('jync_42')");
+        verify(conn).close();
+        verify(positionStore).delete(42L);
+        verify(projectRepository).deleteById(42L);
+    }
+
+    @Test
+    void deleteOfPollingProjectNeverOpensSourceConnection() throws Exception {
+        // 非 PG 策略:没有任何源库副作用(mock 的 strategyOf 默认返回 null → 非 PG)。
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lockService.tryAcquire(1L)).thenReturn(lock);
+
+        service.delete(1L);
+
+        verify(dataSourceManager, never()).getConnection(any());
+        verify(positionStore).delete(1L);
+        verify(projectRepository).deleteById(1L);
     }
 
     // --- force unlock ------------------------------------------------------------------------

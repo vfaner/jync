@@ -41,6 +41,15 @@ public final class JdbcRowMapper {
         return types;
     }
 
+    /** Database-specific type names in result-set order (e.g. "YEAR", "DATETIME"). */
+    public static List<String> columnTypeNames(ResultSetMetaData md) throws SQLException {
+        List<String> names = new ArrayList<>(md.getColumnCount());
+        for (int i = 1; i <= md.getColumnCount(); i++) {
+            names.add(md.getColumnTypeName(i));
+        }
+        return names;
+    }
+
     /**
      * Materializes the current row.
      *
@@ -50,10 +59,22 @@ public final class JdbcRowMapper {
      */
     public static Map<String, Object> readRow(ResultSet rs, List<String> columns,
                                               List<Integer> types) throws SQLException {
+        return readRow(rs, columns, types, null);
+    }
+
+    /**
+     * As {@link #readRow(ResultSet, List, List)} but with the database type name per column,
+     * so columns whose JDBC type misreports the value (MySQL YEAR and DATETIME) can be read
+     * by their real type.
+     */
+    public static Map<String, Object> readRow(ResultSet rs, List<String> columns,
+                                              List<Integer> types, List<String> typeNames)
+            throws SQLException {
         Map<String, Object> row = new LinkedHashMap<>();
         for (int i = 0; i < columns.size(); i++) {
             int idx = i + 1;
             int type = types.get(i);
+            String typeName = typeNames == null ? null : typeNames.get(i);
             Object value;
             switch (type) {
                 case Types.BLOB:
@@ -70,10 +91,36 @@ public final class JdbcRowMapper {
                     break;
                 case Types.TIMESTAMP:
                 case Types.TIMESTAMP_WITH_TIMEZONE:
-                    value = rs.getTimestamp(idx);
+                    if (isMysqlDatetime(typeName)) {
+                        // Connector/J converts DATETIME from the server session zone to the
+                        // JVM zone inside getTimestamp, shifting the wall clock. The server
+                        // literal is the displayed wall time and must survive verbatim; the
+                        // bind side casts it explicitly (?::timestamp on PG-family targets).
+                        value = rs.getString(idx);
+                    } else {
+                        value = rs.getTimestamp(idx);
+                    }
                     break;
                 case Types.DATE:
-                    value = rs.getDate(idx);
+                    if (isMysqlYear(typeName)) {
+                        // YEAR reports DATE but carries an integer year; getDate produced a
+                        // "2026-01-01" literal the integer target could not parse.
+                        value = rs.getInt(idx);
+                    } else {
+                        value = rs.getDate(idx);
+                    }
+                    break;
+                case Types.OTHER:
+                    if (isPgTextBorneOther(typeName)) {
+                        // F-9: PG JSON/JSONB/UUID/XML report OTHER and getObject returns a
+                        // driver-private PGobject the target cannot infer. Their text payload
+                        // is the universal landing form (jsonb canonical text, uuid standard
+                        // form) and binds cleanly to TEXT/VARCHAR — or json/uuid columns via
+                        // the target's assignment cast.
+                        value = rs.getString(idx);
+                    } else {
+                        value = rs.getObject(idx);
+                    }
                     break;
                 case Types.TIME:
                 case Types.TIME_WITH_TIMEZONE:
@@ -91,6 +138,23 @@ public final class JdbcRowMapper {
             row.put(columns.get(i), rs.wasNull() ? null : value);
         }
         return row;
+    }
+
+    private static boolean isMysqlYear(String typeName) {
+        return typeName != null && "YEAR".equalsIgnoreCase(typeName.trim());
+    }
+
+    private static boolean isMysqlDatetime(String typeName) {
+        return typeName != null && "DATETIME".equalsIgnoreCase(typeName.trim());
+    }
+
+    private static boolean isPgTextBorneOther(String typeName) {
+        if (typeName == null) {
+            return false;
+        }
+        String n = typeName.trim().toLowerCase(java.util.Locale.ROOT);
+        return n.equals("json") || n.equals("jsonb") || n.equals("uuid")
+                || n.equals("xml");
     }
 
     /**
@@ -111,12 +175,13 @@ public final class JdbcRowMapper {
                 Integer type = types.get(column);
                 ps.setNull(idx, type == null ? Types.NULL : type);
             } else {
-                bindValue(ps, idx, value);
+                bindValue(ps, idx, value, types.get(column));
             }
         }
     }
 
-    private static void bindValue(PreparedStatement ps, int idx, Object value) throws SQLException {
+    private static void bindValue(PreparedStatement ps, int idx, Object value,
+                                  Integer targetType) throws SQLException {
         // Normalize the java.time types some drivers return so every target accepts them.
         if (value instanceof Instant) {
             ps.setTimestamp(idx, Timestamp.from((Instant) value));
@@ -131,9 +196,46 @@ public final class JdbcRowMapper {
         } else if (value instanceof java.time.LocalTime) {
             ps.setTime(idx, java.sql.Time.valueOf((java.time.LocalTime) value));
         } else if (value instanceof byte[]) {
-            ps.setBytes(idx, (byte[]) value);
+            byte[] bytes = (byte[]) value;
+            // MySQL BIT(n>1) arrives as a big-endian byte array but is built onto an
+            // integer target: decode it as the unsigned integer it represents. BIT(1)
+            // may also arrive as a 1-byte array headed for a boolean column. Genuine
+            // binary columns (BINARY/VARBINARY/BLOB) keep the raw bytes.
+            if (isNumericType(targetType)) {
+                ps.setObject(idx, new java.math.BigInteger(1, bytes));
+            } else if (targetType != null
+                    && (targetType == Types.BIT || targetType == Types.BOOLEAN)
+                    && bytes.length == 1) {
+                ps.setBoolean(idx, bytes[0] != 0);
+            } else {
+                ps.setBytes(idx, bytes);
+            }
+        } else if (value instanceof Boolean && isNumericType(targetType)) {
+            // A BIT(1) source value arriving as Boolean must be accepted by an integer
+            // target; PostgreSQL-family drivers do not coerce Boolean→INTEGER.
+            ps.setObject(idx, (Boolean) value ? 1 : 0);
         } else {
             ps.setObject(idx, value);
+        }
+    }
+
+    private static boolean isNumericType(Integer jdbcType) {
+        if (jdbcType == null) {
+            return false;
+        }
+        switch (jdbcType) {
+            case Types.TINYINT:
+            case Types.SMALLINT:
+            case Types.INTEGER:
+            case Types.BIGINT:
+            case Types.FLOAT:
+            case Types.REAL:
+            case Types.DOUBLE:
+            case Types.NUMERIC:
+            case Types.DECIMAL:
+                return true;
+            default:
+                return false;
         }
     }
 

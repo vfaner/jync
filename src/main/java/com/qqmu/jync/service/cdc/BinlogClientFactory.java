@@ -1,5 +1,7 @@
 package com.qqmu.jync.service.cdc;
 
+import java.util.concurrent.TimeUnit;
+
 import org.springframework.stereotype.Component;
 
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
@@ -8,6 +10,8 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.util.CryptoUtil;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Assembles the {@link BinaryLogClient} for a CDC project (task book B1).
@@ -28,10 +32,12 @@ import com.qqmu.jync.util.CryptoUtil;
  *       bytes; the mapper decodes them with the column's own charset.</li>
  * </ul>
  *
- * <p>keepAlive is disabled on purpose: reconnect policy (exponential backoff, fatal
- * classification) lives entirely in {@link CdcConsumer} so there is exactly one place
- * that decides when to retry.
+ * <p>keepAlive is enabled and a 30s application-level heartbeat is requested so dead
+ * peers surface as communication failures; reconnect policy (exponential backoff,
+ * fatal classification) still lives entirely in {@link CdcConsumer} so there is
+ * exactly one place that decides when to retry.
  */
+@Slf4j
 @Component
 public class BinlogClientFactory {
 
@@ -63,10 +69,16 @@ public class BinlogClientFactory {
         // reconnect loop takes over.
         client.setKeepAlive(true);
         try {
-            client.setHeartbeatInterval(30);
-        } catch (java.lang.NoSuchMethodError | RuntimeException ignored) {
+            // Unit is MILLISECONDS. The value was 30 for a long time — a 30ms
+            // heartbeat means ~33 events/second against an idle source and turns
+            // every network hiccup into a reconnect storm.
+            client.setHeartbeatInterval(TimeUnit.SECONDS.toMillis(30));
+        } catch (java.lang.NoSuchMethodError | RuntimeException e) {
             // Older mysql-binlog-connector forks expose heartbeat only via socket options;
-            // keepAlive(true) alone still lets TCP see dead peers.
+            // keepAlive(true) alone still lets TCP see dead peers — but say so loudly,
+            // a silent catch here is how the unit bug stayed hidden.
+            log.warn("setHeartbeatInterval unavailable ({}); falling back to keepAlive"
+                    + " only — half-open sockets may linger longer", e.toString());
         }
         client.setEventDeserializer(deserializer());
         if (resumeFrom != null) {

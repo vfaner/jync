@@ -49,13 +49,53 @@ public final class TargetTableVerifier {
                         + " (a table with this name exists but its shape does not match the"
                         + " source). Fix the table or let structure sync recreate it.";
             }
-            if (family(sourceColumn.getJdbcType()) != family(targetType)) {
+            if (sourceFamily(sourceColumn) != family(targetType)) {
                 return "target table " + tableName + " column " + sourceColumn.getName()
                         + " has an incompatible type (source JDBC type " + sourceColumn.getJdbcType()
                         + " vs target " + targetType + "). Align the column types.";
             }
         }
         return null;
+    }
+
+    /**
+     * Broad family of the values a SOURCE column actually carries. This diverges from the
+     * raw JDBC type in one case: MySQL-family drivers report YEAR as JDBC DATE, but the
+     * values are integer years, so it belongs with numerics (and must not match a DATE
+     * target, which could not receive the integer bind).
+     */
+    private static int sourceFamily(ColumnMeta column) {
+        if (column.getJdbcType() == java.sql.Types.DATE
+                && column.getTypeName() != null
+                && "YEAR".equalsIgnoreCase(column.getTypeName().trim())) {
+            return 2;
+        }
+        // BIT(1) is a boolean, but a multi-bit BIT (MySQL's BIT(n>1)) carries an unsigned
+        // integer as a byte array and maps onto integer targets. SQL Server's boolean BIT
+        // always reports width 1, so a width above 1 unambiguously means the integer case.
+        if (column.getJdbcType() == java.sql.Types.BIT
+                && column.getSize() != null
+                && column.getSize() > 1) {
+            return 2;
+        }
+        // F-9: PG reports JSON/JSONB/UUID/XML as JDBC OTHER (1111), but their values are
+        // read and written as text (JdbcRowMapper renders them via getString), so they
+        // belong with strings — a pre-created TEXT/VARCHAR target is the recommended
+        // 信创 landing shape. Other OTHER types (geometric point, …) stay exact-match.
+        if (column.getJdbcType() == java.sql.Types.OTHER
+                && isTextBorneOther(column.getTypeName())) {
+            return 1;
+        }
+        return family(column.getJdbcType());
+    }
+
+    private static boolean isTextBorneOther(String typeName) {
+        if (typeName == null) {
+            return false;
+        }
+        String n = typeName.trim().toLowerCase(Locale.ROOT);
+        return n.equals("json") || n.equals("jsonb") || n.equals("uuid")
+                || n.equals("xml");
     }
 
     /** Broad compatibility family; families may freely receive one another's values. */

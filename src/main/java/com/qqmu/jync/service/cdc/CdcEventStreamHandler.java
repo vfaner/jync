@@ -166,7 +166,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                 onDelete(event.getData());
                 break;
             case QUERY:
-                onQuery(event.getData());
+                onQuery(header, event.getData());
                 break;
             case ROTATE:
                 RotateEventData rotate = event.getData();
@@ -268,13 +268,14 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      * are treated as no-ops as well (they are NOT DDL against tracked tables); anything
      * else is DDL — invalidate caches and discard the buffer.
      *
-     * <p>XA transactions: {@code XA START} opens, DML rows buffer, {@code XA PREPARE}
-     * marks the boundary (the subsequent {@code XA COMMIT} is a QUERY we treat as the
-     * commit equivalent). Previously both XA PREPARE and XA COMMIT hit the "anything
-     * non-BEGIN/COMMIT is DDL" branch: buffered rows were dropped, and the position
-     * advanced on the next XID — silent data loss.
+     * <p>XA transactions: verified against real MySQL 8.0.46 ROW binlog, the sequence is
+     * Query(XA START) → rows → Query(XA END) → XA_prepare → Query(XA COMMIT), with NO
+     * XID event afterwards — XA PREPARE already persisted the transaction, so XA COMMIT
+     * is itself the commit point and must flush here. XA PREPARE alone must not (the
+     * branch can still end in XA ROLLBACK). A later XID after the flush is an empty
+     * no-op, which also covers binlog shapes that emit one (one-phase XA commit).
      */
-    private void onQuery(QueryEventData data) {
+    private void onQuery(EventHeaderV4 header, QueryEventData data) {
         String sql = data.getSql();
         String normalized = sql == null ? "" : sql.trim();
         while (normalized.endsWith(";")) {
@@ -287,11 +288,24 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         if ("BEGIN".equals(upper) || "COMMIT".equals(upper) || "ROLLBACK".equals(upper)) {
             return; // transaction control, not DDL: the buffer stays
         }
+        if (upper.startsWith("XA ROLLBACK")) {
+            // 事务已被源端回滚:它的行事件在 XA PREPARE 时刻已写入 binlog 并进了
+            // buffer,而回滚后永远不会再来该事务的提交事件。不清空的话,这些已回滚的
+            // 行会搭上「下一个正常事务」的提交边界泄漏到目标端(源端没有的行凭空出现)。
+            buffered.clear();
+            return;
+        }
+        if (upper.startsWith("XA COMMIT")) {
+            // 实测 MySQL 8 ROW binlog:两阶段 XA 在 XA COMMIT Query 事件处提交,
+            // 其后没有 XID 事件。这就是提交边界,立刻 flush;PREPARE 已落 buffer
+            // 的行此刻才在源库可见,此刻才允许进入目标库。
+            long pos = header.getNextPosition() > 0 ? header.getNextPosition() : lastNextPosition;
+            flushTransaction(pos);
+            return;
+        }
         if (upper.startsWith("XA ") || upper.startsWith("XASTART") || "XASTATE".equals(upper)) {
-            // XA START / XA END / XA PREPARE / XA COMMIT / XA ROLLBACK — transaction
-            // control, not DDL. Rows buffered between XA START and XA PREPARE must stay
-            // in the buffer until the XID event; XA PREPARE/COMMIT do not flush on their
-            // own (MySQL binlog emits an XID after XA COMMIT for the prepared branch).
+            // XA START / XA END / XA PREPARE — transaction control, not DDL. Rows stay
+            // buffered; XA PREPARE is not a commit (the branch can still be rolled back).
             return;
         }
         if (upper.startsWith("SAVEPOINT ") || upper.startsWith("RELEASE SAVEPOINT ")
@@ -317,6 +331,16 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
 
     /** Contract 7: one XID = one sink call = one position mark; empty buffers never flush. */
     private void onXid(EventHeaderV4 header) {
+        long pos = header.getNextPosition() > 0 ? header.getNextPosition() : lastNextPosition;
+        flushTransaction(pos);
+    }
+
+    /**
+     * Applies everything buffered since the last transaction boundary as one sink call at
+     * {@code pos}. Shared by the XID event (ordinary transactions) and the XA COMMIT query
+     * event (XA transactions, which ship no XID in two-phase form).
+     */
+    private void flushTransaction(long pos) {
         List<TableChange> changes = new ArrayList<>();
         for (TableChange change : buffered.values()) {
             if (!change.upserts.isEmpty() || !change.deletes.isEmpty()) {
@@ -330,7 +354,6 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             buffered.clear();
             return;
         }
-        long pos = header.getNextPosition() > 0 ? header.getNextPosition() : lastNextPosition;
         CdcPositionMark mark = new CdcPositionMark(currentFile, pos, gtidSetSupplier.get());
         try {
             sink.apply(changes, mark);

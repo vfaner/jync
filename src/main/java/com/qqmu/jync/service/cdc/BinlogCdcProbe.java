@@ -38,8 +38,37 @@ public class BinlogCdcProbe {
                 "binlog_row_image is %s — CDC applies full after-images and needs FULL"));
         checks.add(checkServerId(conn, plannedServerId));
         checks.add(checkGrants(conn));
+        checks.add(checkBinlogStatus(conn));
         checks.add(checkRetention(conn));
         return CdcProbeResult.of(checks);
+    }
+
+    /**
+     * P1-5: really read the current binlog position — the exact statement pair the
+     * baseline uses ({@link CdcBaselineService}: SHOW BINARY LOG STATUS on 8.2+,
+     * SHOW MASTER STATUS on older servers; 8.4 removed the latter). Passing proves
+     * REPLICATION CLIENT actually works — SHOW GRANTS text matching can be fooled by
+     * role grants — and that the position read the stream start depends on will succeed.
+     */
+    private CdcProbeResult.Check checkBinlogStatus(Connection conn) {
+        SQLException last = null;
+        for (String sql : new String[]{"SHOW BINARY LOG STATUS", "SHOW MASTER STATUS"}) {
+            try (Statement st = conn.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+                if (rs.next()) {
+                    String file = rs.getString("File");
+                    long pos = rs.getLong("Position");
+                    if (file != null && !file.isBlank()) {
+                        return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_STATUS, true,
+                                file + ":" + pos + " readable");
+                    }
+                }
+            } catch (SQLException e) {
+                last = e; // 8.0-: SHOW BINARY LOG STATUS 不存在,落到下一条
+            }
+        }
+        return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_STATUS, false,
+                last != null ? String.valueOf(last.getMessage())
+                        : "could not read the binary log position (is log_bin enabled?)");
     }
 
     private CdcProbeResult.Check checkVersion(Connection conn) {

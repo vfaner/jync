@@ -2,7 +2,14 @@ package com.qqmu.jync.service.cdc;
 
 import lombok.Getter;
 
-/** One persistable position: binlog file + next-position, plus the GTID set when available. */
+/**
+ * One persistable position: binlog file + next-position, plus the GTID set when available.
+ *
+ * <p>P2-8 scope note: only the MySQL binlog and Oracle LogMiner consumers use this
+ * type. The PG logical and SQLServer consumers persist their LSN watermarks
+ * directly through {@code CdcPositionStore} and never touch CdcPositionMark — a
+ * "position" refactor here cannot change their resume behavior.
+ */
 @Getter
 public final class CdcPositionMark {
     private final String file;

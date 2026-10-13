@@ -51,6 +51,15 @@ class BinlogClientFactoryTest {
     }
 
     @Test
+    void heartbeatIntervalIsThirtySecondsInMillis() {
+        // BinaryLogClient.setHeartbeatInterval 的单位是毫秒;传 30 意味着 30ms
+        // 一次心跳 — 每个空闲副本以 ~33 次/秒 的速率向源库要事件,且任何网络
+        // 抖动都直接触发断连重连风暴。正确值:30 秒 = 30000ms。
+        BinaryLogClient client = factory.createClient(mysqlSource(), 42L, null);
+        assertThat(client.getHeartbeatInterval()).isEqualTo(30_000L);
+    }
+
+    @Test
     void gtidPositionWinsOverFilePosition() {
         CdcPosition pos = new CdcPosition();
         pos.setBinlogFile("mysql-bin.000007");

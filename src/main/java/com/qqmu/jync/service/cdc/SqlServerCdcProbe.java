@@ -20,7 +20,8 @@ import lombok.extern.slf4j.Slf4j;
  * <ol>
  *   <li>literal Microsoft SQL Server;</li>
  *   <li>database-level CDC enabled ({@code sys.databases.is_cdc_enabled});</li>
- *   <li>SQL Server Agent running (required for capture / cleanup jobs);</li>
+ *   <li>SQL Server Agent running (required for capture / cleanup jobs) — on Azure SQL
+ *       Database (EngineEdition=5) this fails outright: CDC is unsupported there (P1-9);</li>
  *   <li>current user is in {@code cdc_admin} / {@code cdc_reader} (or {@code sysadmin});</li>
  *   <li>per-table capture instance exists in {@code cdc.change_tables}.</li>
  * </ol>
@@ -39,7 +40,7 @@ public class SqlServerCdcProbe {
         List<CdcProbeResult.Check> checks = new ArrayList<>();
         checks.add(checkMssqlSource(conn));
         checks.add(checkCdcDbEnabled(conn));
-        checks.add(checkAgentRunning(conn));
+        checks.add(checkAgentOrAzure(conn));
         checks.add(checkCdcRole(conn));
         if (schemaTables != null && !schemaTables.isEmpty()) {
             checks.add(checkCaptureInstances(conn, schemaTables));
@@ -79,7 +80,39 @@ public class SqlServerCdcProbe {
         }
     }
 
-    // —— ③ SQL Server Agent running ——
+    // —— ③ SQL Server Agent running (Azure SQL DB: hard fail instead) ——
+
+    /**
+     * P1-9: Azure SQL Database (EngineEdition=5) does not support SQL Server CDC at all —
+     * there is no SQL Server Agent to install or start, so the dm_server_services
+     * remediation ("install/start it") is a dead end there. Detect the edition first and
+     * fail with an honest message; otherwise run the normal Agent check.
+     */
+    private CdcProbeResult.Check checkAgentOrAzure(Connection conn) {
+        Integer edition = readEngineEdition(conn);
+        if (edition != null && edition == 5) {
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_AGENT_RUNNING, false,
+                    "EngineEdition=5 — Azure SQL Database does not support SQL Server CDC"
+                            + " (no SQL Server Agent to run the capture jobs); use Azure"
+                            + " SQL Managed Instance, or switch this project to the"
+                            + " polling strategy");
+        }
+        return checkAgentRunning(conn);
+    }
+
+    /**
+     * SERVERPROPERTY('EngineEdition') — null when undeterminable (old driver, missing
+     * permission, misbehaving mock): the caller then conservatively runs the normal
+     * Agent check instead of guessing.
+     */
+    private static Integer readEngineEdition(Connection conn) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT SERVERPROPERTY('EngineEdition')")) {
+            return rs != null && rs.next() ? (Integer) rs.getInt(1) : null;
+        } catch (SQLException e) {
+            return null;
+        }
+    }
 
     private CdcProbeResult.Check checkAgentRunning(Connection conn) {
         // On Linux SQL Server (mssql-server >= 2019) the Agent is optional; on Windows it
@@ -172,6 +205,17 @@ public class SqlServerCdcProbe {
         // top-1 call; if even this 0-row call throws, runtime will fail on the first
         // drain, so fail early.
         for (String ci : ciNames) {
+            // P1-7: same whitelist the consumer enforces (isSafeCaptureInstanceName) —
+            // the name is inlined into the fn call below, and a CI outside [A-Za-z0-9_]
+            // can never be synced at runtime anyway. Failing here keeps the probe honest:
+            // a green probe must mean the consumer will actually stream this table.
+            if (!SqlServerCdcConsumer.isSafeCaptureInstanceName(ci)) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
+                        "capture instance " + ci + " has a name outside [A-Za-z0-9_]"
+                                + " — Jync refuses to inline it into SQL, so its changes"
+                                + " can never be synced; recreate it with"
+                                + " sys.sp_cdc_enable_table @capture_instance=N'<schema>_<table>'");
+            }
             String sql = "SELECT TOP(1) * FROM cdc.fn_cdc_get_all_changes_" + ci
                     + "(sys.fn_cdc_get_min_lsn(?), sys.fn_cdc_get_max_lsn(), 'all')";
             try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {

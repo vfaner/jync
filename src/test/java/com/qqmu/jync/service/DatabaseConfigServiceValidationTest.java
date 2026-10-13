@@ -208,6 +208,55 @@ class DatabaseConfigServiceValidationTest {
         verify(repository, never()).saveAll(any());
     }
 
+    // —— P0-2:Oracle CDB 挖掘账号(minerUsername/minerPassword)——
+
+    @Test
+    void minerPasswordIsEncryptedOnCreate() {
+        // 挖掘密码与主密码同纪律:落库前必须加密,绝不存明文。
+        DatabaseConfig c = preset(DatabaseType.ORACLE, null);
+        c.setMinerUsername("C##MINER");
+        when(repository.findByName(any())).thenReturn(Optional.empty());
+        when(cryptoUtil.encrypt(null)).thenReturn(null); // 主密码同路径,rawPassword=null
+        when(cryptoUtil.encrypt("miner-secret")).thenReturn("enc-miner");
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig saved = service.save(c, null, "miner-secret");
+
+        assertThat(saved.getMinerPassword()).isEqualTo("enc-miner");
+        assertThat(saved.getMinerUsername()).isEqualTo("C##MINER");
+    }
+
+    @Test
+    void blankMinerPasswordOnUpdateKeepsExisting() {
+        // 与 rawPassword 同一约定:更新时留空 = 保留旧值,表单不必回传密钥。
+        DatabaseConfig existing = stored(1L, ConnectionRole.SOURCE);
+        existing.setMinerPassword("old-enc");
+        DatabaseConfig incoming = stored(1L, ConnectionRole.SOURCE);
+        when(repository.findById(1L)).thenReturn(Optional.of(existing));
+        when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig saved = service.save(incoming, null, "");
+
+        assertThat(saved.getMinerPassword()).isEqualTo("old-enc");
+        verify(cryptoUtil, never()).encrypt("");
+    }
+
+    @Test
+    void newMinerPasswordOnUpdateReplacesExisting() {
+        DatabaseConfig existing = stored(1L, ConnectionRole.SOURCE);
+        existing.setMinerPassword("old-enc");
+        DatabaseConfig incoming = stored(1L, ConnectionRole.SOURCE);
+        when(repository.findById(1L)).thenReturn(Optional.of(existing));
+        when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
+        when(cryptoUtil.encrypt("fresh")).thenReturn("enc-fresh");
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig saved = service.save(incoming, null, "fresh");
+
+        assertThat(saved.getMinerPassword()).isEqualTo("enc-fresh");
+    }
+
     @Test
     void deletingAMissingConnectionIsRejectedWithAnI18nKey() {
         // findById rather than existsById: delete() loads the row so the audit entry can

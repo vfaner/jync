@@ -760,13 +760,16 @@ public class DataSyncService {
                 ResultSetMetaData md = rs.getMetaData();
                 List<String> columns = JdbcRowMapper.columnNames(md);
                 List<Integer> jdbcTypes = JdbcRowMapper.columnTypes(md);
+                List<String> typeNames = JdbcRowMapper.columnTypeNames(md);
                 Map<String, Integer> typeByColumn = new HashMap<>();
                 for (int i = 0; i < columns.size(); i++) {
-                    typeByColumn.put(columns.get(i), jdbcTypes.get(i));
+                    typeByColumn.put(columns.get(i),
+                            effectiveTargetType(jdbcTypes.get(i), typeNames.get(i),
+                                    md.getPrecision(i + 1)));
                 }
 
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
-                        columns, pkColumns);
+                        columns, pkColumns, typeByColumn);
                 List<String> bindOrder = targetDialect.upsertBindOrder(columns, pkColumns);
 
                 boolean emulateUpsert = pkColumns.isEmpty()
@@ -784,9 +787,9 @@ public class DataSyncService {
 
                 total = emulateUpsert && !pkColumns.isEmpty()
                         ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
-                                typeByColumn, rs, jdbcTypes, ctx, pkTrack, sink)
+                                typeByColumn, rs, jdbcTypes, typeNames, ctx, pkTrack, sink)
                         : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
-                                rs, columns, jdbcTypes, ctx, pkTrack, sink);
+                                rs, columns, jdbcTypes, typeNames, ctx, pkTrack, sink);
             }
             targetConn.commit();
         } catch (LockLostException e) {
@@ -830,12 +833,41 @@ public class DataSyncService {
         return total;
     }
 
+    /**
+     * JDBC type of the TARGET column for a source result column. The source metadata types
+     * usually coincide with the built target types, except the columns the converter remaps
+     * by database-specific name/width: MySQL YEAR (reported DATE) lands on SMALLINT, and
+     * MySQL BIT(n>1) lands on a width-band integer. Binds and null-typing must use the
+     * target type.
+     */
+    private static int effectiveTargetType(int sourceJdbcType, String sourceTypeName,
+                                           int precision) {
+        if (sourceJdbcType == java.sql.Types.DATE
+                && sourceTypeName != null
+                && "YEAR".equalsIgnoreCase(sourceTypeName.trim())) {
+            return java.sql.Types.SMALLINT;
+        }
+        if (sourceJdbcType == java.sql.Types.BIT && precision > 1) {
+            if (precision <= 8) {
+                return java.sql.Types.SMALLINT;
+            }
+            if (precision <= 16) {
+                return java.sql.Types.INTEGER;
+            }
+            if (precision <= 63) {
+                return java.sql.Types.BIGINT;
+            }
+            return java.sql.Types.DECIMAL;
+        }
+        return sourceJdbcType;
+    }
+
     /** The normal path: one idempotent statement per row, executed in JDBC batches. */
     private WriteStats writeWithNativeUpsert(Connection targetConn, String upsertSql,
                                              List<String> bindOrder,
                                              Map<String, Integer> typeByColumn,
                                              ResultSet rs, List<String> columns,
-                                             List<Integer> jdbcTypes,
+                                             List<Integer> jdbcTypes, List<String> typeNames,
                                              SyncContext ctx, List<String> pkTrack, PkCursor sink)
             throws SQLException {
         WriteStats stats = new WriteStats();
@@ -843,7 +875,7 @@ public class DataSyncService {
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
             JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
             while (rs.next()) {
-                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes);
+                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes, typeNames);
                 if (sink != null) {
                     sink.values = extractPk(row, pkTrack);
                 }
@@ -871,7 +903,8 @@ public class DataSyncService {
     private WriteStats writeWithEmulatedUpsert(Connection targetConn, String targetTable,
                                                List<String> columns, List<String> pkColumns,
                                                Map<String, Integer> typeByColumn, ResultSet rs,
-                                               List<Integer> jdbcTypes, SyncContext ctx,
+                                               List<Integer> jdbcTypes, List<String> typeNames,
+                                               SyncContext ctx,
                                                List<String> pkTrack, PkCursor sink)
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
@@ -882,7 +915,7 @@ public class DataSyncService {
                 ? generic.getUpdateByPkSql(ctx.getTargetSchema(), targetTable, columns, pkColumns)
                 : null;
         String insertSql = dialect.getUpsertSql(ctx.getTargetSchema(), targetTable, columns,
-                List.of());
+                List.of(), typeByColumn);
 
         List<String> updateBindOrder = new ArrayList<>();
         if (updateSql != null) {
@@ -903,7 +936,7 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(update, properties.getQueryTimeoutSeconds());
             int sinceCommit = 0;
             while (rs.next()) {
-                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes);
+                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes, typeNames);
                 if (sink != null) {
                     sink.values = extractPk(row, pkTrack);
                 }

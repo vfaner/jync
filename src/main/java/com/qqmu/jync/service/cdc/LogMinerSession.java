@@ -47,7 +47,9 @@ public class LogMinerSession implements AutoCloseable {
                     + " AND NAME IS NOT NULL ORDER BY FIRST_CHANGE#";
 
     static final String Q_CONTENTS =
-            "SELECT RS_ID, CSN, XID, OPERATION, SEG_OWNER, TABLE_NAME, SQL_REDO, TIMESTAMP, SRC_CON_ID"
+            // CSCN = commit SCN (populated under COMMITTED_DATA_ONLY); V$LOGMNR_CONTENTS
+            // has NO "CSN" column — selecting it dies with ORA-00904 on every real DB.
+            "SELECT RS_ID, CSCN, XID, OPERATION, SEG_OWNER, TABLE_NAME, SQL_REDO, TIMESTAMP, SRC_CON_ID"
                     + " FROM V$LOGMNR_CONTENTS"
                     + " WHERE CSCN > ? AND OPERATION IN ('INSERT','UPDATE','DELETE','DDL')"
                     + " ORDER BY CSCN, RS_ID";
@@ -156,6 +158,19 @@ public class LogMinerSession implements AutoCloseable {
             return;
         }
         closed = true;
+        // P1-8: SQL_REDO fragments that never reached their ';' terminator are dropped
+        // here. Under COMMITTED_DATA_ONLY with a complete log range this is close to
+        // impossible, so the fix is a diagnostic breadcrumb, not a recovery mechanism —
+        // and the text must not promise recovery: later commits in the same session can
+        // carry the stored position past the dropped CSCN, making it unrecoverable.
+        if (!pending.isEmpty()) {
+            log.warn("Closing LogMiner session (startScn {}) with {} unterminated"
+                    + " SQL_REDO fragment buffer(s) — RS_IDs {} dropped incomplete;"
+                    + " these changes were NOT applied and may be unrecoverable from"
+                    + " the stored position — investigate those RS_IDs in the redo"
+                    + " log", startScn, pending.size(), pending.keySet());
+            pending.clear();
+        }
         try (Statement st = source.createStatement()) {
             st.execute("BEGIN DBMS_LOGMNR.END_LOGMNR; END;");
         } catch (SQLException e) {

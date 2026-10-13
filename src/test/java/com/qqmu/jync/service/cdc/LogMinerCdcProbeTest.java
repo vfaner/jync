@@ -270,6 +270,59 @@ class LogMinerCdcProbeTest {
         assertThat(c.getDetail()).contains("ORA-00942");
     }
 
+    // —— P0-2:CDB 挖掘模式检查(仅 CDB 时出现,非 CDB 报告不变) ——
+
+    private void stubCdb(String cdb, String conId) throws SQLException {
+        singleString(stmt, "SELECT CDB FROM V$DATABASE", cdb);
+        singleString(stmt, "SELECT SYS_CONTEXT('USERENV', 'CON_ID') FROM DUAL", conId);
+    }
+
+    private static com.qqmu.jync.model.DatabaseConfig configWithMiner(String user) {
+        com.qqmu.jync.model.DatabaseConfig c = new com.qqmu.jync.model.DatabaseConfig();
+        c.setMinerUsername(user);
+        c.setMinerPassword(user == null ? null : "enc");
+        return c;
+    }
+
+    @Test
+    void cdbPdbConnectionWithoutMinerAccountFailsCheck() throws SQLException {
+        // README 早已承诺 CDB 走公共挖掘账号;未配置时首轮 START_LOGMNR 必吃
+        // ORA-65040。probe 必须提前拦住并点名解药。
+        stubCdb("YES", "3");
+        CdcProbeResult r = probe.probe(conn, Collections.emptyList(), configWithMiner(null));
+        CdcProbeResult.Check c = byName(r, CdcProbeResult.CDB_MINING_MODE);
+        assertThat(c.isPassed()).isFalse();
+        assertThat(c.getDetail()).contains("ORA-65040").contains("miner");
+    }
+
+    @Test
+    void cdbPdbConnectionWithMinerAccountPassesCheck() throws SQLException {
+        stubCdb("YES", "3");
+        CdcProbeResult r = probe.probe(conn, Collections.emptyList(),
+                configWithMiner("C##MINER"));
+        CdcProbeResult.Check c = byName(r, CdcProbeResult.CDB_MINING_MODE);
+        assertThat(c.isPassed()).isTrue();
+        assertThat(c.getDetail()).contains("C##MINER");
+    }
+
+    @Test
+    void cdbRootConnectionPassesWithScopeNote() throws SQLException {
+        // 直连 CDB$ROOT:能挖,但只挖 root 容器对象——通过,文案说清捕获范围。
+        stubCdb("YES", "1");
+        CdcProbeResult r = probe.probe(conn, Collections.emptyList(), configWithMiner(null));
+        CdcProbeResult.Check c = byName(r, CdcProbeResult.CDB_MINING_MODE);
+        assertThat(c.isPassed()).isTrue();
+        assertThat(c.getDetail()).containsIgnoringCase("root");
+    }
+
+    @Test
+    void nonCdbEmitsNoCdbCheck() {
+        // 守护:默认 rig(V$DATABASE.CDB 查询返回空)不出现第八个检查项,报告形状不变。
+        CdcProbeResult r = probe.probe(conn, tables("SRC", "T1"));
+        assertThat(r.getChecks())
+                .noneMatch(c -> c.getName().equals(CdcProbeResult.CDB_MINING_MODE));
+    }
+
     private static CdcProbeResult.Check byName(CdcProbeResult r, String name) {
         return r.getChecks().stream()
                 .filter(c -> c.getName().equals(name))

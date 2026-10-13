@@ -138,7 +138,9 @@ public class CdcOperationsService {
             }
             // Connection-test-time probe has no project context — table-level checks
             // (supplemental logging per table, LONG columns) are skipped when empty.
-            return logMinerProbe.probe(conn, List.of());
+            // P0-2: the saved source config travels so the CDB mining-mode check can
+            // see whether a mining account is configured.
+            return logMinerProbe.probe(conn, List.of(), source);
         } catch (SQLException | RuntimeException e) {
             // Never an exception to the caller: degrade to a failed check carrying the
             // driver's message, mirroring BinlogCdcProbe.checkVersion's own SQLException path.

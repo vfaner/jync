@@ -37,11 +37,14 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>Source semantics: SQL Server CDC writes every row change into
  * {@code cdc.<schema>_<table>_CT}; each row carries {@code __$start_lsn} (the
- * commit LSN of the originating transaction), {@code __$operation} (1=delete, 2=insert,
- * 4=update-after, and optionally 3=update-before when 'all update old' is requested),
- * and the captured columns. We call
+ * commit LSN of the originating transaction), {@code __$seqval} (order within the
+ * transaction), {@code __$operation} (1=delete, 2=insert, 3=update-before,
+ * 4=update-after — an UPDATE emits a 3/4 pair), and the captured columns. We call
  * {@code cdc.fn_cdc_get_all_changes_<capture_instance>(@from_lsn, @to_lsn, 'all update old')}
- * per cycle with {@code @to_lsn = sys.fn_cdc_get_max_lsn()}.
+ * per cycle with {@code @to_lsn = sys.fn_cdc_get_max_lsn()}, ordered by
+ * {@code (__$start_lsn, __$seqval)}, and fold each transaction's rows through
+ * {@link SqlServerTxFold} (P0-6): same-PK last-op-wins, and a 3/4 pair whose PK moved
+ * deletes the old key — dropping op=3 there left ghost rows on the target.
  *
  * <p>Position discipline (data-first): per-commit transaction → commit target →
  * {@code requireLease} → {@code advanceLsn(maxLsnOfBatch)}.
@@ -69,6 +72,15 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     static final int MAX_PARSE_FAILURES = 5;
 
+    /**
+     * P1-6: even an idle drain (maxLsn unmoved) re-runs capture-instance discovery at
+     * least this often. A CI the DBA enables mid-flight has no DML yet, so maxLsn never
+     * moves for it and the old early return kept the consumer blind until the first row
+     * changed — contradicting the probe's "ready" verdict. Throttled because the 1s idle
+     * poll must not hammer cdc.change_tables every cycle.
+     */
+    static final long DISCOVERY_REFRESH_MS = 60_000L;
+
     private final Project project;
     private final SyncLockService.LockHandle lock;
     private final SyncContext ctx;
@@ -82,6 +94,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     private final CdcEventApplier applier;
     private final BindingSupplier supplier = new BindingSupplier();
+
+    /** P1-6: discovery throttle + the CI names this consumer has already logged. */
+    private long lastDiscoveryAtMs;
+    private final Set<String> knownCaptureInstances = new HashSet<>();
 
     private volatile boolean running = true;
     private volatile Connection currentSource;
@@ -212,7 +228,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         }
     }
 
-    private static final class DrainResult {
+    static final class DrainResult {
         int rows;
         String nextLsn;
     }
@@ -226,13 +242,26 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * mid-iteration: the watermark then stays at fromLsn and the retry re-reads the
      * entire interval — no rows are skipped silently.
      */
-    private DrainResult drain(Connection conn, String fromLsn) throws Exception {
+    DrainResult drain(Connection conn, String fromLsn) throws Exception {
         long projectId = project.getId();
         DrainResult out = new DrainResult();
         String maxLsn = readMaxLsn(conn);
-        if (maxLsn == null || maxLsn.equalsIgnoreCase(fromLsn)) {
+        if (maxLsn == null) {
+            return out; // DB-level CDC off — cdc.change_tables would not even exist
+        }
+        if (maxLsn.equalsIgnoreCase(fromLsn)) {
+            // P1-6: the idle early return must not starve discovery — re-read
+            // cdc.change_tables on a throttled cadence so a newly enabled capture
+            // instance is seen (and logged) now, not at its first DML. Refresh only:
+            // the (fromLsn, maxLsn] interval is empty by definition here.
+            long now = System.currentTimeMillis();
+            if (now - lastDiscoveryAtMs >= DISCOVERY_REFRESH_MS) {
+                lastDiscoveryAtMs = now;
+                discoverCaptureInstances(conn);
+            }
             return out; // nothing new
         }
+        lastDiscoveryAtMs = System.currentTimeMillis();
         List<CaptureInstance> instances = discoverCaptureInstances(conn);
         if (instances.isEmpty()) {
             stats.addSkippedUnsupported(1);
@@ -242,20 +271,17 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             // starts from the current position when the DBA enables CDC mid-stream.
             return out;
         }
-        // Group rows by start_lsn so each transaction flushes atomically.
-        Map<String, Map<CdcTableBinding, List<Map<String, Object>>>> upsertsByTx =
-                new LinkedHashMap<>();
-        Map<String, Map<CdcTableBinding, List<Map<String, Object>>>> deletesByTx =
-                new LinkedHashMap<>();
+        // P0-6: fold rows per transaction in SOURCE ORDER (the SQL guarantees
+        // ORDER BY __$start_lsn, __$seqval): same-PK last-op-wins, op=3/op=4 pairs
+        // delete the old PK when an UPDATE moved it, and transactions flush in
+        // ascending txLsn order so advanceLsn stays monotonic across capture instances.
+        SqlServerTxFold fold = new SqlServerTxFold();
         String highWater = fromLsn;
         for (CaptureInstance ci : instances) {
             // from_lsn is INCLUSIVE — pass fn_cdc_increment_lsn to skip the watermark
             // transaction we already applied on the previous cycle. The persisted value
             // remains fromLsn; only the SQL interval shifts.
-            String sql = "SELECT __$start_lsn, __$operation, *"
-                    + " FROM cdc.fn_cdc_get_all_changes_" + ci.captureInstance
-                    + "((SELECT sys.fn_cdc_increment_lsn(CONVERT(binary(10), ?, 1))),"
-                    + " CONVERT(binary(10), ?, 1),'all update old')";
+            String sql = changesSql(ci.captureInstance);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, fromLsn);
                 ps.setString(2, maxLsn);
@@ -272,15 +298,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                             continue;
                         }
                         Map<String, Object> row = readRow(rs, binding, availableCols);
-                        if (op == 1) { // delete
-                            deletesByTx.computeIfAbsent(startLsn, k -> new LinkedHashMap<>())
-                                    .computeIfAbsent(binding, k -> new ArrayList<>())
-                                    .add(row);
-                        } else if (op == 2 || op == 4) { // insert or update-after
-                            upsertsByTx.computeIfAbsent(startLsn, k -> new LinkedHashMap<>())
-                                    .computeIfAbsent(binding, k -> new ArrayList<>())
-                                    .add(row);
-                        } // op == 3 is update-before — we don't need it (upsert semantics)
+                        fold.accept(startLsn, binding, op, row);
                         highWater = maxLsn;
                         out.rows++;
                         stats.touchEvent(System.currentTimeMillis());
@@ -301,43 +319,81 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 throw e;
             }
         }
-        // Flush per-transaction in LSN order.
-        for (Map.Entry<String, Map<CdcTableBinding, List<Map<String, Object>>>> e
-                : upsertsByTx.entrySet()) {
-            String txLsn = e.getKey();
-            flushTransaction(projectId, txLsn, e.getValue(),
-                    deletesByTx.getOrDefault(txLsn, Collections.emptyMap()));
-        }
-        // Leftover deletes for a start_lsn with no upserts (all-delete transaction).
-        for (Map.Entry<String, Map<CdcTableBinding, List<Map<String, Object>>>> e
-                : deletesByTx.entrySet()) {
-            if (!upsertsByTx.containsKey(e.getKey())) {
-                flushTransaction(projectId, e.getKey(), Collections.emptyMap(), e.getValue());
-            }
+        // Flush per-transaction in ascending txLsn order (fold.ordered() is a TreeMap).
+        for (Map.Entry<String, Map<CdcTableBinding, SqlServerTxFold.Buffer>> e
+                : fold.ordered().entrySet()) {
+            flushTransaction(projectId, e.getKey(), e.getValue());
         }
         out.nextLsn = highWater;
         return out;
     }
 
+    /**
+     * The change-pull SQL for one capture instance (P0-6): {@code 'all update old'}
+     * makes the function emit op=3 update-before images (the fold needs them to delete
+     * moved PKs), and the explicit {@code ORDER BY __$start_lsn, __$seqval} is the
+     * contract the fold's net-effect semantics rely on — the function's default order
+     * is documented behavior, the ORDER BY is a guarantee.
+     */
+    static String changesSql(String captureInstance) {
+        return "SELECT __$start_lsn, __$operation, *"
+                + " FROM cdc.fn_cdc_get_all_changes_" + captureInstance
+                + "((SELECT sys.fn_cdc_increment_lsn(CONVERT(binary(10), ?, 1))),"
+                + " CONVERT(binary(10), ?, 1),'all update old')"
+                + " ORDER BY __$start_lsn, __$seqval";
+    }
+
+    /**
+     * P1-7: capture instance names come from a system table and are concatenated into
+     * SQL — they are identifiers, and SQL Server identifiers used here only ever contain
+     * letters, digits and underscore. Anything else is skipped (not executed).
+     */
+    static boolean isSafeCaptureInstanceName(String captureInstance) {
+        if (captureInstance == null || captureInstance.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < captureInstance.length(); i++) {
+            char c = captureInstance.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '_';
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void flushTransaction(long projectId, String txLsn,
-                                  Map<CdcTableBinding, List<Map<String, Object>>> upserts,
-                                  Map<CdcTableBinding, List<Map<String, Object>>> deletes)
+                                  Map<CdcTableBinding, SqlServerTxFold.Buffer> buffers)
             throws Exception {
-        if (upserts.isEmpty() && deletes.isEmpty()) return;
+        if (buffers.isEmpty()) return;
         Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
         boolean originalAutoCommit = true;
         try {
             originalAutoCommit = target.getAutoCommit();
             target.setAutoCommit(false);
-            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : upserts.entrySet()) {
-                applier.applyUpserts(target, e.getKey(), e.getValue());
+            // Upserts before deletes: with the fold's same-PK collapsing this order is
+            // what makes PK chains (1→2→3 in one tx) land on the source's final state.
+            for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
+                if (!e.getValue().upserts.isEmpty()) {
+                    applier.applyUpserts(target, e.getKey(), e.getValue().upserts);
+                }
             }
-            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : deletes.entrySet()) {
-                applier.applyDeletes(target, e.getKey(), e.getValue());
+            for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
+                if (!e.getValue().deletes.isEmpty()) {
+                    applier.applyDeletes(target, e.getKey(), e.getValue().deletes);
+                }
             }
             target.commit();
         } catch (Exception e) {
             try { target.rollback(); } catch (SQLException ignored) { }
+            // P2-3: a flush failure may mean schema drift — the cached bindings that
+            // built these statements may still carry columns the source dropped (or
+            // miss new ones). Evict them so the retry re-reads metadata instead of
+            // replaying the identical failing SQL until strike-out parks the project.
+            for (CdcTableBinding b : buffers.keySet()) {
+                supplier.invalidate(b);
+            }
             throw e;
         } finally {
             try {
@@ -381,11 +437,37 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 String table = rs.getString(2);
                 String ci = rs.getString(3);
                 if (!matchesProjectTable(schema, table)) continue;
+                if (!isSafeCaptureInstanceName(ci)) {
+                    // P1-7: the name is concatenated into the change-pull SQL; a name
+                    // outside [A-Za-z0-9_] never reaches the statement.
+                    log.warn("Skipping capture instance '{}' of {}.{} — name contains"
+                            + " characters outside [A-Za-z0-9_]; its changes will NOT be"
+                            + " synced until the instance is recreated with a safe name",
+                            ci, schema, table);
+                    continue;
+                }
                 String key = (schema + "." + table).toLowerCase(Locale.ROOT);
                 byTable.put(key, new CaptureInstance(schema, table, ci)); // last one wins
             }
         }
-        return new ArrayList<>(byTable.values());
+        List<CaptureInstance> found = new ArrayList<>(byTable.values());
+        noteNewCaptureInstances(found);
+        return found;
+    }
+
+    /**
+     * P1-6: log the capture instances this consumer has not seen before — the moment a
+     * DBA-enabled CI becomes visible instead of silence until its first DML moves the
+     * watermark. Add-only set: a dropped CI keeps its name (logged once per lifetime).
+     */
+    private void noteNewCaptureInstances(List<CaptureInstance> instances) {
+        for (CaptureInstance ci : instances) {
+            if (knownCaptureInstances.add(ci.captureInstance)) {
+                log.info("SQLServer CDC for project {} picked up capture instance {}"
+                        + " ({}.{}); its changes will be synced",
+                        project.getId(), ci.captureInstance, ci.schema, ci.table);
+            }
+        }
     }
 
     private boolean matchesProjectTable(String schema, String table) {
@@ -514,7 +596,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 Collections.synchronizedMap(new LinkedHashMap<>());
 
         CdcTableBinding binding(CaptureInstance ci) {
-            String key = (ci.schema + "." + ci.table).toLowerCase(Locale.ROOT);
+            String key = keyOf(ci.schema, ci.table);
             Object cached = cache.get(key);
             if (cached != null) {
                 return cached == notMappableSentinel ? null : (CdcTableBinding) cached;
@@ -537,6 +619,22 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 throw new IllegalStateException(
                         "SQLServer metadata read failed for " + key, e);
             }
+        }
+
+        /**
+         * P2-3: drop whatever is cached for this binding's table (binding or negative
+         * sentinel) so the next {@link #binding} call re-reads live metadata. Called
+         * when a flush fails: the cached column set that built the failing SQL is
+         * suspect (source schema drift), and replaying it verbatim would fail
+         * identically every retry until strike-out.
+         */
+        void invalidate(CdcTableBinding binding) {
+            cache.remove(keyOf(binding.getDatabase(), binding.getTable()));
+        }
+
+        /** Cache keys are lowercase "schema.table"; BindingSupplier stores ci.schema as the binding's database. */
+        private static String keyOf(String schema, String table) {
+            return (schema + "." + table).toLowerCase(Locale.ROOT);
         }
     }
 }

@@ -77,7 +77,27 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         int size = c.getSize() == null ? 0 : c.getSize();
 
         switch (c.getJdbcType()) {
-            case Types.BIT:
+            case Types.BIT: {
+                // BIT(1) is a boolean; MySQL's BIT(n>1) is an n-bit UNSIGNED integer the
+                // driver returns as a byte array, so it needs an integer target (mapping
+                // it to BOOLEAN parked baselines in the v1.7.1 docker matrix). Width
+                // bands follow the representable range; BIT(64) needs an exact decimal
+                // because 2^64-1 overflows signed BIGINT.
+                Integer bitWidth = c.getSize();
+                if (bitWidth != null && bitWidth > 1) {
+                    if (bitWidth <= 8) {
+                        return smallIntType();
+                    }
+                    if (bitWidth <= 16) {
+                        return intType();
+                    }
+                    if (bitWidth <= 63) {
+                        return bigIntType();
+                    }
+                    return decimalType(c, sourceType);
+                }
+                return booleanType();
+            }
             case Types.BOOLEAN:
                 return booleanType();
             case Types.TINYINT:
@@ -108,6 +128,13 @@ public abstract class AbstractSqlDialect implements SqlDialect {
             case Types.LONGNVARCHAR:
                 return varcharType(size);
             case Types.DATE:
+                if (isMysqlFamilyYear(c, sourceType)) {
+                    // Connector/J reports YEAR as JDBC DATE, but row values are integer
+                    // years and a DATE target cannot receive them. MySQL-family targets
+                    // keep native YEAR; everyone else stores the year in a smallint.
+                    return family() == DatabaseType.DialectFamily.MYSQL
+                            ? "YEAR" : smallIntType();
+                }
                 return dateTypeFor(c, sourceType);
             case Types.TIME:
             case Types.TIME_WITH_TIMEZONE:
@@ -186,6 +213,17 @@ public abstract class AbstractSqlDialect implements SqlDialect {
      * date-arithmetic semantics for no benefit. That leaves Oracle → 达梦 (DM) unwidened;
      * DM's DATE precision is not verified here, so confirm it before relying on that path.
      */
+    /**
+     * MySQL-family YEAR columns reach us mislabelled as JDBC DATE (Connector/J metadata
+     * quirk), even though the type name stays "YEAR" and the row values are integers.
+     */
+    private static boolean isMysqlFamilyYear(ColumnMeta c, DatabaseType sourceType) {
+        return sourceType != null
+                && sourceType.getFamily() == DatabaseType.DialectFamily.MYSQL
+                && c.getTypeName() != null
+                && "YEAR".equalsIgnoreCase(c.getTypeName().trim());
+    }
+
     protected String dateTypeFor(ColumnMeta c, DatabaseType sourceType) {
         if (sourceType != null
                 && sourceType.getFamily() == DatabaseType.DialectFamily.ORACLE
@@ -596,6 +634,30 @@ public abstract class AbstractSqlDialect implements SqlDialect {
 
     protected String placeholders(int count) {
         return String.join(", ", java.util.Collections.nCopies(count, "?"));
+    }
+
+    /**
+     * One placeholder per column, decorated per the target column's JDBC type where a
+     * dialect needs it ({@link #placeholderFor(Integer)}). A null/empty type map yields
+     * plain question marks.
+     */
+    protected String typedPlaceholders(List<String> columns,
+                                       java.util.Map<String, Integer> columnJdbcTypes) {
+        if (columnJdbcTypes == null || columnJdbcTypes.isEmpty()) {
+            return placeholders(columns.size());
+        }
+        return columns.stream()
+                .map(c -> placeholderFor(columnJdbcTypes.get(c)))
+                .collect(Collectors.joining(", "));
+    }
+
+    /**
+     * Placeholder for a bind that lands in a column of this JDBC type. Plain {@code ?}
+     * for every type by default; PostgreSQL-family dialects cast TIME binds (the sync
+     * sends MySQL TIME values as strings because that domain can exceed 24h).
+     */
+    protected String placeholderFor(Integer jdbcType) {
+        return "?";
     }
 
     protected String quotedList(List<String> names) {

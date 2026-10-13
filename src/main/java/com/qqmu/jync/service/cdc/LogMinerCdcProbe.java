@@ -35,6 +35,16 @@ public class LogMinerCdcProbe {
      *                    are skipped.
      */
     public CdcProbeResult probe(Connection conn, List<String[]> ownerTables) {
+        return probe(conn, ownerTables, null);
+    }
+
+    /**
+     * P0-2 variant carrying the saved config: on a CDB the probe also reports how mining
+     * will reach CDB$ROOT (or why it can't). A null config downgrades that check to
+     * "no mining account configured", matching what the consumer would conclude.
+     */
+    public CdcProbeResult probe(Connection conn, List<String[]> ownerTables,
+                                com.qqmu.jync.model.DatabaseConfig config) {
         List<CdcProbeResult.Check> checks = new ArrayList<>();
         checks.add(checkOracleSource(conn));
         int major = majorVersion(conn);
@@ -46,7 +56,44 @@ public class LogMinerCdcProbe {
             checks.add(checkLongColumns(conn, ownerTables));
         }
         checks.add(checkMiningPrivileges(conn, major));
+        CdcProbeResult.Check cdb = checkCdbMiningMode(conn, config);
+        if (cdb != null) {
+            checks.add(cdb);
+        }
         return CdcProbeResult.of(checks);
+    }
+
+    /**
+     * P0-2: CDB mining mode — null on a non-CDB (or when the CDB flag is unreadable:
+     * 11g has no such column, and guessing would misreport). On a CDB: root connection
+     * passes with a scope note (only root-container objects are captured); a PDB
+     * connection passes only when a mining account is configured, otherwise it fails
+     * with the ORA-65040 the first mine would otherwise die with.
+     */
+    private CdcProbeResult.Check checkCdbMiningMode(
+            Connection conn, com.qqmu.jync.model.DatabaseConfig config) {
+        if (!Boolean.TRUE.equals(OracleCdbSupport.isCdb(conn))) {
+            return null;
+        }
+        int conId = OracleCdbSupport.currentConId(conn);
+        if (conId == 1) {
+            return CdcProbeResult.Check.of(CdcProbeResult.CDB_MINING_MODE, true,
+                    "CDB — connected to CDB$ROOT directly: only root-container objects"
+                            + " are captured; to mine a PDB, configure its service plus"
+                            + " the mining account");
+        }
+        boolean minerConfigured = config != null
+                && config.getMinerUsername() != null && !config.getMinerUsername().isBlank()
+                && config.getMinerPassword() != null && !config.getMinerPassword().isBlank();
+        if (minerConfigured) {
+            return CdcProbeResult.Check.of(CdcProbeResult.CDB_MINING_MODE, true,
+                    "CDB (CON_ID " + conId + ") — mining via CDB$ROOT as '"
+                            + config.getMinerUsername() + "'");
+        }
+        return CdcProbeResult.Check.of(CdcProbeResult.CDB_MINING_MODE, false,
+                "CDB (CON_ID " + conId + ") — DBMS_LOGMNR may only run in CDB$ROOT, so the"
+                        + " first mine raises ORA-65040; configure the miner"
+                        + " username/password (a C## common user) on this connection");
     }
 
     // —— ① literal Oracle ——

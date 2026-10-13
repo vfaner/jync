@@ -38,6 +38,38 @@ class OracleLiteralConvertersTest {
         assertThat(OracleLiteralConverters.convert("1.2E3", Types.DOUBLE)).isEqualTo("1.2E3");
     }
 
+    // —— P2-6:q'[...]' 替代引号去壳(内容逐字,无 '' 转义) ——
+
+    @Test
+    void qQuotedLiteralParsesAsVerbatimContent() {
+        assertThat(OracleLiteralConverters.convert("q'[it's, fine]'", Types.VARCHAR))
+                .isEqualTo("it's, fine");
+        assertThat(OracleLiteralConverters.convert("q'{curly}'", Types.VARCHAR))
+                .isEqualTo("curly");
+        assertThat(OracleLiteralConverters.convert("q'(paren)'", Types.VARCHAR))
+                .isEqualTo("paren");
+        assertThat(OracleLiteralConverters.convert("q'<angle>'", Types.VARCHAR))
+                .isEqualTo("angle");
+        assertThat(OracleLiteralConverters.convert("q'!bang!'", Types.VARCHAR))
+                .isEqualTo("bang");
+        // 内容里单独的闭括号(后面不跟引号)不是终止符。
+        assertThat(OracleLiteralConverters.convert("q'[a]b]'", Types.VARCHAR))
+                .isEqualTo("a]b");
+    }
+
+    @Test
+    void qQuotedNumericCoercesLikePlainQuoted() {
+        assertThat(OracleLiteralConverters.convert("q'[42]'", Types.INTEGER)).isEqualTo("42");
+    }
+
+    @Test
+    void malformedQQuoteStaysUnsupported() {
+        // 守护:未闭合的 q-quote 绝不猜内容——沿用 unsupported → 上层 WARN+raw 透传。
+        assertThatThrownBy(() -> OracleLiteralConverters.convert(
+                "q'[never closed", Types.VARCHAR))
+                .isInstanceOf(OracleLiteralConverters.UnsupportedLiteralException.class);
+    }
+
     @Test
     void toDateInnerStringSurfacedVerbatim() {
         // NLS-dependent date text is surfaced as-is; the target JDBC driver interprets it.

@@ -21,6 +21,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.mockito.Mockito;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 /**
  * LogMinerSession open-sequence and RS_ID continuation-merge tests. All JDBC is mocked —
  * the real ARCHIVELOG pipeline is covered by Task 7 ITs.
@@ -206,5 +210,69 @@ class LogMinerSessionTest {
         session.close();   // idempotent
 
         verify(fx.st, times(1)).execute(Mockito.contains("END_LOGMNR"));
+    }
+
+    @Test
+    void closeWarnsWhenUnterminatedFragmentsRemain() throws SQLException {
+        // P1-8: a fragment that never reaches its ';' terminator (statement split across
+        // RS_ID rows, session killed / high-water reached mid-statement) stays in the
+        // pending map. close() currently drops it silently → the change is lost with no
+        // breadcrumb. It must WARN naming the stranded RS_ID(s).
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"});
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+
+        when(fx.rows.next()).thenReturn(true, false);
+        when(fx.rows.getString(1)).thenReturn("55");
+        when(fx.rows.getLong(2)).thenReturn(520L);
+        when(fx.rows.getString(3)).thenReturn("txA");
+        when(fx.rows.getString(4)).thenReturn("INSERT");
+        when(fx.rows.getString(5)).thenReturn("SRC");
+        when(fx.rows.getString(6)).thenReturn("BIG");
+        // No trailing ';' — accumulate() keeps this in pending.
+        when(fx.rows.getString(7))
+                .thenReturn("insert into \"SRC\".\"BIG\"(\"ID\",\"V\") values ('1', 'unterminated");
+        when(fx.rows.getTimestamp(8)).thenReturn(new Timestamp(0L));
+
+        List<LogMinerSession.Row> batch = session.nextBatch();
+        assertThat(batch).isEmpty();   // fragment never completed
+
+        ListAppender<ILoggingEvent> appender = LogCapture.attach(LogMinerSession.class);
+        try {
+            session.close();
+            assertThat(appender.list)
+                    .anyMatch(e -> e.getLevel() == Level.WARN
+                            && e.getFormattedMessage().contains("55"));
+        } finally {
+            LogCapture.detach(LogMinerSession.class, appender);
+        }
+    }
+
+    @Test
+    void closeIsQuietWhenNoPendingFragments() throws SQLException {
+        // Clean drain → close() must not manufacture a spurious WARN.
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"});
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+        when(fx.rows.next()).thenReturn(false);
+        session.nextBatch();
+
+        ListAppender<ILoggingEvent> appender = LogCapture.attach(LogMinerSession.class);
+        try {
+            session.close();
+            assertThat(appender.list)
+                    .noneMatch(e -> e.getLevel() == Level.WARN);
+        } finally {
+            LogCapture.detach(LogMinerSession.class, appender);
+        }
+    }
+
+    @Test
+    void contentsQuerySelectsCscnNotNonexistentCsnColumn() {
+        // V$LOGMNR_CONTENTS 只有 SCN 与 CSCN 列,没有 CSN(spike 实测 ORA-00904)。
+        // 全部 JDBC 走 mock,列名笔误在单测里静默通过、上真库即全灭 —— 用 SQL 文本断言钉死。
+        assertThat(LogMinerSession.Q_CONTENTS)
+                .contains("RS_ID, CSCN,")
+                .doesNotContain("RS_ID, CSN,");
     }
 }

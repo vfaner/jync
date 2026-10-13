@@ -66,6 +66,20 @@ public class DatabaseConfig {
     @Column(name = "password_enc")
     private String password;
 
+    /**
+     * P0-2: optional LogMiner mining account (Oracle CDB only). When set, streaming mines
+     * through a second connection to CDB$ROOT as this common user (typically {@code C##…}),
+     * while the main connection keeps reading the PDB for baseline/metadata. Blank →
+     * single-account mode (non-CDB sources, the common case).
+     */
+    @Column(name = "miner_username", length = 255)
+    private String minerUsername;
+
+    /** Stored encrypted like {@link #password}; blank on update keeps the existing secret. */
+    @Lob
+    @Column(name = "miner_password_enc")
+    private String minerPassword;
+
     /** Full JDBC URL, used when {@link #type} is {@link DatabaseType#CUSTOM}. */
     @Lob
     @Column(name = "custom_url")

@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.cdc;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -15,6 +16,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeType;
+import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -29,7 +31,8 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Long-lived Oracle LogMiner CDC pipeline (v1.6.0). Lifecycle mirrors {@link CdcConsumer}
  * one-for-one: baseline gate → endless mine/parse/apply loop with lease renewal at the top,
- * requestStop as the quiet exit, fatal-stop on PURGED/AUTH/PARSE_STRIKE_OUT, catch-all
+ * requestStop as the quiet exit, fatal-stop on PURGED/AUTH/PARSE_STRIKE_OUT/APPLY_STRIKE_OUT,
+ * catch-all
  * quiet-vs-park distinction, finally-block lease release + INFO stop line.
  *
  * <p>Position discipline (data-first): one CSCN = one target commit → lease re-check →
@@ -54,6 +57,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     private static final int DDL_LOG_SQL_CHARS = 200;
     /** Parse strike-out: same threshold as {@link CdcConsumer} (5 consecutive poison rows). */
     static final int MAX_PARSE_FAILURES = 5;
+    /**
+     * F-12: apply/cycle strike-out — same threshold as the PG consumer's APPLY_STRIKE_OUT
+     * and the binlog consumer's deserializationFailures (more than 5 consecutive failed
+     * mine cycles with no successfully applied transaction between them).
+     */
+    static final int MAX_APPLY_FAILURES = 5;
 
     private final Project project;
     private final SyncLockService.LockHandle lock;
@@ -73,7 +82,13 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     private volatile boolean running = true;
     private volatile Connection currentSource;
+    /** P0-2: second connection to CDB$ROOT when mining via a common user; null otherwise. */
+    private volatile Connection currentMining;
     private volatile LogMinerSession currentSession;
+    /** P0-2: decided once per consumer lifetime; see {@link #decideMiningPlan}. */
+    private volatile MiningPlan miningPlan;
+    /** P0-2: CDB name (= root service name), resolved with the plan when ROOT. */
+    private volatile String miningCdbName;
     /**
      * CON_ID of the connection's current container. On a non-CDB this is 0/1 and the
      * SRC_CON_ID filter below is a no-op. On a CDB mined from CDB$ROOT, only rows with
@@ -83,6 +98,8 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
     private final AtomicInteger parseFailures = new AtomicInteger();
+    /** F-12: consecutive failed mine cycles (target flush rejection, connect failure...). */
+    private final AtomicInteger applyFailures = new AtomicInteger();
     private final AtomicLong connectedAtNs = new AtomicLong();
 
     private CdcReconnectBackoff backoff;
@@ -139,12 +156,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 try {
                     Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig());
                     currentSource = conn;
-                    if (ownConId < 0) {
-                        ownConId = readOwnConId(conn);
-                    }
+                    // P0-2: on a CDB the session must run on a CDB$ROOT connection made
+                    // with the mining account; on anything else this returns conn itself.
+                    Connection miningConn = resolveMiningConnection(conn, projectId);
                     int batchSize = (int) Math.min(Integer.MAX_VALUE,
                             properties.getCdc().getLogminer().getBatchSize());
-                    LogMinerSession session = sessionFactory.open(conn, lastScn, batchSize);
+                    LogMinerSession session = sessionFactory.open(miningConn, lastScn, batchSize);
                     currentSession = session;
                     stats.setConnected(true);
                     stats.markStarted();
@@ -159,10 +176,17 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     lastScn = session.highWaterScn();
                     session.close();
                 } catch (Throwable e) {
+                    // F-12: count failed cycles. drain's per-row parse skips are counted
+                    // separately (parseFailures); anything that makes it here — target
+                    // flush rejection, source/mining connect failure, session open — is
+                    // a failed cycle and escalates after MAX_APPLY_FAILURES in a row.
+                    applyFailures.incrementAndGet();
                     lastFailure.compareAndSet(null, e);
                     drained = Collections.emptyList();
                 } finally {
                     closeQuietly(currentSession);
+                    closeQuietly(currentMining);
+                    currentMining = null;
                     closeQuietly(currentSource);
                     currentSession = null;
                     currentSource = null;
@@ -175,7 +199,8 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 CdcFailureClassifier.Kind kind = failure == null
                         ? CdcFailureClassifier.Kind.TRANSIENT
                         : CdcFailureClassifier.classify(failure);
-                if (kind != CdcFailureClassifier.Kind.TRANSIENT || parseStrikeOut()) {
+                if (kind != CdcFailureClassifier.Kind.TRANSIENT
+                        || parseStrikeOut() || applyStrikeOut()) {
                     fatalStop(projectId, failure, kind);
                     break;
                 }
@@ -212,6 +237,8 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             }
         } finally {
             closeQuietly(currentSession);
+            closeQuietly(currentMining);
+            currentMining = null;
             closeQuietly(currentSource);
             lock.close();
             stats.setConnected(false);
@@ -225,21 +252,84 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         }
     }
 
+    /** P0-2: where the LogMiner session runs. */
+    enum MiningPlan {
+        /** Mine on the configured source connection (non-CDB, or a direct root connection). */
+        SOURCE,
+        /** Mine on a second CDB$ROOT connection opened with the mining account. */
+        ROOT
+    }
+
     /**
-     * Read the connection's current container ID (V$DATABASE.OPEND_MODES context). On a
-     * non-CDB this returns 0; SRC_CON_ID filtering then passes every row.
+     * The CDB mining-mode decision, as a pure function for direct testing.
+     *
+     * <ul>
+     *   <li>not a CDB (or indeterminate — 11g has no CDB column) → SOURCE, the v1.6.0 path;</li>
+     *   <li>connected to CDB$ROOT (CON_ID 1) → SOURCE, the legacy root-only capture: only
+     *       root-container objects match, which someone may rely on, so it stays but the
+     *       caller WARNs once about the capture scope;</li>
+     *   <li>PDB connection + mining account configured → ROOT;</li>
+     *   <li>PDB connection without one → fail fast with ORA-65040's own error code, naming
+     *       the fix, instead of dying at the first START_LOGMNR with a bare Oracle message.</li>
+     * </ul>
      */
-    private int readOwnConId(Connection conn) {
-        try (java.sql.Statement st = conn.createStatement();
-             java.sql.ResultSet rs = st.executeQuery(
-                     "SELECT SYS_CONTEXT('USERENV', 'CON_ID') FROM DUAL")) {
-            if (rs.next()) {
-                return rs.getInt(1);
-            }
-        } catch (java.sql.SQLException e) {
-            log.debug("Could not read CON_ID (non-CDB?): {}", e.getMessage());
+    static MiningPlan decideMiningPlan(Boolean isCdb, int conId, boolean minerConfigured)
+            throws SQLException {
+        if (!Boolean.TRUE.equals(isCdb) || conId <= 1) {
+            return MiningPlan.SOURCE;
         }
-        return 0;
+        if (minerConfigured) {
+            return MiningPlan.ROOT;
+        }
+        throw new SQLException("ORA-65040: source is a CDB and DBMS_LOGMNR may only run in"
+                + " CDB$ROOT — configure the mining account (miner username/password, a"
+                + " C## common user) on this connection, or the first mine will fail with"
+                + " ORA-65040 anyway");
+    }
+
+    /**
+     * Resolve which connection this cycle's session runs on, deciding the mining plan on
+     * first call. SOURCE returns {@code conn}; ROOT opens a fresh unpooled CDB$ROOT
+     * connection via the mining account (tracked in {@link #currentMining} so requestStop
+     * and the finally blocks close it).
+     */
+    private Connection resolveMiningConnection(Connection conn, long projectId)
+            throws SQLException {
+        if (ownConId < 0) {
+            int cid = OracleCdbSupport.currentConId(conn);
+            ownConId = Math.max(cid, 0);
+        }
+        if (miningPlan == null) {
+            Boolean cdb = OracleCdbSupport.isCdb(conn);
+            DatabaseConfig cfg = ctx.getSourceConfig();
+            boolean minerConfigured = cfg.getMinerUsername() != null
+                    && !cfg.getMinerUsername().isBlank()
+                    && cfg.getMinerPassword() != null && !cfg.getMinerPassword().isBlank();
+            miningPlan = decideMiningPlan(cdb, ownConId, minerConfigured);
+            if (Boolean.TRUE.equals(cdb) && ownConId == 1) {
+                log.warn("Project {}: connected directly to CDB$ROOT — only root-container"
+                        + " objects are captured; to mine a PDB, configure its service plus"
+                        + " the mining account", projectId);
+            }
+            if (miningPlan == MiningPlan.ROOT) {
+                miningCdbName = OracleCdbSupport.cdbName(conn);
+                if (miningCdbName == null) {
+                    throw new SQLException("ORA-65040: source is a CDB but V$DATABASE.NAME"
+                            + " is unreadable — grant SELECT ON V_$DATABASE to the source"
+                            + " account so the CDB$ROOT service can be derived");
+                }
+                log.info("Project {}: CDB detected — mining via CDB$ROOT service '{}'"
+                        + " as '{}', capturing container CON_ID {}", projectId,
+                        miningCdbName, cfg.getMinerUsername(), ownConId);
+            }
+        }
+        if (miningPlan == MiningPlan.ROOT) {
+            Connection mining = dataSourceManager.openOracleRootConnection(
+                    ctx.getSourceConfig(), miningCdbName);
+            currentMining = mining;
+            return mining;
+        }
+        return conn;
     }
 
     /**
@@ -378,6 +468,9 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         positionStore.advanceScn(projectId, csn);
         stats.recordPositionScn(csn);
         parseFailures.set(0);
+        // F-12: a transaction genuinely landed — any earlier failed cycles are old news
+        // and must not park the project later.
+        applyFailures.set(0);
     }
 
     private boolean matchesProjectTable(String owner, String table) {
@@ -399,12 +492,23 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         return parseFailures.get() > MAX_PARSE_FAILURES;
     }
 
+    private boolean applyStrikeOut() {
+        return applyFailures.get() > MAX_APPLY_FAILURES;
+    }
+
     private void fatalStop(long projectId, Throwable failure,
                            CdcFailureClassifier.Kind kind) {
-        String label = kind == CdcFailureClassifier.Kind.TRANSIENT
-                ? "PARSE_STRIKE_OUT" : kind.name();
+        String label;
+        if (kind != CdcFailureClassifier.Kind.TRANSIENT) {
+            label = kind.name();
+        } else if (applyStrikeOut()) {
+            // F-12: checked before parse — a poison-row-only project keeps its old label.
+            label = "APPLY_STRIKE_OUT";
+        } else {
+            label = "PARSE_STRIKE_OUT";
+        }
         String detail = label + ": " + (failure == null
-                ? "repeated LogMiner parse failures"
+                ? "repeated LogMiner failures"
                 : CdcFailureClassifier.describe(failure));
         stats.setLastError(detail);
         taskStore.recordCdcFailure(projectId, detail);

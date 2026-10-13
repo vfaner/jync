@@ -100,6 +100,53 @@ class CdcFailureClassifierTest {
                 new java.sql.SQLException("ORA-01291: missing logfile"))).contains("ORA-01291");
     }
 
+    // —— P2-5 / P2-13:Oracle 错误码分类补齐与命名理顺 ——
+
+    @Test
+    void ora01403NoDataFoundClassifiesAsPurged() {
+        // DBMS_LOGMNR.START_LOG_MNR 在「请求的 SCN 区间没有任何 redo 覆盖」时抛
+        // ORA-01403(而非 01291)——日志已被回收,重试对同一空区间永远失败,处置与
+        // PURGED 相同:park 等人重建基线。当前实现落到 TRANSIENT 热循环,这是 bug。
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-01403: no data found")))
+                .isEqualTo(CdcFailureClassifier.Kind.PURGED);
+    }
+
+    @Test
+    void ora01466ClassifiesAsSchemaConflict() {
+        // ORA-01466 "table definition has changed" = 挖掘期撞上在途 DDL。它从来不是
+        // 认证问题——归到 AUTH_FAILURE 会把 DBA 引向查凭据的错误方向。独立 Kind。
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException(
+                        "ORA-01466: unable to read data - table definition has changed")))
+                .isEqualTo(CdcFailureClassifier.Kind.SCHEMA_CONFLICT);
+    }
+
+    @Test
+    void ora65040ClassifiesAsAuthFailure() {
+        // P0-2:ORA-65040 "operation not allowed from within a pluggable database" 在
+        // LogMiner 语境 = 在 PDB 连接上 START_LOGMNR —— 账号/配置问题(需要 CDB$ROOT
+        // 公共挖掘账号),重试永不自愈。归 AUTH_FAILURE park 等人,文案指向挖掘账号。
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-65040: operation not allowed from within"
+                        + " a pluggable database")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+    }
+
+    @Test
+    void ora01555AndOra00060StayTransient() {
+        // 守护:01555(快照过旧——新挖掘会话拿新快照可恢复)与 00060(死锁)的重试
+        // 语义是刻意设计,归 TRANSIENT 退避重试;谁也不许"顺手"park 它们。
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-01555: snapshot too old: rollback segment"
+                        + " number 12 with name \"_SYSSMU12$\" too small")))
+                .isEqualTo(CdcFailureClassifier.Kind.TRANSIENT);
+        assertThat(CdcFailureClassifier.classify(
+                new java.sql.SQLException("ORA-00060: deadlock detected while waiting"
+                        + " for resource")))
+                .isEqualTo(CdcFailureClassifier.Kind.TRANSIENT);
+    }
+
     @Test
     void everythingElseTransient() {
         assertThat(CdcFailureClassifier.classify(new IOException("Connection reset")))
@@ -141,5 +188,64 @@ class CdcFailureClassifierTest {
                 CdcConsumer.MIN_BACKOFF_RESET_DWELL_MS)).isTrue();
         assertThat(CdcConsumer.shouldResetBackoff(
                 CdcConsumer.MIN_BACKOFF_RESET_DWELL_MS * 10)).isTrue();
+    }
+
+    // —— P1-2:PG / SQL Server 失败特征。分类错误的代价是双向的:认证/权限类被归
+    // TRANSIENT → 对着永远不会成功的凭据热循环重连;资源耗尽类(连接数满)被归
+    // AUTH_FAILURE → 一次抖动把项目 park 进 ERROR 等人救。——
+
+    @Test
+    void pgSqlStateAuthClassified() {
+        // SQLSTATE 28* = invalid_authorization(28P01 密码错;28000 也是 SQL Server
+        // 18456 的状态类);42501 = insufficient_privilege。重试永远无意义。
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "FATAL: password authentication failed for user \"jync\"", "28P01")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "ERROR: permission denied for table orders", "42501")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+    }
+
+    @Test
+    void pgAuthMessageClassifiedWithoutSqlState() {
+        // 驱动/包装层可能丢 SQLState — 消息特征兜底。
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "FATAL: password authentication failed for user \"jync\"")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "FATAL: no pg_hba.conf entry for host \"10.0.0.2\", user \"jync\"")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+    }
+
+    @Test
+    void pgConnectionExhaustionStaysTransient() {
+        // 53300 too_many_connections / 57P03 cannot_connect_now:退避重试有意义,
+        // 绝不许 park。
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "FATAL: sorry, too many clients already", "53300")))
+                .isEqualTo(CdcFailureClassifier.Kind.TRANSIENT);
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "FATAL: the database system is starting up", "57P03")))
+                .isEqualTo(CdcFailureClassifier.Kind.TRANSIENT);
+    }
+
+    @Test
+    void pgSlotExhaustionParks() {
+        // max_replication_slots 满:重试永远无意义,等人清 slot — park。
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "ERROR: maximum number of logical replication slots has been reached")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+    }
+
+    @Test
+    void sqlServerLoginAndPermissionDeniedPark() {
+        // 18456 login failed(mssql-jdbc 给 SQLState 28000)/ 229,230 权限拒绝。
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "Login failed for user 'jync_cdc'.", "28000", 18456)))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "The SELECT permission was denied on the object"
+                        + " 'fn_cdc_get_all_changes_dbo_orders_CT'")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
     }
 }

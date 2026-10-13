@@ -21,6 +21,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.CaptureStrategy;
@@ -39,6 +40,7 @@ import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.cdc.PgLogicalCdcConsumer;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
@@ -77,6 +79,7 @@ public class ProjectService {
     private final CdcConsumerManager cdcManager;
     private final SyncStateWriter stateWriter;
     private final CdcPositionStore positionStore;
+    private final SyncProperties properties;
 
     /**
      * Lenient reader for the persisted sync_config JSON, used only to recover the CURRENT
@@ -111,7 +114,8 @@ public class ProjectService {
                           AdminAuditService auditService,
                           CdcConsumerManager cdcManager,
                           SyncStateWriter stateWriter,
-                          CdcPositionStore positionStore) {
+                          CdcPositionStore positionStore,
+                          SyncProperties properties) {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
         this.progressRepository = progressRepository;
@@ -130,6 +134,7 @@ public class ProjectService {
         this.cdcManager = cdcManager;
         this.stateWriter = stateWriter;
         this.positionStore = positionStore;
+        this.properties = properties;
     }
 
     public List<Project> findAll() {
@@ -549,9 +554,15 @@ public class ProjectService {
             if (lock == null) {
                 throw new IllegalStateException("error.project.sync.in.progress");
             }
+            // Stop this node's CDC consumer before anything else: a live PG consumer
+            // holds its replication slot (drop fails while the slot is active), and a
+            // live cycle of any kind would re-create state rows right after the purge.
+            cdcManager.ensureStopped(projectId);
+            releasePgSlotIfAny(project);
             taskStore.deleteForProject(projectId);
             syncEngine.evictProjectCaches(projectId);
             lockService.evictProject(projectId);
+            positionStore.delete(projectId);
             progressRepository.deleteByProjectId(projectId);
             snapshotService.deleteAllForProject(projectId);
             changeLogRepository.deleteByProjectId(projectId);
@@ -560,6 +571,41 @@ public class ProjectService {
                     "Deleted project '" + project.getName() + "' and all its sync state");
         }
         log.info("Deleted project '{}' and all its sync state", project.getName());
+    }
+
+    /**
+     * P0-5: a PG logical replication slot is a persistent object ON THE SOURCE — deleting
+     * the project without dropping it leaves the source retaining WAL for a consumer that
+     * will never come back, until the disk fills. Best-effort on purpose: an unreachable
+     * source must not block the local delete (dropSlotQuietly already swallows and WARNs).
+     *
+     * <p>This is an external side effect inside a @Transactional method: if the local
+     * delete later rolls back, the slot stays gone. Accepted — the consumer's ensureSlot
+     * re-creates it on the next start (at the cost of a re-baseline, not of correctness).
+     */
+    private void releasePgSlotIfAny(Project project) {
+        if (cdcManager.strategyOf(project) != CaptureStrategy.PG_LOGICAL_CDC) {
+            return;
+        }
+        Long sourceDbId = project.getSourceDbId();
+        if (sourceDbId == null) {
+            log.warn("PG-logical project {} has no source database id; cannot release its"
+                    + " replication slot — drop it by hand on the source", project.getId());
+            return;
+        }
+        DatabaseConfig source = databaseConfigRepository.findById(sourceDbId).orElse(null);
+        if (source == null) {
+            log.warn("Source database {} of deleted PG-logical project {} is gone; cannot"
+                    + " release its replication slot — drop it by hand", sourceDbId,
+                    project.getId());
+            return;
+        }
+        try (Connection conn = dataSourceManager.getConnection(source)) {
+            PgLogicalCdcConsumer.dropSlotQuietly(conn, project.getId(), properties);
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not reach the source of deleted PG-logical project {} to release"
+                    + " its replication slot: {}", project.getId(), e.getMessage());
+        }
     }
 
     /**

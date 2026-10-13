@@ -81,7 +81,8 @@ class ProjectServiceStrategySwitchTest {
         service = new ProjectService(projectRepository, databaseConfigRepository,
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
-                syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore);
+                syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
+                new com.qqmu.jync.config.SyncProperties());
     }
 
     private Project mysqlProject(String currentStrategyJson) {

@@ -143,6 +143,52 @@ public class DataSourceManager {
         return driver;
     }
 
+    /**
+     * P0-2: root-service URL for CDB mining, rebuilt from the configured host/port plus
+     * the CDB name (the root service name by Oracle convention), extra params appended
+     * through the same sanitizer as any other URL. Returns null when no safe derivation
+     * exists — custom-URL sources (string surgery on a hand-pasted descriptor could
+     * silently point mining at the wrong service) and non-Oracle types.
+     */
+    public String buildOracleRootUrl(DatabaseConfig config, String cdbName) {
+        if (config.getType() != DatabaseType.ORACLE || StringUtils.hasText(config.getCustomUrl())) {
+            return null;
+        }
+        int port = config.getPort() != null ? config.getPort() : DatabaseType.ORACLE.getDefaultPort();
+        String host = StringUtils.hasText(config.getHost()) ? config.getHost() : "localhost";
+        String url = String.format(DatabaseType.ORACLE.getUrlTemplate(), host, port, cdbName);
+        return appendExtraParams(url, config);
+    }
+
+    /**
+     * P0-2: opens the CDB$ROOT mining connection for {@code config} — root URL derived
+     * from the CDB name, miner credentials decrypted here so the caller never handles
+     * the plaintext. Throws when no safe root URL exists (custom-URL sources).
+     */
+    public Connection openOracleRootConnection(DatabaseConfig config, String cdbName)
+            throws SQLException {
+        String url = buildOracleRootUrl(config, cdbName);
+        if (url == null) {
+            throw new SQLException("Cannot derive a CDB$ROOT URL for connection '"
+                    + config.getName() + "' — custom-URL sources must be reconfigured with"
+                    + " host/port/service so the root service URL can be derived");
+        }
+        return openUnpooled(resolveDriverClass(config), config.getCustomJarPath(), url,
+                config.getMinerUsername(), cryptoUtil.decrypt(config.getMinerPassword()));
+    }
+
+    /**
+     * P0-2: one unpooled connection for the CDB$ROOT mining session. A consumer holds a
+     * single long-lived LogMiner connection, so pooling buys nothing and would add pool
+     * eviction edge cases; the caller owns the close. Driver readiness goes through the
+     * same {@link DriverLoader} path as pooled connections.
+     */
+    public Connection openUnpooled(String driverClass, String jarPath, String jdbcUrl,
+                                   String username, String password) throws SQLException {
+        driverLoader.ensureDriverLoaded(driverClass, jarPath);
+        return java.sql.DriverManager.getConnection(jdbcUrl, username, password);
+    }
+
     /** Builds the JDBC URL from the template for the type, or uses the custom URL verbatim. */
     public String buildJdbcUrl(DatabaseConfig config) {
         if (StringUtils.hasText(config.getCustomUrl())) {

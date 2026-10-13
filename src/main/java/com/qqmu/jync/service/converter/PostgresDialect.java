@@ -11,7 +11,11 @@ import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
-/** PostgreSQL dialect, shared with OpenGauss, 人大金仓 (KingBase) and 神通 (Oscar). */
+/**
+ * PostgreSQL dialect, shared with 人大金仓 (KingBase) and 神通 (Oscar). openGauss has
+ * its own {@link OpenGaussDialect}: its default MySQL-compatibility mode rejects
+ * ON CONFLICT upserts.
+ */
 @Component
 public class PostgresDialect extends AbstractSqlDialect {
 
@@ -218,20 +222,58 @@ public class PostgresDialect extends AbstractSqlDialect {
     @Override
     public String getUpsertSql(String schema, String table, List<String> columns,
                                List<String> pkColumns) {
+        return getUpsertSql(schema, table, columns, pkColumns, null);
+    }
+
+    @Override
+    public String getUpsertSql(String schema, String table, List<String> columns,
+                               List<String> pkColumns,
+                               java.util.Map<String, Integer> columnJdbcTypes) {
         String insert = "INSERT INTO " + qualify(schema, table)
-                + " (" + quotedList(columns) + ") VALUES (" + placeholders(columns.size()) + ")";
+                + " (" + quotedList(columns) + ") VALUES ("
+                + typedPlaceholders(columns, columnJdbcTypes) + ")";
         if (pkColumns == null || pkColumns.isEmpty()) {
             return insert;
         }
+        return insert + upsertSuffix(columns, pkColumns);
+    }
+
+    /**
+     * The conflict-handling clause appended after the VALUES list. openGauss overrides
+     * this with the MySQL-flavoured {@code ON DUPLICATE KEY UPDATE} (its default
+     * compatibility-A parser rejects ON CONFLICT); everything else in the PostgreSQL
+     * family uses the standard ON CONFLICT form.
+     */
+    protected String upsertSuffix(List<String> columns, List<String> pkColumns) {
         String conflict = " ON CONFLICT (" + quotedList(pkColumns) + ")";
         List<String> updatable = nonKeyColumns(columns, pkColumns);
         if (updatable.isEmpty()) {
-            return insert + conflict + " DO NOTHING";
+            return conflict + " DO NOTHING";
         }
         String updates = updatable.stream()
                 .map(c -> quoteIdentifier(c) + " = EXCLUDED." + quoteIdentifier(c))
                 .collect(Collectors.joining(", "));
-        return insert + conflict + " DO UPDATE SET " + updates;
+        return conflict + " DO UPDATE SET " + updates;
+    }
+
+    @Override
+    protected String placeholderFor(Integer jdbcType) {
+        if (jdbcType != null
+                && (jdbcType == java.sql.Types.TIME
+                        || jdbcType == java.sql.Types.TIME_WITH_TIMEZONE)) {
+            // TIME values arrive as strings (MySQL's TIME domain can exceed 24h); neither
+            // PostgreSQL nor openGauss will implicitly cast varchar to time.
+            return "?::time";
+        }
+        if (jdbcType != null
+                && (jdbcType == java.sql.Types.TIMESTAMP
+                        || jdbcType == java.sql.Types.TIMESTAMP_WITH_TIMEZONE)) {
+            // MySQL DATETIME is read as the server's wall-clock string (Connector/J's
+            // getTimestamp shifts it across time zones); the family does not implicitly
+            // cast varchar to timestamp. A setTimestamp value survives the same cast.
+            return "?::timestamp";
+        }
+        return "?";
     }
 
     @Override
