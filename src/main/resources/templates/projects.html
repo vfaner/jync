@@ -42,7 +42,9 @@
                     <tbody>
                     <tr th:each="project : ${projects}" th:with="task=${taskLookup.get(project.id)}">
                         <td>
-                            <a style="font-weight:600" th:href="@{/projects/{id}(id=${project.id})}"
+                            <!--/* 名称超长省略号截断，悬停 title 看全名（.truncate 复用） */-->
+                            <a class="truncate" style="font-weight:600" th:title="${project.name}"
+                               th:href="@{/projects/{id}(id=${project.id})}"
                                th:text="${project.name}">Project</a>
                             <div class="small muted truncate" th:if="${project.description}"
                                  th:text="${project.description}">description</div>
@@ -55,7 +57,7 @@
                                 <span th:text="#{'status.' + ${st}}">Stopped</span>
                             </span>
                         </td>
-                        <td class="small muted"
+                        <td class="small muted nowrap"
                             th:text="${task != null and task.lastSyncTime != null}
                                      ? ${#temporals.format(task.lastSyncTime, 'yyyy-MM-dd HH:mm:ss')}
                                      : #{common.never}">Never</td>
@@ -80,15 +82,10 @@
                                         th:title="#{project.stop}">
                                     <svg class="ico"><use href="#pause-fill"/></svg>
                                 </button>
-                                <button type="button" class="btn-icon" data-role="api-btn" data-reload="true"
-                                        th:attr="data-action=@{/api/projects/{id}/sync-now(id=${project.id})}"
-                                        th:title="#{project.syncNow}">
-                                    <svg class="ico"><use href="#arrow-repeat"/></svg>
-                                </button>
                                 </th:block>
-                                <!--/* 详情是只读的，访客也要能点进去 */-->
-                                <a class="btn-icon" th:href="@{/projects/{id}(id=${project.id})}"
-                                   th:title="#{project.detail}"><svg class="ico"><use href="#list-ul"/></svg></a>
+                                <!--/* 详情入口 = 名称链接（悬停/点击皆可）；手动跑一轮收进
+                                       项目详情页的运行控制区。列表只留 启停/编辑/删除，
+                                       操作列因此能保持一行。 */-->
                                 <th:block th:if="${isAdmin}">
                                 <a class="btn-icon" th:href="@{/projects/{id}/edit(id=${project.id})}"
                                    th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>

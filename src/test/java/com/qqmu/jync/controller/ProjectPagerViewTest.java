@@ -99,11 +99,14 @@ class ProjectPagerViewTest {
                 .andReturn().getResponse().getContentAsString();
     }
 
-    /** Counts rendered project rows by the name link each one starts with. */
+    /** Counts rendered project rows by the name link each one starts with.
+     *  Anchor on the link's inline style only: the attributes between style and
+     *  href (class, title) move whenever the name cell's markup does, and an
+     *  adjacency-sensitive marker would break on unrelated template edits. */
     private static int projectRows(String html) {
         int count = 0;
         int from = 0;
-        while ((from = html.indexOf("font-weight:600\" href=\"/projects/", from)) >= 0) {
+        while ((from = html.indexOf("style=\"font-weight:600\"", from)) >= 0) {
             count++;
             from++;
         }
