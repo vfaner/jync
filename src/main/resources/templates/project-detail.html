@@ -88,8 +88,11 @@
                         th:title="${project.enabled} ? #{project.config.lockedWhileRunning} : #{common.save}">
                     <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{project.saveConfig}">保存配置</span>
                 </button>
+                <!--/* B9 文案澄清：启用 = 按调度自动增量轮询 / CDC 持续消费（tooltip 明说
+                       非逐轮全量）；「手动跑一轮」不改启用状态。悬停即见语义，消除
+                       「开启同步 = 轮询全量？」的误解。 */-->
                 <button type="button" class="btn btn-ok btn-sm" th:unless="${project.enabled}"
-                        data-role="api-btn" data-reload="true"
+                        data-role="api-btn" data-reload="true" th:title="#{project.startHelp}"
                         th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
                                  data-busy-text=#{common.loading}">
                     <svg class="ico"><use href="#play-fill"/></svg><span th:text="#{project.start}">Start</span>

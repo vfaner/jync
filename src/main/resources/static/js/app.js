@@ -35,14 +35,32 @@
     return t(raw);
   }
 
-  /* ─── Toast ─────────────────────────────────────────────── */
+  /* ─── 表情图标（layer 风格圆脸） ─────────────────────────── */
 
-  var ICONS = {
-    ok: 'check-circle-fill',
-    danger: 'x-circle-fill',
-    warn: 'exclamation-triangle-fill',
-    info: 'info-circle-fill'
+  /**
+   * layui layer 式的圆脸图标：整圆底色 + 白色五官，底色走 currentColor
+   * 由 .jd-<kind> 映射到 --ok/--warn/--danger/--info，亮暗主题自动适配。
+   * ok 笑脸 / danger 哭脸 / warn 惊讶 / info 信息脸。
+   */
+  var FACES = {
+    ok: '<circle cx="18" cy="18" r="16"/>'
+      + '<circle cx="12.5" cy="14" r="2.3" class="jd-fg"/><circle cx="23.5" cy="14" r="2.3" class="jd-fg"/>'
+      + '<path d="M11 21.5c2 3.6 4.5 5.3 7 5.3s5-1.7 7-5.3" class="jd-fs"/>',
+    danger: '<circle cx="18" cy="18" r="16"/>'
+      + '<circle cx="12.5" cy="14" r="2.3" class="jd-fg"/><circle cx="23.5" cy="14" r="2.3" class="jd-fg"/>'
+      + '<path d="M11 26.5c2-3.6 4.5-5.3 7-5.3s5 1.7 7 5.3" class="jd-fs"/>',
+    warn: '<circle cx="18" cy="18" r="16"/>'
+      + '<circle cx="12.5" cy="14" r="2.3" class="jd-fg"/><circle cx="23.5" cy="14" r="2.3" class="jd-fg"/>'
+      + '<circle cx="18" cy="24" r="2.8" class="jd-fg"/>',
+    info: '<circle cx="18" cy="18" r="16"/>'
+      + '<circle cx="18" cy="10.5" r="2.4" class="jd-fg"/>'
+      + '<rect x="15.6" y="15.5" width="4.8" height="12" rx="2.4" class="jd-fg"/>'
   };
+
+  function faceHtml(kind) {
+    return '<svg class="jd-face" viewBox="0 0 36 36" aria-hidden="true">'
+      + (FACES[kind] || FACES.info) + '</svg>';
+  }
 
   /**
    * 构造一个引用内联 SVG 精灵表的图标元素。
@@ -71,7 +89,8 @@
    *   auto             —— 居中轻卡片，约 2.6s 自动消失（ok/warn/info 通知），
    *                       点击卡片或 ESC 可提前消，不强迫点击。
    * 多个弹窗按先后排队而不是叠放；关闭后把焦点还给触发元素。
-   * 纯 ES5、DOM 由 JS 自注入（模板零改动）、颜色全部走 CSS 变量适配亮暗主题。
+   * msg 形态为 layui layer 式：圆脸表情（绿笑/红哭/橙惊讶/蓝信息）+ 文案一行，
+   * 无标题栏；纯 ES5、DOM 由 JS 自注入（模板零改动）、颜色走 CSS 变量适配亮暗。
    */
   var JyncDialog = (function () {
     var AUTO_MS = 2600;
@@ -116,17 +135,35 @@
       var bar = document.createElement('div');
       bar.className = 'jd-bar';
 
-      var head = document.createElement('div');
-      head.className = 'jd-head';
-      head.appendChild(icon(ICONS[kind] || ICONS.info, 'jd-ico'));
-      var title = document.createElement('div');
-      title.className = 'jd-title';
-      title.textContent = opts.title || t('dialog.title.' + kind);
-      head.appendChild(title);
+      // layer 风格：msg 形态（无 title）= 圆脸 + 文案一行居中；
+      // 带 title 的形态（三选一拦截）= 圆脸 + 标题行 + 正文。
+      var faceWrap = document.createElement('div');
+      faceWrap.className = 'jd-face-wrap';
+      faceWrap.innerHTML = faceHtml(kind);
 
       var body = document.createElement('div');
       body.className = 'jd-body';
       body.textContent = opts.message || '';  // textContent：避免把服务端消息当 HTML 执行
+
+      // 顶部渐变条固定在卡片最前（append 顺序 = 视觉顺序），两种布局共用
+      card.appendChild(bar);
+      if (opts.title) {
+        var head = document.createElement('div');
+        head.className = 'jd-head';
+        head.appendChild(faceWrap);
+        var title = document.createElement('div');
+        title.className = 'jd-title';
+        title.textContent = opts.title;
+        head.appendChild(title);
+        card.appendChild(head);
+        card.appendChild(body);
+      } else {
+        var row = document.createElement('div');
+        row.className = 'jd-row';
+        row.appendChild(faceWrap);
+        row.appendChild(body);
+        card.appendChild(row);
+      }
 
       var actions = document.createElement('div');
       actions.className = 'jd-actions';
@@ -151,9 +188,6 @@
         actions.appendChild(b);
       });
 
-      card.appendChild(bar);
-      card.appendChild(head);
-      card.appendChild(body);
       if (buttons.length) { card.appendChild(actions); }
       ov.appendChild(card);
 
@@ -1489,7 +1523,12 @@
     // B9：顶部 Flash 横幅统一转成居中弹窗 —— 成功用自动消失的轻卡片，
     // 错误/无权限用必须点击的阻塞弹窗。读完文案即移除原 .alert 节点，
     // 避免「顶部 + 居中」双重提示；关闭按钮与 5 秒自动消失逻辑随之退役。
-    document.querySelectorAll('main.shell > .alert').forEach(function (el) {
+    // 选择器必须精确到 Flash 两种形态：页面自带的静态状态条（AI 配置/转换
+    // 列表的能力条、项目详情的源库告警、看板错误计数）也是 main 直接子级的
+    // .alert，宽选择器会把它们误弹成弹窗并从页面上摘走。
+    document.querySelectorAll(
+        'main.shell > .alert-ok[data-auto-dismiss], main.shell > .alert-danger'
+    ).forEach(function (el) {
       var body = el.querySelector('.alert-body');
       var text = (body ? body.textContent : el.textContent).trim();
       var isOk = el.className.indexOf('alert-ok') >= 0;

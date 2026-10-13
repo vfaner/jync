@@ -730,14 +730,21 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .jd-ok .jd-bar     { background: linear-gradient(90deg, var(--ok), #34d399); }
 .jd-warn .jd-bar   { background: linear-gradient(90deg, var(--warn), #fbbf24); }
 .jd-danger .jd-bar { background: linear-gradient(90deg, var(--danger), #f87171); }
-.jd-head { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
-.jd-ico { width: 21px; height: 21px; flex-shrink: 0; color: var(--info); }
-.jd-ok .jd-ico     { color: var(--ok); }
-.jd-warn .jd-ico   { color: var(--warn); }
-.jd-danger .jd-ico { color: var(--danger); }
+.jd-head { display: flex; align-items: center; gap: 12px; margin: 2px 0 10px; }
+/* layer 风格圆脸：底色 currentColor，五官白色，级别色由 .jd-<kind> 映射 */
+.jd-face-wrap { flex: none; line-height: 0; }
+.jd-face { width: 42px; height: 42px; color: var(--info); }
+.jd-face > circle:first-child { fill: currentColor; }
+.jd-face .jd-fg { fill: #fff; }
+.jd-face .jd-fs { fill: none; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; }
+.jd-ok .jd-face     { color: var(--ok); }
+.jd-warn .jd-face   { color: var(--warn); }
+.jd-danger .jd-face { color: var(--danger); }
 .jd-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+/* msg 形态（无标题）：脸 + 文案一行，仿 layer.msg */
+.jd-row { display: flex; align-items: center; gap: 14px; }
 .jd-body {
-  font-size: 13.5px; line-height: 1.7; color: var(--ink-mute);
+  font-size: 14px; line-height: 1.7; color: var(--ink);
   white-space: pre-wrap; word-break: break-word;
 }
 .jd-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin-top: 18px; }
@@ -807,6 +814,13 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   word-break: break-all; color: var(--ink-soft);
 }
 .truncate { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 列表单行约束（B9 反馈）：时间戳不换行、操作按钮不折行、名称省略号截断。
+   表格自动布局下 nowrap 的列会拿到所需宽度，.tbl-wrap 窄屏横向滚动兜底。 */
+.nowrap { white-space: nowrap; }
+table.tbl td .btn-row { flex-wrap: nowrap; margin-bottom: 0; }
+table.tbl td .btn-row > * { margin: 0 0 0 6px; }
+table.tbl td .btn-row > *:first-child { margin-left: 0; }
+table.tbl a.truncate { display: block; }
 .wrap-detail { max-width: 420px; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
 .spin {
   display: inline-block; width: 13px; height: 13px;
