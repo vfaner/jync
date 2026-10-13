@@ -12,6 +12,7 @@ import java.util.Set;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.qqmu.jync.model.CaptureStrategy;
+import com.qqmu.jync.util.CollectionUtil;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -91,27 +92,15 @@ public class SyncConfig {
     }
 
     public boolean includesTable(String tableName) {
-        return tables.isEmpty() || containsIgnoreCase(tables, tableName);
+        return tables.isEmpty() || CollectionUtil.containsIgnoreCase(tables, tableName);
     }
 
     public boolean includesView(String viewName) {
-        return views.isEmpty() || containsIgnoreCase(views, viewName);
+        return views.isEmpty() || CollectionUtil.containsIgnoreCase(views, viewName);
     }
 
     public boolean includesProcedure(String procName) {
-        return procedures.isEmpty() || containsIgnoreCase(procedures, procName);
-    }
-
-    private static boolean containsIgnoreCase(Set<String> set, String value) {
-        if (value == null) {
-            return false;
-        }
-        for (String s : set) {
-            if (s.equalsIgnoreCase(value)) {
-                return true;
-            }
-        }
-        return false;
+        return procedures.isEmpty() || CollectionUtil.containsIgnoreCase(procedures, procName);
     }
 
     public String targetTableName(String sourceTable) {

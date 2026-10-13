@@ -31,6 +31,7 @@ import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
+import com.qqmu.jync.util.CollectionUtil;
 import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.Getter;
@@ -921,7 +922,7 @@ public class DataSyncService {
         if (updateSql != null) {
             // SET clause values first, then the WHERE key values.
             for (String c : columns) {
-                if (!containsIgnoreCase(pkColumns, c)) {
+                if (!CollectionUtil.containsIgnoreCase(pkColumns, c)) {
                     updateBindOrder.add(c);
                 }
             }
@@ -1445,15 +1446,6 @@ public class DataSyncService {
         }
         return new RangeResume(false, KeysetChunker.decodePk(latest.getLastPkJson()),
                 latest.getChunkIndex() + 1);
-    }
-
-    private boolean containsIgnoreCase(List<String> list, String value) {
-        for (String s : list) {
-            if (s.equalsIgnoreCase(value)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** SQLState 23xxx is the integrity-constraint class; 23505/23000 are unique violations. */

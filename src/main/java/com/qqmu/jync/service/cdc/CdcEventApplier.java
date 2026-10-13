@@ -10,6 +10,7 @@ import java.util.Map;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
 import com.qqmu.jync.service.sync.SyncContext;
+import com.qqmu.jync.util.CollectionUtil;
 import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.extern.slf4j.Slf4j;
@@ -148,7 +149,7 @@ public final class CdcEventApplier {
         if (updateSql != null) {
             // SET clause values first, then the WHERE key values.
             for (String column : columns) {
-                if (!containsIgnoreCase(pkColumns, column)) {
+                if (!CollectionUtil.containsIgnoreCase(pkColumns, column)) {
                     updateBindOrder.add(column);
                 }
             }
@@ -192,15 +193,6 @@ public final class CdcEventApplier {
                 }
             }
         }
-    }
-
-    private static boolean containsIgnoreCase(List<String> names, String needle) {
-        for (String name : names) {
-            if (name.equalsIgnoreCase(needle)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** SQLState 23xxx is the integrity-constraint class; 23505/23000 are unique violations. */

@@ -304,53 +304,59 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         // delete the old PK when an UPDATE moved it, and transactions flush in
         // ascending txLsn order so advanceLsn stays monotonic across capture instances.
         SqlServerTxFold fold = new SqlServerTxFold();
-        String highWater = fromLsn;
         for (CaptureInstance ci : instances) {
             // from_lsn is INCLUSIVE — pass fn_cdc_increment_lsn to skip the watermark
             // transaction we already applied on the previous cycle. The persisted value
             // remains fromLsn; only the SQL interval shifts.
-            String sql = changesSql(ci.captureInstance);
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, fromLsn);
-                ps.setString(2, maxLsn);
-                try (ResultSet rs = ps.executeQuery()) {
-                    // Cache the real column set of the CT row ONCE per ci — readRow
-                    // consults this to distinguish "not captured" from genuine errors.
-                    Set<String> availableCols = availableColumns(rs);
-                    while (running && !Thread.currentThread().isInterrupted() && rs.next()) {
-                        String startLsn = rs.getString(1); // already CONVERT(varchar, 1) shape
-                        int op = rs.getInt(2);
-                        CdcTableBinding binding = supplier.binding(ci);
-                        if (binding == null || !binding.isApplicable()) {
-                            stats.addUnsupportedTable(ci.schema + "." + ci.table);
-                            continue;
-                        }
-                        Map<String, Object> row = readRow(rs, binding, availableCols);
-                        fold.accept(startLsn, binding, op, row);
-                        highWater = maxLsn;
-                        out.rows++;
-                        stats.touchEvent(System.currentTimeMillis());
-                    }
-                }
+            try {
+                scanCi(conn, ci, changesSql(ci.captureInstance), fromLsn, maxLsn, fold, out);
             } catch (SQLException e) {
                 // SQL Server error 22054 == "an invalid LSN was specified for the capture
                 // instance": the @from_lsn we passed is BELOW this CI's valid range. It
                 // does NOT mean "no rows in the window" — an empty window returns zero
-                // rows, never an error. 22054 fires when the CI was enabled/re-created
-                // mid-flight (its start_lsn sits above our persisted watermark) or when
-                // the log was purged past the watermark. Skipping the CI leaves the
-                // watermark unadvanced for it, so a persistent 22054 is a silent stall —
-                // logged at WARN, not DEBUG, so a human can see it. The proper remedy is
-                // to clamp @from_lsn to sys.fn_cdc_get_min_lsn(ci) and retry; that needs a
-                // live SQL Server to validate and is raised separately.
+                // rows, never an error. #2: DETECT which case fired instead of skipping
+                // the CI (a persistent 22054 skip is a silent stall) or blind-clamping
+                // (which would silently drop purged changes):
+                //   ① the CI was enabled/re-created mid-flight → its start_lsn sits
+                //      ABOVE our watermark; nothing was captured for it before that, so
+                //      clamping @from_lsn to min_lsn and rescanning INCLUSIVE loses
+                //      nothing and self-heals;
+                //   ② the cleanup job purged an ESTABLISHED CI past our watermark
+                //      (start_lsn ≤ watermark < min_lsn) → the changes in
+                //      [watermark, min_lsn) are physically gone; clamping would skip
+                //      them silently, so throw a PURGED-classified SQLException and
+                //      park the project for a re-baseline instead (user ruling).
+                // If start_lsn is unknown the two cases are indistinguishable → park;
+                // never risk the silent data loss of a blind clamp.
                 // Anything else — permission, network, column drift — aborts the whole
                 // drain so we retry instead of silently skipping this ci.
                 if (e.getErrorCode() == 22054) {
-                    log.warn("SQLServer CDC: capture instance {} rejected from_lsn {} as out"
-                            + " of range (error 22054); its changes are NOT synced this cycle"
-                            + " and the watermark will not advance for it until the LSN window"
-                            + " is corrected: {}", ci.captureInstance, fromLsn, e.getMessage());
-                    continue;
+                    String minLsn = readMinLsn(conn, ci.captureInstance);
+                    if (ci.startLsn != null && ci.startLsn.compareTo(fromLsn) > 0) {
+                        // ① new CI. min_lsn is NULL while its change table holds no rows
+                        // yet — start_lsn is then the lowest LSN the function accepts.
+                        String clampTo = minLsn != null ? minLsn : ci.startLsn;
+                        log.warn("SQLServer CDC: capture instance {} starts at {} above the"
+                                + " stored watermark {} (enabled or re-created mid-flight);"
+                                + " clamping from_lsn to {} and rescanning inclusively — no"
+                                + " changes were lost", ci.captureInstance, ci.startLsn,
+                                fromLsn, clampTo);
+                        scanCi(conn, ci, changesSqlInclusive(ci.captureInstance), clampTo,
+                                maxLsn, fold, out);
+                        continue;
+                    }
+                    // ② purged past the watermark — unrecoverable; park as PURGED. No
+                    // cause chain: describe() reports the ROOT message and the remedy
+                    // text below must be what reaches sync_task.last_sync_result.
+                    log.warn("SQLServer CDC: capture instance {} rejected watermark {}"
+                            + " (error 22054) and its min_lsn {} is above it — the cleanup"
+                            + " job purged the changes in between; parking the project",
+                            ci.captureInstance, fromLsn, minLsn, e);
+                    throw new SQLException("SQLServer CDC purge: capture instance "
+                            + ci.captureInstance + " has min_lsn " + minLsn + " above the"
+                            + " stored watermark " + fromLsn + " — the changes in between"
+                            + " were removed by the CDC cleanup job and cannot be"
+                            + " recovered; re-baseline the project from a fresh snapshot");
                 }
                 // Propagate — the caller leaves fromLsn untouched and retries.
                 throw e;
@@ -361,8 +367,54 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 : fold.ordered().entrySet()) {
             flushTransaction(projectId, e.getKey(), e.getValue());
         }
-        out.nextLsn = highWater;
+        // #3: reaching here means the loop completed without aborting — every tracked
+        // CI was scanned over (fromLsn, maxLsn] (normally, or from a #2 clamp point).
+        // Rows were either folded or deliberately skipped as unsupported, so the window
+        // is fully consumed and the watermark advances to maxLsn EVEN WHEN NOTHING
+        // FOLDED. The old per-row highWater only advanced on a tracked row: a project
+        // whose tracked tables are quiet while untracked tables churn kept fromLsn
+        // pinned, re-running full discovery over a monotonically growing window every
+        // cycle until aged-out logs tripped 22054. Guarded by running: an interrupted
+        // scan did not finish the window and must not advance it. The persisted
+        // position still only moves in flushTransaction (data-first); after a restart
+        // the quiet window re-scans once, harmlessly (unsupported rows skip again).
+        if (running && !Thread.currentThread().isInterrupted()) {
+            out.nextLsn = maxLsn;
+        }
         return out;
+    }
+
+    /**
+     * Scan one capture instance over the window its SQL defines — (fromBind, toLsn]
+     * for {@link #changesSql}, [fromBind, toLsn] for the inclusive #2 clamp variant —
+     * folding every row into {@code fold}. Shared by the normal per-cycle pull and the
+     * clamp rescan so both paths fold identically.
+     */
+    private void scanCi(Connection conn, CaptureInstance ci, String sql, String fromBind,
+                        String toLsn, SqlServerTxFold fold, DrainResult out)
+            throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, fromBind);
+            ps.setString(2, toLsn);
+            try (ResultSet rs = ps.executeQuery()) {
+                // Cache the real column set of the CT row ONCE per ci — readRow
+                // consults this to distinguish "not captured" from genuine errors.
+                Set<String> availableCols = availableColumns(rs);
+                while (running && !Thread.currentThread().isInterrupted() && rs.next()) {
+                    String startLsn = rs.getString(1); // already CONVERT(varchar, 1) shape
+                    int op = rs.getInt(2);
+                    CdcTableBinding binding = supplier.binding(ci);
+                    if (binding == null || !binding.isApplicable()) {
+                        stats.addUnsupportedTable(ci.schema + "." + ci.table);
+                        continue;
+                    }
+                    Map<String, Object> row = readRow(rs, binding, availableCols);
+                    fold.accept(startLsn, binding, op, row);
+                    out.rows++;
+                    stats.touchEvent(System.currentTimeMillis());
+                }
+            }
+        }
     }
 
     /**
@@ -377,6 +429,21 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 + " FROM cdc.fn_cdc_get_all_changes_" + captureInstance
                 + "((SELECT sys.fn_cdc_increment_lsn(CONVERT(binary(10), ?, 1))),"
                 + " CONVERT(binary(10), ?, 1),'all update old')"
+                + " ORDER BY __$start_lsn, __$seqval";
+    }
+
+    /**
+     * #2 clamp variant of {@link #changesSql}: binds @from_lsn RAW — no
+     * fn_cdc_increment_lsn — so a change sitting exactly AT the clamp point is
+     * included. The normal pull increments to skip the watermark transaction already
+     * applied last cycle; the clamp point (min_lsn, or a new CI's start_lsn when its
+     * change table is still empty) was never applied, so incrementing there could skip
+     * the boundary row. Replaying a row is safe (idempotent upserts); skipping is loss.
+     */
+    static String changesSqlInclusive(String captureInstance) {
+        return "SELECT __$start_lsn, __$operation, *"
+                + " FROM cdc.fn_cdc_get_all_changes_" + captureInstance
+                + "(CONVERT(binary(10), ?, 1), CONVERT(binary(10), ?, 1),'all update old')"
                 + " ORDER BY __$start_lsn, __$seqval";
     }
 
@@ -456,6 +523,21 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
+     * #2: canonical min valid LSN of one capture instance — the lower bound
+     * fn_cdc_get_all_changes accepts for it — or NULL while its change table holds no
+     * rows yet. Same CONVERT(varchar(32), …, 1) shape as every other LSN we handle.
+     */
+    private String readMinLsn(Connection conn, String captureInstance) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT CONVERT(varchar(32), sys.fn_cdc_get_min_lsn(?), 1)")) {
+            ps.setString(1, captureInstance);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        }
+    }
+
+    /**
      * Discover every enabled capture instance on this DB and filter to the tables the
      * project actually wants. When a source table has MULTIPLE capture instances (schema
      * change → disable/enable), keep only the one with the highest start_lsn — the
@@ -463,7 +545,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      */
     private List<CaptureInstance> discoverCaptureInstances(Connection conn) throws SQLException {
         // ORDER BY start_lsn ASC lets the per-table loop pick the LAST (newest) one.
-        String sql = "SELECT source_schema_name, source_table_name, capture_instance"
+        // #2 also selects start_lsn (canonical form) — the discriminant that tells a
+        // mid-flight-created CI (clamp and self-heal) from a purged one (park).
+        String sql = "SELECT source_schema_name, source_table_name, capture_instance,"
+                + " CONVERT(varchar(32), start_lsn, 1)"
                 + " FROM cdc.change_tables"
                 + " ORDER BY source_schema_name, source_table_name, start_lsn";
         Map<String, CaptureInstance> byTable = new LinkedHashMap<>();
@@ -473,6 +558,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 String schema = rs.getString(1);
                 String table = rs.getString(2);
                 String ci = rs.getString(3);
+                String startLsn = rs.getString(4); // canonical — lexicographic == LSN order
                 if (!matchesProjectTable(schema, table)) continue;
                 if (!isSafeCaptureInstanceName(ci)) {
                     // P1-7: the name is concatenated into the change-pull SQL; a name
@@ -484,7 +570,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     continue;
                 }
                 String key = (schema + "." + table).toLowerCase(Locale.ROOT);
-                byTable.put(key, new CaptureInstance(schema, table, ci)); // last one wins
+                byTable.put(key, new CaptureInstance(schema, table, ci, startLsn)); // last one wins
             }
         }
         List<CaptureInstance> found = new ArrayList<>(byTable.values());
@@ -616,10 +702,19 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         final String schema;
         final String table;
         final String captureInstance;
-        CaptureInstance(String schema, String table, String captureInstance) {
+        /**
+         * #2: canonical start_lsn from cdc.change_tables — the LSN this CI began
+         * capturing at. Compared against the stored watermark on a 22054 to tell a
+         * mid-flight-created CI (start_lsn above the watermark → clamp, self-heal)
+         * from a purged one (start_lsn at/below it → park). The canonical "0x" +
+         * 20-lowercase-hex form is fixed-width, so String.compareTo == LSN order.
+         */
+        final String startLsn;
+        CaptureInstance(String schema, String table, String captureInstance, String startLsn) {
             this.schema = schema;
             this.table = table;
             this.captureInstance = captureInstance;
+            this.startLsn = startLsn;
         }
     }
 
