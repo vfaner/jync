@@ -705,27 +705,51 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .cdc-ok { color: #1a7f37; }
 .cdc-fail { color: #b42318; }
 
-/* ─── Toast ─────────────────────────────────────────────── */
-#toasts {
-  position: fixed; top: calc(var(--nav-h) + 14px); right: 18px; z-index: 1080;
-  display: flex; flex-direction: column; gap: 9px; max-width: 400px;
+/* ─── 统一居中弹窗（JyncDialog，B9） ─────────────────────────────────
+   取代旧的右上角 toast：confirm/choose/alert 阻塞式，auto 约 2.6s 自消。
+   颜色全部走 :root 变量，暗色主题自动适配；z-index 高于导航与捐赠弹窗。 */
+.jd-overlay {
+  position: fixed; inset: 0; z-index: 1400;
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+  background: rgba(15, 23, 42, .45);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  animation: jd-fade .18s ease-out;
 }
-.toast {
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 13px 15px; border-radius: var(--radius-sm);
+.jd-overlay.jd-out { opacity: 0; transition: opacity .16s ease; }
+.jd-card {
+  position: relative; overflow: hidden auto;
+  width: min(92vw, 440px); max-height: 82vh;
+  padding: 22px 24px 18px; border-radius: 14px;
   background: var(--bg); border: 1px solid var(--line);
-  box-shadow: var(--shadow-lg); font-size: 13.5px;
-  animation: toast-in .28s cubic-bezier(.16, 1, .3, 1);
+  box-shadow: var(--shadow-lg);
+  animation: jd-pop .22s cubic-bezier(.2, .9, .3, 1.15);
 }
-.toast.out { animation: toast-out .2s ease forwards; }
-.toast > .ico { width: 17px; height: 17px; flex-shrink: 0; margin-top: 2px; }
-.toast-msg { flex: 1; min-width: 0; word-break: break-word; }
-.toast-ok     { border-left: 3px solid var(--ok); }
-.toast-danger { border-left: 3px solid var(--danger); }
-.toast-warn   { border-left: 3px solid var(--warn); }
-.toast-info   { border-left: 3px solid var(--info); }
-@keyframes toast-in  { from { opacity: 0; transform: translateX(24px) scale(.97); } to { opacity: 1; transform: none; } }
-@keyframes toast-out { to   { opacity: 0; transform: translateX(24px); } }
+.jd-out .jd-card { transform: scale(.96); transition: transform .16s ease; }
+/* 顶部渐变条按级别变色：品牌色起步，级别色收尾 */
+.jd-bar { position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, var(--brand), var(--info)); }
+.jd-ok .jd-bar     { background: linear-gradient(90deg, var(--ok), #34d399); }
+.jd-warn .jd-bar   { background: linear-gradient(90deg, var(--warn), #fbbf24); }
+.jd-danger .jd-bar { background: linear-gradient(90deg, var(--danger), #f87171); }
+.jd-head { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
+.jd-ico { width: 21px; height: 21px; flex-shrink: 0; color: var(--info); }
+.jd-ok .jd-ico     { color: var(--ok); }
+.jd-warn .jd-ico   { color: var(--warn); }
+.jd-danger .jd-ico { color: var(--danger); }
+.jd-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+.jd-body {
+  font-size: 13.5px; line-height: 1.7; color: var(--ink-mute);
+  white-space: pre-wrap; word-break: break-word;
+}
+.jd-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin-top: 18px; }
+.jd-actions .btn { min-width: 92px; justify-content: center; }
+@keyframes jd-fade { from { opacity: 0; } }
+@keyframes jd-pop  { from { opacity: 0; transform: scale(.94) translateY(8px); } }
+@media (max-width: 560px) {
+  /* 窄屏：卡片占满宽度，按钮竖排（主按钮在最下，拇指易达） */
+  .jd-card { width: 100%; padding: 18px 16px 14px; }
+  .jd-actions { flex-direction: column-reverse; }
+  .jd-actions .btn { width: 100%; }
+}
 
 /* ─── 定义列表（设置页） ────────────────────────────────── */
 .dl { display: grid; grid-template-columns: minmax(140px, auto) 1fr; gap: 11px 18px; font-size: 13.5px; margin: 0; }
@@ -1191,7 +1215,6 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   .stat-grid { grid-template-columns: 1fr 1fr; gap: 11px; }
   .stat { padding: 14px; flex-direction: column; align-items: flex-start; gap: 9px; }
   .stat-n { font-size: 22px; }
-  #toasts { left: 14px; right: 14px; max-width: none; }
   /* 五个按钮在窄屏上会挤出导航栏：收紧尺寸和间距，并让标题可省略号截断 */
   .nav-right { gap: 6px; }
   .icon-btn, .donate-btn { width: 34px; height: 34px; }

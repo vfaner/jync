@@ -214,8 +214,6 @@
     </script>
 </th:block>
 
-<div id="toasts"></div>
-
 <main class="shell">
     <!--/* Flash 消息里存的是 i18n key；msgOrNull 让未收录的原始文案也能原样显示 */-->
     <div th:if="${message}" class="alert alert-ok" data-auto-dismiss>
@@ -431,7 +429,19 @@
         'cdc.switch.confirm': /*[[#{cdc.switch.confirm}]]*/ '',
         'error.forbidden': /*[[#{error.forbidden}]]*/ '',
         'error.sessionExpired': /*[[#{error.sessionExpired}]]*/ '',
-        'error.network': /*[[#{error.network}]]*/ ''
+        'error.network': /*[[#{error.network}]]*/ '',
+        'common.ok': /*[[#{common.ok}]]*/ '',
+        'common.cancel': /*[[#{common.cancel}]]*/ '',
+        'dialog.title.info': /*[[#{dialog.title.info}]]*/ '',
+        'dialog.title.ok': /*[[#{dialog.title.ok}]]*/ '',
+        'dialog.title.warn': /*[[#{dialog.title.warn}]]*/ '',
+        'dialog.title.danger': /*[[#{dialog.title.danger}]]*/ '',
+        'dirty.title': /*[[#{dirty.title}]]*/ '',
+        'dirty.message': /*[[#{dirty.message}]]*/ '',
+        'dirty.messageRunning': /*[[#{dirty.messageRunning}]]*/ '',
+        'dirty.saveAndRun': /*[[#{dirty.saveAndRun}]]*/ '',
+        'dirty.runSaved': /*[[#{dirty.runSaved}]]*/ '',
+        'dirty.saveFailed': /*[[#{dirty.saveFailed}]]*/ ''
     };
 </script>
 <script th:src="@{/js/theme.js}"></script>

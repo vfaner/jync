@@ -1,6 +1,6 @@
 /* ==========================================================================
-   通用交互：Toast、API 调用、对象选择、连接测试、移动端导航
-   纯原生 JS，不依赖任何框架，全部本地资源。
+   通用交互：居中弹窗(JyncDialog)、API 调用、对象选择、连接测试、移动端导航
+   纯原生 JS(ES5)，不依赖任何框架，全部本地资源。
    ========================================================================== */
 (function () {
   'use strict';
@@ -63,39 +63,153 @@
     return '<svg class="ico' + (cls ? ' ' + cls : '') + '"><use href="#' + name + '"/></svg>';
   }
 
-  function toast(message, kind) {
-    var box = document.getElementById('toasts');
-    if (!box) return;
+  /* ─── 统一居中弹窗 JyncDialog ─────────────────────────────────────────
+   * 取代旧的右上角 toast 与原生 window.confirm：所有通知/确认都走水平+垂直
+   * 居中的弹窗。三种形态：
+   *   confirm / choose —— 按钮选择，阻塞到用户明确选择（ESC、点背景 = 取消）；
+   *   alert            —— 单按钮，必须点击才关闭（danger 级错误，保证被看到）；
+   *   auto             —— 居中轻卡片，约 2.6s 自动消失（ok/warn/info 通知），
+   *                       点击卡片或 ESC 可提前消，不强迫点击。
+   * 多个弹窗按先后排队而不是叠放；关闭后把焦点还给触发元素。
+   * 纯 ES5、DOM 由 JS 自注入（模板零改动）、颜色全部走 CSS 变量适配亮暗主题。
+   */
+  var JyncDialog = (function () {
+    var AUTO_MS = 2600;
+    var queue = [];
+    var current = null;      // { el: overlay 元素 }
+    var lastFocus = null;
+    var autoTimer = null;
 
-    kind = kind || 'info';
-    var el = document.createElement('div');
-    el.className = 'toast toast-' + kind;
-
-    var iconEl = icon(ICONS[kind] || ICONS.info);
-    var body = document.createElement('div');
-    body.className = 'toast-msg';
-    body.textContent = message;           // textContent：避免把服务端消息当 HTML 执行
-    var close = document.createElement('button');
-    close.className = 'alert-close';
-    close.type = 'button';
-    close.innerHTML = iconHtml('x-lg');
-
-    el.appendChild(iconEl);
-    el.appendChild(body);
-    el.appendChild(close);
-    box.appendChild(el);
-
-    var timer = setTimeout(dismiss, kind === 'danger' ? 8000 : 4000);
-    close.addEventListener('click', function () {
-      clearTimeout(timer);
-      dismiss();
-    });
-
-    function dismiss() {
-      el.classList.add('out');
-      // 等退场动画结束再移除，否则会瞬间消失
-      setTimeout(function () { el.remove(); }, 220);
+    function onKeydown(e) {
+      var key = e.key !== undefined ? e.key : e.keyCode;
+      if (key === 'Escape' || key === 'Esc' || key === 27) { close(); }
     }
+
+    function close() {
+      if (!current) { return; }
+      var el = current.el;
+      current = null;
+      if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+      document.removeEventListener('keydown', onKeydown);
+      el.className += ' jd-out';
+      // 等退场动画结束再移除，否则会瞬间消失
+      setTimeout(function () {
+        if (el.parentNode) { el.parentNode.removeChild(el); }
+      }, 180);
+      if (lastFocus && lastFocus.focus) { lastFocus.focus(); }
+      lastFocus = null;
+      if (queue.length) { show(queue.shift()); }
+    }
+
+    function show(opts) {
+      if (current) { queue.push(opts); return; }
+      var kind = opts.kind || 'info';
+
+      var ov = document.createElement('div');
+      ov.className = 'jd-overlay';
+      ov.setAttribute('role', opts.buttons ? 'alertdialog' : 'dialog');
+      ov.setAttribute('aria-modal', 'true');
+
+      var card = document.createElement('div');
+      card.className = 'jd-card jd-' + kind;
+
+      var bar = document.createElement('div');
+      bar.className = 'jd-bar';
+
+      var head = document.createElement('div');
+      head.className = 'jd-head';
+      head.appendChild(icon(ICONS[kind] || ICONS.info, 'jd-ico'));
+      var title = document.createElement('div');
+      title.className = 'jd-title';
+      title.textContent = opts.title || t('dialog.title.' + kind);
+      head.appendChild(title);
+
+      var body = document.createElement('div');
+      body.className = 'jd-body';
+      body.textContent = opts.message || '';  // textContent：避免把服务端消息当 HTML 执行
+
+      var actions = document.createElement('div');
+      actions.className = 'jd-actions';
+      var buttons = opts.buttons;
+      if (!buttons) {
+        // alert 形态：单个「确定」；auto 形态：无按钮，到点自消
+        buttons = opts.auto ? [] : [
+          { label: t('common.ok'), cls: 'btn btn-primary btn-sm', primary: true }
+        ];
+      }
+      var primary = null;
+      buttons.forEach(function (spec) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = spec.cls;
+        b.textContent = spec.label;
+        b.addEventListener('click', function () {
+          close();
+          if (spec.onClick) { spec.onClick(); }
+        });
+        if (spec.primary) { primary = b; }
+        actions.appendChild(b);
+      });
+
+      card.appendChild(bar);
+      card.appendChild(head);
+      card.appendChild(body);
+      if (buttons.length) { card.appendChild(actions); }
+      ov.appendChild(card);
+
+      // 点背景关闭；对所有形态都等价于「取消/知道了」，不会误触发确认回调
+      ov.addEventListener('click', function (e) {
+        if (e.target === ov) { close(); }
+      });
+      if (opts.auto) { card.addEventListener('click', close); }
+
+      lastFocus = document.activeElement;
+      document.addEventListener('keydown', onKeydown);
+      document.body.appendChild(ov);
+      current = { el: ov };
+      if (opts.auto) { autoTimer = setTimeout(close, opts.autoMs || AUTO_MS); }
+      if (primary) { primary.focus(); }
+    }
+
+    return {
+      /** 阻塞式确认，取代 window.confirm：onOk / onCancel 均可选。 */
+      confirm: function (message, onOk, onCancel) {
+        show({
+          kind: 'warn',
+          message: message,
+          buttons: [
+            { label: t('common.cancel'), cls: 'btn btn-ghost btn-sm', onClick: onCancel },
+            { label: t('common.ok'), cls: 'btn btn-primary btn-sm', onClick: onOk, primary: true }
+          ]
+        });
+      },
+      /** 多选弹窗（未保存配置拦截的三选一）：buttons = [{label, cls, onClick, primary}]。 */
+      choose: function (kind, title, message, buttons) {
+        show({ kind: kind, title: title, message: message, buttons: buttons });
+      },
+      /** 阻塞式告知：必须点击「确定」才关闭，用于不该被错过的错误。 */
+      alert: function (message, kind) {
+        show({ kind: kind || 'danger', message: message });
+      },
+      /** 居中轻告知：约 2.6s 自动消失，点击或 ESC 可提前关闭。 */
+      auto: function (message, kind) {
+        show({ kind: kind || 'info', message: message, auto: true });
+      },
+      /** 分级入口（承接旧 toast 语义）：danger 阻塞必读，其余自动消失。 */
+      notify: function (message, kind) {
+        if (kind === 'danger') { show({ kind: 'danger', message: message }); }
+        else { show({ kind: kind || 'info', message: message, auto: true }); }
+      },
+      close: close
+    };
+  })();
+
+  /**
+   * 兼容壳：既有 17 处 toast(msg, kind) 调用点原样保留，
+   * 统一路由到 JyncDialog —— danger 阻塞式，ok/warn/info 居中自动消失。
+   */
+  function toast(message, kind) {
+    JyncDialog.notify(message, kind);
   }
 
   /* ─── API 调用 ──────────────────────────────────────────── */
@@ -278,46 +392,149 @@
   function bindActionButton(btn) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
-      if (btn.dataset.confirm && !window.confirm(btn.dataset.confirm)) return;
 
       // 这里不用 withBusy：下方 reload 分支刻意「不恢复」按钮 ——
       // 保持加载态直到页面刷新，避免重载前按钮文案闪回原样
-      var original = btn.innerHTML;
-      btn.disabled = true;
-      btn.innerHTML = busyLabel(btn);
+      var run = function () {
+        var original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = busyLabel(btn);
 
-      postJson(btn.dataset.action).then(function (payload) {
-        var text = payload.summary
-          ? t(payload.message) + ' — ' + payload.summary
-          : t(payload.message);
-        // 服务端可用 toastKind 指定级别（如「已排队补跑」用 warn），缺省按成败二色
-        toast(text, payload.toastKind || (payload.success ? 'ok' : 'danger'));
+        postJson(btn.dataset.action).then(function (payload) {
+          var text = payload.summary
+            ? t(payload.message) + ' — ' + payload.summary
+            : t(payload.message);
+          // 服务端可用 toastKind 指定级别（如「已排队补跑」用 warn），缺省按成败二色
+          toast(text, payload.toastKind || (payload.success ? 'ok' : 'danger'));
 
-        // 逐条列出错误，比只给一句「失败」有用
-        if (payload.errors && payload.errors.length) {
-          payload.errors.slice(0, 3).forEach(function (err) { toast(t(err), 'danger'); });
-        }
+          // 逐条列出错误，比只给一句「失败」有用
+          if (payload.errors && payload.errors.length) {
+            payload.errors.slice(0, 3).forEach(function (err) { toast(t(err), 'danger'); });
+          }
 
-        // 跳过的表不是错误，但必须点名：否则「表一直不动」和「本轮无事发生」无法区分
-        if (payload.skippedTables && payload.skippedTables.length) {
-          payload.skippedTables.slice(0, 3).forEach(function (s) {
-            toast(t('msg.sync.skipped') + ' ' + s.table + ': ' + s.reason, 'warn');
-          });
-        }
+          // 跳过的表不是错误，但必须点名：否则「表一直不动」和「本轮无事发生」无法区分
+          if (payload.skippedTables && payload.skippedTables.length) {
+            payload.skippedTables.slice(0, 3).forEach(function (s) {
+              toast(t('msg.sync.skipped') + ' ' + s.table + ': ' + s.reason, 'warn');
+            });
+          }
 
-        // noReload：请求被接受但没有真正执行完（如补跑排队），页面不该刷新
-        if (payload.success && payload.noReload !== true && btn.dataset.reload === 'true') {
-          setTimeout(function () { window.location.reload(); }, 850);
-          return;
-        }
-        btn.disabled = false;
-        btn.innerHTML = original;
-      }).catch(function (err) {
-        toast(describeError(err), 'danger');
-        btn.disabled = false;
-        btn.innerHTML = original;
-      });
+          // noReload：请求被接受但没有真正执行完（如补跑排队），页面不该刷新
+          if (payload.success && payload.noReload !== true && btn.dataset.reload === 'true') {
+            setTimeout(function () { window.location.reload(); }, 850);
+            return;
+          }
+          btn.disabled = false;
+          btn.innerHTML = original;
+        }).catch(function (err) {
+          toast(describeError(err), 'danger');
+          btn.disabled = false;
+          btn.innerHTML = original;
+        });
+      };
+
+      // B9：配置有未保存修改时，先拦住「按配置执行」的动作（启动/立即同步/
+      // 重建基线）弹三选一；data-confirm 的二次确认（重建基线两者都有）在
+      // 用户选完配置来源之后才出现，顺序 = 未保存拦截 → 危险确认 → 执行。
+      var proceed = function () {
+        if (btn.dataset.confirm) { JyncDialog.confirm(btn.dataset.confirm, run); return; }
+        run();
+      };
+      if (configActionBlocked(btn)) { showDirtyChoice(proceed); } else { proceed(); }
     });
+  }
+
+  /* ─── B9：项目配置的未保存修改 ────────────────────────────────────────
+   * 运行控制按钮（启动 / 立即同步 / 重建基线）执行的都是服务端「已保存」的
+   * 配置。用户改了表单没点保存就直接点按钮时，旧行为是静默按旧配置跑，用户
+   * 以为改生效了。现在：①表单变脏即在按钮区亮出「配置未保存」徽标；②点这些
+   * 动作时弹居中三选一 —— 保存并执行 / 按已保存配置执行 / 取消。
+   * 只在存在 #config-form 的项目详情页生效，其余页面零影响。 */
+  var configForm = null;
+  var configDirty = false;
+
+  function initConfigDirtyTracking() {
+    configForm = document.getElementById('config-form');
+    if (!configForm) { return; }
+    var markDirty = function () {
+      if (configDirty) { return; }
+      configDirty = true;
+      setDirtyBadge(true);
+    };
+    configForm.addEventListener('input', markDirty);
+    configForm.addEventListener('change', markDirty);
+  }
+
+  function setDirtyBadge(dirty) {
+    document.querySelectorAll('[data-role="dirty-badge"]').forEach(function (el) {
+      el.classList.toggle('is-hidden', !dirty);
+    });
+  }
+
+  /** 受未保存配置影响的动作：URL 命中 start / sync-now / cdc-rebaseline 才拦。 */
+  var CONFIG_RUN_ACTION = /\/(start|sync-now|cdc-rebaseline)(\?|$)/;
+
+  function configActionBlocked(btn) {
+    return !!(configForm && configDirty
+        && CONFIG_RUN_ACTION.test(btn.getAttribute('data-action') || ''));
+  }
+
+  /**
+   * 「保存并执行」：把表单序列化 POST 到配置端点再执行原动作。走表单编码而不是
+   * 原生 submit，页面不刷新，动作才能接着跑；CSRF 双保险 —— Thymeleaf 注入的
+   * 隐藏域随 FormData 带上，meta 令牌也补进请求头（与 postJson 同款）。
+   */
+  function saveConfigThen(done) {
+    var headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    var token = document.querySelector('meta[name="_csrf"]');
+    var header = document.querySelector('meta[name="_csrf_header"]');
+    if (token && header && token.content && header.content) {
+      headers[header.content] = token.content;
+    }
+    fetch(configForm.getAttribute('action'), {
+      method: 'POST',
+      headers: headers,
+      body: new URLSearchParams(new FormData(configForm)).toString()
+    }).then(function (response) {
+      // 会话过期与 postJson 同策略：重载当前 URL，由安全层自己重定向
+      if (response.status === 401) { window.location.reload(); return null; }
+      if (!response.ok) { throw new Error('HTTP ' + response.status); }
+      // 配置端点是 PRG：校验失败也 302 回详情页（错误进 flash），fetch 跟随
+      // 重定向后同样是 200。真成功与否要看响应 HTML 里有没有错误横幅 ——
+      // 与 bindCdcRefresh 同款 DOMParser 用法。
+      return response.text().then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var errBody = doc.querySelector('main.shell > .alert-danger .alert-body');
+        if (errBody) { throw new Error(errBody.textContent.trim()); }
+        configDirty = false;
+        setDirtyBadge(false);
+        done();
+        return null;
+      });
+    }).catch(function (err) {
+      JyncDialog.alert(t('dirty.saveFailed') + ' ' + describeError(err), 'danger');
+    });
+  }
+
+  function showDirtyChoice(next) {
+    // 项目运行中保存按钮被服务端禁用（配置锁定），此时不提供「保存并执行」，
+    // 只留「按已保存配置执行 / 取消」，并把原因写进弹窗文案。
+    var saveBtn = document.querySelector('button[form="config-form"]');
+    var canSave = !!(saveBtn && !saveBtn.disabled);
+    var buttons = [
+      { label: t('common.cancel'), cls: 'btn btn-ghost btn-sm' },
+      { label: t('dirty.runSaved'), cls: 'btn btn-ghost btn-sm', onClick: next }
+    ];
+    if (canSave) {
+      buttons.push({
+        label: t('dirty.saveAndRun'),
+        cls: 'btn btn-primary btn-sm',
+        primary: true,
+        onClick: function () { saveConfigThen(next); }
+      });
+    }
+    JyncDialog.choose('warn', t('dirty.title'),
+        t(canSave ? 'dirty.message' : 'dirty.messageRunning'), buttons);
   }
 
   /* ─── 连接测试 ──────────────────────────────────────────── */
@@ -828,57 +1045,64 @@
         toast(t('error.override.empty'), 'danger');
         return;
       }
-      if (btn.dataset.confirm && !window.confirm(btn.dataset.confirm)) return;
+      // JyncDialog.confirm 是异步回调，与 window.confirm 的同步返回不同：
+      // 首次点击只负责弹窗，确认后的动作收进 doValidate 由回调触发。
+      var doValidate = function () {
+        if (out) out.innerHTML = '';
 
-      if (out) out.innerHTML = '';
+        withBusy(btn, busyLabel(btn), function () {
+          return postJson(btn.dataset.action, JSON.stringify({
+            kind: btn.dataset.kind,
+            name: btn.dataset.name,
+            sql: editor.value
+          }), true).then(function (payload) {
+            var kind = payload.success ? 'ok' : 'danger';
+            toast(t(payload.success ? 'conversion.validateOk' : 'conversion.validateFailed'), kind);
 
-      withBusy(btn, busyLabel(btn), function () {
-        return postJson(btn.dataset.action, JSON.stringify({
-          kind: btn.dataset.kind,
-          name: btn.dataset.name,
-          sql: editor.value
-        }), true).then(function (payload) {
-          var kind = payload.success ? 'ok' : 'danger';
-          toast(t(payload.success ? 'conversion.validateOk' : 'conversion.validateFailed'), kind);
+            if (!out) return;
+            var alert = document.createElement('div');
+            alert.className = 'alert alert-' + kind;
+            alert.appendChild(icon(payload.success ? 'check-circle-fill' : 'x-circle-fill'));
 
-          if (!out) return;
-          var alert = document.createElement('div');
-          alert.className = 'alert alert-' + kind;
-          alert.appendChild(icon(payload.success ? 'check-circle-fill' : 'x-circle-fill'));
+            var body = document.createElement('div');
+            body.className = 'alert-body';
+            var head = document.createElement('strong');
+            head.textContent = t(payload.success
+              ? 'conversion.validateOk' : 'conversion.validateFailed');
+            body.appendChild(head);
 
-          var body = document.createElement('div');
-          body.className = 'alert-body';
-          var head = document.createElement('strong');
-          head.textContent = t(payload.success
-            ? 'conversion.validateOk' : 'conversion.validateFailed');
-          body.appendChild(head);
-
-          // 失败时目标库自己的报错最有用；message 也可能是 i18n key，t() 找不到时原样返回。
-          // 服务端会拼 "key: 驱动原始报错"，先在第一个 ": " 处拆开：key 部分走翻译，
-          // 驱动细节原样附上（t() 未命中时返回原文，拆开再拼回是无损的）。
-          if (!payload.success && payload.message) {
-            var detail = document.createElement('div');
-            detail.className = 'small mono';
-            var msg = String(payload.message);
-            var cut = msg.indexOf(': ');
-            detail.textContent = cut > -1
-              ? t(msg.slice(0, cut)) + msg.slice(cut)
-              : t(msg);
-            body.appendChild(detail);
-          }
-          // 即使通过也要显示 caveats：「目标库接受了」和「行为一致」是两件事
-          (payload.caveats || []).forEach(function (c) {
-            var line = document.createElement('div');
-            line.className = 'small muted';
-            line.textContent = t(c);
-            body.appendChild(line);
+            // 失败时目标库自己的报错最有用；message 也可能是 i18n key，t() 找不到时原样返回。
+            // 服务端会拼 "key: 驱动原始报错"，先在第一个 ": " 处拆开：key 部分走翻译，
+            // 驱动细节原样附上（t() 未命中时返回原文，拆开再拼回是无损的）。
+            if (!payload.success && payload.message) {
+              var detail = document.createElement('div');
+              detail.className = 'small mono';
+              var msg = String(payload.message);
+              var cut = msg.indexOf(': ');
+              detail.textContent = cut > -1
+                ? t(msg.slice(0, cut)) + msg.slice(cut)
+                : t(msg);
+              body.appendChild(detail);
+            }
+            // 即使通过也要显示 caveats：「目标库接受了」和「行为一致」是两件事
+            (payload.caveats || []).forEach(function (c) {
+              var line = document.createElement('div');
+              line.className = 'small muted';
+              line.textContent = t(c);
+              body.appendChild(line);
+            });
+            alert.appendChild(body);
+            out.appendChild(alert);
+          }).catch(function (err) {
+            toast(describeError(err), 'danger');
           });
-          alert.appendChild(body);
-          out.appendChild(alert);
-        }).catch(function (err) {
-          toast(describeError(err), 'danger');
         });
-      });
+      };
+      if (btn.dataset.confirm) {
+        JyncDialog.confirm(btn.dataset.confirm, doValidate);
+        return;
+      }
+      doValidate();
     });
   }
 
@@ -1260,27 +1484,35 @@
     bindDonate();
     bindGenericModals();
     bindUserMenu();
+    initConfigDirtyTracking();
 
-    // 关闭提示条
-    document.querySelectorAll('[data-dismiss]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var alert = btn.closest('.alert');
-        if (alert) alert.remove();
-      });
-    });
-    // 成功提示自动消失；错误提示留着让用户看清
-    document.querySelectorAll('.alert-ok[data-auto-dismiss]').forEach(function (alert) {
-      setTimeout(function () { alert.remove(); }, 5000);
+    // B9：顶部 Flash 横幅统一转成居中弹窗 —— 成功用自动消失的轻卡片，
+    // 错误/无权限用必须点击的阻塞弹窗。读完文案即移除原 .alert 节点，
+    // 避免「顶部 + 居中」双重提示；关闭按钮与 5 秒自动消失逻辑随之退役。
+    document.querySelectorAll('main.shell > .alert').forEach(function (el) {
+      var body = el.querySelector('.alert-body');
+      var text = (body ? body.textContent : el.textContent).trim();
+      var isOk = el.className.indexOf('alert-ok') >= 0;
+      if (el.parentNode) { el.parentNode.removeChild(el); }
+      if (!text) { return; }
+      if (isOk) { JyncDialog.auto(text, 'ok'); }
+      else { JyncDialog.alert(text, 'danger'); }
     });
 
-    // 提交前确认（删除等不可逆操作）
+    // 提交前确认（删除等不可逆操作）。JyncDialog 是异步回调：submit 一律先
+    // preventDefault，确认后走 form.submit() 程序化提交 —— 它不会再触发本
+    // 监听器（无循环），且浏览器约束校验在 submit 事件发出前已经完成。
     document.querySelectorAll('form[data-confirm]').forEach(function (form) {
       form.addEventListener('submit', function (e) {
         // A second click after confirmation must not submit twice (an accidental double-click
         // on a delete button) — stop the duplicate POST.
         if (form.dataset.submitted === '1') { e.preventDefault(); return; }
-        if (!window.confirm(form.dataset.confirm)) { e.preventDefault(); return; }
-        form.dataset.submitted = '1';
+        e.preventDefault();
+        JyncDialog.confirm(form.dataset.confirm, function () {
+          if (form.dataset.submitted === '1') { return; }
+          form.dataset.submitted = '1';
+          form.submit();
+        });
       });
     });
 
@@ -1336,9 +1568,13 @@
         var picked = form.querySelector('input[name=captureStrategy]:checked');
         if (!picked) { return; }
         var isLogCdc = (picked.value === 'BINLOG_CDC' || picked.value === 'LOGMINER_CDC');
-        if (picked.value !== original && isLogCdc
-            && !window.confirm(t('cdc.switch.confirm'))) {
+        if (picked.value !== original && isLogCdc) {
+          // 异步弹窗：先拦下本次提交，确认后 form.submit() 程序化重提 ——
+          // 不再触发 submit 监听器，无循环；约束校验在事件发出前已通过。
           e.preventDefault();
+          JyncDialog.confirm(t('cdc.switch.confirm'), function () {
+            form.submit();
+          });
         }
       });
     });
@@ -1358,15 +1594,38 @@
       });
     };
     syncPollingOnlyVisibility();
+
+    // B9(#1)：运行控制按钮区跟随「当前所选」策略实时联动 —— 选中日志 CDC 时
+    // （哪怕尚未保存）隐藏「立即同步」及其帮助文案，避免“选了 CDC 却还看到
+    // 立即同步按钮”的误导窗口；服务端仍按已保存配置兜底拒绝。初始状态由
+    // 服务端按已保存配置渲染，这里在加载后同步一次让两边口径一致。
+    // 注意：运行控制按钮已有 data-role="api-btn"（精确匹配选择器），所以
+    // 联动标记走独立属性 data-cdc-visibility，不复用 data-role。
+    var syncRunControlVisibility = function () {
+      var picked = document.querySelector('input[name=captureStrategy]:checked');
+      var isCdc = picked && (picked.value === 'BINLOG_CDC' || picked.value === 'LOGMINER_CDC');
+      document.querySelectorAll('[data-cdc-visibility="non-cdc"]').forEach(function (el) {
+        el.classList.toggle('is-hidden', !!isCdc);
+      });
+      document.querySelectorAll('[data-cdc-visibility="cdc"]').forEach(function (el) {
+        el.classList.toggle('is-hidden', !isCdc);
+      });
+    };
+    syncRunControlVisibility();
+
     document.addEventListener('change', function (e) {
       var el = e.target;
-      if (el && el.matches && el.matches('.strategy-card input')) { syncPollingOnlyVisibility(); }
+      if (el && el.matches && el.matches('.strategy-card input')) {
+        syncPollingOnlyVisibility();
+        syncRunControlVisibility();
+      }
     });
     document.addEventListener('click', function (e) {
       var el = e.target;
       while (el && el.nodeType === 1) {
         if (el.className && String(el.className).indexOf('strategy-card') >= 0) {
           syncPollingOnlyVisibility();
+          syncRunControlVisibility();
           break;
         }
         el = el.parentNode;
@@ -1412,7 +1671,7 @@
   // readSse / extractSqlPrefix 一并暴露：流式解析不依赖页面 DOM，控制台里用
   // 合成的 Response 就能单测，排查「起草不实时」时也用得上。
   window.JyncUI = {
-    toast: toast, t: t, icon: icon, iconHtml: iconHtml,
+    toast: toast, dialog: JyncDialog, t: t, icon: icon, iconHtml: iconHtml,
     readSse: readSse, extractSqlPrefix: extractSqlPrefix
   };
 })();

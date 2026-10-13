@@ -77,6 +77,10 @@
             </dl>
 
             <div class="btn-row" th:if="${isAdmin}">
+                <!--/* B9:表单变脏(改了没保存)时由 app.js 摘掉 is-hidden 亮出徽标;
+                       点启动/立即同步/重建基线会先弹「保存并执行/按已保存配置执行/取消」三选一。 */-->
+                <span class="badge badge-warn is-hidden" data-role="dirty-badge"
+                      th:text="#{dirty.badge}">配置未保存</span>
                 <!-- 保存配置按钮放在立即同步前面:它是配置 form 的 submit,但视觉上归在运行控制区。
                      用 form="config-form" 属性关联到下方的表单,这样按钮可以在 form 外面也能提交它。 -->
                 <button type="submit" form="config-form" class="btn btn-primary btn-sm"
@@ -101,13 +105,13 @@
                        恢复入口是重建基线(B7),复用 api-btn 的 postJson + data-confirm
                        模式,确认文案明示三个后果(停消费/清位点/全量重载)。 */-->
                 <button type="button" class="btn btn-primary btn-sm" th:unless="${cdcActive}"
-                        data-role="api-btn" data-reload="true"
+                        data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
                         th:attr="data-action=@{/api/projects/{id}/sync-now(id=${project.id})},
                                  data-busy-text=#{common.loading}">
                     <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{project.syncNow}">Sync now</span>
                 </button>
                 <button type="button" class="btn btn-primary btn-sm" th:if="${cdcActive}"
-                        data-role="api-btn" data-reload="true"
+                        data-role="api-btn" data-reload="true" data-cdc-visibility="cdc"
                         th:attr="data-action=@{/api/projects/{id}/cdc-rebaseline(id=${project.id})},
                                  data-confirm=#{cdc.rebaseline.confirm},
                                  data-busy-text=#{common.loading}">
@@ -136,9 +140,10 @@
             <!--/* 停用项目上的重建基线仍会跑完整启动序列,但巡检(sync.cdc.supervise-interval-ms,
                    默认 10s)很快会把消费者再次停掉——把这段「先起后停」明说,别让用户猜。 */-->
             <p class="small muted" id="cdc-rebaseline-disabled-hint" style="margin:11px 0 0"
-               th:if="${isAdmin and cdcActive and !project.enabled}"
+               th:if="${isAdmin and cdcActive and !project.enabled}" data-cdc-visibility="cdc"
                th:text="#{cdc.rebaseline.disabled.hint}">Disabled-project rebaseline hint</p>
             <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin and !cdcActive}"
+               data-cdc-visibility="non-cdc"
                th:text="#{project.syncNowHelp}">Sync now help</p>
             <p class="small muted" style="margin:3px 0 0" th:if="${isAdmin}"
                th:text="#{project.resetHelp}">Reset help</p>
