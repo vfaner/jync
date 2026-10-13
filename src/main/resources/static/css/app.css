@@ -163,7 +163,6 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .stat-ico   .ico { width: 21px; height: 21px; }
 .empty-ico  .ico { width: 27px; height: 27px; }
 .feed-ico   .ico { width: 14px; height: 14px; }
-.alert-close .ico { width: 13px; height: 13px; }
 .card-head h2 .ico, .card-head h3 .ico { width: 15px; height: 15px; color: var(--brand); }
 .picker-title .ico { width: 14px; height: 14px; color: var(--brand); }
 .nav-links a .ico { width: 15px; height: 15px; }
@@ -694,11 +693,6 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 [data-theme="dark"] .alert-warn   { color: #fbbf24; }
 [data-theme="dark"] .alert-danger { color: #f87171; }
 [data-theme="dark"] .alert-info   { color: #38bdf8; }
-.alert-close {
-  background: none; border: none; color: inherit; opacity: .55;
-  cursor: pointer; font-size: 15px; padding: 0 2px; line-height: 1;
-}
-.alert-close:hover { opacity: 1; }
 
 /* 连接测试里的 CDC 就绪探测行:行样式对齐 .small,通过/未过用固定色 */
 .test-line { font-size: 12.5px; }
@@ -749,6 +743,22 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 .jd-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin-top: 18px; }
 .jd-actions .btn { min-width: 92px; justify-content: center; }
+/* msg 形态完全复刻 layui layer.msg：黑色半透明底、白字、紧凑小条。
+   无遮罩、无背景模糊、不挡页面操作（layer.msg 同为非阻塞）；
+   点小条本身或 ESC 可提前消。圆脸保留作级别图标（绿笑/红哭/橙惊讶）。 */
+.jd-overlay-msg {
+  background: none; pointer-events: none;
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+.jd-overlay-msg .jd-card { pointer-events: auto; }
+.jd-card.jd-msg {
+  width: auto; min-width: 150px; max-width: min(88vw, 460px);
+  padding: 11px 22px; border: none; border-radius: 6px;
+  background: rgba(0, 0, 0, .62); box-shadow: 0 3px 12px rgba(0, 0, 0, .28);
+}
+.jd-card.jd-msg .jd-row { gap: 10px; }
+.jd-card.jd-msg .jd-face { width: 24px; height: 24px; }
+.jd-card.jd-msg .jd-body { color: #fff; line-height: 1.5; }
 @keyframes jd-fade { from { opacity: 0; } }
 @keyframes jd-pop  { from { opacity: 0; transform: scale(.94) translateY(8px); } }
 @media (max-width: 560px) {

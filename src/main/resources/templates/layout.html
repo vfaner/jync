@@ -215,12 +215,12 @@
 </th:block>
 
 <main class="shell">
-    <!--/* Flash 消息里存的是 i18n key；msgOrNull 让未收录的原始文案也能原样显示 */-->
+    <!--/* Flash 消息里存的是 i18n key；msgOrNull 让未收录的原始文案也能原样显示。
+           横幅不渲染关闭按钮：app.js 会把 flash 统一转成居中弹窗并移除原节点，
+           [data-dismiss] 早已没有任何绑定，留一个点了没反应的 X 是死按钮。 */-->
     <div th:if="${message}" class="alert alert-ok" data-auto-dismiss>
         <svg class="ico"><use href="#check-circle-fill"/></svg>
-        <div class="alert-body" th:text="${#messages.msgOrNull(message) ?: message}">Saved</div>
-        <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
-    </div>
+        <div class="alert-body" th:text="${#messages.msgOrNull(message) ?: message}">Saved</div>    </div>
     <!--/* 服务端抛出的错误可能是「i18n key:附加上下文」（如被占用的项目名列表），
            msgOrNull 对整串取不到时，退而解析冒号前的 key 前缀，再把上下文拼回。
            注意：Thymeleaf 的 #strings.substringBefore 在「找不到分隔符」时返回 null
@@ -235,16 +235,12 @@
                       head=${#messages.msgOrNull(headKey)},
                       suffix=${colon >= 0 ? err.substring(colon + 1) : ''}"
              th:text="${head != null} ? ${head + (#strings.isEmpty(suffix) ? '' : ' ' + suffix)}
-                                      : ${#messages.msgOrNull(err) ?: err}">Error</div>
-        <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
-    </div>
+                                      : ${#messages.msgOrNull(err) ?: err}">Error</div>    </div>
     <!--/* view 账号 POST 写操作被拒：AccessDeniedHandler 重定向到 /?denied，必须给可见反馈。
            id 供测试与脚本区分该横幅（error.forbidden 文案也存在于内联 JS 消息表里）。 */-->
     <div id="denied-alert" th:if="${param.denied}" class="alert alert-danger">
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
-        <div class="alert-body" th:text="#{error.forbidden}">Forbidden</div>
-        <button type="button" class="alert-close" data-dismiss><svg class="ico"><use href="#x-lg"/></svg></button>
-    </div>
+        <div class="alert-body" th:text="#{error.forbidden}">Forbidden</div>    </div>
 
     <th:block th:replace="${content}">
         <p>Page content goes here.</p>

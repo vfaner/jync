@@ -84,6 +84,22 @@ class DeniedBannerViewTest {
         assertThat(html).doesNotContain("??");
     }
 
+    /**
+     * The flash banners must not carry a dismiss button. Since flash messages were unified into
+     * centered dialogs (app.js converts the banner and removes the node), nothing binds
+     * {@code [data-dismiss]} anymore — a visible X that does nothing on click is a dead button,
+     * and with JS disabled the banner never disappears at all, so the honest markup has no X.
+     */
+    @Test
+    void flashBannersCarryNoDeadDismissButton() throws Exception {
+        String html = mvc.perform(get("/ai").flashAttr("error", "error.connection.not.found"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).doesNotContain("data-dismiss");
+        assertThat(html).doesNotContain("alert-close");
+    }
+
     @Test
     void noDeniedParameterMeansNoBanner() throws Exception {
         String html = mvc.perform(get("/ai"))

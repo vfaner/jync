@@ -123,14 +123,25 @@
     function show(opts) {
       if (current) { queue.push(opts); return; }
       var kind = opts.kind || 'info';
+      // layer.msg 形态：自动消失的轻提示完全复刻 layui layer.msg —— 黑色半透明
+      // 小条、白字、无遮罩不挡页面操作；阻塞形态（带按钮或标题）保持白卡，
+      // layer.confirm / layer.alert 本身也是白盒。
+      var isMsg = !!opts.auto;
 
       var ov = document.createElement('div');
-      ov.className = 'jd-overlay';
-      ov.setAttribute('role', opts.buttons ? 'alertdialog' : 'dialog');
-      ov.setAttribute('aria-modal', 'true');
+      ov.className = 'jd-overlay' + (isMsg ? ' jd-overlay-msg' : '');
+      // msg 形态非阻塞（overlay pointer-events:none，页面照常可操作），语义是
+      // 状态播报而不是模态：role=status 让读屏把它当 live region 念出来，
+      // 也不再谎报 aria-modal（那会宣称页面其余部分已失效）。阻塞形态不变。
+      if (isMsg) {
+        ov.setAttribute('role', 'status');
+      } else {
+        ov.setAttribute('role', opts.buttons ? 'alertdialog' : 'dialog');
+        ov.setAttribute('aria-modal', 'true');
+      }
 
       var card = document.createElement('div');
-      card.className = 'jd-card jd-' + kind;
+      card.className = 'jd-card jd-' + kind + (isMsg ? ' jd-msg' : '');
 
       var bar = document.createElement('div');
       bar.className = 'jd-bar';
@@ -145,8 +156,8 @@
       body.className = 'jd-body';
       body.textContent = opts.message || '';  // textContent：避免把服务端消息当 HTML 执行
 
-      // 顶部渐变条固定在卡片最前（append 顺序 = 视觉顺序），两种布局共用
-      card.appendChild(bar);
+      // 顶部渐变条固定在卡片最前（append 顺序 = 视觉顺序）；layer.msg 形态无顶部条
+      if (!isMsg) { card.appendChild(bar); }
       if (opts.title) {
         var head = document.createElement('div');
         head.className = 'jd-head';
@@ -487,16 +498,24 @@
   var configForm = null;
   var configDirty = false;
 
+  /**
+   * 脏标记唯一入口。原生 input/change 之外，「程序化改勾选态」的路径（策略卡片
+   * 点选、对象选择全选/清空）也必须走这里：click 冒泡阶段由 JS 置 checked=true
+   * 会压掉随后的原生激活行为 —— 勾选态没有「发生变化」，change 不再派发，挂在
+   * 表单上的监听收不到，脏标记必须显式补记，否则三选一拦截与徽标全部失效。
+   */
+  function markConfigDirty() {
+    // 没有 #config-form 的页面（新建/编辑项目）不存在运行控制拦截，记脏无意义
+    if (!configForm || configDirty) { return; }
+    configDirty = true;
+    setDirtyBadge(true);
+  }
+
   function initConfigDirtyTracking() {
     configForm = document.getElementById('config-form');
     if (!configForm) { return; }
-    var markDirty = function () {
-      if (configDirty) { return; }
-      configDirty = true;
-      setDirtyBadge(true);
-    };
-    configForm.addEventListener('input', markDirty);
-    configForm.addEventListener('change', markDirty);
+    configForm.addEventListener('input', markConfigDirty);
+    configForm.addEventListener('change', markConfigDirty);
   }
 
   function setDirtyBadge(dirty) {
@@ -669,20 +688,31 @@
     panel.querySelectorAll('[data-all]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         e.preventDefault();
-        // 只勾选当前可见的项，这样「搜索 + 全选」可以组合使用
+        // 只勾选当前可见的项，这样「搜索 + 全选」可以组合使用。
+        // 程序化勾选不触发 change，配置表单的脏标记在这里显式补记。
+        var changed = false;
         boxes.forEach(function (cb) {
-          if (cb.closest('.pick').style.display !== 'none') cb.checked = true;
+          if (cb.closest('.pick').style.display !== 'none' && !cb.checked) {
+            cb.checked = true;
+            changed = true;
+          }
         });
         refresh();
+        if (changed) { markConfigDirty(); }
       });
     });
     panel.querySelectorAll('[data-none]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         e.preventDefault();
+        var changed = false;
         boxes.forEach(function (cb) {
-          if (cb.closest('.pick').style.display !== 'none') cb.checked = false;
+          if (cb.closest('.pick').style.display !== 'none' && cb.checked) {
+            cb.checked = false;
+            changed = true;
+          }
         });
         refresh();
+        if (changed) { markConfigDirty(); }
       });
     });
     panel.querySelectorAll('[data-filter]').forEach(function (input) {
@@ -1496,6 +1526,18 @@
     }
   }
 
+  /* 日志型 CDC 策略值集合，与后端 CaptureStrategy.isLogCdc() 同口径：
+     Binlog / LogMiner / PG 逻辑复制 / SQL Server CDC。B8 破坏性切换确认、
+     轮询字段联动、运行控制联动三处共用这张表 —— 少写一个值，页面口径就和
+     服务端分叉：PG/SQLServer CDC 项目加载后轮询死配置卡被翻回可见、
+     立即同步帮助文案错位，切到这些策略也不弹二次确认。 */
+  var LOG_CDC_STRATEGIES = {
+    BINLOG_CDC: 1, LOGMINER_CDC: 1, PG_LOGICAL_CDC: 1, SQLSERVER_CDC: 1
+  };
+  function isLogCdcStrategy(value) {
+    return !!(value && LOG_CDC_STRATEGIES[value]);
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -1589,7 +1631,14 @@
       if (!card) { return; }
       var input = card.querySelector('input[type=radio]');
       if (!input || input.disabled) { return; }
-      input.checked = true;
+      if (!input.checked) {
+        input.checked = true;
+        // 冒泡阶段程序化勾选压掉了原生激活行为的 change（勾选态没有再「发生
+        // 变化」），configForm 的脏标记监听收不到 —— 这里显式补记，否则鼠标
+        // 切换策略后点启动/立即同步不会触发三选一拦截。键盘方向键走原生
+        // change，不经过本处理器，无需补。
+        markConfigDirty();
+      }
       syncStrategyPicks();
     });
     document.addEventListener('change', function (e) {
@@ -1600,13 +1649,13 @@
     // B8：切到日志 CDC 前的确认框。文案（cdc.switch.confirm）明示两个后果——
     // ①目标库全量重建、②源库 DELETE 从此会同步删除目标数据（轮询看不到
     // DELETE）。data-original-strategy 是页面加载时的选中值，只有「值变了
-    // 且新值是任一日志 CDC（Binlog 或 LogMiner）」才拦截；confirm 返回 false 阻止提交。
+    // 且新值是任一日志 CDC（isLogCdcStrategy，与后端 isLogCdc() 同口径）」才拦截。
     document.querySelectorAll('form[data-original-strategy]').forEach(function (form) {
       form.addEventListener('submit', function (e) {
         var original = form.getAttribute('data-original-strategy');
         var picked = form.querySelector('input[name=captureStrategy]:checked');
         if (!picked) { return; }
-        var isLogCdc = (picked.value === 'BINLOG_CDC' || picked.value === 'LOGMINER_CDC');
+        var isLogCdc = isLogCdcStrategy(picked.value);
         if (picked.value !== original && isLogCdc) {
           // 异步弹窗：先拦下本次提交，确认后 form.submit() 程序化重提 ——
           // 不再触发 submit 监听器，无循环；约束校验在事件发出前已通过。
@@ -1624,7 +1673,7 @@
     // 初始状态由服务端按 data-cdc-active 渲染的 is-hidden 类决定，这里同步点击后即时联动。
     var syncPollingOnlyVisibility = function () {
       var picked = document.querySelector('input[name=captureStrategy]:checked');
-      var isCdc = picked && (picked.value === 'BINLOG_CDC' || picked.value === 'LOGMINER_CDC');
+      var isCdc = picked && isLogCdcStrategy(picked.value);
       document.querySelectorAll('[data-role="polling-only"]').forEach(function (el) {
         el.classList.toggle('is-hidden', !!isCdc);
       });
@@ -1642,7 +1691,7 @@
     // 联动标记走独立属性 data-cdc-visibility，不复用 data-role。
     var syncRunControlVisibility = function () {
       var picked = document.querySelector('input[name=captureStrategy]:checked');
-      var isCdc = picked && (picked.value === 'BINLOG_CDC' || picked.value === 'LOGMINER_CDC');
+      var isCdc = picked && isLogCdcStrategy(picked.value);
       document.querySelectorAll('[data-cdc-visibility="non-cdc"]').forEach(function (el) {
         el.classList.toggle('is-hidden', !!isCdc);
       });
