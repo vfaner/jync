@@ -475,7 +475,12 @@
                     </div>
                     <div class="card-body">
                         <label class="switch">
-                            <input type="checkbox" name="syncStructure" value="true" th:checked="${config.syncStructure}">
+                            <!-- 源库一张表都没有时,表结构/表数据/索引无从同步:强制关并置灰,
+                                 避免开着空开关点保存被「至少选择一张表」拦下。列举失败(sourceObjects
+                                 为 null)属于临时状况,保持已保存配置不动。 -->
+                            <input type="checkbox" name="syncStructure" value="true"
+                                   th:checked="${config.syncStructure and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
+                                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
                             <span class="track"></span>
                             <span class="switch-text">
                                 <strong th:text="#{option.syncStructure}">Structure</strong>
@@ -483,7 +488,9 @@
                             </span>
                         </label>
                         <label class="switch">
-                            <input type="checkbox" name="syncData" value="true" th:checked="${config.syncData}">
+                            <input type="checkbox" name="syncData" value="true"
+                                   th:checked="${config.syncData and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
+                                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
                             <span class="track"></span>
                             <span class="switch-text">
                                 <strong th:text="#{option.syncData}">Data</strong>
@@ -491,7 +498,9 @@
                             </span>
                         </label>
                         <label class="switch">
-                            <input type="checkbox" name="syncIndexes" value="true" th:checked="${config.syncIndexes}">
+                            <input type="checkbox" name="syncIndexes" value="true"
+                                   th:checked="${config.syncIndexes and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
+                                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
                             <span class="track"></span>
                             <span class="switch-text">
                                 <strong th:text="#{option.syncIndexes}">Indexes</strong>
@@ -499,7 +508,9 @@
                             </span>
                         </label>
                         <label class="switch">
-                            <input type="checkbox" name="syncViews" value="true" th:checked="${config.syncViews}">
+                            <input type="checkbox" name="syncViews" value="true"
+                                   th:checked="${config.syncViews and (sourceObjects == null or !#lists.isEmpty(sourceObjects.views))}"
+                                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.views)}">
                             <span class="track"></span>
                             <span class="switch-text">
                                 <strong th:text="#{option.syncViews}">Views</strong>
@@ -507,7 +518,9 @@
                             </span>
                         </label>
                         <label class="switch">
-                            <input type="checkbox" name="syncProcedures" value="true" th:checked="${config.syncProcedures}">
+                            <input type="checkbox" name="syncProcedures" value="true"
+                                   th:checked="${config.syncProcedures and (sourceObjects == null or !#lists.isEmpty(sourceObjects.procedures))}"
+                                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.procedures)}">
                             <span class="track"></span>
                             <span class="switch-text">
                                 <strong th:text="#{option.syncProcedures}">Procedures</strong>
@@ -606,6 +619,31 @@
                         <div class="help" style="margin:0">
                             <svg class="ico" style="color:var(--brand);vertical-align:-3px;margin-right:4px"><use href="#info-circle"/></svg>
                             <span th:text="#{project.schedule.cdcHidden}">Streaming CDC owns the schedule; polling config is ignored.</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- CDC 空闲轮询间隔：只对三个轮询式日志 CDC 引擎生效
+                     (LogMiner / PG 逻辑复制槽 / SQL Server CDC)。捞到数据时立即连续挖掘,
+                     此项只决定"空闲多久再探一次",在低延迟与源库负载之间权衡。
+                     MySQL binlog 是推送模式,不轮询,故 BINLOG_CDC 下也隐藏。
+                     data-cdc-visibility="polling-cdc" 由 app.js 按当前选中策略联动;
+                     隐藏时输入框同时 disabled,避免陈旧值随表单提交(本项目固定纪律)。 -->
+                <div class="card" data-cdc-visibility="polling-cdc"
+                     th:classappend="${selectedStrategy == 'LOGMINER_CDC'
+                            or selectedStrategy == 'PG_LOGICAL_CDC'
+                            or selectedStrategy == 'SQLSERVER_CDC'} ? '' : 'is-hidden'">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#clock"/></svg> <span th:text="#{option.cdcIdlePoll}">CDC idle poll interval</span></h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="field">
+                            <label for="cdcIdlePollMs" th:text="#{option.cdcIdlePoll}">CDC idle poll interval</label>
+                            <input type="number" class="input" id="cdcIdlePollMs" name="cdcIdlePollMs"
+                                   min="50" step="50" th:value="${config.cdcIdlePollMs}"
+                                   th:disabled="${selectedStrategy != 'LOGMINER_CDC'
+                                       and selectedStrategy != 'PG_LOGICAL_CDC'
+                                       and selectedStrategy != 'SQLSERVER_CDC'}">
+                            <div class="help" th:text="#{option.cdcIdlePollHelp}">help</div>
                         </div>
                     </div>
                 </div>

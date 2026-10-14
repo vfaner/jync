@@ -102,6 +102,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     /** Assigned in run() before the loop; the retry path consults it after the stream ends. */
     private CdcReconnectBackoff backoff;
 
+    /** Per-table aggregated change-log flusher (10s windows, final flush on stop). */
+    private final CdcChangeWindowLogger windowLogger;
+
     /**
      * Ruling R3b: a connection must demonstrably LIVE before the reconnect backoff may
      * reset — an unconditional reset in onConnect turned a server that accepts and
@@ -134,6 +137,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         // R3: the same timeout source DataSyncService uses (SyncProperties.queryTimeoutSeconds),
         // so CDC apply statements are bounded exactly like polling write statements.
         this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
+        // 聚合变更日志:按表累计 upsert/delete,到龄一条;停机兜底刷剩余。
+        this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
+                properties.getCdc().getChangeWindowMs());
         this.sink = transactionSink();
         this.supplier = new BindingSupplier();
     }
@@ -154,6 +160,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             backoff = new CdcReconnectBackoff(
                     properties.getCdc().getReconnectBackoffMs(),
                     properties.getCdc().getReconnectBackoffMaxMs());
+            windowLogger.start();
             while (running && !Thread.currentThread().isInterrupted()) {
                 // R1: between-transaction lease liveness. requireLease only covers the write
                 // path; without this check a lost lease classifies as TRANSIENT and the loop
@@ -255,6 +262,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             }
         } finally {
             disconnectQuietly(this.client);                      // 覆盖 stop 落在建流窗口的边界
+            windowLogger.close();                                // 先断流再兜底刷聚合日志,顺序在 stop 标记之前
             lock.close();                                        // 释放租约:他节点可立即接管
             stats.setConnected(false);
             try {

@@ -222,6 +222,18 @@ class SecurityConfigTest {
         assertThat(statusOf(get("/audits").with(asAdmin()))).isEqualTo(200);
     }
 
+    /**
+     * The upgrade poller is the GET half of an admin-only flow (the POST half is covered by
+     * the blanket verb rule below); a viewer never sees the button, so the status must not
+     * leak upgrade progress to one either.
+     */
+    @Test
+    void theUpgradeStatusPollIsAdminOnly() throws Exception {
+        // API endpoints answer a denied viewer with 403, pages with a redirect (see above).
+        assertThat(statusOf(get("/api/upgrade/status").with(asViewer()))).isEqualTo(403);
+        assertThat(statusOf(get("/api/upgrade/status").with(asAdmin()))).isEqualTo(200);
+    }
+
     private com.qqmu.jync.model.AuditEvent latestAudit() {
         return auditRepository.findAll(org.springframework.data.domain.PageRequest.of(
                         0, 1, org.springframework.data.domain.Sort.by(

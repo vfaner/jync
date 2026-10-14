@@ -104,6 +104,9 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     private CdcReconnectBackoff backoff;
 
+    /** Per-table aggregated change-log flusher (10s windows, final flush on stop). */
+    private final CdcChangeWindowLogger windowLogger;
+
     public LogMinerCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                SyncContext ctx, CdcPositionStore positionStore,
                                CdcBaselineService baselineService, SyncTaskStore taskStore,
@@ -122,6 +125,8 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         this.properties = properties;
         this.sessionFactory = sessionFactory;
         this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
+        this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
+                properties.getCdc().getChangeWindowMs());
     }
 
     @Override
@@ -142,6 +147,10 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             backoff = new CdcReconnectBackoff(
                     properties.getCdc().getReconnectBackoffMs(),
                     properties.getCdc().getReconnectBackoffMaxMs());
+            long idlePollMs = CdcReconnectBackoff.effectiveIdlePollMs(
+                    ctx.getConfig().getCdcIdlePollMs(),
+                    properties.getCdc().getLogminer().getIdlePollMs());
+            windowLogger.start();
             while (running && !Thread.currentThread().isInterrupted()) {
                 if (!lock.renew()) {
                     log.warn("LogMiner consumer for project {} stopping: lease lost (another"
@@ -211,9 +220,10 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 if (dwellMs >= CdcConsumer.MIN_BACKOFF_RESET_DWELL_MS) {
                     backoff.reset();
                 }
-                long delay = drained.isEmpty()
-                        ? properties.getCdc().getLogminer().getIdlePollMs()
-                        : backoff.nextDelayMs();
+                // 繁忙轮(捞到数据)立即开下一轮,把高峰延迟压到一个挖掘周期;
+                // 只有真正空闲才休眠 idlePollMs,失败走指数退避。
+                long delay = CdcReconnectBackoff.nextCycleDelayMs(
+                        failure, !drained.isEmpty(), backoff, idlePollMs);
                 stats.setLastError(failure == null
                         ? "mining cycle drained" : CdcFailureClassifier.describe(failure));
                 log.warn("LogMiner cycle for project {} ended ({}); next cycle in {} ms",
@@ -240,6 +250,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             closeQuietly(currentMining);
             currentMining = null;
             closeQuietly(currentSource);
+            windowLogger.close();
             lock.close();
             stats.setConnected(false);
             try {

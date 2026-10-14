@@ -133,6 +133,74 @@ class DatabaseConfigFormViewTest {
         assertThat(page).doesNotContain("data-autofilled");
     }
 
+    /** Extracts the #miner-section element's opening div tag. */
+    private static String minerSectionTag(String page) {
+        int at = page.indexOf("id=\"miner-section\"");
+        assertThat(at).as("miner section is rendered").isPositive();
+        int start = page.lastIndexOf("<div", at);
+        int end = page.indexOf(">", at);
+        return page.substring(start, end + 1);
+    }
+
+    @Test
+    void oracleSourceEditShowsTheMinerSection() throws Exception {
+        DatabaseConfig oracle = new DatabaseConfig();
+        oracle.setId(10L);
+        oracle.setName("ora-src");
+        oracle.setType(DatabaseType.ORACLE);
+        oracle.setRole(ConnectionRole.SOURCE);
+        when(service.findById(10L)).thenReturn(Optional.of(oracle));
+
+        String page = html(mvc.perform(get("/databases/10/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(minerSectionTag(page)).doesNotContain("hidden");
+        // 输入框不带 disabled 才会随表单提交
+        assertThat(extractInput(page, "minerUsername")).doesNotContain("disabled");
+    }
+
+    @Test
+    void oracleTargetEditHidesTheMinerSection() throws Exception {
+        // 挖掘账号只服务于源端 LogMiner;Oracle 目标库显示这两个输入框是纯误导。
+        DatabaseConfig oracle = new DatabaseConfig();
+        oracle.setId(11L);
+        oracle.setName("ora-tgt");
+        oracle.setType(DatabaseType.ORACLE);
+        oracle.setRole(ConnectionRole.TARGET);
+        when(service.findById(11L)).thenReturn(Optional.of(oracle));
+
+        String page = html(mvc.perform(get("/databases/11/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(minerSectionTag(page)).contains("hidden");
+        // 隐藏必须连控件一起禁用,否则残留的挖掘账号会随目标库表单提交
+        assertThat(extractInput(page, "minerUsername")).contains("disabled");
+        assertThat(extractInput(page, "rawMinerPassword")).contains("disabled");
+    }
+
+    private static String extractInput(String page, String inputId) {
+        int at = page.indexOf("id=\"" + inputId + "\"");
+        assertThat(at).as("input %s rendered", inputId).isPositive();
+        int start = page.lastIndexOf("<input", at);
+        int end = page.indexOf(">", at);
+        return page.substring(start, end + 1);
+    }
+
+    @Test
+    void jsMessageBundleCarriesAllCdcCheckKeys() throws Exception {
+        // 连接测试结果由 app.js 用 window.JyncMessages 翻译;Oracle/PG/SQLServer 的
+        // check key 没进这本字典,页面就显示 cdc.check.ORACLE_SOURCE 这种 raw key。
+        String page = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(page).contains(
+                "'cdc.probe.title.oracle'", "'cdc.probe.title.postgres'",
+                "'cdc.probe.title.sqlserver'",
+                "'cdc.check.ORACLE_SOURCE'", "'cdc.check.CDB_MINING_MODE'",
+                "'cdc.check.ARCHIVELOG'", "'cdc.check.MINING_PRIVILEGES'",
+                "'cdc.check.PG_SOURCE'", "'cdc.check.PG_WAL_LEVEL'",
+                "'cdc.check.MSSQL_SOURCE'", "'cdc.check.MSSQL_CDC_DB_ENABLED'");
+        // properties 缺 key 时 Thymeleaf 内联会输出 ??cdc.check.XXX_zh_CN??
+        assertThat(page).doesNotContain("??cdc.");
+    }
+
     @Test
     void editingAGbaseConnectionShowsTheJarCard() throws Exception {
         DatabaseConfig gbase = new DatabaseConfig();

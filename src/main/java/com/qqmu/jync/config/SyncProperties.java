@@ -159,6 +159,13 @@ public class SyncProperties {
         private long lockTtlMs = 30_000L;
         /** How often the consumer supervisor retries lock acquisition for wanted projects. */
         private long superviseIntervalMs = 10_000L;
+        /**
+         * Age at which a per-table CDC change window is flushed as one aggregated change-log
+         * entry. CDC is a continuous stream, so per-row logging would flood the log; counts
+         * per table land at most this often, with a final flush when the consumer stops.
+         * Set to 0 to disable aggregated change logging.
+         */
+        private long changeWindowMs = 10_000L;
         /** Handshake timeout for BinaryLogClient.connect(). */
         private long connectTimeoutMs = 10_000L;
 

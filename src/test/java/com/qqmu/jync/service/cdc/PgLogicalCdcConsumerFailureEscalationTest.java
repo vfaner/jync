@@ -109,6 +109,10 @@ class PgLogicalCdcConsumerFailureEscalationTest {
 
         taskStore = mock(SyncTaskStore.class);
         properties = new SyncProperties();
+        // 新节奏:失败周期走指数退避(不再走 idle poll),成功且捞到行立即下一轮。
+        // 与 LogMiner/SqlServer 两个升级测试同口径:两个旋钮都压到 1ms。
+        properties.getCdc().setReconnectBackoffMs(1L);
+        properties.getCdc().setReconnectBackoffMaxMs(1L);
         properties.getCdc().getPg().setIdlePollMs(1);
     }
 

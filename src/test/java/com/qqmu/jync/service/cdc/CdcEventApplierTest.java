@@ -129,6 +129,23 @@ class CdcEventApplierTest {
     }
 
     @Test
+    void appliedRowsAccumulatePerSourceTableForTheChangeLogWindow() throws SQLException {
+        // 变更日志按表聚合用的是绑定里的源表名(binding.getTable()),不是目标表名;
+        // upsert/delete 分两个计数,空批次不产生窗口。
+        applier.applyUpserts(target, binding, List.of(row(1L, "a", null), row(2L, "b", null)));
+        applier.applyDeletes(target, binding, List.of(row(1L, null, null)));
+        applier.applyUpserts(target, binding, List.of());
+        applier.applyDeletes(target, binding, List.of());
+        target.commit();
+
+        List<CdcRuntimeStats.TableChange> windows = stats.drainAllWindows();
+        assertThat(windows).hasSize(1);
+        assertThat(windows.get(0).table()).isEqualTo("orders");
+        assertThat(windows.get(0).upserts()).isEqualTo(2L);
+        assertThat(windows.get(0).deletes()).isEqualTo(1L);
+    }
+
+    @Test
     void batchSizeFlushesMidwayWithoutCommitting() throws SQLException {
         // batchSize=2:5 行 → 中途两次 executeBatch,但未 commit 前目标库读不到
         List<Map<String, Object>> five = List.of(row(1L, "a", null), row(2L, "b", null),

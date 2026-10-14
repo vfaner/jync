@@ -35,6 +35,8 @@ public class VersionInfo {
     private final String releaseUrl;
     /** Publish date of the newest release, {@code yyyy-MM-dd}; may be null. */
     private final String latestPublishedDate;
+    /** Which feed answered (GitHub directly or the Gitee fallback); may be null. */
+    private final ReleaseFeed.Source latestSource;
     private final State state;
     /** Rendered release notes for the CURRENT version (safe HTML), or null when unavailable. */
     private final String currentNotesHtml;

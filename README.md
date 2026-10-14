@@ -63,9 +63,9 @@
 | 项目 / 连接 | 多项目并行互不干扰；连接按源 / 目标分栏独立分页；保存前可测连通并预览自动拼装的 JDBC URL |
 | 对象与结构 | 表 / 视图 / 存储过程分组勾选（搜索 + 批量）；目标库缺失时按目标方言自动建表 / 索引 / 视图 / 过程 |
 | 方言适配 | 类型映射、函数名转换、标识符引号、分页语法、存储过程包装 |
-| 实时同步 | 轮询（默认 2s）或 Cron 编排；四种日志 CDC（MySQL binlog / Oracle LogMiner / PG 逻辑解码 / SQL Server CDC）秒级延迟 |
+| 实时同步 | 轮询（默认 2s）或 Cron 编排；四种日志 CDC（MySQL binlog / Oracle LogMiner / PG 逻辑解码 / SQL Server CDC），捞到数据立即进入下一轮、真空闲才休眠，秒级延迟 |
 | 可靠性 | 全量按主键 keyset 分块 + 检查点续传；单列整数主键表内并行（上限 8）；重启从游标继续并补齐停机变更；写入全部幂等 |
-| 控制与观测 | 启停 / 立即同步（运行中点击合并为一轮补跑）；看板 + 变更日志 + 行数审计 |
+| 控制与观测 | 启停 / 立即同步（运行中点击合并为一轮补跑）；看板 + 变更日志（CDC 期间按表 10s 聚合落点，带 SCN/LSN/ binlog 位点）+ 行数审计 |
 | 前端 | 中 / 英切换（默认按时区推断）、昼夜主题（跟随系统）、无 CDN 无 webfont，静态资源约 440KB 全本地化 |
 
 ---
@@ -144,6 +144,14 @@ java -jar jync.jar --spring.config.additional-location=file:./application.yml
 
 ---
 
+## 版本检查与一键升级
+
+系统信息页的更新检查先查 GitHub API（单次请求默认 5 秒超时），失败或超时自动改查 Gitee；两边都不可达才提示「更新检查失败，稍后会自动重试」（失败结果缓存 1 分钟后台重试，成功缓存 10 分钟）。检查始终跑在后台线程，不阻塞页面渲染；纯内网可设 `app.update-check.enabled=false` 关闭。
+
+发现新版本后，管理员可「**一键升级**」：弹窗中选择下载源（默认 Gitee），程序从该平台的发布附件下载新版 `jync.jar`，通过大小校验（接口提供大小时）与 zip 完整性校验后替换当前文件——旧文件保留为 `jync.jar.bak`，可随时手动回退。替换完成后选择「**立即重启**」（辅助脚本等旧进程退出后拉起新进程；新进程早期退出或端口一直未就绪时自动用 `.bak` 回滚并重启旧版）或「**稍后手动重启**」。升级成功、新版本真正启动后，下次开机会自动清理备份与标记文件。
+
+---
+
 ## 增量检测策略
 
 增量只有一条查询：`WHERE 游标列 > 上次游标 AND 游标列 <= 本次水位`。**一行能否被同步，只取决于游标列值有没有涨** —— 所以游标列必须是「改一行它就会变大」的列（如 `update_time`）；用 `id` 或 `create_time` 做游标时 UPDATE 永远同步不到。默认轮询模式不碰源库 binlog、不建触发器，只需一个只读账号；切换[日志 CDC](#日志-cdc)后 UPDATE / DELETE 直接可见，上述限制不复存在。
@@ -164,7 +172,7 @@ java -jar jync.jar --spring.config.additional-location=file:./application.yml
 
 ## 日志 CDC
 
-轮询的延迟下限是轮询间隔，且看不到 DELETE。四种源库可按项目切换到日志 CDC，切换前工具执行**就绪探测**并逐项列出不满足项；详情页另有 CDC 状态面板（位点、落后秒数、吞吐、跳过计数、最近错误）。
+轮询的延迟下限是轮询间隔，且看不到 DELETE。四种源库可按项目切换到日志 CDC，切换前工具执行**就绪探测**并逐项列出不满足项；详情页另有 CDC 状态面板（位点、落后秒数、吞吐、跳过计数、最近错误）。三个轮询引擎（LogMiner / PG / SQL Server）**有数据时本轮捞完立刻开下一轮（0 额外等待），只有真空闲才休眠**（默认 LogMiner / SQL Server 1s、PG 500ms，可按项目覆盖，下限 50ms；MySQL binlog 为推送协议本无轮询等待）；失败仍走指数退避。变更日志在 CDC 期间**按表聚合**：每张表每 10s 最多一条 `N upserts / M deletes（截至 SCN/LSN/binlog 位点）`，停止同步时补刷最后一个窗口，避免高峰期逐行刷爆元数据库（`sync.cdc.change-window-ms=0` 可关）。
 
 **统一工作流**：① 记位点（全量装载**之前**写入，基线期变更不漏）→ ② 分块全量基线（复用轮询的分块 / 检查点机制）→ ③ 流式回放。一致性契约 **at-least-once**：先提交目标库、再复检租约、最后推进位点，崩溃后从上一位点重放，重叠窗口由幂等 upsert 吸收。
 
@@ -201,9 +209,14 @@ java -jar jync.jar --spring.config.additional-location=file:./application.yml
 | `sync.cdc.supervise-interval-ms` | `10000` | 各节点巡检抢占 CDC 租约的周期（毫秒） |
 | `sync.cdc.connect-timeout-ms` | `10000` | BinaryLogClient 握手超时（毫秒） |
 | `sync.cdc.logminer.batch-size` | `10000` | LogMiner `V$LOGMNR_CONTENTS` 单批读取行数 |
-| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 无数据时的轮询间隔（毫秒） |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 真空闲时的休眠间隔（毫秒）；有数据 0 等待立刻续采 |
+| `sync.cdc.pg.idle-poll-ms` | `500` | PG 逻辑解码真空闲时的休眠间隔（毫秒） |
+| `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲时的休眠间隔（毫秒） |
+| `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口（毫秒）；`0` 关闭聚合落点 |
 | `crypto-password` / `crypto-salt` | *(默认值)* | 密码加密密钥与盐（十六进制），**生产必须修改** |
 | `ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
+| `app.update-check.enabled` | `true` | 新版本检查（GitHub 优先、Gitee 兜底）；关闭后系统信息页不再出现升级入口 |
+| `app.update-check.timeout-ms` | `5000` | 更新检查单次请求超时（毫秒），超时即切换备用平台 |
 
 连接密码以 AES-256 加密存储（`enc:` 前缀防重复加密，兼容历史明文）。
 
@@ -268,7 +281,7 @@ com.qqmu.jync
 mvn test
 ```
 
-1096 个单元测试，重点覆盖：各方言幂等 upsert 与类型上限不变量；SQL 正文改写不碰字面量 / 注释；游标策略解析与降级、Oracle 行级 SCN 探测；游标序列化往返；密码加密与 AI 密钥加密；AI 启用互斥与应答解析（含截断围栏、拒答、空应答）；候选校验在 H2 实库确认不留残留、同名对象内容不变；页面渲染全条件分支且无 `??`；授权规则（访客 POST 全拒、CSRF 缺失即拒）；分页窗口与省略号展开；立即同步补跑合并；分块全量 keyset SQL 形状、检查点生命周期、并行分段不重叠与 long 溢出回退；日志 CDC 探测七项、位点纪律（先数据后位点）、租约互斥与切换序列；README 文档守卫。
+1188 个单元测试，重点覆盖：各方言幂等 upsert 与类型上限不变量；SQL 正文改写不碰字面量 / 注释；游标策略解析与降级、Oracle 行级 SCN 探测；游标序列化往返；密码加密与 AI 密钥加密；AI 启用互斥与应答解析（含截断围栏、拒答、空应答）；候选校验在 H2 实库确认不留残留、同名对象内容不变；页面渲染全条件分支且无 `??`；授权规则（访客 POST 全拒、CSRF 缺失即拒）；分页窗口与省略号展开；立即同步补跑合并；分块全量 keyset SQL 形状、检查点生命周期、并行分段不重叠与 long 溢出回退；日志 CDC 探测七项、位点纪律（先数据后位点）、租约互斥与切换序列；版本检查 GitHub→Gitee 双通道兜底；一键升级的下载校验、改名替换与备份、marker 状态恢复、重启/回滚脚本生成；README 文档守卫。
 
 真实库集成测试（`*IT`，不进默认套件，需 Docker）：`OracleMigrationHarnessIT`（Oracle 23ai：并行分段全量、kill 后续传、`ROWDEPENDENCIES` 全链路）、`CdcBaselineStreamingIT` / `CdcVolumeAndTypesIT` / `CdcResilienceIT`（MySQL 8 binlog：基线→流式、崩溃重跑、十万行一致、purge 与断线故障）。显式运行加 `-Dapi.version=1.44`。另有端到端脚本（H2 源/目标，20 项断言）覆盖全量、增量、幂等、DDL 传播、并发写入一致与停机补齐。
 
@@ -290,9 +303,14 @@ mvn test
 
 | 渠道 | 账号 |
 |------|------|
-| QQ | 817094 / 2912167928 |
+| QQ | 817094 |
+| QQ | 2912167928 |
 | QQ 群 | 426669837 |
 | 微信 | qqmu66 |
+| 邮箱 | [vfaner@88.com](mailto:vfaner@88.com) |
+| 官网 | <https://jync.qqmu.com> |
+
+应用内「设置 → 项目与作者」中的 QQ / QQ 群可直接点击唤起 QQ（个人号打开临时会话、群打开群资料卡）。
 
 Issue 与 PR 欢迎：[GitHub](https://github.com/vfaner/jync) · [Gitee](https://gitee.com/super_rgh/jync)。觉得有用请点个 Star ⭐
 

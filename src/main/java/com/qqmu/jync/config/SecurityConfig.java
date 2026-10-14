@@ -62,7 +62,10 @@ public class SecurityConfig {
             "/api/databases/discover-drivers",
             // The audit trail is about what admins did; a viewer has no use for it, and
             // showing one would advertise that their own actions are never in it.
-            "/audits"
+            "/audits",
+            // One-click upgrade is an admin action end to end; a viewer is never shown the
+            // button, so the status poll must not answer for one either.
+            "/api/upgrade/status"
     };
 
     @Bean

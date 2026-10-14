@@ -72,7 +72,8 @@ public final class CdcEventApplier {
         } else {
             applyNativeUpserts(targetConn, binding, rows);
         }
-        stats.addUpserts(rows.size());
+        // Per-table accumulation also feeds the global rows-applied total.
+        stats.addTableUpserts(binding.getTable(), rows.size());
     }
 
     public void applyDeletes(Connection targetConn, CdcTableBinding binding,
@@ -99,7 +100,7 @@ public final class CdcEventApplier {
                 ps.executeBatch();
             }
         }
-        stats.addDeletes(rows.size());
+        stats.addTableDeletes(binding.getTable(), rows.size());
     }
 
     /** The normal path: one idempotent statement per row, executed in JDBC batches. */

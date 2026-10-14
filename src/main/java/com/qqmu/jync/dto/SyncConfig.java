@@ -85,6 +85,15 @@ public class SyncConfig {
      */
     private CaptureStrategy captureStrategy;
 
+    /**
+     * Idle poll interval in milliseconds for the polling log-CDC engines
+     * (Oracle LogMiner / PostgreSQL logical slot / SQL Server CDC). Null falls back to
+     * the engine default (LogMiner 1000 / PG 500 / SQL Server 1000). The push-based
+     * MySQL binlog engine never polls and ignores this value. The consumer clamps it to
+     * the 50ms safety floor.
+     */
+    private Long cdcIdlePollMs;
+
     /** Null-safe accessor: legacy configs (field absent) behave exactly like v1.4.0. */
     @JsonIgnore // derived value: keep it out of the persisted JSON, which stores captureStrategy only
     public CaptureStrategy getCaptureStrategyOrDefault() {

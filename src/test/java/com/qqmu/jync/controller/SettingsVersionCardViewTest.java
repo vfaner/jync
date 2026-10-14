@@ -62,11 +62,15 @@ class SettingsVersionCardViewTest {
     }
 
     private String render(VersionInfo info) throws Exception {
+        return renderAs(UserRole.ADMIN, info);
+    }
+
+    private String renderAs(UserRole role, VersionInfo info) throws Exception {
         when(scheduler.scheduledProjectIds()).thenReturn(List.of());
         when(lockService.getOwnerId()).thenReturn("testhost:123");
         when(versionService.snapshot()).thenReturn(info);
         return mvc.perform(get("/settings").locale(Locale.SIMPLIFIED_CHINESE)
-                        .with(as(UserRole.ADMIN)))
+                        .with(as(role)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
     }
@@ -89,7 +93,7 @@ class SettingsVersionCardViewTest {
         assertThat(page).contains("版本信息"); // card head
         assertThat(page).contains("badge-ok");
         assertThat(page).contains("已是最新");
-        assertThat(page).doesNotContain("btn-warn");
+        assertThat(page).doesNotContain("upgrade-open-btn");
         assertThat(page).contains("v1.1.1");
         assertThat(page).contains("<h1>Jync v1.1.1</h1>");
         assertThat(page).contains("当前版本更新内容");
@@ -97,24 +101,55 @@ class SettingsVersionCardViewTest {
     }
 
     @Test
-    void updateAvailableShowsAmberButtonToTheReleasePage() throws Exception {
+    void updateAvailableOffersAdminTheInAppUpgradePlusTheReleasePage() throws Exception {
         String page = render(base()
                 .state(VersionInfo.State.UPDATE_AVAILABLE)
                 .latestVersion("1.2.0").latestTag("v1.2.0")
                 .releaseUrl(RELEASE_URL).latestPublishedDate("2026-09-10")
                 .build());
 
-        assertThat(page).contains("btn-warn");
-        assertThat(page).contains("立即更新");
+        // Admin's primary action is now the in-app upgrade dialog…
+        assertThat(page).contains("一键升级");
+        assertThat(page).containsPattern(
+                "class=\"btn btn-warn btn-sm\"[^>]*data-open-modal=\"upgrade-modal\"");
+        // …with the release page kept as a quieter manual fallback.
+        assertThat(page).contains("发布页");
+        assertThat(page).containsPattern(
+                "class=\"btn btn-ghost btn-sm\"\\s+target=\"_blank\"\\s+rel=\"noopener noreferrer\""
+                + "\\s+href=\"" + java.util.regex.Pattern.quote(RELEASE_URL) + "\"");
+
         assertThat(page).contains("发现新版本");
         assertThat(page).contains("v1.2.0");
         assertThat(page).contains("2026-09-10");
-        // The button is a plain navigation action, in a new tab — no in-app download/restart.
-        // Thymeleaf resolves th:href where the attribute stands (source whitespace may vary).
+        assertThat(page).doesNotContain("badge-ok");
+
+        // The dialog itself: mirror choice (Gitee pre-checked), wired to the upgrade API,
+        // plus the hidden restart-pending badge the poller reveals when a jar is installed.
+        assertThat(page).contains("id=\"upgrade-modal\"");
+        assertThat(page).containsPattern(
+                "name=\"upgrade-source\"[^>]*value=\"GITEE\"[^>]*checked");
+        assertThat(page).containsPattern("name=\"upgrade-source\"[^>]*value=\"GITHUB\"");
+        assertThat(page).contains("/api/upgrade/start");
+        assertThat(page).contains("/api/upgrade/status");
+        assertThat(page).contains("/api/upgrade/restart");
+        assertThat(page).contains("upgrade-ready-badge");
+    }
+
+    @Test
+    void viewerStillGetsThePlainReleasePageButtonAndNoUpgradeDialog() throws Exception {
+        String page = renderAs(UserRole.VIEWER, base()
+                .state(VersionInfo.State.UPDATE_AVAILABLE)
+                .latestVersion("1.2.0").latestTag("v1.2.0")
+                .releaseUrl(RELEASE_URL).latestPublishedDate("2026-09-10")
+                .build());
+
+        assertThat(page).contains("立即更新");
         assertThat(page).containsPattern(
                 "class=\"btn btn-warn btn-sm\"\\s+target=\"_blank\"\\s+rel=\"noopener noreferrer\""
                 + "\\s+href=\"" + java.util.regex.Pattern.quote(RELEASE_URL) + "\"");
-        assertThat(page).doesNotContain("badge-ok");
+        assertThat(page).doesNotContain("upgrade-modal");
+        assertThat(page).doesNotContain("upgrade-open-btn");
+        assertThat(page).doesNotContain("一键升级");
     }
 
     @Test
@@ -125,7 +160,7 @@ class SettingsVersionCardViewTest {
 
         assertThat(page).contains("badge-mute");
         assertThat(page).contains("正在检查更新");
-        assertThat(page).doesNotContain("btn-warn");
+        assertThat(page).doesNotContain("upgrade-open-btn");
     }
 
     @Test
@@ -136,7 +171,7 @@ class SettingsVersionCardViewTest {
 
         assertThat(page).contains("badge-mute");
         assertThat(page).contains("更新检查失败");
-        assertThat(page).doesNotContain("btn-warn");
+        assertThat(page).doesNotContain("upgrade-open-btn");
     }
 
     @Test
@@ -147,7 +182,7 @@ class SettingsVersionCardViewTest {
 
         assertThat(page).contains("badge-mute");
         assertThat(page).contains("已关闭更新检查");
-        assertThat(page).doesNotContain("btn-warn");
+        assertThat(page).doesNotContain("upgrade-open-btn");
     }
 
     @Test

@@ -1,12 +1,17 @@
 package com.qqmu.jync.service.cdc;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 /**
  * Counters and status for one project's CDC pipeline, shared by the row mapper,
@@ -15,6 +20,42 @@ import java.util.concurrent.atomic.AtomicLong;
  * the whole thing as a plain map the C3 status panel consumes directly.
  */
 public final class CdcRuntimeStats {
+
+    /** One table's aggregated change counts since its log window opened. */
+    public static final class TableChange {
+        private final String table;
+        private final long upserts;
+        private final long deletes;
+
+        TableChange(String table, long upserts, long deletes) {
+            this.table = table;
+            this.upserts = upserts;
+            this.deletes = deletes;
+        }
+
+        public String table() {
+            return table;
+        }
+
+        public long upserts() {
+            return upserts;
+        }
+
+        public long deletes() {
+            return deletes;
+        }
+    }
+
+    /** Per-table aggregation window: counts accumulate until the logger drains it. */
+    private static final class Window {
+        private final long openedAtMillis;
+        private long upserts;
+        private long deletes;
+
+        Window(long openedAtMillis) {
+            this.openedAtMillis = openedAtMillis;
+        }
+    }
 
     private final AtomicLong upserts = new AtomicLong();
     private final AtomicLong deletes = new AtomicLong();
@@ -26,6 +67,26 @@ public final class CdcRuntimeStats {
     /** Tables CDC cannot handle here (no PK, unsupported engine); ordered for stable UI display. */
     private final Set<String> unsupportedTables =
             new ConcurrentSkipListSet<>(String.CASE_INSENSITIVE_ORDER);
+
+    /**
+     * Open per-table log windows, keyed case-insensitively (MySQL/PG fold name case;
+     * Oracle's data dictionary spells upper-case). Insertion/removal and accumulation use
+     * {@link ConcurrentMap#compute} on the same key, so a drain never loses concurrent rows —
+     * rows arriving after a window is handed off simply open the next window.
+     */
+    private final ConcurrentMap<String, Window> tableWindows =
+            new ConcurrentSkipListMap<>(String.CASE_INSENSITIVE_ORDER);
+
+    /** Clock for window-age decisions; injectable in tests, wall time in production. */
+    private final LongSupplier clockMillis;
+
+    public CdcRuntimeStats() {
+        this(System::currentTimeMillis);
+    }
+
+    CdcRuntimeStats(LongSupplier clockMillis) {
+        this.clockMillis = clockMillis;
+    }
 
     private volatile boolean connected;
     private volatile String lastError;
@@ -72,6 +133,90 @@ public final class CdcRuntimeStats {
     /** Rows actually written downstream: upserts plus deletes. */
     public long getRowsApplied() {
         return upserts.get() + deletes.get();
+    }
+
+    // —— per-table aggregation windows for the change log ——
+
+    public void addTableUpserts(String table, long n) {
+        addToWindow(table, n, true);
+    }
+
+    public void addTableDeletes(String table, long n) {
+        addToWindow(table, n, false);
+    }
+
+    private void addToWindow(String table, long n, boolean isUpsert) {
+        if (table == null || n <= 0) {
+            return;
+        }
+        // compute() is exclusive per key with drain's removeIf path: a concurrent drain
+        // either hands off the old window first (these rows open a fresh one) or waits,
+        // but rows can never land in a window that was already removed.
+        tableWindows.compute(table, (key, existing) -> {
+            Window window = existing != null ? existing : new Window(clockMillis.getAsLong());
+            if (isUpsert) {
+                window.upserts += n;
+            } else {
+                window.deletes += n;
+            }
+            return window;
+        });
+        // The status-panel total is the sum of every per-table window (plus rows for
+        // keyless/unsupported streams that the applier still counts globally).
+        if (isUpsert) {
+            upserts.addAndGet(n);
+        } else {
+            deletes.addAndGet(n);
+        }
+    }
+
+    /**
+     * Atomically removes and returns windows that have been open at least {@code maxAgeMs}
+     * by {@code nowMillis}; map order is case-insensitive, so the result is stable.
+     */
+    List<TableChange> drainDueWindows(long maxAgeMs, long nowMillis) {
+        List<TableChange> due = new ArrayList<>();
+        tableWindows.entrySet().removeIf(entry -> {
+            Window window = entry.getValue();
+            if (nowMillis - window.openedAtMillis < maxAgeMs) {
+                return false;
+            }
+            if (window.upserts > 0 || window.deletes > 0) {
+                due.add(new TableChange(entry.getKey(), window.upserts, window.deletes));
+            }
+            return true;
+        });
+        return due;
+    }
+
+    /** Removes and returns every open window (consumer shutdown: nothing stays unlogged). */
+    public List<TableChange> drainAllWindows() {
+        List<TableChange> all = new ArrayList<>();
+        tableWindows.entrySet().removeIf(entry -> {
+            Window window = entry.getValue();
+            if (window.upserts > 0 || window.deletes > 0) {
+                all.add(new TableChange(entry.getKey(), window.upserts, window.deletes));
+            }
+            return true;
+        });
+        return all;
+    }
+
+    /**
+     * Human-readable current watermark for log detail text, in source-engine order:
+     * binlog file:pos, then LogMiner SCN, then PG/SQLServer LSN; null before any position.
+     */
+    public String positionLabel() {
+        if (positionFile != null) {
+            return positionFile + ":" + positionPos;
+        }
+        if (positionScn != null) {
+            return "SCN " + positionScn;
+        }
+        if (positionLsn != null) {
+            return "LSN " + positionLsn;
+        }
+        return null;
     }
 
     // —— connection state ——

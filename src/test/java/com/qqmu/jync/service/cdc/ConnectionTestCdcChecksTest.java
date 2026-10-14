@@ -15,14 +15,16 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DataSourceManager;
 
 /**
- * 连接测试对 MYSQL 类型附加逐项 CDC 探测;其他类型 cdcChecks 为 null;探测自身
- * 抛错时连接测试仍然成功(探测只是附加信息,B2:不阻断)。
+ * 连接测试对四种支持日志 CDC 的源库类型附加逐项就绪探测;目标库连接(TARGET 用途)
+ * 与其他类型 cdcChecks 为 null;探测自身抛错时连接测试仍然成功(探测只是附加信息,
+ * B2:不阻断)。
  */
 class ConnectionTestCdcChecksTest {
 
@@ -90,6 +92,18 @@ class ConnectionTestCdcChecksTest {
         List<CdcProbeResult.Check> checks = result.getCdcChecks();
         assertThat(checks).isNotNull().hasSize(8);
         assertThat(checks).allMatch(CdcProbeResult.Check::isPassed);
+    }
+
+    @Test
+    void targetConnectionCarriesNoCdcChecks() throws SQLException {
+        // CDC 只在源端挖掘日志;目标库连接测试跑源端就绪检查纯属误导(用户截图:
+        // 选「目标数据库连接」+ Oracle,结果列出 LogMiner 权限等源端检查项)。
+        ConnectionTestService service = serviceReturning(healthyMySqlConnection());
+        DatabaseConfig target = savedMysql();
+        target.setRole(ConnectionRole.TARGET);
+        ConnectionTestService.TestResult result = service.test(target);
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getCdcChecks()).isNull();
     }
 
     @Test

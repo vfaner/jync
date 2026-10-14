@@ -49,8 +49,9 @@
                     <h2><svg class="ico"><use href="#code-square"/></svg>
                         <span th:text="#{settings.projectAuthor}">Project &amp; author</span></h2>
                 </div>
-                <!-- 六个配对进双列 dl 恰好三行：仓库一行、联系方式两行；
-                     kv 值列 minmax(0,1fr) 允许收缩，长 URL 走省略号而不是撑爆轨道 -->
+                <!-- 双列 dl：(GitHub,Gitee) / (QQ①,QQ②) / (QQ群,邮箱) / (微信,官网)；
+                     kv 值列 minmax(0,1fr) 允许收缩，长 URL 走省略号而不是撑爆轨道；
+                     application.yml 中留空的行不显示，QQ 号可配多个（/ , 空格分隔） -->
                 <div class="card-body">
                     <dl class="dl pairs authors">
                         <!-- 仓库行：dt 用品牌图标代替文字标签（alt 仍取 i18n 键），dd 只放超链接 -->
@@ -72,13 +73,34 @@
                                 </a>
                             </dd>
                         </div>
-                        <div class="kv" th:if="${not #strings.isEmpty(contactQq)}">
+                        <!-- 个人 QQ：tencent 消息深链唤起本机 QQ 并打开与该号的临时会话；
+                             一个配置可给多个号，每个号独占一行 -->
+                        <div class="kv" th:each="qq : ${contactQqs}">
                             <dt th:text="#{settings.contactQq}">QQ</dt>
-                            <dd class="mono" th:text="${contactQq}">QQ</dd>
+                            <dd>
+                                <a class="repo-link mono contact-link"
+                                   th:href="${'tencent://message/?uin=' + qq + '&amp;Site=&amp;Menu=yes'}"
+                                   th:title="#{settings.contactQqHint}"
+                                   th:text="${qq}">817094</a>
+                            </dd>
                         </div>
+                        <!-- QQ 群：mqqapi 打开 QQ 内群资料卡，已在群内即可进群聊 -->
                         <div class="kv" th:if="${not #strings.isEmpty(contactQqGroup)}">
                             <dt th:text="#{settings.contactQqGroup}">QQ group</dt>
-                            <dd class="mono" th:text="${contactQqGroup}">QQ group</dd>
+                            <dd>
+                                <a class="repo-link mono contact-link"
+                                   th:href="${'mqqapi://card/show_pslcard?src_type=internal&amp;version=1&amp;groupcode=' + contactQqGroup}"
+                                   th:title="#{settings.contactQqGroupHint}"
+                                   th:text="${contactQqGroup}">426669837</a>
+                            </dd>
+                        </div>
+                        <div class="kv" th:if="${not #strings.isEmpty(contactEmail)}">
+                            <dt th:text="#{settings.contactEmail}">Email</dt>
+                            <dd>
+                                <a class="repo-link mono contact-link"
+                                   th:href="${'mailto:' + contactEmail}"
+                                   th:text="${contactEmail}">vfaner@88.com</a>
+                            </dd>
                         </div>
                         <div class="kv" th:if="${not #strings.isEmpty(contactWechat)}">
                             <dt th:text="#{settings.contactWechat}">WeChat</dt>
@@ -178,8 +200,23 @@
                     <span th:text="#{settings.upToDate}">Up to date</span>
                 </span>
                 <th:block th:if="${versionInfo.state.name() == 'UPDATE_AVAILABLE'}">
+                    <!--/* 管理员：升级弹窗（下载→校验→替换 jar→提示重启）；
+                         发布页链接降级为幽灵按钮，保留手动兜底 */-->
+                    <button type="button" class="btn btn-warn btn-sm" th:if="${isAdmin}"
+                            id="upgrade-open-btn" data-open-modal="upgrade-modal">
+                        <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                        <span th:text="#{settings.upgradeNow}">Upgrade in app</span>
+                    </button>
+                    <a class="btn btn-ghost btn-sm" target="_blank" rel="noopener noreferrer"
+                       th:if="${isAdmin and versionInfo.releaseUrl != null}"
+                       th:href="${versionInfo.releaseUrl}">
+                        <svg class="ico"><use href="#box-arrow-up-right"/></svg>
+                        <span th:text="#{settings.releasePage}">Release page</span>
+                    </a>
+                    <!-- 只读用户：维持原样，新开标签页去发布页手动升级 -->
                     <a class="btn btn-warn btn-sm" target="_blank" rel="noopener noreferrer"
-                       th:if="${versionInfo.releaseUrl}" th:href="${versionInfo.releaseUrl}">
+                       th:if="${!isAdmin and versionInfo.releaseUrl != null}"
+                       th:href="${versionInfo.releaseUrl}">
                         <svg class="ico"><use href="#box-arrow-up-right"/></svg>
                         <span th:text="#{settings.updateNow}">Update now</span>
                     </a>
@@ -190,6 +227,12 @@
                               th:text="'(' + ${versionInfo.latestPublishedDate} + ')'">(YYYY-MM-DD)</span>
                     </span>
                 </th:block>
+                <!--/* 新版 jar 已替换、等待重启时由升级轮询脚本点亮（服务端渲染时始终隐藏） */-->
+                <span class="badge badge-warn" id="upgrade-ready-badge" th:if="${isAdmin}" hidden
+                      data-open-modal="upgrade-modal" role="button" tabindex="0">
+                    <svg class="ico"><use href="#arrow-clockwise"/></svg>
+                    <span th:text="#{settings.upgradeRestartPending}">Restart to finish upgrade</span>
+                </span>
                 <span class="badge badge-mute" th:if="${versionInfo.state.name() == 'CHECKING'}">
                     <svg class="ico spinning"><use href="#arrow-clockwise"/></svg>
                     <span th:text="#{settings.checking}">Checking for updates…</span>
@@ -228,8 +271,10 @@
                 th:text="#{settings.releaseNotes}">What's new in this version</h3>
             <div class="release-notes" th:if="${versionInfo.currentNotesHtml}"
                  th:utext="${versionInfo.currentNotesHtml}">notes</div>
-            <p class="small soft" th:if="${versionInfo.currentNotesHtml}"
+            <p class="small soft" th:if="${versionInfo.currentNotesHtml != null and isAdmin}"
                th:text="#{settings.updateHelp}">upgrade help</p>
+            <p class="small soft" th:if="${versionInfo.currentNotesHtml != null and !isAdmin}"
+               th:text="#{settings.updateHelpViewer}">upgrade help (viewer)</p>
         </div>
     </div>
 
@@ -261,6 +306,80 @@
                     </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+    </div>
+
+    <!--/* 升级弹窗（仅管理员渲染）：选下载源 → 下载并替换 jync.jar（旧文件保留 .bak）→
+         选择立即重启或稍后手动重启。交互逻辑在 app.js 的 bindUpgrade()，
+         服务端只渲染结构与文案；接口地址经 th:data-* 带上 context-path。 */-->
+    <div class="modal" id="upgrade-modal" aria-hidden="true" role="dialog" aria-modal="true"
+         th:if="${isAdmin}" th:aria-label="#{settings.upgradeTitle}"
+         th:data-start-url="@{/api/upgrade/start}"
+         th:data-status-url="@{/api/upgrade/status}"
+         th:data-restart-url="@{/api/upgrade/restart}">
+        <div class="modal-mask" data-close-modal="upgrade-modal"></div>
+        <div class="modal-dialog">
+            <button type="button" class="modal-close" data-close-modal="upgrade-modal"
+                    th:title="#{common.close}" th:aria-label="#{common.close}">
+                <svg class="ico"><use href="#x-lg"/></svg>
+            </button>
+            <div class="modal-head">
+                <h3 th:text="#{settings.upgradeTitle}">One-click upgrade</h3>
+            </div>
+
+            <div class="field" data-role="upgrade-source-group">
+                <label><span th:text="#{settings.upgradeSource}">Download source</span></label>
+                <div class="role-group">
+                    <label class="role-pick">
+                        <input type="radio" name="upgrade-source" value="GITEE" checked>
+                        <span class="role-text">
+                            <strong th:text="#{settings.upgradeSourceGitee}">Gitee</strong>
+                            <span class="help" th:text="#{settings.upgradeSourceGiteeHelp}">Faster in China</span>
+                        </span>
+                    </label>
+                    <label class="role-pick">
+                        <input type="radio" name="upgrade-source" value="GITHUB">
+                        <span class="role-text">
+                            <strong th:text="#{settings.upgradeSourceGithub}">GitHub</strong>
+                            <span class="help" th:text="#{settings.upgradeSourceGithubHelp}">Faster elsewhere</span>
+                        </span>
+                    </label>
+                </div>
+                <div class="help" th:text="#{settings.upgradeHint}">Downloads and replaces jync.jar…</div>
+            </div>
+
+            <div class="field" data-role="upgrade-progress" hidden>
+                <label><span th:text="#{settings.upgradeDownloading}">Downloading…</span></label>
+                <progress max="100" value="0" style="width: 100%"></progress>
+                <div class="help" data-role="upgrade-progress-text"></div>
+            </div>
+
+            <div class="field" data-role="upgrade-message" hidden>
+                <div class="help" data-role="upgrade-message-text"></div>
+            </div>
+
+            <p class="help" data-role="upgrade-restart-warn"
+               th:text="#{settings.upgradeRestartWarn}">Restart warning</p>
+
+            <div class="modal-actions" data-role="upgrade-actions-idle">
+                <button type="button" class="btn btn-ghost" data-close-modal="upgrade-modal"
+                        th:text="#{common.cancel}">Cancel</button>
+                <button type="button" class="btn btn-warn" data-role="upgrade-start">
+                    <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                    <span th:text="#{settings.upgradeStart}">Download and install</span>
+                </button>
+            </div>
+            <div class="modal-actions" data-role="upgrade-actions-ready" hidden>
+                <button type="button" class="btn btn-ghost" data-close-modal="upgrade-modal"
+                        th:text="#{settings.upgradeRestartLater}">Restart manually later</button>
+                <button type="button" class="btn btn-warn" data-role="upgrade-restart">
+                    <svg class="ico"><use href="#arrow-clockwise"/></svg>
+                    <span th:text="#{settings.upgradeRestartNow}">Restart now</span>
+                </button>
+            </div>
+            <div class="modal-actions" data-role="upgrade-actions-restarting" hidden>
+                <span class="small soft" th:text="#{settings.upgradeRestarting}">Restarting…</span>
             </div>
         </div>
     </div>

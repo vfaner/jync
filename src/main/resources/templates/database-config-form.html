@@ -116,16 +116,17 @@
                         </div>
                     </div>
 
-                    <!--/* P0-2: Oracle CDB 挖掘账号——仅 Oracle 显示;首屏由服务端
-                            hidden+disabled,切换类型时 app.js 同步(与 custom-section 同纪律,
-                            隐藏必须连控件一起禁用,否则残留值随其他类型提交) */-->
+                    <!--/* P0-2: Oracle CDB 挖掘账号——仅「源端 + Oracle」显示;目标库永远
+                            不挖日志。首屏由服务端 hidden+disabled,切换类型/用途时 app.js
+                            同步(与 custom-section 同纪律:隐藏必须连控件一起禁用,否则
+                            残留值随其他类型提交) */-->
                     <div class="grid-2" id="miner-section"
-                         th:attr="hidden=${config.type != null and config.type.name() == 'ORACLE'} ? null : 'hidden'">
+                         th:attr="hidden=${config.type != null and config.type.name() == 'ORACLE' and config.role != null and config.role.name() == 'SOURCE'} ? null : 'hidden'">
                         <div class="field">
                             <label for="minerUsername" th:text="#{db.minerUsername}">Mining user</label>
                             <input type="text" class="input" id="minerUsername" th:field="*{minerUsername}"
                                    autocomplete="off"
-                                   th:attr="disabled=${config.type != null and config.type.name() == 'ORACLE'} ? null : 'disabled'">
+                                   th:attr="disabled=${config.type != null and config.type.name() == 'ORACLE' and config.role != null and config.role.name() == 'SOURCE'} ? null : 'disabled'">
                             <div class="help" th:text="#{db.minerUsernameHelp}">help</div>
                         </div>
                         <div class="field">
@@ -133,7 +134,7 @@
                             <!--/* 与主密码同约定:从不回填,留空保留已存值 */-->
                             <input type="password" class="input" id="rawMinerPassword" name="rawMinerPassword"
                                    autocomplete="new-password"
-                                   th:attr="disabled=${config.type != null and config.type.name() == 'ORACLE'} ? null : 'disabled'">
+                                   th:attr="disabled=${config.type != null and config.type.name() == 'ORACLE' and config.role != null and config.role.name() == 'SOURCE'} ? null : 'disabled'">
                             <div class="help" th:if="${config.id != null}" th:text="#{db.passwordKeepHelp}">help</div>
                         </div>
                     </div>

@@ -31,6 +31,7 @@ import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
+import com.qqmu.jync.service.cdc.CdcReconnectBackoff;
 import com.qqmu.jync.service.cdc.CdcRuntimeStats;
 
 import lombok.extern.slf4j.Slf4j;
@@ -321,6 +322,7 @@ public class ProjectController {
                             @RequestParam(defaultValue = "false") boolean customSchedule,
                             @RequestParam(name = "captureStrategy", required = false)
                                     String captureStrategy,
+                            @RequestParam(required = false) Long cdcIdlePollMs,
                             RedirectAttributes flash) {
         try {
             var project = projectService.findById(id)
@@ -363,6 +365,12 @@ public class ProjectController {
                 flash.addFlashAttribute("error", "error.select.at.least.one.procedure");
                 return "redirect:/projects/" + id;
             }
+            // CDC 空闲轮询间隔:留空=引擎默认;给值就不得低于安全下限,
+            // 否则等于对源库做紧密挖掘会话循环(读侧还有一层兜底 clamp)。
+            if (cdcIdlePollMs != null && cdcIdlePollMs < CdcReconnectBackoff.MIN_IDLE_POLL_MS) {
+                flash.addFlashAttribute("error", "error.project.cdc.idle.poll.too.small");
+                return "redirect:/projects/" + id;
+            }
 
             config.setTables(new LinkedHashSet<>(tables));
             config.setViews(views == null ? new LinkedHashSet<>() : new LinkedHashSet<>(views));
@@ -389,6 +397,9 @@ public class ProjectController {
                 config.setCronExpression(null);
                 config.setBatchSize(null);
             }
+            // 与自定义调度无关:三个轮询式日志 CDC 引擎(LogMiner/PG/SQLServer)
+            // 的空闲休眠;留空回退引擎默认。binlog 引擎不轮询,忽略此值。
+            config.setCdcIdlePollMs(cdcIdlePollMs);
 
             CaptureStrategy before = config.getCaptureStrategyOrDefault();
             projectService.saveConfig(id, config, strategyParam);

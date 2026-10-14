@@ -1,5 +1,8 @@
 package com.qqmu.jync.controller;
 
+import java.util.Arrays;
+import java.util.List;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -21,8 +24,9 @@ public class SettingsController {
     private final VersionService versionService;
     private final String giteeUrl;
     private final String siteUrl;
-    private final String contactQq;
+    private final List<String> contactQqs;
     private final String contactQqGroup;
+    private final String contactEmail;
     private final String contactWechat;
 
     public SettingsController(SyncProperties properties, SyncScheduler scheduler,
@@ -31,6 +35,7 @@ public class SettingsController {
                               @Value("${app.site-url:}") String siteUrl,
                               @Value("${app.contact-qq:}") String contactQq,
                               @Value("${app.contact-qq-group:}") String contactQqGroup,
+                              @Value("${app.contact-email:}") String contactEmail,
                               @Value("${app.contact-wechat:}") String contactWechat) {
         this.properties = properties;
         this.scheduler = scheduler;
@@ -38,9 +43,21 @@ public class SettingsController {
         this.versionService = versionService;
         this.giteeUrl = giteeUrl;
         this.siteUrl = siteUrl;
-        this.contactQq = contactQq;
+        this.contactQqs = splitHandles(contactQq);
         this.contactQqGroup = contactQqGroup;
+        this.contactEmail = contactEmail;
         this.contactWechat = contactWechat;
+    }
+
+    /** One config value may carry several handles: "817094/2912167928" or a comma/space list. */
+    private static List<String> splitHandles(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(raw.split("[/,;\\s]+"))
+                .map(String::trim)
+                .filter(handle -> !handle.isEmpty())
+                .toList();
     }
 
     @GetMapping("/settings")
@@ -53,8 +70,9 @@ public class SettingsController {
         model.addAttribute("versionInfo", versionService.snapshot());
         model.addAttribute("giteeUrl", giteeUrl);
         model.addAttribute("siteUrl", siteUrl);
-        model.addAttribute("contactQq", contactQq);
+        model.addAttribute("contactQqs", contactQqs);
         model.addAttribute("contactQqGroup", contactQqGroup);
+        model.addAttribute("contactEmail", contactEmail);
         model.addAttribute("contactWechat", contactWechat);
         return "settings";
     }

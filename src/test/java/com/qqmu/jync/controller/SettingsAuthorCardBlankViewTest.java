@@ -38,6 +38,8 @@ import com.qqmu.jync.service.version.VersionService;
         "app.github-url=https://github.com/vfaner/jync",
         "app.gitee-url=",
         "app.contact-qq=",
+        "app.contact-qq-group=",
+        "app.contact-email=",
         "app.contact-wechat="})
 class SettingsAuthorCardBlankViewTest {
 
@@ -77,6 +79,9 @@ class SettingsAuthorCardBlankViewTest {
         // Match the dt tags: the donate dialog has its own 微信/QQ pay tabs.
         assertThat(page).doesNotContain(">Gitee</dt>");
         assertThat(page).doesNotContain(">QQ</dt>");
-        assertThat(page).doesNotContain(">微信</dt>");
+        assertThat(page).doesNotContain(">QQ群</dt>");
+        assertThat(page).doesNotContain(">邮箱</dt>");
+        assertThat(page).doesNotContain("tencent://");
+        assertThat(page).doesNotContain("mailto:");
     }
 }

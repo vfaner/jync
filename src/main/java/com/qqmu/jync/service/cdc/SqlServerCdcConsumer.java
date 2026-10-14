@@ -121,6 +121,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     private CdcReconnectBackoff backoff;
 
+    /** Per-table aggregated change-log flusher (10s windows, final flush on stop). */
+    private final CdcChangeWindowLogger windowLogger;
+
     public SqlServerCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                 SyncContext ctx, CdcPositionStore positionStore,
                                 CdcBaselineService baselineService, SyncTaskStore taskStore,
@@ -137,6 +140,8 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         this.stats = stats;
         this.properties = properties;
         this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
+        this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
+                properties.getCdc().getChangeWindowMs());
     }
 
     @Override
@@ -157,6 +162,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             backoff = new CdcReconnectBackoff(
                     properties.getCdc().getReconnectBackoffMs(),
                     properties.getCdc().getReconnectBackoffMaxMs());
+            long idlePollMs = CdcReconnectBackoff.effectiveIdlePollMs(
+                    ctx.getConfig().getCdcIdlePollMs(),
+                    properties.getCdc().getMssql().getIdlePollMs());
+            windowLogger.start();
             while (running && !Thread.currentThread().isInterrupted()) {
                 if (!lock.renew()) {
                     log.warn("SQLServer CDC consumer for project {} stopping: lease lost",
@@ -205,9 +214,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 if (dwellMs >= CdcConsumer.MIN_BACKOFF_RESET_DWELL_MS) {
                     backoff.reset();
                 }
-                long delay = rowsDrained == 0
-                        ? properties.getCdc().getMssql().getIdlePollMs()
-                        : backoff.nextDelayMs();
+                // 繁忙轮(捞到数据)立即开下一轮;只有真正空闲才休眠 idlePollMs,失败走指数退避。
+                long delay = CdcReconnectBackoff.nextCycleDelayMs(
+                        failure, rowsDrained > 0, backoff, idlePollMs);
                 stats.setLastError(failure == null ? "drained"
                         : CdcFailureClassifier.describe(failure));
                 log.info("SQLServer cycle for project {} ended ({}); next cycle in {} ms",
@@ -230,6 +239,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         } finally {
             closeQuietly(currentSource);
             currentSource = null;
+            windowLogger.close();
             lock.close();
             stats.setConnected(false);
             try {

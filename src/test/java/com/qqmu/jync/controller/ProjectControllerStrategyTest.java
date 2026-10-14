@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -148,6 +149,98 @@ class ProjectControllerStrategyTest {
 
         assertThat(result.getFlashMap().get("error")).isEqualTo("error.project.strategy.invalid");
         verify(projectService).saveConfig(eq(1L), any(), isNull());   // 非法值不透传
+    }
+
+    @Test
+    void saveConfigPersistsCdcIdlePollMs() throws Exception {
+        stubDetail(DatabaseType.ORACLE);
+
+        mvc.perform(configPost("POLLING").param("cdcIdlePollMs", "250"))
+                .andExpect(status().is3xxRedirection());
+
+        ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
+        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("POLLING"));
+        assertThat(captor.getValue().getCdcIdlePollMs()).isEqualTo(250L);
+    }
+
+    @Test
+    void saveConfigTreatsMissingIdlePollAsEngineDefault() throws Exception {
+        stubDetail(DatabaseType.ORACLE);
+
+        // 不带该参数(旧表单/直接 API):落库 null,由消费端回退各引擎默认值。
+        mvc.perform(configPost("POLLING"))
+                .andExpect(status().is3xxRedirection());
+
+        ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
+        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("POLLING"));
+        assertThat(captor.getValue().getCdcIdlePollMs()).isNull();
+    }
+
+    @Test
+    void saveConfigRejectsIdlePollBelowTheSafetyFloor() throws Exception {
+        stubDetail(DatabaseType.ORACLE);
+
+        MvcResult result = mvc.perform(configPost("POLLING").param("cdcIdlePollMs", "10"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+
+        assertThat(result.getFlashMap().get("error"))
+                .isEqualTo("error.project.cdc.idle.poll.too.small");
+        // 拒绝时整份配置都不得落库,避免半写状态。
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
+    }
+
+    /** Stubs detail with a stored capture strategy (drives selectedStrategy first paint). */
+    private Project stubStrategyDetail(DatabaseType sourceType, CaptureStrategy strategy) {
+        Project project = stubDetail(sourceType);
+        SyncConfig config = new SyncConfig();
+        config.setCaptureStrategy(strategy);
+        if (strategy == CaptureStrategy.LOGMINER_CDC
+                || strategy == CaptureStrategy.PG_LOGICAL_CDC
+                || strategy == CaptureStrategy.SQLSERVER_CDC) {
+            config.setCdcIdlePollMs(250L);
+        }
+        when(projectService.loadConfig(project)).thenReturn(config);
+        return project;
+    }
+
+    /** The idle-poll card block, from its marker to the end of its number input. */
+    private static String idlePollBlock(String page) {
+        // 以输入框 id 为锚(上方 HTML 注释里也出现了 data-cdc-visibility 串,
+        // 单独用属性串会落到注释上),再回退到所在卡片 <div>,截到 input 标签结束。
+        int inputAt = page.indexOf("id=\"cdcIdlePollMs\"");
+        assertThat(inputAt).as("idle-poll input").isPositive();
+        // 属性的那次出现(注释里也有该串)是输入框前最近的一次;再回退到同一标签的 <div。
+        int markerAt = page.lastIndexOf("data-cdc-visibility=\"polling-cdc\"", inputAt);
+        int cardStart = page.lastIndexOf("<div", markerAt);
+        int inputEnd = page.indexOf(">", inputAt);
+        return page.substring(cardStart, inputEnd + 1);
+    }
+
+    @Test
+    void detailShowsIdlePollOnlyForPollingLogCdcStrategies() throws Exception {
+        // 轮询式三引擎:卡片可见、输入可用、项目覆盖值得回填
+        stubStrategyDetail(DatabaseType.ORACLE, CaptureStrategy.LOGMINER_CDC);
+        String oracle = mvc.perform(get("/projects/1")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String block = idlePollBlock(oracle);
+        assertThat(block).doesNotContain("is-hidden");
+        assertThat(block).contains("name=\"cdcIdlePollMs\"").contains("value=\"250\"");
+        assertThat(block).doesNotContain("disabled");
+        assertThat(oracle).doesNotContain("??option.cdcIdlePoll");
+
+        // MySQL binlog(推送,不轮询):隐藏且禁用,值不随表单提交
+        stubStrategyDetail(DatabaseType.MYSQL, CaptureStrategy.BINLOG_CDC);
+        String mysql = mvc.perform(get("/projects/1")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String binlogBlock = idlePollBlock(mysql);
+        assertThat(binlogBlock).contains("is-hidden", "disabled");
+
+        // 普通增量轮询:同样隐藏
+        stubDetail(DatabaseType.MYSQL);
+        String polling = mvc.perform(get("/projects/1")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(idlePollBlock(polling)).contains("is-hidden", "disabled");
     }
 
     @Test

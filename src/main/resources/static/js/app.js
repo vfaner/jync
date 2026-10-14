@@ -644,13 +644,21 @@
             body.appendChild(ms);
           }
 
-          // CDC 就绪探测逐项结果:仅 MySQL 源库的 payload 携带 cdcChecks,是附加信息,
-          // 不影响上面的成败判定;detail 是驱动/探测给的原文,textContent 防注入
+          // CDC 就绪探测逐项结果:四种支持日志 CDC 的源库 payload 都可能携带 cdcChecks,
+          // 是附加信息,不影响上面的成败判定;detail 是驱动/探测给的原文,textContent 防注入。
+          // 标题按表单当前类型选,否则 Oracle/PG/SQLServer 都顶着「MySQL CDC」。
           var checks = p.cdcChecks;
           if (checks && checks.length) {
             var title = document.createElement('div');
             title.className = 'test-line cdc-title';
-            title.textContent = t('cdc.probe.title');
+            var typeSel = document.getElementById('type');
+            var titleKey = {
+              MYSQL: 'cdc.probe.title',
+              ORACLE: 'cdc.probe.title.oracle',
+              POSTGRESQL: 'cdc.probe.title.postgres',
+              SQLSERVER: 'cdc.probe.title.sqlserver'
+            }[(typeSel && typeSel.value) || 'MYSQL'] || 'cdc.probe.title';
+            title.textContent = t(titleKey);
             body.appendChild(title);
             for (var i = 0; i < checks.length; i++) {
               var line = document.createElement('div');
@@ -777,7 +785,29 @@
 
   /* ─── 数据库类型切换：预填端口、显隐自定义区 ────────────── */
 
+  // 挖掘账号区显隐 = 源端用途 AND Oracle 类型。类型下拉和用途单选任一切换都要重算,
+  // 因此独立成函数:选了 Oracle 目标库时这两个输入框必须消失且禁用(残留值不提交)。
+  function syncMinerSection(form) {
+    var minerSection = document.getElementById('miner-section');
+    if (!minerSection) return;
+    var typeSel = form && form.querySelector('#type');
+    var roleInput = form && form.querySelector('input[name="role"]:checked');
+    var isOracle = typeSel && typeSel.value === 'ORACLE';
+    var isSource = !roleInput || roleInput.value === 'SOURCE';
+    var showMiner = isOracle && isSource;
+    minerSection.hidden = !showMiner;
+    minerSection.querySelectorAll('input').forEach(function (el) { el.disabled = !showMiner; });
+  }
+
   function bindTypeSelect(select) {
+    // 用途单选变化不触发类型默认值接口,只重算挖掘账号区。
+    var form = select.closest('form');
+    if (form) {
+      form.querySelectorAll('input[name="role"]').forEach(function (radio) {
+        radio.addEventListener('change', function () { syncMinerSection(form); });
+      });
+    }
+
     function apply() {
       getJson(select.dataset.action + '?type=' + encodeURIComponent(select.value))
         .then(function (p) {
@@ -812,13 +842,9 @@
           // 服务名说明只对 Oracle 有意义，其余类型隐藏
           var oracleHelp = document.getElementById('oracle-name-help');
           if (oracleHelp) oracleHelp.hidden = select.value !== 'ORACLE';
-          // P0-2: 挖掘账号同理——hidden 不够，控件必须一起禁用，否则残留值随他类型提交
-          var minerSection = document.getElementById('miner-section');
-          if (minerSection) {
-            var showMiner = select.value === 'ORACLE';
-            minerSection.hidden = !showMiner;
-            minerSection.querySelectorAll('input').forEach(function (el) { el.disabled = !showMiner; });
-          }
+          // P0-2: 挖掘账号同理——hidden 不够，控件必须一起禁用，否则残留值随他类型提交。
+          // 用途与类型共同决定显隐:只有「源端 + Oracle」才显示,目标库不挖日志。
+          syncMinerSection(select.closest('form'));
           var driverHint = document.getElementById('driver-hint');
           if (driverHint) driverHint.textContent = p.driverClass || '';
         })
@@ -949,6 +975,144 @@
       tabs.querySelectorAll('.pay-tab').forEach(function (b) {
         b.classList.toggle('active', b === btn);
       });
+    });
+  }
+
+  /* ─── 一键升级（settings 页，仅管理员渲染） ─────────────────── */
+
+  /**
+   * 升级弹窗：选下载源 → 下载新版 jync.jar 并替换当前文件 → 立即重启或稍后手动重启。
+   *
+   * 状态一律以轮询 GET /api/upgrade/status 为准：刷新页面、甚至重启到一半失败回滚后
+   * 重新打开，都能从服务端（含 marker 文件恢复出的 READY）拿到真实阶段，页面自己
+   * 不缓存任何判断。后端 message 是含动态内容（字节数、原因）的原文，直接展示，
+   * 不走 t()；只有固定的 msg.upgrade.* 键经字典翻译。
+   */
+  function bindUpgrade() {
+    var modal = document.getElementById('upgrade-modal');
+    if (!modal) return; // 只读用户没有这个弹窗，也没有轮询权限（接口是 ADMIN 限定）
+
+    var startUrl = modal.dataset.startUrl;
+    var statusUrl = modal.dataset.statusUrl;
+    var restartUrl = modal.dataset.restartUrl;
+
+    var sourceGroup = modal.querySelector('[data-role="upgrade-source-group"]');
+    var progressBox = modal.querySelector('[data-role="upgrade-progress"]');
+    var progressBar = progressBox ? progressBox.querySelector('progress') : null;
+    var progressText = modal.querySelector('[data-role="upgrade-progress-text"]');
+    var messageBox = modal.querySelector('[data-role="upgrade-message"]');
+    var messageText = modal.querySelector('[data-role="upgrade-message-text"]');
+    var restartWarn = modal.querySelector('[data-role="upgrade-restart-warn"]');
+    var actionsIdle = modal.querySelector('[data-role="upgrade-actions-idle"]');
+    var actionsReady = modal.querySelector('[data-role="upgrade-actions-ready"]');
+    var actionsRestarting = modal.querySelector('[data-role="upgrade-actions-restarting"]');
+    var startBtn = modal.querySelector('[data-role="upgrade-start"]');
+    var restartBtn = modal.querySelector('[data-role="upgrade-restart"]');
+    var readyBadge = document.getElementById('upgrade-ready-badge');
+
+    var pollTimer = null;
+
+    function selectedSource() {
+      var checked = modal.querySelector('input[name="upgrade-source"]:checked');
+      return checked ? checked.value : 'GITEE';
+    }
+
+    function mb(bytes) { return (bytes / 1048576).toFixed(1) + ' MB'; }
+
+    function show(el, on) { if (el) el.hidden = !on; }
+
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    /** 纯渲染：把一个 status 快照映射到弹窗各区块的显隐，不发请求、不动轮询。 */
+    function render(s) {
+      var phase = s.phase;
+      var downloading = phase === 'DOWNLOADING';
+      show(progressBox, downloading);
+      show(sourceGroup, !downloading && phase !== 'READY' && phase !== 'RESTARTING');
+      show(actionsIdle, phase === 'IDLE' || phase === 'FAILED');
+      show(actionsReady, phase === 'READY');
+      show(actionsRestarting, phase === 'RESTARTING');
+      show(restartWarn, phase === 'READY');
+      // 下载中进度条自己说话；其余阶段有 message 就展示（失败原因/就绪提示/重启中）
+      var showMsg = !!s.message && !downloading;
+      show(messageBox, showMsg);
+      if (showMsg) messageText.textContent = s.message;
+
+      if (downloading) {
+        var total = s.bytesTotal || 0;
+        var read = s.bytesRead || 0;
+        // Gitee API 不给文件大小：total 未知时进度条停 0，只显示已下载量
+        if (progressBar) progressBar.value = total > 0 ? Math.floor(read * 100 / total) : 0;
+        if (progressText) {
+          progressText.textContent = total > 0 ? mb(read) + ' / ' + mb(total) : mb(read);
+        }
+        if (startBtn) startBtn.disabled = true;
+      } else {
+        if (startBtn) startBtn.disabled = false;
+      }
+      if (readyBadge) readyBadge.hidden = phase !== 'READY';
+    }
+
+    function pollOnce() {
+      getJson(statusUrl).then(function (s) {
+        if (!s || s.success === false) { stopPolling(); return; } // 会话过期等兜底载荷
+        render(s);
+        if (s.phase !== 'DOWNLOADING') stopPolling();
+      });
+    }
+
+    function startPolling() {
+      stopPolling();
+      pollOnce();
+      pollTimer = setInterval(pollOnce, 1000);
+    }
+
+    function fail(text) {
+      if (messageText) messageText.textContent = text;
+      show(messageBox, true);
+      show(actionsIdle, true);
+      show(progressBox, false);
+      if (startBtn) startBtn.disabled = false;
+    }
+
+    if (startBtn) startBtn.addEventListener('click', function () {
+      startBtn.disabled = true;
+      postJson(startUrl + '?source=' + encodeURIComponent(selectedSource()))
+        .then(function (p) {
+          if (p && p.success) {
+            show(messageBox, false);
+            startPolling();
+          } else {
+            // 409 拒绝（已有任务进行中/已是最新/非 jar 运行…）：message 是原文，t() 原样兜底
+            fail(t(p && p.message ? p.message : 'error.unexpected'));
+          }
+        })
+        .catch(function (err) { fail(describeError(err)); });
+    });
+
+    if (restartBtn) restartBtn.addEventListener('click', function () {
+      restartBtn.disabled = true;
+      postJson(restartUrl)
+        .then(function (p) {
+          if (p && p.success) {
+            render({ phase: 'RESTARTING', message: t('msg.upgrade.restarting') });
+          } else {
+            restartBtn.disabled = false;
+            fail(t(p && p.message ? p.message : 'error.unexpected'));
+          }
+        })
+        .catch(function (err) { restartBtn.disabled = false; fail(describeError(err)); });
+    });
+
+    // 进页面先对一次表：READY（marker 恢复）或 DOWNLOADING（刷新前就在下）直接把弹窗
+    // 拉到用户面前 —— 这两种状态都需要用户做一个决定，不该藏在按钮后面。
+    getJson(statusUrl).then(function (s) {
+      if (!s || s.success === false) return;
+      render(s);
+      if (s.phase === 'DOWNLOADING') startPolling();
+      if (s.phase === 'READY' || s.phase === 'DOWNLOADING') setModalOpen(modal.id, true);
     });
   }
 
@@ -1559,6 +1723,7 @@
     bindCdcRefresh();
     bindDonate();
     bindGenericModals();
+    bindUpgrade();
     bindUserMenu();
     initConfigDirtyTracking();
 
@@ -1697,6 +1862,16 @@
       });
       document.querySelectorAll('[data-cdc-visibility="cdc"]').forEach(function (el) {
         el.classList.toggle('is-hidden', !isCdc);
+      });
+      // 空闲轮询间隔只属于三个轮询式日志 CDC 引擎(LogMiner/PG/SQLServer);
+      // binlog 推送不走轮询。隐藏时内部输入同时 disable,杜绝陈旧值随表单提交。
+      var POLLING_CDC = { LOGMINER_CDC: 1, PG_LOGICAL_CDC: 1, SQLSERVER_CDC: 1 };
+      var isPollingCdc = picked && POLLING_CDC[picked.value];
+      document.querySelectorAll('[data-cdc-visibility="polling-cdc"]').forEach(function (el) {
+        el.classList.toggle('is-hidden', !isPollingCdc);
+        el.querySelectorAll('input').forEach(function (input) {
+          input.disabled = !isPollingCdc;
+        });
       });
     };
     syncRunControlVisibility();

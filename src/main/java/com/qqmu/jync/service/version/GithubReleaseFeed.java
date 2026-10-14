@@ -5,9 +5,12 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,11 +31,11 @@ import lombok.extern.slf4j.Slf4j;
  * so changing the repository does not require a second property. Hosts other than
  * github.com are rejected rather than guessing another vendor's API layout.
  */
-@Component
 @Slf4j
 public class GithubReleaseFeed implements ReleaseFeed {
 
-    private static final Duration TIMEOUT = Duration.ofSeconds(3);
+    /** Per-request timeout: how long GitHub has to answer before the chain tries Gitee. */
+    static final long DEFAULT_TIMEOUT_MS = 5_000L;
 
     /** https://github.com/owner/repo(.git)(/) or http variant. */
     private static final Pattern HTTPS_URL =
@@ -43,22 +46,36 @@ public class GithubReleaseFeed implements ReleaseFeed {
             Pattern.compile("^git@github\\.com:([^/]+)/([^/#?:]+?)(?:\\.git)?/?$");
 
     private final String apiBase;
+    private final Duration timeout;
     private final HttpClient http;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public GithubReleaseFeed(@Value("${app.github-url}") String githubUrl) {
+    @Component
+    public static class Bean extends GithubReleaseFeed {
+        public Bean(@Value("${app.github-url}") String githubUrl,
+                    @Value("${app.update-check.timeout-ms:5000}") long timeoutMs) {
+            super(githubUrl, timeoutMs);
+        }
+    }
+
+    public GithubReleaseFeed(String githubUrl) {
+        this(githubUrl, DEFAULT_TIMEOUT_MS);
+    }
+
+    public GithubReleaseFeed(String githubUrl, long timeoutMs) {
         String parsed;
         try {
             parsed = toApiBase(githubUrl);
         } catch (IllegalArgumentException e) {
             // A misconfigured repository URL must not stop the application from booting;
-            // every check then just reports UNKNOWN.
-            log.warn("Update check disabled: {}", e.getMessage());
+            // every check then just fails (and the chained feed moves on to Gitee).
+            log.warn("GitHub update check disabled: {}", e.getMessage());
             parsed = null;
         }
         this.apiBase = parsed;
+        this.timeout = Duration.ofMillis(timeoutMs);
         this.http = HttpClient.newBuilder()
-                .connectTimeout(TIMEOUT)
+                .connectTimeout(this.timeout)
                 // NORMAL (not NEVER): GitHub answers renamed repositories with a 301, and the
                 // update check must survive the repo being renamed — with NEVER, every deployed
                 // instance's check broke the moment the repository moved. NORMAL still refuses
@@ -103,27 +120,43 @@ public class GithubReleaseFeed implements ReleaseFeed {
             throw new IllegalStateException("No GitHub API base derivable from app.github-url");
         }
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(TIMEOUT)
+                .timeout(timeout)
                 .header("Accept", "application/vnd.github+json")
                 .header("User-Agent", "jync-update-check")
                 .GET()
                 .build();
-        HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = http.send(request, BodyHandlers.ofString());
         if (response.statusCode() != 200) {
             throw new IllegalStateException("GitHub API responded " + response.statusCode());
         }
-        JsonNode json = mapper.readTree(response.body());
+        return parse(response.body());
+    }
+
+    /** Parses one GitHub release JSON document; package-private for tests (no sockets). */
+    static Release parse(String body) throws Exception {
+        JsonNode json = new ObjectMapper().readTree(body);
         String tag = json.path("tag_name").asText(null);
         String htmlUrl = json.path("html_url").asText(null);
         String published = json.path("published_at").asText(null);
-        String body = json.path("body").asText("");
+        String releaseBody = json.path("body").asText("");
         if (tag == null || htmlUrl == null) {
             throw new IllegalStateException("GitHub API response is missing tag_name/html_url");
+        }
+        List<Asset> assets = new ArrayList<>();
+        for (JsonNode asset : json.path("assets")) {
+            String name = asset.path("name").asText(null);
+            String downloadUrl = asset.path("browser_download_url").asText(null);
+            if (name == null || downloadUrl == null) {
+                continue;
+            }
+            long size = asset.path("size").asLong(0L);
+            assets.add(new Asset(name, downloadUrl, size > 0 ? size : null));
         }
         Instant publishedAt = null;
         if (published != null && !published.isBlank()) {
             publishedAt = Instant.parse(published);
         }
-        return new Release(tag, htmlUrl, publishedAt, body);
+        return new Release(tag, htmlUrl, publishedAt, releaseBody,
+                List.copyOf(assets), Source.GITHUB);
     }
 }

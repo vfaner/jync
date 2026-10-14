@@ -196,20 +196,38 @@ class VersionServiceTest {
 
     /**
      * The URL arrives in feed JSON and is rendered into th:href, so a javascript: target or
-     * an http downgrade must never reach the page — the link is dropped instead.
+     * an http downgrade must never reach the page — the link is dropped instead. Both
+     * hosting platforms are trusted now (the check falls back from GitHub to Gitee).
      */
     @Test
-    void onlyHttpsGithubUrlsAreTrustedAsReleaseLinks() {
+    void onlyHttpsGithubOrGiteeUrlsAreTrustedAsReleaseLinks() {
         assertThat(VersionService.trustedReleaseUrl("https://github.com/o/r/releases/tag/v1"))
                 .isEqualTo("https://github.com/o/r/releases/tag/v1");
+        assertThat(VersionService
+                .trustedReleaseUrl("https://gitee.com/o/r/releases/tag/v1"))
+                .isEqualTo("https://gitee.com/o/r/releases/tag/v1");
         assertThat(VersionService.trustedReleaseUrl("javascript:alert(1)")).isNull();
         assertThat(VersionService.trustedReleaseUrl("http://github.com/o/r")).isNull();
+        assertThat(VersionService.trustedReleaseUrl("http://gitee.com/o/r")).isNull();
         assertThat(VersionService.trustedReleaseUrl("https://evil.example/github.com/")).isNull();
         assertThat(VersionService.trustedReleaseUrl(null)).isNull();
 
         FakeFeed feed = new FakeFeed();
         feed.latest = release("v1.1.1", "javascript:alert(1)", "b");
         assertThat(service("1.1.1", feed, true).snapshot().getReleaseUrl()).isNull();
+    }
+
+    @Test
+    void snapshotCarriesTheFeedSourceSoThePageCanShowWhichMirrorAnswered() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = new ReleaseFeed.Release("v1.8.0",
+                "https://gitee.com/super_rgh/jync/releases/tag/v1.8.0", PUBLISHED, "body",
+                List.of(), ReleaseFeed.Source.GITEE);
+        VersionInfo info = service("1.7.2", feed, true).snapshot();
+
+        assertThat(info.getState()).isEqualTo(VersionInfo.State.UPDATE_AVAILABLE);
+        assertThat(info.getLatestSource()).isEqualTo(ReleaseFeed.Source.GITEE);
+        assertThat(info.getReleaseUrl()).startsWith("https://gitee.com/");
     }
 
     /** Notes may come from the GitHub release body; a javascript: link must be defused. */

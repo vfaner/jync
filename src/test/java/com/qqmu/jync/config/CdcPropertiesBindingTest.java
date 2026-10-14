@@ -26,6 +26,7 @@ class CdcPropertiesBindingTest {
         assertThat(cdc.getLockTtlMs()).isEqualTo(30_000L);               // 崩溃接管 ≤60s 的前提
         assertThat(cdc.getSuperviseIntervalMs()).isEqualTo(10_000L);
         assertThat(cdc.getConnectTimeoutMs()).isEqualTo(10_000L);
+        assertThat(cdc.getChangeWindowMs()).isEqualTo(10_000L);              // 聚合变更日志 10s 窗口
     }
 
     @Test
@@ -33,12 +34,14 @@ class CdcPropertiesBindingTest {
         runner.withPropertyValues(
                         "sync.cdc.reconnect-backoff-ms=250",
                         "sync.cdc.server-id-offset=700000",
-                        "sync.cdc.lock-ttl-ms=5000")
+                        "sync.cdc.lock-ttl-ms=5000",
+                        "sync.cdc.change-window-ms=0")
                 .run(context -> {
                     SyncProperties props = context.getBean(SyncProperties.class);
                     assertThat(props.getCdc().getReconnectBackoffMs()).isEqualTo(250L);
                     assertThat(props.getCdc().getServerIdOffset()).isEqualTo(700_000L);
                     assertThat(props.getCdc().getLockTtlMs()).isEqualTo(5_000L);
+                    assertThat(props.getCdc().getChangeWindowMs()).isZero();   // 0=关闭聚合日志
                 });
     }
 

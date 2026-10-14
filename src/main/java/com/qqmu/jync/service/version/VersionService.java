@@ -139,6 +139,7 @@ public class VersionService {
                 .latestVersion(c.latestVersion)
                 .releaseUrl(c.releaseUrl)
                 .latestPublishedDate(c.latestPublishedDate)
+                .latestSource(c.latestSource)
                 .build();
     }
 
@@ -176,10 +177,11 @@ public class VersionService {
             cached = new Cached(state, latest.tag(), latestVersion,
                     trustedReleaseUrl(latest.htmlUrl()),
                     latest.publishedAt() == null ? null : DATE.format(latest.publishedAt()),
+                    latest.source(),
                     now.plus(POSITIVE_TTL));
         } catch (Exception e) {
             log.debug("Update check failed: {}", e.toString());
-            cached = new Cached(VersionInfo.State.UNKNOWN, null, null, null, null,
+            cached = new Cached(VersionInfo.State.UNKNOWN, null, null, null, null, null,
                     now.plus(NEGATIVE_TTL));
         }
         return cached;
@@ -228,20 +230,21 @@ public class VersionService {
 
     /**
      * The release link is rendered straight into {@code th:href} and comes from the feed's
-     * JSON. Only an https github.com URL may reach the page — anything else, including a
-     * {@code javascript:} target or an http downgrade, is dropped and the template renders
-     * no link.
+     * JSON. Only an https github.com / gitee.com URL may reach the page — anything else,
+     * including a {@code javascript:} target or an http downgrade, is dropped and the
+     * template renders no link.
      */
     static String trustedReleaseUrl(String url) {
         if (url == null) {
             return null;
         }
         String u = url.trim();
-        return u.startsWith("https://github.com/") ? u : null;
+        return (u.startsWith("https://github.com/") || u.startsWith("https://gitee.com/"))
+                ? u : null;
     }
 
     /** Strips one leading {@code v}: {@code v1.1.1} -> {@code 1.1.1}. */
-    static String stripV(String tag) {
+    public static String stripV(String tag) {
         if (tag == null) {
             return "";
         }
@@ -257,7 +260,7 @@ public class VersionService {
      * {@code 20250923120000} overflow an int, and a parseInt failure here would surface as
      * a permanently UNKNOWN update state rather than an error anyone would notice.
      */
-    static int compareVersions(String a, String b) {
+    public static int compareVersions(String a, String b) {
         String[] sa = stripV(a).split("[^0-9A-Za-z]+");
         String[] sb = stripV(b).split("[^0-9A-Za-z]+");
         int n = Math.max(sa.length, sb.length);
@@ -290,6 +293,7 @@ public class VersionService {
     }
 
     private record Cached(VersionInfo.State state, String latestTag, String latestVersion,
-                          String releaseUrl, String latestPublishedDate, Instant validUntil) {
+                          String releaseUrl, String latestPublishedDate,
+                          ReleaseFeed.Source latestSource, Instant validUntil) {
     }
 }

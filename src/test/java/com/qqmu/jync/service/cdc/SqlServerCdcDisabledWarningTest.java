@@ -78,6 +78,8 @@ class SqlServerCdcDisabledWarningTest {
 
         SyncContext ctx = mock(SyncContext.class);
         when(ctx.getSourceConfig()).thenReturn(new DatabaseConfig());
+        // run() 启动时要解析项目级空闲轮询覆盖(留空=引擎默认);真实 ctx 必带 config。
+        when(ctx.getConfig()).thenReturn(new com.qqmu.jync.dto.SyncConfig());
 
         Project project = new Project();
         project.setId(1L);

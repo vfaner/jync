@@ -38,6 +38,8 @@ import com.qqmu.jync.service.version.VersionService;
         "app.github-url=https://github.com/vfaner/jync",
         "app.gitee-url=https://gitee.com/super_rgh/jync",
         "app.contact-qq=817094/2912167928",
+        "app.contact-qq-group=426669837",
+        "app.contact-email=vfaner@88.com",
         "app.contact-wechat=qqmu66",
         "app.site-url=https://jync.qqmu.com"})
 class SettingsAuthorCardViewTest {
@@ -86,12 +88,56 @@ class SettingsAuthorCardViewTest {
         assertThat(page).contains("https://gitee.com/super_rgh/jync");
         assertThat(page).contains("/assets/github.svg");
         assertThat(page).contains("/assets/gitee.ico");
-        assertThat(page).contains("817094/2912167928");
+        // 两个 QQ 号拆成各自独立的行，不再拼在一个格子里。
+        assertThat(page).contains("817094");
+        assertThat(page).contains("2912167928");
+        assertThat(page).doesNotContain("817094/2912167928");
+        assertThat(page).contains("426669837");
+        assertThat(page).contains("vfaner@88.com");
         assertThat(page).contains("qqmu66");
         // dt tags: the donate dialog has its own 微信 pay tab, so the bare word proves nothing.
         assertThat(page).contains(">微信</dt>");
         assertThat(page).contains(">QQ</dt>");
+        assertThat(page).contains(">QQ群</dt>");
+        assertThat(page).contains(">邮箱</dt>");
         assertThat(page).doesNotContain("??settings.");
+    }
+
+    @Test
+    void qqAccountsAndGroupAreDeepLinksIntoTheQqApp() throws Exception {
+        String page = render();
+
+        // 个人 QQ：tencent://message 直接唤起 QQ 并打开与该账号的临时会话（& 在 HTML 中输出为 &amp;）。
+        for (String qq : List.of("817094", "2912167928")) {
+            assertThat(page).containsPattern(java.util.regex.Pattern.quote(
+                    "tencent://message/?uin=" + qq + "&amp;Site=&amp;Menu=yes"));
+            assertThat(page).containsPattern("<a[^>]*tencent://message/\\?uin=" + qq
+                    + "[^>]*>[^<]*" + qq + "[^<]*</a>");
+        }
+        // QQ 群：mqqapi 群资料卡，已在群内可直接进群聊。
+        assertThat(page).containsPattern(java.util.regex.Pattern.quote(
+                "mqqapi://card/show_pslcard?src_type=internal&amp;version=1"
+                        + "&amp;groupcode=426669837"));
+        // 邮箱：mailto 唤起本地邮件客户端。
+        assertThat(page).containsPattern("<a[^>]*href=\"mailto:vfaner@88\\.com\"[^>]*>"
+                + "[^<]*vfaner@88\\.com[^<]*</a>");
+    }
+
+    @Test
+    void contactsFillTheTwoColumnGridInQqsGroupEmailWechatOrder() throws Exception {
+        String page = render();
+
+        // 双列网格里依次：(QQ①,QQ②) / (QQ群,邮箱) / (微信,官网)——顺序错位会让卡片错排。
+        int qq1 = page.indexOf("tencent://message/?uin=817094");
+        int qq2 = page.indexOf("tencent://message/?uin=2912167928");
+        int group = page.indexOf("groupcode=426669837");
+        int email = page.indexOf("mailto:vfaner@88.com");
+        int wechat = page.indexOf(">qqmu66<");
+        assertThat(qq1).isGreaterThan(-1);
+        assertThat(qq2).isGreaterThan(qq1);
+        assertThat(group).isGreaterThan(qq2);
+        assertThat(email).isGreaterThan(group);
+        assertThat(wechat).isGreaterThan(email);
     }
 
     @Test

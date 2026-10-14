@@ -129,7 +129,9 @@ The key is encrypted like a database password. The probe sends a real request ra
 
 ### System information — runtime settings and version on one page
 
-Instance ID, Java version, scheduled project count, sync defaults, and the concurrency/recovery safeguards are gathered as read-only info. The version card shows the running version, the latest GitHub release, and this version's release notes. The update check runs in the background and never slows the page down — on an air-gapped intranet, the local version number and bundled notes still render normally.
+Instance ID, Java version, scheduled project count, sync defaults, and the concurrency/recovery safeguards are gathered as read-only info. The version card shows the running version, the latest release, and this version's release notes. The update check runs in the background and never slows the page down — it queries the GitHub API first (5 s per-request budget) and falls back to the Gitee mirror on any failure; only when both are unreachable does the card report a failed check and retry later. On an air-gapped intranet the local version number and bundled notes still render normally, and `app.update-check.enabled=false` turns the whole check off.
+
+When a newer release exists, admins get a **one-click upgrade**: pick a download mirror in the dialog (Gitee by default), and the app downloads the new `jync.jar` release asset, verifies it (byte size where the API provides one, zip integrity always) and renames it into place — the running jar survives because every supported platform allows renaming an open jar. The old file is kept as `jync.jar.bak` for a manual rollback. Afterwards choose **Restart now** (a detached helper script waits for the old process to exit, relaunches the jar, and restores the backup automatically if the new process dies or never opens the port) or restart manually later. Once the new version has really booted, the next start-up cleans up the backup and marker files.
 
 ![System information](docs/images/jync_system.png)
 
@@ -146,7 +148,7 @@ Instance ID, Java version, scheduled project count, sync defaults, and the concu
 | **Sync scope** | Table schema, table data, indexes, views, stored procedures and functions |
 | **Auto object creation** | Missing objects are created in the target using the target's dialect |
 | **SQL dialect adaptation** | Type mapping, function-name conversion, identifier quoting, pagination syntax, stored-procedure wrapping |
-| **Real-time sync** | Polling (2s default), or precise orchestration via Cron expressions; MySQL sources can switch per project to Binlog CDC — streamed binlog replay with second-level latency that captures DELETEs too |
+| **Real-time sync** | Polling (2s default), or precise orchestration via Cron expressions; four log-CDC engines (MySQL binlog / Oracle LogMiner / PG logical decoding / SQL Server CDC), each switchable per project — a drained cycle starts the next one immediately (zero extra wait) and only a truly idle cycle sleeps, for second-level latency that captures DELETEs too |
 | **Crash recovery** | Resumes from the last cursor after a restart; changes made while down are backfilled |
 | **Chunked initial load** | The full load commits and checkpoints per primary-key keyset chunk; an interruption resumes at the last chunk instead of re-reading the whole table |
 | **Parallel full load** | Single-column integer-PK tables split into disjoint MIN/MAX ranges copied in parallel (`sync.full-load-parallelism`, capped at 8) |
@@ -245,8 +247,8 @@ Navicat's and DBeaver's "data transfer", and DataX, solve "copy this data across
 
 Being honest about the boundaries:
 
-- **You need millisecond latency** → use Debezium / Flink CDC. [Binlog CDC](#binlog-cdc-mysql) mode (MySQL sources only) delivers second-level latency and replays changes in strict binlog order; a polling design's floor on latency is the poll interval. Binlog CDC does not capture DDL, and non-MySQL sources remain polling-only.
-- **You need physical-delete capture on large tables** → with Binlog CDC (MySQL sources), DELETEs are natively visible and replicated at any table size; other sources keep the polling limitation — without a source-side audit table, delete detection requires comparing full primary-key sets, so it's only enabled below `full-compare-max-rows`.
+- **You need millisecond latency** → use Debezium / Flink CDC. The four built-in [log-CDC](#binlog-cdc-mysql) engines deliver second-level latency (busy cycles replay with zero extra wait); a polling design's floor on latency is the poll interval. Log CDC does not capture DDL.
+- **You need physical-delete capture on large tables** → with any of the four log-CDC engines, DELETEs are natively visible and replicated at any table size; polling keeps the limitation — without a source-side audit table, delete detection requires comparing full primary-key sets, so it's only enabled below `full-compare-max-rows`.
 - **One-time initial load of hundreds of millions of rows** → tools built for bulk throughput, like DataX, will be faster.
 - **You need complex ETL transformation (cleansing, aggregation, multi-stream joins)** → use Kettle / Flink. Jync does **synchronization**, not **transformation**.
 - **Bidirectional multi-master replication** → use SymmetricDS. This tool assumes it is the sole writer to the target.
@@ -813,6 +815,12 @@ Same lease-mutual-exclusion semantics as MySQL / Oracle / PostgreSQL CDC.
 
 Same as the other three CDC strategies: switching triggers a full reload, CDC replicates DELETEs, and switching back to polling retains the position.
 
+### Polling cadence and aggregated change logging
+
+The three polling engines (LogMiner, logical decoding, SQL Server) run their mining cycles back-to-back: **when a cycle drains rows, the next one starts immediately with zero extra wait** — the engine sleeps only on a truly idle cycle, and a failed cycle still uses exponential backoff. Engine defaults for the idle sleep are LogMiner / SQL Server 1s and PostgreSQL 500ms; each project can override the value on the project-detail page (floor 50ms; `cdcIdlePollMs`). The MySQL binlog engine is push-based and has no polling wait at all.
+
+While CDC runs, the change log is **aggregated per table**: at most one row per table every 10 seconds, shaped `N upserts / M deletes (through SCN/LSN/binlog position)`, and the last partial window is flushed when the consumer stops — so peak traffic cannot flood the metadata database with per-row entries. Set `sync.cdc.change-window-ms=0` to disable aggregated entries.
+
 ---
 
 ## Configuration
@@ -839,10 +847,15 @@ Under `sync.*` in `application.yml`:
 | `sync.cdc.supervise-interval-ms` | `10000` | How often each node supervises and grabs wanted CDC leases (ms) |
 | `sync.cdc.connect-timeout-ms` | `10000` | BinaryLogClient handshake timeout (ms) |
 | `sync.cdc.logminer.batch-size` | `10000` | V$LOGMNR_CONTENTS batch fetch size for LogMiner |
-| `sync.cdc.logminer.idle-poll-ms` | `1000` | Idle polling interval (ms) when LogMiner has no new data |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | Idle sleep (ms) when LogMiner has no new data; a busy cycle resumes immediately with zero wait |
+| `sync.cdc.pg.idle-poll-ms` | `500` | Idle sleep (ms) for PG logical decoding |
+| `sync.cdc.mssql.idle-poll-ms` | `1000` | Idle sleep (ms) for SQL Server CDC |
+| `sync.cdc.change-window-ms` | `10000` | Per-table CDC change-log aggregation window (ms); `0` disables aggregated entries |
 | `crypto-password` | *(default)* | Password encryption key — **must be changed in production** |
 | `crypto-salt` | *(default)* | Encryption salt (hex) — **must be changed in production** |
 | `ai.enabled` | `true` | Whether AI-assisted conversion may be configured. `false` removes the menu and its endpoints |
+| `app.update-check.enabled` | `true` | New-version check (GitHub first, Gitee fallback). `false` also removes the in-app upgrade entry point |
+| `app.update-check.timeout-ms` | `5000` | Per-request timeout (ms) of the update check; on timeout the other platform takes over |
 
 Connection passwords are stored encrypted with AES-256 via Spring Security Crypto, marked with an `enc:` prefix to avoid double encryption, and remain compatible with plaintext written before encryption was enabled.
 
@@ -974,7 +987,7 @@ com.qqmu.jync
 mvn test
 ```
 
-847 unit tests, covering:
+1188 unit tests, covering:
 
 - **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
 - **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself
@@ -997,6 +1010,7 @@ mvn test
 - **Real-Oracle integration test** — `OracleMigrationHarnessIT` (testcontainers + an Oracle 23ai Free container; named `*IT` so the default suite skips it, and it disables itself without Docker) proves against a live database: parallel ranged full load of a `NUMBER(18)` key, resume from a checkpoint after an interruption, and the complete `ORA_ROWSCN` chain on a `ROWDEPENDENCIES` table (probe → strategy resolution → an incremental cycle delivering an UPDATE to an already-synced row); run explicitly with `mvn test -Dtest=OracleMigrationHarnessIT` (add `-Dapi.version=1.44` on Docker Engine ≥ 29)
 - **Binlog CDC** — the readiness probe's seven verdicts (version, `log_bin` / `binlog_format` / `binlog_row_image`, `server_id` collision, replication grants, retention, MariaDB rejected); fake server id = offset + project id; row events mapped to idempotent upserts with transaction buffering (DDL invalidates the cached table metadata and drops the buffer, keyless tables skipped, a moved PK upserts the new key *and* deletes the old one, unmappable values skipped pairwise and counted); position discipline (data committed before the position advances; a lost lease never advances it); failure classification (binlog purge / `server_id` collision / auth failure park the project in ERROR until a human acts, transient faults back off exponentially 1s→60s and reset only after a demonstrably live connection); lease mutual exclusion with ≤ 60s takeover; the strategy-switch sequences (to CDC: position cleared, re-baseline; back to polling: position kept, cursors cleared); the README documentation guards
 - **Real-MySQL container integration tests (binlog CDC)** — `CdcBaselineStreamingIT` / `CdcVolumeAndTypesIT` / `CdcResilienceIT` (testcontainers + a real MySQL 8 binlog source; named `*IT` so the default suite skips them, and they **require Docker**, disabling themselves without it) prove against a live database: baseline → streamed continuation, a mid-baseline crash rerunning the whole baseline, 100k-row consistency, the full type-matrix round trip, and the binlog-purge / disconnect failure paths; run explicitly with `mvn test -Dtest=CdcBaselineStreamingIT -Dapi.version=1.44`
+- **Update check & one-click upgrade** — GitHub → Gitee fallback (any GitHub failure flips to the mirror immediately; only a double failure surfaces, naming both feeds); the Gitee v5 payload is parsed with no size field and no `html_url`, so jar verification leans on zip integrity and the browser link is derived; an explicitly chosen download mirror is never silently rerouted; the upgrade rename-dance (a declared-size mismatch or garbage bytes never touch the running jar, the old jar survives as `.bak`, a READY state is rebuilt from the marker file across process restarts, boot cleanup removes the backup only when the target version really booted); bash and PowerShell restart-script generation (wait for the old PID, readiness probe when the port is known, automatic rollback to the backup otherwise); the status poll is admin-only like the rest of the flow
 
 There is also an end-to-end script (H2 source and target, 20 assertions) covering initial full load, incremental inserts, incremental updates, idempotency across repeated syncs, DDL column-addition propagation, **matching row counts with no duplicates under concurrent writes**, concurrent invocations rejected by the lock, **writes made during downtime backfilled after restart**, automatic polling, and change-log / cursor-strategy reporting.
 
@@ -1010,7 +1024,7 @@ There is also an end-to-end script (H2 source and target, 20 assertions) coverin
 - **Row-delete detection** — without a source-side audit table this requires comparing the full primary-key sets on both sides, so it is only enabled for tables below `full-compare-max-rows`.
 - **Tables without a primary key** — idempotency cannot be guaranteed and replay may produce duplicate rows; the tool warns.
 - **Target writers** — the target database is assumed to be written only by this tool.
-- **Latency** — a polling design's latency floor is the poll interval. MySQL sources that need lower latency can switch to the built-in [Binlog CDC](#binlog-cdc-mysql) strategy (streamed binlog replay, second-level latency); for other databases the design can be extended with LogMiner-style log parsing.
+- **Latency** — a polling design's latency floor is the poll interval. Sources that need lower latency can switch to one of the four built-in log-CDC strategies (MySQL binlog, Oracle LogMiner, PG logical decoding, SQL Server CDC; streamed replay with busy cycles running back-to-back, second-level latency).
 
 ---
 
@@ -1024,6 +1038,10 @@ Questions, feature requests and feedback are all welcome:
 | QQ | 2912167928 |
 | QQ Group | 426669837 |
 | WeChat | qqmu66 |
+| Email | [vfaner@88.com](mailto:vfaner@88.com) |
+| Website | <https://jync.qqmu.com> |
+
+In the app's **Settings → Project & author** card, the QQ accounts and the QQ group are clickable deep links that launch the QQ client (a direct chat for a personal account, the group card for the group).
 
 Issues and pull requests are welcome:
 

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.cdc.BinlogCdcProbe;
@@ -91,7 +92,13 @@ public class ConnectionTestService {
         String product = md.getDatabaseProductName() + " " + md.getDatabaseProductVersion();
         String driver = md.getDriverName() + " " + md.getDriverVersion();
         List<CdcProbeResult.Check> cdcChecks = null;
-        if (config.getType() == DatabaseType.MYSQL) {
+        // CDC 就绪检查是源端专属:目标库永远不会被挖掘日志,对 TARGET 连接跑这些检查
+        // (binlog/LogMiner/逻辑复制权限等)只会误导用户。role 在表单为必填,这里对
+        // 历史 null 数据按 SOURCE 处理(字段 backfill 之前默认值就是 SOURCE)。
+        if (config.getRole() == ConnectionRole.TARGET) {
+            log.debug("CDC readiness probe skipped for target connection '{}'",
+                    config.getName());
+        } else if (config.getType() == DatabaseType.MYSQL) {
             try {
                 // 连接页没有项目上下文 → plannedServerId 传 0(只查非 0,不查撞 id)
                 cdcChecks = cdcProbe.probe(conn, 0L).getChecks();
