@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -72,6 +73,10 @@ public class SyncContextFactory {
 
         String sourceSchema = resolveSchema(source, sourceReader);
         String targetSchema = resolveSchema(target, targetReader);
+        // Only the real Oracle product gates identity syntax on this (DM/YashanDB share the
+        // dialect but not Oracle's version numbering — the factory enforces that too).
+        Integer targetMajorVersion = target.getType() == DatabaseType.ORACLE
+                ? resolveMajorVersion(target) : null;
 
         int batchSize = config.getBatchSize() != null && config.getBatchSize() > 0
                 ? config.getBatchSize() : properties.getBatchSize();
@@ -88,7 +93,7 @@ public class SyncContextFactory {
                 .sourceReader(sourceReader)
                 .targetReader(targetReader)
                 .sourceDialect(dialectFactory.forType(source.getType()))
-                .targetDialect(dialectFactory.forType(target.getType()))
+                .targetDialect(dialectFactory.forType(target.getType(), targetMajorVersion))
                 .batchSize(batchSize)
                 .lockOwner(lockOwner)
                 .lockRenewer(lockRenewer)
@@ -99,7 +104,7 @@ public class SyncContextFactory {
     /** Uses the configured schema, or asks the database what the connection's default is. */
     private String resolveSchema(DatabaseConfig config, MetadataReader reader) {
         if (config.getSchemaName() != null && !config.getSchemaName().isBlank()) {
-            return config.getSchemaName().trim();
+            return normalizeConfiguredSchema(config.getType(), config.getSchemaName().trim());
         }
         try (Connection conn = dataSourceManager.getConnection(config)) {
             String schema = reader.resolveDefaultSchema(conn);
@@ -108,6 +113,26 @@ public class SyncContextFactory {
         } catch (SQLException e) {
             throw new IllegalStateException("Cannot connect to '" + config.getName()
                     + "' to determine its schema: " + e.getMessage(), e);
+        }
+    }
+
+    /** Oracle-family dictionaries key unquoted identifiers upper case. */
+    private String normalizeConfiguredSchema(DatabaseType type, String schema) {
+        if (type != null && type.getFamily() == DatabaseType.DialectFamily.ORACLE) {
+            return schema.toUpperCase(java.util.Locale.ROOT);
+        }
+        return schema;
+    }
+
+    /** Target server's major version, or null when the driver won't say — modern syntax wins. */
+    private Integer resolveMajorVersion(DatabaseConfig config) {
+        try (Connection conn = dataSourceManager.getConnection(config)) {
+            int major = conn.getMetaData().getDatabaseMajorVersion();
+            return major > 0 ? major : null;
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not read database major version for '{}'; assuming a modern"
+                    + " release: {}", config.getName(), e.getMessage());
+            return null;
         }
     }
 

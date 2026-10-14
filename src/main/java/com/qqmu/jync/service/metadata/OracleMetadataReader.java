@@ -4,9 +4,16 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Component;
 
+import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
@@ -196,5 +203,148 @@ public class OracleMetadataReader extends GenericMetadataReader {
 
     private String upperOrNull(String s) {
         return s == null || s.isBlank() ? null : s.toUpperCase();
+    }
+
+    /**
+     * Finds autoincrement columns JDBC's {@code IS_AUTOINCREMENT} misses on Oracle-family
+     * servers:
+     * <ul>
+     *   <li>12c+ identity columns listed in {@code ALL_TAB_IDENTITY_COLS} (drivers older than
+     *       the server may leave IS_AUTOINCREMENT empty);</li>
+     *   <li>the pre-12c idiom — an enabled BEFORE-INSERT row trigger that pulls a sequence's
+     *       NEXTVAL into {@code :NEW.col}.</li>
+     * </ul>
+     * Each probe degrades independently: a missing dictionary view (11g, or a look-alike that
+     * does not expose it) only disables that probe.
+     */
+    @Override
+    protected void enrichAutoIncrementColumns(Connection conn, String schema, TableMeta table) {
+        List<ColumnMeta> columns = table.getColumns();
+        if (columns == null || columns.isEmpty()) {
+            return;
+        }
+        Set<String> identityColumns = new LinkedHashSet<>();
+        identityColumns.addAll(queryIdentityColumns(conn, schema, table.getName()));
+        identityColumns.addAll(identityColumnsFromTriggers(
+                columnNamesUpperCase(columns), queryInsertTriggerBodies(conn, schema, table.getName())));
+        if (identityColumns.isEmpty()) {
+            return;
+        }
+        for (ColumnMeta column : columns) {
+            if (column.getName() != null
+                    && identityColumns.contains(column.getName().toUpperCase(Locale.ROOT))) {
+                column.setAutoIncrement(true);
+            }
+        }
+    }
+
+    private static List<String> columnNamesUpperCase(List<ColumnMeta> columns) {
+        return columns.stream()
+                .map(ColumnMeta::getName)
+                .filter(name -> name != null && !name.isBlank())
+                .map(name -> name.toUpperCase(Locale.ROOT))
+                .toList();
+    }
+
+    /** {@code ALL_TAB_IDENTITY_COLS} (12c+); empty on servers without the view. */
+    private Set<String> queryIdentityColumns(Connection conn, String schema, String tableName) {
+        Set<String> columns = new LinkedHashSet<>();
+        String sql = "SELECT COLUMN_NAME FROM ALL_TAB_IDENTITY_COLS "
+                + "WHERE OWNER = NVL(?, USER) AND TABLE_NAME = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, upperOrNull(schema));
+            ps.setString(2, tableName.toUpperCase(Locale.ROOT));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String name = rs.getString(1);
+                    if (name != null) {
+                        columns.add(name.toUpperCase(Locale.ROOT));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            // ORA-00942: view absent on 11g or on look-alikes that do not provide it.
+            log.debug("ALL_TAB_IDENTITY_COLS probe failed for {}: {}", tableName, e.getMessage());
+        }
+        return columns;
+    }
+
+    /**
+     * Bodies of enabled BEFORE-INSERT triggers attached to the table. Timing is read from
+     * TRIGGER_TYPE ({@code BEFORE ...}) rather than the BEFORE_ROW flag: measured on 26ai,
+     * the BEFORE_STATEMENT/BEFORE_ROW/AFTER_* columns are left 'NO' even for a trigger whose
+     * TRIGGER_TYPE is 'BEFORE EACH ROW'. This stays precise anyway — a statement-level
+     * trigger cannot reference :NEW (it would not compile), so the {@code :NEW.col + NEXTVAL}
+     * body heuristic alone admits only row-level before-insert fillers. On a look-alike whose
+     * ALL_TRIGGERS lacks TRIGGER_TYPE the whole query fails and this probe silently degrades.
+     */
+    private List<String> queryInsertTriggerBodies(Connection conn, String schema, String tableName) {
+        List<String> bodies = new ArrayList<>();
+        String sql = "SELECT TRIGGER_BODY FROM ALL_TRIGGERS "
+                + "WHERE OWNER = NVL(?, USER) AND TABLE_NAME = ? AND STATUS = 'ENABLED' "
+                + "AND INSTR(UPPER(TRIGGERING_EVENT), 'INSERT') > 0 "
+                + "AND UPPER(TRIGGER_TYPE) LIKE 'BEFORE%'";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, upperOrNull(schema));
+            ps.setString(2, tableName.toUpperCase(Locale.ROOT));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    // TRIGGER_BODY is LONG; the driver surfaces it as a string here.
+                    String body = rs.getString(1);
+                    if (body != null && !body.isBlank()) {
+                        bodies.add(body);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("ALL_TRIGGERS identity probe failed for {}: {}", tableName, e.getMessage());
+        }
+        return bodies;
+    }
+
+    private static final Pattern NEXTVAL = Pattern.compile("\\.NEXTVAL", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Heuristic behind trigger-based autoincrement detection: among {@code columnNames}, a
+     * column is autoincrement when an enabled BEFORE-INSERT trigger body both references a
+     * sequence ({@code seq.NEXTVAL}) and assigns it into {@code :NEW.col} — via
+     * {@code SELECT ... INTO :NEW.col} or {@code :NEW.col := seq.NEXTVAL}. Audit triggers that
+     * touch {@code :NEW} without a sequence, and bodies without NEXTVAL, match nothing.
+     *
+     * @param columnNames    candidate column names, used verbatim as the result set members
+     * @param triggerBodies enabled BEFORE-INSERT trigger source bodies, nulls tolerated
+     * @return columns (canonical spelling from {@code columnNames}) filled from a sequence
+     */
+    public static Set<String> identityColumnsFromTriggers(List<String> columnNames,
+                                                          List<String> triggerBodies) {
+        Set<String> marked = new LinkedHashSet<>();
+        if (columnNames == null || columnNames.isEmpty() || triggerBodies == null) {
+            return marked;
+        }
+        for (String body : triggerBodies) {
+            if (body == null || body.isBlank() || !NEXTVAL.matcher(body).find()) {
+                continue;
+            }
+            for (String column : columnNames) {
+                if (column == null || column.isBlank() || marked.contains(column)) {
+                    continue;
+                }
+                String quoted = Pattern.quote(column);
+                // SELECT seq.NEXTVAL INTO :NEW.col  (optionally double-quoted)
+                Pattern into = Pattern.compile(
+                        "INTO\\s+:NEW\\.\"?" + quoted + "\"?(?![A-Z0-9_$#])",
+                        Pattern.CASE_INSENSITIVE);
+                // :NEW.col := seq.NEXTVAL
+                Pattern assign = Pattern.compile(
+                        ":NEW\\.\"?" + quoted + "\"?\\s*:=[^;]*\\.NEXTVAL",
+                        Pattern.CASE_INSENSITIVE);
+                if (into.matcher(body).find() || assign.matcher(body).find()) {
+                    marked.add(column);
+                }
+            }
+        }
+        return marked;
     }
 }

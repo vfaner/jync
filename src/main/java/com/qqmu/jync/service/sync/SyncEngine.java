@@ -435,7 +435,8 @@ public class SyncEngine {
         }
         String reason;
         try {
-            reason = TargetTableVerifier.verify(targetConn, schema, targetTable, table);
+            reason = TargetTableVerifier.verify(targetConn, schema, targetTable, table,
+                    ctx.getTargetType());
         } catch (SQLException e) {
             log.debug("Could not verify target table {} columns: {}", targetTable, e.getMessage());
             return true;
@@ -599,6 +600,12 @@ public class SyncEngine {
                     System.currentTimeMillis() - tableStart);
             // The cursor is intentionally left untouched so this window is retried.
             return;
+        }
+
+        if (firstLoad) {
+            // Explicit-id bulk loads leave a freshly created identity/sequence at 1; advance it
+            // past the highest id now in the table. Best effort and non-fatal.
+            dataSync.reseedIdentityAfterInitialLoad(targetConn, table, ctx);
         }
 
         int deleted = 0;

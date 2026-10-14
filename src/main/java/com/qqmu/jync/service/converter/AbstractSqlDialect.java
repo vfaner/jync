@@ -38,8 +38,18 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         // Any other embedded quote char is doubled, which is how every symmetric-quote
         // product escapes it inside a quoted identifier. Stripping it instead would
         // silently rename the object: a column really named a"b would become ab.
-        String escaped = name.replace(String.valueOf(q), "" + q + q);
+        String escaped = normalizeBareIdentifier(name).replace(String.valueOf(q), "" + q + q);
         return q + escaped + q;
+    }
+
+    /**
+     * Normalizes an unquoted identifier before it is wrapped. The default keeps the name as
+     * reported by the source; dialects whose dictionary folds unquoted names (Oracle folds to
+     * upper case) override it so generated DDL/DML lands on the conventional object instead
+     * of a quoted, case-sensitive twin.
+     */
+    protected String normalizeBareIdentifier(String name) {
+        return name;
     }
 
     protected abstract char quoteChar();

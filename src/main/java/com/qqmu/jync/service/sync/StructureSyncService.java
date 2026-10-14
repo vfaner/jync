@@ -210,6 +210,14 @@ public class StructureSyncService {
         // crashed before its snapshot was written.
         boolean created = executor.executeIdempotentCreate(createSql);
 
+        // Version-gated companions: sequence + trigger emulating an identity column on
+        // pre-12c Oracle. A failure here blocks the table (its autoincrement contract is
+        // unfulfilled), so let the SQLException surface to apply()'s failure handling.
+        for (String extra : dialect.getPostCreateTableDdl(table, ctx.getTargetSchema(),
+                targetTable, ctx.getSourceType())) {
+            executor.executeIdempotentCreate(extra);
+        }
+
         int indexCount = 0;
         if (ctx.getConfig().isSyncIndexes()) {
             boolean anyQueued = false;
@@ -241,6 +249,15 @@ public class StructureSyncService {
         return ApplyOutcome.ok(detail);
     }
 
+    /** Runs the dialect's ADD/MODIFY companions (pre-12c Oracle identity emulation). */
+    private void runPostColumnDdl(DdlExecutor executor, SqlDialect dialect, String targetTable,
+                                  ColumnMeta column, SyncContext ctx) throws SQLException {
+        for (String extra : dialect.getPostColumnChangeDdl(
+                ctx.getTargetSchema(), targetTable, column, ctx.getSourceType())) {
+            executor.executeIdempotentCreate(extra);
+        }
+    }
+
     private ApplyOutcome applyColumn(DdlExecutor executor, ChangeEvent event, SyncContext ctx)
             throws SQLException {
         ColumnMeta column = (ColumnMeta) event.getPayload();
@@ -251,6 +268,7 @@ public class StructureSyncService {
             case CREATE:
                 executor.executeIdempotentCreate(dialect.getAddColumnSql(
                         ctx.getTargetSchema(), targetTable, column, ctx.getSourceType()));
+                runPostColumnDdl(executor, dialect, targetTable, column, ctx);
                 return ApplyOutcome.ok("Added column " + column.getName() + " to " + targetTable);
             case ALTER:
                 if (!dialect.supportsAlterColumnType()) {
@@ -258,6 +276,7 @@ public class StructureSyncService {
                 }
                 executor.execute(dialect.getModifyColumnSql(
                         ctx.getTargetSchema(), targetTable, column, ctx.getSourceType()), false);
+                runPostColumnDdl(executor, dialect, targetTable, column, ctx);
                 return ApplyOutcome.ok("Modified column " + column.getName() + " on " + targetTable);
             case DROP:
                 if (!ctx.getConfig().isAllowDrop()) {

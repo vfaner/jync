@@ -198,9 +198,23 @@ public class GenericMetadataReader implements MetadataReader {
         }
         table.getColumns().sort((a, b) -> Integer.compare(a.getOrdinalPosition(), b.getOrdinalPosition()));
 
+        // Product-specific autoincrement detection beyond JDBC IS_AUTOINCREMENT (e.g. the
+        // 11g sequence+trigger emulation, or identity views the driver misreports).
+        enrichAutoIncrementColumns(conn, schema, table);
+
         table.setIndexes(readIndexes(conn, schema, tableName, pkUpper));
         table.setForeignKeys(readForeignKeys(conn, schema, tableName));
         return table;
+    }
+
+    /**
+     * Product-specific autoincrement enrichment after the JDBC column read. The generic
+     * reader trusts IS_AUTOINCREMENT alone; Oracle adds the 12c identity dictionary view and
+     * the pre-12c sequence+trigger heuristic. Failures must stay non-fatal.
+     */
+    protected void enrichAutoIncrementColumns(Connection conn, String schema, TableMeta table)
+            throws SQLException {
+        // no-op by default
     }
 
     /** {@code IS_AUTOINCREMENT} is optional in JDBC; absence is not an error. */

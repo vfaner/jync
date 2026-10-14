@@ -52,6 +52,49 @@ public interface SqlDialect {
         return null;
     }
 
+    /**
+     * Returns a dialect instance configured for the connected target server's major version,
+     * or {@code this} when the dialect's SQL is version-independent. Used for products whose
+     * identity syntax changed across releases (Oracle 12c introduced AS IDENTITY).
+     */
+    default SqlDialect withServerMajorVersion(Integer majorVersion) {
+        return this;
+    }
+
+    /**
+     * DDL that must run right after CREATE TABLE, one statement per list entry — e.g. the
+     * sequence and trigger that emulate an identity column on products without native support.
+     * Empty on every modern dialect.
+     */
+    default List<String> getPostCreateTableDdl(TableMeta table, String schema, String tableName,
+                                               DatabaseType sourceType) {
+        return List.of();
+    }
+
+    /**
+     * DDL that must run after an ADD/MODIFY COLUMN, mirroring {@link #getPostCreateTableDdl}
+     * for the single-column change path.
+     */
+    default List<String> getPostColumnChangeDdl(String schema, String table, ColumnMeta column,
+                                                DatabaseType sourceType) {
+        return List.of();
+    }
+
+    /**
+     * DDL that advances the column's value generator so the next omitted-value insert lands on
+     * {@code nextValue} (typically MAX(column) + 1 after an initial load). Empty for dialects
+     * without a generator. Statements are best-effort: a failure is logged, not fatal.
+     */
+    default List<String> getIdentityReseedDdl(String schema, String table, ColumnMeta column,
+                                              long nextValue) {
+        return List.of();
+    }
+
+    /** {@code SELECT MAX("col") FROM "schema"."table"} in this dialect's quoting. */
+    default String getMaxValueSql(String schema, String table, String column) {
+        return "SELECT MAX(" + quoteIdentifier(column) + ") FROM " + qualify(schema, table);
+    }
+
     /** Wraps an identifier so reserved words and mixed case survive. */
     String quoteIdentifier(String name);
 

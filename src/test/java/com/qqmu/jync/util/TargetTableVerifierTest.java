@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.model.DatabaseType;
 
 /**
  * P2: an existing target table of the right name but wrong shape must be named as the blocker,
@@ -206,9 +207,36 @@ class TargetTableVerifierTest {
         assertThat(reason).contains("incompatible type");
     }
 
+    @Test
+    void oracleFamilyFoldsTheLookupNameToUpperCase() throws SQLException {
+        // H2 — like Oracle — stores unquoted identifiers upper case. With an Oracle-family
+        // target the verifier must fold the request the same way the DDL now does.
+        createTarget("CREATE TABLE orders (id BIGINT, name VARCHAR(100))");
+
+        String reason = TargetTableVerifier.verify(conn, null, "orders",
+                source(col("ID", Types.BIGINT), col("NAME", Types.VARCHAR)),
+                DatabaseType.ORACLE);
+
+        assertThat(reason).isNull();
+    }
+
+    @Test
+    void nonFoldingDialectWithLowercaseRequestKeepsReportingMissingColumns() throws SQLException {
+        // Control case: without the Oracle-family fold, the lowercase pattern "orders" does
+        // not match H2/Oracle dictionary rows keyed ORDERS.
+        createTarget("CREATE TABLE orders (id BIGINT)");
+
+        String reason = TargetTableVerifier.verify(conn, null, "orders",
+                source(col("ID", Types.BIGINT), col("NAME", Types.VARCHAR)),
+                DatabaseType.MYSQL);
+
+        assertThat(reason).contains("missing column ID");
+    }
+
     private void createTarget(String sql) throws SQLException {
         try (Statement st = conn.createStatement()) {
             st.execute("DROP TABLE IF EXISTS T");
+            st.execute("DROP TABLE IF EXISTS ORDERS");
             st.execute(sql);
         }
     }

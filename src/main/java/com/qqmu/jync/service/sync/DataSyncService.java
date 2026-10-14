@@ -24,8 +24,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.ChunkCheckpoint;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
@@ -1722,6 +1724,96 @@ public class DataSyncService {
             executor.execute("DELETE FROM "
                     + ctx.getTargetDialect().qualify(ctx.getTargetSchema(), targetTable), false);
             log.info("Deleted all rows from target table {} before initial load", targetTable);
+        }
+    }
+
+    /**
+     * Advances the target table's autoincrement generator past the ids just loaded.
+     *
+     * <p>Initial load inserts every id explicitly, which leaves a freshly created 12c identity
+     * sequence (or the pre-12 sequence+trigger emulation) sitting at 1; the next application
+     * insert that omits the id would then collide (ORA-00001). Oracle-family targets only —
+     * other dialects return no reseed statements. Best effort: a failure is logged, never
+     * thrown, since the loaded data itself is correct and the generator can be advanced manually.
+     */
+    public void reseedIdentityAfterInitialLoad(Connection targetConn, TableMeta table,
+                                               SyncContext ctx) {
+        if (ctx.getTargetType() == null
+                || ctx.getTargetType().getFamily() != DatabaseType.DialectFamily.ORACLE) {
+            return;
+        }
+        ColumnMeta identityColumn = singleAutoIncrementPrimaryKey(table);
+        if (identityColumn == null) {
+            return;
+        }
+        SqlDialect dialect = ctx.getTargetDialect();
+        String targetTable = ctx.getConfig().targetTableName(table.getName());
+
+        long maxId;
+        try {
+            maxId = queryMaxValue(targetConn,
+                    dialect.getMaxValueSql(ctx.getTargetSchema(), targetTable,
+                            identityColumn.getName()));
+        } catch (SQLException e) {
+            log.warn("Could not read MAX({}) from {} to advance its identity generator: {}",
+                    identityColumn.getName(), targetTable, e.getMessage());
+            return;
+        }
+        // MAX never returns a row without a value, but an empty table yields SQL NULL: nothing
+        // loaded, the new generator already starts at 1.
+        if (maxId < 0) {
+            return;
+        }
+
+        List<String> statements = dialect.getIdentityReseedDdl(
+                ctx.getTargetSchema(), targetTable, identityColumn, maxId + 1);
+        DdlExecutor executor = new DdlExecutor(targetConn);
+        for (String ddl : statements) {
+            try {
+                executor.execute(ddl, false);
+            } catch (SQLException e) {
+                // The legacy first statement drops a sequence we own; if it is absent (a table
+                // prepared manually), drop it from this attempt but still create/replace the rest.
+                if (ddl.startsWith("DROP ")) {
+                    log.debug("Best-effort DDL failed (continuing reseed): {}", ddl);
+                    continue;
+                }
+                log.warn("Identity generator reseed for {} failed ({}); later inserts without an"
+                        + " explicit id may collide until it is advanced manually.", targetTable,
+                        e.getMessage());
+                return;
+            }
+        }
+        if (!statements.isEmpty()) {
+            log.info("Advanced identity generator for {} past loaded id {}", targetTable, maxId);
+        }
+    }
+
+    /** The single-column primary key when it is autoincrement, otherwise null. */
+    private static ColumnMeta singleAutoIncrementPrimaryKey(TableMeta table) {
+        List<String> primaryKeys = table.getPrimaryKeys();
+        if (primaryKeys == null || primaryKeys.size() != 1 || table.getColumns() == null) {
+            return null;
+        }
+        String keyColumn = primaryKeys.get(0);
+        for (ColumnMeta column : table.getColumns()) {
+            if (column.isAutoIncrement() && keyColumn != null
+                    && keyColumn.equalsIgnoreCase(column.getName())) {
+                return column;
+            }
+        }
+        return null;
+    }
+
+    /** @return the column maximum, or -1 when the table is empty. */
+    private static long queryMaxValue(Connection conn, String sql) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+                ResultSet rs = ps.executeQuery()) {
+            if (rs.next()) {
+                long value = rs.getLong(1);
+                return rs.wasNull() ? -1L : value;
+            }
+            return -1L;
         }
     }
 }
