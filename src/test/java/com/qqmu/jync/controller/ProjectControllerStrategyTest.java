@@ -289,6 +289,27 @@ class ProjectControllerStrategyTest {
         assertThat(degraded).doesNotContain("badge-recommend");
     }
 
+    @Test
+    void explicitlySavedPollingStaysPollingEvenWhenCdcProbePasses() throws Exception {
+        // 回归:用户显式保存 POLLING(raw 字段已写值)后,即便 binlog 探测通过、
+        // 且尚未跑过同步,也不得再把 CDC 推荐回选——否则轮询项目永远停不住轮询。
+        stubStrategyDetail(DatabaseType.MYSQL, CaptureStrategy.POLLING);
+        CdcProbeResult passing = CdcProbeResult.of(List.of(
+                CdcProbeResult.Check.of(CdcProbeResult.VERSION, true, "MySQL 8.0.36")));
+        when(cdcOperationsService.probeProject(1L)).thenReturn(passing);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("data-original-strategy=\"POLLING\"");
+        assertThat(cardOf(page, "POLLING")).contains("picked").contains("checked");
+        assertThat(cardOf(page, "BINLOG_CDC")).doesNotContain("picked").doesNotContain("checked");
+        assertThat(page).doesNotContain("badge-recommend");
+        // 显式 POLLING 项目绝不该去碰 binlog 探测(性能 + 语义双重理由)。
+        verify(cdcOperationsService, never()).probeProject(anyLong());
+    }
+
     // —— CDC 面板轻量片段端点(5 秒刷新的新目标)+ 停用项目重建基线提示 ——
 
     @Test

@@ -187,8 +187,12 @@ public class ProjectController {
         CdcProbeResult cdcProbe = null;
         boolean cdcRecommended = false;
         CaptureStrategy recommendedStrategy = null;
+        // Recommendation only pre-selects CDC for a project the user has NEVER explicitly
+        // configured (raw field absent). Gating on current==POLLING is wrong: getCaptureStrategyOrDefault()
+        // maps both "field absent" and "user saved POLLING" to POLLING, so a saved polling project would
+        // be re-overridden back to CDC on every render (it could never stay polling).
         if ((isMysqlSource || isOracleSource || isPostgresSource || isSqlServerSource)
-                && current == CaptureStrategy.POLLING && progressList.isEmpty()) {
+                && config.getCaptureStrategy() == null && progressList.isEmpty()) {
             // A brand-new MySQL/Oracle/PG/SQLServer project that never synced: probe live
             // and preselect the CDC card when it passes. A failing probe must never block
             // rendering — same rule as B2 (a failed probe does not block saving).
