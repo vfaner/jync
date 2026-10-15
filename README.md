@@ -119,7 +119,25 @@ java -jar jync.jar --spring.config.additional-location=file:./application.yml
 >
 > 🔐 `crypto-password` / `crypto-salt` 加密存储的数据库密码，发行包带默认值，**生产必须改**；改后旧密码需重填。
 
-**后台常驻**：systemd 单元把 `ExecStart` 指向上面的启动命令（`WorkingDirectory=/opt/jync`，`Restart=always`）即可；快速验证用 `nohup java -jar jync.jar > /dev/null 2>&1 &`。**容器部署**：仓库自带 `Dockerfile`、`docker-compose.yml` 与 `deploy/k8s/`（Kustomize），环境变量、TLS、升级与排障见 [docs/deploy-container.md](docs/deploy-container.md)。**升级**：停服 → 替换 jar → 启动，表结构随 `ddl-auto: update` 自动演进，**升级前备份 `./data`**；停机期间源库变更重启后自动补齐。
+**后台常驻**：systemd 单元把 `ExecStart` 指向上面的启动命令（`WorkingDirectory=/opt/jync`，`Restart=always`）即可；快速验证用 nohup，同样建议带上外部配置：
+
+```bash
+cd /opt/jync
+nohup java -jar jync.jar --spring.config.additional-location=file:./application.yml \
+  > /dev/null 2>&1 &
+```
+
+**容器部署（Docker / Compose / Kubernetes）**：仓库自带多阶段构建 `Dockerfile`（运行镜像仅 JRE、非 root 运行、内置 HEALTHCHECK）、`docker-compose.yml` 与 `deploy/k8s/`（Kustomize）。一条命令起服务，元数据与日志落在宿主机 `./data`、`./logs`，重建镜像不丢数据：
+
+```bash
+docker compose up -d --build      # 或：docker build -t jync:1.7.3 . && docker run -d \
+                                  #   -p 8080:8080 -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
+                                  #   --restart unless-stopped jync:1.7.3
+```
+
+环境变量覆盖、TLS、多实例扩容、镜像升级与排障见 [docs/deploy-container.md](docs/deploy-container.md)。
+
+**升级**：停服 → 替换 jar → 启动，表结构随 `ddl-auto: update` 自动演进，**升级前备份 `./data`**；停机期间源库变更重启后自动补齐。设置页内置版本检查与一键升级（管理员）：先查 GitHub、5 秒不通转 Gitee，双源失败提示稍后重试；新版可在页面内直接下载替换 jar 并引导重启，详见下文「版本检查与一键升级」。
 
 ---
 
@@ -281,7 +299,7 @@ com.qqmu.jync
 mvn test
 ```
 
-1188 个单元测试，重点覆盖：各方言幂等 upsert 与类型上限不变量；SQL 正文改写不碰字面量 / 注释；游标策略解析与降级、Oracle 行级 SCN 探测；游标序列化往返；密码加密与 AI 密钥加密；AI 启用互斥与应答解析（含截断围栏、拒答、空应答）；候选校验在 H2 实库确认不留残留、同名对象内容不变；页面渲染全条件分支且无 `??`；授权规则（访客 POST 全拒、CSRF 缺失即拒）；分页窗口与省略号展开；立即同步补跑合并；分块全量 keyset SQL 形状、检查点生命周期、并行分段不重叠与 long 溢出回退；日志 CDC 探测七项、位点纪律（先数据后位点）、租约互斥与切换序列；版本检查 GitHub→Gitee 双通道兜底；一键升级的下载校验、改名替换与备份、marker 状态恢复、重启/回滚脚本生成；README 文档守卫。
+1189 个单元测试，重点覆盖：各方言幂等 upsert 与类型上限不变量；SQL 正文改写不碰字面量 / 注释；游标策略解析与降级、Oracle 行级 SCN 探测；游标序列化往返；密码加密与 AI 密钥加密；AI 启用互斥与应答解析（含截断围栏、拒答、空应答）；候选校验在 H2 实库确认不留残留、同名对象内容不变；页面渲染全条件分支且无 `??`；授权规则（访客 POST 全拒、CSRF 缺失即拒）；分页窗口与省略号展开；立即同步补跑合并；分块全量 keyset SQL 形状、检查点生命周期、并行分段不重叠与 long 溢出回退；日志 CDC 探测七项、位点纪律（先数据后位点）、租约互斥与切换序列；版本检查 GitHub→Gitee 双通道兜底；一键升级的下载校验、改名替换与备份、marker 状态恢复、重启/回滚脚本生成；hidden 属性显示契约（作者 display 样式不得压过 hidden）；README 文档守卫。
 
 真实库集成测试（`*IT`，不进默认套件，需 Docker）：`OracleMigrationHarnessIT`（Oracle 23ai：并行分段全量、kill 后续传、`ROWDEPENDENCIES` 全链路）、`CdcBaselineStreamingIT` / `CdcVolumeAndTypesIT` / `CdcResilienceIT`（MySQL 8 binlog：基线→流式、崩溃重跑、十万行一致、purge 与断线故障）。显式运行加 `-Dapi.version=1.44`。另有端到端脚本（H2 源/目标，20 项断言）覆盖全量、增量、幂等、DDL 传播、并发写入一致与停机补齐。
 

@@ -390,10 +390,29 @@ sudo systemctl status jync
 
 ```bash
 cd /opt/jync
-nohup java -jar jync.jar > /dev/null 2>&1 &
+nohup java -jar jync.jar --spring.config.additional-location=file:./application.yml \
+  > /dev/null 2>&1 &
 ```
 
-### 6. Upgrading
+Omit the `additional-location` argument only for a throwaway trial that runs purely on the jar's built-in defaults.
+
+### 6. Docker deployment (Docker / Compose / Kubernetes)
+
+The repo ships a multi-stage `Dockerfile` (the runtime image contains just the JRE, runs as a non-root user and includes a HEALTHCHECK), a `docker-compose.yml`, and `deploy/k8s/` (Kustomize). One command brings the service up; metadata and logs live in the host's `./data` and `./logs`, so rebuilding or replacing the image never loses data:
+
+```bash
+docker compose up -d --build
+
+# or, without Compose:
+docker build -t jync:1.7.3 .
+docker run -d --name jync -p 8080:8080 \
+  -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
+  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.7.3
+```
+
+Environment-variable overrides (HTTPS cookies, external MySQL for multi-instance setups), TLS, horizontal scaling with more than one replica, image upgrades and troubleshooting are covered in [docs/deploy-container.md](docs/deploy-container.md).
+
+### 7. Upgrading
 
 ```bash
 sudo systemctl stop jync
@@ -987,7 +1006,7 @@ com.qqmu.jync
 mvn test
 ```
 
-1188 unit tests, covering:
+1189 unit tests, covering:
 
 - **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
 - **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself
@@ -1011,6 +1030,7 @@ mvn test
 - **Binlog CDC** — the readiness probe's seven verdicts (version, `log_bin` / `binlog_format` / `binlog_row_image`, `server_id` collision, replication grants, retention, MariaDB rejected); fake server id = offset + project id; row events mapped to idempotent upserts with transaction buffering (DDL invalidates the cached table metadata and drops the buffer, keyless tables skipped, a moved PK upserts the new key *and* deletes the old one, unmappable values skipped pairwise and counted); position discipline (data committed before the position advances; a lost lease never advances it); failure classification (binlog purge / `server_id` collision / auth failure park the project in ERROR until a human acts, transient faults back off exponentially 1s→60s and reset only after a demonstrably live connection); lease mutual exclusion with ≤ 60s takeover; the strategy-switch sequences (to CDC: position cleared, re-baseline; back to polling: position kept, cursors cleared); the README documentation guards
 - **Real-MySQL container integration tests (binlog CDC)** — `CdcBaselineStreamingIT` / `CdcVolumeAndTypesIT` / `CdcResilienceIT` (testcontainers + a real MySQL 8 binlog source; named `*IT` so the default suite skips them, and they **require Docker**, disabling themselves without it) prove against a live database: baseline → streamed continuation, a mid-baseline crash rerunning the whole baseline, 100k-row consistency, the full type-matrix round trip, and the binlog-purge / disconnect failure paths; run explicitly with `mvn test -Dtest=CdcBaselineStreamingIT -Dapi.version=1.44`
 - **Update check & one-click upgrade** — GitHub → Gitee fallback (any GitHub failure flips to the mirror immediately; only a double failure surfaces, naming both feeds); the Gitee v5 payload is parsed with no size field and no `html_url`, so jar verification leans on zip integrity and the browser link is derived; an explicitly chosen download mirror is never silently rerouted; the upgrade rename-dance (a declared-size mismatch or garbage bytes never touch the running jar, the old jar survives as `.bak`, a READY state is rebuilt from the marker file across process restarts, boot cleanup removes the backup only when the target version really booted); bash and PowerShell restart-script generation (wait for the old PID, readiness probe when the port is known, automatic rollback to the backup otherwise); the status poll is admin-only like the rest of the flow
+- **Hidden-attribute contract** — the stylesheet must keep `[hidden] { display: none !important; }`, since author display rules on `.badge` / `.alert` / `.modal-actions` would otherwise override the UA rule and leave "hidden" elements (e.g. the restart-pending badge) permanently visible
 
 There is also an end-to-end script (H2 source and target, 20 assertions) covering initial full load, incremental inserts, incremental updates, idempotency across repeated syncs, DDL column-addition propagation, **matching row counts with no duplicates under concurrent writes**, concurrent invocations rejected by the lock, **writes made during downtime backfilled after restart**, automatic polling, and change-log / cursor-strategy reporting.
 

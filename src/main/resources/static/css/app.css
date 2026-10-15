@@ -105,6 +105,11 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 属性只靠 UA 样式表的 [hidden]{display:none} 生效，作者样式里任何 display
+   声明都能压过它（.badge/.alert/.modal-actions 都设了 display）——加 !important 兜底，
+   否则"隐藏"的元素照旧显示（升级待重启徽章曾在已最新版上常驻就是这个原因）。 */
+[hidden] { display: none !important; }
+
 /* 细七彩滚动条：8px 宽、两端胶囊形、轨道透明 */
 /* Firefox 不支持 ::-webkit-scrollbar；标准属性须隔离，否则 Chrome 121+ 会弃用七彩样式 */
 @supports (-moz-appearance: none) {
