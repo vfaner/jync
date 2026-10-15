@@ -11,9 +11,13 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.List;
 
+import java.time.Duration;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.oracle.OracleContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -50,6 +54,18 @@ class OracleTargetIdentityIT {
             new OracleContainer(DockerImageName.parse("gvenzl/oracle-free:23"))
                     .withStartupTimeoutSeconds(600);
 
+    /**
+     * Real 11.2 XE. The testcontainers {@code OracleContainer} is 18c+/PDB-oriented (it pins
+     * the freepdb1 service), so 11g's non-CDB {@code XE} service is driven directly with the
+     * same env vars the manual image documents.
+     */
+    private static final GenericContainer<?> ORACLE_11 =
+            new GenericContainer<>(DockerImageName.parse("gvenzl/oracle-xe:11-slim"))
+                    .withExposedPorts(1521)
+                    .withEnv("ORACLE_PASSWORD", "jync123")
+                    .waitingFor(Wait.forLogMessage(".*DATABASE IS READY TO USE!.*\\n", 1))
+                    .withStartupTimeout(Duration.ofSeconds(900));
+
     private static Connection conn;
     private static OracleDialect modern;
     private static OracleDialect legacy;
@@ -59,7 +75,7 @@ class OracleTargetIdentityIT {
         ORACLE.start();
         conn = DriverManager.getConnection(ORACLE.getJdbcUrl(),
                 ORACLE.getUsername(), ORACLE.getPassword());
-        modern = new OracleDialect();
+        modern = new OracleDialect(23);
         legacy = new OracleDialect(11);
     }
 
@@ -180,6 +196,65 @@ class OracleTargetIdentityIT {
         assertThat(legId.isAutoIncrement())
                 .as("pre-12c sequence+trigger emulation reconstructed from ALL_TRIGGERS").isTrue();
         assertThat(generatedIdFor("LEG", "trigger-fed")).isEqualTo(1L);
+    }
+
+    // --- real 11g XE: detection and portable emulation ------------------------------------
+
+    @Test
+    void elevenGTargetIsDetectedAndRunsTheSequenceTriggerEmulationEndToEnd() throws SQLException {
+        ORACLE_11.start();
+        String url11 = "jdbc:oracle:thin:@//" + ORACLE_11.getHost() + ":"
+                + ORACLE_11.getMappedPort(1521) + "/XE";
+        try (Connection c11 = DriverManager.getConnection(url11, "SYSTEM", "jync123")) {
+
+            // The gate's input: the driver must report 11 against a real 11.2 server.
+            assertThat(c11.getMetaData().getDatabaseMajorVersion()).isEqualTo(11);
+
+            TableMeta table = ordersMeta("LEG11");
+            dropTableQuietly(c11, "LEG11");
+
+            // The modern clause is genuinely rejected by 11g (parser error, not our choice).
+            String identityCreate = modern.getCreateTableSql(table, null, "LEG11",
+                    DatabaseType.MYSQL);
+            try (Statement st = c11.createStatement()) {
+                st.execute(identityCreate);
+                org.junit.jupiter.api.Assertions.fail(
+                        "11g must reject AS IDENTITY, but accepted: " + identityCreate);
+            } catch (SQLException expected) {
+                // 11.2 reports ORA-00907 or ORA-02000 depending on patch level; both parse.
+                assertThat(expected.getErrorCode()).isIn(907, 2000);
+            }
+
+            // The version-gated path the app actually takes: plain column, then sequence
+            // and BEFORE-INSERT trigger.
+            String create = legacy.getCreateTableSql(table, null, "LEG11", DatabaseType.MYSQL);
+            try (Statement st = c11.createStatement()) {
+                st.execute(create);
+                for (String extra : legacy.getPostCreateTableDdl(table, null, "LEG11",
+                        DatabaseType.MYSQL)) {
+                    st.execute(extra);
+                }
+                // Explicit id (bulk sync) kept; omitted id fed by the trigger.
+                st.execute("INSERT INTO \"LEG11\" (\"ID\", \"NAME\") VALUES (77, 'explicit')");
+                st.execute("INSERT INTO \"LEG11\" (\"NAME\") VALUES ('trigger-fed')");
+                try (ResultSet rs = st.executeQuery(
+                        "SELECT \"ID\" FROM \"LEG11\" ORDER BY \"ID\"")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getLong(1)).isEqualTo(1L);
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getLong(1)).isEqualTo(77L);
+                }
+            }
+        }
+    }
+
+    private static void dropTableQuietly(Connection target, String name) {
+        try (Statement st = target.createStatement()) {
+            st.execute("BEGIN EXECUTE IMMEDIATE 'DROP TABLE \"" + name
+                    + "\" CASCADE CONSTRAINTS'; EXCEPTION WHEN OTHERS THEN NULL; END;");
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     // --- helpers --------------------------------------------------------------------------

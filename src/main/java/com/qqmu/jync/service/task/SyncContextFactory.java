@@ -14,6 +14,7 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.connection.OracleVersionResolver;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
@@ -30,6 +31,7 @@ public class SyncContextFactory {
     private final DataSourceManager dataSourceManager;
     private final MetadataReaderFactory readerFactory;
     private final SqlDialectFactory dialectFactory;
+    private final OracleVersionResolver oracleVersionResolver;
     private final SyncProperties properties;
     private final ObjectMapper objectMapper;
 
@@ -37,12 +39,14 @@ public class SyncContextFactory {
                               DataSourceManager dataSourceManager,
                               MetadataReaderFactory readerFactory,
                               SqlDialectFactory dialectFactory,
+                              OracleVersionResolver oracleVersionResolver,
                               SyncProperties properties,
                               ObjectMapper objectMapper) {
         this.databaseConfigRepository = databaseConfigRepository;
         this.dataSourceManager = dataSourceManager;
         this.readerFactory = readerFactory;
         this.dialectFactory = dialectFactory;
+        this.oracleVersionResolver = oracleVersionResolver;
         this.properties = properties;
         this.objectMapper = objectMapper;
     }
@@ -73,10 +77,10 @@ public class SyncContextFactory {
 
         String sourceSchema = resolveSchema(source, sourceReader);
         String targetSchema = resolveSchema(target, targetReader);
-        // Only the real Oracle product gates identity syntax on this (DM/YashanDB share the
-        // dialect but not Oracle's version numbering — the factory enforces that too).
+        // Effective (product vs COMPATIBLE) version for the real product; DM/YashanDB are
+        // routed by the dialect factory itself, not by this number.
         Integer targetMajorVersion = target.getType() == DatabaseType.ORACLE
-                ? resolveMajorVersion(target) : null;
+                ? resolveEffectiveMajorVersion(target) : null;
 
         int batchSize = config.getBatchSize() != null && config.getBatchSize() > 0
                 ? config.getBatchSize() : properties.getBatchSize();
@@ -124,14 +128,16 @@ public class SyncContextFactory {
         return schema;
     }
 
-    /** Target server's major version, or null when the driver won't say — modern syntax wins. */
-    private Integer resolveMajorVersion(DatabaseConfig config) {
+    /**
+     * Target server's effective major version, or null when it cannot be resolved — the
+     * dialect then uses the sequence+trigger emulation, valid on every release.
+     */
+    private Integer resolveEffectiveMajorVersion(DatabaseConfig config) {
         try (Connection conn = dataSourceManager.getConnection(config)) {
-            int major = conn.getMetaData().getDatabaseMajorVersion();
-            return major > 0 ? major : null;
+            return oracleVersionResolver.resolveEffectiveMajorVersion(conn);
         } catch (SQLException | RuntimeException e) {
-            log.warn("Could not read database major version for '{}'; assuming a modern"
-                    + " release: {}", config.getName(), e.getMessage());
+            log.warn("Could not resolve the effective database version for '{}'; using the"
+                    + " portable pre-12 dialect: {}", config.getName(), e.getMessage());
             return null;
         }
     }

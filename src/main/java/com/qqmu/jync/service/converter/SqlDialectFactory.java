@@ -30,9 +30,12 @@ public class SqlDialectFactory {
         if (type == null) {
             return fallback;
         }
-        // OracleDialect also serves 达梦/崖山, whose version numbering is not Oracle's
-        // (DM is "version 8" yet supports identity syntax) — the 11g gate is Oracle-only.
-        Integer oracleVersion = type == DatabaseType.ORACLE ? targetMajorVersion : null;
+        // OracleDialect also serves 达梦/崖山, whose identity syntax and version numbering
+        // are not Oracle's: DM's documented grammar is IDENTITY(seed,increment) and an
+        // explicit PK insert into such a column needs a per-session IDENTITY_INSERT switch,
+        // which the sync cannot do — so non-Oracle Oracle-family products always get the
+        // universally-valid sequence+trigger emulation (version 11 branch of the dialect).
+        Integer oracleVersion = oracleDialectVersion(type, targetMajorVersion);
         // Product-specific dialects win over their family's generic dialect (openGauss
         // diverges from plain PostgreSQL only on the upsert form).
         for (SqlDialect dialect : dialects) {
@@ -50,5 +53,17 @@ public class SqlDialectFactory {
             }
         }
         return fallback;
+    }
+
+    /**
+     * Version handed to the Oracle dialect: the connected server's effective version for the
+     * real product ({@code null} when it could not be resolved — the dialect then chooses the
+     * portable emulation), and a fixed pre-12 marker for other Oracle-family products.
+     */
+    private static Integer oracleDialectVersion(DatabaseType type, Integer targetMajorVersion) {
+        if (type == DatabaseType.ORACLE) {
+            return targetMajorVersion;
+        }
+        return type.getFamily() == DatabaseType.DialectFamily.ORACLE ? 11 : null;
     }
 }

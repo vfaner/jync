@@ -24,7 +24,7 @@ import com.qqmu.jync.model.DatabaseType;
  */
 class OracleDialectIdentityTest {
 
-    private final OracleDialect oracle12 = new OracleDialect();
+    private final OracleDialect oracle12 = new OracleDialect(23);
     private final OracleDialect oracle11 =
             (OracleDialect) new OracleDialect().withServerMajorVersion(11);
 

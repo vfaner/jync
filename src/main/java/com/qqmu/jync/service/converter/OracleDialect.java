@@ -61,9 +61,13 @@ public class OracleDialect extends AbstractSqlDialect {
         return name.indexOf('"') >= 0 ? name : name.toUpperCase(Locale.ROOT);
     }
 
-    /** 12c introduced {@code AS IDENTITY}; older releases need the sequence+trigger emulation. */
+    /**
+     * 12c introduced {@code AS IDENTITY}. An unknown version does NOT get it: the
+     * sequence+trigger emulation is legal on every release (12c+ included), so it is the
+     * safe choice when identity support could not actually be verified.
+     */
     private boolean supportsIdentity() {
-        return majorVersion == null || majorVersion >= 12;
+        return majorVersion != null && majorVersion >= 12;
     }
 
     @Override
