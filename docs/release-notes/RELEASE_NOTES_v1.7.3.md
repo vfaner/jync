@@ -38,6 +38,12 @@
 - 设置页「项目与作者」卡：新增邮箱 vfaner@88.com；多个 QQ 号自动拆行；个人 QQ 与 QQ 群支持点击直接唤起 QQ 会话 / 群资料
 - 修复：「新版本已下载，点击重启生效」黄色徽章在已是最新版本时仍常驻——根因是 `.badge` 等组件的 `display` 样式覆盖了浏览器对 `hidden` 属性的默认隐藏，已全局修正（弹窗按钮组、连接测试提示框同症一并修复）
 
+### 修复：MySQL → Oracle 建表报 ORA-00907（覆盖发布补充）
+
+- 根因：`GENERATED ... AS IDENTITY` 是 Oracle 12.1+ 语法，旧逻辑在**目标库版本探测不到时默认按现代语法建表**，11g（或 19c 但 `COMPATIBLE=11.2`）解析直接报 ORA-00907 / ORA-02000
+- 现在建表前通过 JDBC 元数据 + `DBMS_UTILITY.DB_VERSION` 解析目标库**有效版本（产品版本与 COMPATIBLE 取小）**；版本无法确认时不再赌 identity，统一降级为全版本合法的「普通列 + SEQUENCE + BEFORE INSERT 触发器」，显式主键插入照常保留
+- 达梦 / 崖山虽共用 Oracle 方言，也强制走便携模拟路径（自增语法与版本号规则不同）
+
 ### 文档
 
 - README / README_EN 补齐 Docker 部署：`docker compose up -d --build` 与裸 docker 命令、镜像标签随版本更新；nohup 启动示例统一带上 `--spring.config.additional-location=file:./application.yml`
@@ -45,6 +51,7 @@
 ### 测试
 
 - 新增 73 个单元测试（1116 → 1189），全量 **1189** 测试通过；覆盖双通道 feed 链式兜底、升级下载校验 / 改名替换 / marker 跨重启恢复 / 重启脚本生成 / 权限、CDC 退避时序与窗口聚合等
+- 覆盖发布补充 7 个测试（1189 → **1196**），含真 11g XE 与 23ai 容器端到端验证：11g 实测拒绝 identity 语法，序列 + 触发器模拟在两种库上均执行正确
 
 ## 升级
 
