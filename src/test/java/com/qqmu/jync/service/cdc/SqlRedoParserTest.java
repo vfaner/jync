@@ -21,6 +21,21 @@ class SqlRedoParserTest {
     private final SqlRedoParser parser = new SqlRedoParser();
 
     /** Build a binding for SPIKE_T (ID BIGINT PK, NAME VARCHAR, NOTE VARCHAR, TS TIMESTAMP). */
+    /**
+     * Binding for OG_LOB (ID NUMBER PK, CLOB_IN CLOB, BLOB_IN BLOB) — the docker-measured
+     * out-of-line-LOB table of OracleToOpenGaussIT.streamedLobReachesANonOracleTarget.
+     */
+    private static CdcTableBinding lobBinding() {
+        TableMeta meta = new TableMeta();
+        meta.setName("OG_LOB");
+        meta.setSchema("SRC");
+        meta.getColumns().add(col("ID", Types.BIGINT, true));
+        meta.getColumns().add(col("CLOB_IN", Types.CLOB, false));
+        meta.getColumns().add(col("BLOB_IN", Types.BLOB, false));
+        meta.getPrimaryKeys().add("ID");
+        return CdcTableBinding.of("SRC", "OG_LOB", meta, "OG_LOB", Collections.emptyMap());
+    }
+
     private static CdcTableBinding spikeBinding() {
         TableMeta meta = new TableMeta();
         meta.setName("SPIKE_T");
@@ -41,9 +56,55 @@ class SqlRedoParserTest {
         return c;
     }
 
-    // —— INSERT ——
+    // —— 外联 LOB:LogMiner 的 SQL_REDO 里根本没有这一列 ——
+    //
+    // docker 实测(OracleToOpenGaussIT.streamedLobReachesANonOracleTarget):3000+ 字符的
+    // CLOB 存在 LOB 段里(外联),Oracle 的补全日志不记录 LOB 列,于是这列既不在 SET 里
+    // 也不在 WHERE 的旧镜像里。解析出来的行因此缺这一列,而 CdcEventApplier 按绑定里
+    // 的全部列绑定(JdbcRowMapper 把缺失的键当 null)—— 目标上的现值被静默写成 NULL,
+    // 任务状态还是 RUNNING,没有任何告警或计数。宁可跳过这一次变更并说清楚原因,
+    // 也不能悄悄毁掉目标上的数据。
 
     @Test
+    void updateOmittingAnOutOfLineLobColumnIsRefusedNotNulled() {
+        String sql = "update \"SRC\".\"OG_LOB\" set \"BLOB_IN\" = HEXTORAW('deadbeef')"
+                + " where \"ID\" = '1' and ROWID = 'AAAR4TAAYAAAAALAAA';";
+
+        SqlRedoParser.ParsedChange c =
+                parser.parse(SqlRedoParser.Op.UPDATE, sql, lobBinding());
+
+        assertThat(c.op).isNull();
+        assertThat(c.unsupportedReason).contains("CLOB_IN");
+    }
+
+    @Test
+    void insertOmittingAnOutOfLineLobColumnIsRefusedNotNulled() {
+        String sql = "insert into \"SRC\".\"OG_LOB\"(\"ID\",\"BLOB_IN\")"
+                + " values ('2',HEXTORAW('cafe'));";
+
+        SqlRedoParser.ParsedChange c =
+                parser.parse(SqlRedoParser.Op.INSERT, sql, lobBinding());
+
+        assertThat(c.op).isNull();
+        assertThat(c.unsupportedReason).contains("CLOB_IN");
+    }
+
+    @Test
+    void updateCarryingUnchangedColumnsInTheWhereStillParses() {
+        // 守护:补全日志生效时,未变更的列会出现在 WHERE 的旧镜像里(实机样本见下),
+        // 整套解析必须照旧工作 —— 只有真的缺列才拒绝。
+        String sql = "update \"SRC\".\"OG_LOB\" set \"CLOB_IN\" = 'x'"
+                + " where \"ID\" = '1' and \"BLOB_IN\" = HEXTORAW('aabb')"
+                + " and ROWID = 'AAAR4TAAYAAAAALAAA';";
+
+        SqlRedoParser.ParsedChange c =
+                parser.parse(SqlRedoParser.Op.UPDATE, sql, lobBinding());
+
+        assertThat(c.unsupportedReason).isNull();
+        assertThat(c.row).containsKeys("ID", "CLOB_IN", "BLOB_IN");
+    }
+
+    // —— INSERT ——    @Test
     void parsesInsertWithEscapesAndMultibyte() {
         String sql = "insert into \"SRC\".\"SPIKE_T\"(\"ID\",\"NAME\",\"NOTE\",\"TS\")"
                 + " values ('1','it''s','hello 世界',TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午'));";
@@ -76,7 +137,9 @@ class SqlRedoParserTest {
         // old-image values so unchanged columns are not overwritten with NULL on the
         // target; SET assignments then override the merged old image. ROWID stays out.
         String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"ID\" = '1'"
-                + " and \"NAME\" = 'Alice' and \"NOTE\" = 'old' and ROWID = 'AAAR4TAAYAAAAAPAAA';";
+                + " and \"NAME\" = 'Alice' and \"NOTE\" = 'old'"
+                + " and \"TS\" = TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午')"
+                + " and ROWID = 'AAAR4TAAYAAAAAPAAA';";
         SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());
         assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
         assertThat(c.unsupportedReason).isNull();
@@ -182,7 +245,9 @@ class SqlRedoParserTest {
     void updateOldImageQQuotedValueSurvivesParseAndConversion() {
         // 端到端:q-quote 旧镜像值含撇号+and;同时钉住 convert 的 q-quote 去壳。
         String sql = "UPDATE \"SRC\".\"SPIKE_T\" SET \"NAME\"='bob' WHERE \"ID\"='1'"
-                + " and \"NOTE\"=q'[it's x and y]' and ROWID='AAAR4TAAYAAAAAPAAA';";
+                + " and \"NOTE\"=q'[it's x and y]'"
+                + " and \"TS\"=TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午')"
+                + " and ROWID='AAAR4TAAYAAAAAPAAA';";
         SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());
         assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
         assertThat(c.row.get("NOTE")).isEqualTo("it's x and y");

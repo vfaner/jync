@@ -249,6 +249,95 @@ class OracleToOpenGaussIT extends OracleCdcHarnessIT {
         return rows.isEmpty() ? null : (String) rows.get(0).get("v");
     }
 
+    /**
+     * docker 实测:外联 LOB 的增量。**LogMiner 根本看不到这个值** —— Oracle 的补全日志
+     * 不记录 LOB 列,3000+ 字符的 CLOB 存在 LOB 段里,所以 SQL_REDO 的 SET 里没有它、
+     * WHERE 的旧镜像里也没有它(实机样本):
+     * <pre>
+     * update "SRC"."OG_LOB" set "BLOB_IN" = HEXTORAW('deadbeef')
+     *   where "ID" = '1' and ROWID = 'AAAR4TAAYAAAAALAAA';
+     * </pre>
+     * 以前这一列会被静默写成 NULL(绑定按全列来、缺的键当 null),没有告警、没有计数、
+     * 任务状态还是 RUNNING —— 目标上的数据被无声地毁掉。现在整条变更走"跳过 + 计数":
+     * 目标保留变更前的版本,运营能看到 skippedUnsupported 在涨、WARN 里点名是哪一列。
+     *
+     * <p>这同时是<b>能力边界</b>:外联 LOB 的增量靠 LogMiner 无法复现,想要 LOB 也同步
+     * 只能回源按 ROWID/主键取值(尚未实现)。内联的小 LOB 不受影响。
+     */
+    @Test
+    void streamedOutOfLineLobIsSkippedInsteadOfNullingTheTarget() throws Exception {
+        String small = "clob-seed";
+        // 3600 字符 ≈ 10800 字节,超过 Oracle 的 LOB 内联阈值,强制走真实 LOB 段。
+        String large = "长文本".repeat(1200);
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("CREATE TABLE og_lob (id NUMBER(19) PRIMARY KEY,"
+                    + " clob_in CLOB, blob_in BLOB)");
+            st.execute("ALTER TABLE og_lob ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS");
+            st.execute("INSERT INTO og_lob VALUES (1, '" + small + "', HEXTORAW('AABB'))");
+        }
+        recreateTargetTable("DROP TABLE IF EXISTS \"OG_LOB\" CASCADE");
+        recreateTargetTable("CREATE TABLE \"OG_LOB\" (\"ID\" BIGINT PRIMARY KEY,"
+                + " \"CLOB_IN\" TEXT, \"BLOB_IN\" BYTEA)");
+
+        Project project = newProject("oracle-og-lob", logMinerConfig("OG_LOB"));
+        manager.ensureStarted(project);
+        waitFor("lob baseline row", 180_000, () -> countTarget("\"OG_LOB\"") == 1);
+        long skippedBefore = skippedUnsupported(project.getId());
+
+        // 值必须绑定进来:Oracle 的 SQL 字面量上限是 4000 字节,内联这条 3600 字符的
+        // 中文串直接 ORA-01704(字符串文字太长)。绑定走的是真正的 CLOB 段。
+        try (Connection src = sourceJdbc();
+             java.sql.PreparedStatement ps = src.prepareStatement(
+                     "UPDATE og_lob SET clob_in = ?, blob_in = HEXTORAW('DEADBEEF')"
+                             + " WHERE id = 1")) {
+            ps.setClob(1, new java.io.StringReader(large));
+            ps.executeUpdate();
+        }
+
+        waitFor("out-of-line LOB change skipped or task parked ERROR", 120_000, () ->
+                skippedUnsupported(project.getId()) > skippedBefore
+                        || "ERROR".equals(queryTaskStatus(project.getId())));
+
+        // 关键断言:目标上的现值一个字节都不能被写坏。
+        assertThat(skippedUnsupported(project.getId()))
+                .as("外联 LOB 的变更必须被计数跳过(任务状态 %s)", queryTaskStatus(project.getId()))
+                .isGreaterThan(skippedBefore);
+        assertThat(targetClobLength())
+                .as("目标 CLOB 保留变更前的值,而不是被写成 NULL(任务状态 %s)",
+                        queryTaskStatus(project.getId()))
+                .isEqualTo(small.length());
+        assertThat(targetBlobHex())
+                .as("整条变更一起跳过,行保持变更前的完整版本")
+                .isEqualTo("aabb");
+
+        manager.ensureStopped(project.getId());
+        disableProject(project);
+    }
+
+    /** Changes the pipeline refused to apply because LogMiner could not reproduce them. */
+    private long skippedUnsupported(long projectId) {
+        com.qqmu.jync.service.cdc.CdcRuntimeStats stats = manager.statsFor(projectId);
+        if (stats == null) {
+            return 0L;
+        }
+        Object value = stats.snapshot().get("skippedUnsupported");
+        return value == null ? 0L : ((Number) value).longValue();
+    }
+
+    /** Character count of the streamed CLOB, or null while the row is missing/unchanged. */
+    private Integer targetClobLength() {
+        List<Map<String, Object>> rows = targetQuery(
+                "SELECT length(\"CLOB_IN\") AS v FROM \"OG_LOB\" WHERE \"ID\" = 1");
+        return rows.isEmpty() || rows.get(0).get("v") == null
+                ? null : ((Number) rows.get(0).get("v")).intValue();
+    }
+
+    private String targetBlobHex() {
+        List<Map<String, Object>> rows = targetQuery(
+                "SELECT encode(\"BLOB_IN\", 'hex') AS v FROM \"OG_LOB\" WHERE \"ID\" = 1");
+        return rows.isEmpty() ? null : (String) rows.get(0).get("v");
+    }
+
     @Test
     void ddlAddColumnWhileStoppedThenRestart() throws Exception {
         try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {

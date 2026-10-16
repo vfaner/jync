@@ -113,7 +113,8 @@ public class SqlRedoParser {
             }
             row.put(col, OracleLiteralConverters.convert(values.get(i), sqlType));
         }
-        return ParsedChange.of(Op.INSERT, row);
+        ParsedChange incomplete = refuseIfColumnsAreMissing("insert", binding, row);
+        return incomplete != null ? incomplete : ParsedChange.of(Op.INSERT, row);
     }
 
     // —— UPDATE ——
@@ -179,7 +180,53 @@ public class SqlRedoParser {
                 return ParsedChange.unsupported("update: where missing PK column " + pk);
             }
         }
-        return ParsedChange.of(Op.UPDATE, row);
+        ParsedChange incomplete = refuseIfColumnsAreMissing("update", binding, row);
+        return incomplete != null ? incomplete : ParsedChange.of(Op.UPDATE, row);
+    }
+
+    /**
+     * Refuses a change whose redo text does not carry every column of the binding.
+     *
+     * <p>{@link CdcEventApplier} binds the binding's <em>whole</em> column list on every
+     * upsert and {@link com.qqmu.jync.service.sync.JdbcRowMapper} maps a column absent from
+     * the row to {@code setNull} — so a column the redo text omits silently overwrites the
+     * target's value with NULL.
+     *
+     * <p>That is not hypothetical: a LOB stored <em>out of line</em> (measured with a
+     * 10800-byte CLOB) is excluded from supplemental logging, so LogMiner renders the row
+     * update without that column in either the SET clause or the WHERE old image:
+     * <pre>
+     * update "SRC"."OG_LOB" set "BLOB_IN" = HEXTORAW('deadbeef')
+     *   where "ID" = '1' and ROWID = '...';
+     * </pre>
+     * (the CLOB column is simply absent). The change was then applied with a NULL CLOB and
+     * no warning, no counter, task status still RUNNING — silent data loss. Inline LOBs and
+     * every other type are unaffected: with {@code SUPPLEMENTAL LOG DATA (ALL) COLUMNS} the
+     * unchanged columns of an UPDATE appear in the WHERE old image
+     * ({@code set "NAME" = 'changed' where "ID" = '7' and "NAME" = 'seed-7' and "AMOUNT"
+     * = '7.5' and ROWID = ...}), which this parser folds in.
+     *
+     * @return the refusal to return, or null when the row carries every binding column
+     */
+    private static ParsedChange refuseIfColumnsAreMissing(String op, CdcTableBinding binding,
+                                                          Map<String, Object> row) {
+        List<String> missing = new ArrayList<>();
+        for (String column : binding.columnNames()) {
+            if (!row.containsKey(column.toUpperCase(Locale.ROOT))) {
+                missing.add(column);
+            }
+        }
+        if (missing.isEmpty()) {
+            return null;
+        }
+        return ParsedChange.unsupported(op + ": redo text carries no value for column(s) "
+                + String.join(", ", missing)
+                + " — LogMiner renders only what the redo record holds, and neither out-of-line"
+                + " LOB content nor (under MINIMAL supplemental logging) the unchanged values of"
+                + " an UPDATE are recorded. Applying this change would NULL those target"
+                + " column(s) instead. The whole change is skipped so the target row keeps its"
+                + " previous consistent version; add SUPPLEMENTAL LOG DATA (ALL) COLUMNS on the"
+                + " source table so updates carry the full old image.");
     }
 
     // —— DELETE ——
