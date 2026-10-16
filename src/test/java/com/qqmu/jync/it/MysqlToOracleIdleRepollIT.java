@@ -13,6 +13,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.testcontainers.oracle.OracleContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.CaptureStrategy;
@@ -20,6 +24,8 @@ import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.service.cdc.LogCapture;
+import com.qqmu.jync.service.sync.DataSyncService;
 import com.qqmu.jync.service.task.SyncTaskRunner;
 
 /**
@@ -40,6 +46,9 @@ class MysqlToOracleIdleRepollIT extends CdcMySqlContainerHarnessIT {
     private static final String TABLE = "idle_orders";
 
     @Autowired private SyncTaskRunner runner;
+
+    /** 空闲轮的日志:断言"源库没动就不该有 INFO"用的。 */
+    private ListAppender<ILoggingEvent> idleLogs;
 
     @BeforeEach
     void startOracle() {
@@ -79,11 +88,14 @@ class MysqlToOracleIdleRepollIT extends CdcMySqlContainerHarnessIT {
         config.getTables().add(TABLE);
         config.getCursorColumns().put(TABLE, "updated_at");
         Project project = newProject("idle-repoll", config, false);
+        idleLogs = LogCapture.attach(DataSyncService.class);
         try {
             SyncResult initial = run(project);
             assertThat(initial.getErrors()).as("首轮基线不该报错").isEmpty();
             assertThat(initial.getRowsInserted()).as("首轮把两行搬过去").isEqualTo(2);
 
+            // 只保留第二轮(空闲轮)的日志:首轮的首次全量本来就有话要说。
+            idleLogs.list.clear();
             SyncResult idle = run(project);
             assertThat(idle.getErrors()).as("第二轮不该报错").isEmpty();
             // 源库没动:窗口的安全余量把这两行重发了一遍,但它们与目标里的值一模一样,
@@ -91,8 +103,14 @@ class MysqlToOracleIdleRepollIT extends CdcMySqlContainerHarnessIT {
             assertThat(idle.getRowsUpdated()).as("源库没动，不该报更新").isZero();
             assertThat(idle.getRowsInserted()).isZero();
             assertThat(countTarget(TABLE)).as("目标行数不变").isEqualTo(2);
+            // 而且这一轮不该在控制台留下"同步了 N 行"的 INFO:重放是设计,不是同步。
+            // 空闲项目每秒每表刷一行,正是用户说的「日志不停在刷」。
+            assertThat(LogCapture.messagesAt(Level.INFO, idleLogs))
+                    .as("源库没动的重放不该在 INFO 上刷一族同步行")
+                    .noneMatch(message -> message.contains(TABLE));
         } finally {
             disableProject(project);
+            LogCapture.detach(DataSyncService.class, idleLogs);
             dropTarget();
         }
     }

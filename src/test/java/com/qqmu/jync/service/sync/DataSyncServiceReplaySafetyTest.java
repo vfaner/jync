@@ -16,7 +16,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.service.cdc.LogCapture;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.SyncProgress;
@@ -96,6 +101,46 @@ class DataSyncServiceReplaySafetyTest {
                 .isTrue();
         assertThat(replay.getNewCursorValue()).isEqualTo("2");
         assertThat(count("KEYONLY")).isEqualTo(2);
+    }
+
+    /**
+     * 有主键的表每轮都会把安全余量里那一秒的行重发一遍（设计如此，upsert 吸收掉）。可吸收掉
+     * 的重放不是"同步"：空闲项目上这条 INFO 会每表每秒刷一行 "Synced 1185 row(s)
+     * (0 changed)"，用户看到的就是这个 —— 以为数据一直在变。兄弟链路 SyncTaskRunner 那句
+     * "Sync of 'X' finished" 早就是 {@code result.hasChanges() || !isSuccess()} 才打，
+     * 这里对齐同一个约定。
+     */
+    @Test
+    void anAbsorbedReplayIsNotAnnouncedOnTheInfoChannel() throws SQLException {
+        exec(source, "CREATE TABLE KEYONLY (ID BIGINT PRIMARY KEY)");
+        exec(target, "CREATE TABLE KEYONLY (ID BIGINT PRIMARY KEY)");
+        exec(source, "INSERT INTO KEYONLY VALUES (1), (2)");
+
+        TableMeta table = new TableMeta();
+        table.setName("KEYONLY");
+        table.setPrimaryKeys(List.of("ID"));
+        assertThat(service.syncTable(source, target, table, IDENTITY, new SyncProgress(), ctx)
+                .isSuccess()).isTrue();
+
+        // 游标停在已送过的行上：窗口把这两行重发一遍，而键已存在、值必然相同，目标一行都没动
+        // （key-only 表连 UPDATE 都没有，插入冲突即等价）。
+        SyncProgress progress = new SyncProgress();
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue("0");
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(DataSyncService.class);
+        try {
+            DataSyncService.TableSyncResult replay =
+                    service.syncTable(source, target, table, IDENTITY, progress, ctx);
+
+            assertThat(replay.getRowsWritten()).as("重放确实又读了两行").isEqualTo(2);
+            assertThat(replay.getRowsChanged()).as("目标一行都没动").isZero();
+            assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                    .as("目标一行没动的重放不该出现在 INFO 上")
+                    .noneMatch(message -> message.contains("Synced"));
+        } finally {
+            LogCapture.detach(DataSyncService.class, logs);
+        }
     }
 
     @Test

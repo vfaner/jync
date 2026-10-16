@@ -379,9 +379,19 @@ public class DataSyncService {
         applyStats(result, stats);
 
         if (stats.read > 0) {
-            log.info("Synced {} row(s) ({} changed) for {} in window ({} .. {}]",
-                    stats.read, result.getRowsChanged(), table.getName(),
-                    progress.getLastSyncValue(), watermark);
+            // 只有目标真的动了才值得在 INFO 上说话。安全余量每轮都会把边界那一秒的行重发
+            // 一遍（见上面 applySafetyLagIfKeyed 的说明），空闲项目上那是"每表每秒一行
+            // Synced N row(s) (0 changed)"——用户看到只会以为数据一直在变。SyncTaskRunner
+            // 那句 "Sync of 'X' finished" 用的就是同一条约定：没有改动就留在 DEBUG。
+            if (result.getRowsChanged() > 0) {
+                log.info("Synced {} row(s) ({} changed) for {} in window ({} .. {}]",
+                        stats.read, result.getRowsChanged(), table.getName(),
+                        progress.getLastSyncValue(), watermark);
+            } else {
+                log.debug("Re-read {} row(s) and wrote nothing for {} in window ({} .. {}]"
+                        + " (safety-margin replay)",
+                        stats.read, table.getName(), progress.getLastSyncValue(), watermark);
+            }
         }
 
         // Rewind the persisted watermark slightly, so a source transaction that committed
