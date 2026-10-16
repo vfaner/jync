@@ -111,6 +111,82 @@ public final class TargetTableVerifier {
         return missing;
     }
 
+    /**
+     * The requested columns whose TARGET column values cannot be compared with {@code =} and
+     * {@code <>}, in the order asked for. An empty result vouches for all of them.
+     *
+     * <p>This is what lets a dialect add a "something really differs" condition to its upsert
+     * (see {@link com.qqmu.jync.service.converter.SqlDialect#getUpsertSql(String, String, List,
+     * List, java.util.Map, boolean)}): such a condition is only sound when every non-key column
+     * can be compared, because comparing a CLOB fails the whole statement on Oracle
+     * (ORA-22848/ORA-00932) and because guarding a subset would silently skip rows whose only
+     * change is in the column left out.
+     *
+     * <p>The check reads the target's own dictionary rather than the bind types the caller also
+     * has: those describe the source's values, and a VARCHAR source landing in a CLOB target is
+     * a shape this sync supports ({@link #verify} accepts it deliberately). Anything that
+     * cannot be positively confirmed — an unknown type, a column the target does not have — is
+     * reported as not comparable, since the cost of being wrong that way is an extra change-log
+     * line, while the cost of the opposite is a sync that fails on every row.
+     */
+    public static List<String> uncomparableColumns(Connection conn, String schema, String tableName,
+                                                   DatabaseType targetType, List<String> columns)
+            throws SQLException {
+        if (columns == null || columns.isEmpty()) {
+            return List.of();
+        }
+        boolean oracleFamily = isOracleFamily(targetType);
+        Map<String, TargetColumn> targetTypes = readTargetColumns(conn,
+                foldIfOracle(oracleFamily, normalizeSchema(schema)),
+                foldIfOracle(oracleFamily, tableName));
+        List<String> uncomparable = new ArrayList<>();
+        for (String column : columns) {
+            TargetColumn found = column == null ? null
+                    : targetTypes.get(column.toUpperCase(Locale.ROOT));
+            if (found == null || !supportsEquality(found.jdbcType())) {
+                uncomparable.add(column);
+            }
+        }
+        return uncomparable;
+    }
+
+    /**
+     * Whether {@code =} and {@code <>} are defined for a column of this JDBC type. A whitelist,
+     * not a list of exclusions: everything outside it is either a type whose comparison fails
+     * (CLOB, BLOB, LONG, SQLXML, and PostgreSQL's {@code json}, which has no equality operator)
+     * or a vendor type this code cannot classify, and in both cases standing down is the safe
+     * answer.
+     */
+    static boolean supportsEquality(int jdbcType) {
+        switch (jdbcType) {
+            case java.sql.Types.CHAR:
+            case java.sql.Types.VARCHAR:
+            case java.sql.Types.NCHAR:
+            case java.sql.Types.NVARCHAR:
+            case java.sql.Types.TINYINT:
+            case java.sql.Types.SMALLINT:
+            case java.sql.Types.INTEGER:
+            case java.sql.Types.BIGINT:
+            case java.sql.Types.FLOAT:
+            case java.sql.Types.REAL:
+            case java.sql.Types.DOUBLE:
+            case java.sql.Types.NUMERIC:
+            case java.sql.Types.DECIMAL:
+            case java.sql.Types.DATE:
+            case java.sql.Types.TIME:
+            case java.sql.Types.TIME_WITH_TIMEZONE:
+            case java.sql.Types.TIMESTAMP:
+            case java.sql.Types.TIMESTAMP_WITH_TIMEZONE:
+            case java.sql.Types.BINARY:
+            case java.sql.Types.VARBINARY:
+            case java.sql.Types.BOOLEAN:
+            case java.sql.Types.BIT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private static boolean isOracleFamily(DatabaseType targetType) {
         return targetType != null
                 && targetType.getFamily() == DatabaseType.DialectFamily.ORACLE;

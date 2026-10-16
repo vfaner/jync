@@ -34,6 +34,7 @@ import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 import com.qqmu.jync.util.CollectionUtil;
+import com.qqmu.jync.util.TargetTableVerifier;
 import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.Getter;
@@ -772,7 +773,8 @@ public class DataSyncService {
                 }
 
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
-                        columns, pkColumns, typeByColumn);
+                        columns, pkColumns, typeByColumn,
+                        canGuardUnchangedRows(targetConn, ctx, targetTable, columns, pkColumns));
                 List<String> bindOrder = targetDialect.upsertBindOrder(columns, pkColumns);
 
                 boolean emulateUpsert = pkColumns.isEmpty()
@@ -834,6 +836,48 @@ public class DataSyncService {
             }
         }
         return total;
+    }
+
+    /**
+     * Whether the target's own column types allow the upsert to carry a "something really
+     * differs" condition, i.e. every non-key column's values can be compared with {@code =}.
+     *
+     * <p>This is what stops an idle polling project from logging a fake update every cycle:
+     * the cursor's safety margin replays the same second, the target rewrites those rows, and
+     * a target that cannot say "the values were already there" (Oracle, SQL Server, DB2,
+     * PostgreSQL — everyone but MySQL) books each replay as a change. Deciding it here, from
+     * live target metadata, is deliberate: the bind-type map beside it carries the source's
+     * types, and a VARCHAR source landing in a CLOB target is a shape this sync supports.
+     *
+     * <p>A target the dictionary cannot be read from is treated as unguardable — an extra log
+     * line beats a statement that fails on every row.
+     */
+    private boolean canGuardUnchangedRows(Connection targetConn, SyncContext ctx,
+                                          String targetTable, List<String> columns,
+                                          List<String> pkColumns) {
+        List<String> nonKey = new ArrayList<>();
+        for (String column : columns) {
+            if (!CollectionUtil.containsIgnoreCase(pkColumns, column)) {
+                nonKey.add(column);
+            }
+        }
+        if (nonKey.isEmpty()) {
+            return false;
+        }
+        try {
+            List<String> uncomparable = TargetTableVerifier.uncomparableColumns(targetConn,
+                    ctx.getTargetSchema(), targetTable, ctx.getTargetType(), nonKey);
+            if (!uncomparable.isEmpty()) {
+                log.debug("Target table {} column(s) {} cannot be compared, so Jync rewrites a"
+                        + " replayed row even when nothing changed", targetTable, uncomparable);
+                return false;
+            }
+            return true;
+        } catch (SQLException e) {
+            log.debug("Could not read {}.{} column types ({}), leaving the upsert unguarded",
+                    ctx.getTargetSchema(), targetTable, e.getMessage());
+            return false;
+        }
     }
 
     /**

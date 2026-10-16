@@ -178,6 +178,26 @@ public interface SqlDialect {
     }
 
     /**
+     * As the typed variant, plus {@code guardUnchangedRows}: the caller has read the target
+     * columns' real types and vouched that every non-key one can be compared with {@code =}
+     * and {@code <>}. Dialects that rewrite a matched row should then add a "something really
+     * differs" condition, so that a replayed row that is already identical reports zero
+     * affected rows — the way MySQL's upsert does by itself. It matters because a cursor with
+     * a safety margin replays its last second every cycle, and without the condition each
+     * replay is booked as a change.
+     *
+     * <p>Callers must not pass {@code true} on a hunch: on Oracle comparing a CLOB fails the
+     * whole statement (ORA-22848), which is worse than an extra log line. The default keeps
+     * the plain upsert, so a dialect that has not implemented the condition stays correct.
+     */
+    default String getUpsertSql(String schema, String table, List<String> columns,
+                                List<String> pkColumns,
+                                java.util.Map<String, Integer> columnJdbcTypes,
+                                boolean guardUnchangedRows) {
+        return getUpsertSql(schema, table, columns, pkColumns, columnJdbcTypes);
+    }
+
+    /**
      * The order in which values must be bound to the statement from
      * {@link #getUpsertSql}. Dialects that repeat values (for example a MERGE that names
      * them in both the USING clause and the UPDATE clause) return a longer list.

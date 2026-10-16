@@ -240,7 +240,23 @@ public class PostgresDialect extends AbstractSqlDialect {
         if (pkColumns == null || pkColumns.isEmpty()) {
             return insert;
         }
-        return insert + upsertSuffix(columns, pkColumns);
+        return insert + upsertSuffix(quoteIdentifier(table), columns, pkColumns, columnJdbcTypes,
+                false);
+    }
+
+    @Override
+    public String getUpsertSql(String schema, String table, List<String> columns,
+                               List<String> pkColumns,
+                               java.util.Map<String, Integer> columnJdbcTypes,
+                               boolean guardUnchangedRows) {
+        String insert = "INSERT INTO " + qualify(schema, table)
+                + " (" + quotedList(columns) + ") VALUES ("
+                + typedPlaceholders(columns, columnJdbcTypes) + ")";
+        if (pkColumns == null || pkColumns.isEmpty()) {
+            return insert;
+        }
+        return insert + upsertSuffix(quoteIdentifier(table), columns, pkColumns, columnJdbcTypes,
+                guardUnchangedRows);
     }
 
     /**
@@ -248,8 +264,15 @@ public class PostgresDialect extends AbstractSqlDialect {
      * this with the MySQL-flavoured {@code ON DUPLICATE KEY UPDATE} (its default
      * compatibility-A parser rejects ON CONFLICT); everything else in the PostgreSQL
      * family uses the standard ON CONFLICT form.
+     *
+     * @param tableRef how the DO UPDATE clause names the existing row: inside a WHERE the
+     *     bare column name is ambiguous (the proposed row is in scope too — docker 实测报
+     *     {@code column reference "name" is ambiguous}), so it must be qualified with the
+     *     relation's own name
      */
-    protected String upsertSuffix(List<String> columns, List<String> pkColumns) {
+    protected String upsertSuffix(String tableRef, List<String> columns, List<String> pkColumns,
+                                  java.util.Map<String, Integer> columnJdbcTypes,
+                                  boolean guardUnchangedRows) {
         String conflict = " ON CONFLICT (" + quotedList(pkColumns) + ")";
         List<String> updatable = nonKeyColumns(columns, pkColumns);
         if (updatable.isEmpty()) {
@@ -258,7 +281,15 @@ public class PostgresDialect extends AbstractSqlDialect {
         String updates = updatable.stream()
                 .map(c -> quoteIdentifier(c) + " = EXCLUDED." + quoteIdentifier(c))
                 .collect(Collectors.joining(", "));
-        return conflict + " DO UPDATE SET " + updates;
+        String guard = guardUnchangedRows
+                ? UpsertChangeGuard.condition(updatable,
+                        c -> tableRef + "." + quoteIdentifier(c),
+                        c -> "EXCLUDED." + quoteIdentifier(c))
+                : null;
+        // 值没变就不写：ON CONFLICT DO UPDATE 对无变化的重放同样报 1 影响行，加了 WHERE 之后
+        // 报 0，引擎就能像对 MySQL 那样把重放认成「什么都没发生」。
+        return conflict + " DO UPDATE SET " + updates
+                + (guard == null ? "" : " WHERE " + guard);
     }
 
     @Override

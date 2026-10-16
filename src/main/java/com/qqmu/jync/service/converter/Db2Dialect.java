@@ -198,6 +198,19 @@ public class Db2Dialect extends AbstractSqlDialect {
     @Override
     public String getUpsertSql(String schema, String table, List<String> columns,
                                List<String> pkColumns) {
+        return getUpsertSql(schema, table, columns, pkColumns, null, false);
+    }
+
+    @Override
+    public String getUpsertSql(String schema, String table, List<String> columns,
+                               List<String> pkColumns, java.util.Map<String, Integer> types) {
+        return getUpsertSql(schema, table, columns, pkColumns, types, false);
+    }
+
+    @Override
+    public String getUpsertSql(String schema, String table, List<String> columns,
+                               List<String> pkColumns, java.util.Map<String, Integer> types,
+                               boolean guardUnchangedRows) {
         if (pkColumns == null || pkColumns.isEmpty()) {
             return "INSERT INTO " + qualify(schema, table) + " (" + quotedList(columns)
                     + ") VALUES (" + placeholders(columns.size()) + ")";
@@ -215,7 +228,16 @@ public class Db2Dialect extends AbstractSqlDialect {
             String updates = updatable.stream()
                     .map(c -> "t." + quoteIdentifier(c) + " = s." + quoteIdentifier(c))
                     .collect(Collectors.joining(", "));
-            sb.append(" WHEN MATCHED THEN UPDATE SET ").append(updates);
+            // 条件挂在 WHEN MATCHED AND 上：DB2 的 MERGE 同样不接受 UPDATE 子句带 WHERE。
+            String guard = guardUnchangedRows
+                    ? UpsertChangeGuard.condition(updatable,
+                            c -> "t." + quoteIdentifier(c), c -> "s." + quoteIdentifier(c))
+                    : null;
+            sb.append(" WHEN MATCHED");
+            if (guard != null) {
+                sb.append(" AND ").append(guard);
+            }
+            sb.append(" THEN UPDATE SET ").append(updates);
         }
         String insertVals = columns.stream()
                 .map(c -> "s." + quoteIdentifier(c))

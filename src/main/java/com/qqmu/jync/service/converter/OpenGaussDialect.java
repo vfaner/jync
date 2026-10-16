@@ -29,7 +29,11 @@ public class OpenGaussDialect extends PostgresDialect {
     }
 
     @Override
-    protected String upsertSuffix(List<String> columns, List<String> pkColumns) {
+    protected String upsertSuffix(String tableRef, List<String> columns, List<String> pkColumns,
+                                  java.util.Map<String, Integer> columnJdbcTypes,
+                                  boolean guardUnchangedRows) {
+        // 这里故意不接 {@code guardUnchangedRows}：ON DUPLICATE KEY UPDATE 是 MySQL 语法，
+        // 没有挂条件的位置，加不了「值没变就不写」。openGauss 目标因此仍会把重放的行算成改动。
         List<String> updatable = nonKeyColumns(columns, pkColumns);
         if (updatable.isEmpty()) {
             // Key-only table: a self-assignment keeps the statement an idempotent insert.

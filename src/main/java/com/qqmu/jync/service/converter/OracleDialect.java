@@ -387,6 +387,19 @@ public class OracleDialect extends AbstractSqlDialect {
     @Override
     public String getUpsertSql(String schema, String table, List<String> columns,
                                List<String> pkColumns) {
+        return getUpsertSql(schema, table, columns, pkColumns, null, false);
+    }
+
+    @Override
+    public String getUpsertSql(String schema, String table, List<String> columns,
+                               List<String> pkColumns, java.util.Map<String, Integer> types) {
+        return getUpsertSql(schema, table, columns, pkColumns, types, false);
+    }
+
+    @Override
+    public String getUpsertSql(String schema, String table, List<String> columns,
+                               List<String> pkColumns, java.util.Map<String, Integer> types,
+                               boolean guardUnchangedRows) {
         if (pkColumns == null || pkColumns.isEmpty()) {
             return "INSERT INTO " + qualify(schema, table) + " (" + quotedList(columns)
                     + ") VALUES (" + placeholders(columns.size()) + ")";
@@ -407,6 +420,15 @@ public class OracleDialect extends AbstractSqlDialect {
                     .map(c -> "t." + quoteIdentifier(c) + " = s." + quoteIdentifier(c))
                     .collect(Collectors.joining(", "));
             sb.append(" WHEN MATCHED THEN UPDATE SET ").append(updates);
+            String guard = guardUnchangedRows
+                    ? UpsertChangeGuard.condition(updatable,
+                            c -> "t." + quoteIdentifier(c), c -> "s." + quoteIdentifier(c))
+                    : null;
+            if (guard != null) {
+                // 值没变就不写：MERGE 对无变化的重放也报 1 影响行（实测），于是一轮安全余量
+                // 重放就是一条假的 updated 日志。加了条件后无变化报 0，与 MySQL 目标一致。
+                sb.append(" WHERE ").append(guard);
+            }
         }
         String insertCols = quotedList(columns);
         String insertVals = columns.stream()

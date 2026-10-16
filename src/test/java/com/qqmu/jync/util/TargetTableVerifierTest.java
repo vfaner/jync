@@ -214,6 +214,68 @@ class TargetTableVerifierTest {
         assertThat(missing).isEmpty();
     }
 
+    // —— upsert 的「值没变就不写」条件能不能挂，由目标列的真实类型决定。
+    // 光看调用方手里那份绑定类型不行:源端 VARCHAR 落在目标 CLOB 上是本项目明确支持的形态
+    // (见 aClobTargetAcceptsAVarcharSource),而拿 CLOB 去做 = 比较会让整条语句在 Oracle 上
+    // 直接报 ORA-22848(docker 实测)。 ——
+
+    @Test
+    void aClobColumnCannotBeCompared() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT, NOTE CLOB)");
+
+        assertThat(TargetTableVerifier.uncomparableColumns(conn, null, "T", DatabaseType.ORACLE,
+                List.of("ID", "NOTE"))).containsExactly("NOTE");
+    }
+
+    @Test
+    void aBlobColumnCannotBeCompared() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT, DATA BLOB)");
+
+        assertThat(TargetTableVerifier.uncomparableColumns(conn, null, "T", DatabaseType.MYSQL,
+                List.of("ID", "DATA"))).containsExactly("DATA");
+    }
+
+    @Test
+    void plainColumnsCanAllBeCompared() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT, NAME VARCHAR(50), AMOUNT DECIMAL(10,2),"
+                + " SEEN_AT TIMESTAMP, FLAG BOOLEAN)");
+
+        assertThat(TargetTableVerifier.uncomparableColumns(conn, null, "T", DatabaseType.ORACLE,
+                List.of("ID", "NAME", "AMOUNT", "SEEN_AT", "FLAG"))).isEmpty();
+    }
+
+    @Test
+    void anUnknownTypeCannotBeCompared() throws SQLException {
+        // PG 的 json/jsonb/uuid 都报 Types.OTHER,其中 json 连 = 运算符都没有;判不了就不放行。
+        Connection pg = metadataReporting("C_JSONB", Types.OTHER);
+
+        assertThat(TargetTableVerifier.uncomparableColumns(pg, null, "T", DatabaseType.POSTGRESQL,
+                List.of("C_JSONB"))).containsExactly("C_JSONB");
+    }
+
+    @Test
+    void aColumnTheTargetDoesNotHaveCannotBeCompared() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT)");
+
+        assertThat(TargetTableVerifier.uncomparableColumns(conn, null, "T", DatabaseType.ORACLE,
+                List.of("ID", "MISSING"))).containsExactly("MISSING");
+    }
+
+    @Test
+    void theOracleFamilyLookupFoldsTheTableName() throws SQLException {
+        // 与 verify 同一条规则:Oracle 家族把未加引号的标识符按大写存,小写请求得能对上。
+        createTarget("CREATE TABLE orders (id BIGINT, name VARCHAR(50))");
+
+        assertThat(TargetTableVerifier.uncomparableColumns(conn, null, "orders",
+                DatabaseType.ORACLE, List.of("ID", "NAME"))).isEmpty();
+    }
+
+    @Test
+    void askingAboutNoColumnsVouchesForAllOfThem() throws SQLException {
+        assertThat(TargetTableVerifier.uncomparableColumns(conn, null, "T",
+                DatabaseType.ORACLE, List.of())).isEmpty();
+    }
+
     // —— F-9(docker 实测 PG→openGauss):JSON/JSONB/UUID 报 Types.OTHER(1111),
     // 但值是文本承载;目标手建 TEXT/VARCHAR 是推荐形态,必须通过 shape check。 ——
 
