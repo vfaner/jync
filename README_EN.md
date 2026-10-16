@@ -404,10 +404,10 @@ The repo ships a multi-stage `Dockerfile` (the runtime image contains just the J
 docker compose up -d --build
 
 # or, without Compose:
-docker build -t jync:1.7.4 .
+docker build -t jync:1.7.5 .
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.7.4
+  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.7.5
 ```
 
 Environment-variable overrides (HTTPS cookies, external MySQL for multi-instance setups), TLS, horizontal scaling with more than one replica, image upgrades and troubleshooting are covered in [docs/deploy-container.md](docs/deploy-container.md).
@@ -906,16 +906,19 @@ so two open browser tabs cannot leave two providers enabled.
 
 | Field | Notes |
 |---|---|
-| Protocol | `OpenAI-compatible` or `Anthropic`. Nearly every self-hosted endpoint is the former |
+| Protocol | `OpenAI-compatible`, `Anthropic`, or `Ollama (local)`. Ollama is a preset rather than a third protocol — it speaks the OpenAI shape on `http://localhost:11434/v1` (not its native `/api/chat`), so picking it prefills the address, hides the key field a local model does not need, and relaxes the timeout to 300s. Nearly every self-hosted endpoint is OpenAI-compatible |
 | Base URL | Endpoint root. Vendors disagree about whether `/v1` belongs here, so the form shows the request path that will actually be used |
 | Model | Model name, e.g. `deepseek-chat` |
 | API key | Encrypted with AES-256 like a database password; leave blank when editing to keep the stored value |
 | Max tokens / timeout | A long procedure needs room for the whole rewritten body |
+| Reasoning | `Follow the model default` / `Off` / `Low` / `High`. Turning thinking **off** is not merely faster: thinking tokens come out of the output budget, so a small `max_tokens` leaves the reply empty — the UI spins and then reports an empty model reply. Measured locally against Ollama with `qwen3:8b`, the same request came back ~14× faster with thinking off. The OpenAI shape gets `reasoning_effort`; Anthropic gets `thinking.budget_tokens` (it rejects `reasoning_effort` with a 400). Anthropic requires the budget to be **strictly less than** `max_tokens`, so a Low/High choice means raising max tokens too — refused at save time with a message saying so. `Follow the model default` sends nothing at all, so upgrading never changes an existing provider's requests |
 
 Every provider can be **probed**. The probe sends a real request with `max_tokens: 1`: a TCP or
 `HEAD` check would report success for a wrong key, a misspelled model, or a base URL that is one
 path segment off — the three things that actually go wrong. The outcome is stored and shown as a
-status badge, so rendering the list itself never reaches out to the network.
+status badge, so rendering the list itself never reaches out to the network. The probe never
+carries a reasoning setting: at `max_tokens: 1` a thinking budget would be rejected outright, and
+probing before saving is the whole point of the form.
 
 Enabling a provider makes AI-assisted conversion available. A failed probe does **not** block
 enabling — a transient network problem should not make the setting unsavable — and the list shows
@@ -1006,14 +1009,14 @@ com.qqmu.jync
 mvn test
 ```
 
-1189 unit tests, covering:
+1338 unit tests, covering:
 
 - **Dialect invariants** — every dialect produces a conflict-handling idempotent upsert; bind order matches placeholder count; type mapping never exceeds per-product ceilings (Oracle `VARCHAR2` 4000, SQL Server 4000, DB2 DECIMAL 31, precision-less `NUMBER` never yields `DECIMAL(0,0)`); declared precision is clamped to the ceiling without losing fractional digits; non-portable defaults are dropped rather than emitted as invalid DDL
 - **SQL body rewriting** — string literals, quoted identifiers, line comments, and block comments are never rewritten; escaped quotes inside a literal do not end it early; unterminated literals are preserved verbatim; `SUBSTR` → `SUBSTRING` does not double-hit itself
 - **Cursor strategies** — resolution priority; `IDENTITY` correctly flagged as "may miss updates"; graceful downgrade rather than an error when a configured column becomes invalid; a `VARCHAR` `update_time` is never misused; Oracle row-level SCN probing (`ROWDEPENDENCIES` whitelist, block-level never offered, DM/Yashan not probed)
 - **Cursor serialization** — timestamps round-trip as UTC ISO-8601 without losing millisecond precision; oversized numbers downgrade to `BigDecimal`; corrupt values are treated as "not yet synced" instead of throwing
 - **Password encryption** — round-trip, no double encryption, backward compatibility with legacy plaintext, distinct ciphertexts for identical passwords
-- **AI configuration** — enabling one provider necessarily disables every other (the enabled set is asserted to be exactly one); the global switch masks even an enabled provider; keys are stored encrypted, a blank field on edit keeps the stored one, and the probe receives the plaintext rather than the ciphertext; changing the endpoint clears a stale "reachable" badge; the key appears neither in the probe result nor in the edit page source; OpenAI sends `Authorization: Bearer` while Anthropic sends `x-api-key` and no `Authorization`; a trailing slash or an already-complete endpoint path never produces a doubled path
+- **AI configuration** — enabling one provider necessarily disables every other (the enabled set is asserted to be exactly one); the global switch masks even an enabled provider; keys are stored encrypted, a blank field on edit keeps the stored one, and the probe receives the plaintext rather than the ciphertext; changing the endpoint clears a stale "reachable" badge; the key appears neither in the probe result nor in the edit page source; OpenAI sends `Authorization: Bearer` while Anthropic sends `x-api-key` and no `Authorization`; a trailing slash or an already-complete endpoint path never produces a doubled path; the Ollama preset resolves to `/v1/chat/completions` and an unknown protocol name falls back to the OpenAI shape rather than failing; the reasoning setting splits by protocol (OpenAI shape → `reasoning_effort`, Anthropic → `thinking.budget_tokens` and never `reasoning_effort`); a budget that does not fit under `max_tokens` is omitted rather than sent to fail with a 400, while the same combination is refused at save time so the omission never becomes the normal path; the setting rides along on the streaming path the draft actually uses; the probe carries neither form
 - **AI reply parsing** — SQL is recovered from bare JSON, from a ```` ```json ```` fence, and from half a fence truncated by the token limit; a reply that ignores the output format entirely still has its SQL used, but gains an extra uncertainty entry (a model that would not follow the format probably did not follow "do not invent columns" either); when the model declines the conversion outright its stated reasons are kept rather than discarded as a network error; an empty reply never silently clears the editor; an unconfigured provider throws rather than masquerading as "conversion failed"
 - **Candidate validation** (against real H2) — a same-named object is **byte-identical before and after** a check, including the two forms easiest to get wrong (`CREATE OR REPLACE` and a schema-qualified name); no object is left behind afterwards, and a failed `CREATE` is cleaned up just the same; a statement whose `CREATE` header cannot be parsed is refused rather than forwarded verbatim to the target; the temporary name stays within Oracle's 30-byte limit and two consecutive checks never collide; "the database is unreachable" and "the statement was rejected" do not share one message
 - **Override storage** — the key matches the one `StructureSyncService` actually looks up (`FUNCTION` folds onto `PROCEDURE`); a blank override is refused (an empty-string override is worse than none — the sync would execute it and the object would silently disappear); deleting a key that does not exist writes nothing; overrides whose object was dropped at the source or deselected in the project are flagged as orphans and can be cleared
