@@ -70,6 +70,20 @@ public final class JdbcRowMapper {
     public static Map<String, Object> readRow(ResultSet rs, List<String> columns,
                                               List<Integer> types, List<String> typeNames)
             throws SQLException {
+        return readRow(rs, columns, types, typeNames, null);
+    }
+
+    /**
+     * As the 4-arg form but with the source product, so family-specific driver-private
+     * values can be read as text: PostgreSQL enums ({@code Types.OTHER} named after the
+     * enum) arrive as {@code PGobject} and arrays ({@code Types.ARRAY}, type name
+     * {@code "_int4"}) as {@code PgArray}. The generated target columns are TEXT/CLOB, and
+     * no non-PG driver — nor a PG text column — accepts those driver-private objects.
+     */
+    public static Map<String, Object> readRow(ResultSet rs, List<String> columns,
+                                              List<Integer> types, List<String> typeNames,
+                                              com.qqmu.jync.model.DatabaseType sourceType)
+            throws SQLException {
         Map<String, Object> row = new LinkedHashMap<>();
         for (int i = 0; i < columns.size(); i++) {
             int idx = i + 1;
@@ -111,12 +125,26 @@ public final class JdbcRowMapper {
                     }
                     break;
                 case Types.OTHER:
-                    if (isPgTextBorneOther(typeName)) {
-                        // F-9: PG JSON/JSONB/UUID/XML report OTHER and getObject returns a
-                        // driver-private PGobject the target cannot infer. Their text payload
-                        // is the universal landing form (jsonb canonical text, uuid standard
-                        // form) and binds cleanly to TEXT/VARCHAR — or json/uuid columns via
-                        // the target's assignment cast.
+                    if (isPostgresFamily(sourceType)) {
+                        // Every PG-only OTHER (json/jsonb/uuid/xml plus enums and geometry
+                        // types) builds onto a TEXT/CLOB target — getObject would hand the
+                        // target driver a private PGobject it cannot infer. The text payload
+                        // is the universal landing form; json/uuid also bind to native target
+                        // columns through their assignment casts.
+                        value = rs.getString(idx);
+                    } else if (isPgTextBorneOther(typeName)) {
+                        // Source family unknown (older call paths): the known text-borne
+                        // names still take the safe read.
+                        value = rs.getString(idx);
+                    } else {
+                        value = rs.getObject(idx);
+                    }
+                    break;
+                case Types.ARRAY:
+                    if (isPostgresFamily(sourceType)) {
+                        // PG arrays report ARRAY with internal names like "_int4"; the
+                        // generated column is TEXT/CLOB and accepts the "{1,2,3}" literal,
+                        // while a PgArray object is rejected by every target driver.
                         value = rs.getString(idx);
                     } else {
                         value = rs.getObject(idx);
@@ -146,6 +174,11 @@ public final class JdbcRowMapper {
 
     private static boolean isMysqlDatetime(String typeName) {
         return typeName != null && "DATETIME".equalsIgnoreCase(typeName.trim());
+    }
+
+    private static boolean isPostgresFamily(com.qqmu.jync.model.DatabaseType sourceType) {
+        return sourceType != null
+                && sourceType.getFamily() == com.qqmu.jync.model.DatabaseType.DialectFamily.POSTGRES;
     }
 
     private static boolean isPgTextBorneOther(String typeName) {

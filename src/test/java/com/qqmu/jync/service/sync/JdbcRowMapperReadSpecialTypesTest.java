@@ -117,6 +117,50 @@ class JdbcRowMapperReadSpecialTypesTest {
         assertThat(row.get("c")).isSameAs(point);
     }
 
+    // —— PG 枚举与数组:DDL 侧落成 TEXT/CLOB,行值也必须是文本。枚举报 Types.OTHER
+    // (TYPE_NAME=枚举名),数组报 Types.ARRAY(TYPE_NAME="_int4");旧代码分别走
+    // getObject → PGobject / PgArray,非 PG 目标驱动直接拒绝绑定。 ——
+
+    @Test
+    void pgEnumValueIsReadAsText() throws Exception {
+        ResultSet rs = mockRow(Types.OTHER, "mood");
+        when(rs.getString(1)).thenReturn("happy");
+        when(rs.wasNull()).thenReturn(false);
+
+        Map<String, Object> row = JdbcRowMapper.readRow(rs, List.of("c"),
+                List.of(Types.OTHER), List.of("mood"), com.qqmu.jync.model.DatabaseType.POSTGRESQL);
+
+        assertThat(row.get("c")).isEqualTo("happy");
+    }
+
+    @Test
+    void pgArrayValueIsReadAsText() throws Exception {
+        ResultSet rs = mockRow(Types.ARRAY, "_int4");
+        when(rs.getString(1)).thenReturn("{1,2,3}");
+        when(rs.wasNull()).thenReturn(false);
+
+        Map<String, Object> row = JdbcRowMapper.readRow(rs, List.of("c"),
+                List.of(Types.ARRAY), List.of("_int4"),
+                com.qqmu.jync.model.DatabaseType.POSTGRESQL);
+
+        assertThat(row.get("c")).isEqualTo("{1,2,3}");
+    }
+
+    @Test
+    void nonPgArrayKeepsGetObjectBehaviour() throws Exception {
+        // Source family is not PG: keep the driver's natural reading rather than guessing.
+        Object nativeArray = new Object();
+        ResultSet rs = mockRow(Types.ARRAY, "ARRAY");
+        when(rs.getObject(1)).thenReturn(nativeArray);
+        when(rs.wasNull()).thenReturn(false);
+
+        Map<String, Object> row = JdbcRowMapper.readRow(rs, List.of("c"),
+                List.of(Types.ARRAY), List.of("ARRAY"),
+                com.qqmu.jync.model.DatabaseType.ORACLE);
+
+        assertThat(row.get("c")).isSameAs(nativeArray);
+    }
+
     private static ResultSet mockRow(int jdbcType, String typeName) throws Exception {
         ResultSetMetaData md = mock(ResultSetMetaData.class);
         when(md.getColumnCount()).thenReturn(1);

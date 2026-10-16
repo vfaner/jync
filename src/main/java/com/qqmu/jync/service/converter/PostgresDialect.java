@@ -81,6 +81,11 @@ public class PostgresDialect extends AbstractSqlDialect {
     }
 
     @Override
+    protected String timeTzType() {
+        return "TIME WITH TIME ZONE";
+    }
+
+    @Override
     protected String timestampTzType() {
         return "TIMESTAMP WITH TIME ZONE";
     }

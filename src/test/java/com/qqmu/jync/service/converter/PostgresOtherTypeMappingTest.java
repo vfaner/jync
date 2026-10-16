@@ -3,6 +3,7 @@ package com.qqmu.jync.service.converter;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Types;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -22,6 +23,30 @@ class PostgresOtherTypeMappingTest {
         column.setTypeName(typeName);
         column.setSize(0);
         return column;
+    }
+
+    private ColumnMeta array(String typeName) {
+        ColumnMeta column = new ColumnMeta();
+        column.setName("X");
+        column.setJdbcType(Types.ARRAY);
+        column.setTypeName(typeName);
+        column.setSize(0);
+        return column;
+    }
+
+    @Test
+    void pgArraysNeverEmitTheInternalUnderScoreTypeName() {
+        // Types.ARRAY used to fall through mapType unhandled, emitting the raw internal
+        // name "_int4"/"_text" — legal nowhere except a PG-family target by accident, and
+        // even there array VALUES arrive as text. Every target must build a text LOB.
+        String generic = new GenericSqlDialect().mapType(array("_int4"),
+                DatabaseType.POSTGRESQL);
+        String mysql = new MySqlDialect().mapType(array("_text"), DatabaseType.POSTGRESQL);
+        String pg = new PostgresDialect().mapType(array("_int4"), DatabaseType.POSTGRESQL);
+        for (String ddl : List.of(generic, mysql, pg)) {
+            assertThat(ddl).doesNotContain("_int4").doesNotContain("_text");
+            assertThat(ddl.toUpperCase()).containsAnyOf("CLOB", "TEXT", "LONGTEXT");
+        }
     }
 
     @Test

@@ -767,8 +767,8 @@ public class DataSyncService {
                 Map<String, Integer> typeByColumn = new HashMap<>();
                 for (int i = 0; i < columns.size(); i++) {
                     typeByColumn.put(columns.get(i),
-                            effectiveTargetType(jdbcTypes.get(i), typeNames.get(i),
-                                    md.getPrecision(i + 1)));
+                            effectiveTargetType(ctx.getSourceType(), jdbcTypes.get(i),
+                                    typeNames.get(i), md.getPrecision(i + 1)));
                 }
 
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
@@ -839,16 +839,26 @@ public class DataSyncService {
     /**
      * JDBC type of the TARGET column for a source result column. The source metadata types
      * usually coincide with the built target types, except the columns the converter remaps
-     * by database-specific name/width: MySQL YEAR (reported DATE) lands on SMALLINT, and
-     * MySQL BIT(n>1) lands on a width-band integer. Binds and null-typing must use the
-     * target type.
+     * by database-specific name/width: MySQL YEAR (reported DATE) lands on SMALLINT,
+     * MySQL BIT(n>1) lands on a width-band integer, and MySQL BIGINT UNSIGNED lands on
+     * DECIMAL (its 2^64-1 top value overflows signed BIGINT). Binds and null-typing must
+     * use the target type.
      */
-    private static int effectiveTargetType(int sourceJdbcType, String sourceTypeName,
-                                           int precision) {
+    private static int effectiveTargetType(DatabaseType sourceType, int sourceJdbcType,
+                                           String sourceTypeName, int precision) {
         if (sourceJdbcType == java.sql.Types.DATE
                 && sourceTypeName != null
                 && "YEAR".equalsIgnoreCase(sourceTypeName.trim())) {
             return java.sql.Types.SMALLINT;
+        }
+        if (sourceType != null
+                && sourceType.getFamily() == DatabaseType.DialectFamily.MYSQL
+                && sourceJdbcType == java.sql.Types.BIGINT
+                && sourceTypeName != null) {
+            String name = sourceTypeName.trim().toUpperCase();
+            if (name.startsWith("BIGINT") && name.contains("UNSIGNED")) {
+                return java.sql.Types.DECIMAL;
+            }
         }
         if (sourceJdbcType == java.sql.Types.BIT && precision > 1) {
             if (precision <= 8) {
@@ -878,7 +888,8 @@ public class DataSyncService {
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
             JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
             while (rs.next()) {
-                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes, typeNames);
+                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes, typeNames,
+                        ctx.getSourceType());
                 if (sink != null) {
                     sink.values = extractPk(row, pkTrack);
                 }
@@ -939,7 +950,8 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(update, properties.getQueryTimeoutSeconds());
             int sinceCommit = 0;
             while (rs.next()) {
-                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes, typeNames);
+                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes, typeNames,
+                        ctx.getSourceType());
                 if (sink != null) {
                     sink.values = extractPk(row, pkTrack);
                 }

@@ -69,6 +69,12 @@ public class MySqlDialect extends AbstractSqlDialect {
     }
 
     @Override
+    protected String unsignedBigIntType() {
+        // Native unsigned type holds 2^64-1 directly; no need to widen to DECIMAL.
+        return "BIGINT UNSIGNED";
+    }
+
+    @Override
     protected String floatType() {
         return "FLOAT";
     }
@@ -137,6 +143,58 @@ public class MySqlDialect extends AbstractSqlDialect {
     @Override
     protected String autoIncrementClause() {
         return "AUTO_INCREMENT";
+    }
+
+    /**
+     * MySQL rejects a table whose AUTO_INCREMENT column is not any kind of key
+     * (ER_WRONG_AUTO_KEY, 1075). A source identity/serial column without a primary key
+     * (legal on PostgreSQL, Oracle and DB2) therefore needs an explicit UNIQUE KEY.
+     */
+    @Override
+    protected String additionalTableConstraint(TableMeta table, String targetTable) {
+        ColumnMeta ai = autoIncrementColumnWithoutKey(table);
+        if (ai == null) {
+            return null;
+        }
+        return "UNIQUE KEY " + quoteIdentifier(autoKeyName(targetTable, ai.getName()))
+                + " (" + quoteIdentifier(ai.getName()) + ")";
+    }
+
+    @Override
+    public String getAddColumnSql(String schema, String table, ColumnMeta column,
+                                  DatabaseType sourceType) {
+        // The unique key must be part of the SAME ALTER statement: MySQL rejects a standalone
+        // ADD COLUMN of an AUTO_INCREMENT column without a key (ER_WRONG_AUTO_KEY, 1075), so a
+        // follow-up companion statement would arrive too late.
+        String sql = "ALTER TABLE " + qualify(schema, table) + " ADD COLUMN "
+                + columnDefinition(column, sourceType);
+        if (column.isAutoIncrement() && !column.isPrimaryKey()) {
+            sql += ", ADD UNIQUE KEY " + quoteIdentifier(autoKeyName(table, column.getName()))
+                    + " (" + quoteIdentifier(column.getName()) + ")";
+        }
+        return sql;
+    }
+
+    private static ColumnMeta autoIncrementColumnWithoutKey(TableMeta table) {
+        if (table.getColumns() == null) {
+            return null;
+        }
+        List<String> pk = table.getPrimaryKeys() == null ? List.of()
+                : table.getPrimaryKeys().stream()
+                        .map(n -> n == null ? null : n.toUpperCase(java.util.Locale.ROOT))
+                        .collect(Collectors.toList());
+        for (ColumnMeta col : table.getColumns()) {
+            if (col.isAutoIncrement()
+                    && (col.getName() == null
+                        || !pk.contains(col.getName().toUpperCase(java.util.Locale.ROOT)))) {
+                return col;
+            }
+        }
+        return null;
+    }
+
+    private String autoKeyName(String table, String column) {
+        return truncateIdentifier("uk_" + table + "_" + column);
     }
 
     @Override

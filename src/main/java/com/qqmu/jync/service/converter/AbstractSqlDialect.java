@@ -68,11 +68,13 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         if (mapped != null) {
             return mapped;
         }
-        // PostgreSQL reports uuid/json/jsonb/xml/arrays/enums as Types.OTHER; a non-PG target
-        // cannot create a column named after the PG type ("uuid", "jsonb", "_int4"), so map
-        // them onto portable types instead of passing the raw name through.
-        if (sourceType == DatabaseType.POSTGRESQL
-                && column.getJdbcType() == java.sql.Types.OTHER) {
+        // PostgreSQL reports uuid/json/jsonb/xml/enums as Types.OTHER and arrays as
+        // Types.ARRAY with an internal name like "_int4"; no target can create a column
+        // named "_int4", so map both onto portable types instead of passing the raw name.
+        if (sourceType != null
+                && sourceType.getFamily() == DatabaseType.DialectFamily.POSTGRES
+                && (column.getJdbcType() == java.sql.Types.OTHER
+                    || column.getJdbcType() == java.sql.Types.ARRAY)) {
             return postgresOtherType(column);
         }
         // Unclassified type: pass the source name through and let the target complain.
@@ -117,6 +119,13 @@ public abstract class AbstractSqlDialect implements SqlDialect {
             case Types.INTEGER:
                 return intType();
             case Types.BIGINT:
+                // Connector/J reports BIGINT UNSIGNED as Types.BIGINT, TYPE_NAME
+                // "BIGINT UNSIGNED", size 20: its top value 2^64-1 overflows every signed
+                // BIGINT target, so non-MySQL targets widen to an exact 20-digit decimal;
+                // MySQL-family targets keep the native unsigned type.
+                if (isMysqlFamilyUnsigned(c, sourceType)) {
+                    return unsignedBigIntType();
+                }
                 return bigIntType();
             case Types.REAL:
                 return floatType();
@@ -147,8 +156,9 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                 }
                 return dateTypeFor(c, sourceType);
             case Types.TIME:
-            case Types.TIME_WITH_TIMEZONE:
                 return timeType();
+            case Types.TIME_WITH_TIMEZONE:
+                return timeTzType();
             case Types.TIMESTAMP:
                 return timestampType();
             case Types.TIMESTAMP_WITH_TIMEZONE:
@@ -255,6 +265,26 @@ public abstract class AbstractSqlDialect implements SqlDialect {
 
     protected abstract String bigIntType();
 
+    /** Target type for MySQL-family {@code BIGINT UNSIGNED} (holds up to 2^64-1). Most
+     *  products express that exact range as DECIMAL(20,0); MySQL-family targets override. */
+    protected String unsignedBigIntType() {
+        return "DECIMAL(20,0)";
+    }
+
+    /** Connector/J (and MariaDB driver) flag unsigned bigint only through the type name:
+     *  JDBC type stays BIGINT and size becomes 20. The name must name BIGINT explicitly —
+     *  INT UNSIGNED also arrives as Types.BIGINT, but a signed BIGINT holds its full range. */
+    protected static boolean isMysqlFamilyUnsigned(ColumnMeta c, DatabaseType sourceType) {
+        if (sourceType == null
+                || sourceType.getFamily() != DatabaseType.DialectFamily.MYSQL
+                || c.getJdbcType() != Types.BIGINT
+                || c.getTypeName() == null) {
+            return false;
+        }
+        String name = c.getTypeName().trim().toUpperCase();
+        return name.startsWith("BIGINT") && name.contains("UNSIGNED");
+    }
+
     protected abstract String floatType();
 
     protected abstract String doubleType();
@@ -262,6 +292,12 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     protected abstract String dateType();
 
     protected abstract String timeType();
+
+    /** Target type for TIME WITH TIME ZONE. Dialects without a zone-bearing time type
+     *  (MySQL, SQL Server, DB2) fall back to the plain time type and lose the offset. */
+    protected String timeTzType() {
+        return timeType();
+    }
 
     protected abstract String timestampType();
 
@@ -382,6 +418,10 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                     .collect(Collectors.joining(", "));
             defs.add("  PRIMARY KEY (" + pkCols + ")");
         }
+        String extraConstraint = additionalTableConstraint(table, targetTable);
+        if (extraConstraint != null && !extraConstraint.isBlank()) {
+            defs.add("  " + extraConstraint);
+        }
         sb.append(String.join(",\n", defs));
         sb.append("\n)");
         sb.append(createTableSuffix(table));
@@ -410,7 +450,9 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         }
 
         // A primary key column is implicitly NOT NULL; stating it is harmless and clearer.
-        if (!col.isNullable()) {
+        // DB2 is the exception: its grammar puts NOT NULL BEFORE the identity clause, and an
+        // identity column is implicitly NOT NULL anyway, so it simply omits the tail.
+        if (!col.isNullable() && (!col.isAutoIncrement() || notNullAfterIdentityClause())) {
             sb.append(" NOT NULL");
         }
 
@@ -436,6 +478,23 @@ public abstract class AbstractSqlDialect implements SqlDialect {
 
     protected String createTableSuffix(TableMeta table) {
         return "";
+    }
+
+    /**
+     * An extra inline table constraint (e.g. MySQL's required key on an AUTO_INCREMENT
+     * column), or {@code null} when the dialect needs none.
+     */
+    protected String additionalTableConstraint(TableMeta table, String targetTable) {
+        return null;
+    }
+
+    /**
+     * Whether {@code NOT NULL} may be emitted after the auto-increment/identity clause.
+     * T-SQL and MySQL require/accept that order; DB2 rejects it (SQL0104) and its identity
+     * columns are already implicitly NOT NULL.
+     */
+    protected boolean notNullAfterIdentityClause() {
+        return true;
     }
 
     @Override
@@ -507,9 +566,14 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     }
 
     protected boolean isNumeric(String s) {
+        // Double.parseDouble also accepts NaN, Infinity and hex doubles (0x1p4); none of
+        // them are legal DEFAULT literals on any target, so reject them up front.
+        String trimmed = s.trim();
+        if (!trimmed.matches("[+-]?(\\d+\\.?\\d*|\\.\\d+)([eE][+-]?\\d+)?")) {
+            return false;
+        }
         try {
-            Double.parseDouble(s);
-            return true;
+            return Double.isFinite(Double.parseDouble(trimmed));
         } catch (NumberFormatException e) {
             return false;
         }
