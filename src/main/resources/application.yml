@@ -133,10 +133,14 @@ sync:
     lock-ttl-ms: 30000
     supervise-interval-ms: 10000
     connect-timeout-ms: 10000
-  # Encryption key for stored database passwords. OVERRIDE THIS IN PRODUCTION.
-  # NOTE: the default value is deliberately kept at its pre-rename literal — stored
-  # connection passwords were AES-encrypted with it, and changing it would make
-  # every existing installation's saved credentials undecryptable after upgrade.
+  # Encryption key for stored database passwords. Leave at these defaults on a FRESH install:
+  # CryptoKeyBootstrap generates a strong secret on first boot and persists it beside the
+  # database (<name>.key), so a new deployment is protected without any manual step. Set both
+  # explicitly to manage the key yourself (e.g. via env vars), in which case nothing is generated.
+  # NOTE: the literals below are deliberately kept at their pre-rename default — stored
+  # connection passwords were AES-encrypted with them, and changing the default would make
+  # every existing installation's saved credentials undecryptable after upgrade. An existing
+  # database therefore keeps them (see CryptoKeyResolver).
   crypto-password: synctool-default-key-change-me
   crypto-salt: 5c0744940b5c369b
   ai:

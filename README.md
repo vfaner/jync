@@ -104,8 +104,10 @@ spring:
   datasource:
     url: jdbc:h2:file:/opt/jync/data/jync;MODE=MySQL;AUTO_SERVER=TRUE
 sync:
-  crypto-password: 请改成你自己的强口令      # ← 必须修改
-  crypto-salt: 请改成你自己的16位十六进制盐   # ← 必须修改
+  # 加密密钥：全新部署留空即可，首次启动会自动生成强密钥并保存到数据库同目录的
+  # <库名>.key（如 /opt/jync/data/jync.key）。想自己管密钥（环境变量 / Secret）再显式填写。
+  #crypto-password: 请改成你自己的强口令
+  #crypto-salt: 请改成你自己的16位十六进制盐
 logging:
   file:
     path: /opt/jync/logs
@@ -117,7 +119,11 @@ java -jar jync.jar --spring.config.additional-location=file:./application.yml
 
 > ⚠️ 必须用 `additional-location`（叠加覆盖），不要用替换式的 `spring.config.location`：后者会丢掉 jar 内置配置（i18n basename、`ddl-auto`、`app.github-url`），症状是登录页 `??login.title_zh_CN??`、全新部署不建表甚至启动失败。
 >
-> 🔐 `crypto-password` / `crypto-salt` 加密存储的数据库密码，发行包带默认值，**生产必须改**；改后旧密码需重填。
+> 🔐 `crypto-password` / `crypto-salt` 是数据库连接密码的 AES 加密密钥。**全新部署不用配**：首次启动会生成一个强密钥写到数据库同目录的 `<库名>.key`（如 `/opt/jync/data/jync.key`），之后每次启动都从那里读。两点务必记住：
+> 1. **备份数据库时要连 `<库名>.key` 一起备份**——数据文件和服务都在、只丢了这个文件，已保存的连接密码就解不开了（在界面上重填即可恢复）。
+> 2. **从旧版本升级过来的部署保持默认值不动**：发行包里的默认值是历史密文的解密钥匙，改了会让所有已存连接密码失效。
+>
+> 想自己管理密钥（比如统一走环境变量或 K8s Secret）就直接显式配置这两项，填了完全以你为准，不会再生成文件。
 
 **后台常驻**：systemd 单元把 `ExecStart` 指向上面的启动命令（`WorkingDirectory=/opt/jync`，`Restart=always`）即可；快速验证用 nohup，同样建议带上外部配置：
 
@@ -231,7 +237,7 @@ docker compose up -d --build      # 或：docker build -t jync:1.7.4 . && docker
 | `sync.cdc.pg.idle-poll-ms` | `500` | PG 逻辑解码真空闲时的休眠间隔（毫秒） |
 | `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲时的休眠间隔（毫秒） |
 | `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口（毫秒）；`0` 关闭聚合落点 |
-| `crypto-password` / `crypto-salt` | *(默认值)* | 密码加密密钥与盐（十六进制），**生产必须修改** |
+| `crypto-password` / `crypto-salt` | *(留空即首启自动生成)* | 连接密码的加密密钥与盐（十六进制）。留空则首次启动生成并保存到 `<库名>.key`（与数据库同目录，须随数据库一起备份）；显式配置则以配置为准 |
 | `ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
 | `app.update-check.enabled` | `true` | 新版本检查（GitHub 优先、Gitee 兜底）；关闭后系统信息页不再出现升级入口 |
 | `app.update-check.timeout-ms` | `5000` | 更新检查单次请求超时（毫秒），超时即切换备用平台 |
