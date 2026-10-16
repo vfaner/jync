@@ -315,6 +315,13 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         // ascending txLsn order so advanceLsn stays monotonic across capture instances.
         SqlServerTxFold fold = new SqlServerTxFold();
         for (CaptureInstance ci : instances) {
+            // A stop landing between CIs makes the shared fold partial just as surely as one
+            // landing mid-ResultSet: a transaction spanning tables only a later CI scans
+            // would be missing rows. Do not start another scan, and (checked again below)
+            // do not flush anything the scan did not finish.
+            if (!running || Thread.currentThread().isInterrupted()) {
+                return out;
+            }
             // from_lsn is INCLUSIVE — pass fn_cdc_increment_lsn to skip the watermark
             // transaction we already applied on the previous cycle. The persisted value
             // remains fromLsn; only the SQL interval shifts.
@@ -372,9 +379,23 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 throw e;
             }
         }
+        // The scan phase finished while running on every CI — only now does the fold
+        // contain COMPLETE transactions. If a stop/interrupt cut a scan short, abandon the
+        // whole window: the fold may hold a multi-table transaction missing tables, or an
+        // UPDATE whose op=4 never arrived (the fold would DELETE a row the source keeps).
+        // Committing it and advancing its txLsn would skip the missing rows forever after
+        // restart. The window re-reads on the next start and lands via idempotent upserts.
+        if (!running || Thread.currentThread().isInterrupted()) {
+            return out;
+        }
         // Flush per-transaction in ascending txLsn order (fold.ordered() is a TreeMap).
         for (Map.Entry<String, Map<CdcTableBinding, SqlServerTxFold.Buffer>> e
                 : fold.ordered().entrySet()) {
+            // A stop between flushes leaves later, unflushed transactions for the restart;
+            // already-landed transactions advanced their own LSNs in flushTransaction.
+            if (!running || Thread.currentThread().isInterrupted()) {
+                break;
+            }
             flushTransaction(projectId, e.getKey(), e.getValue());
         }
         // #3: reaching here means the loop completed without aborting — every tracked
