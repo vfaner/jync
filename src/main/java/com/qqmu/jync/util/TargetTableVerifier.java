@@ -53,26 +53,26 @@ public final class TargetTableVerifier {
                 ? tableName.toUpperCase(Locale.ROOT) : tableName;
 
         DatabaseMetaData metaData = conn.getMetaData();
-        Map<String, Integer> targetTypes = new LinkedHashMap<>();
+        Map<String, TargetColumn> targetTypes = new LinkedHashMap<>();
         // Catalog stays null: MySQL uses the current database, others key on schema/owner.
         try (ResultSet rs = metaData.getColumns(null, lookupSchema, lookupTable, "%")) {
             while (rs.next()) {
                 targetTypes.put(rs.getString("COLUMN_NAME").toUpperCase(Locale.ROOT),
-                        rs.getInt("DATA_TYPE"));
+                        new TargetColumn(rs.getInt("DATA_TYPE"), rs.getInt("COLUMN_SIZE")));
             }
         }
 
         for (ColumnMeta sourceColumn : sourceTable.getColumns()) {
-            Integer foundType = targetTypes.get(sourceColumn.getName().toUpperCase(Locale.ROOT));
-            if (foundType == null) {
+            TargetColumn found = targetTypes.get(sourceColumn.getName().toUpperCase(Locale.ROOT));
+            if (found == null) {
                 return "target table " + lookupTable + " is missing column " + sourceColumn.getName()
                         + " (a table with this name exists but its shape does not match the"
                         + " source). Fix the table or let structure sync recreate it.";
             }
-            if (sourceFamily(sourceColumn) != family(foundType)) {
+            if (sourceFamily(sourceColumn) != targetFamily(found, oracleFamily)) {
                 return "target table " + lookupTable + " column " + sourceColumn.getName()
                         + " has an incompatible type (source JDBC type " + sourceColumn.getJdbcType()
-                        + " vs target " + foundType + "). Align the column types.";
+                        + " vs target " + found.jdbcType() + "). Align the column types.";
             }
         }
 
@@ -151,6 +151,45 @@ public final class TargetTableVerifier {
             return 1;
         }
         return family(column.getJdbcType());
+    }
+
+    /** Oracle JDBC's vendor code for its native BINARY_FLOAT (measured on 23ai Free). */
+    static final int ORACLE_BINARY_FLOAT = 100;
+
+    /** Oracle JDBC's vendor code for its native BINARY_DOUBLE (measured on 23ai Free). */
+    static final int ORACLE_BINARY_DOUBLE = 101;
+
+    /** The target column's dictionary entry: its JDBC type and its declared width. */
+    private record TargetColumn(int jdbcType, int columnSize) {
+    }
+
+    /**
+     * Family of the TARGET column's reported JDBC type, judged the same way the source side
+     * judges it. Two divergences from the raw table:
+     *
+     * <p>Oracle's driver reports its native floating types with vendor codes that are not in
+     * {@link java.sql.Types}, so the generic table would file them under "unknown — must match
+     * exactly". They are plain numbers, and {@link com.qqmu.jync.service.converter.OracleDialect}
+     * creates exactly these two for a source FLOAT/DOUBLE — without this the verifier rejected
+     * the table the generator had just built ("source JDBC type 8 vs target 101") and the sync
+     * stopped on its own DDL.
+     *
+     * <p>MySQL reports both {@code BIT(1)} and {@code BIT(n)} as JDBC BIT, so the width decides
+     * the family — the same rule {@link #sourceFamily} applies (see there). Reading the width
+     * from the dictionary is what makes a MySQL {@code BIT(16)} → {@code BIT(16)} pair pass:
+     * both sides report JDBC type -7, and a family that ignored the width called the source's
+     * own shape incompatible and aborted the baseline.
+     */
+    private static int targetFamily(TargetColumn column, boolean oracleFamily) {
+        int jdbcType = column.jdbcType();
+        if (oracleFamily
+                && (jdbcType == ORACLE_BINARY_FLOAT || jdbcType == ORACLE_BINARY_DOUBLE)) {
+            return 2; // numeric
+        }
+        if (jdbcType == java.sql.Types.BIT && column.columnSize() > 1) {
+            return 2; // MySQL BIT(n>1) holds an unsigned integer, as on the source side
+        }
+        return family(jdbcType);
     }
 
     private static boolean isTextBorneOther(String typeName) {

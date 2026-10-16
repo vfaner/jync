@@ -452,13 +452,31 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         // A primary key column is implicitly NOT NULL; stating it is harmless and clearer.
         // DB2 is the exception: its grammar puts NOT NULL BEFORE the identity clause, and an
         // identity column is implicitly NOT NULL anyway, so it simply omits the tail.
+        String nullClause = null;
         if (!col.isNullable() && (!col.isAutoIncrement() || notNullAfterIdentityClause())) {
-            sb.append(" NOT NULL");
+            nullClause = " NOT NULL";
         }
 
         String def = renderDefaultValue(col);
-        if (def != null) {
-            sb.append(" DEFAULT ").append(def);
+        String defaultClause = def == null ? null : " DEFAULT " + def;
+
+        // Oracle's column grammar is name type [DEFAULT expr] [inline constraint ...]: a
+        // DEFAULT after NOT NULL is a syntax error (ORA-00907). MySQL, PostgreSQL, T-SQL and
+        // DB2 all accept DEFAULT in either position, so their order is left unchanged.
+        if (defaultBeforeNotNull()) {
+            if (defaultClause != null) {
+                sb.append(defaultClause);
+            }
+            if (nullClause != null) {
+                sb.append(nullClause);
+            }
+        } else {
+            if (nullClause != null) {
+                sb.append(nullClause);
+            }
+            if (defaultClause != null) {
+                sb.append(defaultClause);
+            }
         }
         return sb.toString();
     }
@@ -495,6 +513,15 @@ public abstract class AbstractSqlDialect implements SqlDialect {
      */
     protected boolean notNullAfterIdentityClause() {
         return true;
+    }
+
+    /**
+     * Whether {@code DEFAULT} must be emitted before {@code NOT NULL}. Oracle's grammar is
+     * {@code column_name data_type [DEFAULT expr] [inline_constraint ...]}, so the MySQL order
+     * produces ORA-00907; every other supported target accepts either order.
+     */
+    protected boolean defaultBeforeNotNull() {
+        return false;
     }
 
     @Override

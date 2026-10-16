@@ -1,9 +1,15 @@
 package com.qqmu.jync.util;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
@@ -142,6 +148,32 @@ class TargetTableVerifierTest {
     }
 
     @Test
+    void wideBitTargetColumnAcceptsAWideBitSource() throws SQLException {
+        // docker 实测 MySQL→MySQL(CdcVolumeAndTypesIT.bit16RoundTrip):源与目标是同一份
+        // DDL 的 BIT(16),驱动两侧都报 JDBC -7,但源按宽度归数值族、目标只看 JDBC 类型
+        // 归布尔族 —— shape check 拒绝了源表自己的形态("source JDBC type -7 vs target
+        // -7"),基线全量直接失败。目标的宽度必须和源一样参与判族。
+        Connection mysql = metadataReporting("V", Types.BIT, 16);
+
+        String reason = TargetTableVerifier.verify(mysql, null, "T",
+                source(bitCol("V", 16)), DatabaseType.MYSQL);
+
+        assertThat(reason).isNull();
+    }
+
+    @Test
+    void wideBitSourceStillRejectsASingleBitTarget() throws SQLException {
+        // 守护:宽度规则是对称判族,不是"BIT 目标一律放行"。目标是 BIT(1)/BOOLEAN 时,
+        // 宽 BIT 源(字节数组)仍然塞不进去。
+        Connection mysql = metadataReporting("V", Types.BIT, 1);
+
+        String reason = TargetTableVerifier.verify(mysql, null, "T",
+                source(bitCol("V", 16)), DatabaseType.MYSQL);
+
+        assertThat(reason).contains("incompatible type");
+    }
+
+    @Test
     void singleBitAgainstBooleanTargetPasses() throws SQLException {
         createTarget("CREATE TABLE T (C_FLAG BOOLEAN)");
 
@@ -231,6 +263,80 @@ class TargetTableVerifierTest {
                 DatabaseType.MYSQL);
 
         assertThat(reason).contains("missing column ID");
+    }
+
+    // —— docker 实测 MySQL→Oracle:Oracle 驱动为它自己的浮点类型报的 DATA_TYPE 是厂商码,
+    // 不是 java.sql.Types 里的值 —— BINARY_FLOAT=100,BINARY_DOUBLE=101。而这两个类型正是
+    // OracleDialect 自己为源端 FLOAT/DOUBLE 生成的形态,于是建表成功、shape check 却判
+    // "incompatible type (source JDBC type 8 vs target 101)",同步在基线阶段就中止。 ——
+
+    @Test
+    void oracleBinaryDoubleColumnAcceptsAMysqlDoubleSource() throws SQLException {
+        Connection oracle = metadataReporting("C_DOUBLE", 101);
+
+        String reason = TargetTableVerifier.verify(oracle, null, "T",
+                source(col("C_DOUBLE", "DOUBLE", Types.DOUBLE)), DatabaseType.ORACLE);
+
+        assertThat(reason).isNull();
+    }
+
+    @Test
+    void oracleBinaryFloatColumnAcceptsAMysqlFloatSource() throws SQLException {
+        Connection oracle = metadataReporting("C_FLOAT", 100);
+
+        String reason = TargetTableVerifier.verify(oracle, null, "T",
+                source(col("C_FLOAT", "FLOAT", Types.FLOAT)), DatabaseType.ORACLE);
+
+        assertThat(reason).isNull();
+    }
+
+    @Test
+    void oracleBinaryDoubleColumnStillRejectsATextSource() throws SQLException {
+        // 放行的只是"数值"这一族:文本源塞进 BINARY_DOUBLE 仍然要拦。
+        Connection oracle = metadataReporting("C_DOUBLE", 101);
+
+        String reason = TargetTableVerifier.verify(oracle, null, "T",
+                source(col("C_DOUBLE", Types.VARCHAR)), DatabaseType.ORACLE);
+
+        assertThat(reason).contains("incompatible type");
+    }
+
+    @Test
+    void vendorFloatCodesStillNeedAnExactMatchOnNonOracleTargets() throws SQLException {
+        // 100/101 只在 Oracle 家族里被解释成浮点数;别的目标上仍是"未知类型须精确匹配"。
+        Connection mysql = metadataReporting("C_DOUBLE", 101);
+
+        String reason = TargetTableVerifier.verify(mysql, null, "T",
+                source(col("C_DOUBLE", "DOUBLE", Types.DOUBLE)), DatabaseType.MYSQL);
+
+        assertThat(reason).contains("incompatible type");
+    }
+
+    /**
+     * A connection whose column dictionary reports one column with a vendor DATA_TYPE —
+     * the only way to exercise codes H2 cannot create. {@code prepareStatement} throws,
+     * which is what the identity pre-check sees on a server without the dictionary view.
+     */
+    private static Connection metadataReporting(String columnName, int dataType)
+            throws SQLException {
+        return metadataReporting(columnName, dataType, 0);
+    }
+
+    /** As the 2-arg form but also reporting the column's width, the way MySQL reports BIT(n). */
+    private static Connection metadataReporting(String columnName, int dataType, int columnSize)
+            throws SQLException {
+        Connection connection = mock(Connection.class);
+        DatabaseMetaData metaData = mock(DatabaseMetaData.class);
+        ResultSet columns = mock(ResultSet.class);
+        when(connection.getMetaData()).thenReturn(metaData);
+        when(metaData.getColumns(any(), any(), any(), any())).thenReturn(columns);
+        when(columns.next()).thenReturn(true, false);
+        when(columns.getString("COLUMN_NAME")).thenReturn(columnName);
+        when(columns.getInt("DATA_TYPE")).thenReturn(dataType);
+        when(columns.getInt("COLUMN_SIZE")).thenReturn(columnSize);
+        when(connection.prepareStatement(anyString()))
+                .thenThrow(new SQLException("ALL_TAB_IDENTITY_COLS not exposed"));
+        return connection;
     }
 
     private void createTarget(String sql) throws SQLException {

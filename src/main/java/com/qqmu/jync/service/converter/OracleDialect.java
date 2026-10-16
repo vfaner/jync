@@ -177,6 +177,18 @@ public class OracleDialect extends AbstractSqlDialect {
         return true;
     }
 
+    /**
+     * Oracle's column grammar is {@code column_name data_type [DEFAULT expr]
+     * [inline_constraint ...]}, so a {@code DEFAULT} written after {@code NOT NULL} — the MySQL
+     * order — is parsed as a stray token. Pre-23 servers report it as the bare
+     * ORA-00907 "missing right parenthesis"; 23ai names it: ORA-03076 "unexpected item DEFAULT
+     * in column definition or internal constraint condition".
+     */
+    @Override
+    protected boolean defaultBeforeNotNull() {
+        return true;
+    }
+
     @Override
     protected String currentTimestampFunction() {
         return "SYSTIMESTAMP";
