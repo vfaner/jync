@@ -12,8 +12,11 @@ import lombok.Getter;
  *       本机 Ollama 0.33.2 + qwen3:8b 实测认 {@code "none"}:带它时 4 个 token、零思考、
  *       正文正常;不带时思考直接吃掉整个输出预算、正文为空。</li>
  *   <li>Anthropic 用 {@code thinking.budget_tokens},而"关"就是省略该字段(它的默认就是不思考)。</li>
- *   <li>官方 OpenAI 的推理模型最低只到 {@code minimal},没有"关"这一档 —— 所以 OFF
- *       只对兼容端点承诺得死,帮助文案里要写清楚。</li>
+ *   <li>官方 OpenAI 的推理模型并非都认 {@code none}:o 系列的地板是 {@code low}(不是
+ *       {@code minimal}),{@code none} 自 gpt-5.1 起才有效,gpt-5.0 是
+ *       {@code minimal/low/medium/high}。不认的值端点以 {@code 400 unsupported_value}
+ *       回绝 —— 所以 OFF 只对兼容端点承诺得死,这一条在帮助文案
+ *       {@code ai.reasoningHelp} 里对用户写明了。</li>
  * </ul>
  *
  * <p>{@link #DEFAULT} 是唯一安全的默认值:它一个字段都不发,行为与"没有这个设置"完全一致。

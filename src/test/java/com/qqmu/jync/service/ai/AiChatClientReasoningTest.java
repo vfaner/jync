@@ -113,6 +113,13 @@ class AiChatClientReasoningTest {
 
     // --- 跟随默认一根毛都不发 -----------------------------------------------------------
 
+    /**
+     * {@code null} here is not a shorthand for DEFAULT — it is the archived row. Every provider
+     * saved before this column existed has it null, and this overload reads it through the same
+     * {@code effortOf} mapping production uses, so this is the test that fails if that mapping
+     * ever starts inventing a level for those rows. It is the only test that covers it: passing
+     * {@code AiReasoningEffort.DEFAULT} explicitly would skip the mapping entirely.
+     */
     @Test
     void theDefaultEffortAddsNothingToAnOpenAiShapedRequest() {
         JsonNode body = complete(AiProtocol.OPENAI, null, 4096);

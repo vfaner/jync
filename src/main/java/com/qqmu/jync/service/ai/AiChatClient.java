@@ -402,8 +402,9 @@ public class AiChatClient {
             thinking.put("budget_tokens", budget);
             return;
         }
-        // OpenAI 形状,包含 Ollama 的兼容端点。官方 OpenAI 的推理模型不认 "none"
-        // (最低到 minimal),所以 OFF 只对兼容端点承诺得死,帮助文案里写明了。
+        // OpenAI 形状,包含 Ollama 的兼容端点。官方 OpenAI 的推理模型并非都认 "none"
+        // (o 系列地板是 low;"none" 自 gpt-5.1 起才有,不认的值以 400 回绝),所以 OFF
+        // 只对兼容端点承诺得死 —— 帮助文案 ai.reasoningHelp 里对用户写明了这一点。
         body.put("reasoning_effort", effort.getEffortLevel());
     }
 
