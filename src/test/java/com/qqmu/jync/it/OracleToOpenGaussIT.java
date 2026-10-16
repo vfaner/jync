@@ -190,6 +190,65 @@ class OracleToOpenGaussIT extends OracleCdcHarnessIT {
         disableProject(project);
     }
 
+    /**
+     * docker 实测:Oracle 的 TIMESTAMP/DATE <b>增量</b>(LogMiner)落到非 Oracle 目标。
+     *
+     * <p>上面那格类型矩阵测的是<b>基线</b>——基线走 JDBC,拿到的是 java.sql.Timestamp,
+     * 目标驱动直接吃。增量走的是 SQL_REDO <b>文本</b>,而 LogMiner 是按<b>挖掘会话的
+     * NLS</b> 渲染字面量的:容器默认中文 NLS 渲染成
+     * {@code TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午')}
+     * (OracleLiteralConvertersTest 里那条实机 fixture 就是它)。OracleLiteralConverters
+     * 把这串原样透出给目标驱动,openGauss/MySQL 都解析不了 —— 整条流断在这个列上。
+     * 该行为与目标无关:只要目标不是同一个 NLS 的 Oracle,就解析不了。
+     */
+    @Test
+    void streamedTimestampReachesANonOracleTarget() throws Exception {
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("CREATE TABLE og_temporal (id NUMBER(19) PRIMARY KEY,"
+                    + " c_ts TIMESTAMP(6), c_date DATE)");
+            st.execute("ALTER TABLE og_temporal ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS");
+            st.execute("INSERT INTO og_temporal VALUES (1,"
+                    + " TO_TIMESTAMP('2026-01-02 03:04:05.000001','YYYY-MM-DD HH24:MI:SS.FF6'),"
+                    + " TO_DATE('2026-01-02 03:04:05','YYYY-MM-DD HH24:MI:SS'))");
+        }
+        recreateTargetTable("DROP TABLE IF EXISTS \"OG_TEMPORAL\" CASCADE");
+        recreateTargetTable("CREATE TABLE \"OG_TEMPORAL\" (\"ID\" BIGINT PRIMARY KEY,"
+                + " \"C_TS\" TIMESTAMP(6), \"C_DATE\" TIMESTAMP(0))");
+
+        Project project = newProject("oracle-og-temporal", logMinerConfig("OG_TEMPORAL"));
+        manager.ensureStarted(project);
+        waitFor("temporal baseline row", 180_000, () -> countTarget("\"OG_TEMPORAL\"") == 1);
+
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("UPDATE og_temporal SET"
+                    + " c_ts = TO_TIMESTAMP('2027-03-04 05:06:07.123456',"
+                    + " 'YYYY-MM-DD HH24:MI:SS.FF6'),"
+                    + " c_date = TO_DATE('2027-03-04 05:06:07','YYYY-MM-DD HH24:MI:SS')"
+                    + " WHERE id = 1");
+        }
+        waitFor("streamed temporal update applied or task parked ERROR", 120_000, () ->
+                "2027-03-04 05:06:07.123456".equals(targetTemporal("C_TS"))
+                        || "ERROR".equals(queryTaskStatus(project.getId())));
+
+        assertThat(targetTemporal("C_TS"))
+                .as("LogMiner 增量里的 TIMESTAMP 必须是非 Oracle 目标也能解析的字面量"
+                        + "(任务状态 %s)", queryTaskStatus(project.getId()))
+                .isEqualTo("2027-03-04 05:06:07.123456");
+        assertThat(targetTemporal("C_DATE"))
+                .as("LogMiner 增量里的 DATE 同上")
+                .isEqualTo("2027-03-04 05:06:07.000000");
+
+        manager.ensureStopped(project.getId());
+        disableProject(project);
+    }
+
+    /** One column of the single test row, rendered server-side to dodge driver formatting. */
+    private String targetTemporal(String column) {
+        List<Map<String, Object>> rows = targetQuery("SELECT to_char(\"" + column + "\","
+                + " 'YYYY-MM-DD HH24:MI:SS.US') AS v FROM \"OG_TEMPORAL\" WHERE \"ID\" = 1");
+        return rows.isEmpty() ? null : (String) rows.get(0).get("v");
+    }
+
     @Test
     void ddlAddColumnWhileStoppedThenRestart() throws Exception {
         try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {

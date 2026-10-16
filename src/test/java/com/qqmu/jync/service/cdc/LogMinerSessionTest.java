@@ -121,6 +121,30 @@ class LogMinerSessionTest {
     }
 
     @Test
+    void theMiningSessionPinsLocaleIndependentNlsBeforeMiningStarts() throws SQLException {
+        // docker 实测(OracleToOpenGaussIT.streamedTimestampReachesANonOracleTarget):SQL_REDO
+        // 的字面量按"挖掘会话的 NLS"渲染。容器默认的中文 NLS 把 TIMESTAMP 渲染成
+        // TO_TIMESTAMP('04-3月 -27 05.06.07.123456 上午'),openGauss 报
+        // invalid input syntax for type timestamp,CDC 任务因 APPLY_STRIKE_OUT 停车 ——
+        // 该项目的增量在这一列上永久断流。会话必须在 START_LOGMNR 之前把 NLS 钉成与
+        // 语言/区域无关的形态,并且数值小数点也要一并钉死(否则小数会渲染成 1,5)。
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/oracle/arch/1_1.log"}, new String[]{"/oracle/redo/current01.log"});
+
+        LogMinerSession.openDefault(fx.conn, 500L, 1000);
+
+        InOrder order = Mockito.inOrder(fx.st);
+        order.verify(fx.st).execute("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'");
+        order.verify(fx.st).execute(
+                "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF9'");
+        order.verify(fx.st).execute(
+                "ALTER SESSION SET NLS_TIMESTAMP_TZ_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF9 TZH:TZM'");
+        order.verify(fx.st).execute("ALTER SESSION SET NLS_DATE_LANGUAGE = 'AMERICAN'");
+        order.verify(fx.st).execute("ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,'");
+        order.verify(fx.st).execute(Mockito.contains("START_LOGMNR"));
+    }
+
+    @Test
     void openWithoutAnyLogfileFails() throws SQLException {
         // No archived logs AND no current online members → mining has nothing to read.
         Fixture fx = new Fixture(1000L, new String[0], new String[0]);

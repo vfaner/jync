@@ -218,6 +218,7 @@ public class LogMinerSession implements AutoCloseable {
      */
     static LogMinerSession openDefault(Connection source, long startScn, int batchSize)
             throws SQLException {
+        pinLocaleIndependentNls(source);
         long currentScn;
         try (Statement st = source.createStatement();
              ResultSet rs = st.executeQuery(Q_CURRENT_SCN)) {
@@ -276,5 +277,36 @@ public class LogMinerSession implements AutoCloseable {
         }
         ResultSet rows = cursor.executeQuery();
         return new LogMinerSession(source, startScn, currentScn, cursor, rows);
+    }
+
+    /**
+     * Pins the mining session's NLS to values that do not depend on the server's locale.
+     *
+     * <p>LogMiner renders {@code V$LOGMNR_CONTENTS.SQL_REDO} — every temporal and numeric
+     * literal in the redo text — using the <em>mining session's</em> NLS settings, not the
+     * settings of the session that wrote the change. On a Chinese-locale server that turns a
+     * TIMESTAMP update into
+     * {@code TO_TIMESTAMP('04-3月 -27 05.06.07.123456 上午')}, which no target outside the same
+     * locale can parse: measured against openGauss 5.0 the apply fails with
+     * {@code invalid input syntax for type timestamp}, and the consumer parks the project in
+     * ERROR — the increment stops permanently on the first temporal column. The numeric
+     * characters matter for the same reason ({@code 1,5} instead of {@code 1.5}).
+     *
+     * <p>These are session settings and the session is ours for the lifetime of the mining
+     * session, so they need no cleanup; the formats are also what a target driver expects
+     * everywhere else in the pipeline.
+     */
+    private static void pinLocaleIndependentNls(Connection source) throws SQLException {
+        List<String> settings = List.of(
+                "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'",
+                "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF9'",
+                "ALTER SESSION SET NLS_TIMESTAMP_TZ_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF9 TZH:TZM'",
+                "ALTER SESSION SET NLS_DATE_LANGUAGE = 'AMERICAN'",
+                "ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,'");
+        try (Statement st = source.createStatement()) {
+            for (String setting : settings) {
+                st.execute(setting);
+            }
+        }
     }
 }

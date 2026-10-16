@@ -89,7 +89,7 @@ public final class CdcEventApplier {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
             for (Map<String, Object> row : rows) {
-                JdbcRowMapper.bind(ps, row, pkColumns, types);
+                JdbcRowMapper.bind(ps, row, pkColumns, types, ctx.getTargetDialect());
                 ps.addBatch();
                 if (++inBatch >= ctx.getBatchSize()) {
                     ps.executeBatch();
@@ -116,7 +116,7 @@ public final class CdcEventApplier {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
             for (Map<String, Object> row : rows) {
-                JdbcRowMapper.bind(ps, row, bindOrder, types);
+                JdbcRowMapper.bind(ps, row, bindOrder, types, ctx.getTargetDialect());
                 ps.addBatch();
                 if (++inBatch >= ctx.getBatchSize()) {
                     ps.executeBatch();
@@ -166,20 +166,20 @@ public final class CdcEventApplier {
             for (Map<String, Object> row : rows) {
                 int updated = 0;
                 if (update != null) {
-                    JdbcRowMapper.bind(update, row, updateBindOrder, types);
+                    JdbcRowMapper.bind(update, row, updateBindOrder, types, ctx.getTargetDialect());
                     updated = update.executeUpdate();
                 }
                 if (updated > 0) {
                     continue;
                 }
-                JdbcRowMapper.bind(insert, row, columns, types);
+                JdbcRowMapper.bind(insert, row, columns, types, ctx.getTargetDialect());
                 try {
                     insert.executeUpdate();
                 } catch (SQLException e) {
                     if (isUniqueViolation(e) && update != null) {
                         // A concurrent writer may have inserted the same key between our
                         // UPDATE and INSERT. Retrying the update converges without failing.
-                        JdbcRowMapper.bind(update, row, updateBindOrder, types);
+                        JdbcRowMapper.bind(update, row, updateBindOrder, types, ctx.getTargetDialect());
                         update.executeUpdate();
                     } else if (isUniqueViolation(e)) {
                         // Key-only table — update is null exactly when every column is part

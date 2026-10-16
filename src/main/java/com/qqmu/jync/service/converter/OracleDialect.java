@@ -189,6 +189,21 @@ public class OracleDialect extends AbstractSqlDialect {
         return true;
     }
 
+    /**
+     * Oracle converts a VARCHAR2 bind into DATE/TIMESTAMP through the session's
+     * NLS_DATE_FORMAT/NLS_TIMESTAMP_FORMAT — the default {@code DD-MON-RR} — so the MySQL
+     * wall-clock literal the reader produces ("2026-10-13 12:34:56.789012") fails with
+     * ORA-01843 "not a valid month". There is no portable in-SQL cast for the binder to
+     * lean on the way the PostgreSQL family leans on {@code ?::timestamp}: wrapping the
+     * placeholder in {@code TO_TIMESTAMP(?)} would send already-typed
+     * {@code Timestamp} binds back through a text round-trip. So the literal is parsed
+     * into a {@code java.sql.Timestamp} before binding instead.
+     */
+    @Override
+    public boolean requiresTypedTemporalBind() {
+        return true;
+    }
+
     @Override
     protected String currentTimestampFunction() {
         return "SYSTIMESTAMP";

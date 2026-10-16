@@ -893,7 +893,7 @@ public class DataSyncService {
                 if (sink != null) {
                     sink.values = extractPk(row, pkTrack);
                 }
-                JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn);
+                JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn, ctx.getTargetDialect());
                 upsert.addBatch();
                 inBatch++;
                 stats.read++;
@@ -957,11 +957,11 @@ public class DataSyncService {
                 }
                 int updated = 0;
                 if (update != null) {
-                    JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn);
+                    JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn, ctx.getTargetDialect());
                     updated = update.executeUpdate();
                 }
                 if (updated == 0) {
-                    JdbcRowMapper.bind(insert, row, columns, typeByColumn);
+                    JdbcRowMapper.bind(insert, row, columns, typeByColumn, ctx.getTargetDialect());
                     try {
                         // This path issues the INSERT and the UPDATE as separate statements, so
                         // it knows which one happened without the target having to say.
@@ -972,7 +972,7 @@ public class DataSyncService {
                         if (isUniqueViolation(e) && update != null) {
                             // A concurrent writer may have inserted the same key between our
                             // UPDATE and INSERT. Retrying the update converges without failing.
-                            JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn);
+                            JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn, ctx.getTargetDialect());
                             if (update.executeUpdate() != 0) {
                                 stats.updated++;
                             }

@@ -199,6 +199,19 @@ public final class JdbcRowMapper {
      */
     public static void bind(PreparedStatement ps, Map<String, Object> row, List<String> bindOrder,
                             Map<String, Integer> types) throws SQLException {
+        bind(ps, row, bindOrder, types, null);
+    }
+
+    /**
+     * As the 4-arg form but knowing the target dialect, so a target whose driver cannot
+     * implicitly convert text into a temporal column gets the reader's MySQL wall-clock
+     * text parsed back into a {@code java.sql} temporal value first
+     * ({@link com.qqmu.jync.service.converter.SqlDialect#requiresTypedTemporalBind()}).
+     */
+    public static void bind(PreparedStatement ps, Map<String, Object> row, List<String> bindOrder,
+                            Map<String, Integer> types,
+                            com.qqmu.jync.service.converter.SqlDialect targetDialect)
+            throws SQLException {
         for (int i = 0; i < bindOrder.size(); i++) {
             String column = bindOrder.get(i);
             Object value = row.get(column);
@@ -208,13 +221,15 @@ public final class JdbcRowMapper {
                 Integer type = types.get(column);
                 ps.setNull(idx, type == null ? Types.NULL : type);
             } else {
-                bindValue(ps, idx, value, types.get(column));
+                bindValue(ps, idx, value, types.get(column),
+                        targetDialect != null && targetDialect.requiresTypedTemporalBind());
             }
         }
     }
 
     private static void bindValue(PreparedStatement ps, int idx, Object value,
-                                  Integer targetType) throws SQLException {
+                                  Integer targetType, boolean typedTemporal)
+            throws SQLException {
         // Normalize the java.time types some drivers return so every target accepts them.
         if (value instanceof Instant) {
             ps.setTimestamp(idx, Timestamp.from((Instant) value));
@@ -247,8 +262,40 @@ public final class JdbcRowMapper {
             // A BIT(1) source value arriving as Boolean must be accepted by an integer
             // target; PostgreSQL-family drivers do not coerce Boolean→INTEGER.
             ps.setObject(idx, (Boolean) value ? 1 : 0);
+        } else if (typedTemporal && value instanceof CharSequence
+                && targetType != null && CursorTypes.isTemporal(targetType)) {
+            // The reader hands MySQL DATETIME/TIME over as the server's wall-clock text
+            // (see readRow). MySQL, T-SQL and DB2 convert that literal implicitly and the
+            // PostgreSQL family casts it (?::timestamp), but Oracle's VARCHAR2 →
+            // DATE/TIMESTAMP conversion runs through the session's NLS format and rejects
+            // it — ORA-01843 "not a valid month". Those targets get the text parsed back
+            // into a real timestamp here. Text that is not a plain SQL literal — MySQL
+            // TIME's -838:59:59, which no java.sql temporal can carry — still binds
+            // verbatim, exactly as it did before.
+            //
+            // The target column must actually BE temporal: a VARCHAR2 target is where the
+            // source's own text column lands, and binding it as a Timestamp would make
+            // Oracle re-render it through NLS_TIMESTAMP_FORMAT
+            // ("2026-10-13 12:34:56" → "13-10月-26 12.34.56.000000 下午"). Only text that
+            // merely looks like a timestamp is at risk, and it must survive verbatim.
+            Timestamp parsed = timestampFromText((String) value);
+            if (parsed == null) {
+                ps.setObject(idx, value);
+            } else {
+                ps.setTimestamp(idx, parsed);
+            }
         } else {
             ps.setObject(idx, value);
+        }
+    }
+
+    /** The literal as a {@code Timestamp}, or null when it is not "yyyy-MM-dd HH:mm:ss[.f…]". */
+    private static Timestamp timestampFromText(String text) {
+        String t = text.trim();
+        try {
+            return Timestamp.valueOf(t);
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 
