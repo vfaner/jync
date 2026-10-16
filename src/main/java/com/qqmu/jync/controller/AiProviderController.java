@@ -12,6 +12,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
+import com.qqmu.jync.model.AiReasoningEffort;
 import com.qqmu.jync.service.ai.AiProviderService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,7 @@ public class AiProviderController {
         provider.setBaseUrl(AiProtocol.OPENAI.getDefaultBaseUrl());
         model.addAttribute("provider", provider);
         model.addAttribute("protocols", AiProtocol.values());
+        model.addAttribute("reasoningEfforts", AiReasoningEffort.values());
         return "ai-provider-form";
     }
 
@@ -50,6 +52,7 @@ public class AiProviderController {
         return service.findById(id).map(provider -> {
             model.addAttribute("provider", provider);
             model.addAttribute("protocols", AiProtocol.values());
+            model.addAttribute("reasoningEfforts", AiReasoningEffort.values());
             return "ai-provider-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.ai.provider.missing");

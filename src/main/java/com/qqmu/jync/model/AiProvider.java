@@ -66,6 +66,16 @@ public class AiProvider {
     private Integer maxTokens = 4096;
 
     /**
+     * 深度思考档位;null 与 {@link AiReasoningEffort#DEFAULT} 同义,即"一个参数都不发"。
+     *
+     * <p>可空是设计的一部分:加这一列之前存档的供应商读出来就是 null,行为与改动前
+     * 一字不差 —— 新功能不该悄悄改变任何一个已有端点的请求。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "reasoning_effort", length = 16)
+    private AiReasoningEffort reasoningEffort = AiReasoningEffort.DEFAULT;
+
+    /**
      * Applied to both the connect and the request phase. A conversion is one large
      * completion, so the default is generous compared with a JDBC probe.
      */

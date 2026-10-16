@@ -9,6 +9,14 @@ import lombok.Getter;
  * domestic endpoint speaks the OpenAI chat-completions shape, so {@link #OPENAI} doubles
  * as "OpenAI-compatible" and is the right choice for an intranet inference service.
  *
+ * <p>{@link #OLLAMA} is a named preset, not a third protocol: it answers on Ollama's
+ * OpenAI-compatibility endpoint, so its {@code chatPath} and wire behaviour are identical to
+ * {@link #OPENAI}. It exists so the form can prefill a localhost address and offer the fields
+ * that make sense for a local model. Deliberately NOT Ollama's native {@code /api/chat} —
+ * that one streams bare NDJSON lines with no {@code data:} prefix, which
+ * {@code AiChatClient.stream} reads as "a gateway buffering the whole reply" and silently
+ * loses streaming on.
+ *
  * <p>{@code chatPath} is appended to the configured base URL only when the base URL does
  * not already end with it, because vendors disagree about whether the {@code /v1} segment
  * belongs to the base URL or to the path.
@@ -18,7 +26,10 @@ public enum AiProtocol {
 
     OPENAI("OpenAI 兼容", "https://api.openai.com/v1", "/chat/completions"),
 
-    ANTHROPIC("Anthropic", "https://api.anthropic.com", "/v1/messages");
+    ANTHROPIC("Anthropic", "https://api.anthropic.com", "/v1/messages"),
+
+    /** Ollama 本机默认端口;走的是它的 OpenAI 兼容端点,不是原生 /api/chat。 */
+    OLLAMA("Ollama（本地）", "http://localhost:11434/v1", "/chat/completions");
 
     private final String displayName;
 

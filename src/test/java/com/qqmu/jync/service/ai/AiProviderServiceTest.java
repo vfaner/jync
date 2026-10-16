@@ -13,6 +13,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
+import com.qqmu.jync.model.AiReasoningEffort;
 import com.qqmu.jync.repository.AiProviderRepository;
 import com.qqmu.jync.util.CryptoUtil;
 
@@ -333,6 +334,60 @@ class AiProviderServiceTest {
 
         assertThat(saved.getMaxTokens()).isPositive();
         assertThat(saved.getTimeoutSeconds()).isPositive();
+    }
+
+    /**
+     * Anthropic 要求思考预算严格小于 max_tokens,塞不下时请求必 400。客户端那边有条兜底会
+     * 悄悄不发 thinking —— 那是为了不让一次转换凭空失败,但不该当成正常路径:这里要在保存
+     * 时就把它拦住,并告诉用户把最大 token 数调大,而不是让他以为设置了深度思考。
+     */
+    @Test
+    void anAnthropicThinkingBudgetThatDoesNotFitIsRefusedAtSaveTime() {
+        AiProvider p = newProvider("anthropic-thinking");
+        p.setProtocol(AiProtocol.ANTHROPIC);
+        p.setBaseUrl("https://api.anthropic.com");
+        p.setReasoningEffort(AiReasoningEffort.HIGH);
+        p.setMaxTokens(4096);
+
+        assertThatThrownBy(() -> service.save(p, "k"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.ai.reasoning.overBudget");
+    }
+
+    @Test
+    void anAnthropicProviderWithRoomForItsBudgetSaves() {
+        AiProvider p = newProvider("anthropic-thinking-ok");
+        p.setProtocol(AiProtocol.ANTHROPIC);
+        p.setBaseUrl("https://api.anthropic.com");
+        p.setReasoningEffort(AiReasoningEffort.HIGH);
+        p.setMaxTokens(16384);
+
+        assertThat(service.save(p, "k").getId()).isNotNull();
+    }
+
+    @Test
+    void theSameSettingOnAnOpenAiShapedEndpointNeedsNoExtraRoom() {
+        // reasoning_effort 不占用 max_tokens 之外的额度,不该被上面那条校验误伤 ——
+        // 而 Ollama 正是这个功能要服务的对象。
+        AiProvider p = newProvider("ollama-thinking");
+        p.setProtocol(AiProtocol.OLLAMA);
+        p.setBaseUrl("http://localhost:11434/v1");
+        p.setReasoningEffort(AiReasoningEffort.HIGH);
+        p.setMaxTokens(4096);
+
+        assertThat(service.save(p, "k").getId()).isNotNull();
+    }
+
+    @Test
+    void turningThinkingOffOnAnthropicNeedsNoExtraRoomEither() {
+        // OFF 在 Anthropic 上就是"省略 thinking",不占预算。
+        AiProvider p = newProvider("anthropic-off");
+        p.setProtocol(AiProtocol.ANTHROPIC);
+        p.setBaseUrl("https://api.anthropic.com");
+        p.setReasoningEffort(AiReasoningEffort.OFF);
+        p.setMaxTokens(1024);
+
+        assertThat(service.save(p, "k").getId()).isNotNull();
     }
 
     @Test

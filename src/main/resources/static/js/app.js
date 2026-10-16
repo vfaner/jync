@@ -872,6 +872,47 @@
       url.addEventListener('input', function () { url.dataset.autofilled = 'false'; });
     }
 
+    var timeout = document.getElementById('timeoutSeconds');
+    if (timeout) {
+      timeout.addEventListener('input', function () { timeout.dataset.autofilled = 'false'; });
+    }
+    var effort = document.getElementById('reasoningEffort');
+    if (effort) {
+      effort.addEventListener('change', function () { effort.dataset.autofilled = 'false'; });
+    }
+    var isNew = select.dataset.newProvider === 'true';
+
+    /* 本地端点（Ollama 这类）没有密钥、也不需要 60 秒就判超时，把不适用的东西收起来。
+       隐藏而不是留着不管：输入框少一个，用户就少一次「这里要不要填」的犹豫。
+       密钥框停用而不是清空 —— 折叠起来的旧值不该被悄悄提交上去。 */
+    function applyLocalPreset(protocol) {
+      var local = protocol === 'OLLAMA';
+      var keyField = document.getElementById('api-key-field');
+      if (keyField) {
+        keyField.hidden = local;
+        var keyInput = keyField.querySelector('input');
+        if (keyInput) keyInput.disabled = local;
+      }
+      var note = document.getElementById('api-key-local-note');
+      if (note) note.hidden = !local;
+
+      // 预填只对新建有意义：编辑已有供应商时，存下来的值就是用户的选择，不能改。
+      if (!isNew) return;
+      if (timeout && local && timeout.dataset.autofilled !== 'false') {
+        timeout.value = '300';
+        timeout.dataset.autofilled = 'true';
+      }
+      if (effort && local && effort.dataset.autofilled !== 'false') {
+        // 本机实测：Ollama 上的 qwen3 不关思考会把输出预算全花在思考上、正文为空。
+        // 所以本地预设默认关掉，用户想要思考可以自己改回来。
+        effort.value = 'OFF';
+        effort.dataset.autofilled = 'true';
+      }
+    }
+
+    // 打开编辑页时先按已存的协议把界面摆对，而不是等用户动一下下拉。
+    applyLocalPreset(select.value);
+
     select.addEventListener('change', function () {
       getJson(select.dataset.action + '?protocol=' + encodeURIComponent(select.value))
         .then(function (p) {
@@ -884,6 +925,7 @@
           }
           var hint = document.getElementById('endpoint-hint');
           if (hint) hint.textContent = p.chatPath || '';
+          applyLocalPreset(p.protocol);
         })
         .catch(function () { /* 预填失败只是少了便利，表单仍可手填 */ });
     });

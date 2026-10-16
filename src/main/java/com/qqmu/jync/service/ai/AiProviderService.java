@@ -167,6 +167,15 @@ public class AiProviderService {
         if (provider.getTimeoutSeconds() == null || provider.getTimeoutSeconds() <= 0) {
             provider.setTimeoutSeconds(60);
         }
+        // 必须在 maxTokens 取完默认值之后再判断。Anthropic 要求思考预算严格小于 max_tokens,
+        // 否则整个请求 400;客户端那边有一条"塞不下就不发 thinking"的兜底,但那会让用户
+        // 以为自己开了深度思考而其实没有 —— 所以这里在保存时就拦住,并告诉他去调大 token 数。
+        if (provider.getProtocol() == AiProtocol.ANTHROPIC
+                && provider.getReasoningEffort() != null
+                && provider.getReasoningEffort().needsThinkingBudget()
+                && provider.getMaxTokens() <= provider.getReasoningEffort().getThinkingBudget()) {
+            throw new IllegalArgumentException("error.ai.reasoning.overBudget");
+        }
     }
 
     /**

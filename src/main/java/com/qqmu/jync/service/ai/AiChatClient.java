@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
+import com.qqmu.jync.model.AiReasoningEffort;
 import com.qqmu.jync.util.AiEndpointValidator;
 
 import lombok.Getter;
@@ -72,6 +73,31 @@ public class AiChatClient {
      */
     public ChatResult complete(AiProvider provider, String apiKey, String system, String user,
                                int maxTokens) {
+        return complete(provider, apiKey, system, user, maxTokens, effortOf(provider));
+    }
+
+    /**
+     * Probes an endpoint with the smallest completion that still proves the three things that
+     * actually go wrong — reachability, the key, and the model name.
+     *
+     * <p>Exists as its own entry point for one reason: it must never carry the provider's
+     * reasoning setting. The request is {@code max_tokens: 1}, and an Anthropic thinking budget
+     * has to be strictly smaller than {@code max_tokens}, so a probe that inherited the setting
+     * would come back as the endpoint's own 400 — while "test before saving" is the whole point
+     * of this page. A local reasoning model would also spend its single token thinking and then
+     * answer with nothing. Everything else about the request — URL, headers, body shape, parsing
+     * — still goes through the same code as a real conversion, so a probe cannot pass while real
+     * requests fail.
+     */
+    public ChatResult probe(AiProvider provider, String apiKey) {
+        return complete(provider, apiKey, null, "ping", 1, AiReasoningEffort.DEFAULT);
+    }
+
+    /**
+     * @param effort overrides the provider's stored setting; used by {@link #probe} to opt out
+     */
+    ChatResult complete(AiProvider provider, String apiKey, String system, String user,
+                        int maxTokens, AiReasoningEffort effort) {
         AiProtocol protocol = provider.getProtocol() == null
                 ? AiProtocol.OPENAI : provider.getProtocol();
         String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
@@ -94,7 +120,7 @@ public class AiChatClient {
             HttpClient client = HTTP_CLIENT;
 
             HttpRequest request = buildRequest(protocol, endpoint, model, apiKey, timeout,
-                    system, user, maxTokens);
+                    system, user, maxTokens, false, effort);
             HttpResponse<String> response =
                     client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             long ms = System.currentTimeMillis() - start;
@@ -139,6 +165,13 @@ public class AiChatClient {
      */
     public ChatResult stream(AiProvider provider, String apiKey, String system, String user,
                              int maxTokens, java.util.function.Consumer<String> sink) {
+        return stream(provider, apiKey, system, user, maxTokens, sink, effortOf(provider));
+    }
+
+    /** @param effort overrides the provider's stored setting; see {@link #complete} */
+    ChatResult stream(AiProvider provider, String apiKey, String system, String user,
+                      int maxTokens, java.util.function.Consumer<String> sink,
+                      AiReasoningEffort effort) {
         AiProtocol protocol = provider.getProtocol() == null
                 ? AiProtocol.OPENAI : provider.getProtocol();
         String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
@@ -162,7 +195,7 @@ public class AiChatClient {
         try {
             HttpClient client = HTTP_CLIENT;
             HttpRequest request = buildRequest(protocol, endpoint, model, apiKey, timeout,
-                    system, user, maxTokens, true);
+                    system, user, maxTokens, true, effort);
             HttpResponse<java.io.InputStream> response =
                     client.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
@@ -290,20 +323,15 @@ public class AiChatClient {
 
     private HttpRequest buildRequest(AiProtocol protocol, String endpoint, String model,
                                      String apiKey, Duration timeout,
-                                     String system, String user, int maxTokens) {
-        return buildRequest(protocol, endpoint, model, apiKey, timeout, system, user, maxTokens,
-                false);
-    }
-
-    private HttpRequest buildRequest(AiProtocol protocol, String endpoint, String model,
-                                     String apiKey, Duration timeout,
-                                     String system, String user, int maxTokens, boolean stream) {
+                                     String system, String user, int maxTokens, boolean stream,
+                                     AiReasoningEffort effort) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", model);
         body.put("max_tokens", maxTokens);
         if (stream) {
             body.put("stream", true);
         }
+        applyReasoning(protocol, body, effort, maxTokens);
 
         boolean anthropic = protocol == AiProtocol.ANTHROPIC;
         boolean hasSystem = system != null && !system.isBlank();
@@ -342,6 +370,47 @@ public class AiChatClient {
 
         return builder.POST(HttpRequest.BodyPublishers.ofString(
                 body.toString(), StandardCharsets.UTF_8)).build();
+    }
+
+    /**
+     * 把"深度思考"的意图翻译成请求体。
+     *
+     * <p>{@link AiReasoningEffort#DEFAULT} 直接返回:一个字段都不发,请求体与这个功能存在
+     * 之前完全一样。这是硬要求,不是保守 —— 老供应商那一列是 null,不能被新功能改变行为。
+     */
+    private void applyReasoning(AiProtocol protocol, ObjectNode body, AiReasoningEffort effort,
+                                int maxTokens) {
+        if (effort == null || effort == AiReasoningEffort.DEFAULT) {
+            return;
+        }
+        if (protocol == AiProtocol.ANTHROPIC) {
+            Integer budget = effort.getThinkingBudget();
+            if (budget == null) {
+                // OFF:Anthropic 的默认就是不思考,省略字段就是关闭。
+                return;
+            }
+            if (budget >= maxTokens) {
+                // Anthropic 要求 budget_tokens 严格小于 max_tokens,否则整个请求 400。
+                // 保存时已经校验过,这里拦住的是把 maxTokens 事后手工调小的情况:
+                // 宁可少想一点,也不要让一次转换直接失败。
+                log.warn("Thinking budget {} does not fit under max_tokens {}; sending the "
+                        + "request without it", budget, maxTokens);
+                return;
+            }
+            ObjectNode thinking = body.putObject("thinking");
+            thinking.put("type", "enabled");
+            thinking.put("budget_tokens", budget);
+            return;
+        }
+        // OpenAI 形状,包含 Ollama 的兼容端点。官方 OpenAI 的推理模型不认 "none"
+        // (最低到 minimal),所以 OFF 只对兼容端点承诺得死,帮助文案里写明了。
+        body.put("reasoning_effort", effort.getEffortLevel());
+    }
+
+    /** The provider's stored setting, with null (rows saved before the column existed) as DEFAULT. */
+    private static AiReasoningEffort effortOf(AiProvider provider) {
+        return provider.getReasoningEffort() == null
+                ? AiReasoningEffort.DEFAULT : provider.getReasoningEffort();
     }
 
     /** Parses the response body once; null when it is blank or not JSON. */

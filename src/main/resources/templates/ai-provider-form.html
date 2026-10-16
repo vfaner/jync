@@ -41,7 +41,8 @@
                             </label>
                             <select class="select" id="protocol" th:field="*{protocol}"
                                     data-role="protocol-select"
-                                    th:attr="data-action=@{/api/ai/protocol-defaults}">
+                                    th:attr="data-action=@{/api/ai/protocol-defaults},
+                                             data-new-provider=${provider.id == null}">
                                 <option th:each="p : ${protocols}" th:value="${p.name()}"
                                         th:text="${p.displayName}">OpenAI</option>
                             </select>
@@ -73,7 +74,7 @@
                             <input type="text" class="input mono" id="model" th:field="*{model}"
                                    required maxlength="128" placeholder="deepseek-chat">
                         </div>
-                        <div class="field">
+                        <div class="field" id="api-key-field">
                             <label for="rawApiKey" th:text="#{ai.apiKey}">API key</label>
                             <!--/* 密钥从不回填到浏览器；留空表示保留已存值 */-->
                             <input type="password" class="input" id="rawApiKey" name="rawApiKey"
@@ -82,6 +83,8 @@
                                  th:text="#{ai.apiKeyKeepHelp}">Leave blank to keep the stored key.</div>
                             <div class="help" th:unless="${provider.id != null}"
                                  th:text="#{ai.apiKeyHelp}">Stored encrypted.</div>
+                            <div class="help" id="api-key-local-note" hidden
+                                 th:text="#{ai.apiKeyLocal}">No key needed for a local endpoint.</div>
                         </div>
                     </div>
 
@@ -98,6 +101,16 @@
                             <label for="timeoutSeconds" th:text="#{ai.timeout}">Timeout (s)</label>
                             <input type="number" class="input" id="timeoutSeconds"
                                    th:field="*{timeoutSeconds}" min="1" max="600">
+                        </div>
+                        <div class="field">
+                            <label for="reasoningEffort" th:text="#{ai.reasoning}">Reasoning</label>
+                            <select class="select" id="reasoningEffort" th:field="*{reasoningEffort}">
+                                <option th:each="e : ${reasoningEfforts}" th:value="${e.name()}"
+                                        th:text="#{${'ai.reasoning.' + e.name()}}">DEFAULT</option>
+                            </select>
+                            <div class="help" th:text="#{ai.reasoningHelp}">
+                                Turning thinking off cuts latency sharply.
+                            </div>
                         </div>
                     </div>
                 </div>
