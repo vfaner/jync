@@ -432,6 +432,9 @@ class UpgradeServiceTest {
     private static final class FakeFeed implements com.qqmu.jync.service.version.SourceAwareFeed {
         Release release;
         Exception failure;
+        /** Answers byTagFrom: the OTHER mirror's release for cross-checking a digest. */
+        Release otherByTag;
+        Exception otherByTagFailure;
 
         @Override
         public Release latestFrom(Source source) throws Exception {
@@ -440,16 +443,140 @@ class UpgradeServiceTest {
             }
             return release;
         }
+
+        @Override
+        public Release byTagFrom(Source source, String tag) throws Exception {
+            if (otherByTagFailure != null) {
+                throw otherByTagFailure;
+            }
+            return otherByTag;
+        }
     }
 
     private static Release release(Source source, String tag, Long size) {
+        return release(source, tag, size, null);
+    }
+
+    private static Release release(Source source, String tag, Long size, String sha256) {
         return new Release(tag,
                 "https://example.invalid/" + source + "/" + tag,
                 null, "body",
                 List.of(new Asset("jync.jar",
-                        "https://example.invalid/" + source + "/" + tag + "/jync.jar", size)),
+                        "https://example.invalid/" + source + "/" + tag + "/jync.jar", size,
+                        sha256)),
                 source);
     }
+
+    private static String sha256Of(byte[] bytes) throws Exception {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+        StringBuilder sb = new StringBuilder(digest.length * 2);
+        for (byte b : digest) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16))
+                    .append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
+    }
+
+    @Test
+    void aMatchingSha256FromTheFeedLetsTheUpgradeProceed() throws Exception {
+        byte[] nextJar = makeFatJar("new-jar-bytes");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITHUB, "v1.8.0", (long) nextJar.length, sha256Of(nextJar));
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITHUB");
+
+        awaitPhase(svc, UpgradeService.Phase.READY);
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+    }
+
+    @Test
+    void aMismatchedSha256FailsClosedAndLeavesTheRunningJarAlone() throws Exception {
+        byte[] nextJar = makeFatJar("tampered");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        // A valid zip of the right size, but not the bytes the release claims: this is exactly
+        // what the size and zip checks cannot catch.
+        feed.release = release(Source.GITHUB, "v1.8.0", (long) nextJar.length,
+                "0000000000000000000000000000000000000000000000000000000000000000");
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITHUB");
+        awaitPhase(svc, UpgradeService.Phase.FAILED);
+
+        assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
+        assertThat(tempDir.resolve("app/jync.jar.bak")).doesNotExist();
+        assertThat(tempDir.resolve("app/jync.jar.part")).doesNotExist();
+        assertThat(svc.status().message()).containsIgnoringCase("sha");
+    }
+
+    @Test
+    void aMirrorWithoutItsOwnDigestIsCheckedAgainstTheOtherMirrors() throws Exception {
+        // Gitee's API publishes no digest, but the same tag on GitHub does. That cross-mirror
+        // digest is the only trustworthy checksum available for a Gitee download.
+        byte[] nextJar = makeFatJar("cross-checked");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITEE, "v1.8.0", null, null);
+        feed.otherByTag = release(Source.GITHUB, "v1.8.0", (long) nextJar.length, sha256Of(nextJar));
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITEE");
+
+        awaitPhase(svc, UpgradeService.Phase.READY);
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+    }
+
+    @Test
+    void aCrossMirrorDigestMismatchFailsClosed() throws Exception {
+        byte[] nextJar = makeFatJar("swapped-on-the-mirror");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITEE, "v1.8.0", null, null);
+        feed.otherByTag = release(Source.GITHUB, "v1.8.0", null,
+                "1111111111111111111111111111111111111111111111111111111111111111");
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITEE");
+        awaitPhase(svc, UpgradeService.Phase.FAILED);
+
+        assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
+        assertThat(tempDir.resolve("app/jync.jar.part")).doesNotExist();
+        assertThat(svc.status().message()).containsIgnoringCase("sha");
+    }
+
+    @Test
+    void whenNoDigestIsAvailableAnywhereTheUpgradeProceedsWithAWarning() throws Exception {
+        // Absence of a digest is not a mismatch: blocking every upgrade would break the
+        // feature for mirrors that publish none. The computed hash is still logged.
+        byte[] nextJar = makeFatJar("unverifiable");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITEE, "v1.8.0", null, null);
+        feed.otherByTag = null;
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITEE");
+
+        awaitPhase(svc, UpgradeService.Phase.READY);
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+    }
+
+    @Test
+    void aFailedCrossMirrorLookupDoesNotBlockTheUpgrade() throws Exception {
+        byte[] nextJar = makeFatJar("lookup-failed");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITEE, "v1.8.0", null, null);
+        feed.otherByTagFailure = new java.io.IOException("offline");
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITEE");
+
+        awaitPhase(svc, UpgradeService.Phase.READY);
+    }
+
 
     // Status snapshot sanity lives here too so the record's shape is pinned at the source.
     @Test

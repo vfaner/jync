@@ -15,8 +15,17 @@ public interface ReleaseFeed {
         GITEE
     }
 
-    /** One downloadable release asset. Size is known on GitHub but absent from Gitee's API. */
-    record Asset(String name, String url, Long sizeBytes) {
+    /**
+     * One downloadable release asset. Size is known on GitHub but absent from Gitee's API; the
+     * same goes for {@code sha256}, which GitHub reports in each asset's {@code digest} field.
+     * A null {@code sha256} means "this feed published no checksum", not "the checksum is wrong".
+     */
+    record Asset(String name, String url, Long sizeBytes, String sha256) {
+
+        /** Back-compat ctor for feeds/tests that carry no checksum. */
+        public Asset(String name, String url, Long sizeBytes) {
+            this(name, url, sizeBytes, null);
+        }
     }
 
     /** One release's relevant fields. {@code source} says which feed produced it. */

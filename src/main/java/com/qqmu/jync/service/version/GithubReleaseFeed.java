@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -150,7 +151,8 @@ public class GithubReleaseFeed implements ReleaseFeed {
                 continue;
             }
             long size = asset.path("size").asLong(0L);
-            assets.add(new Asset(name, downloadUrl, size > 0 ? size : null));
+            assets.add(new Asset(name, downloadUrl, size > 0 ? size : null,
+                    parseSha256(asset.path("digest").asText(null))));
         }
         Instant publishedAt = null;
         if (published != null && !published.isBlank()) {
@@ -158,5 +160,23 @@ public class GithubReleaseFeed implements ReleaseFeed {
         }
         return new Release(tag, htmlUrl, publishedAt, releaseBody,
                 List.copyOf(assets), Source.GITHUB);
+    }
+
+    /**
+     * Normalizes an asset {@code digest} to lowercase hex SHA-256, or null when there is none
+     * to trust. GitHub reports {@code "sha256:<hex>"}; a different algorithm ({@code md5:…}),
+     * a malformed value or an absent field all yield null, so the upgrade knows the bytes could
+     * not be verified this way rather than comparing against something bogus.
+     */
+    private static String parseSha256(String digest) {
+        if (digest == null) {
+            return null;
+        }
+        String value = digest.trim();
+        if (!value.regionMatches(true, 0, "sha256:", 0, "sha256:".length())) {
+            return null;
+        }
+        value = value.substring("sha256:".length()).trim();
+        return value.matches("[0-9a-fA-F]{64}") ? value.toLowerCase(Locale.ROOT) : null;
     }
 }

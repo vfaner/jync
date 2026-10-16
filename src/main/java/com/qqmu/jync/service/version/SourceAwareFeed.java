@@ -15,4 +15,15 @@ public interface SourceAwareFeed {
 
     /** Queries exactly one platform; failures are reported, never rerouted. */
     Release latestFrom(Source source) throws Exception;
+
+    /**
+     * Queries exactly one platform for a specific tag. The upgrade uses this to cross-check a
+     * download against the other mirror's checksum when the chosen mirror publishes none.
+     *
+     * <p>An implementation that cannot answer leaves the default, which throws: the caller
+     * treats every failure here as "no checksum available" and never as a verification result.
+     */
+    default Release byTagFrom(Source source, String tag) throws Exception {
+        throw new UnsupportedOperationException("byTagFrom is not supported by this feed");
+    }
 }

@@ -10,6 +10,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -178,7 +180,8 @@ public class UpgradeService {
 
             status = new Status(Phase.DOWNLOADING, null, target, source.name(), 0,
                     asset.sizeBytes() == null ? 0 : asset.sizeBytes());
-            Thread worker = new Thread(() -> downloadAndInstall(jar, asset, target, source),
+            Thread worker = new Thread(
+                    () -> downloadAndInstall(jar, asset, target, release.tag(), source),
                     "jync-upgrade");
             worker.setDaemon(true);
             worker.start();
@@ -270,7 +273,8 @@ public class UpgradeService {
 
     // ── download / verify / swap ───────────────────────────────────────────────────────
 
-    private void downloadAndInstall(Path jar, Asset asset, String target, Source source) {
+    private void downloadAndInstall(Path jar, Asset asset, String target, String tag,
+                                    Source source) {
         Path part = jar.resolveSibling(jar.getFileName() + PART_SUFFIX);
         try {
             Files.deleteIfExists(part);
@@ -285,6 +289,7 @@ public class UpgradeService {
                         + actual + " 字节 (传输可能被截断)");
             }
             verifyZipIntegrity(part);
+            verifyChecksum(part, asset, tag, source);
 
             Path backup = backupPath(jar);
             Files.move(jar, backup, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
@@ -325,6 +330,86 @@ public class UpgradeService {
         } catch (IOException e) {
             throw new IOException("下载文件校验失败: 不是有效的 zip/jar 文件 (" + e.getMessage() + ")", e);
         }
+    }
+
+    /**
+     * Compares the downloaded bytes against the release's published SHA-256. Neither the size
+     * check nor the zip check can catch bytes that were swapped for a different, equally valid
+     * jar — a compromised mirror or a hijacked CDN redirect produces exactly that.
+     *
+     * <p>A digest published by the chosen mirror always wins. Gitee's API reports no checksums,
+     * so a Gitee download is cross-checked against the same tag on GitHub, which does. No digest
+     * anywhere is not a mismatch: the upgrade proceeds with the computed hash logged, since
+     * blocking every upgrade from a mirror that publishes none would break the feature. A digest
+     * that disagrees fails closed — the {@code .part} is deleted and the running jar never moves.
+     */
+    private void verifyChecksum(Path part, Asset asset, String tag, Source source)
+            throws IOException {
+        String computed = sha256(part);
+        log.info("Upgrade: downloaded {} ({}) from {}; SHA-256 {}", JAR_NAME, tag, source, computed);
+        String expected = publishedSha256(asset, tag, source);
+        if (expected == null) {
+            log.warn("Upgrade: {} {} from {} publishes no SHA-256; the download could not be"
+                    + " verified (computed {})", JAR_NAME, tag, source, computed);
+            return;
+        }
+        if (!expected.equalsIgnoreCase(computed)) {
+            throw new IOException("下载文件校验失败: SHA-256 不匹配 (期望 " + expected
+                    + ", 实际 " + computed + ")");
+        }
+    }
+
+    /** The release's own digest, or the other mirror's for the same tag, or null. */
+    private String publishedSha256(Asset asset, String tag, Source source) {
+        String own = normalizeDigest(asset.sha256());
+        if (own != null) {
+            return own;
+        }
+        Source mirror = source == Source.GITHUB ? Source.GITEE : Source.GITHUB;
+        try {
+            Release release = feed.byTagFrom(mirror, tag);
+            Asset counterpart = release == null ? null : release.jarAsset(JAR_NAME);
+            String digest = counterpart == null ? null : normalizeDigest(counterpart.sha256());
+            if (digest != null) {
+                log.info("Upgrade: {} publishes no SHA-256 for {}; checking against {} instead",
+                        source, tag, mirror);
+            }
+            return digest;
+        } catch (Exception e) {
+            // Best effort only: an unreachable or unknown mirror means "no digest", never a
+            // failed verification — the upgrade still gets the warning path above.
+            log.debug("Upgrade: cross-mirror digest lookup on {} for {} failed: {}", mirror, tag,
+                    e.toString());
+            return null;
+        }
+    }
+
+    private static String normalizeDigest(String digest) {
+        return StringUtils.hasText(digest) ? digest.trim() : null;
+    }
+
+    /** Streaming hex SHA-256; a jar is far too large to read into a byte array. */
+    private static String sha256(Path file) throws IOException {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException("SHA-256 不可用", e);
+        }
+        try (InputStream in = Files.newInputStream(file)) {
+            byte[] buffer = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buffer)) > 0) {
+                digest.update(buffer, 0, n);
+            }
+        }
+        byte[] hash = digest.digest();
+        StringBuilder hex = new StringBuilder(hash.length * 2);
+        for (byte b : hash) {
+            hex.append(Character.forDigit((b >> 4) & 0xF, 16))
+                    .append(Character.forDigit(b & 0xF, 16));
+        }
+        return hex.toString();
     }
 
     private void writeMarker(Path dir, String target, Source source, String backupName)

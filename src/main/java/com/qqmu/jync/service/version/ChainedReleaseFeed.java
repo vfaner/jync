@@ -79,4 +79,13 @@ public class ChainedReleaseFeed implements ReleaseFeed, SourceAwareFeed {
             case GITEE -> gitee.latest();
         };
     }
+
+    /** Same one-platform-only rule as {@link #latestFrom(Source)}, for a specific tag. */
+    @Override
+    public Release byTagFrom(Source source, String tag) throws Exception {
+        return switch (source) {
+            case GITHUB -> github.byTag(tag);
+            case GITEE -> gitee.byTag(tag);
+        };
+    }
 }
