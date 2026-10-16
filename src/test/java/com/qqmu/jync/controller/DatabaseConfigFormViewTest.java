@@ -192,9 +192,10 @@ class DatabaseConfigFormViewTest {
                 .andExpect(status().isOk()));
         assertThat(page).contains(
                 "'cdc.probe.title.oracle'", "'cdc.probe.title.postgres'",
-                "'cdc.probe.title.sqlserver'",
+                "'cdc.probe.title.sqlserver'", "'cdc.probe.title.target'",
                 "'cdc.check.ORACLE_SOURCE'", "'cdc.check.CDB_MINING_MODE'",
                 "'cdc.check.ARCHIVELOG'", "'cdc.check.MINING_PRIVILEGES'",
+                "'cdc.check.TARGET_DDL_PRIVILEGES'",
                 "'cdc.check.PG_SOURCE'", "'cdc.check.PG_WAL_LEVEL'",
                 "'cdc.check.MSSQL_SOURCE'", "'cdc.check.MSSQL_CDC_DB_ENABLED'");
         // properties 缺 key 时 Thymeleaf 内联会输出 ??cdc.check.XXX_zh_CN??

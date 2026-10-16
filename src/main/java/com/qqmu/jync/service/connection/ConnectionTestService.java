@@ -32,18 +32,21 @@ public class ConnectionTestService {
     private final LogMinerCdcProbe logMinerProbe;
     private final PgLogicalReplicationCdcProbe pgProbe;
     private final SqlServerCdcProbe mssqlProbe;
+    private final TargetDdlProbe targetDdlProbe;
     private final SyncProperties properties;
 
     public ConnectionTestService(DataSourceManager dataSourceManager, BinlogCdcProbe cdcProbe,
                                  LogMinerCdcProbe logMinerProbe,
                                  PgLogicalReplicationCdcProbe pgProbe,
                                  SqlServerCdcProbe mssqlProbe,
+                                 TargetDdlProbe targetDdlProbe,
                                  SyncProperties properties) {
         this.dataSourceManager = dataSourceManager;
         this.cdcProbe = cdcProbe;
         this.logMinerProbe = logMinerProbe;
         this.pgProbe = pgProbe;
         this.mssqlProbe = mssqlProbe;
+        this.targetDdlProbe = targetDdlProbe;
         this.properties = properties;
     }
 
@@ -95,9 +98,16 @@ public class ConnectionTestService {
         // CDC 就绪检查是源端专属:目标库永远不会被挖掘日志,对 TARGET 连接跑这些检查
         // (binlog/LogMiner/逻辑复制权限等)只会误导用户。role 在表单为必填,这里对
         // 历史 null 数据按 SOURCE 处理(字段 backfill 之前默认值就是 SOURCE)。
+        // 目标侧换成一项自己的预检:目标账号能不能在写入的 schema 里建表。此前这里
+        // 什么都不查,配置页一路绿灯,直到建表时才甩出 ORA-01031。
         if (config.getRole() == ConnectionRole.TARGET) {
-            log.debug("CDC readiness probe skipped for target connection '{}'",
-                    config.getName());
+            try {
+                List<CdcProbeResult.Check> targetChecks = targetDdlProbe.probe(conn, config);
+                cdcChecks = targetChecks.isEmpty() ? null : targetChecks;
+            } catch (RuntimeException e) {
+                // 与源端一样:预检只是附加信息,炸掉降级为无检查项(B2)
+                log.warn("Target DDL probe failed during connection test; reporting none", e);
+            }
         } else if (config.getType() == DatabaseType.MYSQL) {
             try {
                 // 连接页没有项目上下文 → plannedServerId 传 0(只查非 0,不查撞 id)

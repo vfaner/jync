@@ -48,6 +48,13 @@ public final class CdcProbeResult {
     /** P0-2: emitted only on a CDB — how mining will reach CDB$ROOT (or why it can't). */
     public static final String CDB_MINING_MODE = "CDB_MINING_MODE";
 
+    /**
+     * Target side (not CDC): the configured account may actually create tables in the
+     * schema the sync will write to. Reported by {@code TargetDdlProbe} on a TARGET-role
+     * Oracle connection.
+     */
+    public static final String TARGET_DDL_PRIVILEGES = "TARGET_DDL_PRIVILEGES";
+
     // —— v1.7.0 PostgreSQL logical replication checks ——
 
     /** Source must be literal PostgreSQL (dialect-compatible look-alikes rejected). */

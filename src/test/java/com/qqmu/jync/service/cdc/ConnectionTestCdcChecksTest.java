@@ -20,6 +20,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.connection.TargetDdlProbe;
 
 /**
  * 连接测试对四种支持日志 CDC 的源库类型附加逐项就绪探测;目标库连接(TARGET 用途)
@@ -60,6 +61,46 @@ class ConnectionTestCdcChecksTest {
         return conn;
     }
 
+    /** Oracle target answering SESSION_PRIVS with {@code createTablePrivCount} rows. */
+    private Connection oracleTargetConnection(long createTablePrivCount) throws SQLException {
+        Connection conn = mock(Connection.class);
+        when(conn.isValid(5)).thenReturn(true);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(md.getDatabaseProductName()).thenReturn("Oracle");
+        when(md.getDatabaseProductVersion()).thenReturn("23.0.0.0.0");
+        when(md.getDriverName()).thenReturn("Oracle JDBC driver");
+        when(md.getDriverVersion()).thenReturn("23.4.0.24.05");
+        when(md.getURL()).thenReturn("jdbc:oracle:thin:@localhost:1521/FREEPDB1");
+        when(conn.getMetaData()).thenReturn(md);
+        Statement stmt = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(stmt);
+        when(stmt.executeQuery(any(String.class))).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.next()).thenReturn(true, false);
+            if (sql.contains("USER FROM DUAL")) {
+                when(rs.getString(1)).thenReturn("C##JYNC_MINER");
+            } else {
+                when(rs.getLong(1)).thenReturn(createTablePrivCount);
+            }
+            return rs;
+        });
+        return conn;
+    }
+
+    private DatabaseConfig savedOracleTarget() {
+        DatabaseConfig config = new DatabaseConfig();
+        config.setId(2L);
+        config.setName("tgt");
+        config.setType(DatabaseType.ORACLE);
+        config.setRole(ConnectionRole.TARGET);
+        config.setHost("localhost");
+        config.setPort(1521);
+        config.setDatabaseName("FREEPDB1");
+        config.setUsername("c##jync_miner");
+        return config;
+    }
+
     private ConnectionTestService serviceReturning(Connection conn) {
         DataSourceManager dsm = mock(DataSourceManager.class);
         try {
@@ -69,7 +110,7 @@ class ConnectionTestCdcChecksTest {
         }
         return new ConnectionTestService(dsm, new BinlogCdcProbe(), new LogMinerCdcProbe(),
                 new PgLogicalReplicationCdcProbe(), new SqlServerCdcProbe(),
-                new SyncProperties());
+                new TargetDdlProbe(), new SyncProperties());
     }
 
     private DatabaseConfig savedMysql() {
@@ -95,7 +136,7 @@ class ConnectionTestCdcChecksTest {
     }
 
     @Test
-    void targetConnectionCarriesNoCdcChecks() throws SQLException {
+    void mysqlTargetCarriesNoCdcChecks() throws SQLException {
         // CDC 只在源端挖掘日志;目标库连接测试跑源端就绪检查纯属误导(用户截图:
         // 选「目标数据库连接」+ Oracle,结果列出 LogMiner 权限等源端检查项)。
         ConnectionTestService service = serviceReturning(healthyMySqlConnection());
@@ -104,6 +145,29 @@ class ConnectionTestCdcChecksTest {
         ConnectionTestService.TestResult result = service.test(target);
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getCdcChecks()).isNull();
+    }
+
+    @Test
+    void oracleTargetCarriesTheCreateTablePrivilegePrecheck() throws SQLException {
+        // 实测事故:目标账号没有 CREATE TABLE,配置页一路绿灯,直到建表才甩
+        // ORA-01031 —— 那时用户已经等了一次全量基线。目标连接现在也带一项检查。
+        ConnectionTestService service = serviceReturning(oracleTargetConnection(0L));
+        ConnectionTestService.TestResult result = service.test(savedOracleTarget());
+        assertThat(result.isSuccess()).isTrue();
+        List<CdcProbeResult.Check> checks = result.getCdcChecks();
+        assertThat(checks).isNotNull().hasSize(1);
+        assertThat(checks.get(0).getName())
+                .isEqualTo(CdcProbeResult.TARGET_DDL_PRIVILEGES);
+        assertThat(checks.get(0).isPassed()).isFalse();
+        assertThat(checks.get(0).getDetail()).contains("C##JYNC_MINER");
+    }
+
+    @Test
+    void oracleTargetHoldingThePrivilegePasses() throws SQLException {
+        ConnectionTestService service = serviceReturning(oracleTargetConnection(1L));
+        ConnectionTestService.TestResult result = service.test(savedOracleTarget());
+        assertThat(result.getCdcChecks()).hasSize(1);
+        assertThat(result.getCdcChecks().get(0).isPassed()).isTrue();
     }
 
     @Test

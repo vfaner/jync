@@ -40,6 +40,7 @@ class ConnectionTestServiceTest {
                 new com.qqmu.jync.service.cdc.LogMinerCdcProbe(),
                 new com.qqmu.jync.service.cdc.PgLogicalReplicationCdcProbe(),
                 new com.qqmu.jync.service.cdc.SqlServerCdcProbe(),
+                new TargetDdlProbe(),
                 new SyncProperties());
     }
 

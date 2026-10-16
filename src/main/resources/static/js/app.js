@@ -646,18 +646,22 @@
 
           // CDC 就绪探测逐项结果:四种支持日志 CDC 的源库 payload 都可能携带 cdcChecks,
           // 是附加信息,不影响上面的成败判定;detail 是驱动/探测给的原文,textContent 防注入。
-          // 标题按表单当前类型选,否则 Oracle/PG/SQLServer 都顶着「MySQL CDC」。
+          // 标题按表单当前类型选,否则 Oracle/PG/SQLServer 都顶着「MySQL CDC」;
+          // 目标连接带的是「能不能建表」这一项,顶着 LogMiner 就绪检查会驴唇不对马嘴。
           var checks = p.cdcChecks;
           if (checks && checks.length) {
             var title = document.createElement('div');
             title.className = 'test-line cdc-title';
             var typeSel = document.getElementById('type');
-            var titleKey = {
-              MYSQL: 'cdc.probe.title',
-              ORACLE: 'cdc.probe.title.oracle',
-              POSTGRESQL: 'cdc.probe.title.postgres',
-              SQLSERVER: 'cdc.probe.title.sqlserver'
-            }[(typeSel && typeSel.value) || 'MYSQL'] || 'cdc.probe.title';
+            var roleEl = document.querySelector('input[name="role"]:checked');
+            var titleKey = (roleEl && roleEl.value === 'TARGET')
+                    ? 'cdc.probe.title.target'
+                    : {
+                        MYSQL: 'cdc.probe.title',
+                        ORACLE: 'cdc.probe.title.oracle',
+                        POSTGRESQL: 'cdc.probe.title.postgres',
+                        SQLSERVER: 'cdc.probe.title.sqlserver'
+                      }[(typeSel && typeSel.value) || 'MYSQL'] || 'cdc.probe.title';
             title.textContent = t(titleKey);
             body.appendChild(title);
             for (var i = 0; i < checks.length; i++) {
