@@ -24,22 +24,30 @@ import lombok.Getter;
 @Getter
 public enum AiProtocol {
 
-    OPENAI("OpenAI 兼容", "https://api.openai.com/v1", "/chat/completions"),
+    OPENAI("ai.protocol.OPENAI", "https://api.openai.com/v1", "/chat/completions"),
 
-    ANTHROPIC("Anthropic", "https://api.anthropic.com", "/v1/messages"),
+    ANTHROPIC("ai.protocol.ANTHROPIC", "https://api.anthropic.com", "/v1/messages"),
 
     /** Ollama 本机默认端口;走的是它的 OpenAI 兼容端点,不是原生 /api/chat。 */
-    OLLAMA("Ollama（本地）", "http://localhost:11434/v1", "/chat/completions");
+    OLLAMA("ai.protocol.OLLAMA", "http://localhost:11434/v1", "/chat/completions");
 
-    private final String displayName;
+    /**
+     * i18n key for the human label, not the label itself.
+     *
+     * <p>It used to be a hardcoded string, and "OpenAI 兼容" / "Ollama（本地）" were rendered
+     * verbatim into the English UI — a leak the {@code ??}-based bundle guards cannot see,
+     * because a literal resolves fine and never turns into {@code ??key??}. Keeping only the
+     * key here means the label can only come from a bundle.
+     */
+    private final String messageKey;
 
     /** Prefilled in the form when the protocol is selected; almost always replaced. */
     private final String defaultBaseUrl;
 
     private final String chatPath;
 
-    AiProtocol(String displayName, String defaultBaseUrl, String chatPath) {
-        this.displayName = displayName;
+    AiProtocol(String messageKey, String defaultBaseUrl, String chatPath) {
+        this.messageKey = messageKey;
         this.defaultBaseUrl = defaultBaseUrl;
         this.chatPath = chatPath;
     }

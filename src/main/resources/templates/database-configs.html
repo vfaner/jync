@@ -49,7 +49,8 @@
                     <tr th:each="config : ${sources.content}">
                         <td style="font-weight:600" th:text="${config.name}">name</td>
                         <td>
-                            <span class="badge badge-brand" th:text="${config.type.displayName}">MySQL</span>
+                            <span class="badge badge-brand"
+                                  th:text="#{${'db.type.' + config.type.name()}}">MySQL</span>
                         </td>
                         <td class="mono small"
                             th:text="${config.host != null and !config.host.isEmpty()}
@@ -135,7 +136,8 @@
                     <tr th:each="config : ${targets.content}">
                         <td style="font-weight:600" th:text="${config.name}">name</td>
                         <td>
-                            <span class="badge badge-brand" th:text="${config.type.displayName}">MySQL</span>
+                            <span class="badge badge-brand"
+                                  th:text="#{${'db.type.' + config.type.name()}}">MySQL</span>
                         </td>
                         <td class="mono small"
                             th:text="${config.host != null and !config.host.isEmpty()}

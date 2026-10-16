@@ -77,7 +77,6 @@ public class DatabaseApiController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);
         body.put("type", dbType.name());
-        body.put("displayName", dbType.getDisplayName());
         body.put("defaultPort", dbType.getDefaultPort());
         body.put("driverClass", dbType.getDriverClassName());
         body.put("urlTemplate", dbType.getUrlTemplate());

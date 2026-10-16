@@ -15,7 +15,9 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.Enumeration;
+import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongConsumer;
@@ -29,9 +31,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.info.BuildProperties;
 import org.springframework.context.event.EventListener;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.service.version.ReleaseFeed.Asset;
 import com.qqmu.jync.service.version.ReleaseFeed.Release;
 import com.qqmu.jync.service.version.ReleaseFeed.Source;
@@ -79,8 +83,50 @@ public class UpgradeService {
 
     public enum Phase { IDLE, DOWNLOADING, READY, FAILED, RESTARTING }
 
+    /**
+     * A message that has not been resolved yet: the key plus the arguments to substitute.
+     *
+     * <p>Progress messages are produced on the download thread, which has no request and
+     * therefore no locale, and read by whoever happens to be polling. Collecting the key here
+     * and rendering it at the point of reading is what lets two admins on different languages
+     * each see their own — the same reason {@link #status()} returns a snapshot rather than
+     * pushing text.
+     */
+    public record Localized(String key, Object... args) {
+        /** Logs only; the reader's rendering comes from the bundle. */
+        @Override
+        public String toString() {
+            return args.length == 0 ? key : key + " " + Arrays.toString(args);
+        }
+    }
+
+    /**
+     * A failed check that already knows its wording, minus a locale. Carried on the exception
+     * because the checks that raise it run on the download thread: by the time the catch block
+     * sees it, the only locale in scope is the wrong one.
+     */
+    static class LocalizedFailure extends IOException {
+        private final Localized message;
+
+        LocalizedFailure(Localized message, Throwable cause) {
+            super(message.toString(), cause);
+            this.message = message;
+        }
+
+        Localized message() {
+            return message;
+        }
+    }
+
+    /**
+     * Numbers that appear inside a message travel as text. {@code MessageFormat} localises a
+     * numeric argument, so a byte count rendered as {@code {0}} comes out as "1,024" -- different
+     * digits in some locales, and not what this said before it was a message. Sizes, hashes,
+     * HTTP codes and ports are values to read off, not prose to localise.
+     */
+
     /** Immutable snapshot for polling: {@code bytesRead/bytesTotal} drive the progress bar. */
-    public record Status(Phase phase, String message, String targetVersion, String source,
+    public record Status(Phase phase, Localized message, String targetVersion, String source,
                          long bytesRead, long bytesTotal) {
         public static Status idle() {
             return new Status(Phase.IDLE, null, null, null, 0, 0);
@@ -116,6 +162,7 @@ public class UpgradeService {
     private final Supplier<Path> jarLocation;
     private final Supplier<Path> workDir;
     private final String port;
+    private final I18nConfig.MessageSourceAccessorHolder messages;
 
     /** Single in-flight upgrade: start() flips it, the terminal phase clears it. */
     private final AtomicBoolean busy = new AtomicBoolean(false);
@@ -123,7 +170,8 @@ public class UpgradeService {
 
     public UpgradeService(Supplier<String> currentVersion, SourceAwareFeed feed,
                           JarDownloader downloader, RestartLauncher launcher, Shutdown shutdown,
-                          Supplier<Path> jarLocation, Supplier<Path> workDir, String port) {
+                          Supplier<Path> jarLocation, Supplier<Path> workDir, String port,
+                          I18nConfig.MessageSourceAccessorHolder messages) {
         this.currentVersion = currentVersion;
         this.feed = feed;
         this.downloader = downloader;
@@ -132,7 +180,21 @@ public class UpgradeService {
         this.jarLocation = jarLocation;
         this.workDir = workDir;
         this.port = port;
+        this.messages = messages;
         restoreReadyFromMarker();
+    }
+
+    /**
+     * Resolves a key immediately, in the current request's locale. For the exceptions that reach
+     * the browser as-is: {@code app.js} renders a 409 body verbatim, so the text has to be
+     * finished before it is thrown.
+     *
+     * <p>Only call this from a request thread. The download thread has no locale in scope, and
+     * resolving there would bake in whichever one the JVM happened to start with — that is what
+     * {@link Localized} is for.
+     */
+    private String text(String key, Object... args) {
+        return messages.get(key, LocaleContextHolder.getLocale(), args);
     }
 
     // ── public flow ────────────────────────────────────────────────────────────────────
@@ -143,7 +205,7 @@ public class UpgradeService {
      */
     public void start(String sourceName) {
         if (!busy.compareAndSet(false, true)) {
-            throw new IllegalStateException("已有升级任务进行中，请等待其完成");
+            throw new IllegalStateException(text("error.upgrade.busy"));
         }
         boolean handedOff = false;
         try {
@@ -151,7 +213,7 @@ public class UpgradeService {
             try {
                 source = Source.valueOf(sourceName.trim().toUpperCase());
             } catch (IllegalArgumentException e) {
-                throw new IllegalStateException("未知的下载源: " + sourceName);
+                throw new IllegalStateException(text("error.upgrade.unknownSource", sourceName));
             }
             Path jar = requireJarFile();
 
@@ -160,22 +222,22 @@ public class UpgradeService {
                 release = feed.latestFrom(source);
             } catch (Exception e) {
                 log.warn("Upgrade: release lookup on {} failed", source, e);
-                status = failed("获取最新版本失败: " + describe(e));
+                status = failed(new Localized("upgrade.lookupFailed.detail", describe(e)));
                 return;
             }
             if (release == null) {
-                status = failed("获取最新版本失败: " + source.name() + " 未返回版本信息");
+                status = failed(new Localized("upgrade.lookupFailed.empty", source.name()));
                 return;
             }
 
             String target = VersionService.stripV(release.tag());
             String current = currentVersion.get();
             if (current != null && VersionService.compareVersions(target, current) <= 0) {
-                throw new IllegalStateException("当前已是最新版本 " + current);
+                throw new IllegalStateException(text("error.upgrade.alreadyLatest", current));
             }
             Asset asset = release.jarAsset(JAR_NAME);
             if (asset == null || !StringUtils.hasText(asset.url())) {
-                throw new IllegalStateException("该版本未提供 " + JAR_NAME + " 下载附件");
+                throw new IllegalStateException(text("error.upgrade.noAsset", JAR_NAME));
             }
 
             status = new Status(Phase.DOWNLOADING, null, target, source.name(), 0,
@@ -204,7 +266,7 @@ public class UpgradeService {
     public void restart() {
         Status s = status;
         if (s.phase() != Phase.READY) {
-            throw new IllegalStateException("尚未完成升级下载，无法重启");
+            throw new IllegalStateException(text("error.upgrade.notReady"));
         }
         try {
             Path jar = requireJarFile();
@@ -223,10 +285,10 @@ public class UpgradeService {
             Files.writeString(script, content, StandardCharsets.UTF_8);
             launcher.launch(script, workDir.get());
         } catch (Exception e) {
-            throw new IllegalStateException("重启准备失败: " + describe(e), e);
+            throw new IllegalStateException(text("error.upgrade.restartFailed", describe(e)), e);
         }
-        status = new Status(Phase.RESTARTING, "正在重启，请稍候…", s.targetVersion(), s.source(),
-                s.bytesRead(), s.bytesTotal());
+        status = new Status(Phase.RESTARTING, new Localized("upgrade.restarting"),
+                s.targetVersion(), s.source(), s.bytesRead(), s.bytesTotal());
         shutdown.exit(EXIT_DELAY_MS);
     }
 
@@ -285,8 +347,8 @@ public class UpgradeService {
 
             long actual = Files.size(part);
             if (expected != null && expected > 0 && actual != expected) {
-                throw new IOException("下载文件大小不符: 期望 " + expected + " 字节, 实际 "
-                        + actual + " 字节 (传输可能被截断)");
+                throw new LocalizedFailure(new Localized("upgrade.failed.sizeMismatch",
+                        String.valueOf(expected), String.valueOf(actual)), null);
             }
             verifyZipIntegrity(part);
             verifyChecksum(part, asset, tag, source);
@@ -307,14 +369,14 @@ public class UpgradeService {
 
             writeMarker(jar.getParent(), target, source, backup.getFileName().toString());
             status = new Status(Phase.READY,
-                    "新版本 " + target + " 已下载并替换完成，重启后生效", target, source.name(),
+                    new Localized("upgrade.ready", target), target, source.name(),
                     actual, actual);
             log.info("Upgrade installed {} from {} ({} bytes); backup at {}", target, source,
                     actual, backup.getFileName());
         } catch (Exception e) {
             log.warn("Upgrade to {} failed", target, e);
             deleteQuietly(part);
-            status = failed("升级失败: " + describe(e));
+            status = failed(failureText(e));
         } finally {
             busy.set(false);
         }
@@ -328,7 +390,7 @@ public class UpgradeService {
                 entries.nextElement();
             }
         } catch (IOException e) {
-            throw new IOException("下载文件校验失败: 不是有效的 zip/jar 文件 (" + e.getMessage() + ")", e);
+            throw new LocalizedFailure(new Localized("upgrade.failed.notAJar", e.getMessage()), e);
         }
     }
 
@@ -354,8 +416,8 @@ public class UpgradeService {
             return;
         }
         if (!expected.equalsIgnoreCase(computed)) {
-            throw new IOException("下载文件校验失败: SHA-256 不匹配 (期望 " + expected
-                    + ", 实际 " + computed + ")");
+            throw new LocalizedFailure(
+                    new Localized("upgrade.failed.checksumMismatch", expected, computed), null);
         }
     }
 
@@ -394,7 +456,7 @@ public class UpgradeService {
         try {
             digest = MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {
-            throw new IOException("SHA-256 不可用", e);
+            throw new LocalizedFailure(new Localized("upgrade.failed.noSha256"), e);
         }
         try (InputStream in = Files.newInputStream(file)) {
             byte[] buffer = new byte[64 * 1024];
@@ -458,7 +520,7 @@ public class UpgradeService {
         String running = currentVersion.get();
         if (StringUtils.hasText(target) && !target.equals(running)) {
             status = new Status(Phase.READY,
-                    "新版本 " + target + " 已下载并替换完成，重启后生效", target,
+                    new Localized("upgrade.ready", target), target,
                     marker.getProperty("source"), 0, 0);
         }
     }
@@ -467,8 +529,7 @@ public class UpgradeService {
         Path jar = jarLocation.get();
         if (jar == null || !jar.getFileName().toString().toLowerCase().endsWith(".jar")
                 || !Files.isRegularFile(jar)) {
-            throw new IllegalStateException(
-                    "当前不是以可执行 jar 方式运行，无法在线升级 (jar: " + jar + ")");
+            throw new IllegalStateException(text("error.upgrade.notAJar", jar));
         }
         return jar;
     }
@@ -477,8 +538,18 @@ public class UpgradeService {
         return jar.resolveSibling(jar.getFileName() + BACKUP_SUFFIX);
     }
 
-    private static Status failed(String message) {
+    private static Status failed(Localized message) {
         return new Status(Phase.FAILED, message, null, null, 0, 0);
+    }
+
+    /**
+     * A failed check already says what went wrong; anything else is an exception from somewhere
+     * else, so its own detail becomes the argument rather than the whole set of wording.
+     */
+    private static Localized failureText(Exception e) {
+        return e instanceof LocalizedFailure f
+                ? f.message()
+                : new Localized("upgrade.failed.detail", describe(e));
     }
 
     private static String describe(Exception e) {
@@ -662,7 +733,8 @@ public class UpgradeService {
             HttpResponse<InputStream> response =
                     client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() != 200) {
-                throw new IOException("下载失败: HTTP " + response.statusCode());
+                throw new LocalizedFailure(new Localized("upgrade.failed.http",
+                        String.valueOf(response.statusCode())), null);
             }
             try (InputStream in = response.body();
                  OutputStream out = Files.newOutputStream(target)) {
@@ -727,7 +799,8 @@ public class UpgradeService {
 
         @Autowired
         public Bean(ObjectProvider<BuildProperties> buildProperties, SourceAwareFeed feed,
-                    @Value("${server.port:8080}") String port) {
+                    @Value("${server.port:8080}") String port,
+                    I18nConfig.MessageSourceAccessorHolder messages) {
             super(() -> {
                         BuildProperties props = buildProperties.getIfAvailable();
                         String version = props == null ? null : props.getVersion();
@@ -739,7 +812,8 @@ public class UpgradeService {
                     delayedExit(),
                     UpgradeService::currentJarLocation,
                     () -> Path.of(System.getProperty("user.dir")),
-                    port);
+                    port,
+                    messages);
         }
 
         @EventListener(ApplicationReadyEvent.class)

@@ -64,7 +64,7 @@
                             <select class="select" id="type" th:field="*{type}" data-role="type-select"
                                     th:attr="data-action=@{/api/databases/type-defaults}">
                                 <option th:each="t : ${types}" th:value="${t.name()}"
-                                        th:text="${t.displayName}">MySQL</option>
+                                        th:text="#{${'db.type.' + t.name()}}">MySQL</option>
                             </select>
                             <div class="help mono" id="url-hint"
                                  th:text="${config.type != null ? config.type.urlTemplate : ''}"></div>

@@ -5,12 +5,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.Locale;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.support.ResourceBundleMessageSource;
+import org.springframework.context.i18n.LocaleContextHolder;
 
+import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.DatabaseType;
@@ -65,9 +69,23 @@ class AiSqlAssistantTest {
 
     @BeforeEach
     void setUp() {
+        // The real bundles, not a stub: the point of resolving the product label from a message
+        // key is that the key exists in the shipped bundle, and a fake source would let a missing
+        // key pass as a success while the model was fed a literal "db.type.ORACLE".
+        //
+        // Both settings mirror application.yml. The fallback one is not cosmetic: left at its
+        // default, the JDK tries the system-locale bundle before giving up on a locale, so on a
+        // Chinese-default JVM an English lookup here returns "达梦 DM" — a source configured
+        // differently from the app would test the JDK's fallback, not this class.
+        ResourceBundleMessageSource source = new ResourceBundleMessageSource();
+        source.setBasename("i18n/messages");
+        source.setDefaultEncoding("UTF-8");
+        source.setFallbackToSystemLocale(false);
+
         client = new StubClient();
         providerService = mock(AiProviderService.class);
-        assistant = new AiSqlAssistant(providerService, client);
+        assistant = new AiSqlAssistant(providerService, client,
+                new I18nConfig.MessageSourceAccessorHolder(source));
 
         provider = new AiProvider();
         provider.setId(1L);
@@ -99,6 +117,25 @@ class AiSqlAssistantTest {
         // Family drives the syntax, so the model is told it rather than left to infer it from
         // the product name -- 达梦 and Oracle need the same answer.
         assertThat(client.lastUser).contains("ORACLE").contains("MYSQL");
+    }
+
+    @Test
+    @DisplayName("the prompt names the products in English even when the request is Chinese")
+    void thePromptIsEnglishRegardlessOfTheRequestLocale() {
+        LocaleContextHolder.setLocale(Locale.SIMPLIFIED_CHINESE);
+        try {
+            assistant.draft("PROCEDURE", "GET_TOTAL", ORACLE_BODY, null,
+                    DatabaseType.DM, DatabaseType.MYSQL);
+        } finally {
+            LocaleContextHolder.resetLocaleContext();
+        }
+
+        // The instruction around this fragment is English, so the label must be too: the old
+        // hardcoded "达梦 DM" spliced Chinese into the middle of it. And the key must resolve —
+        // handing the model "db.type.DM" would be worse than the Chinese, because the model
+        // would read it as a product name and answer about an invented database.
+        assertThat(client.lastUser).contains("DAMENG (").doesNotContain("达梦");
+        assertThat(client.lastUser).doesNotContain("db.type.");
     }
 
     @Test

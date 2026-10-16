@@ -17,6 +17,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.service.upgrade.UpgradeService;
+import com.qqmu.jync.service.upgrade.UpgradeService.Localized;
 import com.qqmu.jync.service.upgrade.UpgradeService.Phase;
 import com.qqmu.jync.service.upgrade.UpgradeService.Status;
 
@@ -54,13 +55,13 @@ class UpgradeApiControllerTest {
 
     @Test
     void aRefusedStartBecomesA409CarryingTheReason() throws Exception {
-        doThrow(new IllegalStateException("已有升级任务进行中，请等待其完成"))
+        doThrow(new IllegalStateException("an upgrade is already running"))
                 .when(upgradeService).start("GITEE");
 
         mvc.perform(post("/api/upgrade/start").param("source", "GITEE").with(csrf()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.message").value("已有升级任务进行中，请等待其完成"));
+                .andExpect(jsonPath("$.message").value("an upgrade is already running"));
     }
 
     @Test
@@ -89,12 +90,42 @@ class UpgradeApiControllerTest {
 
     @Test
     void restartBeforeAnUpgradeIsReadyIsA409() throws Exception {
-        doThrow(new IllegalStateException("尚未完成升级下载，无法重启"))
+        doThrow(new IllegalStateException("nothing has been downloaded yet"))
                 .when(upgradeService).restart();
 
         mvc.perform(post("/api/upgrade/restart").with(csrf()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.message").value("尚未完成升级下载，无法重启"));
+                .andExpect(jsonPath("$.message").value("nothing has been downloaded yet"));
+    }
+
+    @Test
+    void theStatusMessageIsRenderedInThePollersLocale() throws Exception {
+        when(upgradeService.status()).thenReturn(new Status(Phase.READY,
+                new Localized("upgrade.ready", "1.8.0"), "1.8.0", "GITEE", 10L, 10L));
+
+        mvc.perform(get("/api/upgrade/status").param("lang", "en"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(
+                        "Version 1.8.0 has been downloaded and swapped in; it takes effect"
+                                + " after a restart"));
+
+        mvc.perform(get("/api/upgrade/status").param("lang", "zh_CN"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("新版本 1.8.0 已下载并替换完成，重启后生效"));
+    }
+
+    @Test
+    void anEnglishPollNeverSeesChinese() throws Exception {
+        // app.js renders this message verbatim -- it goes nowhere near the frontend dictionary --
+        // so the server has to resolve it, in the poller's language, before it leaves.
+        when(upgradeService.status()).thenReturn(new Status(Phase.FAILED,
+                new Localized("upgrade.failed.sizeMismatch", "1024", "512"), null, "GITEE", 0, 0));
+
+        mvc.perform(get("/api/upgrade/status").param("lang", "en"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(
+                        "Downloaded file size mismatch: expected 1024 bytes, got 512"
+                                + " (the transfer may have been truncated)"));
     }
 }

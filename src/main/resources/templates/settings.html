@@ -299,7 +299,7 @@
                     </thead>
                     <tbody>
                     <tr th:each="t : ${supportedTypes}">
-                        <td style="font-weight:600" th:text="${t.displayName}">MySQL</td>
+                        <td style="font-weight:600" th:text="#{${'db.type.' + t.name()}}">MySQL</td>
                         <td class="num mono small"
                             th:text="${t.defaultPort > 0} ? ${t.defaultPort} : '—'">3306</td>
                         <td class="mono small" th:text="${t.driverClassName ?: '—'}">driver</td>

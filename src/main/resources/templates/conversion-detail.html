@@ -12,9 +12,11 @@
             </h1>
             <p class="sub">
                 <span class="badge badge-brand" th:text="${detail.routineType}">PROCEDURE</span>
-                <span th:text="${detail.sourceProduct?.displayName}">Oracle</span>
+                <span th:with="pk=${detail.sourceProduct != null ? 'db.type.' + detail.sourceProduct.name() : null}"
+                      th:text="${pk != null} ? #{${pk}} : ''">Oracle</span>
                 <svg class="ico"><use href="#arrow-left-right"/></svg>
-                <span th:text="${detail.targetProduct?.displayName}">MySQL</span>
+                <span th:with="pk=${detail.targetProduct != null ? 'db.type.' + detail.targetProduct.name() : null}"
+                      th:text="${pk != null} ? #{${pk}} : ''">MySQL</span>
             </p>
         </div>
         <div class="page-actions">
@@ -44,14 +46,16 @@
                 <div class="diff-pane">
                     <div class="diff-head">
                         <span th:text="#{conversion.sourceSide}">Source</span>
-                        <span class="chip" th:text="${detail.sourceProduct?.displayName}">Oracle</span>
+                        <span class="chip" th:with="pk=${detail.sourceProduct != null ? 'db.type.' + detail.sourceProduct.name() : null}"
+                      th:text="${pk != null} ? #{${pk}} : ''">Oracle</span>
                     </div>
                     <pre class="code-block" th:text="${detail.sourceSql}">source sql</pre>
                 </div>
                 <div class="diff-pane">
                     <div class="diff-head">
                         <span th:text="#{conversion.mechanicalSide}">Mechanical conversion</span>
-                        <span class="chip" th:text="${detail.targetProduct?.displayName}">MySQL</span>
+                        <span class="chip" th:with="pk=${detail.targetProduct != null ? 'db.type.' + detail.targetProduct.name() : null}"
+                              th:text="${pk != null} ? #{${pk}} : ''">MySQL</span>
                     </div>
                     <pre class="code-block" th:text="${detail.mechanicalSql}">converted sql</pre>
                 </div>

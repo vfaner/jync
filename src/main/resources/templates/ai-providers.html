@@ -59,7 +59,10 @@
                                   th:text="#{ai.active}">Active</span>
                         </td>
                         <td>
-                            <span class="badge badge-brand" th:text="${p.protocol.displayName}">OpenAI</span>
+                            <!--/* protocol 可为 null(加该列之前存档的行),直接取 name() 会抛异常把页面打成 500 */-->
+                            <span class="badge badge-brand"
+                                  th:with="pk=${p.protocol != null ? 'ai.protocol.' + p.protocol.name() : null}"
+                                  th:text="${pk != null} ? #{${pk}} : ''">OpenAI</span>
                         </td>
                         <td class="mono small" th:text="${p.model ?: '—'}">model</td>
                         <td class="mono small" th:text="${p.baseUrl ?: '—'}"

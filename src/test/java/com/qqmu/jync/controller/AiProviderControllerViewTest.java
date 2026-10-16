@@ -19,6 +19,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.qqmu.jync.EnglishRenderingSupport;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.service.ai.AiProviderService;
@@ -144,5 +145,31 @@ class AiProviderControllerViewTest {
 
         // Keys added to only one of the two bundles would surface here as ??key_en_US??.
         assertThat(html).doesNotContain("??");
+    }
+
+    @Test
+    void theEnglishListNamesTheProtocolInEnglish() throws Exception {
+        when(service.findAll()).thenReturn(List.of(provider("p", false, null)));
+
+        String html = mvc.perform(get("/ai").header("Accept-Language", "en-US"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The protocol badge rendered a hardcoded Chinese literal straight from the enum, which
+        // resolves cleanly and therefore never shows up as ??key??.
+        assertThat(html).contains("OpenAI-compatible");
+        assertThat(html).doesNotContain("兼容");
+    }
+
+    @Test
+    void theEnglishCreateFormNamesTheProtocolInEnglish() throws Exception {
+        String html = mvc.perform(get("/ai/new").header("Accept-Language", "en-US"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("OpenAI-compatible");
+        assertThat(EnglishRenderingSupport.findChinese(html))
+                .as("the English page must not contain any Chinese text")
+                .isNull();
     }
 }

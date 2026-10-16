@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -22,6 +23,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.qqmu.jync.service.upgrade.UpgradeService.RestartSpec;
+import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.context.support.ResourceBundleMessageSource;
+
+import com.qqmu.jync.config.I18nConfig;
+import com.qqmu.jync.service.upgrade.UpgradeService.Localized;
 import com.qqmu.jync.service.upgrade.UpgradeService.Status;
 import com.qqmu.jync.service.version.ReleaseFeed.Asset;
 import com.qqmu.jync.service.version.ReleaseFeed.Release;
@@ -111,7 +117,21 @@ class UpgradeServiceTest {
                 shutdown,
                 () -> jarFile,
                 () -> workDir,
-                "8081");
+                "8081",
+                messages());
+    }
+
+    /**
+     * The real bundles, mirroring application.yml. Status messages are collected unresolved and
+     * asserted by key, so the assertions in this class do not depend on a locale — but the
+     * exception paths resolve at throw time and do, so the holder is the shipped one.
+     */
+    private static I18nConfig.MessageSourceAccessorHolder messages() {
+        ResourceBundleMessageSource source = new ResourceBundleMessageSource();
+        source.setBasename("i18n/messages");
+        source.setDefaultEncoding("UTF-8");
+        source.setFallbackToSystemLocale(false);
+        return new I18nConfig.MessageSourceAccessorHolder(source);
     }
 
     private static byte[] makeFatJar(String marker) throws IOException {
@@ -172,8 +192,11 @@ class UpgradeServiceTest {
         byte[] nextJar = makeFatJar("new");
         ScriptedDownloader downloader = new ScriptedDownloader();
         downloader.blob = nextJar;
-        // GitHub tells the true size; lie about it to simulate a truncated transfer.
-        feed.release = release(Source.GITHUB, "v1.8.0", (long) nextJar.length + 500);
+        // GitHub tells the true size; lie about it to simulate a truncated transfer. The lie is
+        // over a thousand bytes so that a value rendered as a number would come back grouped
+        // ("5,223") and the assertion below can catch it.
+        long declared = (long) nextJar.length + 5000;
+        feed.release = release(Source.GITHUB, "v1.8.0", declared);
         UpgradeService svc = service("1.7.2", downloader);
 
         svc.start("GITHUB");
@@ -182,7 +205,18 @@ class UpgradeServiceTest {
         assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
         assertThat(tempDir.resolve("app/jync.jar.bak")).doesNotExist();
         assertThat(tempDir.resolve("app/jync.jar.part")).doesNotExist();
-        assertThat(svc.status().message()).contains("字节");
+        // The wording is chosen by the reader's locale at poll time, so what the service owes
+        // the poller is the key and the numbers, not a sentence.
+        Localized message = svc.status().message();
+        assertThat(message.key()).isEqualTo("upgrade.failed.sizeMismatch");
+        assertThat(message.args()).containsExactly(
+                String.valueOf(declared), String.valueOf(nextJar.length));
+        // Rendered through the shipped bundle rather than asserted as a key alone: a byte count
+        // passed as a number comes back as "5,223", which is not what this message said before
+        // it became one.
+        assertThat(messages().get(message.key(), Locale.ENGLISH, message.args()))
+                .contains("expected " + declared + " bytes, got " + nextJar.length)
+                .doesNotContain("5,223");
     }
 
     @Test
@@ -196,7 +230,7 @@ class UpgradeServiceTest {
         awaitPhase(svc, UpgradeService.Phase.FAILED);
 
         assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
-        assertThat(svc.status().message()).contains("zip");
+        assertThat(svc.status().message().key()).isEqualTo("upgrade.failed.notAJar");
     }
 
     @Test
@@ -208,7 +242,9 @@ class UpgradeServiceTest {
 
         svc.start("GITEE");
         awaitPhase(svc, UpgradeService.Phase.FAILED);
-        assertThat(svc.status().message()).contains("socket reset");
+        Localized message = svc.status().message();
+        assertThat(message.key()).isEqualTo("upgrade.failed.detail");
+        assertThat(message.args()).containsExactly("socket reset");
         assertThat(tempDir.resolve("app/jync.jar.part")).doesNotExist();
         assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
     }
@@ -219,7 +255,7 @@ class UpgradeServiceTest {
         feed.release = release(Source.GITEE, "v1.8.0", null);
         UpgradeService svc = new UpgradeService(
                 () -> "1.7.2", feed, downloader, launcher, shutdown,
-                () -> tempDir.resolve("classes"), () -> workDir, "8081");
+                () -> tempDir.resolve("classes"), () -> workDir, "8081", messages());
 
         assertThatThrownBy(() -> svc.start("GITEE"))
                 .isInstanceOf(IllegalStateException.class)
@@ -259,9 +295,18 @@ class UpgradeServiceTest {
 
         svc.start("GITEE");
         assertThat(downloader.entered.await(5, TimeUnit.SECONDS)).isTrue();
-        assertThatThrownBy(() -> svc.start("GITEE"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("进行中");
+        // Exceptions are already finished sentences by the time they are thrown -- the 409 body
+        // carries them verbatim -- so they are rendered in the request locale. Pin it rather than
+        // depending on whatever the JVM default happens to be.
+        LocaleContextHolder.setLocale(Locale.SIMPLIFIED_CHINESE);
+        try {
+            assertThatThrownBy(() -> svc.start("GITEE"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("进行中")
+                    .hasMessageContaining("等待其完成");
+        } finally {
+            LocaleContextHolder.resetLocaleContext();
+        }
         downloader.release.countDown();
         awaitPhase(svc, UpgradeService.Phase.READY);
     }
@@ -274,7 +319,9 @@ class UpgradeServiceTest {
 
         svc.start("GITEE");
         awaitPhase(svc, UpgradeService.Phase.FAILED);
-        assertThat(svc.status().message()).contains("gitee blocked");
+        Localized message = svc.status().message();
+        assertThat(message.key()).isEqualTo("upgrade.lookupFailed.detail");
+        assertThat(message.args()[0].toString()).contains("gitee blocked");
     }
 
     @Test
@@ -508,7 +555,7 @@ class UpgradeServiceTest {
         assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
         assertThat(tempDir.resolve("app/jync.jar.bak")).doesNotExist();
         assertThat(tempDir.resolve("app/jync.jar.part")).doesNotExist();
-        assertThat(svc.status().message()).containsIgnoringCase("sha");
+        assertThat(svc.status().message().key()).isEqualTo("upgrade.failed.checksumMismatch");
     }
 
     @Test
@@ -543,7 +590,7 @@ class UpgradeServiceTest {
 
         assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
         assertThat(tempDir.resolve("app/jync.jar.part")).doesNotExist();
-        assertThat(svc.status().message()).containsIgnoringCase("sha");
+        assertThat(svc.status().message().key()).isEqualTo("upgrade.failed.checksumMismatch");
     }
 
     @Test

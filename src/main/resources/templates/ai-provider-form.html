@@ -44,7 +44,7 @@
                                     th:attr="data-action=@{/api/ai/protocol-defaults},
                                              data-new-provider=${provider.id == null}">
                                 <option th:each="p : ${protocols}" th:value="${p.name()}"
-                                        th:text="${p.displayName}">OpenAI</option>
+                                        th:text="#{${'ai.protocol.' + p.name()}}">OpenAI</option>
                             </select>
                             <div class="help" th:text="#{ai.protocolHelp}">
                                 Most self-hosted endpoints speak the OpenAI shape.

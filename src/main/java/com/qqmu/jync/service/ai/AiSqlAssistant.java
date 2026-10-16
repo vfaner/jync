@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.DatabaseType;
 
@@ -59,10 +60,13 @@ public class AiSqlAssistant {
 
     private final AiProviderService providerService;
     private final AiChatClient client;
+    private final I18nConfig.MessageSourceAccessorHolder messages;
 
-    public AiSqlAssistant(AiProviderService providerService, AiChatClient client) {
+    public AiSqlAssistant(AiProviderService providerService, AiChatClient client,
+                          I18nConfig.MessageSourceAccessorHolder messages) {
         this.providerService = providerService;
         this.client = client;
+        this.messages = messages;
     }
 
     /**
@@ -161,12 +165,19 @@ public class AiSqlAssistant {
         return sb.toString();
     }
 
-    /** Product name plus dialect family, since family is what actually drives the syntax. */
+    /**
+     * Product name plus dialect family, since family is what actually drives the syntax.
+     *
+     * <p>Resolved in English rather than in the user's locale: the prompt surrounding this
+     * fragment is English, and the product label is now a message key, so the request locale
+     * would splice "达梦 DM" into the middle of an English instruction.
+     */
     private String describe(DatabaseType type) {
         if (type == null) {
             return "unknown";
         }
-        return type.getDisplayName() + " (" + type.getFamily() + "-compatible dialect)";
+        return messages.get(type.getMessageKey(), java.util.Locale.ENGLISH)
+                + " (" + type.getFamily() + "-compatible dialect)";
     }
 
     /**

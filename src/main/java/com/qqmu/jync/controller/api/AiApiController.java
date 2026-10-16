@@ -54,7 +54,6 @@ public class AiApiController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);
         body.put("protocol", p.name());
-        body.put("displayName", p.getDisplayName());
         body.put("defaultBaseUrl", p.getDefaultBaseUrl());
         body.put("chatPath", p.getChatPath());
         return ResponseEntity.ok(body);

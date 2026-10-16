@@ -29,6 +29,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.qqmu.jync.EnglishRenderingSupport;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -84,6 +85,29 @@ class DatabaseConfigFormViewTest {
         assertThat(page).doesNotContain("??db.jarCard", "??db.jarCardHint");
         // hidden alone still submits the (blank or stale) value; the control must be disabled too
         assertThat(page).containsPattern("id=\"customJarPath\"[^>]*disabled");
+    }
+
+    @Test
+    void theEnglishFormNamesEveryDatabaseTypeInEnglish() throws Exception {
+        String page = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN))
+                        .header("Accept-Language", "en-US"))
+                .andExpect(status().isOk()));
+
+        // Type names used to be hardcoded bilingual literals ("达梦 DM", "自定义 Custom"), which
+        // read as Chinese to an English user and which the ??-guard cannot see.
+        assertThat(page).contains("Custom").contains("MySQL").contains("DAMENG");
+        assertThat(EnglishRenderingSupport.findChinese(page))
+                .as("the English form must not contain any Chinese text")
+                .isNull();
+    }
+
+    @Test
+    void theChineseFormKeepsTheDomesticProductNames() throws Exception {
+        String page = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN))
+                        .header("Accept-Language", "zh-CN"))
+                .andExpect(status().isOk()));
+
+        assertThat(page).contains("达梦 DM").contains("自定义");
     }
 
     @Test

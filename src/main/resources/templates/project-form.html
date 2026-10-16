@@ -55,7 +55,7 @@
                             <select class="select" id="sourceDbId" th:field="*{sourceDbId}" required>
                                 <option value="" th:text="#{project.selectDatabase}">-- select --</option>
                                 <option th:each="db : ${sourceDatabases}" th:value="${db.id}"
-                                        th:text="|${db.name} · ${db.type.displayName}|">db</option>
+                                        th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
                             </select>
                         </div>
                         <div class="field">
@@ -66,7 +66,7 @@
                             <select class="select" id="targetDbId" th:field="*{targetDbId}" required>
                                 <option value="" th:text="#{project.selectDatabase}">-- select --</option>
                                 <option th:each="db : ${targetDatabases}" th:value="${db.id}"
-                                        th:text="|${db.name} · ${db.type.displayName}|">db</option>
+                                        th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
                             </select>
                         </div>
                     </div>

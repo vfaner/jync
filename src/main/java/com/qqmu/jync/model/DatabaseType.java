@@ -23,12 +23,12 @@ public enum DatabaseType {
      * reading those update counts, so without this flag a re-scan of an unchanged table would
      * report every row as changed.
      */
-    MYSQL("MySQL", "com.mysql.cj.jdbc.Driver",
+    MYSQL("db.type.MYSQL", "com.mysql.cj.jdbc.Driver",
             "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
                     + "&characterEncoding=utf8&useAffectedRows=true",
             3306, DialectFamily.MYSQL),
 
-    MARIADB("MariaDB", "org.mariadb.jdbc.Driver",
+    MARIADB("db.type.MARIADB", "org.mariadb.jdbc.Driver",
             "jdbc:mariadb://%s:%d/%s",
             3306, DialectFamily.MYSQL),
 
@@ -41,31 +41,31 @@ public enum DatabaseType {
      * "database name" field keeps working for them; truly SID-only setups can still
      * paste a full descriptor into the custom-URL field.
      */
-    ORACLE("Oracle", "oracle.jdbc.OracleDriver",
+    ORACLE("db.type.ORACLE", "oracle.jdbc.OracleDriver",
             "jdbc:oracle:thin:@//%s:%d/%s",
             1521, DialectFamily.ORACLE),
 
-    SQLSERVER("SQL Server", "com.microsoft.sqlserver.jdbc.SQLServerDriver",
+    SQLSERVER("db.type.SQLSERVER", "com.microsoft.sqlserver.jdbc.SQLServerDriver",
             "jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=false;trustServerCertificate=true",
             1433, DialectFamily.SQLSERVER),
 
-    DB2("DB2", "com.ibm.db2.jcc.DB2Driver",
+    DB2("db.type.DB2", "com.ibm.db2.jcc.DB2Driver",
             "jdbc:db2://%s:%d/%s",
             50000, DialectFamily.DB2),
 
-    POSTGRESQL("PostgreSQL", "org.postgresql.Driver",
+    POSTGRESQL("db.type.POSTGRESQL", "org.postgresql.Driver",
             "jdbc:postgresql://%s:%d/%s",
             5432, DialectFamily.POSTGRES),
 
-    OPENGAUSS("OpenGauss", "org.opengauss.Driver",
+    OPENGAUSS("db.type.OPENGAUSS", "org.opengauss.Driver",
             "jdbc:opengauss://%s:%d/%s",
             5432, DialectFamily.POSTGRES),
 
-    DM("达梦 DM", "dm.jdbc.driver.DmDriver",
+    DM("db.type.DM", "dm.jdbc.driver.DmDriver",
             "jdbc:dm://%s:%d/%s",
             5236, DialectFamily.ORACLE),
 
-    KINGBASE("人大金仓 KingBase", "com.kingbase8.Driver",
+    KINGBASE("db.type.KINGBASE", "com.kingbase8.Driver",
             "jdbc:kingbase8://%s:%d/%s",
             54321, DialectFamily.POSTGRES),
 
@@ -75,7 +75,7 @@ public enum DatabaseType {
      * an Oracle-family URL rather than this preset. Default port is the OBProxy port;
      * a direct observer connection uses 2881.
      */
-    OCEANBASE("OceanBase", "com.oceanbase.jdbc.Driver",
+    OCEANBASE("db.type.OCEANBASE", "com.oceanbase.jdbc.Driver",
             "jdbc:oceanbase://%s:%d/%s",
             2883, DialectFamily.MYSQL),
 
@@ -84,16 +84,16 @@ public enum DatabaseType {
      * so this preset reuses the bundled MySQL driver instead of the third-party
      * repackaged "TiDB driver" that circulates on Maven Central.
      */
-    TIDB("TiDB", "com.mysql.cj.jdbc.Driver",
+    TIDB("db.type.TIDB", "com.mysql.cj.jdbc.Driver",
             "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
                     + "&characterEncoding=utf8&useAffectedRows=true",
             4000, DialectFamily.MYSQL),
 
-    HIGHGO("瀚高 HighGo", "com.highgo.jdbc.Driver",
+    HIGHGO("db.type.HIGHGO", "com.highgo.jdbc.Driver",
             "jdbc:highgo://%s:%d/%s",
             5866, DialectFamily.POSTGRES),
 
-    VASTBASE("海量 Vastbase", "cn.com.vastbase.Driver",
+    VASTBASE("db.type.VASTBASE", "cn.com.vastbase.Driver",
             "jdbc:vastbase://%s:%d/%s",
             5432, DialectFamily.POSTGRES),
 
@@ -102,15 +102,15 @@ public enum DatabaseType {
      * so it joins the Oracle dialect family. The URL prefix is {@code jdbc:yasdb:},
      * not {@code jdbc:yashandb:} — verified against the driver itself.
      */
-    YASHANDB("崖山 YashanDB", "com.yashandb.jdbc.Driver",
+    YASHANDB("db.type.YASHANDB", "com.yashandb.jdbc.Driver",
             "jdbc:yasdb://%s:%d/%s",
             1688, DialectFamily.ORACLE),
 
-    GBASE("南大通用 GBase", "com.gbase.jdbc.Driver",
+    GBASE("db.type.GBASE", "com.gbase.jdbc.Driver",
             "jdbc:gbase://%s:%d/%s",
             5258, DialectFamily.MYSQL),
 
-    OSCAR("神通 Oscar", "com.oscar.Driver",
+    OSCAR("db.type.OSCAR", "com.oscar.Driver",
             "jdbc:oscar://%s:%d/%s",
             2003, DialectFamily.POSTGRES),
 
@@ -120,21 +120,32 @@ public enum DatabaseType {
      * ({@code ENGINE=InnoDB DEFAULT CHARSET=utf8mb4}) is rejected by a default-mode H2.
      * The generic dialect emits standard SQL that H2 accepts in any mode.
      */
-    H2("H2", "org.h2.Driver",
+    H2("db.type.H2", "org.h2.Driver",
             "jdbc:h2:tcp://%s:%d/%s",
             9092, DialectFamily.GENERIC),
 
-    CUSTOM("自定义 Custom", null, null, 0, DialectFamily.GENERIC);
+    CUSTOM("db.type.CUSTOM", null, null, 0, DialectFamily.GENERIC);
 
-    private final String displayName;
+    /**
+     * i18n key for the human label, not the label itself.
+     *
+     * <p>These used to be hardcoded bilingual literals — "达梦 DM", "自定义 Custom" — on the
+     * theory that showing both languages suits either reader. It does not: an English user saw
+     * Chinese text on every connection form, and because a literal needs no lookup it resolved
+     * cleanly and never tripped the bundle guard. The domestic products now carry their own
+     * English brand in {@code messages.properties} (DAMENG, KingBase, HighGo…) and their Chinese
+     * name in {@code messages_zh_CN.properties}, which is what each reader expects.
+     */
+    private final String messageKey;
+
     private final String driverClassName;
     private final String urlTemplate;
     private final int defaultPort;
     private final DialectFamily family;
 
-    DatabaseType(String displayName, String driverClassName, String urlTemplate,
+    DatabaseType(String messageKey, String driverClassName, String urlTemplate,
                  int defaultPort, DialectFamily family) {
-        this.displayName = displayName;
+        this.messageKey = messageKey;
         this.driverClassName = driverClassName;
         this.urlTemplate = urlTemplate;
         this.defaultPort = defaultPort;
