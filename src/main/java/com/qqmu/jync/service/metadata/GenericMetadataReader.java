@@ -162,7 +162,13 @@ public class GenericMetadataReader implements MetadataReader {
                         rs.getString("TABLE_SCHEM"), schema)) {
                     continue;
                 }
-                pkBySeq.put(rs.getShort("KEY_SEQ"), rs.getString("COLUMN_NAME"));
+                String pkColumn = rs.getString("COLUMN_NAME");
+                // COLUMN_NAME is nullable per the JDBC spec; a null entry would NPE the
+                // pk.toUpperCase() below and fail the whole table read. Skip the row.
+                if (pkColumn == null) {
+                    continue;
+                }
+                pkBySeq.put(rs.getShort("KEY_SEQ"), pkColumn);
             }
         } catch (SQLException e) {
             log.debug("getPrimaryKeys failed for {}: {}", tableName, e.getMessage());
@@ -179,8 +185,14 @@ public class GenericMetadataReader implements MetadataReader {
                         rs.getString("TABLE_SCHEM"), schema)) {
                     continue;
                 }
+                String columnName = rs.getString("COLUMN_NAME");
+                // A null name is spec-permitted but unusable: generated DDL/DML would carry
+                // an empty identifier and the PK flag below would NPE. Skip the whole row.
+                if (columnName == null) {
+                    continue;
+                }
                 ColumnMeta col = new ColumnMeta();
-                col.setName(rs.getString("COLUMN_NAME"));
+                col.setName(columnName);
                 col.setTypeName(rs.getString("TYPE_NAME"));
                 col.setJdbcType(rs.getInt("DATA_TYPE"));
                 int size = rs.getInt("COLUMN_SIZE");
