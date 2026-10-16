@@ -406,6 +406,19 @@ class UpgradeServiceTest {
     }
 
     @Test
+    void shellScriptEscapesSingleQuotesInPaths() {
+        // A single quote inside a path must not break out of the generated script's quoting.
+        RestartSpec spec = new RestartSpec(1L, "/opt/jy'bin/java",
+                "/opt/jy'nc/jync.jar", "/opt/jy'nc/jync.jar.bak", "/opt/jy'nc", 8081,
+                "/opt/jy'nc/jync.jar.failed-x");
+        String script = UpgradeService.buildShellScript(spec);
+
+        assertThat(script).contains("JAVA='/opt/jy'\\''bin/java'");
+        assertThat(script).contains("JAR='/opt/jy'\\''nc/jync.jar'");
+        assertThat(script).doesNotContain("'/opt/jy'nc/jync.jar'");
+    }
+
+    @Test
     void powershellEscapesSingleQuotesInPaths() {
         RestartSpec spec = new RestartSpec(1L, "C:\\app'o\\java.exe",
                 "C:\\app'o\\jync.jar", "C:\\app'o\\jync.jar.bak", "C:\\work", 8080,
