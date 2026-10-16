@@ -130,9 +130,9 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 **容器部署（Docker / Compose / Kubernetes）**：仓库自带多阶段构建 `Dockerfile`（运行镜像仅 JRE、非 root 运行、内置 HEALTHCHECK）、`docker-compose.yml` 与 `deploy/k8s/`（Kustomize）。一条命令起服务，元数据与日志落在宿主机 `./data`、`./logs`，重建镜像不丢数据：
 
 ```bash
-docker compose up -d --build      # 或：docker build -t jync:1.7.3 . && docker run -d \
+docker compose up -d --build      # 或：docker build -t jync:1.7.4 . && docker run -d \
                                   #   -p 8080:8080 -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-                                  #   --restart unless-stopped jync:1.7.3
+                                  #   --restart unless-stopped jync:1.7.4
 ```
 
 环境变量覆盖、TLS、多实例扩容、镜像升级与排障见 [docs/deploy-container.md](docs/deploy-container.md)。

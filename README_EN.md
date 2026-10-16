@@ -404,10 +404,10 @@ The repo ships a multi-stage `Dockerfile` (the runtime image contains just the J
 docker compose up -d --build
 
 # or, without Compose:
-docker build -t jync:1.7.3 .
+docker build -t jync:1.7.4 .
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.7.3
+  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.7.4
 ```
 
 Environment-variable overrides (HTTPS cookies, external MySQL for multi-instance setups), TLS, horizontal scaling with more than one replica, image upgrades and troubleshooting are covered in [docs/deploy-container.md](docs/deploy-container.md).

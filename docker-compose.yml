@@ -5,7 +5,7 @@
 services:
   jync:
     build: .
-    image: jync:1.7.3
+    image: jync:1.7.4
     container_name: jync
     ports:
       - "8080:8080"
