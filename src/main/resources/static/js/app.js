@@ -449,13 +449,14 @@
           var text = payload.summary
             ? t(payload.message) + ' — ' + payload.summary
             : t(payload.message);
+          // 出错时摘要已经点名了条数/原因/表名，这里只补一句"明细在哪"。
+          // 曾经把前三条错误原文各弹一个窗（每条都带完整 DDL），用户要按四次「确定」，
+          // 还得自己从三段几乎相同的文本里认出原因；原文仍在变更日志里，不必搬进弹窗。
+          if (payload.errors && payload.errors.length) {
+            text += ' ' + t('msg.sync.errors.hint');
+          }
           // 服务端可用 toastKind 指定级别（如「已排队补跑」用 warn），缺省按成败二色
           toast(text, payload.toastKind || (payload.success ? 'ok' : 'danger'));
-
-          // 逐条列出错误，比只给一句「失败」有用
-          if (payload.errors && payload.errors.length) {
-            payload.errors.slice(0, 3).forEach(function (err) { toast(t(err), 'danger'); });
-          }
 
           // 跳过的表不是错误，但必须点名：否则「表一直不动」和「本轮无事发生」无法区分
           if (payload.skippedTables && payload.skippedTables.length) {

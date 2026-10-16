@@ -53,7 +53,13 @@ public class SyncResult {
 
     public String summary() {
         if (!success) {
-            return "FAILED: " + String.join("; ", errors.subList(0, Math.min(3, errors.size())));
+            // 只给一句人话:失败了几项、什么原因、哪些表。原文(full DDL)在变更日志里,
+            // 这里堆原文会让弹窗和项目列表的 chip 一起变成一屏 SQL,见 ErrorDigest。
+            String digest = ErrorDigest.of(errors);
+            if (digest == null) {
+                return "FAILED: no error detail";
+            }
+            return "FAILED: " + errors.size() + " error(s) — " + digest;
         }
         if (!hasChanges()) {
             return skippedTables.isEmpty() ? "No changes"
