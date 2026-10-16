@@ -77,10 +77,12 @@ public class SyncContextFactory {
 
         String sourceSchema = resolveSchema(source, sourceReader);
         String targetSchema = resolveSchema(target, targetReader);
-        // Effective (product vs COMPATIBLE) version for the real product; DM/YashanDB are
-        // routed by the dialect factory itself, not by this number.
+        // Dialect version for the real product: effective (product vs COMPATIBLE) major,
+        // downgraded to the pre-12 emulation when a live grammar probe shows the server does
+        // not actually accept AS IDENTITY. DM/YashanDB are routed by the dialect factory
+        // itself, not by this number.
         Integer targetMajorVersion = target.getType() == DatabaseType.ORACLE
-                ? resolveEffectiveMajorVersion(target) : null;
+                ? resolveDialectVersion(target) : null;
 
         int batchSize = config.getBatchSize() != null && config.getBatchSize() > 0
                 ? config.getBatchSize() : properties.getBatchSize();
@@ -129,15 +131,15 @@ public class SyncContextFactory {
     }
 
     /**
-     * Target server's effective major version, or null when it cannot be resolved — the
+     * Dialect version for the connected target, or null when it cannot be resolved — the
      * dialect then uses the sequence+trigger emulation, valid on every release.
      */
-    private Integer resolveEffectiveMajorVersion(DatabaseConfig config) {
+    private Integer resolveDialectVersion(DatabaseConfig config) {
         try (Connection conn = dataSourceManager.getConnection(config)) {
-            return oracleVersionResolver.resolveEffectiveMajorVersion(conn);
+            return oracleVersionResolver.resolveDialectVersion(conn);
         } catch (SQLException | RuntimeException e) {
-            log.warn("Could not resolve the effective database version for '{}'; using the"
-                    + " portable pre-12 dialect: {}", config.getName(), e.getMessage());
+            log.warn("Could not resolve the database dialect version for '{}'; using the"
+                    + " portable pre-12 emulation: {}", config.getName(), e.getMessage());
             return null;
         }
     }

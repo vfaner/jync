@@ -27,6 +27,7 @@ import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.service.connection.OracleVersionResolver;
 import com.qqmu.jync.service.converter.OracleDialect;
 import com.qqmu.jync.service.metadata.OracleMetadataReader;
 import com.qqmu.jync.service.sync.DataSyncService;
@@ -198,6 +199,14 @@ class OracleTargetIdentityIT {
         assertThat(generatedIdFor("LEG", "trigger-fed")).isEqualTo(1L);
     }
 
+    // --- live grammar probe ----------------------------------------------------------------
+
+    @Test
+    void dialectVersionIsProbedNotInferredFromProductVersion() throws SQLException {
+        // A modern server must verify the identity clause itself before the dialect emits it.
+        assertThat(new OracleVersionResolver().resolveDialectVersion(conn)).isEqualTo(23);
+    }
+
     // --- real 11g XE: detection and portable emulation ------------------------------------
 
     @Test
@@ -209,6 +218,8 @@ class OracleTargetIdentityIT {
 
             // The gate's input: the driver must report 11 against a real 11.2 server.
             assertThat(c11.getMetaData().getDatabaseMajorVersion()).isEqualTo(11);
+            // And the resolved dialect version must force the emulation path.
+            assertThat(new OracleVersionResolver().resolveDialectVersion(c11)).isEqualTo(11);
 
             TableMeta table = ordersMeta("LEG11");
             dropTableQuietly(c11, "LEG11");
