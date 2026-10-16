@@ -442,6 +442,9 @@ public class SyncEngine {
             return true;
         }
         if (reason != null) {
+            reason = repairMissingColumns(targetConn, ctx, table, targetTable, schema, reason);
+        }
+        if (reason != null) {
             log.error("Project '{}': {}", ctx.projectName(), reason);
             stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE, table.getName(),
                     ChangeType.ERROR, reason, false, 0);
@@ -450,6 +453,59 @@ public class SyncEngine {
         }
         verifiedTables.add(key);
         return true;
+    }
+
+    /**
+     * Adds the source columns a pre-existing target table lacks, then re-checks the shape.
+     *
+     * <p>Without this the shape check is a dead end for a table the structure phase never sees:
+     * the structural diff compares the source against its snapshot, so a target table altered
+     * behind Jync's back (or created by an older version) shows no diff, and the data phase
+     * reported the same missing column every cycle while the advice it printed — "let structure
+     * sync recreate it" — was something structure sync never did: it only issues CREATE, which
+     * an existing table rejects.
+     *
+     * <p>Only additive repairs are attempted. A wrong type or a {@code GENERATED ALWAYS}
+     * identity column keeps its reason and stays the user's call. With structure sync off
+     * nothing is touched at all: the point of that switch is that Jync does not modify the
+     * target's schema.
+     *
+     * @return null when the table is now compatible, otherwise the remaining reason
+     */
+    private String repairMissingColumns(Connection targetConn, SyncContext ctx, TableMeta table,
+                                        String targetTable, String schema, String reason) {
+        if (!ctx.getConfig().isSyncStructure()) {
+            return reason;
+        }
+        try {
+            List<String> added = structureSync.addMissingColumns(targetConn, ctx, targetTable, table);
+            if (added.isEmpty()) {
+                // 没有缺列可补（类型不符、身份列不合规之类），原判不变。
+                return reason;
+            }
+            stateWriter.recordLog(ctx.projectId(), ObjectType.COLUMN, table.getName(),
+                    ChangeType.CREATE, "Added missing column(s) " + String.join(", ", added)
+                            + " to " + targetTable, true, 0);
+        } catch (SQLException e) {
+            log.warn("Project '{}': could not add the missing column(s) of {}: {}",
+                    ctx.projectName(), targetTable, e.getMessage());
+            return reason + " (adding the missing column(s) failed: " + e.getMessage() + ")";
+        }
+        return describeShapeBlocker(targetConn, schema, table, targetTable, ctx);
+    }
+
+    /** Re-reads the verdict after a repair attempt; null means the table is usable now. */
+    private String describeShapeBlocker(Connection targetConn, String schema, TableMeta table,
+                                        String targetTable, SyncContext ctx) {
+        try {
+            return TargetTableVerifier.verify(targetConn, schema, targetTable, table,
+                    ctx.getTargetType());
+        } catch (SQLException e) {
+            // 复核不了就以「可用」论处：这是安全网，驱动答不上来不该拦住同步。
+            log.debug("Could not re-verify target table {} columns: {}", targetTable,
+                    e.getMessage());
+            return null;
+        }
     }
 
     private static String verifiedKey(long projectId, String targetTable) {

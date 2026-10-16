@@ -60,6 +60,12 @@ class TargetTableVerifierTest {
                 source(col("ID", Types.BIGINT), col("NAME", Types.VARCHAR)));
 
         assertThat(reason).contains("missing column NAME");
+        // 建议本身也得是可执行的：老文案让人「让结构同步重建这张表」，而结构同步只会对
+        // 已存在的表发 CREATE（必被拒），从来不会重建，用户照着做只会再撞一次墙。
+        assertThat(reason)
+                .as("缺列是补得上的，建议必须指向那条真能走通的路")
+                .contains("structure sync")
+                .doesNotContain("recreate it");
     }
 
     @Test
@@ -181,6 +187,31 @@ class TargetTableVerifierTest {
                 source(bitCol("C_FLAG", 1)));
 
         assertThat(reason).isNull();
+    }
+
+    // —— 缺列的「诊断」与「医治」分开：verify 只报告，补列由 StructureSyncService 执行。
+    // 这里钉住诊断那一半：目标表有、源表没有的列不动，源表有、目标表没有的列按源顺序列出。 ——
+
+    @Test
+    void missingColumnsListsWhatTheTargetLacksInSourceOrder() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT, LEGACY VARCHAR(10))");
+
+        List<ColumnMeta> missing = TargetTableVerifier.missingColumns(conn, null, "T",
+                source(col("ID", Types.BIGINT), col("NAME", Types.VARCHAR),
+                        col("AMOUNT", Types.DECIMAL)));
+
+        assertThat(missing).extracting(ColumnMeta::getName).containsExactly("NAME", "AMOUNT");
+    }
+
+    @Test
+    void aCompatibleTargetHasNoMissingColumns() throws SQLException {
+        // 名字大小写不同不算缺列：源端 MySQL 报小写、目标 Oracle 存大写，同一列。
+        createTarget("CREATE TABLE T (ID BIGINT, NAME VARCHAR(50))");
+
+        List<ColumnMeta> missing = TargetTableVerifier.missingColumns(conn, null, "T",
+                source(col("id", Types.BIGINT), col("name", Types.VARCHAR)));
+
+        assertThat(missing).isEmpty();
     }
 
     // —— F-9(docker 实测 PG→openGauss):JSON/JSONB/UUID 报 Types.OTHER(1111),

@@ -4,7 +4,9 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -45,29 +47,18 @@ public final class TargetTableVerifier {
      */
     public static String verify(Connection conn, String schema, String tableName,
                                 TableMeta sourceTable, DatabaseType targetType) throws SQLException {
-        boolean oracleFamily = targetType != null
-                && targetType.getFamily() == DatabaseType.DialectFamily.ORACLE;
-        String lookupSchema = oracleFamily && schema != null
-                ? schema.toUpperCase(Locale.ROOT) : schema;
-        String lookupTable = oracleFamily && tableName != null
-                ? tableName.toUpperCase(Locale.ROOT) : tableName;
-
-        DatabaseMetaData metaData = conn.getMetaData();
-        Map<String, TargetColumn> targetTypes = new LinkedHashMap<>();
-        // Catalog stays null: MySQL uses the current database, others key on schema/owner.
-        try (ResultSet rs = metaData.getColumns(null, lookupSchema, lookupTable, "%")) {
-            while (rs.next()) {
-                targetTypes.put(rs.getString("COLUMN_NAME").toUpperCase(Locale.ROOT),
-                        new TargetColumn(rs.getInt("DATA_TYPE"), rs.getInt("COLUMN_SIZE")));
-            }
-        }
+        boolean oracleFamily = isOracleFamily(targetType);
+        String lookupSchema = foldIfOracle(oracleFamily, normalizeSchema(schema));
+        String lookupTable = foldIfOracle(oracleFamily, tableName);
+        Map<String, TargetColumn> targetTypes = readTargetColumns(conn, lookupSchema, lookupTable);
 
         for (ColumnMeta sourceColumn : sourceTable.getColumns()) {
             TargetColumn found = targetTypes.get(sourceColumn.getName().toUpperCase(Locale.ROOT));
             if (found == null) {
                 return "target table " + lookupTable + " is missing column " + sourceColumn.getName()
                         + " (a table with this name exists but its shape does not match the"
-                        + " source). Fix the table or let structure sync recreate it.";
+                        + " source). Turn structure sync on so Jync adds the missing column,"
+                        + " or add it yourself.";
             }
             if (sourceFamily(sourceColumn) != targetFamily(found, oracleFamily)) {
                 return "target table " + lookupTable + " column " + sourceColumn.getName()
@@ -88,6 +79,67 @@ public final class TargetTableVerifier {
             }
         }
         return null;
+    }
+
+    /**
+     * Source columns the target table does not have, in source order.
+     *
+     * <p>This is the additive half of a shape mismatch, reported separately because it is the
+     * only half that can be repaired mechanically: a missing column is added without touching a
+     * single existing row, while a wrong type or a bad identity clause needs a human decision.
+     * The caller therefore adds these before deciding the table is unusable.
+     */
+    public static List<ColumnMeta> missingColumns(Connection conn, String schema, String tableName,
+                                                  TableMeta sourceTable) throws SQLException {
+        return missingColumns(conn, schema, tableName, sourceTable, null);
+    }
+
+    /** Type-aware variant, folding Oracle-family identifiers the same way {@link #verify} does. */
+    public static List<ColumnMeta> missingColumns(Connection conn, String schema, String tableName,
+                                                  TableMeta sourceTable, DatabaseType targetType)
+            throws SQLException {
+        boolean oracleFamily = isOracleFamily(targetType);
+        Map<String, TargetColumn> targetTypes = readTargetColumns(conn,
+                foldIfOracle(oracleFamily, normalizeSchema(schema)),
+                foldIfOracle(oracleFamily, tableName));
+        List<ColumnMeta> missing = new ArrayList<>();
+        for (ColumnMeta sourceColumn : sourceTable.getColumns()) {
+            if (!targetTypes.containsKey(sourceColumn.getName().toUpperCase(Locale.ROOT))) {
+                missing.add(sourceColumn);
+            }
+        }
+        return missing;
+    }
+
+    private static boolean isOracleFamily(DatabaseType targetType) {
+        return targetType != null
+                && targetType.getFamily() == DatabaseType.DialectFamily.ORACLE;
+    }
+
+    /** A blank schema means "the connection's own schema", the same thing null means. */
+    private static String normalizeSchema(String schema) {
+        return schema == null || schema.isBlank() ? null : schema;
+    }
+
+    /** Oracle stores unquoted identifiers upper-cased, so a raw lower-case pattern finds nothing. */
+    private static String foldIfOracle(boolean oracleFamily, String name) {
+        return oracleFamily && name != null ? name.toUpperCase(Locale.ROOT) : name;
+    }
+
+    /** Column name (upper-cased) to JDBC type of the target table. Empty when it is absent. */
+    private static Map<String, TargetColumn> readTargetColumns(Connection conn, String schema,
+                                                               String tableName)
+            throws SQLException {
+        DatabaseMetaData metaData = conn.getMetaData();
+        Map<String, TargetColumn> columns = new LinkedHashMap<>();
+        // Catalog stays null: MySQL uses the current database, others key on schema/owner.
+        try (ResultSet rs = metaData.getColumns(null, schema, tableName, "%")) {
+            while (rs.next()) {
+                columns.put(rs.getString("COLUMN_NAME").toUpperCase(Locale.ROOT),
+                        new TargetColumn(rs.getInt("DATA_TYPE"), rs.getInt("COLUMN_SIZE")));
+            }
+        }
+        return columns;
     }
 
     /**

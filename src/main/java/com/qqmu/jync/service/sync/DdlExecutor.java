@@ -132,11 +132,24 @@ public class DdlExecutor {
         }
         // SQLState 42S02 / 42P01 / 42704: undefined object. 42S01 / 42P07 / 42710: duplicate.
         String state = e.getSQLState();
+        if (!create) {
+            if (state == null) {
+                return false;
+            }
+            return state.equals("42S02") || state.equals("42P01") || state.equals("42704");
+        }
+        // Oracle: ORA-00955 "name is already used by an existing object" covers every schema
+        // object kind, and the driver reports it with the ORA number as the vendor code. The
+        // text markers above are localized — a Chinese Oracle says 「名称已由现有对象使用」 and
+        // matches none of them — so the code is what identifies the duplicate there. Ignoring
+        // it made an "idempotent" create non-idempotent on a localized Oracle: structure sync
+        // re-issued the same CREATE every cycle, failed every cycle, and the failure withheld
+        // the table's snapshot, which is what kept re-detecting it.
+        if (e.getErrorCode() == 955) {
+            return true;
+        }
         if (state == null) {
             return false;
-        }
-        if (!create) {
-            return state.equals("42S02") || state.equals("42P01") || state.equals("42704");
         }
         if (state.equals("42S01") || state.equals("42P07") || state.equals("42710")) {
             return true;

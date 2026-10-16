@@ -21,6 +21,7 @@ import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.util.TargetTableVerifier;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -163,7 +164,7 @@ public class StructureSyncService {
         try {
             switch (event.getObjectType()) {
                 case TABLE:
-                    return applyTable(executor, event, ctx);
+                    return applyTable(targetConn, executor, event, ctx);
                 case COLUMN:
                     return applyColumn(executor, event, ctx);
                 case INDEX:
@@ -187,8 +188,8 @@ public class StructureSyncService {
         }
     }
 
-    private ApplyOutcome applyTable(DdlExecutor executor, ChangeEvent event, SyncContext ctx)
-            throws SQLException {
+    private ApplyOutcome applyTable(Connection targetConn, DdlExecutor executor,
+                                    ChangeEvent event, SyncContext ctx) throws SQLException {
         TableMeta table = (TableMeta) event.getPayload();
         SqlDialect dialect = ctx.getTargetDialect();
         String targetTable = ctx.getConfig().targetTableName(table.getName());
@@ -207,8 +208,15 @@ public class StructureSyncService {
                 ctx.getSourceType());
 
         // Tolerate "already exists": the target may have been created by a previous run that
-        // crashed before its snapshot was written.
+        // crashed before its snapshot was written, or pre-created by hand.
         boolean created = executor.executeIdempotentCreate(createSql);
+
+        // 表本来就在，并不意味着它装得下源端的行：手工预建、或者上一版跑出来的表都可能少列
+        // （实测：源库后来加了 gender，目标的 TEACHER 还是老结构）。缺列是纯增量差异，补上
+        // 不动任何已存在的数据；不补的话这张表会永远卡住 —— 结构同步只会 CREATE（对已存在的
+        // 表不生效），数据侧每轮报一次 missing column，快照又被失败扣住，谁都不会好转。
+        List<String> addedColumns = created ? List.of()
+                : addMissingColumns(targetConn, ctx, targetTable, table);
 
         // Version-gated companions: sequence + trigger emulating an identity column on
         // pre-12c Oracle. A failure here blocks the table (its autoincrement contract is
@@ -245,8 +253,46 @@ public class StructureSyncService {
             }
         }
         String detail = (created ? "Created table " : "Table already present: ") + targetTable
+                + (addedColumns.isEmpty() ? "" : ", added column(s) " + String.join(", ", addedColumns))
                 + (indexCount > 0 ? " with " + indexCount + " index(es)" : "");
         return ApplyOutcome.ok(detail);
+    }
+
+    /**
+     * Adds the source columns the target table does not have; returns the names it added.
+     *
+     * <p>Purely additive: existing columns keep their type and nothing is dropped, so a table
+     * that carries extra business columns of its own keeps them. A missing column is the one
+     * shape difference that can be repaired without a human decision, which is why it is done
+     * here instead of being reported. Wrong types and a {@code GENERATED ALWAYS} identity
+     * column are not touched — those still come back as a shape-check error for the user.
+     *
+     * @throws SQLException when an ADD fails. The caller must not swallow it: a table whose
+     *     missing mandatory column could not be added still cannot take the source's rows, and
+     *     reporting success would have the engine save the snapshot and lose the retry record.
+     */
+    public List<String> addMissingColumns(Connection targetConn, SyncContext ctx,
+                                          String targetTable, TableMeta table)
+            throws SQLException {
+        SqlDialect dialect = ctx.getTargetDialect();
+        List<ColumnMeta> missing = TargetTableVerifier.missingColumns(targetConn,
+                ctx.getTargetSchema(), targetTable, table, ctx.getTargetType());
+        if (missing.isEmpty()) {
+            return List.of();
+        }
+        DdlExecutor executor = new DdlExecutor(targetConn);
+        List<String> added = new ArrayList<>();
+        for (ColumnMeta column : missing) {
+            // Idempotent: two cycles can race to add the same column, and "already there" is
+            // the desired end state just as it is for a table.
+            executor.executeIdempotentCreate(dialect.getAddColumnSql(
+                    ctx.getTargetSchema(), targetTable, column, ctx.getSourceType()));
+            runPostColumnDdl(executor, dialect, targetTable, column, ctx);
+            added.add(column.getName());
+        }
+        log.info("Added missing column(s) {} to target table {} (project {})",
+                String.join(", ", added), targetTable, ctx.projectId());
+        return added;
     }
 
     /** Runs the dialect's ADD/MODIFY companions (pre-12c Oracle identity emulation). */

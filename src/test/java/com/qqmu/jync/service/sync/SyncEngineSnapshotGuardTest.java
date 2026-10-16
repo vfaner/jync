@@ -341,6 +341,58 @@ class SyncEngineSnapshotGuardTest {
         verify(dataSync, never()).syncTable(any(), any(), any(), any(), any(), any());
         verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.TABLE), eq("ORDERS"),
                 eq(ChangeType.ERROR), contains("missing column NAME"), eq(false), eq(0L));
+        // 结构同步关着 = 不许改人家的目标库结构，这种情况只能报告，不能补列。
+        verify(structureSync, never()).addMissingColumns(any(), any(), any(), any());
+    }
+
+    @Test
+    void aListedTableMissingASourceColumnIsRepairedWhenStructureSyncIsOn() throws Exception {
+        // 同一张缺列的表，结构同步打开时不该再卡住：缺列是纯增量差异，补上就能继续。
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
+        orders.setColumns(List.of(orders.getColumns().get(0), name));
+
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
+        // 让 mock 真的在目标库上补列：校验是拿真实元数据复核的，只返回个名字不够。
+        when(structureSync.addMissingColumns(any(), any(), any(), any())).thenAnswer(inv -> {
+            try (java.sql.Statement st = targetConn.createStatement()) {
+                st.execute("ALTER TABLE ORDERS ADD COLUMN NAME VARCHAR(50)");
+            }
+            return List.of("NAME");
+        });
+
+        SyncResult result = engine.runCycle(ctx(true, true), () -> true);
+
+        assertThat(result.isSuccess()).isTrue();
+        verify(dataSync).syncTable(any(), any(), any(), any(), any(), any());
+        verify(stateWriter, never()).recordLog(eq(PROJECT_ID), eq(ObjectType.TABLE), eq("ORDERS"),
+                eq(ChangeType.ERROR), anyString(), eq(false), anyLong());
+    }
+
+    @Test
+    void aListedTableWithAnIncompatibleColumnTypeIsNotRepaired() throws Exception {
+        // 类型不符补列解决不了：不许因为「能补列」就去改列类型。
+        ColumnMeta amount = new ColumnMeta();
+        amount.setName("AMOUNT");
+        amount.setJdbcType(Types.VARCHAR);
+        orders.setColumns(List.of(orders.getColumns().get(0), amount));
+        try (java.sql.Statement st = targetConn.createStatement()) {
+            st.execute("ALTER TABLE ORDERS ADD COLUMN AMOUNT INT");
+        }
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
+        when(structureSync.addMissingColumns(any(), any(), any(), any())).thenReturn(List.of());
+
+        SyncResult result = engine.runCycle(ctx(true, true), () -> true);
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(dataSync, never()).syncTable(any(), any(), any(), any(), any(), any());
+        verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.TABLE), eq("ORDERS"),
+                eq(ChangeType.ERROR), contains("incompatible type"), eq(false), eq(0L));
     }
 
     @Test

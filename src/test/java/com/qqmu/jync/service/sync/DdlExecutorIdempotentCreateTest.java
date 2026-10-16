@@ -56,6 +56,17 @@ class DdlExecutorIdempotentCreateTest {
     }
 
     @Test
+    void oracleChineseDuplicateNameIsBenign() throws SQLException {
+        // 实测事故：目标 Oracle 是中文语言环境，对「表名已占用」返回的是
+        // 「ORA-00955: 名称已由现有对象使用」。上面的中文白名单只认「已存在」「已被使用」，
+        // 这句命中不了；Oracle 把 955 映射成的 SQLState 也不是 42S01/42P07/42710。
+        // 结果幂等建表在中文 Oracle 上不幂等：结构同步每轮发一次 CREATE、每轮失败一次，
+        // 而失败会扣住快照，于是下一轮再发一次 —— 死循环（实测日志刷到 480 行）。
+        DdlExecutor exec = executorThrowing("ORA-00955: 名称已由现有对象使用", "42000", 955);
+        assertThat(exec.executeIdempotentCreate("CREATE TABLE X (id INT)")).isFalse();
+    }
+
+    @Test
     void dmDropMissingTableIsBenign() throws SQLException {
         // 达梦 DROP 不存在的表：无效的表或视图名
         Connection conn = mock(Connection.class);
