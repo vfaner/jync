@@ -241,6 +241,27 @@ public class AiChatClient {
                         event = null;
                         continue;
                     }
+                    if (protocol == AiProtocol.OLLAMA_NATIVE) {
+                        // 原生流式是 NDJSON:一行一个独立对象,没有 data: 前缀。必须走在
+                        // 下面"裸行 = 网关把整段缓冲了"的判定之前 —— 否则整个流会被收进
+                        // rawBody,多行 JSON 拼起来解析失败,回复整个变空。
+                        JsonNode chunk = parseOrNull(line);
+                        if (chunk == null) {
+                            continue;
+                        }
+                        if (served[0].isEmpty()) {
+                            served[0] = servedModel(chunk);
+                        }
+                        String piece = chunk.path("message").path("content").asText("");
+                        if (!piece.isEmpty()) {
+                            text.append(piece);
+                            sink.accept(piece);
+                        }
+                        if (chunk.path("done").asBoolean(false)) {
+                            break;
+                        }
+                        continue;
+                    }
                     if (!line.startsWith("data:") && !line.startsWith("event:")
                             && !line.startsWith(":")) {
                         rawBody = new StringBuilder(line).append('\n');
@@ -327,9 +348,17 @@ public class AiChatClient {
                                      AiReasoningEffort effort) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", model);
-        body.put("max_tokens", maxTokens);
-        if (stream) {
-            body.put("stream", true);
+        boolean nativeOllama = protocol == AiProtocol.OLLAMA_NATIVE;
+        if (nativeOllama) {
+            // 原生形状的两处不同。stream 总是显式发:Ollama 的默认是 true,
+            // 省略它等于把一次非流式调用变成 NDJSON 回来,而调用方在等一个完整 JSON。
+            body.put("stream", stream);
+            body.putObject("options").put("num_predict", maxTokens);
+        } else {
+            body.put("max_tokens", maxTokens);
+            if (stream) {
+                body.put("stream", true);
+            }
         }
         applyReasoning(protocol, body, effort, maxTokens);
 
@@ -357,7 +386,8 @@ public class AiChatClient {
                 .header("Content-Type", "application/json")
                 // A few gateways only switch to SSE on the Accept header rather than the
                 // stream flag; the majors ignore Accept entirely, so asking costs nothing.
-                .header("Accept", stream ? "text/event-stream" : "application/json");
+                .header("Accept", stream && !nativeOllama
+                        ? "text/event-stream" : "application/json");
 
         if (anthropic) {
             builder.header("x-api-key", apiKey == null ? "" : apiKey)
@@ -402,6 +432,13 @@ public class AiChatClient {
             thinking.put("budget_tokens", budget);
             return;
         }
+        if (protocol == AiProtocol.OLLAMA_NATIVE) {
+            // 原生协议的思考开关是顶层布尔 think:"关"发 false,要思考发 true。
+            // 刻意用布尔而不是 "low"/"high" 档位串 —— 档位串只有较新的 Ollama 认,
+            // 布尔各版本通吃,DEFAULT 已在上面返回。
+            body.put("think", effort != AiReasoningEffort.OFF);
+            return;
+        }
         // OpenAI 形状,包含 Ollama 的兼容端点。官方 OpenAI 的推理模型并非都认 "none"
         // (o 系列地板是 low;"none" 自 gpt-5.1 起才有,不认的值以 400 回绝),所以 OFF
         // 只对兼容端点承诺得死 —— 帮助文案 ai.reasoningHelp 里对用户写明了这一点。
@@ -431,6 +468,10 @@ public class AiChatClient {
     private String extractText(AiProtocol protocol, JsonNode root) {
         if (root == null) {
             return "";
+        }
+        if (protocol == AiProtocol.OLLAMA_NATIVE) {
+            // 原生回复直接是 message.content,没有 choices 这一层。
+            return root.path("message").path("content").asText("");
         }
         if (protocol == AiProtocol.ANTHROPIC) {
             // content is a list of typed blocks; only the text ones carry the reply, and a

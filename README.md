@@ -250,7 +250,7 @@ docker compose up -d --build      # 或：docker build -t jync:1.7.5 . && docker
 
 存储过程的过程化控制流无法靠文本替换可靠翻译，`AI 配置` 提供另一条路：模型**起草候选**，人工审阅后落库。边界是硬的：AI 只产候选、永不参与同步（`StructureSyncService` 不调用任何 AI 代码）；候选经确认才写入 `ddlOverrides`；未启用供应商时不产生任何外部请求；`sync.ai.enabled=false` 可整体下线。
 
-协议有**OpenAI 兼容**、**Anthropic** 和 **Ollama（本地）** 三种可选。Ollama 是预设不是第三种协议：它走 Ollama 的 OpenAI 兼容端点（`http://localhost:11434/v1`，不是原生的 `/api/chat`），选它会把地址自动填好、收起 API 密钥栏（本地模型本就不需要密钥），超时放宽到 300 秒。密钥与库密码同样加密存储；探测发一次 `max_tokens: 1` 的**真实请求**（TCP 探活会把密钥错、模型名错、路径差一段全部误报为成功），失败不阻止启用但列表红标。审阅页左右对照源定义与机械转换结果（即不干预时同步真正执行的语句），模型自述的「不确定项」列在 SQL 之上 —— 比 SQL 本身更值得先读。「语法检查」会在**目标库**以 `JYNC_AI_CHECK_<时间戳>` 真建一次对象再删除，仅手动触发并二次确认；通过只证明目标库接受这段 DDL，不证明语义等价。
+协议有**OpenAI 兼容**、**Anthropic**、**Ollama（本地）** 和 **Ollama（原生接口）** 四种可选。后两个是同一个本地服务的两条入口：**Ollama（本地）** 走它的 OpenAI 兼容端点（`http://localhost:11434/v1`），**Ollama（原生接口）** 走它自己的 `/api/chat`（`http://localhost:11434`，无 `max_tokens` 而是 `options.num_predict`，流式是逐行 NDJSON），代理只放行了 `/api` 或兼容层版本太老时用它。两者都会把地址自动填好、收起 API 密钥栏（本地模型本就不需要密钥），超时放宽到 300 秒。密钥与库密码同样加密存储；探测发一次 `max_tokens: 1` 的**真实请求**（TCP 探活会把密钥错、模型名错、路径差一段全部误报为成功），失败不阻止启用但列表红标。审阅页左右对照源定义与机械转换结果（即不干预时同步真正执行的语句），模型自述的「不确定项」列在 SQL 之上 —— 比 SQL 本身更值得先读。「语法检查」会在**目标库**以 `JYNC_AI_CHECK_<时间戳>` 真建一次对象再删除，仅手动触发并二次确认；通过只证明目标库接受这段 DDL，不证明语义等价。
 
 每个供应商还有一个**深度思考**档位：`跟随模型默认` / `关闭` / `低` / `高`。**关闭思考对本地推理模型不只是省时间**：思考 token 计入输出预算，`max_tokens` 偏小时正文会被思考挤空，界面上表现为一直转圈然后报「模型返回了空内容」；本机 Ollama + `qwen3:8b` 实测同一请求关闭后快约 14 倍。落参按协议分流 —— OpenAI 形状发 `reasoning_effort`，Anthropic 发 `thinking.budget_tokens`（它不认 `reasoning_effort`，发过去就是 400）。Anthropic 的思考预算必须**严格小于** `max_tokens`，所以选低/高档后要把最大 token 数一并调大，保存时会校验并提示；`跟随模型默认`是默认值且**一个字段都不发**，因此升级不改变任何已有供应商的请求。探测永远不携带推理参数（它是 `max_tokens: 1` 的最小请求，带上必被端点拒）。
 
@@ -307,7 +307,7 @@ com.qqmu.jync
 mvn test
 ```
 
-1338 个单元测试，重点覆盖：各方言幂等 upsert 与类型上限不变量；SQL 正文改写不碰字面量 / 注释；游标策略解析与降级、Oracle 行级 SCN 探测；游标序列化往返；密码加密与 AI 密钥加密；AI 启用互斥与应答解析（含截断围栏、拒答、空应答）；推理档位按协议分流（OpenAI 形状落 `reasoning_effort`、Anthropic 落 `thinking.budget_tokens`）、预算塞不进 `max_tokens` 时宁可不思考也不让请求 400、预算不足在保存时即被拒、探测永不携带推理参数；Ollama 预设端点路径与未知协议名回落 OpenAI 兼容；候选校验在 H2 实库确认不留残留、同名对象内容不变；页面渲染全条件分支且无 `??`；授权规则（访客 POST 全拒、CSRF 缺失即拒）；分页窗口与省略号展开；立即同步补跑合并；分块全量 keyset SQL 形状、检查点生命周期、并行分段不重叠与 long 溢出回退；日志 CDC 探测七项、位点纪律（先数据后位点）、租约互斥与切换序列；版本检查 GitHub→Gitee 双通道兜底；一键升级的下载校验、改名替换与备份、marker 状态恢复、重启/回滚脚本生成；hidden 属性显示契约（作者 display 样式不得压过 hidden）；README 文档守卫。
+1383 个单元测试，重点覆盖：各方言幂等 upsert 与类型上限不变量；SQL 正文改写不碰字面量 / 注释；游标策略解析与降级、Oracle 行级 SCN 探测；游标序列化往返；密码加密与 AI 密钥加密；AI 启用互斥与应答解析（含截断围栏、拒答、空应答）；推理档位按协议分流（OpenAI 形状落 `reasoning_effort`、Anthropic 落 `thinking.budget_tokens`）、预算塞不进 `max_tokens` 时宁可不思考也不让请求 400、预算不足在保存时即被拒、探测永不携带推理参数；Ollama 预设端点路径与未知协议名回落 OpenAI 兼容、Ollama 原生 `/api/chat` 的请求体形状（`options.num_predict` 而非 `max_tokens`、总是显式发 `stream`、顶层布尔 `think`）与 NDJSON 流逐块到达 sink 而非攒完一次交出；候选校验在 H2 实库确认不留残留、同名对象内容不变；页面渲染全条件分支且无 `??`、英文界面全页扫描无中文（页面可见文本、升级状态 JSON、英文 bundle 三处；发布说明属发布者写的数据，按容器排除）、中英两个 bundle 键集一致；授权规则（访客 POST 全拒、CSRF 缺失即拒）；分页窗口与省略号展开；立即同步补跑合并；分块全量 keyset SQL 形状、检查点生命周期、并行分段不重叠与 long 溢出回退；日志 CDC 探测七项、位点纪律（先数据后位点）、租约互斥与切换序列；版本检查 GitHub→Gitee 双通道兜底；一键升级的下载校验、改名替换与备份、marker 状态恢复、重启/回滚脚本生成；hidden 属性显示契约（作者 display 样式不得压过 hidden）；README 文档守卫。
 
 真实库集成测试（`*IT`，不进默认套件，需 Docker）：`OracleMigrationHarnessIT`（Oracle 23ai：并行分段全量、kill 后续传、`ROWDEPENDENCIES` 全链路）、`CdcBaselineStreamingIT` / `CdcVolumeAndTypesIT` / `CdcResilienceIT`（MySQL 8 binlog：基线→流式、崩溃重跑、十万行一致、purge 与断线故障）。显式运行加 `-Dapi.version=1.44`。另有端到端脚本（H2 源/目标，20 项断言）覆盖全量、增量、幂等、DDL 传播、并发写入一致与停机补齐。
 

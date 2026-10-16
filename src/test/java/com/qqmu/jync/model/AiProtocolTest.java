@@ -26,6 +26,30 @@ class AiProtocolTest {
         assertThat(AiProtocol.fromName(" OLLAMA ")).isEqualTo(AiProtocol.OLLAMA);
     }
 
+    /**
+     * 原生端点的预填值。用户在表单里选它,得到的地址就是这里拼出来的 —— 拼错一个段,
+     * 端点回的就是它自己的 404,而报错里只有那个 URL 能说明问题。
+     */
+    @Test
+    void nativeOllamaPrefillsTheNativePathWithoutV1() {
+        assertThat(AiProtocol.OLLAMA_NATIVE.getDefaultBaseUrl())
+                .as("原生端点在 11434 根上,没有 /v1 那一段")
+                .isEqualTo("http://localhost:11434");
+        assertThat(AiProtocol.OLLAMA_NATIVE.resolveEndpoint(
+                AiProtocol.OLLAMA_NATIVE.getDefaultBaseUrl()))
+                .as("预填值拼出来必须正好是原生端点")
+                .isEqualTo("http://localhost:11434/api/chat");
+        assertThat(AiProtocol.OLLAMA_NATIVE.resolveEndpoint("http://localhost:11434/api/chat"))
+                .as("用户把完整地址粘进来不该拼成 /api/chat/api/chat")
+                .isEqualTo("http://localhost:11434/api/chat");
+    }
+
+    @Test
+    void aStoredNativeNameRoundTrips() {
+        // 表单提交的就是 name();存进去再读出来必须还是同一个成员。
+        assertThat(AiProtocol.fromName("OLLAMA_NATIVE")).isEqualTo(AiProtocol.OLLAMA_NATIVE);
+    }
+
     @Test
     void anUnknownStoredNameStillFallsBackToTheOpenAiShape() {
         // 新库(含 OLLAMA)落到老版本时走的就是这条路:回退到 OPENAI。
