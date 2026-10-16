@@ -260,6 +260,42 @@ class AiProviderServiceTest {
     }
 
     @Test
+    void overlongFieldsAreRejectedWithLengthKeys() {
+        AiProvider longName = newProvider("x".repeat(129));
+        assertThatThrownBy(() -> service.save(longName, "k"))
+                .hasMessage("error.ai.name.too.long");
+
+        AiProvider longUrl = newProvider("p");
+        longUrl.setBaseUrl("https://" + "a".repeat(506));
+        assertThatThrownBy(() -> service.save(longUrl, "k"))
+                .hasMessage("error.ai.baseUrl.too.long");
+
+        AiProvider longModel = newProvider("p");
+        longModel.setModel("m".repeat(129));
+        assertThatThrownBy(() -> service.save(longModel, "k"))
+                .hasMessage("error.ai.model.too.long");
+    }
+
+    @Test
+    void enableReReadThatVanishesBetweenDisableAndSaveReportsAnI18nKey() {
+        // A concurrent delete committing between the existence check and the re-read would
+        // otherwise surface as a bare NoSuchElementException 500.
+        AiProvider disappearing = newProvider("p");
+        disappearing.setId(9L);
+        AiProviderRepository mockRepo = org.mockito.Mockito.mock(AiProviderRepository.class);
+        org.mockito.Mockito.when(mockRepo.findById(9L))
+                .thenReturn(java.util.Optional.of(disappearing), java.util.Optional.empty());
+        AiProviderService svc = new AiProviderService(mockRepo, probe,
+                new CryptoUtil(properties), properties, txManager);
+
+        assertThatThrownBy(() -> svc.enable(9L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.ai.provider.missing");
+        org.mockito.Mockito.verify(mockRepo).disableAll();
+        org.mockito.Mockito.verify(mockRepo, org.mockito.Mockito.never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void aBaseUrlWithoutASchemeIsRejected() {
         // Without this, URI.create succeeds and the failure surfaces as an opaque probe error.
         AiProvider p = newProvider("p");

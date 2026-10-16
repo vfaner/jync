@@ -128,6 +128,41 @@ class DatabaseConfigServiceValidationTest {
     }
 
     @Test
+    void missingTypeIsRejected() {
+        // A crafted POST with type= binds to null. Without this guard the insert hits the
+        // NOT NULL column and surfaces as a generic 500.
+        DatabaseConfig c = preset(DatabaseType.MYSQL, null);
+        c.setType(null);
+
+        assertThatThrownBy(() -> service.save(c, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.connection.type.required");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void overlongNameIsRejected() {
+        DatabaseConfig c = preset(DatabaseType.MYSQL, null);
+        c.setName("x".repeat(129));
+
+        assertThatThrownBy(() -> service.save(c, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.connection.name.too.long");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void overlongHostIsRejected() {
+        DatabaseConfig c = preset(DatabaseType.MYSQL, null);
+        c.setHost("h".repeat(256));
+
+        assertThatThrownBy(() -> service.save(c, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.connection.host.too.long");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     void changingSourceToTargetIsBlockedWhenProjectsUseItAsSource() {
         DatabaseConfig incoming = stored(1L, ConnectionRole.TARGET);
         when(repository.findById(1L)).thenReturn(Optional.of(stored(1L, ConnectionRole.SOURCE)));

@@ -232,6 +232,44 @@ class ProjectServiceTest {
         verify(projectRepository, never()).findById(any());
     }
 
+    @Test
+    void creatingANewProjectNeverStartsEnabledEvenWhenTheBindingCarriesTheFlag() {
+        // Mass-assignment guard: the create form has no enabled control, so a crafted POST
+        // must not be able to create a project that schedules itself immediately.
+        Project incoming = project(null);
+        incoming.setEnabled(true);
+        when(projectRepository.findByName("proj")).thenReturn(Optional.empty());
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.save(incoming);
+
+        ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
+        verify(projectRepository).save(captor.capture());
+        assertThat(captor.getValue().getEnabled()).isFalse();
+    }
+
+    @Test
+    void anOverlongProjectNameIsRejectedWithAnI18nKey() {
+        Project p = project(null);
+        p.setName("x".repeat(129));
+
+        assertThatThrownBy(() -> service.save(p))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.name.too.long");
+        verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    void anOverlongProjectDescriptionIsRejectedWithAnI18nKey() {
+        Project p = project(null);
+        p.setDescription("x".repeat(513));
+
+        assertThatThrownBy(() -> service.save(p))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.description.too.long");
+        verify(projectRepository, never()).save(any());
+    }
+
     // --- delete guard -----------------------------------------------------------------------
 
     @Test

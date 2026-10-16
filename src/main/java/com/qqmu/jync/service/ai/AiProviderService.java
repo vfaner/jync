@@ -133,6 +133,9 @@ public class AiProviderService {
             throw new IllegalArgumentException("error.ai.name.required");
         }
         provider.setName(provider.getName().trim());
+        if (provider.getName().length() > 128) {
+            throw new IllegalArgumentException("error.ai.name.too.long");
+        }
         repository.findByName(provider.getName()).ifPresent(existing -> {
             if (!existing.getId().equals(provider.getId())) {
                 throw new IllegalArgumentException("error.ai.name.duplicate");
@@ -146,11 +149,17 @@ public class AiProviderService {
             throw new IllegalArgumentException("error.ai.baseUrl.required");
         }
         provider.setBaseUrl(provider.getBaseUrl().trim());
+        if (provider.getBaseUrl().length() > 512) {
+            throw new IllegalArgumentException("error.ai.baseUrl.too.long");
+        }
         AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
         if (provider.getModel() == null || provider.getModel().isBlank()) {
             throw new IllegalArgumentException("error.ai.model.required");
         }
         provider.setModel(provider.getModel().trim());
+        if (provider.getModel().length() > 128) {
+            throw new IllegalArgumentException("error.ai.model.too.long");
+        }
 
         if (provider.getMaxTokens() == null || provider.getMaxTokens() <= 0) {
             provider.setMaxTokens(4096);
@@ -179,7 +188,10 @@ public class AiProviderService {
             }
             repository.disableAll();
             // Re-read: disableAll() was a bulk update, so the instance above may now be stale.
-            AiProvider provider = repository.findById(id).orElseThrow();
+            // A concurrent delete can also have committed between the two reads, hence the
+            // named key instead of a bare NoSuchElementException 500.
+            AiProvider provider = repository.findById(id)
+                    .orElseThrow(() -> new IllegalArgumentException("error.ai.provider.missing"));
             provider.setEnabled(true);
             AiProvider s = repository.save(provider);
             log.info("Enabled AI provider '{}'; all others switched off", s.getName());

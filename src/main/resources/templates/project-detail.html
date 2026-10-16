@@ -395,8 +395,8 @@
                                         th:text="#{common.selectNone}">None</button>
                             </span>
                         </div>
-                        <!-- 空集 = 同步全部(通配),显式勾了哪些就只同步哪些。
-                             在 picker 下面加一行解释,避免用户以为"取消勾选某表就排除它"。 -->
+                        <!-- 显式白名单:勾了哪些就只同步哪些;保存时至少要勾一张表
+                             (ProjectController 拒绝空提交)。picker 下的说明与该规则保持一致。 -->
                         <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.tables)}">
                             <label class="pick" th:each="tbl,i : ${sourceObjects.tables}">
                                 <input type="checkbox" name="tables" th:value="${tbl}"

@@ -61,6 +61,11 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class ProjectService {
 
+    /** Match the NOT NULL VARCHAR limits on the project row so overlong input is a field
+     *  error rather than a H2 22001 constraint failure rendered as a generic 500. */
+    private static final int NAME_MAX_LENGTH = 128;
+    private static final int DESCRIPTION_MAX_LENGTH = 512;
+
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
     private final SyncProgressRepository progressRepository;
@@ -235,6 +240,13 @@ public class ProjectService {
             throw new IllegalArgumentException("error.project.name.required");
         }
         project.setName(project.getName().trim());
+        if (project.getName().length() > NAME_MAX_LENGTH) {
+            // Left to H2 this arrives as a raw 22001 DataIntegrityViolation → generic 500.
+            throw new IllegalArgumentException("error.project.name.too.long");
+        }
+        if (project.getDescription() != null && project.getDescription().length() > DESCRIPTION_MAX_LENGTH) {
+            throw new IllegalArgumentException("error.project.description.too.long");
+        }
         projectRepository.findByName(project.getName()).ifPresent(existing -> {
             if (!existing.getId().equals(project.getId())) {
                 throw new IllegalArgumentException("error.project.name.duplicate");
@@ -246,6 +258,12 @@ public class ProjectService {
         }
 
         boolean isNew = project.getId() == null;
+        if (isNew) {
+            // The create form carries no start switch: projects always start life stopped and
+            // are later enabled through the explicit start action. A bound enabled=true from
+            // a crafted POST must not survive into the row (it would schedule immediately).
+            project.setEnabled(false);
+        }
         if (!isNew) {
             // The edit form only carries the descriptive fields; enabled, syncConfig and
             // createdAt live on the row, so a stale tab submitting this form must neither

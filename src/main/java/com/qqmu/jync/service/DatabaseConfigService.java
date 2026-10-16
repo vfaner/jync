@@ -152,14 +152,30 @@ public class DatabaseConfigService {
         if (config.getName() == null || config.getName().isBlank()) {
             throw new IllegalArgumentException("error.connection.name.required");
         }
-        repository.findByName(config.getName().trim()).ifPresent(existing -> {
+        config.setName(config.getName().trim());
+        if (config.getName().length() > 128) {
+            throw new IllegalArgumentException("error.connection.name.too.long");
+        }
+        repository.findByName(config.getName()).ifPresent(existing -> {
             if (!existing.getId().equals(config.getId())) {
                 throw new IllegalArgumentException("error.connection.name.duplicate");
             }
         });
-        config.setName(config.getName().trim());
 
         DatabaseType type = config.getType();
+        if (type == null) {
+            // A crafted POST with type= binds to null; the NOT NULL column would otherwise
+            // surface as a generic 500.
+            throw new IllegalArgumentException("error.connection.type.required");
+        }
+        // Column-length guards: an overlong value otherwise fails deep in JPA as an English 500.
+        checkLength(config.getHost(), 255, "error.connection.host.too.long");
+        checkLength(config.getDatabaseName(), 255, "error.connection.database.too.long");
+        checkLength(config.getSchemaName(), 128, "error.connection.schema.too.long");
+        checkLength(config.getUsername(), 255, "error.connection.username.too.long");
+        checkLength(config.getMinerUsername(), 255, "error.connection.username.too.long");
+        checkLength(config.getCustomDriver(), 255, "error.connection.driver.too.long");
+        checkLength(config.getCustomJarPath(), 1024, "error.connection.jarpath.too.long");
         if (type == DatabaseType.CUSTOM) {
             // Without these three a custom connection cannot be opened at all.
             if (config.getCustomUrl() == null || config.getCustomUrl().isBlank()) {
@@ -180,6 +196,12 @@ public class DatabaseConfigService {
                     && (config.getCustomJarPath() == null || config.getCustomJarPath().isBlank())) {
                 throw new IllegalArgumentException("error.driver.jar.required");
             }
+        }
+    }
+
+    private static void checkLength(String value, int max, String messageKey) {
+        if (value != null && value.length() > max) {
+            throw new IllegalArgumentException(messageKey);
         }
     }
 
