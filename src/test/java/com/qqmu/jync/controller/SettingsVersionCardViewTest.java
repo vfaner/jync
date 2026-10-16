@@ -6,11 +6,13 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.info.BuildProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
@@ -49,6 +51,8 @@ class SettingsVersionCardViewTest {
     private SyncLockService lockService;
     @MockBean
     private VersionService versionService;
+    @MockBean
+    private BuildProperties buildProperties;
 
     private static RequestPostProcessor as(UserRole role) {
         AppUser user = new AppUser();
@@ -196,6 +200,31 @@ class SettingsVersionCardViewTest {
         assertThat(page).contains("开发构建");
         assertThat(page).doesNotContain("logo-ver");
         assertThat(page).doesNotContain("foot-ver");
+    }
+
+    @Test
+    void buildTimeStampIsShownNextToCurrentVersion() throws Exception {
+        // Same version string can belong to several repackaged jars; the build stamp lets
+        // support tell them apart.
+        when(buildProperties.getTime()).thenReturn(Instant.parse("2026-10-15T13:32:06Z"));
+        String page = render(base()
+                .state(VersionInfo.State.UP_TO_DATE)
+                .latestVersion("1.1.1")
+                .build());
+
+        assertThat(page).contains("构建于 2026-10-15 13:32 UTC");
+    }
+
+    @Test
+    void buildTimeWithoutInstantIsHidden() throws Exception {
+        // getTime() stays null (build-info carries no time) -> no stamp, no unresolved key.
+        String page = render(base()
+                .state(VersionInfo.State.UP_TO_DATE)
+                .latestVersion("1.1.1")
+                .build());
+
+        assertThat(page).doesNotContain("构建于");
+        assertThat(page).doesNotContain("??settings.builtAt");
     }
 
     @Test

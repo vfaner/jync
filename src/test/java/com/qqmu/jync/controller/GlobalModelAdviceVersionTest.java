@@ -71,4 +71,24 @@ class GlobalModelAdviceVersionTest {
     void blankVersionHidesVersion() {
         assertThat(adviceWith(new BuildProperties(new Properties())).appVersion()).isNull();
     }
+
+    @Test
+    void formatsBuildTimeAsUtcStamp() {
+        Properties p = new Properties();
+        p.setProperty("time", "2026-10-15T13:32:06Z");
+        assertThat(adviceWith(new BuildProperties(p)).buildTime())
+                .isEqualTo("2026-10-15 13:32 UTC");
+    }
+
+    @Test
+    void absentBuildPropertiesHidesBuildTime() {
+        assertThat(adviceWith(null).buildTime()).isNull();
+    }
+
+    @Test
+    void buildInfoWithoutTimeHidesBuildTime() {
+        Properties p = new Properties();
+        p.setProperty("version", "1.7.3");
+        assertThat(adviceWith(new BuildProperties(p)).buildTime()).isNull();
+    }
 }

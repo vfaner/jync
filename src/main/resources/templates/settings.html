@@ -254,6 +254,8 @@
                           th:text="'v' + ${versionInfo.currentVersion}">vX.Y.Z</span>
                     <span class="chip" th:unless="${versionInfo.currentVersion}"
                           th:text="#{settings.devBuild}">Development build</span>
+                    <span class="small soft" th:if="${appBuildTime}"
+                          th:text="#{settings.builtAt(${appBuildTime})}">Built 2026-10-15 13:32 UTC</span>
                 </dd>
 
                 <dt th:text="#{settings.latestVersion}">Latest version</dt>

@@ -1,5 +1,9 @@
 package com.qqmu.jync.controller;
 
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.info.BuildProperties;
@@ -22,6 +26,9 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
  */
 @ControllerAdvice
 public class GlobalModelAdvice {
+
+    private static final DateTimeFormatter BUILD_TIME_FORMATTER =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'");
 
     private final String githubUrl;
     private final SyncProperties properties;
@@ -46,6 +53,25 @@ public class GlobalModelAdvice {
             return null;
         }
         return "v" + props.getVersion().trim();
+    }
+
+    /**
+     * Build timestamp of the running artifact as a UTC stamp, or {@code null} when the
+     * artifact carries no build-info.
+     *
+     * <p>The version string alone is not enough to identify a running build: a repackaged
+     * release keeps the same version. Support reads this stamp next to the version to tell
+     * an overwritten same-version jar from the original. UTC (not the server's local zone)
+     * keeps the stamp identical for users in any time zone.
+     */
+    @ModelAttribute("appBuildTime")
+    public String buildTime() {
+        BuildProperties props = buildProperties.getIfAvailable();
+        Instant time = props == null ? null : props.getTime();
+        if (time == null) {
+            return null;
+        }
+        return BUILD_TIME_FORMATTER.format(time.atOffset(ZoneOffset.UTC));
     }
 
     /** Repository link used by the nav icon and the donate dialog. */
