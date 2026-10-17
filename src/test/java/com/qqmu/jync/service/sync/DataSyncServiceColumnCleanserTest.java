@@ -100,6 +100,31 @@ class DataSyncServiceColumnCleanserTest {
         assertThat(names()).containsExactly("alice", "bob");
     }
 
+    /**
+     * A rule on the primary key must not move the keyset boundary. The boundary is bound
+     * against the raw source keys on the next page, so taking it from the cleansed row skips
+     * every source key between the cleansed and the raw value (here 'B' > 'a' but 'B' < ...).
+     */
+    @Test
+    void aRuleOnAStringPrimaryKeyDoesNotSkipRowsInTheChunkedLoad() throws SQLException {
+        exec(source, "CREATE TABLE CODES (CODE VARCHAR(32) PRIMARY KEY)");
+        exec(target, "CREATE TABLE CODES (CODE VARCHAR(32) PRIMARY KEY)");
+        exec(source, "INSERT INTO CODES VALUES ('A'), ('B')");
+        ColumnRule lower = new ColumnRule();
+        lower.setTable("CODES");
+        lower.setColumn("CODE");
+        lower.setType(ColumnRuleType.LOWER);
+        ctx.getConfig().setColumnRules(List.of(lower));
+        DataSyncService service = service(1);
+
+        DataSyncService.TableSyncResult result = service.syncTable(
+                source, target, codesMeta(), CursorStrategy.fullCompare("probe"),
+                new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(codes()).containsExactly("a", "b");
+    }
+
     @Test
     void deletionDetectionComparesSourceKeysThroughTheSameRules() throws SQLException {
         exec(source, "CREATE TABLE CODES (CODE VARCHAR(32) PRIMARY KEY)");
@@ -134,6 +159,17 @@ class DataSyncServiceColumnCleanserTest {
         // Without a row estimate detection bows out (MAX_VALUE > the comparison ceiling).
         table.setApproximateRowCount(1L);
         return table;
+    }
+
+    private List<String> codes() throws SQLException {
+        List<String> codes = new java.util.ArrayList<>();
+        try (Statement st = target.createStatement();
+             ResultSet rs = st.executeQuery("SELECT CODE FROM CODES ORDER BY CODE")) {
+            while (rs.next()) {
+                codes.add(rs.getString(1));
+            }
+        }
+        return codes;
     }
 
     private long count(String tableName) throws SQLException {

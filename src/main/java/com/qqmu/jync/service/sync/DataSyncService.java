@@ -945,11 +945,14 @@ public class DataSyncService {
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
             JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
             while (rs.next()) {
-                Map<String, Object> row = cleanser.apply(JdbcRowMapper.readRow(rs, columns,
-                        jdbcTypes, typeNames, ctx.getSourceType()));
+                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns,
+                        jdbcTypes, typeNames, ctx.getSourceType());
                 if (sink != null) {
+                    // The keyset boundary is bound against the RAW source keys on the next
+                    // page, so it must be captured before the cleanser rewrites them.
                     sink.values = extractPk(row, pkTrack);
                 }
+                cleanser.apply(row);
                 JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn, ctx.getTargetDialect());
                 upsert.addBatch();
                 inBatch++;
@@ -1007,11 +1010,13 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(update, properties.getQueryTimeoutSeconds());
             int sinceCommit = 0;
             while (rs.next()) {
-                Map<String, Object> row = cleanser.apply(JdbcRowMapper.readRow(rs, columns,
-                        jdbcTypes, typeNames, ctx.getSourceType()));
+                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns,
+                        jdbcTypes, typeNames, ctx.getSourceType());
                 if (sink != null) {
+                    // Same rule as the native writer: the boundary must stay a raw source key.
                     sink.values = extractPk(row, pkTrack);
                 }
+                cleanser.apply(row);
                 int updated = 0;
                 if (update != null) {
                     JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn, ctx.getTargetDialect());
