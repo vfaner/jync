@@ -983,6 +983,21 @@ table.tbl a.truncate { display: block; }
   margin-top: 22px;
 }
 
+/* 只读数据预览：比常规弹窗宽，结果区自己滚动，表头不参与滚动布局 */
+.preview-dialog {
+  max-width: min(1100px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  text-align: left;
+}
+.preview-body {
+  max-height: 60vh; overflow: auto;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.preview-body .tbl-wrap { overflow-x: auto; }
+.preview-body table.tbl th { position: sticky; top: 0; z-index: 1; }
+.preview-null { color: var(--ink-mute); font-style: italic; }
+.preview-note { margin: 10px 2px 0; }
+
 .pay-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
 .pay-tab {
   padding: 8px 18px; border-radius: 10px;

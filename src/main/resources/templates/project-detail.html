@@ -678,6 +678,8 @@
                         <th class="num" data-role="polling-only"
                             th:classappend="${(isAdmin and !cdcActive)} ? '' : 'is-hidden'"
                             th:text="#{cursor.set}">Set cursor</th>
+                        <!-- 只读预览：源/目标各一个入口。纯 GET，不改变同步状态，访客同样可见。 -->
+                        <th class="num" th:text="#{preview.title}">Preview</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -747,6 +749,24 @@
                                 </button>
                             </form>
                         </td>
+                        <td class="num nowrap">
+                            <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
+                                    data-side="source"
+                                    th:attr="data-table=${p.objectName},
+                                             data-action=@{/api/projects/{id}/preview(id=${project.id})},
+                                             title=#{preview.sourceHint}">
+                                <svg class="ico"><use href="#table"/></svg>
+                                <span th:text="#{preview.source}">Source</span>
+                            </button>
+                            <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
+                                    data-side="target"
+                                    th:attr="data-table=${p.objectName},
+                                             data-action=@{/api/projects/{id}/preview(id=${project.id})},
+                                             title=#{preview.targetHint}">
+                                <svg class="ico"><use href="#eye"/></svg>
+                                <span th:text="#{preview.target}">Target</span>
+                            </button>
+                        </td>
                     </tr>
                     </tbody>
                 </table>
@@ -759,6 +779,31 @@
             <svg class="ico"><use href="#clock-history"/></svg>
             <span th:text="#{project.viewAllLogs}">Full change log</span>
         </a>
+    </div>
+
+    <!-- 只读预览弹窗：页面只渲染空壳，内容由 app.js 按按钮上的 data-* 拉取填充。 -->
+    <div class="modal" id="preview-modal" aria-hidden="true" role="dialog" aria-modal="true"
+         th:attr="aria-label=#{preview.title}">
+        <div class="modal-mask" data-close-modal="preview-modal"></div>
+        <div class="modal-dialog preview-dialog">
+            <button type="button" class="modal-close" data-close-modal="preview-modal"
+                    th:attr="aria-label=#{common.close}">
+                <svg class="ico"><use href="#x-lg"/></svg>
+            </button>
+            <div class="modal-head">
+                <h3 id="preview-title" th:text="#{preview.title}">Preview</h3>
+                <p id="preview-meta" class="mono small"></p>
+            </div>
+            <!-- 带参数的文案不进全局字典，随控件走 data-template（同 project.selectedCount）。 -->
+            <div id="preview-body" class="preview-body"
+                 th:attr="data-template=#{preview.truncated}">
+                <div class="help" th:text="#{preview.loading}">Loading...</div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-ghost btn-sm" data-close-modal="preview-modal"
+                        th:text="#{common.close}">Close</button>
+            </div>
+        </div>
     </div>
 
 </div>

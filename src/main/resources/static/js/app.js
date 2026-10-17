@@ -982,6 +982,117 @@
     input.addEventListener('click', load);
   }
 
+  /* ─── 只读数据预览 ──────────────────────────────────────── */
+
+  /**
+   * 按进度行上的 data-side 拉取源/目标的前 100 行，填入弹窗。
+   *
+   * 纯 GET，不改变任何同步状态。数据库里的内容一律经 textContent 写入：
+   * 单元格里出现 "<script>" 也只是文本，不会变成标记；列名同理。
+   */
+  function bindTablePreview(btn) {
+    btn.addEventListener('click', function () {
+      var side = btn.dataset.side === 'target' ? 'target' : 'source';
+      var action = btn.dataset.action;
+      var body = document.getElementById('preview-body');
+      if (!action || !body) { return; }
+
+      var url = action + '?table=' + encodeURIComponent(btn.dataset.table || '')
+              + '&side=' + encodeURIComponent(side);
+      var title = document.getElementById('preview-title');
+      var meta = document.getElementById('preview-meta');
+      if (title) {
+        title.textContent = t('preview.title') + ' · ' + (btn.dataset.table || '');
+      }
+      if (meta) { meta.textContent = ''; }
+      body.innerHTML = '';
+      body.appendChild(textBlock(t('preview.loading')));
+      setModalOpen('preview-modal', true);
+
+      getJson(url).then(function (payload) {
+        if (!payload.success) {
+          body.innerHTML = '';
+          body.appendChild(textBlock(t(payload.message || 'error.unexpected'),
+              'alert alert-danger'));
+          return;
+        }
+        renderPreview(payload.preview);
+      });
+    });
+  }
+
+  function renderPreview(preview) {
+    var body = document.getElementById('preview-body');
+    var meta = document.getElementById('preview-meta');
+    if (!body) { return; }
+    body.innerHTML = '';
+    if (!preview) {
+      body.appendChild(textBlock(t('error.unexpected'), 'alert alert-danger'));
+      return;
+    }
+    if (meta) {
+      var sideLabel = t(preview.side === 'target' ? 'preview.target' : 'preview.source');
+      meta.textContent = sideLabel + ' · ' + (preview.connection || '') + ' · '
+          + (preview.schema ? preview.schema + '.' : '') + preview.table
+          + ' · ' + preview.elapsedMs + ' ms';
+    }
+
+    if (!preview.rows || !preview.rows.length) {
+      body.appendChild(textBlock(t('preview.empty')));
+      return;
+    }
+
+    var wrap = document.createElement('div');
+    wrap.className = 'tbl-wrap';
+    var table = document.createElement('table');
+    table.className = 'tbl dense mono small';
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    (preview.columns || []).forEach(function (col) {
+      var th = document.createElement('th');
+      th.textContent = col;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    preview.rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      (preview.columns || []).forEach(function (_, i) {
+        var cell = row[i];
+        var td = document.createElement('td');
+        if (cell === null || cell === undefined) {
+          // SQL NULL 是数据语义，不随界面语言翻译
+          td.className = 'preview-null';
+          td.textContent = 'NULL';
+        } else {
+          td.textContent = cell;
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    body.appendChild(wrap);
+
+    if (preview.truncated) {
+      var template = body.dataset.template || '';
+      if (template) {
+        body.appendChild(textBlock(
+            template.replace('{0}', preview.rows.length), 'help preview-note'));
+      }
+    }
+  }
+
+  function textBlock(text, cls) {
+    var div = document.createElement('div');
+    div.className = cls || 'help';
+    div.textContent = text;
+    return div;
+  }
+
   /* ─── 赞赏弹窗 ──────────────────────────────────────────── */
 
   /**
@@ -1764,6 +1875,7 @@
     document.querySelectorAll('[data-role="toggle-password"]').forEach(bindPasswordToggle);
     document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
       .forEach(bindCursorInput);
+    document.querySelectorAll('[data-role="preview"]').forEach(bindTablePreview);
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
