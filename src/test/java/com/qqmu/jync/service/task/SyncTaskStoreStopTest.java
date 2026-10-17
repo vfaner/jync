@@ -59,8 +59,11 @@ class SyncTaskStoreStopTest {
         store.recordOutcome(1L, success());
 
         assertThat(task.getStatus()).isEqualTo(TaskStatus.STOPPED);
-        // The stats are still worth recording — the cycle really did run.
-        assertThat(task.getLastSyncTime()).isNotNull();
+        // The cycle's finding is still worth recording — it really did run. The timestamp is
+        // not, though: this result carries no changes, and 上次同步 means "data last moved"
+        // (see SyncTaskStoreLastSyncTimeTest), so it stays null.
+        assertThat(task.getLastSyncResult()).isEqualTo("No changes");
+        assertThat(task.getLastSyncTime()).isNull();
         assertThat(task.getConsecutiveFailures()).isZero();
     }
 

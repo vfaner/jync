@@ -55,7 +55,14 @@ public class SyncTaskStore {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordOutcome(Long projectId, SyncResult result) {
         taskRepository.findByProjectId(projectId).ifPresent(task -> {
-            task.setLastSyncTime(Instant.now());
+            // "Last sync" answers "when did data last land", not "when did we last look": the
+            // polling engine fires every second even on an idle source, so stamping every
+            // outcome made the dashboard's timestamp tick while the row counter stood still.
+            // A failed cycle moved nothing either — the previous successful time stays truthful.
+            // The summary is still recorded below, so the list can still say "No changes".
+            if (result.isSuccess() && result.hasChanges()) {
+                task.setLastSyncTime(Instant.now());
+            }
             task.setLastSyncResult(truncate(result.summary()));
 
             // A stop requested mid-cycle must survive the cycle's own outcome: the

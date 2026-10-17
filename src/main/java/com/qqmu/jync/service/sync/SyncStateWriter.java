@@ -62,7 +62,13 @@ public class SyncStateWriter {
             progress.setResumableLoad(result.getResumableLoad());
         }
         progress.setInitialLoadDone(true);
-        progress.setLastSyncTime(Instant.now());
+        // This method runs on every successful cycle, idle ones included — carrying the cursor
+        // forward is exactly what stops an idle table re-reading the same window, so the
+        // timestamp cannot ride along with it. Same rule as the project's 上次同步: it marks the
+        // last cycle that delivered a change (deletes included; getRowsChanged() omits them).
+        if (result.getRowsChanged() > 0 || result.getRowsDeleted() > 0) {
+            progress.setLastSyncTime(Instant.now());
+        }
         // Counts rows the target actually changed, not rows scanned. A full-compare table is
         // re-read in its entirety every cycle, so accumulating the scan size would inflate this
         // total by the table's row count every few seconds and tell the user nothing.
