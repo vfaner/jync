@@ -115,6 +115,16 @@ public class ProjectApiController {
         return ResponseEntity.ok(body);
     }
 
+    /** Every column of a source table, for pickers such as column cleansing. */
+    @GetMapping("/{id}/columns")
+    public ResponseEntity<Map<String, Object>> tableColumns(@PathVariable Long id,
+                                                            @RequestParam String table) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("columns", projectService.listTableColumns(id, table));
+        return ResponseEntity.ok(body);
+    }
+
     private Map<String, Object> ok(String messageKey) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);

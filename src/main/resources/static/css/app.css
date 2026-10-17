@@ -516,6 +516,9 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }
+/* 网格里的尾部按钮会掉到下一行最左边；列清洗这类「填完再提交」的小表单统一
+   把按钮放在独立右对齐的行里，视线落点与表单末尾一致。 */
+.column-rule-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
 
 .input, .select, .textarea {
   width: 100%; padding: 9px 12px; font-size: 14px; font-family: inherit;

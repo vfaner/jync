@@ -486,6 +486,17 @@ class ProjectServiceTest {
         verify(databaseConfigRepository, never()).findById(any());
     }
 
+    @Test
+    void tableColumnsWithoutASourceConnectionAreRejectedWithAnI18nKey() {
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
+
+        // Same guard as the cursor picker: endpoints are only mandatory at start().
+        assertThatThrownBy(() -> service.listTableColumns(1L, "orders"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.source.required");
+        verify(databaseConfigRepository, never()).findById(any());
+    }
+
     // --- stop bookkeeping ------------------------------------------------------------------
 
     /** Stopping a log-CDC project must flip the task row to STOPPED, exactly like the

@@ -18,6 +18,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.config.I18nConfig;
+import com.qqmu.jync.dto.ColumnRule;
+import com.qqmu.jync.dto.ColumnRuleType;
 import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
@@ -462,6 +464,116 @@ public class ProjectController {
             flash.addFlashAttribute("error", e.getMessage());
         }
         return "redirect:/projects/" + id;
+    }
+
+    /**
+     * Appends one column-cleansing rule. The closed rule set is validated here rather than
+     * in the sync engine: a bad rule must be refused when it is saved, not discovered
+     * mid-load. A running project is refused for the same reason as any other config change.
+     */
+    @PostMapping("/{id}/column-rules")
+    public String addColumnRule(@PathVariable Long id,
+                                @RequestParam(required = false) String tableName,
+                                @RequestParam(name = "columnName", required = false)
+                                        String columnName,
+                                @RequestParam(required = false) String ruleType,
+                                @RequestParam(required = false) String ruleArg,
+                                @RequestParam(required = false) String ruleReplacement,
+                                RedirectAttributes flash) {
+        try {
+            var project = projectService.findById(id)
+                    .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+            if (Boolean.TRUE.equals(project.getEnabled())) {
+                flash.addFlashAttribute("error", "error.project.stop.before.config");
+                return "redirect:/projects/" + id;
+            }
+            String table = trimToNull(tableName);
+            String column = trimToNull(columnName);
+            if (table == null || column == null) {
+                flash.addFlashAttribute("error", "error.columnrule.required");
+                return "redirect:/projects/" + id;
+            }
+            ColumnRuleType type = parseRuleType(ruleType);
+            String arg = trimToNull(ruleArg);
+            String invalid = validateRuleArgs(type, arg);
+            if (invalid != null) {
+                flash.addFlashAttribute("error", invalid);
+                return "redirect:/projects/" + id;
+            }
+            SyncConfig config = projectService.loadConfig(project);
+            ColumnRule rule = new ColumnRule();
+            rule.setTable(table);
+            rule.setColumn(column);
+            rule.setType(type);
+            rule.setArg(arg);
+            rule.setReplacement(trimToNull(ruleReplacement));
+            config.getColumnRules().add(rule);
+            projectService.saveConfig(id, config);
+            flash.addFlashAttribute("message", "msg.columnrule.saved");
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            flash.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/projects/" + id;
+    }
+
+    /** Removes one rule by its position in the stored list. */
+    @PostMapping("/{id}/column-rules/delete")
+    public String deleteColumnRule(@PathVariable Long id,
+                                   @RequestParam(defaultValue = "-1") int index,
+                                   RedirectAttributes flash) {
+        try {
+            var project = projectService.findById(id)
+                    .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+            if (Boolean.TRUE.equals(project.getEnabled())) {
+                flash.addFlashAttribute("error", "error.project.stop.before.config");
+                return "redirect:/projects/" + id;
+            }
+            SyncConfig config = projectService.loadConfig(project);
+            if (index < 0 || index >= config.getColumnRules().size()) {
+                flash.addFlashAttribute("error", "error.columnrule.notfound");
+                return "redirect:/projects/" + id;
+            }
+            config.getColumnRules().remove(index);
+            projectService.saveConfig(id, config);
+            flash.addFlashAttribute("message", "msg.columnrule.saved");
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            flash.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/projects/" + id;
+    }
+
+    /** Unknown rule names are a user error, not a 500. */
+    private static ColumnRuleType parseRuleType(String ruleType) {
+        if (ruleType == null || ruleType.isBlank()) {
+            throw new IllegalArgumentException("error.columnrule.type.invalid");
+        }
+        try {
+            return ColumnRuleType.valueOf(ruleType.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("error.columnrule.type.invalid");
+        }
+    }
+
+    /** Returns the message key for an invalid argument, or null when the rule is usable. */
+    private static String validateRuleArgs(ColumnRuleType type, String arg) {
+        boolean requiresArg = type == ColumnRuleType.STRIP_PREFIX
+                || type == ColumnRuleType.STRIP_SUFFIX
+                || type == ColumnRuleType.REGEX_REPLACE;
+        if (requiresArg && arg == null) {
+            return "error.columnrule.arg.required";
+        }
+        if (type == ColumnRuleType.REGEX_REPLACE) {
+            try {
+                java.util.regex.Pattern.compile(arg);
+            } catch (java.util.regex.PatternSyntaxException e) {
+                return "error.columnrule.regex.invalid";
+            }
+        }
+        return null;
+    }
+
+    private static String trimToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     /** Sets an explicit cursor column for one table, overriding auto-detection. */

@@ -26,6 +26,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeLog;
@@ -787,6 +788,35 @@ public class ProjectService {
      * <p>Only comparable types are offered: a cursor must support {@code >} and {@code MAX()}.
      */
     public List<String> listCursorCandidates(Long projectId, String tableName) {
+        TableMeta table = readSourceTable(projectId, tableName);
+        List<String> candidates = new ArrayList<>();
+        for (var column : table.getColumns()) {
+            // Union of temporal/integral candidates plus SQL Server rowversion columns
+            // (which the driver reports as Types.BINARY but behave as a bump-on-update
+            // 8-byte counter — see CursorStrategy.isSqlServerRowversion).
+            if (com.qqmu.jync.service.monitor.CursorStrategy.isCursorCandidate(column)) {
+                candidates.add(column.getName());
+            }
+        }
+        return candidates;
+    }
+
+    /**
+     * Every column of one source table, in metadata order — the picker behind features that
+     * key on a column name (column cleansing) should offer the real list instead of trusting
+     * free typing. No type filtering: the UI shows the table as it is, and a cleansing rule
+     * simply has no effect on a column that is not a string.
+     */
+    public List<String> listTableColumns(Long projectId, String tableName) {
+        List<String> columns = new ArrayList<>();
+        for (var column : readSourceTable(projectId, tableName).getColumns()) {
+            columns.add(column.getName());
+        }
+        return columns;
+    }
+
+    /** Resolves the project's source connection and reads one table's metadata. */
+    private TableMeta readSourceTable(Long projectId, String tableName) {
         Project project = require(projectId);
         if (project.getSourceDbId() == null) {
             // Endpoints are optional until start(), so findById(null) would otherwise leak
@@ -799,17 +829,7 @@ public class ProjectService {
         try (Connection conn = dataSourceManager.getConnection(source)) {
             String schema = source.getSchemaName() != null && !source.getSchemaName().isBlank()
                     ? source.getSchemaName() : reader.resolveDefaultSchema(conn);
-            var table = reader.readTable(conn, schema, tableName);
-            List<String> candidates = new ArrayList<>();
-            for (var column : table.getColumns()) {
-                // Union of temporal/integral candidates plus SQL Server rowversion columns
-                // (which the driver reports as Types.BINARY but behave as a bump-on-update
-                // 8-byte counter — see CursorStrategy.isSqlServerRowversion).
-                if (com.qqmu.jync.service.monitor.CursorStrategy.isCursorCandidate(column)) {
-                    candidates.add(column.getName());
-                }
-            }
-            return candidates;
+            return reader.readTable(conn, schema, tableName);
         } catch (SQLException e) {
             // Keep the driver's raw detail server-side; callers only surface the message key.
             log.debug("Cannot read columns of '{}' for project '{}': {}",

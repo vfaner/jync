@@ -982,6 +982,84 @@
     input.addEventListener('click', load);
   }
 
+  /* ─── 列清洗规则表单 ──────────────────────────────────────
+     两件事都为了少让人手填、少让人猜：
+     1) 列候选跟着「表」走 —— 表一变就清空旧候选并重新拉取；
+     2) 参数/替换为只在对应用得上的规则下出现 —— 去空白、大小写、空串转 NULL
+        本来就没有参数，常驻的空输入框只会让人以为每条都要填。 */
+  function bindColumnRuleForm(form) {
+    var tableInput = form.querySelector('input[name=tableName]');
+    var columnInput = form.querySelector('input[name=columnName]');
+    var typeSelect = form.querySelector('select[name=ruleType]');
+    var argInput = form.querySelector('input[name=ruleArg]');
+    var replacementInput = form.querySelector('input[name=ruleReplacement]');
+    var datalist = document.getElementById('column-rule-columns');
+    if (!tableInput || !columnInput || !typeSelect) return;
+
+    var cache = {};          // 表名（小写）→ 列名数组
+    var loadedTable = null;  // 当前 datalist 里装的是哪张表的候选
+
+    function currentTable() {
+      return (tableInput.value || '').trim();
+    }
+
+    function fillColumns(columns) {
+      loadedTable = currentTable().toLowerCase();
+      if (!datalist) return;
+      while (datalist.firstChild) { datalist.removeChild(datalist.firstChild); }
+      columns.forEach(function (col) {
+        var opt = document.createElement('option');
+        opt.value = col;
+        datalist.appendChild(opt);
+      });
+    }
+
+    function loadColumns() {
+      var table = currentTable();
+      if (!table || !columnInput.dataset.action) return;
+      var key = table.toLowerCase();
+      if (loadedTable === key) return;
+      if (cache[key]) { fillColumns(cache[key]); return; }
+      getJson(columnInput.dataset.action + '?table=' + encodeURIComponent(table))
+        .then(function (data) {
+          if (!data || !data.success || !Array.isArray(data.columns)) return;
+          cache[key] = data.columns;
+          // 请求期间表又被改了：这份结果已经不是当前表的候选，丢弃。
+          if (currentTable().toLowerCase() === key) fillColumns(data.columns);
+        })
+        .catch(function () { /* 拉取失败仍可手填 */ });
+    }
+
+    columnInput.addEventListener('focus', loadColumns);
+    columnInput.addEventListener('click', loadColumns);
+    tableInput.addEventListener('change', loadColumns);
+
+    function toggleField(input, show, label) {
+      if (!input) return;
+      var field = input.closest('.field');
+      if (field) { field.classList.toggle('is-hidden', !show); }
+      if (label && field) {
+        var labelEl = field.querySelector('label');
+        if (labelEl) { labelEl.textContent = label; }
+      }
+      input.required = show;
+      // 隐藏的字段不能带着上一次规则留下的值提交
+      if (!show) { input.value = ''; }
+    }
+
+    function syncArgFields() {
+      var opt = typeSelect.options[typeSelect.selectedIndex];
+      var needsArg = !!opt && opt.getAttribute('data-arg') === 'true';
+      var needsReplacement = !!opt && opt.getAttribute('data-replacement') === 'true';
+      toggleField(argInput, needsArg, opt && opt.getAttribute('data-arg-label'));
+      toggleField(replacementInput, needsReplacement,
+                  opt && opt.getAttribute('data-replacement-label'));
+    }
+
+    typeSelect.addEventListener('change', syncArgFields);
+    syncArgFields();
+  }
+
   /* ─── 只读数据预览 ──────────────────────────────────────── */
 
   /**
@@ -1875,6 +1953,7 @@
     document.querySelectorAll('[data-role="toggle-password"]').forEach(bindPasswordToggle);
     document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
       .forEach(bindCursorInput);
+    document.querySelectorAll('[data-role="column-rule-form"]').forEach(bindColumnRuleForm);
     document.querySelectorAll('[data-role="preview"]').forEach(bindTablePreview);
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);

@@ -70,6 +70,12 @@ public class SyncConfig {
     /** Table name mapping source -> target; unmapped tables keep their name. */
     private Map<String, String> tableNameMapping = new HashMap<>();
 
+    /**
+     * Ordered string-cleansing rules, applied to matching columns just before the value
+     * is written to the target. Empty means every value is copied verbatim.
+     */
+    private List<ColumnRule> columnRules = new ArrayList<>();
+
     /** User-edited DDL overrides, keyed by {@code TYPE:NAME}, for objects that cannot be auto-converted. */
     private Map<String, String> ddlOverrides = new HashMap<>();
 

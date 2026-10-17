@@ -4,9 +4,12 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -54,6 +57,18 @@ class ProjectApiControllerTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("error.project.lock.not.held"));
+    }
+
+    @Test
+    void tableColumnsFeedTheCleansingColumnPicker() throws Exception {
+        when(projectService.listTableColumns(7L, "orders"))
+                .thenReturn(List.of("id", "customer_name", "amount"));
+
+        mvc.perform(get("/api/projects/7/columns").param("table", "orders"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.columns[1]").value("customer_name"));
+        verify(projectService).listTableColumns(7L, "orders");
     }
 
     @Test

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.qqmu.jync.service.converter.GenericSqlDialect;
+import com.qqmu.jync.service.sync.ColumnCleanser;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.util.CollectionUtil;
@@ -61,6 +62,7 @@ public final class CdcEventApplier {
         if (rows.isEmpty()) {
             return;
         }
+        cleanse(binding, rows);
         // Same dispatch as the polling engine: emulate only when there is a key to update
         // by; a keyless binding (unreachable in CDC — the handler gates on isApplicable)
         // degrades to the plain-INSERT branch rather than an update with an empty WHERE.
@@ -81,6 +83,9 @@ public final class CdcEventApplier {
         if (rows.isEmpty()) {
             return;
         }
+        // A cleansed primary key must be transformed the same way the upsert was, or the
+        // delete would look for a row the target does not hold.
+        cleanse(binding, rows);
         List<String> pkColumns = binding.pkNames();
         String sql = ctx.getTargetDialect().getDeleteByPkSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), pkColumns);
@@ -101,6 +106,22 @@ public final class CdcEventApplier {
             }
         }
         stats.addTableDeletes(binding.getTable(), rows.size());
+    }
+
+    /**
+     * Applies the project's column rules to the buffered rows in place.
+     *
+     * <p>In-place is safe under at-least-once because every consumer drops its buffer when
+     * an apply fails and replays the transaction by re-reading the source stream, so the
+     * same row map is never cleansed twice. A future retry path that re-applies the SAME
+     * list must copy first: non-idempotent rules such as STRIP_PREFIX would otherwise run
+     * twice on values that are already clean.
+     */
+    private void cleanse(CdcTableBinding binding, List<Map<String, Object>> rows) {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(ctx.getConfig(), binding.getTable());
+        for (Map<String, Object> row : rows) {
+            cleanser.apply(row);
+        }
     }
 
     /** The normal path: one idempotent statement per row, executed in JDBC batches. */

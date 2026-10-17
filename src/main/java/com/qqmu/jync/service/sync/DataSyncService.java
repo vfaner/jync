@@ -800,11 +800,13 @@ public class DataSyncService {
                             table.getName());
                 }
 
+                ColumnCleanser cleanser = ColumnCleanser.forTable(
+                        ctx.getConfig(), table.getName());
                 total = emulateUpsert && !pkColumns.isEmpty()
                         ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
-                                typeByColumn, rs, jdbcTypes, typeNames, ctx, pkTrack, sink)
+                                typeByColumn, rs, jdbcTypes, typeNames, ctx, cleanser, pkTrack, sink)
                         : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
-                                rs, columns, jdbcTypes, typeNames, ctx, pkTrack, sink);
+                                rs, columns, jdbcTypes, typeNames, ctx, cleanser, pkTrack, sink);
             }
             targetConn.commit();
         } catch (LockLostException e) {
@@ -935,15 +937,16 @@ public class DataSyncService {
                                              Map<String, Integer> typeByColumn,
                                              ResultSet rs, List<String> columns,
                                              List<Integer> jdbcTypes, List<String> typeNames,
-                                             SyncContext ctx, List<String> pkTrack, PkCursor sink)
+                                             SyncContext ctx, ColumnCleanser cleanser,
+                                             List<String> pkTrack, PkCursor sink)
             throws SQLException {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
             JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
             while (rs.next()) {
-                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes, typeNames,
-                        ctx.getSourceType());
+                Map<String, Object> row = cleanser.apply(JdbcRowMapper.readRow(rs, columns,
+                        jdbcTypes, typeNames, ctx.getSourceType()));
                 if (sink != null) {
                     sink.values = extractPk(row, pkTrack);
                 }
@@ -972,7 +975,7 @@ public class DataSyncService {
                                                List<String> columns, List<String> pkColumns,
                                                Map<String, Integer> typeByColumn, ResultSet rs,
                                                List<Integer> jdbcTypes, List<String> typeNames,
-                                               SyncContext ctx,
+                                               SyncContext ctx, ColumnCleanser cleanser,
                                                List<String> pkTrack, PkCursor sink)
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
@@ -1004,8 +1007,8 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(update, properties.getQueryTimeoutSeconds());
             int sinceCommit = 0;
             while (rs.next()) {
-                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, jdbcTypes, typeNames,
-                        ctx.getSourceType());
+                Map<String, Object> row = cleanser.apply(JdbcRowMapper.readRow(rs, columns,
+                        jdbcTypes, typeNames, ctx.getSourceType()));
                 if (sink != null) {
                     sink.values = extractPk(row, pkTrack);
                 }
@@ -1630,11 +1633,15 @@ public class DataSyncService {
         String sourceSql = "SELECT " + pk.stream().map(sourceDialect::quoteIdentifier)
                 .reduce((a, b) -> a + ", " + b).orElseThrow()
                 + " FROM " + sourceDialect.qualify(ctx.getSourceSchema(), table.getName());
+        // The target holds cleansed keys, so the source side must be transformed the same
+        // way before comparing: otherwise every cleansed key looks "deleted at source" and
+        // deletion sync wipes the whole table.
+        ColumnCleanser cleanser = ColumnCleanser.forTable(ctx.getConfig(), table.getName());
         try (Statement st = sourceConn.createStatement()) {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
             try (ResultSet rs = st.executeQuery(sourceSql)) {
                 while (rs.next()) {
-                    sourceKeys.add(keyOf(rs, pk.size()));
+                    sourceKeys.add(cleansedKeyOf(cleanser, pk, rs));
                 }
             }
         }
@@ -1695,6 +1702,22 @@ public class DataSyncService {
         }
         log.info("Deleted {} row(s) from {} that no longer exist in source", deleted, targetTable);
         return deleted;
+    }
+
+    /** Source-side key, transformed by the project's column rules before comparison. */
+    private String cleansedKeyOf(ColumnCleanser cleanser, List<String> pk, ResultSet rs)
+            throws SQLException {
+        Map<String, Object> values = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < pk.size(); i++) {
+            values.put(pk.get(i), rs.getObject(i + 1));
+        }
+        cleanser.apply(values);
+        StringBuilder sb = new StringBuilder();
+        for (String column : pk) {
+            String part = keyPartOf(values.get(column));
+            sb.append(part.length()).append(':').append(part).append('\u0001');
+        }
+        return sb.toString();
     }
 
     /** Builds a comparable composite-key string from the leading columns of a row. */

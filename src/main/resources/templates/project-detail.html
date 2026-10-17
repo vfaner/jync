@@ -658,6 +658,123 @@
     </fieldset>
     </form>
 
+    <!-- 列清洗：封闭的字符串规则集，写入目标库前在内存中生效，不改源数据。
+         独立小表单而非并入配置表单：规则需要逐条增删，合并会让主表单的保存语义
+         变成「整表覆盖」，误删风险更高。 -->
+    <div class="card" th:if="${isAdmin}">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#sliders"/></svg>
+                <span th:text="#{columnrule.title}">Column cleansing</span></h2>
+            <span class="hint" th:text="#{columnrule.help}">help</span>
+        </div>
+        <div class="card-body tight">
+            <p class="muted small" th:if="${#lists.isEmpty(config.columnRules)}"
+               th:text="#{columnrule.empty}">No column rules yet.</p>
+            <div class="tbl-wrap" th:unless="${#lists.isEmpty(config.columnRules)}">
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{columnrule.table}">Table</th>
+                        <th th:text="#{columnrule.column}">Column</th>
+                        <th th:text="#{columnrule.type}">Rule</th>
+                        <th th:text="#{columnrule.arg}">Argument</th>
+                        <th class="num" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="r, i : ${config.columnRules}">
+                        <td class="mono" th:text="${r.table}">orders</td>
+                        <td class="mono" th:text="${r.column}">name</td>
+                        <td th:text="${r.type != null} ? ${#messages.msg('columnrule.type.' + r.type)} : ''">TRIM</td>
+                        <td class="mono small">
+                            <span th:text="${r.arg != null and !#strings.isEmpty(r.arg)} ? ${r.arg} : '—'">—</span>
+                            <span th:if="${r.type != null and r.type.name() == 'REGEX_REPLACE'}">
+                                → <span th:text="${r.replacement ?: ''}"></span>
+                            </span>
+                        </td>
+                        <td class="num">
+                            <!-- 按位置删除：规则按保存顺序执行，列表就是唯一顺序真相。 -->
+                            <form method="post"
+                                  th:action="@{/projects/{id}/column-rules/delete(id=${project.id})}">
+                                <input type="hidden" name="index" th:value="${i.index}">
+                                <button type="submit" class="btn-icon"
+                                        th:disabled="${project.enabled}" th:title="#{columnrule.delete}">
+                                    <svg class="ico"><use href="#trash"/></svg>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+            <!-- 表单分两段：字段网格 + 独立的右对齐按钮行。参数/替换为只在需要它们的
+                 规则下由 app.js 显示，且标签换成「要移除的前缀 / 正则表达式」这类
+                 说明性文字——常驻两个空输入框会让人以为每条规则都要填。 -->
+            <form method="post" data-role="column-rule-form" style="margin-top:12px"
+                  th:action="@{/projects/{id}/column-rules(id=${project.id})}">
+                <div class="grid-2">
+                    <div class="field">
+                        <label for="columnRuleTable" th:text="#{columnrule.table}">Table</label>
+                        <input type="text" class="input mono" id="columnRuleTable" name="tableName"
+                               list="column-rule-tables" required maxlength="128"
+                               autocomplete="off" th:disabled="${project.enabled}">
+                        <datalist id="column-rule-tables">
+                            <option th:each="tbl : ${sourceObjects?.tables}" th:value="${tbl}"></option>
+                        </datalist>
+                    </div>
+                    <div class="field">
+                        <label for="columnRuleColumn" th:text="#{columnrule.column}">Column</label>
+                        <!-- 候选列按表即时拉取；表还没填时只能手填，拉取失败也不阻塞。 -->
+                        <input type="text" class="input mono" id="columnRuleColumn" name="columnName"
+                               list="column-rule-columns" required maxlength="128"
+                               autocomplete="off" th:disabled="${project.enabled}"
+                               th:attr="data-action=@{/api/projects/{id}/columns(id=${project.id})}">
+                        <datalist id="column-rule-columns"></datalist>
+                    </div>
+                    <div class="field">
+                        <label for="columnRuleType" th:text="#{columnrule.type}">Rule</label>
+                        <select class="select" id="columnRuleType" name="ruleType"
+                                th:disabled="${project.enabled}">
+                            <option value="TRIM" th:text="#{columnrule.type.TRIM}">Trim</option>
+                            <option value="UPPER" th:text="#{columnrule.type.UPPER}">Upper</option>
+                            <option value="LOWER" th:text="#{columnrule.type.LOWER}">Lower</option>
+                            <option value="BLANK_TO_NULL" th:text="#{columnrule.type.BLANK_TO_NULL}">Blank to NULL</option>
+                            <option value="STRIP_PREFIX" data-arg="true"
+                                    th:attr="data-arg-label=#{columnrule.arg.prefix}"
+                                    th:text="#{columnrule.type.STRIP_PREFIX}">Strip prefix</option>
+                            <option value="STRIP_SUFFIX" data-arg="true"
+                                    th:attr="data-arg-label=#{columnrule.arg.suffix}"
+                                    th:text="#{columnrule.type.STRIP_SUFFIX}">Strip suffix</option>
+                            <option value="REGEX_REPLACE" data-arg="true" data-replacement="true"
+                                    th:attr="data-arg-label=#{columnrule.arg.regex},
+                                             data-replacement-label=#{columnrule.replacement.regex}"
+                                    th:text="#{columnrule.type.REGEX_REPLACE}">Regex replace</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="columnRuleArg" th:text="#{columnrule.arg}">Argument</label>
+                        <input type="text" class="input mono" id="columnRuleArg" name="ruleArg"
+                               maxlength="256" autocomplete="off"
+                               th:disabled="${project.enabled}">
+                    </div>
+                    <div class="field">
+                        <label for="columnRuleReplacement" th:text="#{columnrule.replacement}">Replacement</label>
+                        <input type="text" class="input mono" id="columnRuleReplacement"
+                               name="ruleReplacement" maxlength="256" autocomplete="off"
+                               th:disabled="${project.enabled}">
+                    </div>
+                </div>
+                <div class="column-rule-actions">
+                    <button type="submit" class="btn btn-primary btn-sm"
+                            th:disabled="${project.enabled}">
+                        <svg class="ico"><use href="#plus-lg"/></svg>
+                        <span th:text="#{columnrule.add}">Add rule</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- 各表进度与游标策略 -->
     <div class="card">
         <div class="card-head">
