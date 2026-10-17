@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -201,7 +202,11 @@ class ProjectServiceTest {
         when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         // What the form binds: only the descriptive fields, with entity defaults elsewhere.
-        service.save(project(1L));
+        // A real edit (not a no-op save, which now short-circuits before any write) so the
+        // restored fields can be inspected on the merged entity.
+        Project incoming = project(1L);
+        incoming.setDescription("备注改一下");
+        service.save(incoming);
 
         ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
         verify(projectRepository).save(captor.capture());
@@ -593,13 +598,43 @@ class ProjectServiceTest {
     @Test
     void keepingTheSameEndpointsDoesNotClearSyncState() {
         Project existing = storedProject(1L, false);
-        stubExisting(existing);
+        stubLookup(existing);              // 内容未变:save() 不会被调用,不需要它的 stub
 
         service.save(formProject(1L));
 
         verify(syncEngine, never()).resetProject(any());
         verify(checkpointRepository, never()).deleteByProjectId(any());
         verify(positionStore, never()).delete(any());
+    }
+
+    @Test
+    void savingAnUnchangedProjectWritesNothing() {
+        Project existing = storedProject(1L, true);
+        stubLookup(existing);
+        // lenient:未改动时根本不该走到 save(),若走到了也要让它返回实体而不是 null,
+        // 这样失败原因才是 verify(never()) 而不是一次无关的 NPE。
+        lenient().when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        Project result = service.save(formProject(1L));
+
+        assertThat(result).isSameAs(existing);
+        verify(projectRepository, never()).save(any());
+        verify(auditService, never()).record(any(), any());
+        verify(scheduler, never()).reschedule(any());
+    }
+
+    @Test
+    void aBlankDescriptionMatchesAStoredNullDescription() {
+        Project existing = storedProject(1L, false);
+        existing.setDescription(null);
+        stubLookup(existing);
+        lenient().when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        Project incoming = formProject(1L);
+        incoming.setDescription("");       // 表单对空文本域提交的是空串,不是 null
+
+        service.save(incoming);
+
+        verify(projectRepository, never()).save(any());
     }
 
     @Test

@@ -64,4 +64,23 @@ class SyncTaskStoreCdcFailureTest {
         store.markCdcRunning(21L);
         assertThat(task.getStatus()).isEqualTo(TaskStatus.RUNNING);
     }
+
+    @Test
+    void markCdcRunningClearsTheStaleResultSummary() {
+        store.recordCdcFailure(21L, "SERVER_ID_CONFLICT: duplicate replica");
+        store.markCdcRunning(21L);
+        // 状态已经回到 RUNNING,详情页却还在展示上一次致命故障的原文 —— 会话恢复后
+        // 这条摘要描述的是历史,不是现状。
+        assertThat(task.getLastSyncResult()).isNull();
+    }
+
+    @Test
+    void markCdcRunningClearsAStaleSummaryLeftOnAnAlreadyRunningTask() {
+        task.setStatus(TaskStatus.RUNNING);
+        task.setLastSyncResult("SERVER_ID_CONFLICT: duplicate replica");
+
+        store.markCdcRunning(21L);
+
+        assertThat(task.getLastSyncResult()).isNull();
+    }
 }

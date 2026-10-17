@@ -176,12 +176,28 @@ public class SyncTaskStore {
         });
     }
 
-    /** CDC consumer came up (or a rebaseline succeeded): RUNNING, ERROR hat off. */
+    /**
+     * CDC consumer came up (or a rebaseline succeeded): RUNNING, ERROR hat off.
+     *
+     * <p>The stale result summary is cleared too: after a fatal failure it still carries the
+     * old error text (e.g. {@code SERVER_ID_CONFLICT}), and leaving it there makes the
+     * detail page show a failure forever while the panel above says RUNNING and data is
+     * flowing. Cleared even when the status is already RUNNING, because a task can hold a
+     * stale summary left behind by a recovery that predates this rule.
+     */
     @Transactional
     public void markCdcRunning(Long projectId) {
         taskRepository.findByProjectId(projectId).ifPresent(task -> {
+            boolean changed = false;
             if (task.getStatus() != TaskStatus.RUNNING) {
                 task.setStatus(TaskStatus.RUNNING);
+                changed = true;
+            }
+            if (task.getLastSyncResult() != null) {
+                task.setLastSyncResult(null);
+                changed = true;
+            }
+            if (changed) {
                 taskRepository.save(task);
             }
         });

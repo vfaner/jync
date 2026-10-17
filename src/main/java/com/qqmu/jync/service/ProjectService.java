@@ -273,6 +273,13 @@ public class ProjectService {
             // submitting this form must neither stop a running project nor null out columns
             // the form never contained. Start/stop go through their own methods below.
             Project existing = require(project.getId());
+            if (sameContent(project, existing)) {
+                // A save with nothing to change must not write: a merge would bump
+                // updated_at (the form never carries it), append a PROJECT_SAVE audit row
+                // that claims an edit nobody made, and re-create the Quartz trigger —
+                // nudging the polling cadence. Report success by returning the stored row.
+                return existing;
+            }
             endpointsChanged = !Objects.equals(project.getSourceDbId(), existing.getSourceDbId())
                     || !Objects.equals(project.getTargetDbId(), existing.getTargetDbId());
             if (endpointsChanged && isRunning(existing)) {
@@ -469,6 +476,22 @@ public class ProjectService {
         }
         return task.getLockExpiresAt() == null
                 || task.getLockExpiresAt().isAfter(Instant.now());
+    }
+
+    /**
+     * The form carries the same values the row already holds. The source/target comparison
+     * is null-safe; a blank textarea arrives as "" while older rows may store null, so the
+     * description is compared with null folded to "".
+     */
+    private static boolean sameContent(Project form, Project stored) {
+        return form.getName().equals(stored.getName())
+                && normalizeBlank(form.getDescription()).equals(normalizeBlank(stored.getDescription()))
+                && Objects.equals(form.getSourceDbId(), stored.getSourceDbId())
+                && Objects.equals(form.getTargetDbId(), stored.getTargetDbId());
+    }
+
+    private static String normalizeBlank(String value) {
+        return value == null ? "" : value;
     }
 
     /** Full config parse of the persisted JSON; null when absent or unreadable. */
