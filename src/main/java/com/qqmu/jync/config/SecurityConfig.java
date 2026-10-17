@@ -65,7 +65,13 @@ public class SecurityConfig {
             "/audits",
             // One-click upgrade is an admin action end to end; a viewer is never shown the
             // button, so the status poll must not answer for one either.
-            "/api/upgrade/status"
+            "/api/upgrade/status",
+            // Preview returns row data straight out of the configured databases, and the two
+            // lookups expose an arbitrary table's schema. All three back admin-only controls
+            // on the project detail page; a viewer must not call them directly.
+            "/api/projects/*/preview",
+            "/api/projects/*/columns",
+            "/api/projects/*/cursor-candidates"
     };
 
     @Bean

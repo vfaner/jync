@@ -874,6 +874,7 @@
                         </td>
                         <td class="num nowrap">
                             <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
+                                    th:if="${isAdmin}"
                                     data-side="source"
                                     th:attr="data-table=${p.objectName},
                                              data-action=@{/api/projects/{id}/preview(id=${project.id})},
@@ -882,6 +883,7 @@
                                 <span th:text="#{preview.source}">Source</span>
                             </button>
                             <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
+                                    th:if="${isAdmin}"
                                     data-side="target"
                                     th:attr="data-table=${p.objectName},
                                              data-action=@{/api/projects/{id}/preview(id=${project.id})},

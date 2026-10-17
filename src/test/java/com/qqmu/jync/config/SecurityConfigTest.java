@@ -234,6 +234,22 @@ class SecurityConfigTest {
         assertThat(statusOf(get("/api/upgrade/status").with(asAdmin()))).isEqualTo(200);
     }
 
+    /**
+     * Table preview returns row data straight out of the configured databases, and the two
+     * lookup endpoints expose an arbitrary table's schema. They exist to support the
+     * admin-only detail-page controls, so a viewer must not be able to call them directly.
+     */
+    @Test
+    void theProjectDataAndSchemaEndpointsAreAdminOnly() throws Exception {
+        for (String path : new String[] {
+                "/api/projects/1/preview?table=T&side=source",
+                "/api/projects/1/columns?table=T",
+                "/api/projects/1/cursor-candidates?table=T"}) {
+            assertThat(statusOf(get(path).with(asViewer()))).as(path).isEqualTo(403);
+            assertThat(statusOf(get(path).with(asAdmin()))).as(path).isNotEqualTo(403);
+        }
+    }
+
     private com.qqmu.jync.model.AuditEvent latestAudit() {
         return auditRepository.findAll(org.springframework.data.domain.PageRequest.of(
                         0, 1, org.springframework.data.domain.Sort.by(

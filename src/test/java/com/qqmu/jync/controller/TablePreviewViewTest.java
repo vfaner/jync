@@ -60,7 +60,22 @@ class TablePreviewViewTest {
                 principal, null, principal.getAuthorities()));
     }
 
+    private static RequestPostProcessor asViewer() {
+        AppUser user = new AppUser();
+        user.setId(2L);
+        user.setUsername("view");
+        user.setPasswordHash("not-checked-here");
+        user.setRole(UserRole.VIEWER);
+        SyncUserDetails principal = new SyncUserDetails(user, false);
+        return authentication(new UsernamePasswordAuthenticationToken(
+                principal, null, principal.getAuthorities()));
+    }
+
     private String render() throws Exception {
+        return render(asAdmin());
+    }
+
+    private String render(RequestPostProcessor user) throws Exception {
         Project project = new Project();
         project.setId(1L);
         project.setName("proj");
@@ -77,7 +92,7 @@ class TablePreviewViewTest {
         progress.setObjectName("ITEMS");
         when(projectService.findProgress(1L)).thenReturn(List.of(progress));
 
-        return mvc.perform(get("/projects/1").with(asAdmin()))
+        return mvc.perform(get("/projects/1").with(user))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
     }
@@ -93,6 +108,15 @@ class TablePreviewViewTest {
         assertThat(html).contains("data-action=\"/api/projects/1/preview\"");
         assertThat(html).contains("id=\"preview-modal\"");
         assertThat(html).contains("id=\"preview-body\"");
+    }
+
+    /**
+     * The endpoints are admin-only; offering a viewer a button that is guaranteed to come
+     * back 403 is worse than not showing it.
+     */
+    @Test
+    void aViewerIsNotOfferedThePreviewButtons() throws Exception {
+        assertThat(render(asViewer())).doesNotContain("data-role=\"preview\"");
     }
 
     @Test
