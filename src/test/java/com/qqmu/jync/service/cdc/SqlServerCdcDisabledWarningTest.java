@@ -21,7 +21,9 @@ import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.CdcPosition;
+import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.SyncContext;
@@ -85,9 +87,10 @@ class SqlServerCdcDisabledWarningTest {
         project.setId(1L);
         project.setName("mssql-cdc-off");
 
+        SyncStateWriter stateWriter = mock(SyncStateWriter.class);
         SqlServerCdcConsumer consumer = new SqlServerCdcConsumer(project, boundedLock(1), ctx,
                 positionStore, mock(CdcBaselineService.class), taskStore,
-                mock(SyncStateWriter.class), dsm, new CdcRuntimeStats(), properties);
+                stateWriter, dsm, new CdcRuntimeStats(), properties);
 
         ListAppender<ILoggingEvent> appender = LogCapture.attach(SqlServerCdcConsumer.class);
         try {
@@ -100,6 +103,9 @@ class SqlServerCdcDisabledWarningTest {
             assertThat(ev.getLevel()).isEqualTo(Level.WARN);
             assertThat(ev.getFormattedMessage()).contains("disabled");
         });
+        // 启动行与停机行配对,重启不再看起来像崩溃。
+        verify(stateWriter).recordLog(1L, ObjectType.PROJECT, "mssql-cdc-off",
+                ChangeType.INFO, "SQLServer consumer started", true, 0L);
         verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
     }
 

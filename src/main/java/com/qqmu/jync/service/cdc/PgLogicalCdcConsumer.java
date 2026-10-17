@@ -108,6 +108,14 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     public void run() {
         long projectId = project.getId();
         taskStore.markCdcRunning(projectId);
+        // Pair the stop line with a start line so restarts do not read as a crash loop.
+        try {
+            stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
+                    ChangeType.INFO, "PG consumer started", true, 0L);
+        } catch (RuntimeException e) {
+            log.warn("Could not record the PG start log for project {}: {}",
+                    projectId, e.getMessage());
+        }
         String slotName = slotName(projectId, properties);
         try {
             CdcPosition position = positionStore.find(projectId).orElse(null);

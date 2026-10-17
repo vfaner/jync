@@ -22,7 +22,9 @@ import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.CdcPosition;
+import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.SyncStateWriter;
@@ -174,8 +176,9 @@ class PgLogicalCdcConsumerTest {
         // 提交的事务落在 slot 起始位点之前 —— pg_create_logical_replication_slot 只
         // 保留创建点之后的 WAL,那批变更永久丢失(UPDATE 永不生效即此症)。
         // 钉住顺序:启动 → 开连接建 slot → 才允许 runBaseline。
-        Project project = mock(Project.class);
-        when(project.getId()).thenReturn(1L);
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("pg-1");
         SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
         when(lock.renew()).thenReturn(false); // 进入 drain 循环即让出,测试只关心启动顺序
 
@@ -212,6 +215,9 @@ class PgLogicalCdcConsumerTest {
 
         consumer.run();
 
+        // 启动行与停机行配对,重启不再看起来像崩溃。
+        verify(stateWriter).recordLog(1L, ObjectType.PROJECT, "pg-1", ChangeType.INFO,
+                "PG consumer started", true, 0L);
         InOrder order = inOrder(dsm, baselineService, slotStmt);
         order.verify(dsm).getConnection(sourceConfig);
         order.verify(slotStmt).execute(contains("pg_create_logical_replication_slot"));

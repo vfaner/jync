@@ -110,6 +110,9 @@ class LogMinerCdcConsumerTest {
         verify(stateWriter).recordLog(eq(7L), eq(ObjectType.PROJECT), eq("lm-7"),
                 eq(ChangeType.INFO), eq("LogMiner consumer stopped: lease lost"),
                 eq(true), eq(0L));
+        // 启动行与停机行配对,重启不再看起来像崩溃。
+        verify(stateWriter).recordLog(eq(7L), eq(ObjectType.PROJECT), eq("lm-7"),
+                eq(ChangeType.INFO), eq("LogMiner consumer started"), eq(true), eq(0L));
         verify(lock).close();
     }
 

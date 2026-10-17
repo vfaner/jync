@@ -116,6 +116,10 @@ class CdcConsumerTest {
                 eq(ChangeType.ERROR), anyString(), anyBoolean(), anyLong());  // 绝不写 ERROR
         verify(stateWriter).recordLog(7L, ObjectType.PROJECT, "cdc-7", ChangeType.INFO,
                 "CDC consumer stopped: lease lost", true, 0L);
+        // 停机行必须有一条启动行与之配对:否则重启后的变更日志里只有「停止」，
+        // 看起来像反复崩溃,而不是一次正常的进程重启。
+        verify(stateWriter).recordLog(7L, ObjectType.PROJECT, "cdc-7", ChangeType.INFO,
+                "CDC consumer started", true, 0L);
         verify(lock).close();                                  // 租约句柄仍按 owner 守卫释放
     }
 

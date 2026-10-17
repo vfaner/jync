@@ -133,6 +133,14 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     public void run() {
         long projectId = project.getId();
         taskStore.markCdcRunning(projectId);
+        // Pair the stop line with a start line so restarts do not read as a crash loop.
+        try {
+            stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
+                    ChangeType.INFO, "LogMiner consumer started", true, 0L);
+        } catch (RuntimeException e) {
+            log.warn("Could not record the LogMiner start log for project {}: {}",
+                    projectId, e.getMessage());
+        }
         try {
             CdcPosition position = positionStore.find(projectId).orElse(null);
             if (position == null || !Boolean.TRUE.equals(position.isBaselineDone())) {

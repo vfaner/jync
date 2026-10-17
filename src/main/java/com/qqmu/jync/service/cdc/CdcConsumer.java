@@ -148,6 +148,17 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     public void run() {
         long projectId = project.getId();
         taskStore.markCdcRunning(projectId);
+        // The stop line alone reads like a crash loop on the change log: every restart
+        // writes "stopped" but nothing says a new consumer came up. Pair it with a start
+        // line so a restart is visibly one stop + one start. Best-effort: a failed audit
+        // write must not keep the stream from running.
+        try {
+            stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
+                    ChangeType.INFO, "CDC consumer started", true, 0L);
+        } catch (RuntimeException e) {
+            log.warn("Could not record the CDC start log for project {}: {}",
+                    projectId, e.getMessage());
+        }
         try {
             CdcPosition position = positionStore.find(projectId).orElse(null);
             if (position == null || !Boolean.TRUE.equals(position.isBaselineDone())) {
