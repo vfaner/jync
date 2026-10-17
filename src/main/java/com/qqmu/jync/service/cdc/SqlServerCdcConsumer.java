@@ -141,7 +141,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         this.properties = properties;
         this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
-                properties.getCdc().getChangeWindowMs());
+                taskStore, properties.getCdc().getChangeWindowMs());
     }
 
     @Override

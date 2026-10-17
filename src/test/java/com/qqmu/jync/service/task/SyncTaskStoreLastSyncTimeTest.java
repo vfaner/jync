@@ -90,4 +90,12 @@ class SyncTaskStoreLastSyncTimeTest {
         assertThat(task.getLastSyncTime()).isEqualTo(LAST_REAL_SYNC);
         assertThat(task.getLastSyncResult()).startsWith("FAILED:");
     }
+
+    @Test
+    @DisplayName("a CDC window that applied rows moves it, same as a polling cycle")
+    void aCdcWindowThatAppliedRowsMovesTheLastSyncTime() {
+        store.markCdcDataApplied(1L);
+
+        assertThat(task.getLastSyncTime()).isAfter(LAST_REAL_SYNC);
+    }
 }

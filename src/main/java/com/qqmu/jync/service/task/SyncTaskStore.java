@@ -160,6 +160,22 @@ public class SyncTaskStore {
         });
     }
 
+    /**
+     * A CDC change window delivered rows: 上次同步 advances, same rule as polling.
+     *
+     * <p>The window logger only aggregates rows the applier already committed, so reaching
+     * this call means data landed. Status and the result summary are deliberately untouched —
+     * those belong to the consumer's own lifecycle ({@link #markCdcRunning},
+     * {@link #recordCdcFailure}).
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markCdcDataApplied(Long projectId) {
+        taskRepository.findByProjectId(projectId).ifPresent(task -> {
+            task.setLastSyncTime(Instant.now());
+            taskRepository.save(task);
+        });
+    }
+
     /** CDC consumer came up (or a rebaseline succeeded): RUNNING, ERROR hat off. */
     @Transactional
     public void markCdcRunning(Long projectId) {

@@ -139,7 +139,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
         // 聚合变更日志:按表累计 upsert/delete,到龄一条;停机兜底刷剩余。
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
-                properties.getCdc().getChangeWindowMs());
+                taskStore, properties.getCdc().getChangeWindowMs());
         this.sink = transactionSink();
         this.supplier = new BindingSupplier();
     }

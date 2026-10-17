@@ -13,6 +13,7 @@ import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.service.cdc.CdcRuntimeStats.TableChange;
 import com.qqmu.jync.service.sync.SyncStateWriter;
+import com.qqmu.jync.service.task.SyncTaskStore;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -26,6 +27,12 @@ import lombok.extern.slf4j.Slf4j;
  * configured age (default 10s) as a single {@code DATA/INFO} entry carrying the upsert and
  * delete counts plus the watermark reached. On consumer {@link #close()} every undued window
  * is flushed as well, so a quiet stream never strands counts past shutdown.
+ *
+ * <p>A flush that carried rows also advances the project's 上次同步: the windows only
+ * aggregate rows the applier already committed, so a non-empty window is the CDC pipeline's
+ * only evidence that data landed (the polling engine has {@code SyncTaskStore.recordOutcome}
+ * for the same job). The timestamp is advanced even if the change-log write itself fails —
+ * the audit entry is the side effect, the data landing is not.
  *
  * <p>Failures of the meta-database write are swallowed with a warn: this is an observability
  * side path and must never stop or park a consumer thread.
@@ -49,6 +56,7 @@ public final class CdcChangeWindowLogger implements AutoCloseable {
     private final long projectId;
     private final CdcRuntimeStats stats;
     private final SyncStateWriter stateWriter;
+    private final SyncTaskStore taskStore;
     private final long windowMs;
     private final long tickMs;
     private final LongSupplier clockMillis;
@@ -57,15 +65,19 @@ public final class CdcChangeWindowLogger implements AutoCloseable {
     private ScheduledFuture<?> task;
 
     public CdcChangeWindowLogger(long projectId, CdcRuntimeStats stats,
-                                 SyncStateWriter stateWriter, long windowMs) {
-        this(projectId, stats, stateWriter, windowMs, DEFAULT_TICK_MS, System::currentTimeMillis);
+                                 SyncStateWriter stateWriter, SyncTaskStore taskStore,
+                                 long windowMs) {
+        this(projectId, stats, stateWriter, taskStore, windowMs,
+                DEFAULT_TICK_MS, System::currentTimeMillis);
     }
 
     CdcChangeWindowLogger(long projectId, CdcRuntimeStats stats, SyncStateWriter stateWriter,
-                          long windowMs, long tickMs, LongSupplier clockMillis) {
+                          SyncTaskStore taskStore, long windowMs, long tickMs,
+                          LongSupplier clockMillis) {
         this.projectId = projectId;
         this.stats = stats;
         this.stateWriter = stateWriter;
+        this.taskStore = taskStore;
         this.windowMs = windowMs;
         this.tickMs = tickMs;
         this.clockMillis = clockMillis;
@@ -114,8 +126,10 @@ public final class CdcChangeWindowLogger implements AutoCloseable {
             return;
         }
         String through = stats.positionLabel();
+        boolean applied = false;
         for (TableChange change : changes) {
             long total = change.upserts() + change.deletes();
+            applied |= total > 0;
             String detail = "CDC window: " + change.upserts() + " upserts, "
                     + change.deletes() + " deletes"
                     + (through != null ? " (through " + through + ")" : "");
@@ -126,6 +140,16 @@ public final class CdcChangeWindowLogger implements AutoCloseable {
             } catch (RuntimeException e) {
                 log.warn("Could not write CDC change window for project {} table {}: {}",
                         projectId, change.table(), e.getMessage());
+            }
+        }
+        // One stamp per flush, not per table: the dashboard cares when data last landed,
+        // and every table in this batch landed at essentially the same moment.
+        if (applied) {
+            try {
+                taskStore.markCdcDataApplied(projectId);
+            } catch (RuntimeException e) {
+                log.warn("Could not advance last-sync for CDC project {}: {}",
+                        projectId, e.getMessage());
             }
         }
     }

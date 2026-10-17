@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.service.sync.SyncStateWriter;
+import com.qqmu.jync.service.task.SyncTaskStore;
 
 /**
  * 聚合变更日志的落库契约:窗口到龄才写、一张表一条(ObjectType.DATA + ChangeType.INFO,
@@ -31,9 +33,10 @@ class CdcChangeWindowLoggerTest {
 
     private final AtomicLong clock = new AtomicLong(1_000L);
     private final SyncStateWriter stateWriter = mock(SyncStateWriter.class);
+    private final SyncTaskStore taskStore = mock(SyncTaskStore.class);
 
     private CdcChangeWindowLogger logger(CdcRuntimeStats stats, long windowMs) {
-        return new CdcChangeWindowLogger(7L, stats, stateWriter, windowMs,
+        return new CdcChangeWindowLogger(7L, stats, stateWriter, taskStore, windowMs,
                 1_000L, clock::get);
     }
 
@@ -107,5 +110,58 @@ class CdcChangeWindowLoggerTest {
 
         verify(stateWriter).recordLog(eq(7L), eq(ObjectType.DATA), eq("T"),
                 eq(ChangeType.INFO), contains("1 upserts"), eq(true), eq(0L), eq(1));
+    }
+
+    @Test
+    void aWindowWithAppliedRowsAdvancesTheLastSyncTimeOncePerFlush() {
+        CdcRuntimeStats stats = new CdcRuntimeStats(clock::get);
+        stats.addTableUpserts("ORDERS", 3);
+        stats.addTableDeletes("ORDERS", 1);
+        stats.addTableUpserts("AUDIT", 2);   // 两表同批落库,只推进一次
+        CdcChangeWindowLogger logger = logger(stats, 10_000L);
+        clock.set(20_000L);
+
+        logger.flushDue();
+
+        verify(taskStore, times(1)).markCdcDataApplied(7L);
+    }
+
+    @Test
+    void anIdleTickDoesNotTouchTheTask() {
+        CdcChangeWindowLogger logger = logger(new CdcRuntimeStats(clock::get), 10_000L);
+        clock.set(20_000L);
+
+        logger.flushDue();
+
+        verify(taskStore, never()).markCdcDataApplied(anyLong());
+    }
+
+    @Test
+    void aFailingLogWriteDoesNotSuppressTheTimestamp() {
+        // 数据已经落进目标库,变更日志写失败只是少了审计记录,不能连带瞒掉「上次同步」。
+        CdcRuntimeStats stats = new CdcRuntimeStats(clock::get);
+        stats.addTableDeletes("ORDERS", 2);
+        doThrow(new RuntimeException("meta DB down")).when(stateWriter)
+                .recordLog(anyLong(), any(), any(), any(), any(),
+                        anyBoolean(), anyLong(), any());
+        CdcChangeWindowLogger logger = logger(stats, 10_000L);
+        clock.set(20_000L);
+
+        logger.flushDue();
+
+        verify(taskStore).markCdcDataApplied(7L);
+    }
+
+    @Test
+    void aFailingTaskWriteDoesNotEscape() {
+        // 时间戳写入同样是旁路:元数据库不可用时消费线程不能被它带崩。
+        CdcRuntimeStats stats = new CdcRuntimeStats(clock::get);
+        stats.addTableUpserts("ORDERS", 1);
+        doThrow(new RuntimeException("meta DB down")).when(taskStore)
+                .markCdcDataApplied(anyLong());
+        CdcChangeWindowLogger logger = logger(stats, 10_000L);
+        clock.set(20_000L);
+
+        assertThatCode(logger::flushDue).doesNotThrowAnyException();
     }
 }
