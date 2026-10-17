@@ -679,4 +679,36 @@ class ProjectServiceTest {
         assertThatCode(() -> service.saveConfig(1L, config)).doesNotThrowAnyException();
         verify(projectRepository).save(any());
     }
+
+    // --- cloning a project -----------------------------------------------------------------
+
+    @Test
+    void copyConfigCopiesTheStoredSyncSettingsVerbatim() {
+        Project source = project(1L);
+        source.setSyncConfig("{\"tables\":[\"A\"],\"tableNameMapping\":{\"A\":\"X\"}}");
+        Project target = project(2L);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(source));
+        when(projectRepository.findById(2L)).thenReturn(Optional.of(target));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.copyConfig(1L, 2L);
+
+        // Verbatim, not re-serialized from a parsed config: fields this version does not
+        // know (a newer version's config) must survive the clone.
+        assertThat(target.getSyncConfig()).isEqualTo(source.getSyncConfig());
+        verify(projectRepository).save(target);
+        // Runtime state belongs to the source's history; the clone starts from zero.
+        verify(progressRepository, never()).findByProjectId(any());
+        verify(checkpointRepository, never()).deleteByProjectId(any());
+    }
+
+    @Test
+    void copyConfigRefusesAnUnknownSource() {
+        when(projectRepository.findById(9L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.copyConfig(9L, 2L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.not.found");
+        verify(projectRepository, never()).save(any());
+    }
 }

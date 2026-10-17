@@ -29,6 +29,8 @@
     <div style="max-width:720px">
         <form method="post" th:action="@{/projects/save}" th:object="${project}">
             <input type="hidden" th:field="*{id}">
+            <!-- 克隆：源项目与同步设置由服务端预填，目标库必须重新选择 -->
+            <input type="hidden" th:if="${copyFrom != null}" name="copyFrom" th:value="${copyFrom}">
 
             <div class="card">
                 <div class="card-head">
@@ -70,6 +72,8 @@
                             </select>
                         </div>
                     </div>
+                    <div class="help" th:if="${copyFrom != null}"
+                         th:text="#{project.clone.targetHint}">Choose a different target for this project.</div>
                     <div class="help" id="endpoint-lock-hint" th:if="${topologyLocked}"
                          th:text="#{project.endpoints.lockedHint}">Stop the project to change
                         the source or target database.</div>

@@ -325,6 +325,27 @@ public class ProjectService {
     }
 
     /**
+     * Copies the stored sync settings of one project onto another (project clone).
+     *
+     * <p>The JSON is copied verbatim rather than re-serialized from a parsed config: that
+     * preserves fields this version does not know, so cloning cannot silently drop a newer
+     * version's settings. Runtime state is not touched — a new project has none, and the
+     * source's cursors describe a different target.
+     */
+    @Transactional
+    public void copyConfig(Long sourceProjectId, Long targetProjectId) {
+        Project source = require(sourceProjectId);
+        Project target = require(targetProjectId);
+        if (source.getId().equals(target.getId())) {
+            return;
+        }
+        target.setSyncConfig(source.getSyncConfig());
+        projectRepository.save(target);
+        log.info("Project '{}' cloned sync settings from project '{}'",
+                target.getName(), source.getName());
+    }
+
+    /**
      * Persists the sync settings and, when {@code captureStrategy} names a strategy other
      * than the row's current one, runs the C2 strategy-switch flow after commit.
      *

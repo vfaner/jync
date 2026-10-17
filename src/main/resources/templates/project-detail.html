@@ -140,6 +140,12 @@
                     <svg class="ico"><use href="#unlock-fill"/></svg>
                     <span th:text="#{project.lock.forceUnlock}">Force unlock</span>
                 </button>
+                <!--/* 克隆一个项目（一个源同步到第二个目标）：复用新建表单，源库与同步设置
+                       由服务端预填，目标库强制重新选择，运行状态不复制。 */-->
+                <a class="btn btn-ghost btn-sm" th:href="@{/projects/new(from=${project.id})}">
+                    <svg class="ico"><use href="#arrow-left-right"/></svg>
+                    <span th:text="#{project.clone}">Clone</span>
+                </a>
             </div>
             <!--/* 停用项目上的重建基线仍会跑完整启动序列,但巡检(sync.cdc.supervise-interval-ms,
                    默认 10s)很快会把消费者再次停掉——把这段「先起后停」明说,别让用户猜。 */-->

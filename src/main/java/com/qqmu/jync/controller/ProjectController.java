@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
@@ -42,22 +44,28 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class ProjectController {
 
+    /** Project names cap at 128 in the service; a clone's suffix must not push past it. */
+    private static final int PROJECT_NAME_MAX_LENGTH = 128;
+
     private final ProjectService projectService;
     private final DatabaseConfigService databaseConfigService;
     private final CdcOperationsService cdcOperationsService;
     private final CdcConsumerManager cdcConsumerManager;
     private final CdcPositionStore cdcPositionStore;
+    private final I18nConfig.MessageSourceAccessorHolder messages;
 
     public ProjectController(ProjectService projectService,
                             DatabaseConfigService databaseConfigService,
                             CdcOperationsService cdcOperationsService,
                             CdcConsumerManager cdcConsumerManager,
-                            CdcPositionStore cdcPositionStore) {
+                            CdcPositionStore cdcPositionStore,
+                            I18nConfig.MessageSourceAccessorHolder messages) {
         this.projectService = projectService;
         this.databaseConfigService = databaseConfigService;
         this.cdcOperationsService = cdcOperationsService;
         this.cdcConsumerManager = cdcConsumerManager;
         this.cdcPositionStore = cdcPositionStore;
+        this.messages = messages;
     }
 
     @GetMapping
@@ -80,12 +88,38 @@ public class ProjectController {
         return "projects";
     }
 
+    /**
+     * New-project form, optionally prefilled from an existing project ({@code ?from=}).
+     *
+     * <p>A clone keeps the source and copies the sync settings on save, but the target is
+     * left blank on purpose: writing the same tables to the same database is exactly what a
+     * second project must not do, and the create form already requires a target.
+     */
     @GetMapping("/new")
-    public String createForm(Model model) {
+    public String createForm(@RequestParam(name = "from", required = false) Long from,
+                             Model model) {
         Project project = new Project();
+        Project source = from == null ? null : projectService.findById(from).orElse(null);
+        if (source != null) {
+            project.setName(cloneName(source.getName()));
+            project.setDescription(source.getDescription());
+            project.setSourceDbId(source.getSourceDbId());
+            model.addAttribute("copyFrom", source.getId());
+        }
         model.addAttribute("project", project);
         addDatabaseOptions(model, project);
         return "project-form";
+    }
+
+    /** The source name plus the localized "(copy)" suffix, capped at the column length. */
+    private String cloneName(String sourceName) {
+        String base = sourceName == null ? "" : sourceName;
+        String suffix = messages.get("project.clone.nameSuffix",
+                LocaleContextHolder.getLocale());
+        if (base.length() + suffix.length() > PROJECT_NAME_MAX_LENGTH) {
+            base = base.substring(0, PROJECT_NAME_MAX_LENGTH - suffix.length());
+        }
+        return base + suffix;
     }
 
     @GetMapping("/{id}/edit")
@@ -124,9 +158,16 @@ public class ProjectController {
     }
 
     @PostMapping("/save")
-    public String save(@ModelAttribute Project project, RedirectAttributes flash) {
+    public String save(@ModelAttribute Project project,
+                       @RequestParam(name = "copyFrom", required = false) Long copyFrom,
+                       RedirectAttributes flash) {
         try {
             Project saved = projectService.save(project);
+            if (copyFrom != null) {
+                // After the row exists: the settings live on the new project, and the copy is
+                // verbatim so fields this version does not know survive.
+                projectService.copyConfig(copyFrom, saved.getId());
+            }
             flash.addFlashAttribute("message", "msg.project.saved");
             return "redirect:/projects/" + saved.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
