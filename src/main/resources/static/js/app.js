@@ -1095,6 +1095,12 @@
           return;
         }
         renderPreview(payload.preview);
+      }).catch(function () {
+        // getJson() only normalizes 401 and non-JSON responses; a fetch rejection (the
+        // server went away mid-request) still lands here. Without this the modal stays on
+        // "Loading..." forever.
+        body.innerHTML = '';
+        body.appendChild(textBlock(t('error.unexpected'), 'alert alert-danger'));
       });
     });
   }
