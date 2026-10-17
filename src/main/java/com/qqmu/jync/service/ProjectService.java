@@ -22,8 +22,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -326,24 +329,55 @@ public class ProjectService {
     }
 
     /**
-     * Copies the stored sync settings of one project onto another (project clone).
+     * Creates a new project carrying the stored sync settings of {@code sourceProjectId}.
      *
-     * <p>The JSON is copied verbatim rather than re-serialized from a parsed config: that
-     * preserves fields this version does not know, so cloning cannot silently drop a newer
-     * version's settings. Runtime state is not touched — a new project has none, and the
-     * source's cursors describe a different target.
+     * <p>One save in one transaction: the row and its settings commit together, so a failure
+     * cannot leave an empty project behind. The JSON is copied verbatim rather than
+     * re-serialized from a parsed config, so fields this version does not know survive —
+     * except {@code truncateBeforeInitialLoad}, which is forced off (see
+     * {@link #cloneSettings(Project)}). Runtime state is not touched: a new project has none,
+     * and the source's cursors describe a different target.
      */
     @Transactional
-    public void copyConfig(Long sourceProjectId, Long targetProjectId) {
+    public Project saveAsClone(Project clone, Long sourceProjectId) {
         Project source = require(sourceProjectId);
-        Project target = require(targetProjectId);
-        if (source.getId().equals(target.getId())) {
-            return;
-        }
-        target.setSyncConfig(source.getSyncConfig());
-        projectRepository.save(target);
+        clone.setSyncConfig(cloneSettings(source));
         log.info("Project '{}' cloned sync settings from project '{}'",
-                target.getName(), source.getName());
+                clone.getName(), source.getName());
+        return save(clone);
+    }
+
+    /**
+     * The source's stored settings, with {@code truncateBeforeInitialLoad} forced off.
+     *
+     * <p>That flag empties the target on the clone's first run. Copied verbatim it turns
+     * "duplicate this project" into a one-click wipe of a database the user may not have
+     * meant to touch; the other destructive flags describe ongoing behavior and stay.
+     *
+     * <p>Read and written as a tree so fields this version does not know survive; the
+     * string is returned untouched when there is nothing to reset.
+     */
+    private static String cloneSettings(Project source) {
+        String json = source.getSyncConfig();
+        if (json == null || json.isBlank()) {
+            return json;
+        }
+        try {
+            JsonNode node = STRATEGY_JSON.readTree(json);
+            if (node instanceof ObjectNode object
+                    && object.path("truncateBeforeInitialLoad").asBoolean(false)) {
+                object.put("truncateBeforeInitialLoad", false);
+                return STRATEGY_JSON.writeValueAsString(object);
+            }
+            return json;
+        } catch (JsonProcessingException e) {
+            // A config this version cannot parse is copied verbatim — the behavior before
+            // the clone feature existed. Refusing the clone would be worse: the user can
+            // still repair the copied JSON afterwards.
+            log.warn("Stored sync settings of project '{}' are not valid JSON; copying verbatim",
+                    source.getName());
+            return json;
+        }
     }
 
     /**

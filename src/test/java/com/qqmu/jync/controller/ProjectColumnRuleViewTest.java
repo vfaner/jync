@@ -120,6 +120,116 @@ class ProjectColumnRuleViewTest {
         verify(projectService, never()).saveConfig(anyLong(), any());
     }
 
+    /**
+     * A replacement is parsed lazily, at the first match — so an invalid one is accepted at
+     * save time today and then fails every sync cycle. The missing-group case is the common
+     * typo ({@code $1} without a capture group in the pattern).
+     */
+    @Test
+    void aReplacementReferencingAMissingGroupIsRefusedWithoutSaving() throws Exception {
+        storedConfig(false);
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "phone")
+                        .param("ruleType", "REGEX_REPLACE")
+                        .param("ruleArg", "\\d+")
+                        .param("ruleReplacement", "$1"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(flash().attribute("error", "error.columnrule.replacement.invalid"));
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    @Test
+    void aReplacementEndingInABackslashIsRefusedWithoutSaving() throws Exception {
+        storedConfig(false);
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "phone")
+                        .param("ruleType", "REGEX_REPLACE")
+                        .param("ruleArg", "\\d+")
+                        .param("ruleReplacement", "\\"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(flash().attribute("error", "error.columnrule.replacement.invalid"));
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    /**
+     * Java backs a numeric reference off to a shorter prefix when the full digit run is not
+     * a group: with one group, {@code $12} means group 1 followed by a literal "2".
+     * Rejecting it would refuse a replacement that works at sync time.
+     */
+    @Test
+    void aNumericReferenceMayUseAGroupPrefixOfTheDigitRun() throws Exception {
+        SyncConfig config = storedConfig(false);
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "phone")
+                        .param("ruleType", "REGEX_REPLACE")
+                        .param("ruleArg", "(\\d+)")
+                        .param("ruleReplacement", "$12"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(projectService).saveConfig(eq(1L), any());
+        assertThat(config.getColumnRules()).hasSize(1);
+        assertThat(config.getColumnRules().get(0).getReplacement()).isEqualTo("$12");
+    }
+
+    /** {@code ${1}} is a NAMED reference in Java; a digit-starting name is an error. */
+    @Test
+    void aBracedNumericGroupReferenceIsRefusedWithoutSaving() throws Exception {
+        storedConfig(false);
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "phone")
+                        .param("ruleType", "REGEX_REPLACE")
+                        .param("ruleArg", "(\\d+)")
+                        .param("ruleReplacement", "${1}"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(flash().attribute("error", "error.columnrule.replacement.invalid"));
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    /** A group number too large for an int must be a validation message, not a 500. */
+    @Test
+    void anOverlongGroupNumberIsRefusedWithoutSaving() throws Exception {
+        storedConfig(false);
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "phone")
+                        .param("ruleType", "REGEX_REPLACE")
+                        .param("ruleArg", "\\d+")
+                        .param("ruleReplacement", "$99999999999999999999"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(flash().attribute("error", "error.columnrule.replacement.invalid"));
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    @Test
+    void aReplacementReferencingAnExistingGroupIsSaved() throws Exception {
+        SyncConfig config = storedConfig(false);
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "phone")
+                        .param("ruleType", "REGEX_REPLACE")
+                        .param("ruleArg", "(\\d+)")
+                        .param("ruleReplacement", "[$1]"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(projectService).saveConfig(eq(1L), any());
+        assertThat(config.getColumnRules()).hasSize(1);
+        assertThat(config.getColumnRules().get(0).getReplacement()).isEqualTo("[$1]");
+    }
+
     @Test
     void aRuleMissingItsArgumentIsRefusedWithoutSaving() throws Exception {
         storedConfig(false);

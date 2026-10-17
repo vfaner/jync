@@ -164,12 +164,11 @@ public class ProjectController {
                        @RequestParam(name = "copyFrom", required = false) Long copyFrom,
                        RedirectAttributes flash) {
         try {
-            Project saved = projectService.save(project);
-            if (copyFrom != null) {
-                // After the row exists: the settings live on the new project, and the copy is
-                // verbatim so fields this version does not know survive.
-                projectService.copyConfig(copyFrom, saved.getId());
-            }
+            // The clone is created and its settings copied in one transaction; a failure
+            // leaves neither an empty project nor a half-initialized one behind.
+            Project saved = copyFrom != null
+                    ? projectService.saveAsClone(project, copyFrom)
+                    : projectService.save(project);
             flash.addFlashAttribute("message", "msg.project.saved");
             return "redirect:/projects/" + saved.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -495,7 +494,8 @@ public class ProjectController {
             }
             ColumnRuleType type = parseRuleType(ruleType);
             String arg = trimToNull(ruleArg);
-            String invalid = validateRuleArgs(type, arg);
+            String replacement = trimToNull(ruleReplacement);
+            String invalid = validateRuleArgs(type, arg, replacement);
             if (invalid != null) {
                 flash.addFlashAttribute("error", invalid);
                 return "redirect:/projects/" + id;
@@ -506,7 +506,7 @@ public class ProjectController {
             rule.setColumn(column);
             rule.setType(type);
             rule.setArg(arg);
-            rule.setReplacement(trimToNull(ruleReplacement));
+            rule.setReplacement(replacement);
             config.getColumnRules().add(rule);
             projectService.saveConfig(id, config);
             flash.addFlashAttribute("message", "msg.columnrule.saved");
@@ -555,7 +555,7 @@ public class ProjectController {
     }
 
     /** Returns the message key for an invalid argument, or null when the rule is usable. */
-    private static String validateRuleArgs(ColumnRuleType type, String arg) {
+    private static String validateRuleArgs(ColumnRuleType type, String arg, String replacement) {
         boolean requiresArg = type == ColumnRuleType.STRIP_PREFIX
                 || type == ColumnRuleType.STRIP_SUFFIX
                 || type == ColumnRuleType.REGEX_REPLACE;
@@ -563,13 +563,111 @@ public class ProjectController {
             return "error.columnrule.arg.required";
         }
         if (type == ColumnRuleType.REGEX_REPLACE) {
+            java.util.regex.Pattern pattern;
             try {
-                java.util.regex.Pattern.compile(arg);
+                pattern = java.util.regex.Pattern.compile(arg);
             } catch (java.util.regex.PatternSyntaxException e) {
                 return "error.columnrule.regex.invalid";
             }
+            // Matcher parses the replacement lazily, at the first match; an invalid one would
+            // therefore save cleanly and then fail every sync cycle. Validate the syntax here.
+            if (!isValidReplacement(pattern, replacement)) {
+                return "error.columnrule.replacement.invalid";
+            }
         }
         return null;
+    }
+
+    /**
+     * Mirrors the parts of {@link java.util.regex.Matcher#appendReplacement} that can fail:
+     * a trailing backslash, a {@code $} without a group reference, and a reference to a group
+     * the pattern does not define. Escaped characters ({@code \$}, {@code \\}) are literal.
+     */
+    private static boolean isValidReplacement(java.util.regex.Pattern pattern, String replacement) {
+        if (replacement == null) {
+            return true;
+        }
+        int groupCount = pattern.matcher("").groupCount();
+        java.util.Set<String> namedGroups = namedGroups(pattern);
+        for (int i = 0; i < replacement.length(); i++) {
+            char c = replacement.charAt(i);
+            if (c == '\\') {
+                if (++i >= replacement.length()) {
+                    return false;
+                }
+                continue;
+            }
+            if (c != '$') {
+                continue;
+            }
+            if (++i >= replacement.length()) {
+                return false;
+            }
+            char next = replacement.charAt(i);
+            if (next == '{') {
+                int close = replacement.indexOf('}', i);
+                if (close < 0) {
+                    return false;
+                }
+                // Java reads ${...} as a NAMED group only; even ${1} is an error.
+                if (!namedGroups.contains(replacement.substring(i + 1, close))) {
+                    return false;
+                }
+                i = close;
+            } else if (Character.isDigit(next)) {
+                int end = i;
+                while (end + 1 < replacement.length()
+                        && Character.isDigit(replacement.charAt(end + 1))) {
+                    end++;
+                }
+                if (!hasValidGroupPrefix(replacement, i, end, groupCount)) {
+                    return false;
+                }
+                i = end;
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether the digit run contains a group reference Java accepts.
+     *
+     * <p>Java consumes the whole run and, when that number exceeds the group count, backs off
+     * one digit at a time until the remaining prefix is a valid group; the dropped digits are
+     * literal ("$12" with one group is group 1 followed by "2"). Parsed without an int to
+     * keep an overlong run ({@code $99999999999999999999}) a validation error, not a 500.
+     */
+    private static boolean hasValidGroupPrefix(String replacement, int from, int to,
+                                               int groupCount) {
+        for (int end = to; end >= from; end--) {
+            long value = 0;
+            boolean overflow = false;
+            for (int i = from; i <= end; i++) {
+                value = value * 10 + (replacement.charAt(i) - '0');
+                if (value > Integer.MAX_VALUE) {
+                    overflow = true;
+                    break;
+                }
+            }
+            if (!overflow && value <= groupCount) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Named groups the pattern defines; lookbehind's {@code (?<=}/{@code (?<!} is excluded. */
+    private static java.util.Set<String> namedGroups(java.util.regex.Pattern pattern) {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\\(\\?<([a-zA-Z][a-zA-Z0-9]*)>")
+                .matcher(pattern.pattern());
+        while (m.find()) {
+            names.add(m.group(1));
+        }
+        return names;
     }
 
     private static String trimToNull(String value) {

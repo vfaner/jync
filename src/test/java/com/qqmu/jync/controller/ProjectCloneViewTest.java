@@ -2,6 +2,8 @@ package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -116,7 +118,7 @@ class ProjectCloneViewTest {
     void savingTheCloneCopiesTheSourceSettingsOntoTheNewProject() throws Exception {
         Project saved = new Project();
         saved.setId(2L);
-        when(projectService.save(any())).thenReturn(saved);
+        when(projectService.saveAsClone(any(), eq(1L))).thenReturn(saved);
 
         mvc.perform(post("/projects/save").with(asAdmin()).with(csrf())
                         .param("name", "proj (copy)")
@@ -125,9 +127,11 @@ class ProjectCloneViewTest {
                         .param("copyFrom", "1"))
                 .andExpect(status().is3xxRedirection());
 
-        // After the row exists, copy the stored sync settings verbatim. Runtime state is
-        // not copied because a brand-new project has none — and must start from zero.
-        verify(projectService).copyConfig(1L, 2L);
+        // Creating the row and copying the settings is one service call (one transaction).
+        // Runtime state is not copied because a brand-new project has none — and must start
+        // from zero.
+        verify(projectService).saveAsClone(any(), eq(1L));
+        verify(projectService, never()).save(any());
     }
 
     @Test

@@ -694,30 +694,60 @@ class ProjectServiceTest {
     // --- cloning a project -----------------------------------------------------------------
 
     @Test
-    void copyConfigCopiesTheStoredSyncSettingsVerbatim() {
+    void saveAsCloneCopiesTheStoredSettingsVerbatimWhenNothingNeedsResetting() {
         Project source = project(1L);
         source.setSyncConfig("{\"tables\":[\"A\"],\"tableNameMapping\":{\"A\":\"X\"}}");
-        Project target = project(2L);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(source));
-        when(projectRepository.findById(2L)).thenReturn(Optional.of(target));
         when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        Project clone = project(null);
+        clone.setName("proj (copy)");
 
-        service.copyConfig(1L, 2L);
+        Project saved = service.saveAsClone(clone, 1L);
 
         // Verbatim, not re-serialized from a parsed config: fields this version does not
         // know (a newer version's config) must survive the clone.
-        assertThat(target.getSyncConfig()).isEqualTo(source.getSyncConfig());
-        verify(projectRepository).save(target);
+        assertThat(saved.getSyncConfig()).isEqualTo(source.getSyncConfig());
+        // One save: the row and its settings commit together, so a failed clone cannot
+        // leave an empty project behind.
+        verify(projectRepository, org.mockito.Mockito.times(1)).save(any());
         // Runtime state belongs to the source's history; the clone starts from zero.
         verify(progressRepository, never()).findByProjectId(any());
         verify(checkpointRepository, never()).deleteByProjectId(any());
     }
 
+    /**
+     * {@code truncateBeforeInitialLoad} empties the target table on the clone's very first
+     * run. Carried over from the source it is a one-click data wipe on a database the user
+     * may not have meant to touch — the other destructive flags describe ongoing behavior
+     * (drop columns on a detected diff, mirror deletions) and stay part of the copied config.
+     */
     @Test
-    void copyConfigRefusesAnUnknownSource() {
-        when(projectRepository.findById(9L)).thenReturn(Optional.empty());
+    void saveAsCloneForcesTruncateBeforeTheFirstLoadOff() throws Exception {
+        Project source = project(1L);
+        source.setSyncConfig("{\"tables\":[\"A\"],\"truncateBeforeInitialLoad\":true,"
+                + "\"futureField\":{\"k\":1}}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(source));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        Project clone = project(null);
+        clone.setName("proj (copy)");
 
-        assertThatThrownBy(() -> service.copyConfig(9L, 2L))
+        Project saved = service.saveAsClone(clone, 1L);
+
+        com.fasterxml.jackson.databind.JsonNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
+        assertThat(node.path("truncateBeforeInitialLoad").asBoolean()).isFalse();
+        // Unknown-to-this-version fields survive the reset.
+        assertThat(node.path("futureField").path("k").asInt()).isEqualTo(1);
+        assertThat(node.path("tables").get(0).asText()).isEqualTo("A");
+    }
+
+    @Test
+    void saveAsCloneRefusesAnUnknownSourceWithoutSaving() {
+        when(projectRepository.findById(9L)).thenReturn(Optional.empty());
+        Project clone = project(null);
+        clone.setName("proj (copy)");
+
+        assertThatThrownBy(() -> service.saveAsClone(clone, 9L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.not.found");
         verify(projectRepository, never()).save(any());
