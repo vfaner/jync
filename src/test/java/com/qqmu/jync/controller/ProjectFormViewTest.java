@@ -120,4 +120,48 @@ class ProjectFormViewTest {
         assertThat(sourceSelect).contains("misfiled");
         assertThat(sourceSelect).containsPattern("value=\"99\"[^>]*selected");
     }
+
+    @Test
+    void aRunningProjectShowsTheEndpointLockHint() throws Exception {
+        Project project = new Project();
+        project.setId(8L);
+        project.setName("orders");
+        project.setSourceDbId(1L);
+        project.setTargetDbId(2L);
+        when(projectService.findById(8L)).thenReturn(Optional.of(project));
+        when(projectService.isRunning(project)).thenReturn(true);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(config(1L, "src", ConnectionRole.SOURCE)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET))
+                .thenReturn(List.of(config(2L, "tgt", ConnectionRole.TARGET)));
+
+        String page = mvc.perform(get("/projects/8/edit").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The backend refuses the change anyway; the hint keeps the user from filling in
+        // a whole edit (and losing a real save) before the error appears.
+        assertThat(page).contains("id=\"endpoint-lock-hint\"");
+    }
+
+    @Test
+    void aStoppedProjectShowsNoEndpointLockHint() throws Exception {
+        Project project = new Project();
+        project.setId(8L);
+        project.setName("orders");
+        project.setSourceDbId(1L);
+        project.setTargetDbId(2L);
+        when(projectService.findById(8L)).thenReturn(Optional.of(project));
+        when(projectService.isRunning(project)).thenReturn(false);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(config(1L, "src", ConnectionRole.SOURCE)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET))
+                .thenReturn(List.of(config(2L, "tgt", ConnectionRole.TARGET)));
+
+        String page = mvc.perform(get("/projects/8/edit").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).doesNotContain("endpoint-lock-hint");
+    }
 }

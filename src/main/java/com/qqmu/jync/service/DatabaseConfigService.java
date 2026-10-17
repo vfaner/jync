@@ -98,6 +98,18 @@ public class DatabaseConfigService {
         if (config.getId() != null) {
             DatabaseConfig existing = repository.findById(config.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.connection.not.found"));
+            // Saving evicts the cached pool. Under a running project that means the next
+            // acquisition in an in-flight cycle switches host/credentials mid-run, and a CDC
+            // consumer keeps its old config snapshot until restarted — the UI would claim a
+            // connection the consumer is not using. Refuse until the project is stopped.
+            List<Project> running = projectRepository
+                    .findBySourceDbIdOrTargetDbId(config.getId(), config.getId()).stream()
+                    .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
+                    .toList();
+            if (!running.isEmpty()) {
+                throw new IllegalStateException(
+                        "error.connection.edit.running:" + joinNames(running));
+            }
             if (existing.getRole() != null && existing.getRole() != config.getRole()) {
                 // Reclassifying a connection that projects already depend on would silently
                 // remove it from the project form's selector on the other side.

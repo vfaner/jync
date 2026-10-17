@@ -3,11 +3,14 @@ package com.qqmu.jync.service;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 import org.quartz.CronExpression;
 import org.springframework.data.domain.PageRequest;
@@ -258,6 +261,7 @@ public class ProjectService {
         }
 
         boolean isNew = project.getId() == null;
+        boolean endpointsChanged = false;
         if (isNew) {
             // The create form carries no start switch: projects always start life stopped and
             // are later enabled through the explicit start action. A bound enabled=true from
@@ -265,17 +269,37 @@ public class ProjectService {
             project.setEnabled(false);
         }
         if (!isNew) {
-            // The edit form only carries the descriptive fields; enabled, syncConfig and
-            // createdAt live on the row, so a stale tab submitting this form must neither
-            // stop a running project nor null out columns the form never contained.
-            // Start/stop go through their own methods below and are unaffected.
+            // enabled, syncConfig and createdAt are not the form's to set: a stale tab
+            // submitting this form must neither stop a running project nor null out columns
+            // the form never contained. Start/stop go through their own methods below.
             Project existing = require(project.getId());
+            endpointsChanged = !Objects.equals(project.getSourceDbId(), existing.getSourceDbId())
+                    || !Objects.equals(project.getTargetDbId(), existing.getTargetDbId());
+            if (endpointsChanged && isRunning(existing)) {
+                // The running cycle (or live CDC consumer) holds the old endpoints; switching
+                // them mid-flight would read one database and write another within a single
+                // run. Stop the project first.
+                throw new IllegalStateException("error.project.edit.running");
+            }
             project.setEnabled(existing.getEnabled());
             project.setSyncConfig(existing.getSyncConfig());
             project.setCreatedAt(existing.getCreatedAt());
         }
         Project saved = projectRepository.save(project);
         taskStore.ensureTask(saved);
+        if (endpointsChanged) {
+            // Cursors, chunk checkpoints, structure snapshots and the CDC position all
+            // describe the OLD source/target pair. Carried into the new pair they make the
+            // next run start from another database's watermark, silently skipping rows (and
+            // a new target would never get its history). Clear them so the next start is a
+            // full reload — the same state resetProgress() performs, just implied by the
+            // endpoint change instead of requested explicitly.
+            syncEngine.resetProject(saved.getId());
+            checkpointRepository.deleteByProjectId(saved.getId());
+            positionStore.delete(saved.getId());
+            log.info("Project '{}' endpoints changed; sync state cleared for a full reload",
+                    saved.getName());
+        }
         // Inside the same transaction: the audit row commits with the change it describes
         // and rolls back with it, so the trail never claims a save that did not happen.
         auditService.record(AuditAction.PROJECT_SAVE,
@@ -355,6 +379,15 @@ public class ProjectService {
             }
             config.setCaptureStrategy(requested);
         }
+        // Table selection and name mapping are topology: changing them under a running
+        // cycle makes it copy tables the old schedule never promised, and per-table cursors
+        // are keyed by the OLD name. A strategy switch is exempt — that flow stops the
+        // engine and clears its cursors in both directions by design.
+        boolean switching = requested != null && requested != oldStrategy;
+        if (!switching && mappingChanged(parseConfigLenient(project.getSyncConfig()), config)
+                && isRunning(project)) {
+            throw new IllegalStateException("error.project.mapping.running");
+        }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         Project saved = projectRepository.save(project);
         if (requested != null && requested != oldStrategy) {
@@ -419,6 +452,49 @@ public class ProjectService {
             stateWriter.clearCursor(projectId);
             scheduler.reschedule(project);
         }
+    }
+
+    /**
+     * A project counts as running while its durable enabled flag is set, or while a live
+     * cycle still holds its lease. An expired lease is not running — the holder is gone and
+     * the documented remedy is force-unlock/TTL reclaim, not an edit blocked forever.
+     */
+    public boolean isRunning(Project project) {
+        if (Boolean.TRUE.equals(project.getEnabled())) {
+            return true;
+        }
+        SyncTask task = taskStore.find(project.getId()).orElse(null);
+        if (task == null || task.getLockOwner() == null) {
+            return false;
+        }
+        return task.getLockExpiresAt() == null
+                || task.getLockExpiresAt().isAfter(Instant.now());
+    }
+
+    /** Full config parse of the persisted JSON; null when absent or unreadable. */
+    private static SyncConfig parseConfigLenient(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return STRATEGY_JSON.readValue(json, SyncConfig.class);
+        } catch (IOException | RuntimeException e) {
+            log.warn("Unreadable sync_config while comparing table mappings: {}",
+                    e.getMessage());
+            return null;
+        }
+    }
+
+    /** Table selection or name mapping differs from what the row last persisted. */
+    private static boolean mappingChanged(SyncConfig previous, SyncConfig next) {
+        Set<String> oldTables = previous == null || previous.getTables() == null
+                ? Set.of() : previous.getTables();
+        Set<String> newTables = next.getTables() == null ? Set.of() : next.getTables();
+        Map<String, String> oldNames = previous == null || previous.getTableNameMapping() == null
+                ? Map.of() : previous.getTableNameMapping();
+        Map<String, String> newNames = next.getTableNameMapping() == null
+                ? Map.of() : next.getTableNameMapping();
+        return !oldTables.equals(newTables) || !oldNames.equals(newNames);
     }
 
     /** Corrupt or absent sync_config degrades to POLLING, matching CdcConsumerManager. */

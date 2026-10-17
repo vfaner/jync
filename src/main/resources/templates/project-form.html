@@ -70,6 +70,9 @@
                             </select>
                         </div>
                     </div>
+                    <div class="help" id="endpoint-lock-hint" th:if="${topologyLocked}"
+                         th:text="#{project.endpoints.lockedHint}">Stop the project to change
+                        the source or target database.</div>
                 </div>
                 <div class="card-foot btn-row">
                     <button type="submit" class="btn btn-primary">

@@ -502,4 +502,146 @@ class ProjectServiceTest {
         verify(cdcManager).ensureStopped(7L);
         verify(taskStore).markStopped(7L);
     }
+
+    // --- running-state topology guards ------------------------------------------------------
+
+    private Project storedProject(Long id, boolean enabled) {
+        Project p = project(id);
+        p.setEnabled(enabled);
+        p.setSourceDbId(10L);
+        p.setTargetDbId(20L);
+        return p;
+    }
+
+    private Project formProject(Long id) {
+        Project p = project(id);
+        p.setSourceDbId(10L);
+        p.setTargetDbId(20L);
+        return p;
+    }
+
+    private void stubExisting(Project existing) {
+        stubLookup(existing);
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    /** Only the lookups: refusal paths must not leave an unused save() stub behind. */
+    private void stubLookup(Project existing) {
+        when(projectRepository.findByName(existing.getName())).thenReturn(Optional.empty());
+        when(projectRepository.findById(existing.getId())).thenReturn(Optional.of(existing));
+    }
+
+    @Test
+    void changingEndpointsWhileEnabledIsRefusedBeforeAnythingIsPersisted() {
+        Project existing = storedProject(1L, true);
+        stubLookup(existing);
+        Project incoming = formProject(1L);
+        incoming.setSourceDbId(11L);   // 换了源库
+
+        assertThatThrownBy(() -> service.save(incoming))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.edit.running");
+        verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    void changingEndpointsWhileALiveCycleHoldsTheLeaseIsRefused() {
+        Project existing = storedProject(1L, false);
+        stubLookup(existing);
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a:8081");
+        running.setLockExpiresAt(Instant.now().plusSeconds(60));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        Project incoming = formProject(1L);
+        incoming.setTargetDbId(21L);
+
+        assertThatThrownBy(() -> service.save(incoming))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.edit.running");
+        verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    void editingDescriptiveFieldsWhileEnabledStillSaves() {
+        Project existing = storedProject(1L, true);
+        stubExisting(existing);
+        Project incoming = formProject(1L);
+        incoming.setDescription("备注改一下");
+
+        assertThatCode(() -> service.save(incoming)).doesNotThrowAnyException();
+        verify(projectRepository).save(any());
+        verify(syncEngine, never()).resetProject(any());
+    }
+
+    @Test
+    void changingEndpointsWhileStoppedClearsTheOldPairsSyncState() {
+        Project existing = storedProject(1L, false);
+        stubExisting(existing);
+        Project incoming = formProject(1L);
+        incoming.setSourceDbId(11L);
+        incoming.setTargetDbId(21L);
+
+        service.save(incoming);
+
+        // 游标/检查点/快照/CDC 位点描述的是旧端点组合,换库后必须全部作废,否则下次
+        // 增量会拿旧游标读新库,静默漏数据。
+        verify(syncEngine).resetProject(1L);
+        verify(checkpointRepository).deleteByProjectId(1L);
+        verify(positionStore).delete(1L);
+    }
+
+    @Test
+    void keepingTheSameEndpointsDoesNotClearSyncState() {
+        Project existing = storedProject(1L, false);
+        stubExisting(existing);
+
+        service.save(formProject(1L));
+
+        verify(syncEngine, never()).resetProject(any());
+        verify(checkpointRepository, never()).deleteByProjectId(any());
+        verify(positionStore, never()).delete(any());
+    }
+
+    @Test
+    void changingTheTableSelectionWhileEnabledIsRefused() {
+        Project existing = storedProject(1L, true);
+        existing.setSyncConfig("{\"tables\":[\"A\"]}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("B")));
+
+        assertThatThrownBy(() -> service.saveConfig(1L, config))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.mapping.running");
+        verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    void changingTheTableMappingWhileEnabledIsRefused() {
+        Project existing = storedProject(1L, true);
+        existing.setSyncConfig("{\"tableNameMapping\":{\"A\":\"X\"}}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        SyncConfig config = new SyncConfig();
+        config.getTableNameMapping().put("A", "Y");
+
+        assertThatThrownBy(() -> service.saveConfig(1L, config))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.mapping.running");
+        verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    void anUnchangedMappingStillSavesWhileEnabled() {
+        Project existing = storedProject(1L, true);
+        existing.setSyncConfig("{\"tables\":[\"A\"]}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(contextFactory.serializeConfig(any())).thenReturn("{\"tables\":[\"A\"]}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("A")));
+        config.setCronExpression("0 0/30 * * * ?");
+
+        assertThatCode(() -> service.saveConfig(1L, config)).doesNotThrowAnyException();
+        verify(projectRepository).save(any());
+    }
 }

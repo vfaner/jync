@@ -92,6 +92,9 @@ public class ProjectController {
     public String editForm(@PathVariable Long id, Model model, RedirectAttributes flash) {
         return projectService.findById(id).map(project -> {
             model.addAttribute("project", project);
+            // The service refuses an endpoint switch while running; the form shows the same
+            // verdict up front so the user does not fill in a whole edit that cannot save.
+            model.addAttribute("topologyLocked", projectService.isRunning(project));
             addDatabaseOptions(model, project);
             return "project-form";
         }).orElseGet(() -> {

@@ -21,4 +21,12 @@ public interface ChunkCheckpointRepository extends JpaRepository<ChunkCheckpoint
 
     @Transactional
     void deleteByProjectIdAndTableName(Long projectId, String tableName);
+
+    /**
+     * Drops every resume point of the project. Used when the project's endpoints change:
+     * checkpoints describe chunk ranges of the OLD source and must not seed a load from
+     * the new one.
+     */
+    @Transactional
+    void deleteByProjectId(Long projectId);
 }
