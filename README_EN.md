@@ -14,16 +14,26 @@
 
 A ready-to-run web application that keeps **schema and data** in sync **across heterogeneous databases** in real time. Start a single jar, click a few times in your browser, and **any two of the 17 built-in database types (plus a custom type)** form a continuous sync link — Oracle → PostgreSQL and MySQL → Dameng are just two examples among them — **no Kafka, no ZooKeeper, not a single line of code.**
 
-- Repository: <https://github.com/vfaner/jync>
-- China mirror: <https://gitee.com/super_rgh/jync>
-- Demo video: <https://www.bilibili.com/video/BV1iHYJ6vEEd> (Bilibili, ~10 min; narration in Chinese)
+- Releases: GitHub <https://github.com/vfaner/jync/releases/latest> · Gitee <https://gitee.com/super_rgh/jync/releases/latest>
+- Website: <https://jync.qqmu.com>
+- Demo video: <https://www.bilibili.com/video/BV1iHYJ6vEEd> (Bilibili, ~14 min; narration in Chinese)
 
 Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz scheduling + embedded H2 metadata store. **Zero external dependencies, fully usable on an air-gapped intranet.**
 
 ---
 
+## Project Background
+
+- **Grown out of real migration projects.** In domestic IT localization (信创) programs, existing MySQL / Oracle / SQL Server databases must move to Chinese databases and then stay consistent for the long term. Commercial sync tools charge per node; open-source options such as Debezium require a full Kafka stack first — both the deployment and the operations burden are substantial.
+- **Turning synchronization into deliverable software.** We distilled the sync logic used repeatedly in internal projects into a single-jar web application: implementation engineers create connections, pick tables and start syncing from a browser, without writing job scripts or maintaining a message queue.
+- **Domestic databases as first-class citizens.** Dameng, KingBase, OceanBase, TiDB, HighGo, Vastbase, YashanDB, GBase, Oscar and OpenGauss all have dedicated dialect implementations, with Chinese-first UI and documentation.
+- **Domestic open source, privately deployable.** Released under the MIT License: auditable, free of cloud dependencies, and suitable for air-gapped and localized environments. Maintained by **Mumu Open Source Workshop (沐沐开源工坊)**; official website <https://jync.qqmu.com>.
+
+---
+
 ## Table of Contents
 
+- [Project Background](#project-background)
 - [Screenshots](#screenshots)
 - [Features](#features)
 - [Comparison With Existing Tools](#comparison-with-existing-tools)
@@ -31,6 +41,7 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 - [Deployment](#deployment)
 - [Login & Roles](#login--roles)
 - [Workflow](#workflow)
+- [Data Preview, Project Cloning & Column Cleansing](#data-preview-project-cloning--column-cleansing)
 - [Concurrency & Consistency Design](#concurrency--consistency-design)
 - [Incremental Detection Strategies](#incremental-detection-strategies)
 - [Binlog CDC (MySQL)](#binlog-cdc-mysql)
@@ -40,6 +51,7 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 - [Configuration](#configuration)
 - [AI-Assisted Conversion (optional)](#ai-assisted-conversion-optional)
 - [Architecture](#architecture)
+- [Documentation](#documentation)
 - [Tests](#tests)
 - [Known Limitations](#known-limitations)
 - [License](#license)
@@ -209,6 +221,7 @@ Typography uses the system font stack (`PingFang SC` / `Microsoft YaHei` / …) 
 | **Deployment** | **One jar** | Kafka + Connect + ZK/KRaft | Canal Server (+MQ) | Flink cluster (JM/TM) | CLI scripts | Desktop + repository | Engine on every node | Desktop client |
 | **External deps** | **None** | Kafka, ZooKeeper | ZooKeeper (cluster) | Flink, checkpoint store | None (but JSON jobs) | JVM + plugins | Triggers in source DB | None |
 | **How you configure it** | **Click in a web UI** | YAML/REST + consumer code | Config file + client code | SQL/DataStream code | JSON job files | Drag-and-drop ETL | properties + create triggers | Wizard |
+| **Time to first sync** | **Minutes** — download the jar, start, click | Days — stand up Kafka first, then write consumer code | Hours — server + client code | Days — Flink concepts and code | Hours — hand-written JSON jobs | Days — ETL job/transformation model | Hours — properties + triggers | Minutes — wizard, but one-shot only |
 | **Continuous incremental sync** | Supported: polling/Cron & log CDC (MySQL binlog, Oracle LogMiner) | Supported: log-based | Supported: binlog | Supported: log-based | N/A (one-shot batch by design) | Partial (roll your own scheduling & delta logic) | Supported: trigger-based | N/A (one-shot transfer by design) |
 | **Schema (DDL) sync** | Supported: **auto-creates tables/indexes/views/procs** | Partial (emits DDL events; applying them is your job) | Partial (events only) | Partial (custom code) | Not supported (tables must pre-exist) | Partial (manual mapping) | Partial | Supported (one-shot only) |
 | **Heterogeneous dialect conversion** | Supported: types/functions/quoting/paging/procs | Not supported (positioned as event output; conversion is the consumer's job) | Not supported (positioned as binlog subscription; no dialect conversion) | Partial | Partial (limited type mapping) | Partial (manual) | Partial | Partial (one-shot mapping) |
@@ -221,25 +234,29 @@ Typography uses the system font stack (`PingFang SC` / `Microsoft YaHei` / …) 
 
 > Legend: Supported = capability provided out of the box　Partial = partial support or extra work required　Not supported = capability not provided　N/A = dimension outside that tool's positioning
 
-### Five differences that actually matter
+### Six differences that actually matter
 
 **1. "One jar" versus "a whole platform"**
 
 Debezium and Flink CDC are excellent streaming frameworks, but standing up a single MySQL → PostgreSQL pipeline means Kafka, Kafka Connect, a coordination service, and then a consumer you write yourself to translate events into target-side DML. The Jync equivalent is: `java -jar jync.jar`, open a browser, create two connections, create a project, click Start. **When the size of the sync need doesn't justify the operational cost of a streaming platform, this gap is decisive.**
 
-**2. Schema sync is a first-class feature, not homework left for you**
+**2. Minutes to the first sync: configuration, not platform engineering**
+
+Download the jar, start it, create two connections, pick the tables, press Start — the first sync is running in minutes, without learning a streaming platform. Debezium, Canal, and Flink CDC all assume platform skills (Kafka/Connect, ZooKeeper, checkpoints) before the first row moves. For a department-sized migration, that difference decides whether the work starts today or after a platform project.
+
+**3. Schema sync is a first-class feature, not homework left for you**
 
 Most CDC tools solve only the data stream; the target tables are yours to create. DataX explicitly requires them to pre-exist. Jync reads source metadata and creates tables, indexes, views, and stored procedures **in the target's dialect**, then propagates the diff after source-side DDL changes. In a heterogeneous migration, DDL translation and type mapping is usually more work than moving the rows.
 
-**3. Built for Chinese domestic databases and localization migrations**
+**4. Built for Chinese domestic databases and localization migrations**
 
 Dameng (DM), KingBase, OceanBase, TiDB, HighGo, Vastbase, YashanDB, GBase, Oscar, and OpenGauss are preset first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly the scenario the Debezium and Canal ecosystems were not designed for — their official domestic-DB support is relatively limited.
 
-**4. Zero intrusion into the source database (default polling mode)**
+**5. Zero intrusion into the source database (default polling mode)**
 
 SymmetricDS requires triggers in the source. Debezium, Canal, and Flink CDC require binlog / WAL logical replication to be enabled plus replication privileges — on many production databases that is a change request with an approval workflow attached. Jync's **default polling mode** needs one **read-only account** and derives deltas from cursor-column queries — the source's schema and configuration are untouched. With [Binlog CDC](#binlog-cdc-mysql) enabled, the sync account additionally needs REPLICATION SLAVE / REPLICATION CLIENT grants — still strictly read-only (binlog parsing only: no triggers, no writes to the source), but no longer the bare minimum of a single read-only account.
 
-**5. One-shot data movement versus staying in sync**
+**6. One-shot data movement versus staying in sync**
 
 Navicat's and DBeaver's "data transfer", and DataX, solve "copy this data across, once." Jync solves "keep both sides consistent, indefinitely": resume from the cursor after a restart, backfill changes that happened while down, and make every row write idempotent. Those are two different problems.
 
@@ -275,20 +292,31 @@ Every driver above except **GBase** and **Oscar** ships inside the distribution,
 | Port | `8080` by default |
 | Disk | Metadata store + logs; reserve ~1 GB |
 
-### 1. Build
+### 1. Download the release jar (recommended)
+
+Download the latest `jync.jar` from either release page:
+
+- GitHub: <https://github.com/vfaner/jync/releases/latest>
+- Gitee: <https://gitee.com/super_rgh/jync/releases/latest>
+
+```bash
+java -jar jync.jar
+```
+
+### 2. Build from source
 
 ```bash
 git clone https://github.com/vfaner/jync.git
-# In mainland China, use the mirror:
+# In mainland China, use the Gitee repository:
 # git clone https://gitee.com/super_rgh/jync.git
 
 cd jync
 mvn clean package -DskipTests
 ```
 
-Artifact: `target/jync.jar` (executable fat jar).
+Artifact: `target/jync.jar` (executable fat jar). Omit `-DskipTests` for a full build (about 10 minutes).
 
-### 2. Run
+### 3. Run
 
 ```bash
 java -jar target/jync.jar
@@ -305,17 +333,13 @@ The first launch creates the following under the **current working directory**:
 
 > ⚠️ These are **relative paths**. Always start from the same directory, or override them with absolute paths — otherwise a restart won't find your existing data.
 
-### 3. Production configuration (important)
+### 4. Production configuration (important)
 
 Create `application.yml` next to the jar:
 
 ```yaml
 server:
   port: 8080
-
-spring:
-  datasource:
-    url: jdbc:h2:file:/opt/jync/data/jync;MODE=MySQL;AUTO_SERVER=TRUE
 
 sync:
   poll-interval: 2000              # polling interval in ms
@@ -324,15 +348,16 @@ sync:
   chunk-size: 100000               # rows per full-load chunk; each commits + checkpoints; 0 = no chunking
   full-load-parallelism: 1         # parallel workers (single-column integer-PK tables only, capped at 8)
   safety-lag-ms: 1000
-  row-count-audit-interval-ms: 60000
-  full-compare-max-rows: 20000
   lock-ttl-ms: 300000
-  crypto-password: replace-with-your-own-strong-secret   # ← MUST change
-  crypto-salt: replace-with-your-own-hex-salt            # ← MUST change
+  crypto-password: ""              # blank = generated on first boot and saved to data/jync.key
+  crypto-salt: ""                  # blank = same; fill in only if you manage the key yourself
+  # ai:
+  #   enabled: false                 # air-gapped: uncomment to disable AI (menu hidden, no model calls)
 
-logging:
-  file:
-    path: /opt/jync/logs
+# Air-gapped: uncomment to disable the update check (no GitHub/Gitee access, upgrade entry hidden)
+# app:
+#   update-check:
+#     enabled: false
 ```
 
 Start with:
@@ -343,9 +368,15 @@ java -jar jync.jar --spring.config.additional-location=file:./application.yml
 
 > ⚠️ **Use `additional-location` (additive overlay), never `spring.config.location`**: the latter *replaces* all default config locations, so the jar-internal `application.yml` is no longer read — built-in keys such as i18n (`spring.messages.basename`), schema auto-creation (`spring.jpa.hibernate.ddl-auto`) and `app.github-url` are all lost. The symptoms are markers like `??login.title_zh_CN??` on the login page, no tables on a fresh install, or outright startup failure. The external file only needs the keys you want to **override**.
 
-> 🔐 **Security note:** `sync.crypto-password` and `sync.crypto-salt` encrypt the stored database passwords. **The distribution ships with defaults; you must change them in production.** After changing them, previously stored passwords can no longer be decrypted and must be re-entered in the UI. `crypto-salt` must be a valid hexadecimal string.
+> 🔐 **Encryption keys:** `sync.crypto-password` and `sync.crypto-salt` encrypt the stored connection passwords.
+> - **A fresh install needs no configuration**: the first start generates a strong key and writes it to `<store>.key` next to the database file (e.g. `data/jync.key`).
+> - **Back up `<store>.key` together with `./data`**: without it, previously saved connection passwords cannot be decrypted and must be re-entered in the UI.
+> - **Keep the defaults when upgrading an existing install**: they are what decrypts the old ciphertext. Changing them invalidates every stored password.
+> - Set the two keys explicitly (environment variables or a Kubernetes Secret) if you prefer to manage them yourself; `crypto-salt` must be valid hexadecimal.
 
-### 4. Loading external driver jars (GBase / Oscar / custom)
+> 🔇 **Air-gapped / offline:** uncomment `sync.ai.enabled` and `app.update-check.enabled` above and restart — the application then makes no outbound requests at all. The AI menu is hidden and AI drafting is blocked before any request; the boot-time update pre-check is disabled and Settings shows "update check disabled". Both default to enabled, so networked deployments need no change.
+
+### 5. Loading external driver jars (GBase / Oscar / custom)
 
 Drivers for MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and H2 ship inside the distribution (TiDB speaks the MySQL protocol and reuses the MySQL driver), so **this step is not needed for them**. Only **GBase**, **Oscar**, and **custom databases** require an external jar. Place the vendor jar on the server, for example:
 
@@ -356,7 +387,7 @@ cp gbase-jdbc.jar oscar.jar /opt/jync/drivers/
 
 When one of these types is selected, the form automatically shows a **Driver jar** card. Just fill in the **driver jar path** — either a single jar file or a directory of jars, e.g. `/opt/jync/drivers`. Custom types also need a JDBC URL and a driver class; the **Detect driver classes** button can read candidate class names straight from the jar. Click **Test Connection** to confirm it loads, then save.
 
-### 5. Running as a service
+### 6. Running as a service
 
 **Option A: systemd (recommended)**
 
@@ -396,7 +427,7 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 
 Omit the `additional-location` argument only for a throwaway trial that runs purely on the jar's built-in defaults.
 
-### 6. Docker deployment (Docker / Compose / Kubernetes)
+### 7. Docker deployment (Docker / Compose / Kubernetes)
 
 The repo ships a multi-stage `Dockerfile` (the runtime image contains just the JRE, runs as a non-root user and includes a HEALTHCHECK), a `docker-compose.yml`, and `deploy/k8s/` (Kustomize). One command brings the service up; metadata and logs live in the host's `./data` and `./logs`, so rebuilding or replacing the image never loses data:
 
@@ -412,7 +443,31 @@ docker run -d --name jync -p 8080:8080 \
 
 Environment-variable overrides (HTTPS cookies, external MySQL for multi-instance setups), TLS, horizontal scaling with more than one replica, image upgrades and troubleshooting are covered in [docs/deploy-container.md](docs/deploy-container.md).
 
-### 7. Upgrading
+**Kubernetes (Kustomize)**
+
+```bash
+# 1) Build and push the image (kind / minikube can load it locally instead)
+docker build -t registry.example.com/qqmu/jync:1.7.5 .
+docker push registry.example.com/qqmu/jync:1.7.5
+
+# 2) Point the manifests at your image — the default image is jync:1.7.5.
+#    Either edit deploy/k8s/deployment.yaml, or use the images transform:
+# images:
+#   - name: jync
+#     newName: registry.example.com/qqmu/jync
+#     newTag: "1.7.5"
+
+# 3) Deploy Namespace / PVC / Deployment / Service / Ingress
+kubectl apply -k deploy/k8s/
+kubectl -n jync get pods
+```
+
+- Manifests live in [deploy/k8s/](deploy/k8s/); the default tag is `jync:1.7.5`.
+- `ingress.yaml` is optional — remove it from `kustomization.yaml` if you do not run an Ingress, or adjust the host name and TLS.
+- The Service is `ClusterIP`. From outside the cluster use `kubectl -n jync port-forward svc/jync 8080:80` or an Ingress.
+- The H2 metadata store uses a `ReadWriteOnce` PVC, so **`replicas` must stay at 1**. For more replicas, first point the metadata store at an external MySQL / PostgreSQL (`SPRING_DATASOURCE_*`), then scale up.
+
+### 8. Upgrading
 
 ```bash
 sudo systemctl stop jync
@@ -461,6 +516,16 @@ Login passwords are stored as one-way BCrypt hashes, unlike the database and AI 
 3. Open **project detail** → check the tables/views/procedures to sync → configure sync options → save
 4. Click **Sync Now** for a one-off verification (a click during a run queues exactly one extra round once the current one finishes), or **Start Sync** to begin continuous polling
 5. Inspect each run in the **Change Log**
+
+---
+
+## Data Preview, Project Cloning & Column Cleansing
+
+- **Read-only preview** — on the project detail page, inspect the current source and target rows, the column list, and the candidate cursor columns. Admin-only; viewers never see the entry points.
+- **Project cloning** — derive a new project from an existing one, copying every sync setting (the target connection may differ). "Truncate target before first load" is forced off for the clone, so copied settings can never wipe target data.
+- **Column cleansing** — per-table, per-column rules applied before rows are written: `TRIM`, `UPPER`, `LOWER`, blank → `NULL`, strip prefix, strip suffix, and regex replacement. Rules apply to **string columns only**; numeric and date columns pass through untouched.
+- **Validation at save time** — a regex replacement string is checked against Java's own semantics (`$n` group references, `${name}` named groups, backslash escaping) when the rule is saved, not on every sync cycle.
+- **Editing while running** — stop the project first; cleansing rules cannot be changed mid-run.
 
 ---
 
@@ -1003,6 +1068,16 @@ com.qqmu.jync
 
 ---
 
+## Documentation
+
+- **Container deployment & operations** — [docs/deploy-container.md](docs/deploy-container.md) (environment variables, TLS, multiple instances, upgrades, troubleshooting)
+- **Oracle → Dameng migration walkthrough** — [docs/migration-harness-oracle-to-dm.md](docs/migration-harness-oracle-to-dm.md)
+- **Project article** — [docs/jync-article.md](docs/jync-article.md)
+- **Release notes** — [GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases)
+- **Third-party driver licenses** — [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
+
+---
+
 ## Tests
 
 ```bash
@@ -1060,21 +1135,23 @@ Questions, feature requests and feedback are all welcome:
 
 | Channel | Account |
 |---------|---------|
-| QQ | 817094 |
-| QQ | 2912167928 |
-| QQ Group | 426669837 |
+| QQ | [817094](https://wpa.qq.com/msgrd?v=3&uin=817094&site=qq&menu=yes) (opens a temporary chat) |
+| QQ | [2912167928](https://wpa.qq.com/msgrd?v=3&uin=2912167928&site=qq&menu=yes) (opens a temporary chat) |
+| QQ Group | [426669837 · Mumu Open Source Workshop](https://qun.qq.com/universal-share/share?ac=1&authKey=xm%2BfgdraFGDpH8GHkV4DbuMjArg6BsPdNnXKUqcWvFXI1ocS56TcioSRYOVBvn5Q&busi_data=eyJncm91cENvZGUiOiI0MjY2Njk4MzciLCJ0b2tlbiI6Ind0V1pMYlVieXJkQmtnMVgveUFsOHFnbFhTd28wUE03dy9uVUErVExBdnlkMENnMis0UmhqWlJjcURzRHFnUEMiLCJ1aW4iOiI4MTcwOTQifQ%3D%3D&data=tZVIfZoO6N9QWSJE6ZbdZR15OmuLpSVucid5TicWYaMgb9Go1B975NZk0iZOo69AEzXQ4XucFtenImLltzFI5w&svctype=4&tempid=h5_group_info) (opens the group join page) |
 | WeChat | qqmu66 |
 | Email | [vfaner@88.com](mailto:vfaner@88.com) |
 | Website | <https://jync.qqmu.com> |
 
+Clicking a QQ number opens a temporary chat in the QQ client; clicking the group opens the join page for **Mumu Open Source Workshop (沐沐开源工坊)**. The contact card in the app's Settings page is clickable too.
+
 In the app's **Settings → Project & author** card, the QQ accounts and the QQ group are clickable deep links that launch the QQ client (a direct chat for a personal account, the group card for the group).
 
-Issues and pull requests are welcome:
+Release downloads:
 
-- GitHub: <https://github.com/vfaner/jync>
-- Gitee: <https://gitee.com/super_rgh/jync>
+- GitHub Releases: <https://github.com/vfaner/jync/releases/latest>
+- Gitee Releases: <https://gitee.com/super_rgh/jync/releases/latest>
 
-If this project helps you, a Star ⭐ is appreciated.
+Bug reports, feature requests and pull requests are welcome through any channel above. If this project helps you, a Star ⭐ is appreciated.
 
 ---
 
