@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -783,11 +785,34 @@ public class UpgradeService {
     static Path currentJarLocation() {
         try {
             var codeSource = UpgradeService.class.getProtectionDomain().getCodeSource();
-            return codeSource == null ? null : Path.of(codeSource.getLocation().toURI());
+            return codeSource == null ? null : jarPathFromLocation(codeSource.getLocation());
         } catch (Exception e) {
             log.debug("Cannot resolve jar location: {}", e.toString());
             return null;
         }
+    }
+
+    /**
+     * Turns a class's code-source location into the file it is running from. Launched with
+     * {@code java -jar}, Spring Boot defines application classes under a nested URL such as
+     * {@code jar:file:/app/jync.jar!/BOOT-INF/classes!/}; {@link Path#of(URI)} cannot open a
+     * {@code jar:} URI, so unwrap it to the outer jar — the file an upgrade replaces. An
+     * exploded run (IDE, {@code target/classes}) comes back as that directory, and the caller
+     * rejects it: there is no jar to replace.
+     */
+    static Path jarPathFromLocation(URL location) throws URISyntaxException {
+        if (location == null) {
+            return null;
+        }
+        if (!"jar".equalsIgnoreCase(location.getProtocol())) {
+            return Path.of(location.toURI());
+        }
+        String spec = location.toString();
+        int separator = spec.indexOf("!/");
+        if (separator < 0) {
+            return null;
+        }
+        return Path.of(URI.create(spec.substring("jar:".length(), separator)));
     }
 
     /**

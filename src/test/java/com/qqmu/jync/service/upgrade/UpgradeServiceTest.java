@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.URI;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -667,5 +669,38 @@ class UpgradeServiceTest {
 
         assertThat(tempDir.resolve("app/jync-update-restart.sh")).doesNotExist();
         assertThat(tempDir.resolve("app/jync-update-restart.ps1")).doesNotExist();
+    }
+
+    @Test
+    void springBootsNestedClassLocationResolvesToTheOuterJar() throws Exception {
+        // `java -jar jync.jar` puts application classes at
+        // jar:file:/.../jync.jar!/BOOT-INF/classes!/ — a URL Path.of cannot open.
+        URL nested = new URL("jar:file:/opt/jync/jync.jar!/BOOT-INF/classes!/");
+        assertThat(UpgradeService.jarPathFromLocation(nested))
+                .isEqualTo(Path.of(URI.create("file:/opt/jync/jync.jar")));
+    }
+
+    @Test
+    void anExplodedClassesDirectoryIsReturnedAsIs() throws Exception {
+        Path classes = tempDir.resolve("target/classes");
+        assertThat(UpgradeService.jarPathFromLocation(classes.toUri().toURL()))
+                .isEqualTo(classes);
+    }
+
+    @Test
+    void aJarUrlWithoutAnEntrySeparatorIsUnresolvable() throws Exception {
+        URL malformed = new URL(null, "jar:file:/opt/jync/jync.jar",
+                new java.net.URLStreamHandler() {
+                    @Override
+                    protected java.net.URLConnection openConnection(URL u) {
+                        throw new UnsupportedOperationException();
+                    }
+                });
+        assertThat(UpgradeService.jarPathFromLocation(malformed)).isNull();
+    }
+
+    @Test
+    void aMissingLocationIsUnresolvable() throws Exception {
+        assertThat(UpgradeService.jarPathFromLocation(null)).isNull();
     }
 }
