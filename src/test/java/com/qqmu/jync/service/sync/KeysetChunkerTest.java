@@ -102,14 +102,15 @@ class KeysetChunkerTest {
     }
 
     @Test
-    void sqlServerGetsBracketQuotingAndOffsetFetchPaging() {
+    void sqlServerGetsBracketQuotingAndTopPaging() {
         List<Object> params = new ArrayList<>();
         String sql = KeysetChunker.pageSql(new SqlServerDialect(), "dbo", "ORDERS",
                 List.of("ORDER_ID"), List.of(9L), null, IDENTITY, null, 25, params);
 
-        assertThat(sql).isEqualTo("SELECT * FROM [dbo].[ORDERS]"
-                + " WHERE ([ORDER_ID] > ?) ORDER BY [ORDER_ID]"
-                + " OFFSET 0 ROWS FETCH NEXT 25 ROWS ONLY");
+        // TOP, not OFFSET/FETCH: the latter is 2012+ and made every chunk of a 2008/R2
+        // full load a syntax error. The keyset predicate already did the seeking.
+        assertThat(sql).isEqualTo("SELECT TOP (25) * FROM [dbo].[ORDERS]"
+                + " WHERE ([ORDER_ID] > ?) ORDER BY [ORDER_ID]");
         assertThat(params).containsExactly(9L);
     }
 
@@ -120,6 +121,23 @@ class KeysetChunkerTest {
         List<Object> back = KeysetChunker.decodePk(KeysetChunker.encodePk(pk));
 
         assertThat(back).containsExactly(41, "acme", new BigDecimal("19.99"));
+    }
+
+    @Test
+    void temporalBoundariesComeBackAsSqlTemporalValuesWhenTheKeyTypeSaysSo() {
+        Timestamp timestamp = Timestamp.valueOf("2026-10-20 12:34:56.789");
+        java.sql.Date date = java.sql.Date.valueOf("2026-10-20");
+
+        // A checkpoint stores the boundary as JSON; a temporal key serializes as epoch millis.
+        // Rebinding a Long to a TIMESTAMP/DATE column fails on Oracle and PostgreSQL and can
+        // silently compare the wrong domain elsewhere, so the resume path must restore the
+        // column's type before the value reaches the keyset predicate.
+        assertThat(KeysetChunker.decodePk(
+                KeysetChunker.encodePk(List.of(timestamp)), List.of(Types.TIMESTAMP)))
+                .containsExactly(timestamp);
+        assertThat(KeysetChunker.decodePk(
+                KeysetChunker.encodePk(List.of(date)), List.of(Types.DATE)))
+                .containsExactly(date);
     }
 
     @Test

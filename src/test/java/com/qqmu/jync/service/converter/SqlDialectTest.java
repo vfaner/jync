@@ -425,6 +425,38 @@ class SqlDialectTest {
         assertThat(oracle.getPaginationSql(base, 0, 50))
                 .contains("ROWNUM <= 50").doesNotContain("rnum_");
         assertThat(sqlServer.getPaginationSql(base, 100, 50)).contains("OFFSET 100").contains("FETCH NEXT 50");
+        // DB2 has no LIMIT clause: its row-limit grammar is FETCH FIRST / OFFSET ... FETCH NEXT.
+        // Keyset chunking calls this on every page, so LIMIT here breaks every DB2 full load.
+        assertThat(db2.getPaginationSql(base, 0, 50))
+                .contains("FETCH FIRST 50 ROWS ONLY").doesNotContain("LIMIT");
+        assertThat(db2.getPaginationSql(base, 100, 50))
+                .contains("OFFSET 100 ROWS").contains("FETCH NEXT 50 ROWS ONLY");
+    }
+
+    @Test
+    void sqlServerCapsTheFirstPageWithTopBecause2008HasNoOffsetFetch() {
+        // OFFSET/FETCH arrived in SQL Server 2012. The keyset chunker only ever asks for
+        // offset 0, so on 2008/R2 the old form made EVERY chunked full load fail with a
+        // syntax error; TOP is the 2005+ equivalent of "offset 0, take n".
+        String base = "SELECT * FROM t WHERE id > ? ORDER BY id";
+        assertThat(sqlServer.getPaginationSql(base, 0, 50))
+                .isEqualTo("SELECT TOP (50) * FROM t WHERE id > ? ORDER BY id")
+                .doesNotContain("OFFSET")
+                .doesNotContain("FETCH");
+    }
+
+    @Test
+    void sqlServerTopGoesAfterDistinct() {
+        // TOP sits between SELECT and the select list; a DISTINCT that got pushed behind it
+        // would be a syntax error.
+        assertThat(sqlServer.getPaginationSql("SELECT DISTINCT id FROM t ORDER BY id", 0, 10))
+                .isEqualTo("SELECT DISTINCT TOP (10) id FROM t ORDER BY id");
+    }
+
+    @Test
+    void sqlServerKeepsOffsetFetchForPagesPastTheFirst() {
+        assertThat(sqlServer.getPaginationSql("SELECT * FROM t ORDER BY id", 100, 50))
+                .contains("OFFSET 100").contains("FETCH NEXT 50");
     }
 
     // --- Oracle DATE carries a time component -----------------------------------------

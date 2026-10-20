@@ -154,12 +154,46 @@ public final class KeysetChunker {
     }
 
     /** Inverse of {@link #encodePk}; see the note on {@link #JSON} about numeric widths. */
-    @SuppressWarnings("unchecked")
     public static List<Object> decodePk(String json) {
+        return decodePk(json, null);
+    }
+
+    /**
+     * Inverse of {@link #encodePk}, restoring temporal key values to the JDBC type the source
+     * metadata reports.
+     *
+     * <p>JSON has no date type: a {@link java.sql.Timestamp} boundary is written as epoch
+     * milliseconds and comes back as a number. Rebinding that number to a TIMESTAMP/DATE
+     * column is an error on Oracle and PostgreSQL and compares the wrong domain on other
+     * products — so a resumed load would fail (or silently mis-boundary) on any table whose
+     * key contains a temporal column. The caller passes the PK columns' JDBC types; a null
+     * or shorter type list leaves those positions untouched.
+     */
+    @SuppressWarnings("unchecked")
+    public static List<Object> decodePk(String json, List<Integer> pkJdbcTypes) {
+        List<Object> values;
         try {
-            return JSON.readValue(json, List.class);
+            values = JSON.readValue(json, List.class);
         } catch (Exception e) {
             throw new IllegalStateException("Cannot parse stored keyset boundary: " + json, e);
         }
+        if (pkJdbcTypes == null) {
+            return values;
+        }
+        for (int i = 0; i < values.size() && i < pkJdbcTypes.size(); i++) {
+            Object value = values.get(i);
+            Integer type = pkJdbcTypes.get(i);
+            if (!(value instanceof Number) || type == null) {
+                continue;
+            }
+            long millis = ((Number) value).longValue();
+            if (type == java.sql.Types.TIMESTAMP
+                    || type == java.sql.Types.TIMESTAMP_WITH_TIMEZONE) {
+                values.set(i, new java.sql.Timestamp(millis));
+            } else if (type == java.sql.Types.DATE) {
+                values.set(i, new java.sql.Date(millis));
+            }
+        }
+        return values;
     }
 }

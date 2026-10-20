@@ -343,10 +343,14 @@ server:
 
 sync:
   poll-interval: 2000              # polling interval in ms
-  batch-size: 500
-  fetch-size: 1000
+  batch-size: 500                  # incremental polling / CDC replay batch (live traffic; keep it small)
+  fetch-size: 1000                 # incremental source fetch size
+  full-load-batch-size: 2000       # initial full load only: rows per batch (recommended 1000-5000)
+  full-load-fetch-size: 2000       # initial full load only: source fetch size
+  full-load-parallelism: 2         # parallel workers (recommended 1-4, pool-capped, max 8)
   chunk-size: 100000               # rows per full-load chunk; each commits + checkpoints; 0 = no chunking
-  full-load-parallelism: 1         # parallel workers (single-column integer-PK tables only, capped at 8)
+  oracle-initial-load-insert-first: true   # empty Oracle target: INSERT instead of MERGE (~2.5x)
+  defer-secondary-indexes: true    # build non-unique indexes after the initial load (~40% faster)
   safety-lag-ms: 1000
   lock-ttl-ms: 300000
   crypto-password: ""              # blank = generated on first boot and saved to data/jync.key
@@ -914,10 +918,14 @@ Under `sync.*` in `application.yml`:
 | Key | Default | Description |
 |---|---|---|
 | `poll-interval` | `2000` | Polling interval (ms) |
-| `batch-size` | `500` | Rows per JDBC batch |
-| `fetch-size` | `1000` | Source result-set fetch size |
+| `batch-size` | `500` | Rows per JDBC batch for incremental polling and CDC replay |
+| `fetch-size` | `1000` | Source result-set fetch size for incremental polling |
+| `full-load-batch-size` | `2000` | Initial full load only: rows per batch; recommended 1000-5000, capped at 20000 |
+| `full-load-fetch-size` | `2000` | Initial full load only: source result-set fetch size |
 | `chunk-size` | `100000` | Rows per chunk of the initial full load; each chunk commits and checkpoints on its own; `0` disables chunking (classic streamed read) |
-| `full-load-parallelism` | `1` | Parallel workers per full load; single-column integer-PK tables only, capped at 8; values above `max-pool-size` queue on the connection pool |
+| `full-load-parallelism` | `2` | Parallel workers per full load; single-column integer-PK tables only, recommended 1-4, capped at 8 and by the connection pool |
+| `oracle-initial-load-insert-first` | `true` | Empty Oracle target: plain INSERT instead of MERGE (~2.5x); a non-empty table keeps the idempotent MERGE |
+| `defer-secondary-indexes` | `true` | Build a new table's non-unique secondary indexes after its initial load (~40% faster end to end); the PK and unique indexes are still created immediately |
 | `max-pool-size` | `5` | Maximum connections per database connection pool |
 | `max-retries` | `3` | Consecutive failures before a task is marked ERROR |
 | `safety-lag-ms` | `1000` | Timestamp watermark rollback; see above |

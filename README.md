@@ -188,10 +188,14 @@ server:
 
 sync:
   poll-interval: 2000              # 轮询间隔（毫秒）
-  batch-size: 500
-  fetch-size: 1000
+  batch-size: 500                  # 增量轮询 / CDC 回放每批行数（在线流量，保持小）
+  fetch-size: 1000                 # 增量读取的结果集批量
+  full-load-batch-size: 2000       # 仅首次全量：每批行数（建议 1000-5000）
+  full-load-fetch-size: 2000       # 仅首次全量：结果集批量
+  full-load-parallelism: 2         # 全量并行 worker 数（建议 1-4，受连接池约束，上限 8）
   chunk-size: 100000               # 全量每块行数，每块提交 + 写检查点；0 = 不分块
-  full-load-parallelism: 1         # 全量并行 worker 数（仅单列整数主键表，上限 8）
+  oracle-initial-load-insert-first: true   # 目标为空的 Oracle 表用 INSERT 代替 MERGE（约 2.5 倍）
+  defer-secondary-indexes: true    # 新建表先灌数据、全量完成后再建非唯一二级索引（实测快约 40%）
   safety-lag-ms: 1000
   lock-ttl-ms: 300000
   crypto-password: ""              # 留空 = 首次启动自动生成，保存到 data/jync.key
@@ -349,9 +353,13 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `poll-interval` | `2000` | 轮询间隔（毫秒） |
-| `batch-size` / `fetch-size` | `500` / `1000` | JDBC 批次行数 / 源库读取批量 |
+| `batch-size` / `fetch-size` | `500` / `1000` | 增量轮询与 CDC 回放的 JDBC 批次行数 / 源库读取批量 |
+| `full-load-batch-size` | `2000` | 仅首次全量：每批行数，建议 1000-5000，上限 20000 |
+| `full-load-fetch-size` | `2000` | 仅首次全量：源库结果集批量 |
 | `chunk-size` | `100000` | 全量每块行数，每块提交 + 写检查点；`0` 关闭分块 |
-| `full-load-parallelism` | `1` | 单表全量并行 worker 数（仅单列整数主键表，上限 8） |
+| `full-load-parallelism` | `2` | 单表全量并行 worker 数（仅单列整数主键表，上限 8，受连接池约束） |
+| `oracle-initial-load-insert-first` | `true` | 目标为空的 Oracle 表时用 INSERT 代替 MERGE（约 2.5 倍）；非空表仍走幂等 MERGE |
+| `defer-secondary-indexes` | `true` | 新建表的非唯一二级索引延到首次全量完成后再建（实测整体快约 40%）；主键与唯一索引仍立即创建 |
 | `max-pool-size` / `max-retries` | `5` / `3` | 每库连接池上限 / 连续失败置 ERROR 的次数 |
 | `safety-lag-ms` | `1000` | 时间戳水位线回退量，防晚提交事务被跳过 |
 | `row-count-audit-interval-ms` | `60000` | 行数审计间隔（毫秒） |

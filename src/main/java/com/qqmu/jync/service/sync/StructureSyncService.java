@@ -96,6 +96,48 @@ public class StructureSyncService {
         return recovered;
     }
 
+    /**
+     * Builds the non-unique secondary indexes that were held back when a newly created table
+     * took its initial full load. Called after the load has committed (before the cursor is
+     * advanced, so a crash in this window repeats the load instead of losing the indexes), and
+     * also when the table's data sync is skipped — no load is coming, so the indexes are owed
+     * now rather than deferred forever.
+     *
+     * <p>Idempotent: a resumed load, a table whose indexes were created up front, or a second
+     * call after a partial success simply reports what it actually created. A failing index is
+     * queued like any other index failure — data is already safely in the target.
+     *
+     * @return number of indexes actually created by this call
+     */
+    public int createDeferredIndexes(Connection targetConn, SyncContext ctx, TableMeta sourceTable) {
+        if (!ctx.isDeferSecondaryIndexes() || !ctx.getConfig().isSyncIndexes()) {
+            return 0;
+        }
+        String targetTable = ctx.getConfig().targetTableName(sourceTable.getName());
+        DdlExecutor executor = new DdlExecutor(targetConn);
+        int created = 0;
+        for (IndexMeta index : sourceTable.secondaryIndexes()) {
+            if (index.getColumns().isEmpty() || index.isUnique()) {
+                continue;
+            }
+            try {
+                if (executor.executeIdempotentCreate(ctx.getTargetDialect()
+                        .getCreateIndexSql(index, ctx.getTargetSchema(), targetTable))) {
+                    created++;
+                }
+            } catch (SQLException e) {
+                log.warn("Could not create deferred index {} on {}: {}",
+                        index.getName(), targetTable, e.getMessage());
+                queueFailedIndex(ctx.projectId(), sourceTable.getName(), index);
+            }
+        }
+        if (created > 0) {
+            log.info("Created {} deferred secondary index(es) on {} after the initial load",
+                    created, targetTable);
+        }
+        return created;
+    }
+
     /** Records an index that could not be created with its table, de-duplicated by index name. */
     private void queueFailedIndex(long projectId, String sourceTable, IndexMeta index) {
         String key = pendingKey(projectId, sourceTable);
@@ -227,10 +269,20 @@ public class StructureSyncService {
         }
 
         int indexCount = 0;
+        int deferred = 0;
         if (ctx.getConfig().isSyncIndexes()) {
+            // A brand-new table is empty and is about to take its initial full load in this
+            // same cycle. Non-unique indexes are pure write cost while the rows arrive, so
+            // hold them back until the load has committed (see createDeferredIndexes).
+            boolean deferSecondary = ctx.isDeferSecondaryIndexes() && created
+                    && ctx.getConfig().isSyncData();
             boolean anyQueued = false;
             for (IndexMeta index : table.secondaryIndexes()) {
                 if (index.getColumns().isEmpty()) {
+                    continue;
+                }
+                if (deferSecondary && !index.isUnique()) {
+                    deferred++;
                     continue;
                 }
                 try {
@@ -254,7 +306,9 @@ public class StructureSyncService {
         }
         String detail = (created ? "Created table " : "Table already present: ") + targetTable
                 + (addedColumns.isEmpty() ? "" : ", added column(s) " + String.join(", ", addedColumns))
-                + (indexCount > 0 ? " with " + indexCount + " index(es)" : "");
+                + (indexCount > 0 ? " with " + indexCount + " index(es)" : "")
+                + (deferred > 0 ? ", " + deferred
+                        + " secondary index(es) deferred until the initial load completes" : "");
         return ApplyOutcome.ok(detail);
     }
 

@@ -662,6 +662,14 @@ public class SyncEngine {
             // identical to a table with nothing to do. Carry it on the result so the run
             // summary and the sync-now response name the table and the reason.
             log.info("Skipping data sync for {}: {}", table.getName(), tableResult.getSkipReason());
+            // No load is coming for this table, so the indexes held back "until the load"
+            // must be built now: a skipped table would otherwise keep a created table with
+            // its secondary indexes missing for as long as the skip lasts. Only while the
+            // first load is still outstanding: once it completed the indexes were settled,
+            // and probing again every cycle would issue a failing CREATE INDEX per index.
+            if (firstLoad) {
+                structureSync.createDeferredIndexes(targetConn, ctx, table);
+            }
             result.addSkipped(table.getName(), tableResult.getSkipReason());
             return;
         }
@@ -689,6 +697,14 @@ public class SyncEngine {
                 log.warn("Deletion sync failed for {}: {}", table.getName(), e.getMessage());
                 result.addError(table.getName() + " (deletes): " + e.getMessage());
             }
+        }
+
+        // Build the secondary indexes that were held back while the rows arrived. Repeated
+        // after a resumed load (idempotent), and deliberately placed before the cursor is
+        // advanced: a crash between the load and this point re-runs the idempotent load
+        // instead of recording the table as done with its indexes still missing.
+        if (tableResult.isInitialLoad()) {
+            structureSync.createDeferredIndexes(targetConn, ctx, table);
         }
 
         // Advance the cursor only now that the target has committed the data. This ordering is

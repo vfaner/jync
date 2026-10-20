@@ -249,7 +249,12 @@ public class Db2Dialect extends AbstractSqlDialect {
 
     @Override
     public String getPaginationSql(String baseSql, long offset, int limit) {
-        return baseSql + " LIMIT " + limit + " OFFSET " + offset;
+        // DB2 has no LIMIT clause. The keyset pager always passes offset 0, which every
+        // supported release accepts as FETCH FIRST; deeper offsets use the 11.1+ OFFSET form.
+        if (offset <= 0) {
+            return baseSql + " FETCH FIRST " + limit + " ROWS ONLY";
+        }
+        return baseSql + " OFFSET " + offset + " ROWS FETCH NEXT " + limit + " ROWS ONLY";
     }
 
     @Override

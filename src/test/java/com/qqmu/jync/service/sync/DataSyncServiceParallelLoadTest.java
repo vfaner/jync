@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -15,6 +16,12 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,6 +61,7 @@ class DataSyncServiceParallelLoadTest {
     private DatabaseConfig sourceCfg;
     private DatabaseConfig targetCfg;
     private SyncContext ctx;
+    private final AtomicInteger connectionOpens = new AtomicInteger();
 
     @BeforeEach
     void setUp() throws SQLException {
@@ -76,8 +84,11 @@ class DataSyncServiceParallelLoadTest {
                 .sourceDialect(new GenericSqlDialect())
                 .targetDialect(new GenericSqlDialect())
                 .batchSize(50)
-                .connectionProvider(cfg -> DriverManager.getConnection(
-                        cfg == sourceCfg ? SRC_URL : TGT_URL, "sa", ""))
+                .connectionProvider(cfg -> {
+                    connectionOpens.incrementAndGet();
+                    return DriverManager.getConnection(
+                            cfg == sourceCfg ? SRC_URL : TGT_URL, "sa", "");
+                })
                 .build();
     }
 
@@ -114,8 +125,10 @@ class DataSyncServiceParallelLoadTest {
         exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'),"
                 + " (5,'e'), (6,'f')");
         when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
-                new ChunkCheckpoint(7L, "ITEMS", 0, 2, null, 0, ChunkCheckpoint.STATUS_RANGE_DONE),
-                new ChunkCheckpoint(7L, "ITEMS", 1, 1, "[6]", 2, ChunkCheckpoint.STATUS_CHUNK)));
+                new ChunkCheckpoint(7L, "ITEMS", 0, 2, null, 0,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, 0L, 4L),
+                new ChunkCheckpoint(7L, "ITEMS", 1, 1, "[6]", 2,
+                        ChunkCheckpoint.STATUS_CHUNK, 4L, 8L)));
         DataSyncService service = service(3, 2);
 
         DataSyncService.TableSyncResult result = service.syncTable(
@@ -126,6 +139,101 @@ class DataSyncServiceParallelLoadTest {
         assertThat(result.getRowsWritten()).isEqualTo(4);
         assertThat(count(target, "ITEMS")).isEqualTo(10);
         verify(checkpoints).deleteByProjectIdAndTableName(7L, "ITEMS");
+    }
+
+    @Test
+    void changedParallelismDiscardsStaleRangeCheckpoints() throws SQLException {
+        createItems(10);
+        // Checkpoints from a 3-way split (0,4] (4,8] (8,10]. This run uses 2 workers, whose
+        // ranges are (0,5] (5,10]: range 0's old RANGE_DONE would skip ids 5 entirely, and
+        // range 1's old boundary [8] would skip 6-8. Both must be discarded, not trusted.
+        exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'),"
+                + " (5,'e'), (6,'f'), (7,'g'), (8,'h')");
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "ITEMS", 0, 2, null, 0,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, 0L, 4L),
+                new ChunkCheckpoint(7L, "ITEMS", 1, 1, "[8]", 4,
+                        ChunkCheckpoint.STATUS_CHUNK, 4L, 8L)));
+        DataSyncService service = service(2, 2);
+
+        DataSyncService.TableSyncResult result = service.syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        // Stale checkpoints mean a full re-read; upserts keep the already-written rows.
+        assertThat(result.getRowsWritten()).isEqualTo(10);
+        assertThat(count(target, "ITEMS")).isEqualTo(10);
+        // Once for the discard, once when the reload completes.
+        verify(checkpoints, atLeastOnce()).deleteByProjectIdAndTableName(7L, "ITEMS");
+    }
+
+    @Test
+    void shiftedKeySpanDiscardsStaleRangeCheckpoints() throws SQLException {
+        createItems(10);
+        // Same 2-way split, but recorded when the span ended at a different upper bound:
+        // trusting (0,4] as if it were (0,5] would leave id 5 unread.
+        exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d')");
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "ITEMS", 0, 1, null, 0,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, 0L, 4L)));
+        DataSyncService service = service(2, 2);
+
+        DataSyncService.TableSyncResult result = service.syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(result.getRowsWritten()).isEqualTo(10);
+        assertThat(count(target, "ITEMS")).isEqualTo(10);
+        verify(checkpoints, atLeastOnce()).deleteByProjectIdAndTableName(7L, "ITEMS");
+    }
+
+    @Test
+    void sequentialLoadDiscardsRangeZeroCheckpointCarryingParallelBounds() throws SQLException {
+        createItems(10);
+        // A parallel run's range 0 is a slice, not the whole table. The sequential path
+        // must not resume from its boundary as if it covered the full key span.
+        exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'), (5,'e')");
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "ITEMS", 0, 0, "[5]", 5,
+                        ChunkCheckpoint.STATUS_CHUNK, 0L, 5L)));
+        DataSyncService service = service(1, 2);
+
+        DataSyncService.TableSyncResult result = service.syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(result.getRowsWritten()).isEqualTo(10);
+        assertThat(count(target, "ITEMS")).isEqualTo(10);
+        verify(checkpoints, atLeastOnce()).deleteByProjectIdAndTableName(7L, "ITEMS");
+    }
+
+    @Test
+    void interruptingTheCoordinatorStopsEveryWorker() throws Exception {
+        createItems(2000);
+        // One row per chunk keeps both workers busy long enough to interrupt mid-load.
+        DataSyncService service = service(2, 1);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            Future<DataSyncService.TableSyncResult> run = caller.submit(() ->
+                    service.syncTable(source, target, itemsMeta(), IDENTITY,
+                            new SyncProgress(), ctx));
+            awaitAtLeast(() -> connectionOpens.get() >= 2 && countQuietly(target) > 0, 10_000);
+
+            // The only stop mechanism in production (CdcConsumerManager) interrupts the
+            // thread running the load.
+            caller.shutdownNow();
+
+            Throwable failure = catchThrowable(() -> run.get(30, TimeUnit.SECONDS));
+            assertThat(failure).isInstanceOf(ExecutionException.class);
+            assertThat(failure.getCause()).isInstanceOf(StopRequestedException.class);
+
+            // The core contract: once the call has returned, no worker is still writing.
+            long settled = count(target, "ITEMS");
+            Thread.sleep(300);
+            assertThat(count(target, "ITEMS")).isEqualTo(settled);
+        } finally {
+            caller.shutdownNow();
+        }
     }
 
     @Test
@@ -274,6 +382,25 @@ class DataSyncServiceParallelLoadTest {
         assertThat(sparse.get(sparse.size() - 1)[1]).isEqualTo(900_000_000L);
         for (int i = 1; i < sparse.size(); i++) {
             assertThat(sparse.get(i)[0]).isEqualTo(sparse.get(i - 1)[1]);
+        }
+    }
+
+    private static void awaitAtLeast(java.util.function.BooleanSupplier condition,
+                                     long timeoutMs) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("condition not met within " + timeoutMs + "ms");
+            }
+            Thread.sleep(10);
+        }
+    }
+
+    private long countQuietly(Connection conn) {
+        try {
+            return count(conn, "ITEMS");
+        } catch (SQLException e) {
+            return -1;
         }
     }
 

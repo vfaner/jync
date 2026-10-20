@@ -74,6 +74,24 @@ public class GlobalModelAdvice {
         return BUILD_TIME_FORMATTER.format(time.atOffset(ZoneOffset.UTC));
     }
 
+    /**
+     * The global full-load batch default, shown as the empty field's placeholder.
+     *
+     * <p>An empty project field means "use the global default"; without the number on screen
+     * there is no baseline for the user to tune against. A placeholder, not a prefilled
+     * value: prefilling would save an explicit override for every project the user opens.
+     */
+    @ModelAttribute("fullLoadBatchDefault")
+    public int fullLoadBatchDefault() {
+        return properties.getFullLoadBatchSize();
+    }
+
+    /** The global full-load parallelism default, same placeholder contract as the batch. */
+    @ModelAttribute("fullLoadParallelismDefault")
+    public int fullLoadParallelismDefault() {
+        return properties.getFullLoadParallelism();
+    }
+
     /** Repository link used by the nav icon and the donate dialog. */
     @ModelAttribute("githubUrl")
     public String githubUrl() {

@@ -41,8 +41,35 @@ public class SyncContext {
 
     private final SqlDialect targetDialect;
 
-    /** Rows per JDBC batch for this project, already resolved against the global default. */
+    /**
+     * Rows per JDBC batch for incremental windows and CDC replay, already resolved against
+     * the global default. The full load has its own budget below.
+     */
     private final int batchSize;
+
+    /**
+     * Rows per JDBC batch of the full load; 0 (hand-built contexts) means "use {@link #batchSize}".
+     * Resolved by the factory from the project's override or {@code sync.full-load-batch-size}.
+     */
+    private final int fullLoadBatchSize;
+
+    /** Cursor fetch size of the full load; 0 means "use {@code sync.fetch-size}". */
+    private final int fullLoadFetchSize;
+
+    /**
+     * Parallel workers this project wants for its chunked full load; 0 falls back to the
+     * global value. Already capped by the connection pool in the factory, and still subject
+     * to the table-shape checks in {@link DataSyncService}.
+     */
+    private final int fullLoadParallelism;
+
+    /**
+     * Whether non-unique secondary indexes of a <em>newly created</em> table are held back
+     * until its initial full load has committed. Resolved by the factory from
+     * {@code sync.defer-secondary-indexes}. Hand-built contexts default to false (create
+     * everything up front), which is also the pre-deferral behavior.
+     */
+    private final boolean deferSecondaryIndexes;
 
     /** Identifies the node/thread holding the sync lock, for logging and lock renewal. */
     private final String lockOwner;

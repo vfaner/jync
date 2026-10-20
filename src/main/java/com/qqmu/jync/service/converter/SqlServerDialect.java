@@ -2,6 +2,8 @@ package com.qqmu.jync.service.converter;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
@@ -270,8 +272,25 @@ public class SqlServerDialect extends AbstractSqlDialect {
         return sb.toString();
     }
 
+    /** Leading {@code SELECT [DISTINCT]}, where a TOP clause must be inserted. */
+    private static final Pattern SELECT_HEAD =
+            Pattern.compile("^(\\s*SELECT\\s+(?:DISTINCT\\s+)?)", Pattern.CASE_INSENSITIVE);
+
     @Override
     public String getPaginationSql(String baseSql, long offset, int limit) {
+        if (offset == 0) {
+            // OFFSET/FETCH arrived in SQL Server 2012; on 2008/R2 it is a syntax error that
+            // takes every chunked full load down. TOP is the 2005+ equivalent of the only
+            // shape actually requested — offset 0, take the first page — and is
+            // semantically identical under the caller's ORDER BY.
+            Matcher head = SELECT_HEAD.matcher(baseSql);
+            if (head.find()) {
+                return baseSql.substring(0, head.end()) + "TOP (" + limit + ") "
+                        + baseSql.substring(head.end());
+            }
+            // No recognisable SELECT head: leave the statement alone rather than guess.
+            return baseSql;
+        }
         // OFFSET/FETCH requires an ORDER BY; the caller supplies one.
         return baseSql + " OFFSET " + offset + " ROWS FETCH NEXT " + limit + " ROWS ONLY";
     }

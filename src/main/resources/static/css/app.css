@@ -518,6 +518,28 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .field .req { color: var(--danger); margin-left: 2px; }
 .field .help { font-size: 12px; color: var(--ink-mute); margin-top: 5px; line-height: 1.5; }
 
+/* 标签行的问号提示：大不是越好，两个旋钮都要说清取舍。卡片是 overflow:hidden，
+   提示向下或向上展开会撞到下一条 field 或被裁掉，所以从图标右侧展开——仍在卡片
+   内，且不挡住正在填的输入框。hover 与键盘 focus 都能展开。 */
+.label-row { display: flex; align-items: center; margin-bottom: 6px; }
+.label-row label { margin-bottom: 0; }
+.tip-icon { position: relative; display: inline-flex; align-items: center;
+  margin-left: 5px; color: var(--ink-mute); cursor: help; outline: none;
+  border-radius: 50%; }
+.tip-icon .ico { width: 14px; height: 14px; }
+.tip-icon:hover, .tip-icon:focus { color: var(--brand); }
+.tip-body { position: absolute; top: 50%; left: calc(100% + 8px); transform: translateY(-50%);
+  width: 300px; padding: 9px 11px; border-radius: 8px;
+  background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+  font-size: 12px; font-weight: 400; line-height: 1.55; text-align: left;
+  white-space: normal; letter-spacing: 0;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .28);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity .12s ease; z-index: 1060; }
+.tip-icon:hover .tip-body, .tip-icon:focus .tip-body, .tip-icon:focus-within .tip-body {
+  opacity: 1; visibility: visible; }
+@media (max-width: 640px) { .tip-body { width: 220px; } }
+
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }
 /* 网格里的尾部按钮会掉到下一行最左边；列清洗这类「填完再提交」的小表单统一

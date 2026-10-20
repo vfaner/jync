@@ -69,7 +69,18 @@ public class SyncConfig {
     /** Optional Quartz cron expression; takes precedence over the poll interval. */
     private String cronExpression;
 
+    /**
+     * Rows per JDBC batch of this project's initial/full load; null falls back to the global
+     * {@code sync.full-load-batch-size}. Incremental windows and CDC replay are not affected.
+     */
     private Integer batchSize;
+
+    /**
+     * Parallel workers for this project's chunked full load; null falls back to the global
+     * {@code sync.full-load-parallelism}. The effective value is further capped by the
+     * connection pool, and only a single-column integer primary key can be range-split.
+     */
+    private Integer fullLoadParallelism;
 
     /**
      * Explicit cursor column per table, e.g. {@code {"orders": "updated_at"}}.

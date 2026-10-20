@@ -407,6 +407,7 @@ public class ProjectController {
                             @RequestParam(required = false) Long pollIntervalMs,
                             @RequestParam(required = false) String cronExpression,
                             @RequestParam(required = false) Integer batchSize,
+                            @RequestParam(required = false) Integer fullLoadParallelism,
                             @RequestParam(defaultValue = "false") boolean customSchedule,
                             // Set by the form whenever the object pickers were rendered: it is
                             // what turns an empty submission from "never configured" into
@@ -478,18 +479,20 @@ public class ProjectController {
             config.setSyncDeletes(syncDeletes);
             config.setDisableTargetConstraints(disableTargetConstraints);
             config.setTruncateBeforeInitialLoad(truncateBeforeInitialLoad);
-            // 自定义调度开关:关闭时清空三个字段,让引擎回退到全局默认值。
+            // 自定义调度开关:关闭时清空调度的两个字段,让引擎回退到全局默认值。
             // 开启时透传表单值(空字符串 → null,保持"留空=默认"语义)。
             if (customSchedule) {
                 config.setPollIntervalMs(pollIntervalMs);
                 config.setCronExpression(cronExpression == null || cronExpression.isBlank()
                         ? null : cronExpression.trim());
-                config.setBatchSize(batchSize);
             } else {
                 config.setPollIntervalMs(null);
                 config.setCronExpression(null);
-                config.setBatchSize(null);
             }
+            // 加载性能与调度无关(CDC 项目的基线全量同样吃这两个值),因此不受上面开关影响。
+            // 留空 → null = 用全局默认;越界在服务端收敛到边界并记账,绝不静默接受。
+            config.setBatchSize(clampFullLoadBatchSize(batchSize));
+            config.setFullLoadParallelism(clampFullLoadParallelism(fullLoadParallelism));
             // 与自定义调度无关:三个轮询式日志 CDC 引擎(LogMiner/PG/SQLServer)
             // 的空闲休眠;留空回退引擎默认。binlog 引擎不轮询,忽略此值。
             config.setCdcIdlePollMs(cdcIdlePollMs);
@@ -507,6 +510,39 @@ public class ProjectController {
             flash.addFlashAttribute("error", e.getMessage());
         }
         return "redirect:/projects/" + id;
+    }
+
+    /** Server-side bounds for the full-load knobs; the form's min/max is only a hint. */
+    private static final int MAX_FULL_LOAD_BATCH = 20_000;
+
+    private static final int MAX_FULL_LOAD_PARALLELISM = 8;
+
+    /**
+     * Null stays null ("use the global default"); out-of-range values are pulled to the
+     * nearest bound rather than rejected, so an old form or a direct POST cannot make the
+     * project unsaveable.
+     */
+    private Integer clampFullLoadBatchSize(Integer value) {
+        if (value == null) {
+            return null;
+        }
+        int clamped = Math.max(1, Math.min(value, MAX_FULL_LOAD_BATCH));
+        if (clamped != value) {
+            log.info("Full-load batch size {} out of range; storing {}", value, clamped);
+        }
+        return clamped;
+    }
+
+    /** Same contract as {@link #clampFullLoadBatchSize}: null = global default. */
+    private Integer clampFullLoadParallelism(Integer value) {
+        if (value == null) {
+            return null;
+        }
+        int clamped = Math.max(1, Math.min(value, MAX_FULL_LOAD_PARALLELISM));
+        if (clamped != value) {
+            log.info("Full-load parallelism {} out of range; storing {}", value, clamped);
+        }
+        return clamped;
     }
 
     /**

@@ -82,6 +82,20 @@ public class ChunkCheckpoint {
     @Column(name = "rows_copied")
     private Integer rowsCopied = 0;
 
+    /**
+     * Inclusive lower bound of the parallel range this row belongs to ({@code lo} of
+     * {@code (lo, hi]}). Null on sequential loads. A resumed parallel load re-splits the key
+     * span with the current parallelism, so a saved range index alone does not identify the
+     * slice it covered; when these bounds no longer match the recomputed range the
+     * checkpoints are discarded and the table is reloaded instead of skipping rows.
+     */
+    @Column(name = "range_lower")
+    private Long rangeLower;
+
+    /** Inclusive upper bound of the parallel range; null on sequential loads. */
+    @Column(name = "range_upper")
+    private Long rangeUpper;
+
     /** {@link #STATUS_CHUNK} or {@link #STATUS_RANGE_DONE}. */
     @Column(name = "status", nullable = false, length = 16)
     private String status = STATUS_CHUNK;
@@ -95,6 +109,14 @@ public class ChunkCheckpoint {
 
     public ChunkCheckpoint(Long projectId, String tableName, int rangeIndex, int chunkIndex,
                            String lastPkJson, int rowsCopied, String status) {
+        this(projectId, tableName, rangeIndex, chunkIndex, lastPkJson, rowsCopied, status,
+                null, null);
+    }
+
+    /** Parallel-range form: carries the {@code (rangeLower, rangeUpper]} slice it covered. */
+    public ChunkCheckpoint(Long projectId, String tableName, int rangeIndex, int chunkIndex,
+                           String lastPkJson, int rowsCopied, String status,
+                           Long rangeLower, Long rangeUpper) {
         this.projectId = projectId;
         this.tableName = tableName;
         this.rangeIndex = rangeIndex;
@@ -102,6 +124,8 @@ public class ChunkCheckpoint {
         this.lastPkJson = lastPkJson;
         this.rowsCopied = rowsCopied;
         this.status = status;
+        this.rangeLower = rangeLower;
+        this.rangeUpper = rangeUpper;
         this.updatedAt = Instant.now();
     }
 }

@@ -606,14 +606,14 @@
                 </div>
 
                 <!-- 调度卡片：仅轮询/全量比对模式生效。日志 CDC 模式下由长驻消费者持续流式回放，
-                     Quartz 调度、cron、轮询间隔、批次大小全部是死配置，直接藏掉以避免误导。
+                     Quartz 调度、cron、轮询间隔都是死配置，直接藏掉以避免误导。
                      data-role="polling-only" 由 app.js 在策略卡片切到任一日志 CDC 时同步隐藏。
-                     "自定义调度"开关关闭时折叠三个输入框——留空使用全局默认值，这是多数用户的预期。 -->
+                     "自定义调度"开关关闭时折叠两个输入框——留空使用全局默认值，这是多数用户的预期。
+                     加载性能(批次/并行度)不属于调度，见下方常显的「全量加载性能」卡片。 -->
                 <div class="card" data-role="polling-only"
                      th:classappend="${cdcActive} ? 'is-hidden' : ''"
                      th:with="customSched=${config.pollIntervalMs != null
-                                or config.cronExpression != null
-                                or config.batchSize != null}">
+                                or config.cronExpression != null}">
                     <div class="card-head">
                         <h2><svg class="ico"><use href="#clock"/></svg> <span th:text="#{project.schedule}">Schedule</span></h2>
                     </div>
@@ -641,12 +641,6 @@
                                        placeholder="0/5 * * * * ?" th:value="${config.cronExpression}">
                                 <div class="help" th:text="#{option.cronExpressionHelp}">help</div>
                             </div>
-                            <div class="field">
-                                <label for="batchSize" th:text="#{option.batchSize}">Batch size</label>
-                                <input type="number" class="input" id="batchSize" name="batchSize"
-                                       min="1" step="50" th:value="${config.batchSize}">
-                                <div class="help" th:text="#{option.batchSizeHelp}">help</div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -657,6 +651,48 @@
                         <div class="help" style="margin:0">
                             <svg class="ico" style="color:var(--brand);vertical-align:-3px;margin-right:4px"><use href="#info-circle"/></svg>
                             <span th:text="#{project.schedule.cdcHidden}">Streaming CDC owns the schedule; polling config is ignored.</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- 全量加载性能：与调度无关，轮询与 CDC 模式都常显——CDC 的基线全量走同一
+                     条 chunked 加载路径。批次越大提交越稀、并行度越高连接越多，两者都受
+                     连接池与数据库承受能力约束：数据库敏感时把并行度设为 1、批次调小。 -->
+                <div class="card" data-role="full-load-performance">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#activity"/></svg> <span th:text="#{project.performance}">全量加载性能</span></h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="field">
+                            <div class="label-row">
+                                <label for="batchSize" th:text="#{option.batchSize}">Batch size</label>
+                                <span class="tip-icon" tabindex="0" role="img"
+                                      th:attr="aria-label=#{option.batchSizeTip(${fullLoadBatchDefault})}">
+                                    <svg class="ico" aria-hidden="true"><use href="#question-circle"/></svg>
+                                    <span class="tip-body" role="tooltip" id="batchSizeTip"
+                                          th:text="#{option.batchSizeTip(${fullLoadBatchDefault})}">tip</span>
+                                </span>
+                            </div>
+                            <input type="number" class="input" id="batchSize" name="batchSize"
+                                   min="1" max="20000" step="500" th:value="${config.batchSize}"
+                                   th:placeholder="${fullLoadBatchDefault}">
+                            <div class="help"
+                                 th:text="#{option.batchSizeHelp(${fullLoadBatchDefault})}">help</div>
+                        </div>
+                        <div class="field">
+                            <div class="label-row">
+                                <label for="fullLoadParallelism" th:text="#{option.fullLoadParallelism}">并行度</label>
+                                <span class="tip-icon" tabindex="0" role="img"
+                                      th:attr="aria-label=#{option.fullLoadParallelismTip(${fullLoadParallelismDefault})}">
+                                    <svg class="ico" aria-hidden="true"><use href="#question-circle"/></svg>
+                                    <span class="tip-body" role="tooltip" id="fullLoadParallelismTip"
+                                          th:text="#{option.fullLoadParallelismTip(${fullLoadParallelismDefault})}">tip</span>
+                                </span>
+                            </div>
+                            <input type="number" class="input" id="fullLoadParallelism" name="fullLoadParallelism"
+                                   min="1" max="8" th:value="${config.fullLoadParallelism}"
+                                   th:placeholder="${fullLoadParallelismDefault}">
+                            <div class="help"
+                                 th:text="#{option.fullLoadParallelismHelp(${fullLoadParallelismDefault})}">help</div>
                         </div>
                     </div>
                 </div>

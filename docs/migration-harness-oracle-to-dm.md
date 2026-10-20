@@ -86,7 +86,7 @@ COMMIT;
    - 目标:`DM`(达梦),`jdbc:dm://<host>:5236`,填 `JYNC_TEST` 用户,测试连通。
 2. 新建项目,源选 Oracle、目标选达梦,勾选 ITEMS / SCN_T / NO_PK 三张表。
 3. 全量参数(设置页或项目高级配置):
-   - `sync.chunk-size`:5000(默认 2000,验收并行时可调大)
+   - `sync.chunk-size`:5000(默认 100000,验收并行时可调小以便多切几块)
    - `sync.full-load-parallelism`:4(>1 才会分段并行;上限 8)
 4. 增量策略:
    - ITEMS:留默认(单整数主键 → IDENTITY 游标)。

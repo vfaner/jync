@@ -11,6 +11,7 @@ import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChangeLogRepository;
+import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
 import com.qqmu.jync.service.monitor.CursorStrategy;
@@ -33,13 +34,16 @@ public class SyncStateWriter {
     private final SyncProgressRepository progressRepository;
     private final ChangeLogRepository changeLogRepository;
     private final MetadataSnapshotService snapshotService;
+    private final ChunkCheckpointRepository checkpointRepository;
 
     public SyncStateWriter(SyncProgressRepository progressRepository,
                            ChangeLogRepository changeLogRepository,
-                           MetadataSnapshotService snapshotService) {
+                           MetadataSnapshotService snapshotService,
+                           ChunkCheckpointRepository checkpointRepository) {
         this.progressRepository = progressRepository;
         this.changeLogRepository = changeLogRepository;
         this.snapshotService = snapshotService;
+        this.checkpointRepository = checkpointRepository;
     }
 
     /**
@@ -174,6 +178,10 @@ public class SyncStateWriter {
     @Transactional
     public void resetProject(Long projectId) {
         progressRepository.deleteByProjectId(projectId);
+        // Chunk checkpoints are resume points of the load being reset. Left behind, they let
+        // the "full reload" skip the ranges they already mark as copied — into a target the
+        // reset may also have truncated, or a source whose rows have since changed.
+        checkpointRepository.deleteByProjectId(projectId);
         snapshotService.deleteAllForProject(projectId);
         log.info("Reset sync state for project {}; the next run performs a full reload", projectId);
     }

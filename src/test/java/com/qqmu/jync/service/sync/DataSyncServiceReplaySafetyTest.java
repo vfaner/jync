@@ -2,6 +2,8 @@ package com.qqmu.jync.service.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -24,7 +26,9 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.service.cdc.LogCapture;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
+import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
@@ -433,6 +437,52 @@ class DataSyncServiceReplaySafetyTest {
         service.truncateTarget(target, table, ctx);
 
         assertThat(count("ITEMS")).isZero();
+    }
+
+    @Test
+    void truncatingTheTargetDropsTheTablesChunkCheckpoints() throws SQLException {
+        // An empty target plus a surviving checkpoint is the worst combination: the resumed
+        // chunked load trusts its RANGE_DONE marker and skips the ranges it "already copied",
+        // into a table the user just emptied. The truncate must invalidate the resume points.
+        exec(target, "CREATE TABLE ITEMS (ID BIGINT PRIMARY KEY, NAME VARCHAR(50))");
+
+        ChunkCheckpointRepository checkpoints = mock(ChunkCheckpointRepository.class);
+        DataSyncService svc = new DataSyncService(new SyncProperties(), checkpoints);
+
+        Project project = new Project();
+        project.setId(42L);
+        SyncContext withProject = ctx.toBuilder().project(project).build();
+
+        TableMeta table = new TableMeta();
+        table.setName("ITEMS");
+
+        svc.truncateTarget(target, table, withProject);
+
+        verify(checkpoints).deleteByProjectIdAndTableName(42L, "ITEMS");
+    }
+
+    @Test
+    void aTruncateThatFailedLeavesTheCheckpointsAlone() throws SQLException {
+        // The cycle is about to fail and retry; the resume points still describe the rows
+        // already committed to a table that was NOT emptied, so they remain valid.
+        ChunkCheckpointRepository checkpoints = mock(ChunkCheckpointRepository.class);
+        DataSyncService svc = new DataSyncService(new SyncProperties(), checkpoints);
+
+        Project project = new Project();
+        project.setId(42L);
+        SyncContext withProject = ctx.toBuilder().project(project).build();
+
+        TableMeta table = new TableMeta();
+        table.setName("ITEMS");
+
+        Connection dead = DriverManager.getConnection(
+                "jdbc:h2:mem:replay_dead2;DB_CLOSE_DELAY=-1", "sa", "");
+        dead.close();
+
+        assertThatThrownBy(() -> svc.truncateTarget(dead, table, withProject))
+                .isInstanceOf(SQLException.class);
+        verify(checkpoints, org.mockito.Mockito.never())
+                .deleteByProjectIdAndTableName(42L, "ITEMS");
     }
 
     @Test

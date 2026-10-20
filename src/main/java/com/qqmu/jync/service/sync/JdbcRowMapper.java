@@ -84,7 +84,23 @@ public final class JdbcRowMapper {
                                               List<Integer> types, List<String> typeNames,
                                               com.qqmu.jync.model.DatabaseType sourceType)
             throws SQLException {
-        Map<String, Object> row = new LinkedHashMap<>();
+        return readRowInto(rs, columns, types, typeNames, sourceType, new LinkedHashMap<>());
+    }
+
+    /**
+     * As the 5-arg form, but filling a caller-owned map: every row of a large load would
+     * otherwise allocate its own {@code LinkedHashMap}, and the write loops have no use for
+     * the previous row once it has been bound. The map is cleared first, so the result is
+     * indistinguishable from a freshly built one.
+     *
+     * @param row scratch map, reused across rows; cleared before filling
+     */
+    public static Map<String, Object> readRowInto(ResultSet rs, List<String> columns,
+                                                  List<Integer> types, List<String> typeNames,
+                                                  com.qqmu.jync.model.DatabaseType sourceType,
+                                                  Map<String, Object> row)
+            throws SQLException {
+        row.clear();
         for (int i = 0; i < columns.size(); i++) {
             int idx = i + 1;
             int type = types.get(i);
@@ -118,8 +134,12 @@ public final class JdbcRowMapper {
                 case Types.DATE:
                     if (isMysqlYear(typeName)) {
                         // YEAR reports DATE but carries an integer year; getDate produced a
-                        // "2026-01-01" literal the integer target could not parse.
-                        value = rs.getInt(idx);
+                        // "2026-01-01" literal the integer target could not parse. getInt is
+                        // the only primitive read here, so it is the only one that needs the
+                        // wasNull check — every object-returning getter already yields null
+                        // for SQL NULL, and checking all of them cost a call per column.
+                        int year = rs.getInt(idx);
+                        value = rs.wasNull() ? null : year;
                     } else {
                         value = rs.getDate(idx);
                     }
@@ -163,7 +183,7 @@ public final class JdbcRowMapper {
                 default:
                     value = rs.getObject(idx);
             }
-            row.put(columns.get(i), rs.wasNull() ? null : value);
+            row.put(columns.get(i), value);
         }
         return row;
     }

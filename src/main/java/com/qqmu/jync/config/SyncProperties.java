@@ -23,6 +23,30 @@ public class SyncProperties {
     private int fetchSize = 1000;
 
     /**
+     * Rows per JDBC batch for the initial/full load only; the incremental and CDC replay
+     * paths keep {@link #batchSize}. A full load has no live traffic to protect the source
+     * from and benefits directly from fewer, larger commits, while a two-second incremental
+     * window or a replay in front of a busy application does not — the two budgets are
+     * therefore deliberately separate knobs.
+     */
+    private int fullLoadBatchSize = 2000;
+
+    /** Cursor fetch size for the initial/full load only; incremental reads keep {@link #fetchSize}. */
+    private int fullLoadFetchSize = 2000;
+
+    /**
+     * Whether an initial full load into an <em>empty</em> Oracle target writes plain
+     * {@code INSERT} instead of {@code MERGE}.
+     *
+     * <p>Nothing can match on an empty table, so the upsert's match test buys nothing there
+     * while costing roughly 2.5x per row (container benchmark, 500k rows at batch 2000:
+     * ~84k rows/s MERGE vs ~211k rows/s INSERT). The target is probed once per table load,
+     * before the first chunk; a table that already has rows — a resumed load, a re-run
+     * without truncate — keeps the idempotent MERGE. Other target types are untouched.
+     */
+    private boolean oracleInitialLoadInsertFirst = true;
+
+    /**
      * Rows per keyset chunk of an initial full load; 0 disables chunking.
      *
      * <p>Chunking turns one table-long streamed read into a chain of short bounded reads, each
@@ -40,8 +64,27 @@ public class SyncProperties {
      * sequential. Each worker borrows its own source/target connection per chunk, so the
      * effective concurrency is also bounded by {@link #maxPoolSize} — parallelism beyond the
      * pool size simply queues on it. Values above 8 are clamped.
+     *
+     * <p>Default 2 is the balanced setting: the container benchmark (500k-row Oracle table)
+     * measured ~117k rows/s at 1 worker, ~184k at 2 and ~216k at 4 (+18% for the last step).
+     * Set it to 1 when the databases are shared with live traffic, or raise it for a
+     * dedicated pair of servers.
      */
-    private int fullLoadParallelism = 1;
+    private int fullLoadParallelism = 2;
+
+    /**
+     * Whether a newly created table's non-unique secondary indexes wait until its initial
+     * full load has committed before they are built.
+     *
+     * <p>Maintaining them row by row during the load roughly doubled its duration in the
+     * container benchmark (500k rows, two secondary indexes: 11.1s with the indexes versus
+     * 5.9s without; building both afterwards took 0.5s). The primary key — part of
+     * {@code CREATE TABLE} — and unique indexes are always created immediately: the upsert
+     * needs the PK, and a unique index must reject duplicate source rows as they arrive, not
+     * at the end of the load. Structure-only projects, where no data load follows, also keep
+     * creating every index up front.
+     */
+    private boolean deferSecondaryIndexes = true;
 
     /**
      * Slack subtracted from the timestamp high-watermark before it is persisted.

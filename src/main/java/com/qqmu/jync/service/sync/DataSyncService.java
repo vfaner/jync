@@ -19,6 +19,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -272,6 +273,9 @@ public class DataSyncService {
             return result;
         }
 
+        boolean insertFirst = useInsertFirst(targetConn, ctx, targetTable,
+                table.getPrimaryKeys());
+
         SqlDialect sourceDialect = ctx.getSourceDialect();
         String selectSql = "SELECT * FROM "
                 + sourceDialect.qualify(ctx.getSourceSchema(), table.getName());
@@ -299,7 +303,8 @@ public class DataSyncService {
         }
         WriteStats stats = copyRows(sourceConn, targetConn, selectSql,
                 watermark != null ? List.of(upperBound) : List.of(),
-                table, targetTable, ctx);
+                table, targetTable, ctx, null, null,
+                fullLoadBatchSize(ctx), fullLoadFetchSize(ctx), insertFirst);
 
         result.rowsWritten = stats.read;
         applyStats(result, stats);
@@ -317,6 +322,42 @@ public class DataSyncService {
             result.newCursorValue = CursorStrategy.FULL_COMPARE_ROWCOUNT_PREFIX + stats.read;
         }
         return result;
+    }
+
+    /**
+     * Whether this initial load may write plain {@code INSERT}s: an Oracle target whose table
+     * is still empty.
+     *
+     * <p>On an empty table the upsert's match test can never fire, and the benchmark measured
+     * the INSERT that remains at roughly 2.5x the MERGE throughput. Everything that is not a
+     * <em>confirmed</em>-empty Oracle table keeps the idempotent upsert: an INSERT against an
+     * existing key raises a unique violation, so "could not tell" must never mean "empty".
+     */
+    boolean useInsertFirst(Connection targetConn, SyncContext ctx, String targetTable,
+                           List<String> pkColumns) {
+        if (!properties.isOracleInitialLoadInsertFirst() || pkColumns.isEmpty()
+                || ctx.getTargetType() != DatabaseType.ORACLE) {
+            return false;
+        }
+        String probe = "SELECT 1 FROM "
+                + ctx.getTargetDialect().qualify(ctx.getTargetSchema(), targetTable)
+                + " WHERE ROWNUM = 1";
+        try (Statement st = targetConn.createStatement();
+             ResultSet rs = st.executeQuery(probe)) {
+            boolean empty = !rs.next();
+            if (empty) {
+                log.info("Initial load of {} writes INSERT: the target table is empty",
+                        targetTable);
+            } else {
+                log.debug("Initial load of {} keeps MERGE: the target table already has rows",
+                        targetTable);
+            }
+            return empty;
+        } catch (SQLException e) {
+            log.debug("Could not probe {} for the initial-load INSERT path ({}); keeping MERGE",
+                    targetTable, e.getMessage());
+            return false;
+        }
     }
 
     /** Reads and upserts only rows inside {@code (lastCursor, watermark]}. */
@@ -737,6 +778,46 @@ public class DataSyncService {
                                 List<Object> params, TableMeta table, String targetTable,
                                 SyncContext ctx, List<String> pkTrack, PkCursor sink)
             throws SQLException {
+        // Incremental windows and CDC replay keep the shared, conservative budget.
+        return copyRows(sourceConn, targetConn, selectSql, params, table, targetTable, ctx,
+                pkTrack, sink, ctx.getBatchSize(), properties.getFetchSize());
+    }
+
+    /** Rows per batch the full load should commit with; hand-built contexts fall back. */
+    private int fullLoadBatchSize(SyncContext ctx) {
+        return ctx.getFullLoadBatchSize() > 0 ? ctx.getFullLoadBatchSize() : ctx.getBatchSize();
+    }
+
+    /** Fetch size the full-load cursor should use; hand-built contexts fall back. */
+    private int fullLoadFetchSize(SyncContext ctx) {
+        return ctx.getFullLoadFetchSize() > 0
+                ? ctx.getFullLoadFetchSize() : properties.getFetchSize();
+    }
+
+    /**
+     * One copy pass with an explicit batch/fetch budget, so the full load can commit at a
+     * cadence the incremental and CDC paths must not inherit.
+     */
+    private WriteStats copyRows(Connection sourceConn, Connection targetConn, String selectSql,
+                                List<Object> params, TableMeta table, String targetTable,
+                                SyncContext ctx, List<String> pkTrack, PkCursor sink,
+                                int batchSize, int fetchSize)
+            throws SQLException {
+        // Incremental windows and CDC replay never take the INSERT-only initial-load shortcut:
+        // their rows routinely hit keys that already exist, which is exactly what MERGE is for.
+        return copyRows(sourceConn, targetConn, selectSql, params, table, targetTable, ctx,
+                pkTrack, sink, batchSize, fetchSize, false);
+    }
+
+    /**
+     * As above, with the writer's statement shape decided by the caller: an initial load into
+     * a confirmed-empty Oracle table writes {@code INSERT}, everything else keeps the upsert.
+     */
+    private WriteStats copyRows(Connection sourceConn, Connection targetConn, String selectSql,
+                                List<Object> params, TableMeta table, String targetTable,
+                                SyncContext ctx, List<String> pkTrack, PkCursor sink,
+                                int batchSize, int fetchSize, boolean insertFirst)
+            throws SQLException {
         SqlDialect targetDialect = ctx.getTargetDialect();
         List<String> pkColumns = table.getPrimaryKeys();
 
@@ -764,8 +845,7 @@ public class DataSyncService {
             // The dialect decides how to ask its driver for a streamed read: MySQL-protocol
             // sources need the Integer.MIN_VALUE sentinel, everyone else honors the
             // configured fetch size.
-            select.setFetchSize(ctx.getSourceDialect()
-                    .streamingFetchSize(properties.getFetchSize()));
+            select.setFetchSize(ctx.getSourceDialect().streamingFetchSize(fetchSize));
             for (int i = 0; i < params.size(); i++) {
                 select.setObject(i + 1, params.get(i));
             }
@@ -782,10 +862,13 @@ public class DataSyncService {
                                     typeNames.get(i), md.getPrecision(i + 1)));
                 }
 
+                // An INSERT has no match clause, so the key columns only decide that shape —
+                // the cursor and replay logic above keeps using the real key list.
+                List<String> statementKeys = insertFirst ? List.of() : pkColumns;
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
-                        columns, pkColumns, typeByColumn,
+                        columns, statementKeys, typeByColumn,
                         canGuardUnchangedRows(targetConn, ctx, targetTable, columns, pkColumns));
-                List<String> bindOrder = targetDialect.upsertBindOrder(columns, pkColumns);
+                List<String> bindOrder = targetDialect.upsertBindOrder(columns, statementKeys);
 
                 boolean emulateUpsert = pkColumns.isEmpty()
                         || (targetDialect instanceof GenericSqlDialect
@@ -802,11 +885,15 @@ public class DataSyncService {
 
                 ColumnCleanser cleanser = ColumnCleanser.forTable(
                         ctx.getConfig(), table.getName());
+                ThroughputMeter throughput = new ThroughputMeter(table.getName());
                 total = emulateUpsert && !pkColumns.isEmpty()
                         ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
-                                typeByColumn, rs, jdbcTypes, typeNames, ctx, cleanser, pkTrack, sink)
+                                typeByColumn, rs, jdbcTypes, typeNames, ctx, cleanser, pkTrack,
+                                sink, throughput, batchSize)
                         : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
-                                rs, columns, jdbcTypes, typeNames, ctx, cleanser, pkTrack, sink);
+                                rs, columns, jdbcTypes, typeNames, ctx, cleanser, pkTrack, sink,
+                                throughput, batchSize);
+                throughput.logSummary();
             }
             targetConn.commit();
         } catch (LockLostException e) {
@@ -938,33 +1025,47 @@ public class DataSyncService {
                                              ResultSet rs, List<String> columns,
                                              List<Integer> jdbcTypes, List<String> typeNames,
                                              SyncContext ctx, ColumnCleanser cleanser,
-                                             List<String> pkTrack, PkCursor sink)
+                                             List<String> pkTrack, PkCursor sink,
+                                             ThroughputMeter throughput, int batchSize)
             throws SQLException {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
             JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
+            // `mark` sits at the end of the previous row's write, so the gap it opens with is
+            // the source's blocking rs.next() — the read the meter is meant to expose.
+            long mark = System.nanoTime();
+            // One map for every row: a million-row load would otherwise allocate a million.
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns,
-                        jdbcTypes, typeNames, ctx.getSourceType());
+                long fetched = System.nanoTime();
+                JdbcRowMapper.readRowInto(rs, columns, jdbcTypes, typeNames,
+                        ctx.getSourceType(), row);
                 if (sink != null) {
                     // The keyset boundary is bound against the RAW source keys on the next
                     // page, so it must be captured before the cleanser rewrites them.
                     sink.values = extractPk(row, pkTrack);
                 }
+                long read = System.nanoTime();
+                throughput.recordRead(read - mark);
+
                 cleanser.apply(row);
                 JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn, ctx.getTargetDialect());
                 upsert.addBatch();
                 inBatch++;
                 stats.read++;
 
-                if (inBatch >= ctx.getBatchSize()) {
-                    executeBatch(upsert, targetConn, stats, ctx);
+                if (inBatch >= batchSize) {
+                    executeBatch(upsert, targetConn, stats, ctx, throughput);
                     inBatch = 0;
                 }
+                throughput.recordWrite(System.nanoTime() - fetched);
+                mark = System.nanoTime();
             }
             if (inBatch > 0) {
-                executeBatch(upsert, targetConn, stats, ctx);
+                long tailStart = System.nanoTime();
+                executeBatch(upsert, targetConn, stats, ctx, throughput);
+                throughput.recordWrite(System.nanoTime() - tailStart);
             }
         }
         return stats;
@@ -979,7 +1080,8 @@ public class DataSyncService {
                                                Map<String, Integer> typeByColumn, ResultSet rs,
                                                List<Integer> jdbcTypes, List<String> typeNames,
                                                SyncContext ctx, ColumnCleanser cleanser,
-                                               List<String> pkTrack, PkCursor sink)
+                                               List<String> pkTrack, PkCursor sink,
+                                               ThroughputMeter throughput, int batchSize)
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
         GenericSqlDialect generic = dialect instanceof GenericSqlDialect
@@ -1009,13 +1111,19 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(insert, properties.getQueryTimeoutSeconds());
             JdbcUtil.applyQueryTimeout(update, properties.getQueryTimeoutSeconds());
             int sinceCommit = 0;
+            long mark = System.nanoTime();
+            // Same reuse as the native writer: one row map for the whole pass.
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                Map<String, Object> row = JdbcRowMapper.readRow(rs, columns,
-                        jdbcTypes, typeNames, ctx.getSourceType());
+                long fetched = System.nanoTime();
+                JdbcRowMapper.readRowInto(rs, columns, jdbcTypes, typeNames,
+                        ctx.getSourceType(), row);
                 if (sink != null) {
                     // Same rule as the native writer: the boundary must stay a raw source key.
                     sink.values = extractPk(row, pkTrack);
                 }
+                long read = System.nanoTime();
+                throughput.recordRead(read - mark);
                 cleanser.apply(row);
                 int updated = 0;
                 if (update != null) {
@@ -1054,13 +1162,16 @@ public class DataSyncService {
                     stats.updated++;
                 }
                 stats.read++;
-                if (++sinceCommit >= ctx.getBatchSize()) {
+                if (++sinceCommit >= batchSize) {
                     targetConn.commit();
+                    throughput.recordBatch();
                     // Same renewal point as the native-batch path: abort before more rows once
                     // the lease is lost. The committed tail stays; the rest replays next time.
                     ctx.requireLease();
                     sinceCommit = 0;
                 }
+                throughput.recordWrite(System.nanoTime() - fetched);
+                mark = System.nanoTime();
             }
         }
         return stats;
@@ -1129,11 +1240,17 @@ public class DataSyncService {
         List<ChunkCheckpoint> saved = checkpoints
                 .findByProjectIdAndTableName(ctx.projectId(), table.getName());
         int parallelism = resolveParallelism(route, table, ctx);
+        // Asked once per table load, never per chunk: from the second chunk on the table holds
+        // the first chunk's rows and would answer "not empty", quietly dropping every later
+        // chunk back to MERGE. The ranges of a parallel load are disjoint, so a table that was
+        // empty at this point is a safe INSERT target for every worker as well.
+        boolean insertFirst = useInsertFirst(targetConn, ctx, targetTable,
+                table.getPrimaryKeys());
         boolean done = parallelism > 1
                 ? parallelChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                        watermark, upperBound, ctx, result, saved, parallelism)
+                        watermark, upperBound, ctx, result, saved, parallelism, insertFirst)
                 : sequentialChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                        watermark, upperBound, ctx, result, saved);
+                        watermark, upperBound, ctx, result, saved, insertFirst);
         if (done) {
             result.resumableLoad = true;
         }
@@ -1148,14 +1265,17 @@ public class DataSyncService {
                                           TableMeta table, String targetTable,
                                           CursorStrategy strategy, String watermark,
                                           Object upperBound, SyncContext ctx,
-                                          TableSyncResult result, List<ChunkCheckpoint> saved)
+                                          TableSyncResult result, List<ChunkCheckpoint> saved,
+                                          boolean insertFirst)
             throws SQLException {
         // Checkpoints left by an earlier parallel run are organized into key ranges this path
         // does not walk; dropping them and reloading is safe (idempotent upserts) and keeps the
-        // sequential resume model single-valued.
+        // sequential resume model single-valued. Range 0 of a parallel split is a slice of the
+        // span, not the whole table, so its non-null bounds also mark it foreign.
         boolean foreignModel = saved.stream().anyMatch(c ->
                 (c.getRangeIndex() != null && c.getRangeIndex() != 0)
-                        || ChunkCheckpoint.STATUS_RANGE_DONE.equals(c.getStatus()));
+                        || ChunkCheckpoint.STATUS_RANGE_DONE.equals(c.getStatus())
+                        || c.getRangeLower() != null || c.getRangeUpper() != null);
         if (foreignModel) {
             log.info("Discarding parallel-range checkpoints for {}: reloading sequentially",
                     table.getName());
@@ -1165,7 +1285,7 @@ public class DataSyncService {
         List<String> pk = table.getPrimaryKeys();
         int chunkSize = properties.getChunkSize();
 
-        RangeResume resume = resumePoint(saved, 0);
+        RangeResume resume = resumePoint(saved, 0, table);
         List<Object> lastPk = resume.boundary;
         int chunkIndex = resume.nextChunkIndex;
         if (lastPk != null) {
@@ -1199,7 +1319,8 @@ public class DataSyncService {
                     table.getName(), pk, lastPk, null, strategy, upperBound, chunkSize, params);
             PkCursor sink = new PkCursor();
             WriteStats stats = copyRows(sourceConn, targetConn, pageSql, params,
-                    table, targetTable, ctx, pk, sink);
+                    table, targetTable, ctx, pk, sink,
+                    fullLoadBatchSize(ctx), fullLoadFetchSize(ctx), insertFirst);
             if (stats.read == 0) {
                 break;
             }
@@ -1240,8 +1361,11 @@ public class DataSyncService {
      * connections, and the key is a single integer column whose span can be split into
      * disjoint ranges. Clamped to 8 per the capacity plan.
      */
-    private int resolveParallelism(FullLoadRoute route, TableMeta table, SyncContext ctx) {
-        int configured = properties.getFullLoadParallelism();
+    int resolveParallelism(FullLoadRoute route, TableMeta table, SyncContext ctx) {
+        // The factory already capped the project's value against the pool; a hand-built
+        // context (tests, calls that bypass the factory) falls back to the global knob.
+        int configured = ctx.getFullLoadParallelism() > 0
+                ? ctx.getFullLoadParallelism() : properties.getFullLoadParallelism();
         if (configured <= 1) {
             return 1;
         }
@@ -1289,7 +1413,7 @@ public class DataSyncService {
                                         CursorStrategy strategy, String watermark,
                                         Object upperBound, SyncContext ctx,
                                         TableSyncResult result, List<ChunkCheckpoint> saved,
-                                        int parallelism) throws SQLException {
+                                        int parallelism, boolean insertFirst) throws SQLException {
         String pk = table.getPrimaryKeys().get(0);
         long[] bounds = readPkBounds(sourceConn, table, pk, strategy, upperBound, ctx);
         if (bounds == null) {
@@ -1304,8 +1428,12 @@ public class DataSyncService {
         if (ranges == null) {
             // Key span too wide to split without overflow; sequential chunking spans anything.
             return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                    watermark, upperBound, ctx, result, saved);
+                    watermark, upperBound, ctx, result, saved, insertFirst);
         }
+        // The split is recomputed on every attempt from the current parallelism and MIN/MAX.
+        // A saved range index without its bounds cannot prove it covers the range it is now
+        // mapped onto; trusting it can skip whole slices, so a mismatch is a full reload.
+        List<ChunkCheckpoint> usable = validRangeCheckpoints(saved, ranges, table, ctx);
         log.info("Parallel full load of {}: key span [{}, {}] split into {} ranges ({} workers)",
                 table.getName(), bounds[0], bounds[1], ranges.size(), parallelism);
 
@@ -1321,47 +1449,10 @@ public class DataSyncService {
                 final int rangeIndex = i;
                 final long[] range = ranges.get(i);
                 futures.add(pool.submit(() -> copyRange(table, targetTable, strategy, upperBound,
-                        ctx, range, rangeIndex, resumePoint(saved, rangeIndex))));
+                        ctx, range, rangeIndex, resumePoint(usable, rangeIndex, table),
+                        insertFirst)));
             }
-            // Waiting for every future (even after one failed) means no worker is still
-            // writing by the time this method throws or clears the checkpoints.
-            LockLostException leaseLost = null;
-            SQLException failure = null;
-            for (Future<WriteStats> future : futures) {
-                try {
-                    WriteStats w = future.get();
-                    total.read += w.read;
-                    total.inserted += w.inserted;
-                    total.updated += w.updated;
-                    total.unclassified += w.unclassified;
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    if (failure == null) {
-                        failure = new SQLException("Parallel full load interrupted", e);
-                    }
-                } catch (ExecutionException e) {
-                    Throwable cause = e.getCause();
-                    if (cause instanceof LockLostException) {
-                        if (leaseLost == null) {
-                            leaseLost = (LockLostException) cause;
-                        }
-                    } else if (failure == null) {
-                        failure = cause instanceof SQLException ? (SQLException) cause
-                                : new SQLException("Parallel full load failed: "
-                                        + cause.getMessage(), cause);
-                    }
-                }
-            }
-            if (leaseLost != null) {
-                // Checkpoints stay: every committed chunk survives, and whoever holds the
-                // lock next resumes instead of reloading the whole table.
-                throw leaseLost;
-            }
-            if (failure != null) {
-                // Same contract as a failed sequential load: checkpoints stay, the cursor is
-                // not advanced, and the next cycle resumes where the ranges left off.
-                throw failure;
-            }
+            total = awaitWorkerStats(futures, pool);
         } finally {
             pool.shutdown();
         }
@@ -1375,10 +1466,104 @@ public class DataSyncService {
         return true;
     }
 
+    /**
+     * Waits for every range worker and aggregates its stats.
+     *
+     * <p>An interrupt on the coordinating thread is a <em>stop request</em> (the CDC
+     * consumer manager interrupts the thread it is stopping). It must reach the workers:
+     * returning while they keep writing leaves the target changing after the cycle ended,
+     * and the lease may already have been released. Workers are therefore interrupted and
+     * given a bounded join, and the stop is rethrown as {@link StopRequestedException} with
+     * the interrupt flag left set — the same contract the sequential load uses, so callers
+     * can tell a legitimate stop from a failure.
+     */
+    private WriteStats awaitWorkerStats(List<Future<WriteStats>> futures, ExecutorService pool)
+            throws SQLException {
+        WriteStats total = new WriteStats();
+        LockLostException leaseLost = null;
+        SQLException failure = null;
+        StopRequestedException stopped = null;
+        for (Future<WriteStats> future : futures) {
+            try {
+                WriteStats w = future.get();
+                total.read += w.read;
+                total.inserted += w.inserted;
+                total.updated += w.updated;
+                total.unclassified += w.unclassified;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                if (stopped == null) {
+                    stopped = new StopRequestedException(
+                            "Parallel full load interrupted: stop requested");
+                }
+                // Every remaining get() would throw immediately on the set flag, and the
+                // workers have not been told anything yet — stop them below.
+                break;
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof LockLostException) {
+                    if (leaseLost == null) {
+                        leaseLost = (LockLostException) cause;
+                    }
+                } else if (cause instanceof StopRequestedException) {
+                    if (stopped == null) {
+                        stopped = (StopRequestedException) cause;
+                    }
+                } else if (failure == null) {
+                    failure = cause instanceof SQLException ? (SQLException) cause
+                            : new SQLException("Parallel full load failed: "
+                                    + cause.getMessage(), cause);
+                }
+            }
+        }
+        if (stopped != null) {
+            stopWorkers(pool);
+            throw stopped;
+        }
+        if (leaseLost != null) {
+            // Checkpoints stay: every committed chunk survives, and whoever holds the
+            // lock next resumes instead of reloading the whole table.
+            throw leaseLost;
+        }
+        if (failure != null) {
+            // Same contract as a failed sequential load: checkpoints stay, the cursor is
+            // not advanced, and the next cycle resumes where the ranges left off.
+            throw failure;
+        }
+        return total;
+    }
+
+    /** Interrupts running range workers and waits a bounded time for them to unwind. */
+    static void stopWorkers(ExecutorService pool) {
+        List<Runnable> dropped = pool.shutdownNow();
+        // The stop is delivered by interrupting this thread, so the flag is already set and
+        // awaitTermination would throw on entry — skipping the join exactly when it matters
+        // and letting workers keep committing after the load returned. Wait with the flag
+        // cleared, then restore it so callers still see the stop.
+        boolean interrupted = Thread.interrupted();
+        boolean terminated = false;
+        try {
+            terminated = pool.awaitTermination(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            interrupted = true;
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (!terminated) {
+            log.warn("Parallel full-load workers did not stop within 30s of a stop request;"
+                    + " they abort at their next chunk boundary");
+        }
+        if (!dropped.isEmpty()) {
+            log.debug("Dropped {} queued range task(s) on stop", dropped.size());
+        }
+    }
+
     /** One parallel worker: walks its own {@code (lo, hi]} key slice, checkpointing per chunk. */
     private WriteStats copyRange(TableMeta table, String targetTable, CursorStrategy strategy,
                                  Object upperBound, SyncContext ctx, long[] range, int rangeIndex,
-                                 RangeResume resume) throws SQLException {
+                                 RangeResume resume, boolean insertFirst) throws SQLException {
         WriteStats totals = new WriteStats();
         if (resume.done) {
             return totals;
@@ -1389,6 +1574,14 @@ public class DataSyncService {
         List<Object> lastPk = resume.boundary != null ? resume.boundary : List.of(range[0]);
         int chunkIndex = resume.nextChunkIndex;
         while (true) {
+            // Same stop contract as the sequential path: a chunk boundary is a safe abort
+            // point (the previous chunk is committed and checkpointed), and the interrupt
+            // flag is left set so the caller can tell a stop from a failure.
+            if (Thread.currentThread().isInterrupted()) {
+                throw new StopRequestedException("Full load of " + table.getName()
+                        + " range " + rangeIndex + " aborted at chunk " + chunkIndex
+                        + ": stop requested (thread interrupted)");
+            }
             List<Object> params = new ArrayList<>();
             String pageSql = KeysetChunker.pageSql(ctx.getSourceDialect(), ctx.getSourceSchema(),
                     table.getName(), pkColumns, lastPk, range[1], strategy, upperBound,
@@ -1400,7 +1593,8 @@ public class DataSyncService {
             try (Connection src = ctx.getConnectionProvider().open(ctx.getSourceConfig());
                  Connection tgt = ctx.getConnectionProvider().open(ctx.getTargetConfig())) {
                 stats = copyRows(src, tgt, pageSql, params, table, targetTable, ctx,
-                        pkColumns, sink);
+                        pkColumns, sink, fullLoadBatchSize(ctx), fullLoadFetchSize(ctx),
+                        insertFirst);
             }
             if (stats.read == 0) {
                 break;
@@ -1411,7 +1605,7 @@ public class DataSyncService {
             totals.unclassified += stats.unclassified;
             checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
                     chunkIndex++, KeysetChunker.encodePk(sink.values), stats.read,
-                    ChunkCheckpoint.STATUS_CHUNK));
+                    ChunkCheckpoint.STATUS_CHUNK, range[0], range[1]));
             lastPk = sink.values;
             if (stats.read < chunkSize) {
                 break;
@@ -1420,7 +1614,7 @@ public class DataSyncService {
         }
         // Marks the slice complete: a resumed load skips this range without reading it again.
         checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
-                chunkIndex, null, 0, ChunkCheckpoint.STATUS_RANGE_DONE));
+                chunkIndex, null, 0, ChunkCheckpoint.STATUS_RANGE_DONE, range[0], range[1]));
         return totals;
     }
 
@@ -1505,8 +1699,40 @@ public class DataSyncService {
         }
     }
 
+    /**
+     * The checkpoints a resumed parallel load may trust, or an empty list after deleting
+     * them. A range index is only meaningful together with the bounds it was recorded for:
+     * the split depends on the current parallelism and the current MIN/MAX, so an index
+     * alone can point at a different slice after either changes. Reloading instead is safe
+     * because every write is an idempotent upsert.
+     */
+    private List<ChunkCheckpoint> validRangeCheckpoints(List<ChunkCheckpoint> saved,
+                                                        List<long[]> ranges,
+                                                        TableMeta table, SyncContext ctx) {
+        if (saved.isEmpty()) {
+            return saved;
+        }
+        boolean matches = saved.stream().allMatch(c -> {
+            Integer index = c.getRangeIndex();
+            if (index == null || index < 0 || index >= ranges.size()
+                    || c.getRangeLower() == null || c.getRangeUpper() == null) {
+                return false;
+            }
+            long[] range = ranges.get(index);
+            return c.getRangeLower() == range[0] && c.getRangeUpper() == range[1];
+        });
+        if (matches) {
+            return saved;
+        }
+        log.info("Discarding {} chunk checkpoint(s) for {}: the parallel key ranges changed"
+                + " (parallelism or MIN/MAX); reloading the table", saved.size(), table.getName());
+        checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+        return List.of();
+    }
+
     /** Reads a range's resume state from the table's checkpoints (newest chunk wins). */
-    private static RangeResume resumePoint(List<ChunkCheckpoint> saved, int rangeIndex) {
+    private static RangeResume resumePoint(List<ChunkCheckpoint> saved, int rangeIndex,
+                                           TableMeta table) {
         ChunkCheckpoint latest = null;
         for (ChunkCheckpoint c : saved) {
             if (c.getRangeIndex() != null && c.getRangeIndex() == rangeIndex
@@ -1520,8 +1746,20 @@ public class DataSyncService {
         if (ChunkCheckpoint.STATUS_RANGE_DONE.equals(latest.getStatus())) {
             return new RangeResume(true, null, latest.getChunkIndex() + 1);
         }
-        return new RangeResume(false, KeysetChunker.decodePk(latest.getLastPkJson()),
+        // A temporal key round-trips through JSON as epoch millis; restore the column's JDBC
+        // type so it can be rebound to a DATE/TIMESTAMP key column on resume.
+        return new RangeResume(false,
+                KeysetChunker.decodePk(latest.getLastPkJson(), pkJdbcTypes(table)),
                 latest.getChunkIndex() + 1);
+    }
+
+    /** JDBC type of each primary-key column, in key order, for checkpoint decoding. */
+    private static List<Integer> pkJdbcTypes(TableMeta table) {
+        List<Integer> types = new ArrayList<>(table.getPrimaryKeys().size());
+        for (String pk : table.getPrimaryKeys()) {
+            types.add(table.column(pk).map(c -> c.getJdbcType()).orElse(Types.OTHER));
+        }
+        return types;
     }
 
     /** SQLState 23xxx is the integrity-constraint class; 23505/23000 are unique violations. */
@@ -1561,9 +1799,10 @@ public class DataSyncService {
      * rather than failing the whole table anonymously.
      */
     private void executeBatch(PreparedStatement ps, Connection conn, WriteStats stats,
-                              SyncContext ctx) throws SQLException {
+                              SyncContext ctx, ThroughputMeter throughput) throws SQLException {
         try {
             int[] counts = ps.executeBatch();
+            throughput.recordBatch();
             conn.commit();
             // The batch is a commit boundary and hence a safe renewal point: the rows it holds
             // are durable and idempotent. Stop now if the lease was lost, before the next batch.
@@ -1818,6 +2057,13 @@ public class DataSyncService {
             executor.execute("DELETE FROM "
                     + ctx.getTargetDialect().qualify(ctx.getTargetSchema(), targetTable), false);
             log.info("Deleted all rows from target table {} before initial load", targetTable);
+        }
+        // The table is empty now, so any resume point describes rows that no longer exist.
+        // Keeping them would let the next chunked load skip the ranges they mark as copied,
+        // leaving permanent holes. Only reached after the truncate/delete succeeded — a failed
+        // empty leaves the already-committed rows in place, and their checkpoints stay valid.
+        if (checkpoints != null && ctx.getProject() != null) {
+            checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
         }
     }
 

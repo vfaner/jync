@@ -85,19 +85,40 @@ sync:
   poll-interval: 2000
   # Max retry attempts for a failed sync unit before it is logged as an error
   max-retries: 3
-  # JDBC batch size for data synchronization
+  # JDBC batch size for incremental windows and CDC replay (live traffic; keep it small)
   batch-size: 500
-  # Fetch size hint applied to source result sets
+  # Fetch size hint applied to incremental source result sets
   fetch-size: 1000
+  # Rows per JDBC batch of the initial/full load only. Independent of batch-size: a full load
+  # has no live traffic to protect, so fewer/larger commits are safe there. Clamped to 20000.
+  full-load-batch-size: 2000
+  # Cursor fetch size of the initial/full load only. Clamped to 20000.
+  full-load-fetch-size: 2000
+  # Initial load into an EMPTY Oracle target writes INSERT instead of MERGE (measured ~2.5x
+  # faster: nothing can match on an empty table, so the match test buys nothing). The target
+  # is probed once per table load; a table that already has rows keeps the idempotent MERGE.
+  # Other target databases are unaffected.
+  oracle-initial-load-insert-first: true
+  # A newly created table's non-unique secondary indexes are built AFTER its initial load,
+  # not while the rows arrive: maintaining them per row roughly doubled the load in the
+  # 500k-row Oracle benchmark (11.1s vs 5.9s), while creating both afterwards took 0.5s.
+  # The primary key (inside CREATE TABLE) and unique indexes are always created immediately:
+  # the upsert needs the PK, and a unique index must catch duplicate source rows as they
+  # arrive. Structure-only projects (no data load) still create every index up front.
+  defer-secondary-indexes: true
   # Rows per keyset chunk of an initial full load; each chunk commits and checkpoints on its
   # own, so a crash mid-table resumes at the last chunk instead of re-reading everything.
   # 0 disables chunking (classic single streamed read). Keyless tables never chunk.
   chunk-size: 100000
-  # Worker threads for one chunked initial full load; 1 = sequential (the classic behavior).
-  # Requires a single-column integer primary key (MIN/MAX range split); other tables stay
-  # sequential. Workers borrow their own connections per chunk, so parallelism above
-  # max-pool-size just queues on the pool. Clamped to 8.
-  full-load-parallelism: 1
+  # Worker threads for one chunked initial full load. Requires a single-column integer primary
+  # key (MIN/MAX range split); other tables stay sequential. Workers borrow their own
+  # connections per chunk, so parallelism above max-pool-size just queues on the pool. Clamped
+  # to 8, and further capped by the pool: max-pool-size - 1 for distinct endpoints,
+  # (max-pool-size - 2) / 2 when source and target share one database config. A project may
+  # override it (full-load performance card). Default 2 is balanced: the 500k-row Oracle
+  # benchmark measured ~117k rows/s at 1, ~184k at 2 and ~216k at 4 (+18% for the last step).
+  # Set 1 on databases that are shared with live traffic.
+  full-load-parallelism: 2
   # Maximum connections in each per-database pool; a cycle borrows one connection per side
   max-pool-size: 5
   # Subtracted from the timestamp high-watermark so in-flight source transactions
