@@ -11,6 +11,7 @@ Jync（捷同，原 SyncTool）自身以 MIT 许可证发布（见 `pom.xml` 中
 | MariaDB | `org.mariadb.jdbc:mariadb-java-client:3.1.4` | LGPL-2.1 | — |
 | Microsoft SQL Server | `com.microsoft.sqlserver:mssql-jdbc:10.2.3.jre8` | MIT | — |
 | Oracle | `com.oracle.database.jdbc:ojdbc8:21.5.0.0` | Oracle Free Use Terms and Conditions (FUTC) | `META-INF/license.txt` |
+| Oracle 字符集转换（NLS） | `com.oracle.database.nls:orai18n:21.5.0.0` | Oracle Free Use Terms and Conditions (FUTC) | `META-INF/license.txt` |
 | IBM DB2 | `com.ibm.db2:jcc:11.5.9.0` | IBM International Program License Agreement (IPLA) | — |
 | openGauss | `org.opengauss:opengauss-jdbc:6.0.0-og` | BSD-2-Clause | `META-INF/LICENSE` |
 | 达梦 DM | `com.dameng:DmJdbcDriver18:8.1.3.140` | Apache License 2.0 | — |
@@ -21,7 +22,7 @@ Jync（捷同，原 SyncTool）自身以 MIT 许可证发布（见 `pom.xml` 中
 | 崖山 YashanDB | `com.yashandb:yashandb-jdbc:1.7.10` | Apache License 2.0 | `META-INF/LICENSE` |
 | H2（本工具的元数据库） | `com.h2database:h2:2.1.214` | MPL 2.0 / EPL 1.0（双许可） | — |
 
-其中 PostgreSQL、MariaDB、SQL Server、ojdbc8、DB2 jcc 的版本由 Spring Boot 2.7.18 的依赖管理统一锁定。TiDB 预置类型复用 MySQL 驱动（MySQL 协议兼容），不单独内置构件。
+其中 PostgreSQL、MariaDB、SQL Server、ojdbc8、orai18n、DB2 jcc 的版本由 Spring Boot 2.7.18 的依赖管理统一锁定（orai18n 与 ojdbc8 版本必须一致）。TiDB 预置类型复用 MySQL 驱动（MySQL 协议兼容），不单独内置构件。
 
 各许可证原文：
 
@@ -32,9 +33,9 @@ Jync（捷同，原 SyncTool）自身以 MIT 许可证发布（见 `pom.xml` 中
 - Apache License 2.0：<https://www.apache.org/licenses/LICENSE-2.0>
 - MPL 2.0：<https://www.mozilla.org/MPL/2.0/>；EPL 1.0：<https://opensource.org/licenses/eclipse-1.0.php>
 
-### Oracle ojdbc8（FUTC）的再分发说明
+### Oracle ojdbc8 与 orai18n（FUTC）的再分发说明
 
-ojdbc8 按 Oracle Free Use Terms and Conditions 发布，其中明确允许再分发未修改的程序与文档（原文）：
+ojdbc8 与 orai18n 均按 Oracle Free Use Terms and Conditions 发布，其中明确允许再分发未修改的程序与文档（原文）：
 
 > "(b) redistribute unmodified Programs and Programs Documentation, under the terms of this License, provided that You do not charge Your end users any additional fees for the use of the Programs."
 

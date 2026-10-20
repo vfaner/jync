@@ -129,6 +129,16 @@
             <artifactId>ojdbc8</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- Oracle's NLS character converters, without which ojdbc8 cannot read a database
+             whose character set is not built into the JVM: every conversion throws
+             "不支持的字符集 (在类路径中添加 orai18n.jar): ZHS16GBK" and the object list comes
+             back empty on such databases (GBK is common in domestic 11g installs). Version
+             is pinned by the same Spring Boot BOM as ojdbc8, so the two stay aligned. -->
+        <dependency>
+            <groupId>com.oracle.database.nls</groupId>
+            <artifactId>orai18n</artifactId>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>com.ibm.db2</groupId>
             <artifactId>jcc</artifactId>

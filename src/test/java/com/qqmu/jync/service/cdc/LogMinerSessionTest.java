@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -18,6 +19,7 @@ import java.sql.Timestamp;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mockito;
 
@@ -38,6 +40,7 @@ class LogMinerSessionTest {
      */
     private static final class Fixture {
         final Connection conn = mock(Connection.class);
+        final DatabaseMetaData meta = mock(DatabaseMetaData.class);
         final Statement st = mock(Statement.class);
         final PreparedStatement cursor = mock(PreparedStatement.class);
         final PreparedStatement archivePs = mock(PreparedStatement.class);
@@ -47,6 +50,13 @@ class LogMinerSessionTest {
         final ResultSet redoRs = mock(ResultSet.class);
 
         Fixture(long currentScn, String[] archivedLogs, String[] redoMembers) throws SQLException {
+            this(currentScn, archivedLogs, redoMembers, 23);
+        }
+
+        Fixture(long currentScn, String[] archivedLogs, String[] redoMembers,
+                int databaseMajorVersion) throws SQLException {
+            when(conn.getMetaData()).thenReturn(meta);
+            when(meta.getDatabaseMajorVersion()).thenReturn(databaseMajorVersion);
             when(conn.createStatement()).thenReturn(st);
             when(st.executeQuery(LogMinerSession.Q_CURRENT_SCN)).thenReturn(scnRs);
             when(scnRs.next()).thenReturn(true);
@@ -289,6 +299,28 @@ class LogMinerSessionTest {
         } finally {
             LogCapture.detach(LogMinerSession.class, appender);
         }
+    }
+
+    @Test
+    void pre12cConnectionsSelectAConstantContainerId() throws SQLException {
+        // Oracle 11g's V$LOGMNR_CONTENTS has no SRC_CON_ID (11.2.0.2 实测: ORA-00904), and
+        // LogMinerSession is the only mining entry point every 11g project runs. The query
+        // must select a constant there so the result shape (and the CDB filter's no-op on
+        // ownConId=0) stays identical; otherwise the first read after START_LOGMNR fails.
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"}, 11);
+        ArgumentCaptor<String> prepared = ArgumentCaptor.forClass(String.class);
+        when(fx.conn.prepareStatement(prepared.capture())).thenAnswer(invocation ->
+                LogMinerSession.Q_ARCHIVED_LOGS_SINCE.equals(invocation.getArgument(0))
+                        ? fx.archivePs : fx.cursor);
+
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+
+        assertThat(prepared.getAllValues())
+                .as("11g must not reference the 12c-only SRC_CON_ID column")
+                .anyMatch(sql -> sql.contains("V$LOGMNR_CONTENTS")
+                        && sql.contains("0 AS SRC_CON_ID"));
+        session.close();
     }
 
     @Test

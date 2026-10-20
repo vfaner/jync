@@ -72,6 +72,26 @@ class BundledDriversTest {
         }
     }
 
+    /**
+     * ojdbc8 does not contain Oracle's NLS character converters; they live in orai18n.jar.
+     * On a database whose character set is not in the JVM (ZHS16GBK is the common one in
+     * domestic deployments), the driver hands out {@code CharacterSetUnknown}, and every
+     * metadata read that converts a column to a Java String fails with
+     * "不支持的字符集 (在类路径中添加 orai18n.jar): ZHS16GBK" — connection test passes,
+     * the object list does not (customer report, Oracle 11.2.0.3 + ZHS16GBK, 2026-10-20).
+     *
+     * <p>Charset id 852 is ZHS16GBK. Converting even ASCII bytes goes through the same
+     * converter the metadata calls use, so this reproduces the customer failure without
+     * a database, and fails if the orai18n dependency is dropped from {@code pom.xml}.
+     */
+    @Test
+    @DisplayName("orai18n 在 classpath 上:ZHS16GBK 库的字符转换不能抛『不支持的字符集』")
+    void gbkDatabaseCharacterSetIsConvertible() throws Exception {
+        oracle.sql.CharacterSet gbk = oracle.sql.CharacterSet.make(852);
+        assertEquals("A", gbk.toString(new byte[]{0x41}, 0, 1),
+                "缺少 orai18n.jar 时,ojdbc 无法转换 ZHS16GBK 数据,元数据读取会整体失败;检查 pom.xml");
+    }
+
     @Test
     @DisplayName("DriverPresence 对空白类名和不存在的类返回 false")
     void presenceHandlesBlankAndMissing() {

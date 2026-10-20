@@ -58,6 +58,11 @@ class LogMinerCdcProbeTest {
             } else if (sql.contains("SESSION_ROLES")) {
                 when(rs.next()).thenReturn(true, false);
                 when(rs.getLong(1)).thenReturn(1L);
+            } else if (sql.contains("SESSION_PRIVS")) {
+                // Happy path holds SELECT ANY TRANSACTION; tests that flip it stub the
+                // exact query themselves (or rely on this fallback answering false).
+                when(rs.next()).thenReturn(true, false);
+                when(rs.getLong(1)).thenReturn(1L);
             } else {
                 when(rs.next()).thenReturn(false);
             }
@@ -218,6 +223,28 @@ class LogMinerCdcProbeTest {
         CdcProbeResult.Check c = byName(r, CdcProbeResult.MINING_PRIVILEGES);
         assertThat(c.isPassed()).isTrue();
         assertThat(c.getDetail()).contains("EXECUTE_CATALOG_ROLE");
+    }
+
+    @Test
+    void elevenGRequiresSelectAnyTransactionForLogmnrContents() throws SQLException {
+        // 11.2.0.2 实测:即便同时持有 EXECUTE_CATALOG_ROLE + SELECT_CATALOG_ROLE +
+        // 直接的 SELECT ON V_$LOGMNR_CONTENTS,START_LOGMNR 之后读 V$LOGMNR_CONTENTS
+        // 仍然报 ORA-01031;授予 SELECT ANY TRANSACTION 后才返回数据(DBA 角色自带该
+        // 权限,普通挖掘账号不带)。只查角色会把一个"首轮挖掘必失败"的源误报成就绪。
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(md.getDatabaseProductName()).thenReturn("Oracle");
+        when(md.getDatabaseProductVersion()).thenReturn("11.2.0.2");
+        when(conn.getMetaData()).thenReturn(md);
+        singleLong(stmt, "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN"
+                + " ('EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE','DBA')", 1L);
+        // Role present, privilege absent — the customer's situation.
+        singleLong(stmt, "SELECT COUNT(*) FROM SESSION_PRIVS"
+                + " WHERE PRIVILEGE = 'SELECT ANY TRANSACTION'", 0L);
+
+        CdcProbeResult r = probe.probe(conn, Collections.emptyList());
+        CdcProbeResult.Check c = byName(r, CdcProbeResult.MINING_PRIVILEGES);
+        assertThat(c.isPassed()).isFalse();
+        assertThat(c.getDetail()).contains("SELECT ANY TRANSACTION");
     }
 
     @Test

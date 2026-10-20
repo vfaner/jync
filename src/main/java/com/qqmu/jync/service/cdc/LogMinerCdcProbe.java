@@ -221,26 +221,53 @@ public class LogMinerCdcProbe {
         boolean is11g = major > 0 && major < 12;
         String roleSql;
         String expected;
+        String roleGrant;
         if (is11g) {
             roleSql = "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN"
                     + " ('EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE','DBA')";
             expected = "EXECUTE_CATALOG_ROLE / SELECT_CATALOG_ROLE (or DBA)";
+            roleGrant = "EXECUTE_CATALOG_ROLE";
         } else {
             roleSql = "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN ('LOGMINING','DBA')";
             expected = "LOGMINING role (or DBA)";
+            roleGrant = "LOGMINING";
         }
-        try (Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(roleSql)) {
-            long count = rs.next() ? rs.getLong(1) : 0L;
-            boolean ok = count > 0;
-            return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, ok,
-                    ok ? "has " + expected
-                            : "missing " + expected
-                                    + " — grant with: GRANT " + (is11g ? "EXECUTE_CATALOG_ROLE" : "LOGMINING")
-                                    + " TO <user>; plus EXECUTE ON SYS.DBMS_LOGMNR and SELECT on"
-                                    + " V_\\$DATABASE / V_\\$LOG / V_\\$LOGFILE / V_\\$ARCHIVED_LOG / V_\\$LOGMNR_CONTENTS");
+        try {
+            boolean hasRole = count(conn, roleSql) > 0;
+            // Oracle 11.2.0.2 实测:持有目录角色 + 直接 SELECT ON V_$LOGMNR_CONTENTS,
+            // START_LOGMNR 之后读该视图仍报 ORA-01031,授予 SELECT ANY TRANSACTION 才通。
+            // 12c+ 的 LOGMINING 角色同样不隐含它(IT 里也是单独授予),所以各版本都查。
+            // DBA 角色自带该权限,按角色连库的 DBA 用户不受影响。
+            boolean hasSelectAnyTxn = count(conn,
+                    "SELECT COUNT(*) FROM SESSION_PRIVS"
+                            + " WHERE PRIVILEGE = 'SELECT ANY TRANSACTION'") > 0;
+            if (hasRole && hasSelectAnyTxn) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, true,
+                        "has " + expected + " and SELECT ANY TRANSACTION");
+            }
+            List<String> missing = new ArrayList<>();
+            if (!hasRole) {
+                missing.add("missing " + expected + " — GRANT " + roleGrant + " TO <user>");
+            }
+            if (!hasSelectAnyTxn) {
+                missing.add("missing SELECT ANY TRANSACTION — without it every read of"
+                        + " V_$LOGMNR_CONTENTS after START_LOGMNR fails with ORA-01031;"
+                        + " GRANT SELECT ANY TRANSACTION TO <user>");
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, false,
+                    String.join("; ", missing)
+                            + "; plus EXECUTE ON SYS.DBMS_LOGMNR and SELECT on"
+                            + " V_\\$DATABASE / V_\\$LOG / V_\\$LOGFILE / V_\\$ARCHIVED_LOG / V_\\$LOGMNR_CONTENTS");
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, false, msg(e));
+        }
+    }
+
+    /** First-column COUNT(*) of a scalar query; 0 when the query returns no row. */
+    private static long count(Connection conn, String sql) throws SQLException {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            return rs.next() ? rs.getLong(1) : 0L;
         }
     }
 

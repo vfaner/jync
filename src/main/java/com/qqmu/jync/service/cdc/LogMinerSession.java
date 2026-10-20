@@ -33,7 +33,8 @@ import lombok.extern.slf4j.Slf4j;
  * emits a single {@link Row} per logical statement.
  *
  * <p>The session does NOT filter by source container: on a CDB the consumer owns that
- * predicate (SRC_CON_ID = the PDB's CON_ID); on a non-CDB every row is in scope.
+ * predicate (SRC_CON_ID = the PDB's CON_ID); on a non-CDB every row is in scope. Oracle
+ * 11g has no SRC_CON_ID column, so the cursor selects a constant 0 there instead.
  */
 @Slf4j
 public class LogMinerSession implements AutoCloseable {
@@ -46,13 +47,24 @@ public class LogMinerSession implements AutoCloseable {
             "SELECT NAME FROM V$ARCHIVED_LOG WHERE DEST_ID = 1 AND NEXT_CHANGE# > ?"
                     + " AND NAME IS NOT NULL ORDER BY FIRST_CHANGE#";
 
-    static final String Q_CONTENTS =
+    private static final String Q_CONTENTS_HEAD =
             // CSCN = commit SCN (populated under COMMITTED_DATA_ONLY); V$LOGMNR_CONTENTS
             // has NO "CSN" column — selecting it dies with ORA-00904 on every real DB.
-            "SELECT RS_ID, CSCN, XID, OPERATION, SEG_OWNER, TABLE_NAME, SQL_REDO, TIMESTAMP, SRC_CON_ID"
-                    + " FROM V$LOGMNR_CONTENTS"
+            "SELECT RS_ID, CSCN, XID, OPERATION, SEG_OWNER, TABLE_NAME, SQL_REDO, TIMESTAMP, ";
+    private static final String Q_CONTENTS_TAIL =
+            " FROM V$LOGMNR_CONTENTS"
                     + " WHERE CSCN > ? AND OPERATION IN ('INSERT','UPDATE','DELETE','DDL')"
                     + " ORDER BY CSCN, RS_ID";
+
+    /** 12c+: SRC_CON_ID exists and carries the row's origin container on a CDB. */
+    static final String Q_CONTENTS = Q_CONTENTS_HEAD + "SRC_CON_ID" + Q_CONTENTS_TAIL;
+
+    /**
+     * Oracle 11g: V$LOGMNR_CONTENTS has no SRC_CON_ID (verified on 11.2.0.2 — selecting it
+     * raises ORA-00904). A literal 0 keeps the result shape and makes the consumer's
+     * container filter a no-op, exactly as it is on a non-CDB.
+     */
+    static final String Q_CONTENTS_PRE_12C = Q_CONTENTS_HEAD + "0 AS SRC_CON_ID" + Q_CONTENTS_TAIL;
 
     private final Connection source;
     private final long startScn;
@@ -216,8 +228,14 @@ public class LogMinerSession implements AutoCloseable {
      * ADD_LOGFILE/START_LOGMNR, and returns an open cursor. Extracted as a static so tests
      * can exercise the open sequence with mocks without going through Spring.
      */
+    /** The cursor query, split solely by whether the server has V$LOGMNR_CONTENTS.SRC_CON_ID. */
+    static String contentsQuery(int databaseMajorVersion) {
+        return databaseMajorVersion >= 12 ? Q_CONTENTS : Q_CONTENTS_PRE_12C;
+    }
+
     static LogMinerSession openDefault(Connection source, long startScn, int batchSize)
             throws SQLException {
+        int majorVersion = source.getMetaData().getDatabaseMajorVersion();
         pinLocaleIndependentNls(source);
         long currentScn;
         try (Statement st = source.createStatement();
@@ -270,7 +288,7 @@ public class LogMinerSession implements AutoCloseable {
                     + " + DBMS_LOGMNR.COMMITTED_DATA_ONLY); END;");
         }
 
-        PreparedStatement cursor = source.prepareStatement(Q_CONTENTS);
+        PreparedStatement cursor = source.prepareStatement(contentsQuery(majorVersion));
         cursor.setLong(1, startScn);
         if (batchSize > 0) {
             cursor.setFetchSize(batchSize);
