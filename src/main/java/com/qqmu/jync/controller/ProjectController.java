@@ -1,11 +1,10 @@
 package com.qqmu.jync.controller;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Controller;
@@ -85,19 +84,19 @@ public class ProjectController {
         Map<Long, SyncTask> taskLookup = projectService.findTasks(
                 projects.stream().map(Project::getId).toList());
 
-        // An explicitly empty selection means starting would only schedule empty cycles.
-        // The template disables the list's start button for exactly these rows; the
-        // service refuses the action anyway (stale page / direct API).
-        Set<Long> noSyncObjectIds = new HashSet<>();
+        // Rows whose saved configuration can produce no write at all: the template disables
+        // their start icon and shows the reason; the service refuses the action anyway.
+        Map<Long, String> noSyncWorkMessages = new HashMap<>();
         for (Project project : projects) {
-            if (projectService.loadConfig(project).hasNoSyncObjects()) {
-                noSyncObjectIds.add(project.getId());
+            String reason = noSyncWorkMessage(projectService.loadConfig(project));
+            if (reason != null) {
+                noSyncWorkMessages.put(project.getId(), reason);
             }
         }
 
         model.addAttribute("projects", projects);
         model.addAttribute("taskLookup", taskLookup);
-        model.addAttribute("noSyncObjectIds", noSyncObjectIds);
+        model.addAttribute("noSyncWorkMessages", noSyncWorkMessages);
         model.addAttribute("pager", pager);
         return "projects";
     }
@@ -123,6 +122,22 @@ public class ProjectController {
         model.addAttribute("project", project);
         addDatabaseOptions(model, project);
         return "project-form";
+    }
+
+    /**
+     * Localized reason why start/sync-now would do nothing for this project, or null when
+     * there is work. An explicit empty object selection blocks every strategy; turning all
+     * sync options off only reduces a polling cycle to a no-op, because a CDC consumer
+     * replays row events regardless of those switches.
+     */
+    private String noSyncWorkMessage(SyncConfig config) {
+        if (config.hasNoSyncObjects()) {
+            return messages.get("error.project.no.objects", LocaleContextHolder.getLocale());
+        }
+        if (!config.getCaptureStrategyOrDefault().isLogCdc() && config.hasNoPollingWork()) {
+            return messages.get("error.project.no.options", LocaleContextHolder.getLocale());
+        }
+        return null;
     }
 
     /** The source name plus the localized "(copy)" suffix, capped at the column length. */
@@ -210,9 +225,8 @@ public class ProjectController {
 
         model.addAttribute("project", project);
         model.addAttribute("config", config);
-        // Drives the disabled state of start/sync-now: an explicitly empty selection has
-        // nothing to sync, and a legacy empty one ("all") must stay startable.
-        model.addAttribute("noSyncObjects", config.hasNoSyncObjects());
+        // Drives the disabled state of start/sync-now plus the reason shown on the page.
+        model.addAttribute("noSyncWorkMessage", noSyncWorkMessage(config));
         model.addAttribute("databases", databaseConfigService.findAll());
         SyncTask task = projectService.findTask(id).orElse(null);
         model.addAttribute("task", task);

@@ -601,12 +601,18 @@ public class ProjectService {
         if (project.getSourceDbId() == null || project.getTargetDbId() == null) {
             throw new IllegalStateException("error.project.endpoints.required");
         }
-        // An explicit empty selection has nothing to sync: starting would only schedule empty
+        // Nothing to sync is refused up front: starting would only schedule connect-and-read
         // cycles (or launch a consumer mining for events it discards). The UI disables the
         // button; this is the server-side backstop for a stale page or a direct API call.
-        // Bare key: ApiExceptionHandler returns it as-is and the browser localizes it.
-        if (loadConfig(project).hasNoSyncObjects()) {
+        // Bare keys: ApiExceptionHandler returns them as-is and the browser localizes them.
+        SyncConfig config = loadConfig(project);
+        if (config.hasNoSyncObjects()) {
             throw new IllegalStateException("error.project.no.objects");
+        }
+        // The option switches only reduce a POLLING/FULL_COMPARE cycle to a no-op; a CDC
+        // consumer replays row events regardless of them, so its start must stay allowed.
+        if (!config.getCaptureStrategyOrDefault().isLogCdc() && config.hasNoPollingWork()) {
+            throw new IllegalStateException("error.project.no.options");
         }
         project.setEnabled(true);
         Project saved = projectRepository.save(project);
@@ -653,8 +659,13 @@ public class ProjectService {
             // 裸 i18n 键:ApiExceptionHandler 原样返回,浏览器端 JyncMessages 本地化。
             throw new IllegalStateException("error.project.cdc.use.rebaseline");
         }
-        if (loadConfig(project).hasNoSyncObjects()) {
+        SyncConfig config = loadConfig(project);
+        if (config.hasNoSyncObjects()) {
             throw new IllegalStateException("error.project.no.objects");
+        }
+        // CDC already returned above, so this is always a polling strategy.
+        if (config.hasNoPollingWork()) {
+            throw new IllegalStateException("error.project.no.options");
         }
         return taskRunner.runOnce(projectId);
     }

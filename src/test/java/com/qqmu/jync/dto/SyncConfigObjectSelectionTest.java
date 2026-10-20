@@ -99,6 +99,70 @@ class SyncConfigObjectSelectionTest {
     }
 
     @Test
+    void everyPollingOptionOffLeavesNothingToWrite() {
+        SyncConfig config = pollingConfig();
+
+        assertThat(config.hasNoPollingWork()).isTrue();
+    }
+
+    @Test
+    void anyEnabledOptionWithSelectedObjectsCountsAsWork() {
+        SyncConfig structure = new SyncConfig();
+        structure.setTables(new LinkedHashSet<>(List.of("orders")));
+        structure.setSyncData(false);
+        assertThat(structure.hasNoPollingWork()).isFalse();
+
+        SyncConfig data = pollingConfig();
+        data.setSyncData(true);
+        assertThat(data.hasNoPollingWork()).isFalse();
+
+        SyncConfig views = pollingConfig();
+        views.setSyncViews(true);
+        views.setViews(new LinkedHashSet<>(List.of("v_orders")));
+        assertThat(views.hasNoPollingWork()).isFalse();
+
+        SyncConfig procedures = pollingConfig();
+        procedures.setSyncProcedures(true);
+        procedures.setProcedures(new LinkedHashSet<>(List.of("p_nightly")));
+        assertThat(procedures.hasNoPollingWork()).isFalse();
+    }
+
+    @Test
+    void indexSyncAloneCannotWriteWithoutStructureSync() {
+        // Index work only rides on table structure: with structure off, the switch alone
+        // produces no statement, so it must not keep Start enabled.
+        SyncConfig config = pollingConfig();
+        config.setSyncIndexes(true);
+
+        assertThat(config.hasNoPollingWork()).isTrue();
+    }
+
+    @Test
+    void anExplicitlyEmptySelectionLeavesNoWorkEvenWithEveryOptionOn() {
+        SyncConfig config = new SyncConfig();   // every option defaults to on
+        config.setObjectSelectionExplicit(true);
+
+        assertThat(config.hasNoPollingWork()).isTrue();
+    }
+
+    @Test
+    void aLegacyEmptySelectionKeepsWorkBecauseEmptyMeansAll() {
+        assertThat(new SyncConfig().hasNoPollingWork()).isFalse();
+    }
+
+    /** Selected tables but all five switches off — the reported UI state. */
+    private static SyncConfig pollingConfig() {
+        SyncConfig config = new SyncConfig();
+        config.setTables(new LinkedHashSet<>(List.of("orders")));
+        config.setSyncStructure(false);
+        config.setSyncData(false);
+        config.setSyncIndexes(false);
+        config.setSyncViews(false);
+        config.setSyncProcedures(false);
+        return config;
+    }
+
+    @Test
     void theExplicitFlagSurvivesJsonRoundTrip() throws Exception {
         SyncConfig saved = new SyncConfig();
         saved.setObjectSelectionExplicit(true);

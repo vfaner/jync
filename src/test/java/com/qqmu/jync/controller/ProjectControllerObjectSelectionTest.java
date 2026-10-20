@@ -174,6 +174,77 @@ class ProjectControllerObjectSelectionTest {
     }
 
     @Test
+    void detailDisablesStartAndSyncNowWhenEverySyncOptionIsOff() throws Exception {
+        SyncConfig stored = stubDetail();
+        stored.setTables(new LinkedHashSet<>(List.of("orders")));
+        stored.setSyncStructure(false);
+        stored.setSyncData(false);
+        stored.setSyncIndexes(false);
+        stored.setSyncViews(false);
+        stored.setSyncProcedures(false);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // A polling cycle with no enabled category never writes anything.
+        assertThat(buttonTag(page, "/api/projects/1/start")).contains("disabled");
+        assertThat(buttonTag(page, "/api/projects/1/sync-now")).contains("disabled");
+        assertThat(page).contains("No sync options are enabled");
+    }
+
+    @Test
+    void detailKeepsStartEnabledForCdcWhenEverySyncOptionIsOff() throws Exception {
+        SyncConfig stored = stubDetail();
+        stored.setTables(new LinkedHashSet<>(List.of("orders")));
+        stored.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+        stored.setSyncStructure(false);
+        stored.setSyncData(false);
+        stored.setSyncIndexes(false);
+        stored.setSyncViews(false);
+        stored.setSyncProcedures(false);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The CDC consumer replays row events regardless of these switches, so the polling
+        // rule must not take its start button away.
+        assertThat(buttonTag(page, "/api/projects/1/start")).doesNotContain("disabled");
+    }
+
+    @Test
+    void projectListDisablesStartForAPollingProjectWithEveryOptionOff() throws Exception {
+        Project off = new Project();
+        off.setId(1L);
+        off.setName("off");
+        Project on = new Project();
+        on.setId(2L);
+        on.setName("on");
+        when(projectService.count()).thenReturn(2L);
+        when(projectService.findPage(0, 20)).thenReturn(List.of(off, on));
+        when(projectService.findTasks(List.of(1L, 2L))).thenReturn(java.util.Map.of());
+        SyncConfig noOptions = new SyncConfig();
+        noOptions.setTables(new LinkedHashSet<>(List.of("orders")));
+        noOptions.setSyncStructure(false);
+        noOptions.setSyncData(false);
+        noOptions.setSyncIndexes(false);
+        noOptions.setSyncViews(false);
+        noOptions.setSyncProcedures(false);
+        when(projectService.loadConfig(off)).thenReturn(noOptions);
+        when(projectService.loadConfig(on)).thenReturn(new SyncConfig());
+
+        String page = mvc.perform(get("/projects"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(buttonTag(page, "/api/projects/1/start"))
+                .contains("disabled")
+                .contains("No sync options are enabled");
+        assertThat(buttonTag(page, "/api/projects/2/start")).doesNotContain("disabled");
+    }
+
+    @Test
     void projectListDisablesStartOnlyForTheEmptySelectionProject() throws Exception {
         Project empty = new Project();
         empty.setId(1L);

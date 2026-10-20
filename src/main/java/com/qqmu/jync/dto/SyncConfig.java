@@ -146,6 +146,29 @@ public class SyncConfig {
                 && tables.isEmpty() && views.isEmpty() && procedures.isEmpty();
     }
 
+    /**
+     * True when a polling cycle has no enabled category left to write: table structure and
+     * data are both off (or no table is selected), and views/routines are off (or none is
+     * selected). Index work only rides on table structure, so {@link #syncIndexes} alone
+     * cannot produce a statement.
+     *
+     * <p>Only meaningful for the polling strategies ({@link CaptureStrategy#POLLING},
+     * {@link CaptureStrategy#FULL_COMPARE}). A CDC consumer replays row events filtered by
+     * the selected tables alone and ignores these switches after the initial baseline, so
+     * callers must not use this to block a CDC start.
+     */
+    public boolean hasNoPollingWork() {
+        boolean tableWork = (syncStructure || syncData) && mayContainObjects(tables);
+        boolean viewWork = syncViews && mayContainObjects(views);
+        boolean procedureWork = syncProcedures && mayContainObjects(procedures);
+        return !tableWork && !viewWork && !procedureWork;
+    }
+
+    /** Legacy empty means "all discovered", so work may exist; explicit empty means none. */
+    private boolean mayContainObjects(Set<String> selection) {
+        return !objectSelectionExplicit || !selection.isEmpty();
+    }
+
     public String targetTableName(String sourceTable) {
         for (Map.Entry<String, String> e : tableNameMapping.entrySet()) {
             if (e.getKey().equalsIgnoreCase(sourceTable)

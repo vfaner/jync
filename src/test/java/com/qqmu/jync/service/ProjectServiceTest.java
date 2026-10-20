@@ -797,6 +797,67 @@ class ProjectServiceTest {
     }
 
     @Test
+    void startRefusesAPollingProjectWhenEverySyncOptionIsOff() {
+        Project project = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(contextFactory.parseConfig(project)).thenReturn(pollingWithNoOptions());
+
+        // No enabled category can write anything: scheduling would only connect and read.
+        assertThatThrownBy(() -> service.start(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.no.options");
+        assertThat(project.getEnabled()).isNotEqualTo(Boolean.TRUE);
+        verify(projectRepository, never()).save(any());
+        verify(scheduler, never()).schedule(any());
+        verify(cdcManager, never()).ensureStarted(any());
+    }
+
+    @Test
+    void startStillRunsCdcWhenEveryPollingOptionIsOff() {
+        Project project = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        SyncConfig config = pollingWithNoOptions();
+        config.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+        when(contextFactory.parseConfig(project)).thenReturn(config);
+        when(cdcManager.strategyOf(project))
+                .thenReturn(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+
+        service.start(1L);
+
+        // The consumer replays row events regardless of the polling switches; blocking
+        // Start here would disable a mode that still has work to do.
+        assertThat(project.getEnabled()).isTrue();
+        verify(cdcManager).ensureStarted(project);
+        verify(scheduler, never()).schedule(any());
+    }
+
+    @Test
+    void syncNowRefusesAPollingProjectWhenEverySyncOptionIsOff() {
+        Project project = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(cdcManager.strategyOf(project))
+                .thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
+        when(contextFactory.parseConfig(project)).thenReturn(pollingWithNoOptions());
+
+        assertThatThrownBy(() -> service.syncNow(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.no.options");
+        verify(taskRunner, never()).runOnce(any());
+    }
+
+    private SyncConfig pollingWithNoOptions() {
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("orders")));
+        config.setSyncStructure(false);
+        config.setSyncData(false);
+        config.setSyncIndexes(false);
+        config.setSyncViews(false);
+        config.setSyncProcedures(false);
+        return config;
+    }
+
+    @Test
     void saveAsCloneRefusesAnUnknownSourceWithoutSaving() {
         when(projectRepository.findById(9L)).thenReturn(Optional.empty());
         Project clone = project(null);

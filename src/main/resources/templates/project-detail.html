@@ -92,12 +92,13 @@
                 <!--/* B9 文案澄清：启用 = 按调度自动增量轮询 / CDC 持续消费（tooltip 明说
                        非逐轮全量）；「手动跑一轮」不改启用状态。悬停即见语义，消除
                        「开启同步 = 轮询全量？」的误解。 */-->
-                <!--/* 显式全不选时没有任何对象可同步：启动只会空跑调度。禁用并说明原因，
-                       服务端仍有同名 key 的兜底拒绝(stale 页面/直接调 API)。 */-->
+                <!--/* 没有可同步的内容(显式全不选,或轮询策略下同步选项全关):启动只会
+                       空跑。禁用并说明原因,服务端仍做兜底拒绝(stale 页面/直接调 API)。
+                       CDC 不受同步选项影响,服务端与这里都不会因此禁用。 */-->
                 <button type="button" class="btn btn-ok btn-sm" th:unless="${project.enabled}"
-                        th:disabled="${noSyncObjects}"
+                        th:disabled="${noSyncWorkMessage != null}"
                         data-role="api-btn" data-reload="true"
-                        th:title="${noSyncObjects} ? #{error.project.no.objects} : #{project.startHelp}"
+                        th:title="${noSyncWorkMessage != null} ? ${noSyncWorkMessage} : #{project.startHelp}"
                         th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
                                  data-busy-text=#{common.loading}">
                     <svg class="ico"><use href="#play-fill"/></svg><span th:text="#{project.start}">Start</span>
@@ -113,9 +114,9 @@
                        恢复入口是重建基线(B7),复用 api-btn 的 postJson + data-confirm
                        模式,确认文案明示三个后果(停消费/清位点/全量重载)。 */-->
                 <button type="button" class="btn btn-primary btn-sm" th:unless="${cdcActive}"
-                        th:disabled="${noSyncObjects}"
+                        th:disabled="${noSyncWorkMessage != null}"
                         data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
-                        th:title="${noSyncObjects} ? #{error.project.no.objects}"
+                        th:title="${noSyncWorkMessage != null} ? ${noSyncWorkMessage}"
                         th:attr="data-action=@{/api/projects/{id}/sync-now(id=${project.id})},
                                  data-busy-text=#{common.loading}">
                     <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{project.syncNow}">Sync now</span>
@@ -154,8 +155,9 @@
                 </a>
             </div>
             <!--/* 禁用态的按钮不会弹 tooltip，这里把原因直接写在页面上。 */-->
-            <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin and noSyncObjects}"
-               th:text="#{error.project.no.objects}">No sync objects selected</p>
+            <p class="small muted" style="margin:11px 0 0"
+               th:if="${isAdmin and noSyncWorkMessage != null}"
+               th:text="${noSyncWorkMessage}">No sync objects selected</p>
             <!--/* 停用项目上的重建基线仍会跑完整启动序列,但巡检(sync.cdc.supervise-interval-ms,
                    默认 10s)很快会把消费者再次停掉——把这段「先起后停」明说,别让用户猜。 */-->
             <p class="small muted" id="cdc-rebaseline-disabled-hint" style="margin:11px 0 0"
