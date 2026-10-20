@@ -44,6 +44,8 @@ public class VersionService {
 
     private final Supplier<String> currentVersionSupplier;
     private final ReleaseFeed feed;
+    /** Per-mirror access for the click-triggered check; null in tests that only stub one feed. */
+    private final SourceAwareFeed sourceAwareFeed;
     private final boolean enabled;
     /** Runs the network call off the request thread; a fresh daemon thread per refresh. */
     private final Executor refreshExecutor;
@@ -66,6 +68,7 @@ public class VersionService {
     @Autowired
     public VersionService(ObjectProvider<BuildProperties> buildProperties,
                           ReleaseFeed feed,
+                          SourceAwareFeed sourceAwareFeed,
                           @Value("${app.update-check.enabled:true}") boolean enabled) {
         this(() -> {
             BuildProperties props = buildProperties.getIfAvailable();
@@ -74,19 +77,36 @@ public class VersionService {
             }
             String version = props.getVersion();
             return StringUtils.hasText(version) ? version.trim() : null;
-        }, feed, enabled, daemonExecutor());
+        }, feed, sourceAwareFeed, enabled, daemonExecutor());
     }
 
     /** Test seam: inject the "current" version and a fake feed; checks run inline. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed, boolean enabled) {
-        this(currentVersionSupplier, feed, enabled, Runnable::run);
+        this(currentVersionSupplier, feed, asSourceAware(feed), enabled, Runnable::run);
     }
 
     /** Test seam with a controllable executor so the non-blocking behavior is observable. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed, boolean enabled,
                    Executor refreshExecutor) {
+        this(currentVersionSupplier, feed, asSourceAware(feed), enabled, refreshExecutor);
+    }
+
+    /** Test seam for the click-triggered check, which needs to see each mirror's answer. */
+    VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
+                   SourceAwareFeed sourceAwareFeed, boolean enabled) {
+        this(currentVersionSupplier, feed, sourceAwareFeed, enabled, Runnable::run);
+    }
+
+    private static SourceAwareFeed asSourceAware(ReleaseFeed feed) {
+        return feed instanceof SourceAwareFeed aware ? aware : null;
+    }
+
+    private VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
+                           SourceAwareFeed sourceAwareFeed, boolean enabled,
+                           Executor refreshExecutor) {
         this.currentVersionSupplier = currentVersionSupplier;
         this.feed = feed;
+        this.sourceAwareFeed = sourceAwareFeed;
         this.enabled = enabled;
         this.refreshExecutor = refreshExecutor;
     }
@@ -141,6 +161,51 @@ public class VersionService {
                 .latestPublishedDate(c.latestPublishedDate)
                 .latestSource(c.latestSource)
                 .build();
+    }
+
+    /**
+     * One synchronous check for the settings page's nav badge: ask Gitee first, then GitHub.
+     * Each feed is bounded by {@code app.update-check.timeout-ms}, so a dead mirror costs one
+     * timeout rather than a hung page. Never throws; when both mirrors fail — or the feature
+     * is switched off — the caller learns nothing and shows nothing.
+     */
+    public UpdateCheck checkNow() {
+        String current = currentVersionSupplier.get();
+        if (!enabled) {
+            return new UpdateCheck(false, false, current, null, null, null);
+        }
+        ReleaseFeed.Release latest;
+        try {
+            latest = latestGiteeFirst();
+        } catch (Exception bothFailed) {
+            log.debug("Click-triggered update check failed: {}", bothFailed.toString());
+            return new UpdateCheck(false, false, current, null, null, null);
+        }
+        String latestVersion = stripV(latest.tag());
+        boolean newer = current != null && compareVersions(latestVersion, current) > 0;
+        return new UpdateCheck(true, newer, current, latestVersion, latest.tag(),
+                trustedReleaseUrl(latest.htmlUrl()));
+    }
+
+    /** Gitee first (domestic hosts answer fastest), GitHub only when Gitee fails. */
+    private ReleaseFeed.Release latestGiteeFirst() throws Exception {
+        if (sourceAwareFeed == null) {
+            return feed.latest();
+        }
+        try {
+            return sourceAwareFeed.latestFrom(ReleaseFeed.Source.GITEE);
+        } catch (Exception giteeFailure) {
+            log.debug("Gitee update check failed ({}), trying GitHub", giteeFailure.toString());
+            return sourceAwareFeed.latestFrom(ReleaseFeed.Source.GITHUB);
+        }
+    }
+
+    /**
+     * Result of a click-triggered check. {@code checked == false} means no mirror answered
+     * (or the feature is off); the page then shows no badge at all.
+     */
+    public record UpdateCheck(boolean checked, boolean updateAvailable, String currentVersion,
+                              String latestVersion, String latestTag, String releaseUrl) {
     }
 
     /** Submits a refresh unless one is already running; never throws into the request thread. */

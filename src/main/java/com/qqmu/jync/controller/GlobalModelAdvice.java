@@ -33,13 +33,16 @@ public class GlobalModelAdvice {
     private final String githubUrl;
     private final SyncProperties properties;
     private final ObjectProvider<BuildProperties> buildProperties;
+    private final boolean updateCheckEnabled;
 
     public GlobalModelAdvice(@Value("${app.github-url}") String githubUrl,
                              SyncProperties properties,
-                             ObjectProvider<BuildProperties> buildProperties) {
+                             ObjectProvider<BuildProperties> buildProperties,
+                             @Value("${app.update-check.enabled:true}") boolean updateCheckEnabled) {
         this.githubUrl = githubUrl;
         this.properties = properties;
         this.buildProperties = buildProperties;
+        this.updateCheckEnabled = updateCheckEnabled;
     }
 
     /**
@@ -96,6 +99,15 @@ public class GlobalModelAdvice {
     @ModelAttribute("githubUrl")
     public String githubUrl() {
         return githubUrl;
+    }
+
+    /**
+     * Whether the settings page may render the nav's update badge at all. The flag is read
+     * on every request so an air-gapped deployment can turn the check off without a rebuild.
+     */
+    @ModelAttribute("updateCheckEnabled")
+    public boolean updateCheckEnabled() {
+        return updateCheckEnabled;
     }
 
     /**

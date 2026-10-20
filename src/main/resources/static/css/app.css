@@ -218,6 +218,23 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 }
 
 .nav-right { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+
+/* 系统信息页右上角的「发现新版本」：模板里始终 hidden，查到更高版本后由 app.js 揭开。
+   颜色与 .badge-warn 同源，避免导航里出现第二套告警色。 */
+.nav-update-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 9px;
+  font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  background: var(--fb-warn-15);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: #b45309;
+}
+.nav-update-badge:hover { color: #92400e; }
+.nav-update-badge .ico { width: 13px; height: 13px; }
+[data-theme="dark"] .nav-update-badge { color: #fbbf24; }
+
+/* 徽章链到版本卡；吸顶导航会遮住锚点，留出导航高度。 */
+#version-info { scroll-margin-top: calc(var(--nav-h) + 12px); }
 .icon-btn {
   width: 36px; height: 36px; border-radius: 9px; border: 1px solid var(--line);
   background: var(--bg); color: var(--ink-soft); cursor: pointer;
@@ -1076,6 +1093,8 @@ table.tbl a.truncate { display: block; }
     box-shadow: var(--shadow); display: none;
   }
   .nav-links.open { display: flex; }
+  /* 窄屏把「发现新版本：」收成图标 + 版本号，避免把导航挤爆 */
+  .nav-update-badge .nav-update-label { display: none; }
   .logo-text small { display: none; }
   .shell { padding: 20px 16px 44px; }
   .nav-inner, .foot { padding-left: 16px; padding-right: 16px; }

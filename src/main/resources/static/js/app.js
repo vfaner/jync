@@ -1228,6 +1228,24 @@
     });
   }
 
+  /* ─── 系统信息页：导航右上角的「发现新版本」 ─────────────────
+     打开页面后查一次。服务端先查 Gitee、5 秒无结果再查 GitHub；
+     两边都失败就静默返回 —— 不弹错误、什么都不显示。 */
+  function bindNavUpdateBadge() {
+    var badge = document.getElementById('nav-update-badge');
+    if (!badge || !badge.dataset.url) { return; }
+    getJson(badge.dataset.url).then(function (payload) {
+      if (!payload || !payload.updateAvailable) { return; }
+      var version = badge.querySelector('[data-role="nav-update-version"]');
+      if (version && payload.latestVersion) {
+        version.textContent = 'v' + payload.latestVersion;
+      }
+      badge.hidden = false;
+    }).catch(function () {
+      // 离线或请求超时：当作没有新版本，保持安静
+    });
+  }
+
   /* ─── 一键升级（settings 页，仅管理员渲染） ─────────────────── */
 
   /**
@@ -1975,6 +1993,7 @@
     bindCdcRefresh();
     bindDonate();
     bindGenericModals();
+    bindNavUpdateBadge();
     bindUpgrade();
     bindUserMenu();
     initConfigDirtyTracking();

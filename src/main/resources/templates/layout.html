@@ -82,6 +82,20 @@
         </nav>
 
         <div class="nav-right">
+            <!--/* 系统信息页的更新提示：打开页面后查一次，确认有更高版本才由 app.js 揭开。
+                   服务端先查 Gitee、5 秒无结果再查 GitHub；两边都失败就保持隐藏，不打扰用户。
+                   未开启更新检查（app.update-check.enabled=false）时整块不渲染。 */-->
+            <a class="nav-update-badge" id="nav-update-badge"
+               th:if="${updateCheckEnabled and activeNav == 'settings'}"
+               th:href="@{/settings#version-info}"
+               th:data-url="@{/api/version/check}"
+               hidden>
+                <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                <span class="nav-update-label"
+                      th:text="#{settings.updateAvailable}">New version available:</span>
+                <span class="mono" data-role="nav-update-version"></span>
+            </a>
+
             <!--/* 语言切换：空 URL 保留当前路径，只追加 ?lang，
                    由 LocaleChangeInterceptor 接收、CookieLocaleResolver 持久化。
                    显式选择之后优先级高于时区推断。 */-->

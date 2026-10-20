@@ -20,7 +20,7 @@ class GlobalModelAdviceVersionTest {
 
     private GlobalModelAdvice adviceWith(BuildProperties props) {
         return new GlobalModelAdvice(
-                "https://github.com/vfaner/jync", new SyncProperties(), providerOf(props));
+                "https://github.com/vfaner/jync", new SyncProperties(), providerOf(props), true);
     }
 
     /** Minimal ObjectProvider view: fixed instance or nothing, no bean factory involved. */

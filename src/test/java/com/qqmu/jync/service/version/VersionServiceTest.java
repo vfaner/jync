@@ -2,12 +2,17 @@ package com.qqmu.jync.service.version;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.net.http.HttpTimeoutException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
+
+import com.qqmu.jync.service.version.ReleaseFeed.Source;
 
 /**
  * Version comparison, remote-state mapping, caching and release-notes rendering.
@@ -38,6 +43,47 @@ class VersionServiceTest {
         public ReleaseFeed.Release byTag(String tag) {
             byTagCalls.incrementAndGet();
             return tagRelease;
+        }
+    }
+
+    /**
+     * A feed that answers per mirror and records the order it was asked. The click-triggered
+     * check must ask Gitee first and only fall back to GitHub; the passive {@code latest()}
+     * path is deliberately unsupported here so an accidental call fails loudly.
+     */
+    private static final class SourceAwareFakeFeed implements ReleaseFeed, SourceAwareFeed {
+        private final List<Source> calls = new ArrayList<>();
+        private final Map<Source, ReleaseFeed.Release> releases = new EnumMap<>(Source.class);
+        private final Map<Source, Exception> failures = new EnumMap<>(Source.class);
+
+        SourceAwareFakeFeed answer(Source source, ReleaseFeed.Release release) {
+            releases.put(source, release);
+            return this;
+        }
+
+        SourceAwareFakeFeed fail(Source source, Exception failure) {
+            failures.put(source, failure);
+            return this;
+        }
+
+        @Override
+        public ReleaseFeed.Release latest() {
+            throw new AssertionError("the click check must ask a specific mirror");
+        }
+
+        @Override
+        public ReleaseFeed.Release byTag(String tag) {
+            return null;
+        }
+
+        @Override
+        public ReleaseFeed.Release latestFrom(Source source) throws Exception {
+            calls.add(source);
+            Exception failure = failures.get(source);
+            if (failure != null) {
+                throw failure;
+            }
+            return releases.get(source);
         }
     }
 
@@ -192,6 +238,82 @@ class VersionServiceTest {
         assertThat(VersionService.compareVersions("20250923120000", "20240101000000")).isPositive();
         assertThat(VersionService.compareVersions("v20250923120000.1", "20250923120000.0")).isPositive();
         assertThat(VersionService.compareVersions("20250923120000", "20250923120000")).isZero();
+    }
+
+    /**
+     * The settings page's own update check: Gitee first (domestic hosts answer fastest),
+     * GitHub second. The badge only needs to know whether a newer release exists, so the
+     * comparison is the same one the passive snapshot uses.
+     */
+    @Test
+    void clickCheckAsksGiteeFirstAndSkipsGithubOnceGiteeAnswers() {
+        SourceAwareFakeFeed feed = new SourceAwareFakeFeed().answer(Source.GITEE,
+                release("v1.7.10", "https://gitee.com/super_rgh/jync/releases/tag/v1.7.10", ""));
+        VersionService.UpdateCheck check =
+                new VersionService(() -> "1.7.9", feed, feed, true).checkNow();
+
+        assertThat(check.checked()).isTrue();
+        assertThat(check.updateAvailable()).isTrue();
+        assertThat(check.currentVersion()).isEqualTo("1.7.9");
+        assertThat(check.latestVersion()).isEqualTo("1.7.10");
+        assertThat(check.latestTag()).isEqualTo("v1.7.10");
+        assertThat(check.releaseUrl())
+                .isEqualTo("https://gitee.com/super_rgh/jync/releases/tag/v1.7.10");
+        assertThat(feed.calls).containsExactly(Source.GITEE);
+    }
+
+    @Test
+    void clickCheckFallsBackToGithubWhenGiteeFails() {
+        SourceAwareFakeFeed feed = new SourceAwareFakeFeed()
+                .fail(Source.GITEE, new HttpTimeoutException("gitee slow"))
+                .answer(Source.GITHUB,
+                        release("v1.7.10",
+                                "https://github.com/vfaner/jync/releases/tag/v1.7.10", ""));
+        VersionService.UpdateCheck check =
+                new VersionService(() -> "1.7.9", feed, feed, true).checkNow();
+
+        assertThat(check.checked()).isTrue();
+        assertThat(check.updateAvailable()).isTrue();
+        assertThat(check.latestVersion()).isEqualTo("1.7.10");
+        assertThat(feed.calls).containsExactly(Source.GITEE, Source.GITHUB);
+    }
+
+    @Test
+    void clickCheckStaysSilentWhenBothMirrorsFail() {
+        SourceAwareFakeFeed feed = new SourceAwareFakeFeed()
+                .fail(Source.GITEE, new HttpTimeoutException("gitee slow"))
+                .fail(Source.GITHUB, new HttpTimeoutException("github slow"));
+        VersionService.UpdateCheck check =
+                new VersionService(() -> "1.7.9", feed, feed, true).checkNow();
+
+        assertThat(check.checked()).isFalse();
+        assertThat(check.updateAvailable()).isFalse();
+        assertThat(check.latestVersion()).isNull();
+        assertThat(feed.calls).containsExactly(Source.GITEE, Source.GITHUB);
+    }
+
+    @Test
+    void clickCheckDoesNotFlagTheRunningVersionAsAnUpdate() {
+        SourceAwareFakeFeed feed = new SourceAwareFakeFeed()
+                .answer(Source.GITEE, release("v1.7.9", "https://gitee.com/o/r/releases/tag/v1.7.9", ""));
+        VersionService.UpdateCheck check =
+                new VersionService(() -> "1.7.9", feed, feed, true).checkNow();
+
+        assertThat(check.checked()).isTrue();
+        assertThat(check.updateAvailable()).isFalse();
+        assertThat(check.latestVersion()).isEqualTo("1.7.9");
+    }
+
+    @Test
+    void clickCheckMakesNoNetworkCallWhenTheFeatureIsDisabled() {
+        SourceAwareFakeFeed feed = new SourceAwareFakeFeed()
+                .answer(Source.GITEE, release("v1.7.10", "https://gitee.com/o/r/releases/tag/v1.7.10", ""));
+        VersionService.UpdateCheck check =
+                new VersionService(() -> "1.7.9", feed, feed, false).checkNow();
+
+        assertThat(check.checked()).isFalse();
+        assertThat(check.updateAvailable()).isFalse();
+        assertThat(feed.calls).isEmpty();
     }
 
     /**

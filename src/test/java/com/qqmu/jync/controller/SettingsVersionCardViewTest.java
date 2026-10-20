@@ -86,6 +86,20 @@ class SettingsVersionCardViewTest {
     }
 
     @Test
+    void settingsPageRendersTheHiddenNavBadgeThatTriggersTheClickCheck() throws Exception {
+        String page = render(base()
+                .state(VersionInfo.State.UP_TO_DATE)
+                .latestVersion("1.1.1").latestTag("v1.1.1")
+                .build());
+
+        assertThat(page).contains("id=\"nav-update-badge\"");
+        assertThat(page).contains("href=\"/settings#version-info\"");
+        assertThat(page).contains("data-url=\"/api/version/check\"");
+        assertThat(page).contains("data-role=\"nav-update-version\"");
+        assertThat(page).containsPattern("id=\"nav-update-badge\"[^>]*\\shidden");
+    }
+
+    @Test
     void upToDateShowsGreenBadgeAndNoUpdateButton() throws Exception {
         String page = render(base()
                 .state(VersionInfo.State.UP_TO_DATE)
