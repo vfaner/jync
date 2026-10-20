@@ -414,8 +414,9 @@ public class GenericMetadataReader implements MetadataReader {
         DatabaseMeta meta = new DatabaseMeta();
         meta.setSchema(schema);
 
-        List<String> tableNames = tables != null && !tables.isEmpty()
-                ? tables : listTableNames(conn, schema);
+        // null = "all discovered"; an EMPTY list = "none". The two must stay distinct or an
+        // unchecked picker silently syncs everything again.
+        List<String> tableNames = tables != null ? tables : listTableNames(conn, schema);
         for (String name : tableNames) {
             try {
                 meta.getTables().add(readTable(conn, schema, name));
@@ -429,8 +430,7 @@ public class GenericMetadataReader implements MetadataReader {
         }
 
         if (includeViews) {
-            List<String> viewNames = views != null && !views.isEmpty()
-                    ? views : listViewNames(conn, schema);
+            List<String> viewNames = views != null ? views : listViewNames(conn, schema);
             for (String name : viewNames) {
                 try {
                     meta.getViews().add(readView(conn, schema, name));
@@ -444,8 +444,8 @@ public class GenericMetadataReader implements MetadataReader {
         }
 
         if (includeProcedures) {
-            List<String> procNames = procedures != null && !procedures.isEmpty()
-                    ? procedures : listProcedureNames(conn, schema);
+            List<String> procNames = procedures != null ? procedures
+                    : listProcedureNames(conn, schema);
             for (String name : procNames) {
                 try {
                     meta.getProcedures().add(readProcedure(conn, schema, name));

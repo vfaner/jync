@@ -1,6 +1,7 @@
 package com.qqmu.jync.controller;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -84,8 +85,19 @@ public class ProjectController {
         Map<Long, SyncTask> taskLookup = projectService.findTasks(
                 projects.stream().map(Project::getId).toList());
 
+        // An explicitly empty selection means starting would only schedule empty cycles.
+        // The template disables the list's start button for exactly these rows; the
+        // service refuses the action anyway (stale page / direct API).
+        Set<Long> noSyncObjectIds = new HashSet<>();
+        for (Project project : projects) {
+            if (projectService.loadConfig(project).hasNoSyncObjects()) {
+                noSyncObjectIds.add(project.getId());
+            }
+        }
+
         model.addAttribute("projects", projects);
         model.addAttribute("taskLookup", taskLookup);
+        model.addAttribute("noSyncObjectIds", noSyncObjectIds);
         model.addAttribute("pager", pager);
         return "projects";
     }
@@ -198,6 +210,9 @@ public class ProjectController {
 
         model.addAttribute("project", project);
         model.addAttribute("config", config);
+        // Drives the disabled state of start/sync-now: an explicitly empty selection has
+        // nothing to sync, and a legacy empty one ("all") must stay startable.
+        model.addAttribute("noSyncObjects", config.hasNoSyncObjects());
         model.addAttribute("databases", databaseConfigService.findAll());
         SyncTask task = projectService.findTask(id).orElse(null);
         model.addAttribute("task", task);
@@ -306,7 +321,7 @@ public class ProjectController {
         } catch (RuntimeException e) {
             // Keep the raw detail (SQL/connection internals) server-side; the page only ever sees
             // this bundle key, which the template already knows how to resolve.
-            log.debug("Could not list source objects for project {}: {}", id, e.toString());
+            log.warn("Could not list source objects for project {}: {}", id, e.getMessage(), e);
             model.addAttribute("sourceWarning", "msg.source.objects.unavailable");
         }
         return "project-detail";
@@ -375,6 +390,10 @@ public class ProjectController {
                             @RequestParam(required = false) String cronExpression,
                             @RequestParam(required = false) Integer batchSize,
                             @RequestParam(defaultValue = "false") boolean customSchedule,
+                            // Set by the form whenever the object pickers were rendered: it is
+                            // what turns an empty submission from "never configured" into
+                            // "the user unchecked everything".
+                            @RequestParam(defaultValue = "false") boolean objectSelectionExplicit,
                             @RequestParam(name = "captureStrategy", required = false)
                                     String captureStrategy,
                             @RequestParam(required = false) Long cdcIdlePollMs,
@@ -403,22 +422,27 @@ public class ProjectController {
                 }
             }
 
-            // At least one table must be selected, per the requirement. An empty submission
-            // would otherwise silently mean "all tables", which is not what unchecking implies.
-            if (tables == null || tables.isEmpty()) {
-                flash.addFlashAttribute("error", "error.select.at.least.one.table");
-                return "redirect:/projects/" + id;
-            }
-            // Only when the feature is on: an empty selection must not be stored, because an
-            // empty set means "include all" elsewhere (readSourceMetadata), so unchecking every
-            // view/routine would silently sync all of them — the opposite of the click.
-            if (syncViews && (views == null || views.isEmpty())) {
-                flash.addFlashAttribute("error", "error.select.at.least.one.view");
-                return "redirect:/projects/" + id;
-            }
-            if (syncProcedures && (procedures == null || procedures.isEmpty())) {
-                flash.addFlashAttribute("error", "error.select.at.least.one.procedure");
-                return "redirect:/projects/" + id;
+            // Object selection. An empty submission is ambiguous, so the form tells us which
+            // reading it is:
+            //  - flag present: the pickers were rendered and this is the user's full choice.
+            //    An empty list means "sync none of this kind" — a legitimate no-op, not an error.
+            //  - flag absent: the source listing failed, or an old/direct client posted. An
+            //    empty payload then carries NO selection information, so the stored sets are
+            //    kept instead of being silently wiped to "sync nothing".
+            if (objectSelectionExplicit) {
+                config.setTables(tables == null ? new LinkedHashSet<>() : new LinkedHashSet<>(tables));
+                config.setViews(views == null ? new LinkedHashSet<>() : new LinkedHashSet<>(views));
+                config.setProcedures(procedures == null ? new LinkedHashSet<>()
+                        : new LinkedHashSet<>(procedures));
+                config.setObjectSelectionExplicit(true);
+            } else if ((tables != null && !tables.isEmpty())
+                    || (views != null && !views.isEmpty())
+                    || (procedures != null && !procedures.isEmpty())) {
+                // Legacy payload: names present, flag missing. Store it with the old reading.
+                config.setTables(tables == null ? new LinkedHashSet<>() : new LinkedHashSet<>(tables));
+                config.setViews(views == null ? new LinkedHashSet<>() : new LinkedHashSet<>(views));
+                config.setProcedures(procedures == null ? new LinkedHashSet<>()
+                        : new LinkedHashSet<>(procedures));
             }
             // CDC 空闲轮询间隔:留空=引擎默认;给值就不得低于安全下限,
             // 否则等于对源库做紧密挖掘会话循环(读侧还有一层兜底 clamp)。
@@ -427,10 +451,6 @@ public class ProjectController {
                 return "redirect:/projects/" + id;
             }
 
-            config.setTables(new LinkedHashSet<>(tables));
-            config.setViews(views == null ? new LinkedHashSet<>() : new LinkedHashSet<>(views));
-            config.setProcedures(procedures == null ? new LinkedHashSet<>()
-                    : new LinkedHashSet<>(procedures));
             config.setSyncStructure(syncStructure);
             config.setSyncData(syncData);
             config.setSyncIndexes(syncIndexes);

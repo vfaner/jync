@@ -601,6 +601,13 @@ public class ProjectService {
         if (project.getSourceDbId() == null || project.getTargetDbId() == null) {
             throw new IllegalStateException("error.project.endpoints.required");
         }
+        // An explicit empty selection has nothing to sync: starting would only schedule empty
+        // cycles (or launch a consumer mining for events it discards). The UI disables the
+        // button; this is the server-side backstop for a stale page or a direct API call.
+        // Bare key: ApiExceptionHandler returns it as-is and the browser localizes it.
+        if (loadConfig(project).hasNoSyncObjects()) {
+            throw new IllegalStateException("error.project.no.objects");
+        }
         project.setEnabled(true);
         Project saved = projectRepository.save(project);
         taskStore.ensureTask(saved);
@@ -645,6 +652,9 @@ public class ProjectService {
             // 「立即同步」对 CDC 无意义:流一直在跑。正确的重放入口是「重建基线」(T17)。
             // 裸 i18n 键:ApiExceptionHandler 原样返回,浏览器端 JyncMessages 本地化。
             throw new IllegalStateException("error.project.cdc.use.rebaseline");
+        }
+        if (loadConfig(project).hasNoSyncObjects()) {
+            throw new IllegalStateException("error.project.no.objects");
         }
         return taskRunner.runOnce(projectId);
     }

@@ -286,6 +286,10 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .btn-icon.is-ok:hover     { border-color: var(--ok);     color: var(--ok); }
 .btn-icon.is-warn:hover   { border-color: var(--warn);   color: var(--warn); }
 .btn-icon.is-danger:hover { border-color: var(--danger); color: var(--danger); }
+/* 与 .btn:disabled 同款语义：没有对象可选时列表的启动图标被禁用，必须看得出来，
+   否则外观与可点击时一模一样。放在上面的:hover 规则之后，同特异性下才能覆盖高亮。 */
+.btn-icon:disabled { opacity: .55; cursor: not-allowed; }
+.btn-icon:disabled:hover { border-color: var(--line); color: var(--ink-soft); background: var(--bg); }
 
 /* ─── 页头 ──────────────────────────────────────────────── */
 .page-head {

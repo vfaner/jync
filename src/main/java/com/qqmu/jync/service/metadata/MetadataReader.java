@@ -39,9 +39,11 @@ public interface MetadataReader {
     /**
      * Reads everything the given selection covers in one pass.
      *
-     * @param tables     table names to read, or null for all
-     * @param views      view names to read, or null for all; ignored when {@code includeViews} is false
-     * @param procedures routine names to read, or null for all; ignored when {@code includeProcedures} is false
+     * @param tables     table names to read, null for all discovered, empty for none
+     * @param views      view names to read, null for all, empty for none; ignored when
+     *                   {@code includeViews} is false
+     * @param procedures routine names to read, null for all, empty for none; ignored when
+     *                   {@code includeProcedures} is false
      */
     DatabaseMeta readAll(Connection conn, String schema,
                          List<String> tables, List<String> views, List<String> procedures,

@@ -74,9 +74,10 @@
                                 <th:block th:if="${isAdmin}">
                                 <!-- 启动/停止互斥，由 enabled 标志决定显示哪一个 -->
                                 <button type="button" class="btn-icon is-ok" th:unless="${project.enabled}"
+                                        th:disabled="${noSyncObjectIds.contains(project.id)}"
                                         data-role="api-btn" data-reload="true"
                                         th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})}"
-                                        th:title="#{project.start}">
+                                        th:title="${noSyncObjectIds.contains(project.id)} ? #{error.project.no.objects} : #{project.start}">
                                     <svg class="ico"><use href="#play-fill"/></svg>
                                 </button>
                                 <button type="button" class="btn-icon is-warn" th:if="${project.enabled}"

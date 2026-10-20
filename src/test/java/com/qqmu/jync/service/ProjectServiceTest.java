@@ -741,6 +741,61 @@ class ProjectServiceTest {
         assertThat(node.path("tables").get(0).asText()).isEqualTo("A");
     }
 
+    // --- object-selection guards -------------------------------------------------------------
+
+    private SyncConfig explicitlyEmptySelection() {
+        SyncConfig config = new SyncConfig();
+        config.setObjectSelectionExplicit(true);
+        return config;
+    }
+
+    @Test
+    void startRefusesWhenTheSavedSelectionIsEmpty() {
+        Project project = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(contextFactory.parseConfig(project)).thenReturn(explicitlyEmptySelection());
+
+        // Nothing is selected, so starting would only schedule empty cycles — refuse before
+        // the enabled flag is persisted and before any consumer is launched.
+        assertThatThrownBy(() -> service.start(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.no.objects");
+        assertThat(project.getEnabled()).isNotEqualTo(Boolean.TRUE);
+        verify(projectRepository, never()).save(any());
+        verify(scheduler, never()).schedule(any());
+        verify(cdcManager, never()).ensureStarted(any());
+    }
+
+    @Test
+    void startStillRunsForALegacyEmptySelection() {
+        Project project = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
+        when(cdcManager.strategyOf(project)).thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
+
+        service.start(1L);
+
+        // Legacy empty means "all" — there is still work to schedule.
+        assertThat(project.getEnabled()).isTrue();
+        verify(scheduler).schedule(project);
+        verify(scheduler).triggerNow(1L);
+    }
+
+    @Test
+    void syncNowRefusesWhenTheSavedSelectionIsEmpty() {
+        Project project = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(cdcManager.strategyOf(project))
+                .thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
+        when(contextFactory.parseConfig(project)).thenReturn(explicitlyEmptySelection());
+
+        assertThatThrownBy(() -> service.syncNow(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.no.objects");
+        verify(taskRunner, never()).runOnce(any());
+    }
+
     @Test
     void saveAsCloneRefusesAnUnknownSourceWithoutSaving() {
         when(projectRepository.findById(9L)).thenReturn(Optional.empty());

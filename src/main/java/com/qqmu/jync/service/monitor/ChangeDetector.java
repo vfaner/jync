@@ -99,8 +99,11 @@ public class ChangeDetector {
             // An EMPTY enumeration is ambiguous: it matches both "every table was dropped"
             // and "the schema was renamed / grants were revoked / the dictionary hiccuped".
             // With snapshots on record the latter is the catastrophic reading, so suppress
-            // every DROP this pass rather than erase the whole target.
-            if (current.getTables().isEmpty() && current.getUnreadableTables().isEmpty()
+            // every DROP this pass rather than erase the whole target. An explicitly empty
+            // selection is not ambiguous at all — nothing was read because nothing is wanted,
+            // so the warning below must not fire for it.
+            if (!(config.isObjectSelectionExplicit() && config.getTables().isEmpty())
+                    && current.getTables().isEmpty() && current.getUnreadableTables().isEmpty()
                     && !snapshots.isEmpty()) {
                 log.warn("Project {}: source table enumeration came back empty while {} table(s)"
                         + " are snapshotted — suppressing drops this cycle (check the configured"
@@ -233,7 +236,8 @@ public class ChangeDetector {
 
         if (config.isAllowDrop()) {
             // Same empty-enumeration guard as tables.
-            if (current.getViews().isEmpty() && current.getUnreadableViews().isEmpty()
+            if (!(config.isObjectSelectionExplicit() && config.getViews().isEmpty())
+                    && current.getViews().isEmpty() && current.getUnreadableViews().isEmpty()
                     && !snapshots.isEmpty()) {
                 log.warn("Project {}: source view enumeration came back empty while {} view(s)"
                         + " are snapshotted — suppressing drops this cycle.",
@@ -283,7 +287,8 @@ public class ChangeDetector {
 
         if (config.isAllowDrop()) {
             // Same empty-enumeration guard as tables/views.
-            if (current.getProcedures().isEmpty() && current.getUnreadableProcedures().isEmpty()
+            if (!(config.isObjectSelectionExplicit() && config.getProcedures().isEmpty())
+                    && current.getProcedures().isEmpty() && current.getUnreadableProcedures().isEmpty()
                     && !snapshots.isEmpty()) {
                 log.warn("Project {}: source routine enumeration came back empty while {} routine(s)"
                         + " are snapshotted — suppressing drops this cycle.",

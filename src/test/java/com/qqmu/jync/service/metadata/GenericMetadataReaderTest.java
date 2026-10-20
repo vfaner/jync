@@ -5,14 +5,18 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 
 /**
@@ -208,6 +212,24 @@ class GenericMetadataReaderTest {
 
         assertThat(reader.listTableNames(conn, "ruoyi"))
                 .containsExactly("biz_order", "sys_role", "sys_user");
+    }
+
+    @Test
+    void anEmptySelectionReadsNoObjectsInsteadOfListingEverything() throws Exception {
+        // null 一直是"全部";空列表必须是"一个都不要",否则"全不选"在引擎里又被翻回"全同步"。
+        Connection conn = mock(Connection.class);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(conn.getMetaData()).thenReturn(md);
+
+        DatabaseMeta meta = reader.readAll(conn, null,
+                List.of(), List.of(), List.of(), true, true);
+
+        assertThat(meta.getTables()).isEmpty();
+        assertThat(meta.getViews()).isEmpty();
+        assertThat(meta.getProcedures()).isEmpty();
+        // 显式空选择连列举查询都不该发:那正是"全部"才需要的代价。
+        verify(md, never()).getTables(any(), any(), any(), any());
+        verify(md, never()).getProcedures(any(), any(), any());
     }
 
     private ResultSet emptyResultSet() throws Exception {

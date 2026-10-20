@@ -20,9 +20,12 @@ import lombok.Setter;
 /**
  * Per-project sync settings, persisted as JSON on {@link com.qqmu.jync.model.Project}.
  *
- * <p>An empty {@link #tables} set means "all tables discovered in the source", which is
- * the default and matches the UI's select-all behaviour. Explicit selections are stored
- * so newly created source tables are not silently picked up.
+ * <p>The object sets have two readings, told apart by {@link #objectSelectionExplicit}:
+ * a legacy config (never saved through the picker, or written by an older version) treats an
+ * empty set as "all objects discovered in the source", because that is the only sensible
+ * default for a project whose selection was never expressed. Once the form has persisted a
+ * selection, the empty set means "none of this kind" — unchecking everything is a choice,
+ * and the cycle simply finds nothing to sync.
  */
 @Getter
 @Setter
@@ -32,14 +35,21 @@ import lombok.Setter;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class SyncConfig {
 
-    /** Selected table names. Empty means all tables. */
+    /** Selected table names. Empty means all — or none when {@link #objectSelectionExplicit}. */
     private Set<String> tables = new LinkedHashSet<>();
 
-    /** Selected view names. Empty means all views (when {@link #syncViews} is on). */
+    /** Selected view names. Empty means all — or none when {@link #objectSelectionExplicit}. */
     private Set<String> views = new LinkedHashSet<>();
 
-    /** Selected procedure/function names. Empty means all. */
+    /** Selected procedure/function names. Empty means all — or none when {@link #objectSelectionExplicit}. */
     private Set<String> procedures = new LinkedHashSet<>();
+
+    /**
+     * True once the selection pickers have been saved, making an empty object set mean
+     * "sync none of this kind" instead of the legacy "sync everything". Absent in configs
+     * written before this field existed, which is exactly the legacy reading.
+     */
+    private boolean objectSelectionExplicit;
 
     private boolean syncStructure = true;
     private boolean syncData = true;
@@ -107,15 +117,33 @@ public class SyncConfig {
     }
 
     public boolean includesTable(String tableName) {
-        return tables.isEmpty() || CollectionUtil.containsIgnoreCase(tables, tableName);
+        return includes(tables, tableName);
     }
 
     public boolean includesView(String viewName) {
-        return views.isEmpty() || CollectionUtil.containsIgnoreCase(views, viewName);
+        return includes(views, viewName);
     }
 
     public boolean includesProcedure(String procName) {
-        return procedures.isEmpty() || CollectionUtil.containsIgnoreCase(procedures, procName);
+        return includes(procedures, procName);
+    }
+
+    /** Empty set: all for a legacy config, none once an explicit selection was saved. */
+    private boolean includes(Set<String> selection, String name) {
+        if (selection.isEmpty()) {
+            return !objectSelectionExplicit;
+        }
+        return CollectionUtil.containsIgnoreCase(selection, name);
+    }
+
+    /**
+     * True when the saved selection explicitly names no object at all, so a sync cycle could
+     * only ever be a no-op. A legacy empty selection does not qualify: it still means "all",
+     * which is always something to sync.
+     */
+    public boolean hasNoSyncObjects() {
+        return objectSelectionExplicit
+                && tables.isEmpty() && views.isEmpty() && procedures.isEmpty();
     }
 
     public String targetTableName(String sourceTable) {

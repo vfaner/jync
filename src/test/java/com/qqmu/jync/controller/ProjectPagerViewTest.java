@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -22,6 +23,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
@@ -61,6 +63,13 @@ class ProjectPagerViewTest {
 
     @MockBean
     private CdcPositionStore cdcPositionStore;
+
+    @BeforeEach
+    void legacySelectionForEveryRow() {
+        // The list disables the start icon per row; these fixtures are legacy configs
+        // (empty = all), so every row stays startable.
+        when(projectService.loadConfig(any())).thenReturn(new SyncConfig());
+    }
 
     private static RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();

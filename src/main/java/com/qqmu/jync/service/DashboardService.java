@@ -74,15 +74,16 @@ public class DashboardService {
             trackedCountByProject.put((Long) row[0], (Long) row[1]);
         }
 
-        // Count selected tables across projects. An empty selection means "all tables", which
-        // cannot be counted without connecting, so those fall back to the number of tables
-        // actually synced so far.
+        // Count selected tables across projects. A LEGACY empty selection means "all tables",
+        // which cannot be counted without connecting, so those fall back to the number of
+        // tables actually synced so far. An explicitly saved empty selection means none — it
+        // must count as zero, not inherit the progress rows of an earlier configuration.
         long selectedTables = 0;
         for (Project project : projects) {
             SyncConfig config = contextFactory.parseConfig(project);
             if (!config.getTables().isEmpty()) {
                 selectedTables += config.getTables().size();
-            } else {
+            } else if (!config.isObjectSelectionExplicit()) {
                 selectedTables += trackedCountByProject.getOrDefault(project.getId(), 0L);
             }
         }

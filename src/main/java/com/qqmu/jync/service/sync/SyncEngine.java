@@ -128,7 +128,13 @@ public class SyncEngine {
                 return result;
             }
 
-            if (ctx.getConfig().isSyncStructure() && ctx.getConfig().isSyncIndexes()) {
+            // Nothing selected means no table may be touched — including the retry of an
+            // index that failed before the selection was narrowed. Without this guard a
+            // "sync nothing" project would still issue DDL against its target each cycle.
+            boolean noTableSelected = ctx.getConfig().isObjectSelectionExplicit()
+                    && ctx.getConfig().getTables().isEmpty();
+            if (!noTableSelected && ctx.getConfig().isSyncStructure()
+                    && ctx.getConfig().isSyncIndexes()) {
                 retryFailedIndexes(targetConn, ctx, result);
             }
 
@@ -175,12 +181,12 @@ public class SyncEngine {
 
     private DatabaseMeta readSourceMetadata(Connection sourceConn, SyncContext ctx)
             throws SQLException {
-        List<String> tables = ctx.getConfig().getTables().isEmpty() ? null
-                : new ArrayList<>(ctx.getConfig().getTables());
-        List<String> views = ctx.getConfig().getViews().isEmpty() ? null
-                : new ArrayList<>(ctx.getConfig().getViews());
-        List<String> procs = ctx.getConfig().getProcedures().isEmpty() ? null
-                : new ArrayList<>(ctx.getConfig().getProcedures());
+        List<String> tables = selection(ctx.getConfig().getTables(),
+                ctx.getConfig().isObjectSelectionExplicit());
+        List<String> views = selection(ctx.getConfig().getViews(),
+                ctx.getConfig().isObjectSelectionExplicit());
+        List<String> procs = selection(ctx.getConfig().getProcedures(),
+                ctx.getConfig().isObjectSelectionExplicit());
 
         DatabaseMeta meta = ctx.getSourceReader().readAll(sourceConn, ctx.getSourceSchema(),
                 tables, views, procs,
@@ -199,6 +205,17 @@ public class SyncEngine {
             }
         }
         return meta;
+    }
+
+    /**
+     * {@code null} = read every object the source discovers (legacy empty selection);
+     * empty list = read none (the user unchecked everything and saved).
+     */
+    private static List<String> selection(Set<String> names, boolean explicit) {
+        if (!names.isEmpty()) {
+            return new ArrayList<>(names);
+        }
+        return explicit ? List.of() : null;
     }
 
     /** Retries secondary indexes that failed during table creation in earlier cycles. */

@@ -92,8 +92,12 @@
                 <!--/* B9 文案澄清：启用 = 按调度自动增量轮询 / CDC 持续消费（tooltip 明说
                        非逐轮全量）；「手动跑一轮」不改启用状态。悬停即见语义，消除
                        「开启同步 = 轮询全量？」的误解。 */-->
+                <!--/* 显式全不选时没有任何对象可同步：启动只会空跑调度。禁用并说明原因，
+                       服务端仍有同名 key 的兜底拒绝(stale 页面/直接调 API)。 */-->
                 <button type="button" class="btn btn-ok btn-sm" th:unless="${project.enabled}"
-                        data-role="api-btn" data-reload="true" th:title="#{project.startHelp}"
+                        th:disabled="${noSyncObjects}"
+                        data-role="api-btn" data-reload="true"
+                        th:title="${noSyncObjects} ? #{error.project.no.objects} : #{project.startHelp}"
                         th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
                                  data-busy-text=#{common.loading}">
                     <svg class="ico"><use href="#play-fill"/></svg><span th:text="#{project.start}">Start</span>
@@ -109,7 +113,9 @@
                        恢复入口是重建基线(B7),复用 api-btn 的 postJson + data-confirm
                        模式,确认文案明示三个后果(停消费/清位点/全量重载)。 */-->
                 <button type="button" class="btn btn-primary btn-sm" th:unless="${cdcActive}"
+                        th:disabled="${noSyncObjects}"
                         data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
+                        th:title="${noSyncObjects} ? #{error.project.no.objects}"
                         th:attr="data-action=@{/api/projects/{id}/sync-now(id=${project.id})},
                                  data-busy-text=#{common.loading}">
                     <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{project.syncNow}">Sync now</span>
@@ -147,6 +153,9 @@
                     <span th:text="#{project.clone}">Clone</span>
                 </a>
             </div>
+            <!--/* 禁用态的按钮不会弹 tooltip，这里把原因直接写在页面上。 */-->
+            <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin and noSyncObjects}"
+               th:text="#{error.project.no.objects}">No sync objects selected</p>
             <!--/* 停用项目上的重建基线仍会跑完整启动序列,但巡检(sync.cdc.supervise-interval-ms,
                    默认 10s)很快会把消费者再次停掉——把这段「先起后停」明说,别让用户猜。 */-->
             <p class="small muted" id="cdc-rebaseline-disabled-hint" style="margin:11px 0 0"
@@ -387,12 +396,17 @@
                     </span>
                 </div>
                 <div class="card-body">
+                    <!-- 勾选状态显式提交:字段在场 = 这是用户的完整选择,某一类全不勾就是
+                         "这一类都不同步";字段缺席(源库列举失败,选择器没渲染)时后端保留已保存
+                         的选择,不会把空提交误当成"全不要"。 -->
+                    <input type="hidden" name="objectSelectionExplicit" value="true"
+                           th:if="${sourceObjects != null}">
                     <!-- 表 -->
                     <div class="picker" data-role="picker">
                         <div class="picker-head">
                             <span class="picker-title">
                                 <svg class="ico"><use href="#table"/></svg>
-                                <span th:text="#{project.tables}">Tables</span><span class="req">*</span>
+                                <span th:text="#{project.tables}">Tables</span>
                                 <span class="badge badge-mute" data-count
                                       th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
                             </span>
@@ -404,16 +418,17 @@
                                         th:text="#{common.selectNone}">None</button>
                             </span>
                         </div>
-                        <!-- 显式白名单:勾了哪些就只同步哪些;保存时至少要勾一张表
-                             (ProjectController 拒绝空提交)。picker 下的说明与该规则保持一致。 -->
+                        <!-- 显式白名单:勾了哪些就只同步哪些;全不勾 = 这一类都不同步,
+                             周期检测不到对象就空转(不报错)。includesTable 已经区分了
+                             "老配置的空集合=全部"与"保存过的空集合=全不选"。 -->
                         <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.tables)}">
                             <label class="pick" th:each="tbl,i : ${sourceObjects.tables}">
                                 <input type="checkbox" name="tables" th:value="${tbl}"
-                                       th:checked="${config.tables.isEmpty() or config.includesTable(tbl)}">
+                                       th:checked="${config.includesTable(tbl)}">
                                 <span th:text="${tbl}">table</span>
                             </label>
                             <div class="help" style="margin:6px 2px 0">
-                                <span th:text="#{project.picker.tablesEmptyMeansAll}">No table checked = sync all. Unchecking some narrows the set; unchecking all resets to sync all.</span>
+                                <span th:text="#{project.picker.emptyMeansNone}">Only checked objects are synced; unchecking every table means no table is synced.</span>
                             </div>
                         </div>
                         <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.tables)}"
@@ -439,7 +454,7 @@
                         <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.views)}">
                             <label class="pick" th:each="v : ${sourceObjects.views}">
                                 <input type="checkbox" name="views" th:value="${v}"
-                                       th:checked="${config.views.isEmpty() or config.includesView(v)}">
+                                       th:checked="${config.includesView(v)}">
                                 <span th:text="${v}">view</span>
                             </label>
                         </div>
@@ -466,7 +481,7 @@
                         <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.procedures)}">
                             <label class="pick" th:each="p : ${sourceObjects.procedures}">
                                 <input type="checkbox" name="procedures" th:value="${p}"
-                                       th:checked="${config.procedures.isEmpty() or config.includesProcedure(p)}">
+                                       th:checked="${config.includesProcedure(p)}">
                                 <span th:text="${p}">proc</span>
                             </label>
                         </div>
