@@ -270,6 +270,12 @@ public class ProjectController {
         // recommendation wins over the stored value, so two cards can never both check.
         model.addAttribute("selectedStrategy",
                 recommendedStrategy != null ? recommendedStrategy.name() : current.name());
+        // The persisted value, deliberately distinct from selectedStrategy: a CDC card
+        // pre-selected by the probe recommendation is NOT saved, and the form's baseline
+        // (dirty detection + the CDC-switch confirmation) must compare against what the
+        // Start button will actually run, or Start silently launches polling while the
+        // CDC card looks checked.
+        model.addAttribute("storedStrategy", current.name());
 
         // --- CDC status panel (C3) ------------------------------------------------------
         // Keyed off the STORED strategy, not selectedStrategy: a merely-recommended CDC

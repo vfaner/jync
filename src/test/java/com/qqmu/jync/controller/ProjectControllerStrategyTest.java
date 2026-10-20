@@ -275,7 +275,10 @@ class ProjectControllerStrategyTest {
         String page = mvc.perform(get("/projects/1"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        assertThat(page).contains("data-original-strategy=\"BINLOG_CDC\"");
+        // 推荐只改「界面上选哪张卡」，绝不等于已保存配置：data-original-strategy 必须是
+        // 已保存的 POLLING。否则表单在首次打开时被误判为干净，点「开启自动同步」会不
+        // 经确认按轮询启动，而界面还勾着 CDC；保存推荐 CDC 时也会跳过切换确认。
+        assertThat(page).contains("data-original-strategy=\"POLLING\"");
         assertThat(cardOf(page, "BINLOG_CDC")).contains("picked").contains("checked");
         assertThat(cardOf(page, "POLLING")).doesNotContain("picked").doesNotContain("checked");
         assertThat(page).contains("badge-recommend");

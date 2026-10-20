@@ -517,6 +517,14 @@
     if (!configForm) { return; }
     configForm.addEventListener('input', markConfigDirty);
     configForm.addEventListener('change', markConfigDirty);
+    // 首屏的推荐勾选不是用户改的，但它确实还没保存：data-original-strategy 是已保存
+    // 策略，两者不一致就按「配置未保存」处理。否则点「开启自动同步」会不经确认按
+    // 已保存的轮询策略启动，界面却还勾着日志 CDC，随后推荐条件失效、轮询按钮浮出来。
+    var picked = configForm.querySelector('input[name=captureStrategy]:checked');
+    var stored = configForm.getAttribute('data-original-strategy');
+    if (picked && stored && picked.value !== stored) {
+      markConfigDirty();
+    }
   }
 
   function setDirtyBadge(dirty) {
@@ -2057,8 +2065,10 @@
 
     // B8：切到日志 CDC 前的确认框。文案（cdc.switch.confirm）明示两个后果——
     // ①目标库全量重建、②源库 DELETE 从此会同步删除目标数据（轮询看不到
-    // DELETE）。data-original-strategy 是页面加载时的选中值，只有「值变了
-    // 且新值是任一日志 CDC（isLogCdcStrategy，与后端 isLogCdc() 同口径）」才拦截。
+    // DELETE）。data-original-strategy 是「已保存」策略：就绪探测推荐的勾选
+    // 尚未落库，首次保存它同样属于一次真实的策略切换，必须看到这个确认。
+    // 只有「值变了且新值是任一日志 CDC（isLogCdcStrategy，与后端 isLogCdc()
+    // 同口径）」才拦截。
     document.querySelectorAll('form[data-original-strategy]').forEach(function (form) {
       form.addEventListener('submit', function (e) {
         var original = form.getAttribute('data-original-strategy');

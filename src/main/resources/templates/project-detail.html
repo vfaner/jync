@@ -245,11 +245,14 @@
         </div>
     </div>
 
-    <!--/* data-original-strategy：页面加载时的选中策略，B8 确认框拿它和提交值比对，
+    <!--/* data-original-strategy：已保存的捕获策略，B8 确认框拿它和提交值比对，
            只有「改成任一日志 CDC」才弹确认（app.js isLogCdcStrategy，与后端
-           CaptureStrategy.isLogCdc() 同口径，含 PG 逻辑复制 / SQL Server CDC）。 */-->
+           CaptureStrategy.isLogCdc() 同口径，含 PG 逻辑复制 / SQL Server CDC）。
+           注意不能用 selectedStrategy：就绪探测推荐 CDC 时那个勾选只是建议、并未
+           落库，拿它当基线会让表单看起来「干净」，点启动便静默按轮询跑。app.js
+           加载时会比较勾选值与这里的已保存值，不一致即视为未保存修改。 */-->
     <form id="config-form" method="post" th:action="@{/projects/{id}/config(id=${project.id})}"
-          th:attr="data-original-strategy=${selectedStrategy},
+          th:attr="data-original-strategy=${storedStrategy},
                    data-cdc-active=${cdcActive}">
     <!--/* 访客保留这一整块而不是藏掉：勾选状态本身是有用的只读信息。
            fieldset[disabled] 让浏览器原生置灰全部输入，比逐个加 disabled 可靠，
