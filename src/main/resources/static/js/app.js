@@ -1228,21 +1228,59 @@
     });
   }
 
-  /* ─── 系统信息页：导航右上角的「发现新版本」 ─────────────────
-     打开页面后查一次。服务端先查 Gitee、5 秒无结果再查 GitHub；
-     两边都失败就静默返回 —— 不弹错误、什么都不显示。 */
+  /* ─── 导航项右上角的更新圆点（仅管理员，所有页面） ─────────────
+     登录后第一次加载查一次，结果放进 sessionStorage：之后翻到别的菜单直接复用，
+     圆点跟着导航一起留在页面上；进入系统信息页再强制查一次。
+     服务端先查 Gitee、5 秒无结果再查 GitHub；两边都失败就静默返回。 */
+  var NAV_UPDATE_CACHE_KEY = 'jync.navUpdateCheck';
+
+  function readNavUpdateCache() {
+    try {
+      return JSON.parse(window.sessionStorage.getItem(NAV_UPDATE_CACHE_KEY) || 'null');
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function showNavUpdateBadge(badge, payload) {
+    if (!payload || !payload.updateAvailable) {
+      badge.hidden = true;
+      return;
+    }
+    var text = badge.dataset.label || '';
+    if (payload.latestVersion) {
+      text += ' v' + payload.latestVersion;
+    }
+    badge.title = text;
+    badge.setAttribute('aria-label', text);
+    // 点「系统信息」时直接落到版本卡，而不是页面顶部
+    var link = badge.closest('a');
+    if (link && link.getAttribute('href')) {
+      link.href = link.getAttribute('href').split('#')[0] + '#version-info';
+    }
+    badge.hidden = false;
+  }
+
   function bindNavUpdateBadge() {
     var badge = document.getElementById('nav-update-badge');
     if (!badge || !badge.dataset.url) { return; }
+    var cached = readNavUpdateCache();
+    if (cached) { showNavUpdateBadge(badge, cached); }
+    // 普通页面有缓存就不再请求；系统信息页每次都刷新
+    if (cached && badge.dataset.refresh !== 'true') { return; }
     getJson(badge.dataset.url).then(function (payload) {
-      if (!payload || !payload.updateAvailable) { return; }
-      var version = badge.querySelector('[data-role="nav-update-version"]');
-      if (version && payload.latestVersion) {
-        version.textContent = 'v' + payload.latestVersion;
+      if (!payload) { return; }
+      try {
+        window.sessionStorage.setItem(NAV_UPDATE_CACHE_KEY, JSON.stringify({
+          updateAvailable: !!payload.updateAvailable,
+          latestVersion: payload.latestVersion || null
+        }));
+      } catch (e) {
+        // 隐私模式禁用 storage：退化为每次页面加载都查，不影响功能
       }
-      badge.hidden = false;
+      showNavUpdateBadge(badge, payload);
     }).catch(function () {
-      // 离线或请求超时：当作没有新版本，保持安静
+      // 离线或请求超时：有缓存就保留，没有就保持安静
     });
   }
 

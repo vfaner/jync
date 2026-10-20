@@ -86,17 +86,21 @@ class SettingsVersionCardViewTest {
     }
 
     @Test
-    void settingsPageRendersTheHiddenNavBadgeThatTriggersTheClickCheck() throws Exception {
+    void settingsPagePinsAHiddenUpdateDotOnTheSettingsNavLink() throws Exception {
         String page = render(base()
                 .state(VersionInfo.State.UP_TO_DATE)
                 .latestVersion("1.1.1").latestTag("v1.1.1")
                 .build());
 
-        assertThat(page).contains("id=\"nav-update-badge\"");
-        assertThat(page).contains("href=\"/settings#version-info\"");
+        // 小圆点挂在「系统信息」导航项右上角，而不是 nav-right 里的一整条横幅。
+        assertThat(page).containsPattern(
+                "(?s)<a[^>]*class=\"nav-settings[^\"]*\"[^>]*>.*?id=\"nav-update-badge\"");
         assertThat(page).contains("data-url=\"/api/version/check\"");
-        assertThat(page).contains("data-role=\"nav-update-version\"");
+        assertThat(page).contains("data-refresh=\"true\"");
+        assertThat(page).contains("data-label=\"发现新版本：\"");
         assertThat(page).containsPattern("id=\"nav-update-badge\"[^>]*\\shidden");
+        assertThat(page).doesNotContain("nav-update-label");
+        assertThat(page).doesNotContain("data-role=\"nav-update-version\"");
     }
 
     @Test
