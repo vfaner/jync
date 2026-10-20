@@ -194,6 +194,42 @@ class ProjectControllerObjectSelectionTest {
     }
 
     @Test
+    void detailHidesThePollingOnlySyncOptionsForCdc() throws Exception {
+        SyncConfig stored = stubDetail();
+        stored.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The change stream does not consult these switches, so showing them invites edits
+        // that cannot take effect. They stay in the form (CSS-hidden, not disabled) so the
+        // saved values survive a save made while CDC is selected.
+        for (String name : List.of("syncStructure", "syncData", "syncIndexes",
+                "syncViews", "syncProcedures")) {
+            assertThat(labelTag(page, name)).contains("polling-only").contains("is-hidden");
+        }
+        // The note explaining the disappearance must be shown in CDC mode.
+        assertThat(cdcHiddenHintTag(page)).doesNotContain("is-hidden");
+    }
+
+    @Test
+    void detailKeepsTheSyncOptionsVisibleForPolling() throws Exception {
+        stubDetail();
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        for (String name : List.of("syncStructure", "syncData", "syncIndexes",
+                "syncViews", "syncProcedures")) {
+            assertThat(labelTag(page, name)).doesNotContain("is-hidden");
+        }
+        // The CDC-only note stays in the DOM but is hidden, so it cannot flash on switch.
+        assertThat(cdcHiddenHintTag(page)).contains("is-hidden");
+    }
+
+    @Test
     void detailKeepsStartEnabledForCdcWhenEverySyncOptionIsOff() throws Exception {
         SyncConfig stored = stubDetail();
         stored.setTables(new LinkedHashSet<>(List.of("orders")));
@@ -303,6 +339,24 @@ class ProjectControllerObjectSelectionTest {
         assertThat(at).as("button for " + action).isPositive();
         int start = page.lastIndexOf("<button", at);
         int end = page.indexOf(">", at);
+        return page.substring(start, end + 1);
+    }
+
+    /** The <p> tag carrying the CDC-mode note about the hidden polling switches. */
+    private static String cdcHiddenHintTag(String page) {
+        int at = page.indexOf("these polling switches are hidden");
+        assertThat(at).as("CDC hidden-options note").isPositive();
+        int start = page.lastIndexOf("<p", at);
+        int end = page.indexOf(">", at);
+        return page.substring(start, end + 1);
+    }
+
+    /** The opening <label> tag that wraps the checkbox with the given name. */
+    private static String labelTag(String page, String name) {
+        int at = page.indexOf("name=\"" + name + "\"");
+        assertThat(at).as("checkbox " + name).isPositive();
+        int start = page.lastIndexOf("<label", at);
+        int end = page.indexOf(">", start);
         return page.substring(start, end + 1);
     }
 

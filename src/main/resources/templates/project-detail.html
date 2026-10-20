@@ -500,7 +500,14 @@
                         <h2><svg class="ico"><use href="#toggles"/></svg> <span th:text="#{project.syncOptions}">Options</span></h2>
                     </div>
                     <div class="card-body">
-                        <label class="switch">
+                        <!--/* 日志 CDC 下这五个开关不参与增量流(消费者只按所选表过滤,
+                               行变更照常应用),显示出来只会诱导无效修改:隐藏但不禁用,
+                               提交时保存值原样带回,切回轮询后恢复显示。 */-->
+                        <p class="small muted" data-cdc-visibility="cdc"
+                           th:classappend="${selectedCdc} ? '' : 'is-hidden'"
+                           style="margin:0 0 10px" th:text="#{project.syncOptions.cdcHidden}">Log CDC mode: these polling switches are hidden.</p>
+                        <label class="switch" data-role="polling-only"
+                               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
                             <!-- 源库一张表都没有时,表结构/表数据/索引无从同步:强制关并置灰,
                                  避免开着空开关点保存被「至少选择一张表」拦下。列举失败(sourceObjects
                                  为 null)属于临时状况,保持已保存配置不动。 -->
@@ -513,7 +520,8 @@
                                 <span class="help" th:text="#{option.syncStructureHelp}">help</span>
                             </span>
                         </label>
-                        <label class="switch">
+                        <label class="switch" data-role="polling-only"
+                               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
                             <input type="checkbox" name="syncData" value="true"
                                    th:checked="${config.syncData and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
                                    th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
@@ -523,7 +531,8 @@
                                 <span class="help" th:text="#{option.syncDataHelp}">help</span>
                             </span>
                         </label>
-                        <label class="switch">
+                        <label class="switch" data-role="polling-only"
+                               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
                             <input type="checkbox" name="syncIndexes" value="true"
                                    th:checked="${config.syncIndexes and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
                                    th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
@@ -533,7 +542,8 @@
                                 <span class="help" th:text="#{option.syncIndexesHelp}">help</span>
                             </span>
                         </label>
-                        <label class="switch">
+                        <label class="switch" data-role="polling-only"
+                               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
                             <input type="checkbox" name="syncViews" value="true"
                                    th:checked="${config.syncViews and (sourceObjects == null or !#lists.isEmpty(sourceObjects.views))}"
                                    th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.views)}">
@@ -543,7 +553,8 @@
                                 <span class="help" th:text="#{option.syncViewsHelp}">help</span>
                             </span>
                         </label>
-                        <label class="switch">
+                        <label class="switch" data-role="polling-only"
+                               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
                             <input type="checkbox" name="syncProcedures" value="true"
                                    th:checked="${config.syncProcedures and (sourceObjects == null or !#lists.isEmpty(sourceObjects.procedures))}"
                                    th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.procedures)}">
@@ -554,7 +565,8 @@
                             </span>
                         </label>
 
-                        <hr class="divider">
+                        <hr class="divider" data-role="polling-only"
+                            th:classappend="${selectedCdc} ? 'is-hidden' : ''">
 
                         <label class="switch is-warn">
                             <input type="checkbox" name="allowDrop" value="true" th:checked="${config.allowDrop}">

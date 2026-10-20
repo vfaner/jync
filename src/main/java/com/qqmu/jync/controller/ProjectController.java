@@ -297,8 +297,12 @@ public class ProjectController {
         // Single source of truth for which card is checked — and for the form's
         // data-original-strategy, which the B8 confirm dialog compares against. The
         // recommendation wins over the stored value, so two cards can never both check.
-        model.addAttribute("selectedStrategy",
-                recommendedStrategy != null ? recommendedStrategy.name() : current.name());
+        CaptureStrategy selected = recommendedStrategy != null ? recommendedStrategy : current;
+        model.addAttribute("selectedStrategy", selected.name());
+        // The object/option switches below are polling-only: the CDC change stream does not
+        // consult them. Keyed off the SELECTION (including an unsaved recommendation) so the
+        // five switches hide the moment a CDC card is picked; app.js keeps it in sync after.
+        model.addAttribute("selectedCdc", selected.isLogCdc());
         // The persisted value, deliberately distinct from selectedStrategy: a CDC card
         // pre-selected by the probe recommendation is NOT saved, and the form's baseline
         // (dirty detection + the CDC-switch confirmation) must compare against what the
