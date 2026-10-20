@@ -435,10 +435,10 @@ The repo ships a multi-stage `Dockerfile` (the runtime image contains just the J
 docker compose up -d --build
 
 # or, without Compose:
-docker build -t jync:1.7.5 .
+docker build -t jync:1.7.6 .
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.7.5
+  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.7.6
 ```
 
 Environment-variable overrides (HTTPS cookies, external MySQL for multi-instance setups), TLS, horizontal scaling with more than one replica, image upgrades and troubleshooting are covered in [docs/deploy-container.md](docs/deploy-container.md).
@@ -447,22 +447,22 @@ Environment-variable overrides (HTTPS cookies, external MySQL for multi-instance
 
 ```bash
 # 1) Build and push the image (kind / minikube can load it locally instead)
-docker build -t registry.example.com/qqmu/jync:1.7.5 .
-docker push registry.example.com/qqmu/jync:1.7.5
+docker build -t registry.example.com/qqmu/jync:1.7.6 .
+docker push registry.example.com/qqmu/jync:1.7.6
 
-# 2) Point the manifests at your image — the default image is jync:1.7.5.
+# 2) Point the manifests at your image — the default image is jync:1.7.6.
 #    Either edit deploy/k8s/deployment.yaml, or use the images transform:
 # images:
 #   - name: jync
 #     newName: registry.example.com/qqmu/jync
-#     newTag: "1.7.5"
+#     newTag: "1.7.6"
 
 # 3) Deploy Namespace / PVC / Deployment / Service / Ingress
 kubectl apply -k deploy/k8s/
 kubectl -n jync get pods
 ```
 
-- Manifests live in [deploy/k8s/](deploy/k8s/); the default tag is `jync:1.7.5`.
+- Manifests live in [deploy/k8s/](deploy/k8s/); the default tag is `jync:1.7.6`.
 - `ingress.yaml` is optional — remove it from `kustomization.yaml` if you do not run an Ingress, or adjust the host name and TLS.
 - The Service is `ClusterIP`. From outside the cluster use `kubectl -n jync port-forward svc/jync 8080:80` or an Ingress.
 - The H2 metadata store uses a `ReadWriteOnce` PVC, so **`replicas` must stay at 1**. For more replicas, first point the metadata store at an external MySQL / PostgreSQL (`SPRING_DATASOURCE_*`), then scale up.
