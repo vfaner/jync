@@ -33,6 +33,14 @@ import ch.qos.logback.core.read.ListAppender;
  */
 class LogMinerSessionTest {
 
+    /** One V$ARCHIVED_LOG row: the file plus the identity LogMiner deduplicates by. */
+    private record Archived(String name, int thread, long sequence) {
+    }
+
+    /** One V$LOGFILE/V$LOG row for a CURRENT redo group. */
+    private record Redo(int group, String member, int thread, long sequence) {
+    }
+
     /**
      * Wire a mock connection that answers: CURRENT_SCN, archived-log list (bind?), current
      * redo members, and the V$LOGMNR_CONTENTS cursor. Returns the cursor so tests can drive
@@ -55,6 +63,16 @@ class LogMinerSessionTest {
 
         Fixture(long currentScn, String[] archivedLogs, String[] redoMembers,
                 int databaseMajorVersion) throws SQLException {
+            this(currentScn, archived(archivedLogs), redo(redoMembers), databaseMajorVersion);
+        }
+
+        Fixture(long currentScn, Archived[] archivedLogs, Redo[] redoMembers)
+                throws SQLException {
+            this(currentScn, archivedLogs, redoMembers, 23);
+        }
+
+        Fixture(long currentScn, Archived[] archivedLogs, Redo[] redoMembers,
+                int databaseMajorVersion) throws SQLException {
             when(conn.getMetaData()).thenReturn(meta);
             when(meta.getDatabaseMajorVersion()).thenReturn(databaseMajorVersion);
             when(conn.createStatement()).thenReturn(st);
@@ -63,42 +81,174 @@ class LogMinerSessionTest {
             when(scnRs.getLong(1)).thenReturn(currentScn);
 
             // Archived logs query — since v1.7.1 it is a PreparedStatement with the SCN
-            // bound (instead of a string-substituted Statement.executeQuery).
+            // bound (instead of a string-substituted Statement.executeQuery). The result
+            // carries NAME, THREAD# and SEQUENCE# so the open sequence can tell whether the
+            // current online member is already covered by an archived copy.
             when(conn.prepareStatement(LogMinerSession.Q_ARCHIVED_LOGS_SINCE))
                     .thenReturn(archivePs);
             when(archivePs.executeQuery()).thenReturn(archiveRs);
-            if (archivedLogs.length == 0) {
-                when(archiveRs.next()).thenReturn(false);
-            } else {
-                Boolean[] answers = new Boolean[archivedLogs.length + 1];
-                for (int i = 0; i < archivedLogs.length; i++) {
-                    answers[i] = Boolean.TRUE;
-                }
-                answers[archivedLogs.length] = Boolean.FALSE;
-                when(archiveRs.next()).thenReturn(answers[0],
-                        java.util.Arrays.copyOfRange(answers, 1, answers.length));
-                when(archiveRs.getString(1)).thenReturn(archivedLogs[0],
-                        java.util.Arrays.copyOfRange(archivedLogs, 1, archivedLogs.length));
+            stubRows(archiveRs, archivedLogs.length);
+            if (archivedLogs.length > 0) {
+                when(archiveRs.getString(1)).thenReturn(archivedLogs[0].name(),
+                        archivedNames(archivedLogs));
+                when(archiveRs.getInt(2)).thenReturn(archivedLogs[0].thread(),
+                        archivedThreads(archivedLogs));
+                when(archiveRs.getLong(3)).thenReturn(archivedLogs[0].sequence(),
+                        archivedSequences(archivedLogs));
             }
 
             when(st.executeQuery(LogMinerSession.Q_CURRENT_REDO_MEMBERS)).thenReturn(redoRs);
-            if (redoMembers.length == 0) {
-                when(redoRs.next()).thenReturn(false);
-            } else {
-                Boolean[] answers = new Boolean[redoMembers.length + 1];
-                for (int i = 0; i < redoMembers.length; i++) {
-                    answers[i] = Boolean.TRUE;
-                }
-                answers[redoMembers.length] = Boolean.FALSE;
-                when(redoRs.next()).thenReturn(answers[0],
-                        java.util.Arrays.copyOfRange(answers, 1, answers.length));
-                when(redoRs.getString(1)).thenReturn(redoMembers[0],
-                        java.util.Arrays.copyOfRange(redoMembers, 1, redoMembers.length));
+            stubRows(redoRs, redoMembers.length);
+            if (redoMembers.length > 0) {
+                // getString(1) keeps the pre-dedupe contract readable during the RED step;
+                // the production query returns GROUP#, MEMBER, THREAD#, SEQUENCE#.
+                when(redoRs.getString(1)).thenReturn(redoMembers[0].member(),
+                        redoMembers(redoMembers));
+                when(redoRs.getInt(1)).thenReturn(redoMembers[0].group(), redoGroups(redoMembers));
+                when(redoRs.getString(2)).thenReturn(redoMembers[0].member(),
+                        redoMembers(redoMembers));
+                when(redoRs.getInt(3)).thenReturn(redoMembers[0].thread(),
+                        redoThreads(redoMembers));
+                when(redoRs.getLong(4)).thenReturn(redoMembers[0].sequence(),
+                        redoSequences(redoMembers));
             }
 
             when(conn.prepareStatement(LogMinerSession.Q_CONTENTS)).thenReturn(cursor);
             when(cursor.executeQuery()).thenReturn(rows);
         }
+
+        private static void stubRows(ResultSet rs, int count) throws SQLException {
+            if (count == 0) {
+                when(rs.next()).thenReturn(false);
+                return;
+            }
+            Boolean[] answers = new Boolean[count + 1];
+            for (int i = 0; i < count; i++) {
+                answers[i] = Boolean.TRUE;
+            }
+            answers[count] = Boolean.FALSE;
+            when(rs.next()).thenReturn(answers[0],
+                    java.util.Arrays.copyOfRange(answers, 1, answers.length));
+        }
+
+        /** Sequence below the redo defaults so plain fixtures never look like an overlap. */
+        private static Archived[] archived(String[] names) {
+            Archived[] out = new Archived[names.length];
+            for (int i = 0; i < names.length; i++) {
+                out[i] = new Archived(names[i], 1, 100L + i);
+            }
+            return out;
+        }
+
+        private static Redo[] redo(String[] members) {
+            Redo[] out = new Redo[members.length];
+            for (int i = 0; i < members.length; i++) {
+                out[i] = new Redo(1, members[i], 1, 1000L + i);
+            }
+            return out;
+        }
+
+        private static String[] archivedNames(Archived[] rows) {
+            String[] out = new String[rows.length - 1];
+            for (int i = 1; i < rows.length; i++) {
+                out[i - 1] = rows[i].name();
+            }
+            return out;
+        }
+
+        private static Integer[] archivedThreads(Archived[] rows) {
+            Integer[] out = new Integer[rows.length - 1];
+            for (int i = 1; i < rows.length; i++) {
+                out[i - 1] = rows[i].thread();
+            }
+            return out;
+        }
+
+        private static Long[] archivedSequences(Archived[] rows) {
+            Long[] out = new Long[rows.length - 1];
+            for (int i = 1; i < rows.length; i++) {
+                out[i - 1] = rows[i].sequence();
+            }
+            return out;
+        }
+
+        private static String[] redoMembers(Redo[] rows) {
+            String[] out = new String[rows.length - 1];
+            for (int i = 1; i < rows.length; i++) {
+                out[i - 1] = rows[i].member();
+            }
+            return out;
+        }
+
+        private static Integer[] redoGroups(Redo[] rows) {
+            Integer[] out = new Integer[rows.length - 1];
+            for (int i = 1; i < rows.length; i++) {
+                out[i - 1] = rows[i].group();
+            }
+            return out;
+        }
+
+        private static Integer[] redoThreads(Redo[] rows) {
+            Integer[] out = new Integer[rows.length - 1];
+            for (int i = 1; i < rows.length; i++) {
+                out[i - 1] = rows[i].thread();
+            }
+            return out;
+        }
+
+        private static Long[] redoSequences(Redo[] rows) {
+            Long[] out = new Long[rows.length - 1];
+            for (int i = 1; i < rows.length; i++) {
+                out[i - 1] = rows[i].sequence();
+            }
+            return out;
+        }
+    }
+
+    @Test
+    void aCurrentLogPathAlreadyReturnedByTheArchivedQueryIsAddedOnce() throws SQLException {
+        // V$ARCHIVED_LOG also carries a row for the current redo group, and on a FRA
+        // database that row's NAME is the online member path. Adding it a second time from
+        // V$LOGFILE raises ORA-01289 on a live database.
+        Fixture fx = new Fixture(1000L,
+                new Archived[]{new Archived("/arch/1.log", 1, 100L),
+                        new Archived("/redo/cur.log", 1, 101L)},
+                new Redo[]{new Redo(1, "/redo/cur.log", 1, 101L)});
+
+        LogMinerSession.openDefault(fx.conn, 500L, 1000).close();
+
+        verify(fx.st, times(2)).execute(Mockito.contains("DBMS_LOGMNR.ADD_LOGFILE"));
+        verify(fx.st, times(1)).execute(Mockito.argThat(sql -> sql.contains("/redo/cur.log")));
+    }
+
+    @Test
+    void aMultiplexedCurrentGroupContributesOnlyOneMember() throws SQLException {
+        // Oracle only requires one member of a multiplexed group; LogMiner identifies the
+        // group by thread+sequence, so the second member is a duplicate (ORA-01289).
+        Fixture fx = new Fixture(1000L,
+                new Archived[]{new Archived("/arch/1.log", 1, 100L)},
+                new Redo[]{new Redo(1, "/redo/m1.log", 1, 101L),
+                        new Redo(1, "/redo/m2.log", 1, 101L)});
+
+        LogMinerSession.openDefault(fx.conn, 500L, 1000).close();
+
+        verify(fx.st, times(2)).execute(Mockito.contains("DBMS_LOGMNR.ADD_LOGFILE"));
+        verify(fx.st, never()).execute(Mockito.contains("/redo/m2.log"));
+    }
+
+    @Test
+    void anOnlineMemberWhoseSequenceIsAlreadyArchivedIsNotAddedAgain() throws SQLException {
+        // ARCHIVE LOG CURRENT archives the group without switching it: the archived copy
+        // covers the sequence while V$LOGFILE still reports the online member for the same
+        // thread+sequence. Adding the online path again is the duplicate ORA-01289 rejects.
+        Fixture fx = new Fixture(1000L,
+                new Archived[]{new Archived("/arch/1_101.arc", 1, 101L)},
+                new Redo[]{new Redo(1, "/redo/cur.log", 1, 101L)});
+
+        LogMinerSession.openDefault(fx.conn, 500L, 1000).close();
+
+        verify(fx.st, times(1)).execute(Mockito.contains("DBMS_LOGMNR.ADD_LOGFILE"));
+        verify(fx.st, never()).execute(Mockito.contains("/redo/cur.log"));
     }
 
     @Test

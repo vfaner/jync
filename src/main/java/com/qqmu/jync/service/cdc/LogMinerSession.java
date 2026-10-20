@@ -7,9 +7,12 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -21,7 +24,8 @@ import lombok.extern.slf4j.Slf4j;
  * <ol>
  *   <li>read the logfile list covering {@code (startScn, current_scn]} — archived logs from
  *       V$ARCHIVED_LOG (DEST_ID=1, NEXT_CHANGE# &gt; startScn) plus the CURRENT online
- *       members from V$LOGFILE/V$LOG;</li>
+ *       members from V$LOGFILE/V$LOG, one file per thread+sequence (see the dedupe note in
+ *       {@link #openDefault});</li>
  *   <li>ADD_LOGFILE each path with DBMS_LOGMNR.NEW on the first, ADD on the rest;</li>
  *   <li>START_LOGMNR with START_SCN, DICT_FROM_ONLINE_CATALOG, COMMITTED_DATA_ONLY;</li>
  *   <li>stream V$LOGMNR_CONTENTS filtered by {@code CSCN > ?} and row-level OPERATION.</li>
@@ -41,11 +45,12 @@ public class LogMinerSession implements AutoCloseable {
 
     static final String Q_CURRENT_SCN = "SELECT CURRENT_SCN FROM V$DATABASE";
     static final String Q_CURRENT_REDO_MEMBERS =
-            "SELECT MEMBER FROM V$LOGFILE WHERE GROUP# IN"
-                    + " (SELECT GROUP# FROM V$LOG WHERE STATUS = 'CURRENT')";
+            "SELECT F.GROUP#, F.MEMBER, L.THREAD#, L.SEQUENCE# FROM V$LOGFILE F"
+                    + " JOIN V$LOG L ON L.GROUP# = F.GROUP#"
+                    + " WHERE L.STATUS = 'CURRENT' ORDER BY F.GROUP#, F.MEMBER";
     static final String Q_ARCHIVED_LOGS_SINCE =
-            "SELECT NAME FROM V$ARCHIVED_LOG WHERE DEST_ID = 1 AND NEXT_CHANGE# > ?"
-                    + " AND NAME IS NOT NULL ORDER BY FIRST_CHANGE#";
+            "SELECT NAME, THREAD#, SEQUENCE# FROM V$ARCHIVED_LOG WHERE DEST_ID = 1"
+                    + " AND NEXT_CHANGE# > ? AND NAME IS NOT NULL ORDER BY FIRST_CHANGE#";
 
     private static final String Q_CONTENTS_HEAD =
             // CSCN = commit SCN (populated under COMMITTED_DATA_ONLY); V$LOGMNR_CONTENTS
@@ -246,21 +251,43 @@ public class LogMinerSession implements AutoCloseable {
             currentScn = rs.getLong(1);
         }
 
-        List<String> logfiles = new ArrayList<>();
+        // LogMiner identifies a log file by thread + sequence number, not by path, and
+        // raises ORA-01289 when the same (thread, sequence) is added twice. Three shapes
+        // produce that duplicate on a live database:
+        //   * V$ARCHIVED_LOG also carries a row for the CURRENT group, and on a FRA
+        //     database that row's NAME is the online member path — same path twice;
+        //   * a multiplexed CURRENT group has several members sharing one sequence;
+        //   * ALTER SYSTEM ARCHIVE LOG CURRENT archives the group without switching it, so
+        //     an archived copy and the still-CURRENT online member share a sequence.
+        // Keep insertion order (archived first, then redo) and add at most one file per
+        // thread+sequence.
+        Set<String> logfiles = new LinkedHashSet<>();
+        Set<String> addedSequences = new HashSet<>();
         // Use a PreparedStatement for the SCN (numeric bind, no injection) — the string
         // .replace("?", ...) below worked, but a bind keeps the query plan cache stable.
         try (PreparedStatement ps = source.prepareStatement(Q_ARCHIVED_LOGS_SINCE)) {
             ps.setLong(1, startScn);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    logfiles.add(rs.getString(1));
+                    if (addedSequences.add(threadSequence(rs.getInt(2), rs.getLong(3)))) {
+                        logfiles.add(rs.getString(1));
+                    }
                 }
             }
         }
+        Set<Integer> archivedGroups = new HashSet<>();
         try (Statement st = source.createStatement();
              ResultSet rs = st.executeQuery(Q_CURRENT_REDO_MEMBERS)) {
             while (rs.next()) {
-                logfiles.add(rs.getString(1));
+                int group = rs.getInt(1);
+                String member = rs.getString(2);
+                String sequence = threadSequence(rs.getInt(3), rs.getLong(4));
+                // One member per group: Oracle needs only one copy of a multiplexed group.
+                // A group whose sequence is already archived (ARCHIVE LOG CURRENT) is
+                // already covered, so its online member must not be added again.
+                if (archivedGroups.add(group) && addedSequences.add(sequence)) {
+                    logfiles.add(member);
+                }
             }
         }
         if (logfiles.isEmpty()) {
@@ -295,6 +322,11 @@ public class LogMinerSession implements AutoCloseable {
         }
         ResultSet rows = cursor.executeQuery();
         return new LogMinerSession(source, startScn, currentScn, cursor, rows);
+    }
+
+    /** Identity LogMiner deduplicates log files by (thread number + log sequence). */
+    private static String threadSequence(int thread, long sequence) {
+        return thread + ":" + sequence;
     }
 
     /**
