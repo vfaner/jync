@@ -1163,7 +1163,7 @@ public class DataSyncService {
                 }
                 stats.read++;
                 if (++sinceCommit >= batchSize) {
-                    targetConn.commit();
+                    commitAndRecord(targetConn, throughput);
                     throughput.recordBatch();
                     // Same renewal point as the native-batch path: abort before more rows once
                     // the lease is lost. The committed tail stays; the rest replays next time.
@@ -1803,7 +1803,7 @@ public class DataSyncService {
         try {
             int[] counts = ps.executeBatch();
             throughput.recordBatch();
-            conn.commit();
+            commitAndRecord(conn, throughput);
             // The batch is a commit boundary and hence a safe renewal point: the rows it holds
             // are durable and idempotent. Stop now if the lease was lost, before the next batch.
             ctx.requireLease();
@@ -1837,6 +1837,18 @@ public class DataSyncService {
                     + (failedIndex >= 0 ? " at row " + (failedIndex + 1) + " of the batch" : "")
                     + ": " + e.getMessage(), e.getSQLState(), e.getErrorCode(), e);
         }
+    }
+
+    /**
+     * Commits and books the wait into the meter's commit share instead of the row-work share.
+     * {@code COMMIT} blocks on durability — redo-log sync, a synchronous stand-by, slow
+     * storage — which the row loop cannot influence and which must not be mistaken for slow
+     * row processing when someone reads the throughput line.
+     */
+    private void commitAndRecord(Connection conn, ThroughputMeter throughput) throws SQLException {
+        long start = System.nanoTime();
+        conn.commit();
+        throughput.recordCommit(System.nanoTime() - start);
     }
 
     /** Sums a batch's update counts, treating SUCCESS_NO_INFO as one affected row. */

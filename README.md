@@ -354,7 +354,7 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 |---|---|---|
 | `poll-interval` | `2000` | 轮询间隔（毫秒） |
 | `batch-size` / `fetch-size` | `500` / `1000` | 增量轮询与 CDC 回放的 JDBC 批次行数 / 源库读取批量 |
-| `full-load-batch-size` | `2000` | 仅首次全量：每批行数，建议 1000-5000，上限 20000 |
+| `full-load-batch-size` | `2000` | 仅首次全量：每批行数，建议 1000-5000，上限 20000。吞吐日志里 `commit%` 偏高（目标库提交慢，如 redo 慢盘、Data Guard 同步传输）时加大此值，提交次数随之减少 |
 | `full-load-fetch-size` | `2000` | 仅首次全量：源库结果集批量 |
 | `chunk-size` | `100000` | 全量每块行数，每块提交 + 写检查点；`0` 关闭分块 |
 | `full-load-parallelism` | `2` | 单表全量并行 worker 数（仅单列整数主键表，上限 8，受连接池约束） |

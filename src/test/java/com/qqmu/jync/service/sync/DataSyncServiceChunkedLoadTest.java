@@ -19,6 +19,10 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.List;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +35,7 @@ import com.qqmu.jync.model.ChunkCheckpoint;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
+import com.qqmu.jync.service.cdc.LogCapture;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
@@ -220,6 +225,53 @@ class DataSyncServiceChunkedLoadTest {
         // production) has no such column to bound the comparison with.
         assertThat(service.auditSyncedRowCounts(source, target, itemsMeta(),
                 CursorStrategy.rowScn("row-level SCN"), progress, ctx)).isNull();
+    }
+
+    /**
+     * The throughput line is the one piece of evidence a customer is asked to send in when a
+     * first full load is slow. It must say how much of the write share was commit wait: a
+     * target whose commits cost seconds is fixed by fewer, larger commits, while slow row
+     * work needs a different answer entirely — the summary cannot leave the two merged.
+     */
+    @Test
+    void theThroughputLineCarvesCommitWaitOutOfTheWriteShare() throws SQLException {
+        // At or above the meter's INFO threshold, so the line is actually emitted.
+        createItems(1200);
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(ThroughputMeter.class);
+        try {
+            // A target whose COMMIT costs real time, like a redo-log-bound production one.
+            DataSyncService.TableSyncResult result = service(2000).syncTable(
+                    source, slowCommit(target), itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+            assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        } finally {
+            LogCapture.detach(ThroughputMeter.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                .as("commit waits must be booked into their own share of the throughput line")
+                .anyMatch(line -> line.contains("commit=") && !line.contains("commit=0%"));
+    }
+
+    /** Delegates everything to the real target, but makes every COMMIT take {@code millis}. */
+    private static Connection slowCommit(Connection real) {
+        return (Connection) java.lang.reflect.Proxy.newProxyInstance(
+                DataSyncServiceChunkedLoadTest.class.getClassLoader(),
+                new Class<?>[] {Connection.class},
+                (proxy, method, args) -> {
+                    if ("commit".equals(method.getName()) && (args == null || args.length == 0)) {
+                        try {
+                            Thread.sleep(20L);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                    try {
+                        return method.invoke(real, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
     }
 
     private DataSyncService service(int chunkSize) {

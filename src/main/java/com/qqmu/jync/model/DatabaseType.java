@@ -22,10 +22,18 @@ public enum DatabaseType {
      * a row exactly as it was still reports one affected row. The sync counts rows changed by
      * reading those update counts, so without this flag a re-scan of an unchanged table would
      * report every row as changed.
+     *
+     * <p>{@code rewriteBatchedStatements=true} is what makes {@code executeBatch()} one network
+     * round trip instead of one per row — Connector/J sends each statement of a batch on its own
+     * unless told to rewrite it. Every write this product makes to MySQL is an
+     * {@code INSERT ... ON DUPLICATE KEY UPDATE}, a shape the rewrite handles, so a first full
+     * load would otherwise be capped by round-trip latency no matter how large its batch is.
+     * A rewritten batch travels as one packet: keep the full-load batch size moderate on
+     * servers with a small {@code max_allowed_packet} (MySQL 5.7 defaults to 4 MB).
      */
     MYSQL("db.type.MYSQL", "com.mysql.cj.jdbc.Driver",
             "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
-                    + "&characterEncoding=utf8&useAffectedRows=true",
+                    + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
             3306, DialectFamily.MYSQL),
 
     MARIADB("db.type.MARIADB", "org.mariadb.jdbc.Driver",
@@ -86,7 +94,7 @@ public enum DatabaseType {
      */
     TIDB("db.type.TIDB", "com.mysql.cj.jdbc.Driver",
             "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
-                    + "&characterEncoding=utf8&useAffectedRows=true",
+                    + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
             4000, DialectFamily.MYSQL),
 
     HIGHGO("db.type.HIGHGO", "com.highgo.jdbc.Driver",

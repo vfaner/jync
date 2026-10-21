@@ -291,7 +291,8 @@ class OracleFullLoadThroughputIT {
             assertThat(sumId(target)).isEqualTo(checksum(SRC));
             assertThat(meterLogs.list)
                     .as("the throughput meter must have reported the pass")
-                    .anyMatch(e -> e.getFormattedMessage().contains("rows/s="));
+                    .anyMatch(e -> e.getFormattedMessage().contains("rows/s="))
+                    .anyMatch(e -> e.getFormattedMessage().contains("commit="));
 
             runs.add(new Run(runs.size() + 1, "engine parallel=" + parallelism, target,
                     FULL_LOAD_BATCH, ROWS, nanos, -1, 0, 0, 0, 0));

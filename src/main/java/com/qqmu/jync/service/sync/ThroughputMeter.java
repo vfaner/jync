@@ -11,9 +11,9 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>A full load used to report only a final row count, which said nothing about whether the
  * bottleneck was reading, binding, buffering or committing — the three are indistinguishable
- * from the outside. Splitting the pass into a read share and a write share is what turns
- * "slow" into a number someone can act on: a dominant write share with few batches means
- * commit frequency, a dominant read share means the source cursor, and a write share with one
+ * from the outside. Splitting the pass into read, row-work and commit shares is what turns
+ * "slow" into a number someone can act on: a dominant commit share means redo-log or storage
+ * latency (fewer, larger commits), a dominant read share means the source cursor, and one
  * {@code executeBatch} call per batch says the driver really is batching.
  *
  * <p>Not a bean and not shared: one instance lives inside one {@link DataSyncService#copyRows}
@@ -32,6 +32,7 @@ final class ThroughputMeter {
     private int rows;
     private long readNanos;
     private long writeNanos;
+    private long commitNanos;
     private int batches;
 
     ThroughputMeter(String table) {
@@ -55,10 +56,20 @@ final class ThroughputMeter {
 
     /**
      * One row was handed to the target: cleansing, binding, {@code addBatch}, and — when the
-     * batch filled — {@code executeBatch} plus its commit.
+     * batch filled — {@code executeBatch}. A commit that happens inside this window is
+     * measured by {@link #recordCommit(long)} and reported apart from the row work.
      */
     void recordWrite(long nanos) {
         writeNanos += nanos;
+    }
+
+    /**
+     * The target's {@code COMMIT} call. Reported on its own because it waits on things the
+     * row loop cannot influence — redo-log sync, a Data Guard stand-by, slow storage — and
+     * the remedy is fewer, larger commits, not a faster write loop.
+     */
+    void recordCommit(long nanos) {
+        commitNanos += nanos;
     }
 
     /** One {@code executeBatch} call; the count per row is what exposes a driver not batching. */
@@ -76,6 +87,10 @@ final class ThroughputMeter {
 
     long writeNanos() {
         return writeNanos;
+    }
+
+    long commitNanos() {
+        return commitNanos;
     }
 
     int batches() {
@@ -99,13 +114,18 @@ final class ThroughputMeter {
     String describe() {
         long measured = readNanos + writeNanos;
         int readPct = measured == 0 ? 0 : (int) Math.round(readNanos * 100.0 / measured);
-        int writePct = measured == 0 ? 0 : 100 - readPct;
+        // Write windows include the commit that closed a batch; report row work net of it.
+        long rowWorkNanos = Math.max(0L, writeNanos - commitNanos);
+        int writePct = measured == 0 ? 0 : (int) Math.round(rowWorkNanos * 100.0 / measured);
+        // The remainder, so the three shares always add up to 100 after rounding.
+        int commitPct = measured == 0 ? 0 : Math.max(0, 100 - readPct - writePct);
         double rowsPerBatch = batches == 0 ? 0 : (double) rows / batches;
         return String.format(Locale.ROOT,
-                "table=%s thread=%s rows=%d elapsed=%.1fs rows/s=%.1f read=%d%% write=%d%%"
+                "table=%s thread=%s rows=%d elapsed=%.1fs rows/s=%.1f"
+                        + " read=%d%% write=%d%% commit=%d%%"
                         + " batches=%d rowsPerBatch=%.0f",
                 table, Thread.currentThread().getName(), rows, elapsedNanos() / 1e9,
-                rowsPerSecond(), readPct, writePct, batches, rowsPerBatch);
+                rowsPerSecond(), readPct, writePct, commitPct, batches, rowsPerBatch);
     }
 
     /**

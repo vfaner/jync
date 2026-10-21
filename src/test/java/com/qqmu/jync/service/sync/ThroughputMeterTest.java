@@ -62,7 +62,33 @@ class ThroughputMeterTest {
                 .contains("rows=1000")
                 .contains("read=20%")
                 .contains("write=80%")
+                .contains("commit=0%")
                 .contains("batches=2")
                 .contains("rowsPerBatch=500");
+    }
+
+    /**
+     * The write share used to swallow {@code conn.commit()}, so a target whose commits take
+     * seconds looked exactly like a target whose rows take seconds — and the two need
+     * opposite fixes (fewer commits vs. a faster target). Commit waits are reported,
+     * and taken out of the row-work share so the three percentages still sum to 100.
+     */
+    @Test
+    void commitWaitIsReportedApartFromTheRowWorkThatPrecededIt() {
+        ThroughputMeter meter = new ThroughputMeter("ORDERS", clock::get);
+        for (int i = 0; i < 100; i++) {
+            meter.recordRead(1_000_000L);   // 1 ms per row  -> 100 ms
+            meter.recordWrite(3_000_000L);  // 3 ms per row  -> 300 ms, of which one commit
+        }
+        meter.recordCommit(100_000_000L);   // 100 ms inside the write windows above
+        meter.recordBatch();
+
+        assertThat(meter.commitNanos()).isEqualTo(100_000_000L);
+        // writeNanos keeps the total window; describe() reports the row work net of commit.
+        assertThat(meter.writeNanos()).isEqualTo(300_000_000L);
+        assertThat(meter.describe())
+                .contains("read=25%")
+                .contains("write=50%")
+                .contains("commit=25%");
     }
 }
