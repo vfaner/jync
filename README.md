@@ -11,7 +11,7 @@
 
 ![Jync 捷同 · 异构数据库实时同步工具](docs/images/jync.png)
 
-在**异构数据库**之间实时同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点几下即可在**内置 21 种数据库（另支持自定义类型）之间任意两种**建立持续同步链路。
+在**异构数据库**之间实时同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点几下即可在**内置 26 种数据库（另支持自定义类型）之间任意两种**建立持续同步链路。
 
 - **零外部依赖**：Spring Boot 单体 + Thymeleaf 服务端渲染 + Quartz + H2 内嵌元数据库，内网离线可用。
 - **零侵入增量**：默认轮询检测，只需一个只读账号；MySQL / Oracle / PostgreSQL / SQL Server 源库可切换**日志 CDC**，做到秒级延迟。
@@ -90,7 +90,7 @@
 
 内置 **26 种**：MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**华为 GaussDB**、**达梦**、**人大金仓**、**OceanBase**、**TiDB**、**中兴 GoldenDB**、**腾讯 TDSQL（MySQL 版）**、**阿里 PolarDB（MySQL 版）**、**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB**、**平安 RASESQL**、**东方金信 SeaboxSQL**、**瀚高**、**海量**、**崖山**、**南大通用 (GBase)**、**神通 (Oscar)**、H2。
 
-- **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时动态加载。
+- **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时动态加载；可指定 SQL 方言家族（通用 / Oracle / MySQL / PostgreSQL / SQL Server / DB2），决定建表、upsert 与元数据读取的方式，不指定时按通用 ANSI 处理。
 - **驱动内置**：除 **GBase**、**神通** 与 **华为 GaussDB** 外均随包内置；这三家未在 Maven Central 发布官方构件，需自备 jar 并填写路径（独立 `URLClassLoader` 加载，不污染主程序）。厂商 jar 里的驱动类名与预设不同时，可在同一张卡片里覆盖驱动类（留空即用预设），例如 GaussDB 的 `gsjdbc200.jar` 使用 `com.huawei.gauss200.jdbc.Driver`。
 - **华为 GaussDB**：与 openGauss 是两个产品（驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`），方言归入 PostgreSQL 系；使用随库提供的 `gaussdbjdbc.jar` 即可，不要按 openGauss 的方式连接。
 - **PolarDB / TDSQL 分版本**：MySQL 版有独立预置（内置 MySQL 驱动，端口按控制台改）；PostgreSQL 版选 PostgreSQL 预置；PolarDB Oracle 兼容版协议是 PostgreSQL、驱动为 `com.aliyun.polardb2.Driver`，请用自定义类型并自备 jar。
