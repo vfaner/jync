@@ -152,6 +152,15 @@ public class SyncStateWriter {
     public void recordLog(Long projectId, ObjectType objectType, String objectName,
                           ChangeType changeType, String details, boolean success,
                           long durationMs, Integer affectedRows) {
+        if (!success && isDuplicateFailure(
+                errorKey(projectId, objectType, objectName, changeType, details),
+                System.currentTimeMillis())) {
+            // The first occurrence carries the information; identical repeats one poll interval
+            // apart would file tens of thousands of rows a day and bury everything else.
+            log.debug("Suppressed a repeated failure log for {} {}: {}",
+                    objectType, objectName, details);
+            return;
+        }
         ChangeLog entry = ChangeLog.of(projectId, objectType, objectName, changeType, details);
         entry.setSuccess(success);
         entry.setDurationMs(durationMs);
@@ -162,6 +171,46 @@ public class SyncStateWriter {
             entry.setDetails(details.substring(0, 4000) + "... (truncated)");
         }
         changeLogRepository.save(entry);
+    }
+
+    /**
+     * How long an identical failure is kept from being written again. Long enough that a
+     * two-second poll cannot flood the log, short enough that a failure still in progress keeps
+     * reminding the reader it has not gone away.
+     */
+    static final long ERROR_DEDUP_WINDOW_MS = 60_000;
+
+    /** Capacity after which expired entries are swept; failures are few, keys must not leak. */
+    private static final int ERROR_DEDUP_SWEEP_THRESHOLD = 1024;
+
+    /** When each distinct failure was last written, keyed by {@link #errorKey}. */
+    private final java.util.Map<String, Long> lastFailureAt = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Identity of a failure for de-duplication: the same message on the same object. */
+    static String errorKey(Long projectId, ObjectType objectType, String objectName,
+                           ChangeType changeType, String details) {
+        return projectId + "\u0001" + objectType + "\u0001" + objectName + "\u0001" + changeType
+                + "\u0001" + details;
+    }
+
+    /**
+     * Records {@code now} for the key and answers whether this occurrence should be skipped.
+     * Concurrent calls for the same key cannot both win: the first one to store the new time
+     * is the only one told to write.
+     */
+    boolean isDuplicateFailure(String key, long now) {
+        boolean[] duplicate = {false};
+        lastFailureAt.compute(key, (k, last) -> {
+            if (last != null && now - last < ERROR_DEDUP_WINDOW_MS) {
+                duplicate[0] = true;
+                return last;
+            }
+            return now;
+        });
+        if (lastFailureAt.size() > ERROR_DEDUP_SWEEP_THRESHOLD) {
+            lastFailureAt.values().removeIf(last -> now - last >= ERROR_DEDUP_WINDOW_MS);
+        }
+        return duplicate[0];
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
