@@ -19,9 +19,11 @@ import com.qqmu.jync.service.converter.SqlDialect;
  * offending table is reported once, clearly, and dropped from the cycle's metadata so neither
  * structure sync nor the data phase touches it.
  *
- * <p>Limits are per product and measured in bytes (UTF-8), because Oracle and PostgreSQL count
- * bytes, not characters. A product whose limit is unknown gets no check: a false refusal would
- * block a table that used to sync, which is worse than the late failure this improves.
+ * <p>Limits are per product and measured in the unit the product documents: bytes (UTF-8) for
+ * Oracle and PostgreSQL, characters for MySQL and SQL Server ({@link
+ * SqlDialect#identifierLimitInBytes()}). A product whose limit is unknown gets no check: a
+ * false refusal would block a table that used to sync, which is worse than the late failure
+ * this improves.
  */
 public final class IdentifierPreflight {
 
@@ -61,6 +63,8 @@ public final class IdentifierPreflight {
         if (limit <= 0 || tables == null || tables.isEmpty()) {
             return List.of();
         }
+        boolean bytes = dialect.identifierLimitInBytes();
+        String unit = bytes ? " bytes" : " characters";
         List<Violation> violations = new ArrayList<>();
         for (TableMeta table : tables) {
             if (table == null || table.getName() == null) {
@@ -71,10 +75,10 @@ public final class IdentifierPreflight {
             if (target == null || target.isBlank()) {
                 target = table.getName();
             }
-            int bytes = utf8Length(target);
-            if (bytes > limit) {
+            int length = measure(target, bytes);
+            if (length > limit) {
                 violations.add(new Violation(table.getName(), "Table '" + table.getName()
-                        + "': target table name '" + target + "' is " + bytes + " bytes; "
+                        + "': target table name '" + target + "' is " + length + unit + "; "
                         + targetType.name() + " allows at most " + limit));
                 // One message per table is enough — the name alone already blocks it.
                 continue;
@@ -86,11 +90,11 @@ public final class IdentifierPreflight {
                 if (column == null || column.getName() == null) {
                     continue;
                 }
-                int columnBytes = utf8Length(column.getName());
-                if (columnBytes > limit) {
+                int columnLength = measure(column.getName(), bytes);
+                if (columnLength > limit) {
                     violations.add(new Violation(table.getName(), "Table '" + table.getName()
-                            + "': column '" + column.getName() + "' is " + columnBytes + " bytes; "
-                            + targetType.name() + " allows at most " + limit));
+                            + "': column '" + column.getName() + "' is " + columnLength + unit
+                            + "; " + targetType.name() + " allows at most " + limit));
                 }
             }
         }
@@ -113,7 +117,9 @@ public final class IdentifierPreflight {
         return dialect.maxIdentifierBytes();
     }
 
-    private static int utf8Length(String name) {
-        return name.getBytes(StandardCharsets.UTF_8).length;
+    /** Length in the product's own unit: UTF-8 bytes, or Unicode code points. */
+    private static int measure(String name, boolean bytes) {
+        return bytes ? name.getBytes(StandardCharsets.UTF_8).length
+                : name.codePointCount(0, name.length());
     }
 }

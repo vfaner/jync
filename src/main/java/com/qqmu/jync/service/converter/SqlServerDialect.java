@@ -27,6 +27,12 @@ public class SqlServerDialect extends AbstractSqlDialect {
         return 128;
     }
 
+    /** SQL Server documents 128 <em>characters</em>, not bytes. */
+    @Override
+    public boolean identifierLimitInBytes() {
+        return false;
+    }
+
     @Override
     protected char quoteChar() {
         // Bracket quoting; handled specially since the delimiters differ.

@@ -305,14 +305,26 @@ public interface SqlDialect {
     }
 
     /**
-     * The product's identifier length limit in bytes, or 0 when it is unknown or unlimited.
+     * The product's identifier length limit, or 0 when it is unknown or unlimited.
      *
      * <p>Used to refuse a name before the target rejects it mid-load with an error that names
-     * neither the mapping that produced the name nor the limit it broke. Byte-based, because
-     * Oracle and PostgreSQL measure identifiers in bytes, not characters.
+     * neither the mapping that produced the name nor the limit it broke. The unit is the one
+     * the product documents: see {@link #identifierLimitInBytes()}.
      */
     default int maxIdentifierBytes() {
         return 0;
+    }
+
+    /**
+     * Whether {@link #maxIdentifierBytes()} counts bytes rather than characters.
+     *
+     * <p>Oracle and PostgreSQL count bytes; MySQL and SQL Server document a character limit.
+     * Measuring every product in bytes would refuse a legal multi-byte name — 22 CJK
+     * characters already exceed MySQL's 64 "bytes" — and a false refusal blocks a table that
+     * used to sync.
+     */
+    default boolean identifierLimitInBytes() {
+        return true;
     }
 
     String getTruncateSql(String schema, String table);

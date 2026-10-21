@@ -84,6 +84,24 @@ class IdentifierPreflightTest {
     }
 
     @Test
+    void mysqlCountsCharactersNotBytes() {
+        // MySQL's documented limit is 64 characters, so 64 CJK names (192 bytes) still fit.
+        assertThat(check(DatabaseType.MYSQL, new MySqlDialect(), table("表".repeat(64))))
+                .as("a name at the character limit is legal however many bytes it takes")
+                .isEmpty();
+        assertThat(check(DatabaseType.MYSQL, new MySqlDialect(), table("表".repeat(65))))
+                .hasSize(1);
+    }
+
+    @Test
+    void sqlServerCountsCharactersNotBytes() {
+        assertThat(check(DatabaseType.SQLSERVER, new SqlServerDialect(),
+                table("表".repeat(128)))).isEmpty();
+        assertThat(check(DatabaseType.SQLSERVER, new SqlServerDialect(),
+                table("表".repeat(129)))).hasSize(1);
+    }
+
+    @Test
     void sqlServerAllowsOneHundredTwentyEight() {
         assertThat(check(DatabaseType.SQLSERVER, new SqlServerDialect(),
                 table("T".repeat(128)))).isEmpty();

@@ -71,6 +71,12 @@ public class MySqlDialect extends AbstractSqlDialect {
         return 64;
     }
 
+    /** MySQL documents 64 <em>characters</em>, not bytes. */
+    @Override
+    public boolean identifierLimitInBytes() {
+        return false;
+    }
+
     /**
      * MySQL Connector/J — and the MySQL-protocol forks this family covers (MariaDB,
      * OceanBase, TiDB, GBase) — only stream a result set row-by-row when the fetch size
