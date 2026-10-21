@@ -26,6 +26,7 @@ public class PostgresMetadataReader extends GenericMetadataReader {
     public boolean supports(DatabaseType type) {
         return type == DatabaseType.POSTGRESQL
                 || type == DatabaseType.OPENGAUSS
+                || type == DatabaseType.GAUSSDB
                 || type == DatabaseType.KINGBASE
                 || type == DatabaseType.OSCAR
                 || type == DatabaseType.HIGHGO

@@ -71,8 +71,9 @@ public class DatabaseConfigController {
 
     /**
      * The jar-path card is shown for CUSTOM (nothing is bundled) and for preset types whose
-     * driver is not on the classpath (currently GBase and Oscar), so the first paint already
-     * matches the selected type instead of flashing after the type-defaults round-trip.
+     * driver is not on the classpath (currently GBase, Oscar and Huawei GaussDB), so the first
+     * paint already matches the selected type instead of flashing after the type-defaults
+     * round-trip.
      */
     private static boolean jarCardVisible(DatabaseType type) {
         if (type == null || type == DatabaseType.CUSTOM) {

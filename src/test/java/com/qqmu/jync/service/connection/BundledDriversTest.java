@@ -19,13 +19,15 @@ import com.qqmu.jync.model.DatabaseType;
  * <p>Without this, removing (or forgetting) a driver dependency in {@code pom.xml} compiles
  * fine and only fails at the customer site when they click "Test connection". Instead every
  * preset type must either resolve from the application classpath or be explicitly classified
- * as external (user-supplied jar). The external set is currently GBase and Oscar — neither
- * vendor publishes an artifact on Maven Central — plus CUSTOM, which never has a driver.
+ * as external (user-supplied jar). The external set is currently GBase, Oscar and Huawei
+ * GaussDB — none of their vendors publishes a redistributable artifact — plus CUSTOM, which
+ * never has a driver.
  */
 class BundledDriversTest {
 
     private static final Set<DatabaseType> EXTERNAL =
-            EnumSet.of(DatabaseType.CUSTOM, DatabaseType.GBASE, DatabaseType.OSCAR);
+            EnumSet.of(DatabaseType.CUSTOM, DatabaseType.GBASE, DatabaseType.OSCAR,
+                    DatabaseType.GAUSSDB);
 
     @Test
     @DisplayName("每个预设类型要么内置驱动,要么显式走外部 jar")
@@ -43,13 +45,13 @@ class BundledDriversTest {
     }
 
     @Test
-    @DisplayName("内置驱动预设共 15 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/OceanBase/TiDB/瀚高/海量/崖山/H2")
-    void fifteenDriversAreBundled() {
+    @DisplayName("内置驱动预设共 18 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/OceanBase/TiDB/GoldenDB/TDSQL/PolarDB/瀚高/海量/崖山/H2")
+    void eighteenDriversAreBundled() {
         long bundled = Arrays.stream(DatabaseType.values())
                 .filter(t -> !EXTERNAL.contains(t))
                 .filter(t -> DriverPresence.isPresent(t.getDriverClassName()))
                 .count();
-        assertEquals(15, bundled);
+        assertEquals(18, bundled);
     }
 
     /**

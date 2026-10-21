@@ -69,6 +69,18 @@ public enum DatabaseType {
             "jdbc:opengauss://%s:%d/%s",
             5432, DialectFamily.POSTGRES),
 
+    /**
+     * Huawei's commercial GaussDB, which is not openGauss under another name: it ships its
+     * own driver ({@code gaussdbjdbc.jar}) and URL prefix. Connecting it as CUSTOM would
+     * place it in the GENERIC family, losing the PostgreSQL type mapping and metadata
+     * reader, so it gets a preset of its own. The driver is not redistributable, hence the
+     * external-jar path. The default port is the usual GaussDB instance port; deployments
+     * with a different one edit the field.
+     */
+    GAUSSDB("db.type.GAUSSDB", "com.huawei.gaussdb.jdbc.Driver",
+            "jdbc:gaussdb://%s:%d/%s",
+            8000, DialectFamily.POSTGRES),
+
     DM("db.type.DM", "dm.jdbc.driver.DmDriver",
             "jdbc:dm://%s:%d/%s",
             5236, DialectFamily.ORACLE),
@@ -96,6 +108,42 @@ public enum DatabaseType {
             "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
                     + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
             4000, DialectFamily.MYSQL),
+
+    /**
+     * ZTE GoldenDB speaks the MySQL protocol, and ZTE's own connection examples use the
+     * standard Connector/J with a {@code jdbc:mysql://} URL, so this preset reuses the
+     * bundled MySQL driver. The default port is the compute node / DBProxy port that
+     * applications connect to in a distributed deployment; single-node deployments and
+     * proxies mapped to 3306 just edit the port. A deployment that mandates the vendor's
+     * own driver ({@code com.goldendb.jdbc.Driver}, {@code jdbc:goldendb://}) uses CUSTOM.
+     */
+    GOLDENDB("db.type.GOLDENDB", "com.mysql.cj.jdbc.Driver",
+            "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+                    + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
+            8880, DialectFamily.MYSQL),
+
+    /**
+     * Tencent Cloud TDSQL, <b>MySQL edition</b>: the vended protocol is MySQL, so the
+     * bundled Connector/J connects it and the MYSQL family supplies dialect and metadata.
+     * The console may assign a non-default port (53306 is common); edit the port field.
+     * TDSQL's PostgreSQL edition belongs to the POSTGRESQL preset — one preset cannot cover
+     * two protocols without failing the connection with a protocol error.
+     */
+    TDSQL("db.type.TDSQL", "com.mysql.cj.jdbc.Driver",
+            "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+                    + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
+            3306, DialectFamily.MYSQL),
+
+    /**
+     * Alibaba Cloud PolarDB, <b>MySQL edition</b>: same reasoning as {@link #TDSQL}.
+     * PolarDB's PostgreSQL edition uses the POSTGRESQL preset; the Oracle-compatible
+     * edition is a PostgreSQL-protocol product with its own driver
+     * ({@code com.aliyun.polardb2.Driver}) and belongs in CUSTOM.
+     */
+    POLARDB("db.type.POLARDB", "com.mysql.cj.jdbc.Driver",
+            "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+                    + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
+            3306, DialectFamily.MYSQL),
 
     HIGHGO("db.type.HIGHGO", "com.highgo.jdbc.Driver",
             "jdbc:highgo://%s:%d/%s",

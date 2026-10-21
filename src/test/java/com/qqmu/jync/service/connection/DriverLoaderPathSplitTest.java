@@ -39,4 +39,18 @@ class DriverLoaderPathSplitTest {
 
         assertThat(drivers).containsExactly("com.example.DriverA", "com.example.DriverB");
     }
+
+    @Test
+    void discoversDriversInsideADirectory(@TempDir File dir) throws Exception {
+        // The form advertises "a jar path, or a directory of jars", and loading accepts a
+        // directory. Detection must agree: skipping directories found no driver there and
+        // told the user the jar declared none.
+        jarWithDriver(dir, "a.jar", "com.example.DriverA");
+        jarWithDriver(dir, "b.jar", "com.example.DriverB");
+
+        List<String> drivers = new DriverLoader()
+                .discoverDriverClasses(dir.getAbsolutePath());
+
+        assertThat(drivers).containsExactly("com.example.DriverA", "com.example.DriverB");
+    }
 }

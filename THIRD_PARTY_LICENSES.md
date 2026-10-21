@@ -22,7 +22,7 @@ Jync（捷同，原 SyncTool）自身以 MIT 许可证发布（见 `pom.xml` 中
 | 崖山 YashanDB | `com.yashandb:yashandb-jdbc:1.7.10` | Apache License 2.0 | `META-INF/LICENSE` |
 | H2（本工具的元数据库） | `com.h2database:h2:2.1.214` | MPL 2.0 / EPL 1.0（双许可） | — |
 
-其中 PostgreSQL、MariaDB、SQL Server、ojdbc8、orai18n、DB2 jcc 的版本由 Spring Boot 2.7.18 的依赖管理统一锁定（orai18n 与 ojdbc8 版本必须一致）。TiDB 预置类型复用 MySQL 驱动（MySQL 协议兼容），不单独内置构件。
+其中 PostgreSQL、MariaDB、SQL Server、ojdbc8、orai18n、DB2 jcc 的版本由 Spring Boot 2.7.18 的依赖管理统一锁定（orai18n 与 ojdbc8 版本必须一致）。TiDB、中兴 GoldenDB、腾讯 TDSQL（MySQL 版）与阿里 PolarDB（MySQL 版）预置类型复用 MySQL 驱动（MySQL 协议兼容），不单独内置构件。
 
 各许可证原文：
 
@@ -47,13 +47,18 @@ ojdbc8 与 orai18n 均按 Oracle Free Use Terms and Conditions 发布，其中�
 
 ## 未内置的驱动
 
-以下两类数据库的 JDBC 驱动**不随本项目分发**，需要在连接配置中填写服务器本地的驱动 jar 路径，运行时动态加载：
+以下数据库的 JDBC 驱动**不随本项目分发**，需要在连接配置中填写服务器本地的驱动 jar 路径，运行时动态加载：
 
 - **GBase（南大通用）**：`com.gbase.jdbc.Driver`
 - **神通 Oscar**：`com.oscar.Driver`
+- **华为 GaussDB**：`com.huawei.gaussdb.jdbc.Driver`（`gaussdbjdbc.jar`；注意与 openGauss 的 `org.opengauss.Driver` 不是同一个驱动）。部分发行包的 `gsjdbc200.jar` / `gsjdbc4.jar` 驱动类名不同（如 `com.huawei.gauss200.jdbc.Driver`），可在连接表单的驱动 jar 卡片里覆盖驱动类，留空则使用预设值
 - **自定义（CUSTOM）**类型：任意第三方驱动
 
-原因是这两个厂商未在 Maven Central 发布官方构件，本项目也未获得其驱动的再分发授权。请从数据库厂商处获取驱动 jar。
+原因是这些厂商未在 Maven Central 发布可再分发的官方构件，本项目也未获得其驱动的再分发授权。请从数据库厂商处获取驱动 jar。
+
+## 商标与兼容性说明
+
+本项目对第三方数据库的提及仅用于说明**兼容性**：预置类型只记录厂商公开的 JDBC 驱动类名、URL 前缀和默认端口，用于通过标准 JDBC 接口连接用户自己部署的数据库；不包含、也不分发这些厂商的驱动代码，不复制其产品代码，不涉及对驱动内部实现的逆向工程。各产品名称与商标归各自权利人所有，本项目与这些厂商**没有隶属、赞助或官方认证关系**。使用这些数据库仍需遵守其自身的产品许可，驱动 jar 的获取与使用授权由用户自行向厂商确认。
 
 ## 其他第三方依赖
 

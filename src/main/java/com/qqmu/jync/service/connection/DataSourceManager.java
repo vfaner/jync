@@ -107,26 +107,41 @@ public class DataSourceManager {
         String jdbcUrl = buildJdbcUrl(config);
 
         // Register the driver before Hikari tries to resolve the class itself.
-        driverLoader.ensureDriverLoaded(driverClass, config.getCustomJarPath());
+        ClassLoader driverClassLoader =
+                driverLoader.ensureDriverLoaded(driverClass, config.getCustomJarPath());
 
-        HikariConfig hikari = new HikariConfig();
-        hikari.setJdbcUrl(jdbcUrl);
-        hikari.setDriverClassName(driverClass);
-        hikari.setUsername(config.getUsername());
-        hikari.setPassword(cryptoUtil.decrypt(config.getPassword()));
-        hikari.setPoolName("jync-" + (config.getName() == null ? "adhoc" : config.getName()));
-        hikari.setMaximumPoolSize(poolSize);
-        hikari.setMinimumIdle(1);
-        hikari.setConnectionTimeout(15_000);
-        hikari.setValidationTimeout(5_000);
-        hikari.setIdleTimeout(300_000);
-        hikari.setMaxLifetime(1_800_000);
-        // Fail fast on a bad connection instead of blocking the sync job for minutes.
-        hikari.setInitializationFailTimeout(-1);
-        hikari.setAutoCommit(true);
+        // HikariCP resolves driverClassName through the thread context class loader, falling
+        // back to its own. A driver loaded from a user-supplied jar lives in a child
+        // URLClassLoader that neither of those can see, so "Test connection" failed with
+        // "Failed to load driver class ... in either of HikariConfig class loader or Thread
+        // context classloader" for every custom driver (GaussDB, domestic databases, ...).
+        // Point the context loader at the driver's loader while the pool is built; pool
+        // creation instantiates the driver and resolves its class in this window.
+        Thread thread = Thread.currentThread();
+        ClassLoader previousLoader = thread.getContextClassLoader();
+        thread.setContextClassLoader(driverClassLoader);
+        try {
+            HikariConfig hikari = new HikariConfig();
+            hikari.setJdbcUrl(jdbcUrl);
+            hikari.setDriverClassName(driverClass);
+            hikari.setUsername(config.getUsername());
+            hikari.setPassword(cryptoUtil.decrypt(config.getPassword()));
+            hikari.setPoolName("jync-" + (config.getName() == null ? "adhoc" : config.getName()));
+            hikari.setMaximumPoolSize(poolSize);
+            hikari.setMinimumIdle(1);
+            hikari.setConnectionTimeout(15_000);
+            hikari.setValidationTimeout(5_000);
+            hikari.setIdleTimeout(300_000);
+            hikari.setMaxLifetime(1_800_000);
+            // Fail fast on a bad connection instead of blocking the sync job for minutes.
+            hikari.setInitializationFailTimeout(-1);
+            hikari.setAutoCommit(true);
 
-        log.debug("Creating pool for '{}' -> {}", config.getName(), jdbcUrl);
-        return new HikariDataSource(hikari);
+            log.debug("Creating pool for '{}' -> {}", config.getName(), jdbcUrl);
+            return new HikariDataSource(hikari);
+        } finally {
+            thread.setContextClassLoader(previousLoader);
+        }
     }
 
     public String resolveDriverClass(DatabaseConfig config) {

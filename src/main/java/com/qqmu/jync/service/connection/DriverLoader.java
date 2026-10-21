@@ -267,33 +267,55 @@ public class DriverLoader {
         loaderCache.clear();
     }
 
-    /** Lists candidate driver class names found in a jar, to help the user fill the form. */
+    /** Lists candidate driver class names found in a jar or a directory of jars, to help
+     *  the user fill the form. */
     public List<String> discoverDriverClasses(String jarPath) {
         List<String> found = new ArrayList<>();
         for (String part : jarPath.split(PATH_SPLIT)) {
-            File file = new File(part.trim());
-            if (!file.isFile()) {
-                continue;
-            }
-            try (java.util.jar.JarFile jar = new java.util.jar.JarFile(file)) {
-                // A compliant driver advertises itself through the service loader file.
-                java.util.jar.JarEntry svc = jar.getJarEntry("META-INF/services/java.sql.Driver");
-                if (svc != null) {
-                    try (java.io.BufferedReader reader = new java.io.BufferedReader(
-                            new java.io.InputStreamReader(jar.getInputStream(svc), java.nio.charset.StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            String cls = line.trim();
-                            if (!cls.isEmpty() && !cls.startsWith("#")) {
-                                found.add(cls);
+            for (File file : candidateJars(part.trim())) {
+                try (java.util.jar.JarFile jar = new java.util.jar.JarFile(file)) {
+                    // A compliant driver advertises itself through the service loader file.
+                    java.util.jar.JarEntry svc =
+                            jar.getJarEntry("META-INF/services/java.sql.Driver");
+                    if (svc != null) {
+                        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                                new java.io.InputStreamReader(jar.getInputStream(svc),
+                                        java.nio.charset.StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                String cls = line.trim();
+                                if (!cls.isEmpty() && !cls.startsWith("#")) {
+                                    found.add(cls);
+                                }
                             }
                         }
                     }
+                } catch (Exception e) {
+                    log.debug("Could not scan {} for drivers: {}", file, e.getMessage());
                 }
-            } catch (Exception e) {
-                log.debug("Could not scan {} for drivers: {}", part, e.getMessage());
             }
         }
         return found;
+    }
+
+    /**
+     * Expands one path entry into the jars to scan: a jar file is itself, a directory
+     * contributes the jars inside it (the same shape {@link #buildLoader} accepts). Sorted
+     * by name so the detected list is stable regardless of filesystem order.
+     */
+    private List<File> candidateJars(String path) {
+        File file = new File(path);
+        if (file.isFile()) {
+            return List.of(file);
+        }
+        if (file.isDirectory()) {
+            File[] jars = file.listFiles(f -> f.getName().toLowerCase().endsWith(".jar"));
+            if (jars == null) {
+                return List.of();
+            }
+            java.util.Arrays.sort(jars, java.util.Comparator.comparing(File::getName));
+            return java.util.Arrays.asList(jars);
+        }
+        return List.of();
     }
 }

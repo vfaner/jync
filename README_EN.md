@@ -26,7 +26,7 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 
 - **Grown out of real migration projects.** In domestic IT localization (信创) programs, existing MySQL / Oracle / SQL Server databases must move to Chinese databases and then stay consistent for the long term. Commercial sync tools charge per node; open-source options such as Debezium require a full Kafka stack first — both the deployment and the operations burden are substantial.
 - **Turning synchronization into deliverable software.** We distilled the sync logic used repeatedly in internal projects into a single-jar web application: implementation engineers create connections, pick tables and start syncing from a browser, without writing job scripts or maintaining a message queue.
-- **Domestic databases as first-class citizens.** Dameng, KingBase, OceanBase, TiDB, HighGo, Vastbase, YashanDB, GBase, Oscar and OpenGauss all have dedicated dialect implementations, with Chinese-first UI and documentation.
+- **Domestic databases as first-class citizens.** Dameng, KingBase, OceanBase, TiDB, GoldenDB, TDSQL, PolarDB, HighGo, Vastbase, YashanDB, GBase, Oscar and OpenGauss all have dedicated dialect implementations, with Chinese-first UI and documentation.
 - **Domestic open source, privately deployable.** Released under the MIT License: auditable, free of cloud dependencies, and suitable for air-gapped and localized environments. Maintained by **Mumu Open Source Workshop (沐沐开源工坊)**; official website <https://jync.qqmu.com>.
 
 ---
@@ -86,7 +86,7 @@ The "中 / EN" button in the navbar flips every menu, form, status, and error me
 
 ### Database connections — sources and targets in separate lists, test before you save
 
-Connections are split by purpose into a Source table and a Target table, each paginated on its own; the project form's source and target selectors only offer connections from the matching list, so the two sides can no longer be mixed up. Pick a database type and the JDBC URL is generated for you — preview it, test it. Nearly every database driver ships inside the distribution; for GBase, Oscar, and custom drivers, just point at a jar and it loads dynamically.
+Connections are split by purpose into a Source table and a Target table, each paginated on its own; the project form's source and target selectors only offer connections from the matching list, so the two sides can no longer be mixed up. Pick a database type and the JDBC URL is generated for you — preview it, test it. Nearly every database driver ships inside the distribution; for GBase, Oscar, Huawei GaussDB, and custom drivers, just point at a jar and it loads dynamically.
 
 ![Database connections](docs/images/jync_db.png)
 
@@ -225,7 +225,7 @@ Typography uses the system font stack (`PingFang SC` / `Microsoft YaHei` / …) 
 | **Continuous incremental sync** | Supported: polling/Cron & log CDC (MySQL binlog, Oracle LogMiner) | Supported: log-based | Supported: binlog | Supported: log-based | N/A (one-shot batch by design) | Partial (roll your own scheduling & delta logic) | Supported: trigger-based | N/A (one-shot transfer by design) |
 | **Schema (DDL) sync** | Supported: **auto-creates tables/indexes/views/procs** | Partial (emits DDL events; applying them is your job) | Partial (events only) | Partial (custom code) | Not supported (tables must pre-exist) | Partial (manual mapping) | Partial | Supported (one-shot only) |
 | **Heterogeneous dialect conversion** | Supported: types/functions/quoting/paging/procs | Not supported (positioned as event output; conversion is the consumer's job) | Not supported (positioned as binlog subscription; no dialect conversion) | Partial | Partial (limited type mapping) | Partial (manual) | Partial | Partial (one-shot mapping) |
-| **Chinese domestic databases** | Supported: **DM / KingBase / OceanBase / TiDB / HighGo / Vastbase / YashanDB / GBase / Oscar / OpenGauss** | Partial (no official domestic-DB connector; community or DIY) | Not supported (MySQL family only, binlog-based by design) | Partial (a few) | Partial (needs custom plugins) | Partial (generic JDBC only) | Partial | Partial |
+| **Chinese domestic databases** | Supported: **DM / KingBase / OceanBase / TiDB / GoldenDB / TDSQL / PolarDB / HighGo / Vastbase / YashanDB / GBase / Oscar / OpenGauss / GaussDB** | Partial (no official domestic-DB connector; community or DIY) | Not supported (MySQL family only, binlog-based by design) | Partial (a few) | Partial (needs custom plugins) | Partial (generic JDBC only) | Partial | Partial |
 | **Intrusiveness to source** | **Default polling mode: read-only queries, zero intrusion**; Binlog CDC mode adds replication grants (still read-only binlog parsing) | binlog/WAL + replication privileges | binlog required | binlog/WAL required | read-only | read-only | **must create triggers** | read-only |
 | **Idempotency / resume** | Supported: PK upsert + persisted cursor | Supported: offsets | Supported | Supported: checkpoints | N/A (one-shot batch) | Partial (roll your own delta logic) | Supported | N/A (one-shot transfer) |
 | **Built-in monitoring** | Supported: dashboard + change log | Prometheus/Grafana required | DIY | Flink UI (job-level) | logs | limited | Web console | N/A (one-shot transfer, no continuous monitoring) |
@@ -250,7 +250,7 @@ Most CDC tools solve only the data stream; the target tables are yours to create
 
 **4. Built for Chinese domestic databases and localization migrations**
 
-Dameng (DM), KingBase, OceanBase, TiDB, HighGo, Vastbase, YashanDB, GBase, Oscar, and OpenGauss are preset first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly the scenario the Debezium and Canal ecosystems were not designed for — their official domestic-DB support is relatively limited.
+Dameng (DM), KingBase, OceanBase, TiDB, GoldenDB, TDSQL, PolarDB, HighGo, Vastbase, YashanDB, GBase, Oscar, OpenGauss, and Huawei GaussDB are preset first-class options — not "you can probably reach it over generic JDBC," but dedicated dialect implementations: the `MERGE INTO ... FROM DUAL` upsert form, type ceilings (Oracle `VARCHAR2` 4000), function-name differences, and identifier quoting rules are all handled. Oracle/SQL Server → domestic-DB replacement is this tool's home turf, and it happens to be exactly the scenario the Debezium and Canal ecosystems were not designed for — their official domestic-DB support is relatively limited.
 
 **5. Zero intrusion into the source database (default polling mode)**
 
@@ -274,9 +274,9 @@ Being honest about the boundaries:
 
 ## Supported Databases
 
-MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, **Dameng (DM)**, **KingBase**, **OceanBase**, **TiDB**, **HighGo**, **Vastbase**, **YashanDB**, **GBase**, **Oscar**, H2, plus **custom databases** (supply a JDBC URL, driver class name, and driver jar path — loaded dynamically at runtime).
+MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, **Huawei GaussDB**, **Dameng (DM)**, **KingBase**, **OceanBase**, **TiDB**, **GoldenDB**, **TDSQL (MySQL)**, **PolarDB (MySQL)**, **HighGo**, **Vastbase**, **YashanDB**, **GBase**, **Oscar**, H2, plus **custom databases** (supply a JDBC URL, driver class name, and driver jar path — loaded dynamically at runtime).
 
-Every driver above except **GBase** and **Oscar** ships inside the distribution, so those types work out of the box with no extra jar. GBase and Oscar publish no official artifact on Maven Central and are not redistributed here: obtain the vendor jar yourself and fill in its path; the same applies to custom types. External jars are loaded through a dedicated `URLClassLoader` and registered with `DriverManager` via a `DriverShim`, isolated from the application classloader so driver version conflicts can't pollute the main app. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the bundled drivers' versions and licenses. PolarDB publishes no official JDBC artifact on Maven Central — pick the MySQL or PostgreSQL type according to the edition's protocol; GBase 8s likewise has none, so use the custom type.
+Every driver above except **GBase**, **Oscar** and **Huawei GaussDB** ships inside the distribution, so those types work out of the box with no extra jar. Those three publish no redistributable artifact on Maven Central and are not redistributed here: obtain the vendor jar yourself and fill in its path; the same applies to custom types. If the vendor jar declares a different driver class than the preset, override it in the same card (leave it blank to keep the preset) — GaussDB's `gsjdbc200.jar`, for example, uses `com.huawei.gauss200.jdbc.Driver`. GaussDB is a separate product from openGauss — it uses `com.huawei.gaussdb.jdbc.Driver` with a `jdbc:gaussdb://` URL, and the preset routes it to the PostgreSQL dialect family. External jars are loaded through a dedicated `URLClassLoader` and registered with `DriverManager` via a `DriverShim`, isolated from the application classloader so driver version conflicts can't pollute the main app. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the bundled drivers' versions and licenses. TDSQL and PolarDB are edition-specific: the MySQL editions have their own presets using the bundled Connector/J; the PostgreSQL editions use the PostgreSQL preset; PolarDB's Oracle-compatible edition speaks the PostgreSQL protocol with the vendor driver (`com.aliyun.polardb2.Driver`), so use the custom type with that jar. GBase 8s publishes no official artifact either, so it also uses the custom type.
 
 ---
 
@@ -380,9 +380,9 @@ java -jar jync.jar --spring.config.additional-location=file:./application.yml
 
 > 🔇 **Air-gapped / offline:** uncomment `sync.ai.enabled` and `app.update-check.enabled` above and restart — the application then makes no outbound requests at all. The AI menu is hidden and AI drafting is blocked before any request; the boot-time update pre-check is disabled and Settings shows "update check disabled". Both default to enabled, so networked deployments need no change.
 
-### 5. Loading external driver jars (GBase / Oscar / custom)
+### 5. Loading external driver jars (GBase / Oscar / GaussDB / custom)
 
-Drivers for MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and H2 ship inside the distribution (TiDB speaks the MySQL protocol and reuses the MySQL driver), so **this step is not needed for them**. Only **GBase**, **Oscar**, and **custom databases** require an external jar. Place the vendor jar on the server, for example:
+Drivers for MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, OpenGauss, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and H2 ship inside the distribution (TiDB, GoldenDB, TDSQL and PolarDB MySQL editions speak the MySQL protocol and reuse the MySQL driver), so **this step is not needed for them**. Only **GBase**, **Oscar**, **Huawei GaussDB**, and **custom databases** require an external jar. Place the vendor jar on the server, for example:
 
 ```bash
 mkdir -p /opt/jync/drivers
@@ -725,7 +725,7 @@ The probe runs both on the connection-test page and on the project's strategy ca
 
 ### Scope and limitations
 
-- **MySQL only**: MariaDB / TiDB / OceanBase / GBase are family members, but their binlog dialects differ — **none are supported**; later releases will evaluate them.
+- **MySQL only**: MariaDB / TiDB / OceanBase / GBase / GoldenDB / TDSQL / PolarDB are family members, but their binlog dialects differ — **none are supported**; later releases will evaluate them.
 - **DDL is not captured**: DDL statements in the stream are logged as WARN and skipped (the detail page shows a "DDL skipped" count), and cached table metadata is invalidated. After a source-side schema change, align the target schema manually; when the drift is too large to align, use **Rebuild baseline** to reseed.
 - **Tables without a primary key** are seeded once during the baseline, then skipped in the streaming phase, and flagged per table in the CDC status panel ("No-PK tables, seeded once only") — without a key there is no idempotent replay.
 
@@ -1167,4 +1167,4 @@ Bug reports, feature requests and pull requests are welcome through any channel 
 
 Released under the [MIT License](LICENSE) — free for commercial and non-commercial use.
 
-The distribution bundles fourteen third-party JDBC drivers (Oracle, DB2, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and others), each under its vendor license — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for versions, links, and the Oracle/IBM redistribution terms. **GBase** and **Oscar** drivers are not distributed with this project; obtain them from the vendors and confirm your own usage rights.
+The distribution bundles fourteen third-party JDBC drivers (Oracle, DB2, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and others), each under its vendor license — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for versions, links, and the Oracle/IBM redistribution terms. **GBase**, **Oscar**, and **Huawei GaussDB** drivers are not distributed with this project; obtain them from the vendors and confirm your own usage rights.

@@ -31,7 +31,10 @@ public class MySQLMetadataReader extends GenericMetadataReader {
                 || type == DatabaseType.MARIADB
                 || type == DatabaseType.GBASE
                 || type == DatabaseType.OCEANBASE
-                || type == DatabaseType.TIDB;
+                || type == DatabaseType.TIDB
+                || type == DatabaseType.GOLDENDB
+                || type == DatabaseType.TDSQL
+                || type == DatabaseType.POLARDB;
     }
 
     @Override
