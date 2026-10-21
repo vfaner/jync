@@ -52,4 +52,17 @@ class CompatiblePresetsTest {
         assertThat(DatabaseType.RASESQL.getDefaultPort()).isEqualTo(5432);
         assertThat(DatabaseType.SEABOXSQL.getDefaultPort()).isEqualTo(5432);
     }
+
+    @Test
+    @DisplayName("MySQL 兼容预设的 URL 同样启用 affected-rows 语义，新增/更新可分类")
+    void mysqlCompatiblePresetsClassifyInsertFromUpdate() {
+        for (DatabaseType type : new DatabaseType[] {
+                DatabaseType.GREATDB, DatabaseType.UPDRDB, DatabaseType.KUNDB }) {
+            assertThat(type.getUrlTemplate()).as(type.name()).contains("useAffectedRows=true");
+            assertThat(type.upsertCountsDistinguishInsertFromUpdate()).as(type.name()).isTrue();
+        }
+        // PostgreSQL 系没有 affected-rows 语义，保持不分类是正确行为。
+        assertThat(DatabaseType.RASESQL.upsertCountsDistinguishInsertFromUpdate()).isFalse();
+        assertThat(DatabaseType.SEABOXSQL.upsertCountsDistinguishInsertFromUpdate()).isFalse();
+    }
 }

@@ -26,11 +26,13 @@ class MetadataReaderFactoryTest {
             new GenericMetadataReader()));
 
     @Test
-    @DisplayName("MySQL 协议系（含 OceanBase、TiDB、GBase、GoldenDB、TDSQL、PolarDB）走 MySQL 读取器")
+    @DisplayName("MySQL 协议系（含 OceanBase、TiDB、GBase、GoldenDB、TDSQL、PolarDB、"
+            + "万里 GreatDB、银联 UPDRDB、星环 KunDB）走 MySQL 读取器")
     void mysqlProtocolTypesGetTheMysqlReader() {
         for (DatabaseType type : List.of(DatabaseType.MYSQL, DatabaseType.MARIADB,
                 DatabaseType.GBASE, DatabaseType.OCEANBASE, DatabaseType.TIDB,
-                DatabaseType.GOLDENDB, DatabaseType.TDSQL, DatabaseType.POLARDB)) {
+                DatabaseType.GOLDENDB, DatabaseType.TDSQL, DatabaseType.POLARDB,
+                DatabaseType.GREATDB, DatabaseType.UPDRDB, DatabaseType.KUNDB)) {
             assertThat(factory.forType(type))
                     .as("%s 应路由到 MySQLMetadataReader", type)
                     .isInstanceOf(MySQLMetadataReader.class);
@@ -38,11 +40,13 @@ class MetadataReaderFactoryTest {
     }
 
     @Test
-    @DisplayName("PostgreSQL 系（含 openGauss、华为 GaussDB、瀚高、海量）走 PostgreSQL 读取器")
+    @DisplayName("PostgreSQL 系（含 openGauss、华为 GaussDB、瀚高、海量、平安 RASESQL、"
+            + "东方金信 SeaboxSQL）走 PostgreSQL 读取器")
     void postgresDerivedTypesGetThePostgresReader() {
         for (DatabaseType type : List.of(DatabaseType.POSTGRESQL, DatabaseType.OPENGAUSS,
                 DatabaseType.GAUSSDB, DatabaseType.KINGBASE, DatabaseType.OSCAR,
-                DatabaseType.HIGHGO, DatabaseType.VASTBASE)) {
+                DatabaseType.HIGHGO, DatabaseType.VASTBASE,
+                DatabaseType.RASESQL, DatabaseType.SEABOXSQL)) {
             assertThat(factory.forType(type))
                     .as("%s 应路由到 PostgresMetadataReader", type)
                     .isInstanceOf(PostgresMetadataReader.class);

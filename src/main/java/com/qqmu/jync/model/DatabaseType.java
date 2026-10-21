@@ -277,7 +277,11 @@ public enum DatabaseType {
      * worse than declining to classify them.
      */
     public boolean upsertCountsDistinguishInsertFromUpdate() {
-        return this == MYSQL;
+        // Every preset that reuses Connector/J with the same URL flags qualifies: TiDB,
+        // GoldenDB, TDSQL, PolarDB and the three domestic MySQL-compatible presets all
+        // carry useAffectedRows=true, so ON DUPLICATE KEY UPDATE reports 1/2/0 exactly like
+        // MySQL. MariaDB keeps its own driver and no such flag, so it stays unclassified.
+        return urlTemplate != null && urlTemplate.contains("useAffectedRows=true");
     }
 
     public static DatabaseType fromName(String name) {

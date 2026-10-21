@@ -30,7 +30,9 @@ public class PostgresMetadataReader extends GenericMetadataReader {
                 || type == DatabaseType.KINGBASE
                 || type == DatabaseType.OSCAR
                 || type == DatabaseType.HIGHGO
-                || type == DatabaseType.VASTBASE;
+                || type == DatabaseType.VASTBASE
+                || type == DatabaseType.RASESQL
+                || type == DatabaseType.SEABOXSQL;
     }
 
     @Override

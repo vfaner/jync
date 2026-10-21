@@ -2,6 +2,7 @@ package com.qqmu.jync.service.connection;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -55,6 +56,56 @@ class DataSourceManagerCustomDriverTest {
         // The swap is scoped to pool creation: leaving the child loader on the caller's
         // thread would leak it into unrelated class loading.
         assertThat(Thread.currentThread().getContextClassLoader()).isSameAs(callerLoader);
+    }
+
+    /**
+     * The connection-test endpoint returns a message key to the browser, which resolves it
+     * through {@code JyncMessages}. A key without the {@code error.} prefix matches no bundle
+     * entry, so the user sees the raw key instead of "a driver class name is required".
+     */
+    @Test
+    void missingCustomDriverReportsATranslatableKey() {
+        DataSourceManager manager = manager();
+        DatabaseConfig config = new DatabaseConfig();
+        config.setType(DatabaseType.CUSTOM);
+        config.setCustomUrl("jdbc:vendor://localhost/db");
+
+        assertThatThrownBy(() -> manager.resolveDriverClass(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.custom.driver.required");
+    }
+
+    @Test
+    void missingCustomUrlReportsATranslatableKey() {
+        DataSourceManager manager = manager();
+        DatabaseConfig config = new DatabaseConfig();
+        config.setType(DatabaseType.CUSTOM);
+
+        assertThatThrownBy(() -> manager.buildJdbcUrl(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.custom.url.required");
+    }
+
+    /** A hand-posted form can arrive without a type; that must be a message, not an NPE. */
+    @Test
+    void missingTypeReportsAChoiceInsteadOfNpe() {
+        DataSourceManager manager = manager();
+        DatabaseConfig config = new DatabaseConfig();
+        config.setName("no-type");
+        // A form post with an empty type binds null over the field's MYSQL default.
+        config.setType(null);
+
+        assertThatThrownBy(() -> manager.resolveDriverClass(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.connection.type.required");
+        assertThatThrownBy(() -> manager.buildJdbcUrl(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.connection.type.required");
+    }
+
+    private DataSourceManager manager() {
+        SyncProperties properties = new SyncProperties();
+        return new DataSourceManager(new DriverLoader(), new CryptoUtil(properties), properties);
     }
 
     private DatabaseConfig customConfig(File jar) {

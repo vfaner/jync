@@ -34,7 +34,10 @@ public class MySQLMetadataReader extends GenericMetadataReader {
                 || type == DatabaseType.TIDB
                 || type == DatabaseType.GOLDENDB
                 || type == DatabaseType.TDSQL
-                || type == DatabaseType.POLARDB;
+                || type == DatabaseType.POLARDB
+                || type == DatabaseType.GREATDB
+                || type == DatabaseType.UPDRDB
+                || type == DatabaseType.KUNDB;
     }
 
     @Override

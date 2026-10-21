@@ -147,9 +147,12 @@ public class DataSourceManager {
     public String resolveDriverClass(DatabaseConfig config) {
         if (config.getType() == DatabaseType.CUSTOM || StringUtils.hasText(config.getCustomDriver())) {
             if (!StringUtils.hasText(config.getCustomDriver())) {
-                throw new IllegalArgumentException("custom.driver.required");
+                throw new IllegalArgumentException("error.custom.driver.required");
             }
             return config.getCustomDriver().trim();
+        }
+        if (config.getType() == null) {
+            throw new IllegalArgumentException("error.connection.type.required");
         }
         String driver = config.getType().getDriverClassName();
         if (!StringUtils.hasText(driver)) {
@@ -211,7 +214,10 @@ public class DataSourceManager {
         }
         DatabaseType type = config.getType();
         if (type == DatabaseType.CUSTOM) {
-            throw new IllegalArgumentException("custom.url.required");
+            throw new IllegalArgumentException("error.custom.url.required");
+        }
+        if (type == null) {
+            throw new IllegalArgumentException("error.connection.type.required");
         }
         String template = type.getUrlTemplate();
         int port = config.getPort() != null ? config.getPort() : type.getDefaultPort();
