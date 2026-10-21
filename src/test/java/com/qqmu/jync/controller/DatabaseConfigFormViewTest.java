@@ -40,10 +40,12 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 /**
  * Server-side first-paint state of the driver-jar card on the connection form.
  *
- * <p>The card must already be hidden (or shown) in the served HTML; waiting for the
- * type-defaults AJAX call would flash the card on every GBase / Oscar edit page. The rule is
- * classpath-driven through {@code DriverPresence}: bundled presets hide it, GBase and Oscar
- * show it, and CUSTOM always shows it.
+ * <p>The card is rendered for every type and its initial state must already be right in the
+ * served HTML; waiting for the type-defaults AJAX call would flash it on every edit page.
+ * The rule is classpath-driven through {@code DriverPresence}: CUSTOM and presets whose
+ * driver is not bundled (GBase, Oscar, GaussDB, ...) get an open, required card; a bundled
+ * preset (MySQL, DM, GoldenDB, ...) gets a locked card behind the vendor-driver switch,
+ * unlocked again when the stored connection carries an override.
  */
 @WebMvcTest(DatabaseConfigController.class)
 @Import(GlobalModelAdvice.class)
@@ -76,15 +78,66 @@ class DatabaseConfigFormViewTest {
     }
 
     @Test
-    void newFormDefaultsToMysqlAndHidesTheJarCard() throws Exception {
+    void newFormHidesTheDriverCardForAStandardType() throws Exception {
+        // 驱动设置只为商业信创预设(及 CUSTOM)准备。MySQL 这类标准产品用内置驱动,
+        // 卡片留在 DOM 里(切换类型时要能复用)但隐藏,控件同时禁用。
         String page = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN)))
                 .andExpect(status().isOk()));
         assertThat(JAR_CARD_HIDDEN.matcher(page).find())
-                .as("MySQL is bundled, jar card must be hidden on first paint")
+                .as("MySQL is a standard product; no driver card")
                 .isTrue();
-        assertThat(page).doesNotContain("??db.jarCard", "??db.jarCardHint");
-        // hidden alone still submits the (blank or stale) value; the control must be disabled too
-        assertThat(page).containsPattern("id=\"customJarPath\"[^>]*disabled");
+        assertThat(extractInput(page, "customUrl")).contains("disabled");
+        assertThat(extractInput(page, "customJarPath")).contains("disabled");
+        assertThat(extractInput(page, "customDriver")).contains("disabled");
+    }
+
+    @Test
+    void editingAGoldenDbPresetWithVendorOverridesOpensTheDriverCard() throws Exception {
+        // 厂商要求专属驱动时(GoldenDB 的 com.goldendb.jdbc.Driver + jdbc:goldendb://),
+        // 已保存的覆盖值必须原样回显且控件可提交,而不是被内置驱动预设锁死。
+        DatabaseConfig golden = new DatabaseConfig();
+        golden.setId(21L);
+        golden.setName("goldendb-prod");
+        golden.setType(DatabaseType.GOLDENDB);
+        golden.setCustomUrl("jdbc:goldendb://host:8880/appdb");
+        golden.setCustomDriver("com.goldendb.jdbc.Driver");
+        golden.setCustomJarPath("/opt/drivers/goldendb-jdbc.jar");
+        when(service.findById(21L)).thenReturn(Optional.of(golden));
+
+        String page = html(mvc.perform(get("/databases/21/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(JAR_CARD_HIDDEN.matcher(page).find()).isFalse();
+        assertThat(extractInput(page, "vendor-driver-toggle")).contains("checked");
+        assertThat(driverCardBodyTag(page)).doesNotContain("hidden");
+        assertThat(extractInput(page, "customUrl")).doesNotContain("disabled");
+        assertThat(extractInput(page, "customJarPath")).doesNotContain("disabled");
+        assertThat(extractInput(page, "customDriver")).doesNotContain("disabled");
+        assertThat(page).contains("jdbc:goldendb://host:8880/appdb");
+        assertThat(page).contains("com.goldendb.jdbc.Driver");
+    }
+
+    @Test
+    void theJdbcUrlOverrideLivesInTheDriverCardNotTheCustomSection() throws Exception {
+        // URL 覆盖对所有类型都有意义,所以从 CUSTOM 区块搬进驱动卡片;同一表单只能
+        // 有一个 customUrl 控件,否则提交顺序决定哪个值生效。
+        DatabaseConfig custom = new DatabaseConfig();
+        custom.setId(22L);
+        custom.setName("custom-src");
+        custom.setType(DatabaseType.CUSTOM);
+        custom.setCustomUrl("jdbc:other://host:5236/db");
+        custom.setCustomDriver("com.example.jdbc.Driver");
+        when(service.findById(22L)).thenReturn(Optional.of(custom));
+
+        String page = html(mvc.perform(get("/databases/22/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        int jarAt = page.indexOf("id=\"jar-card\"");
+        int customAt = page.indexOf("id=\"custom-section\"");
+        assertThat(jarAt).isPositive();
+        assertThat(customAt).isGreaterThan(jarAt);
+        assertThat(page.indexOf("id=\"customUrl\"")).isBetween(jarAt, customAt);
+        assertThat(page.split("id=\"customUrl\"", -1)).hasSize(2);
     }
 
     @Test
@@ -208,6 +261,15 @@ class DatabaseConfigFormViewTest {
         return page.substring(start, end + 1);
     }
 
+    /** Extracts the #driver-card-body opening tag. */
+    private static String driverCardBodyTag(String page) {
+        int at = page.indexOf("id=\"driver-card-body\"");
+        assertThat(at).as("driver card body rendered").isPositive();
+        int start = page.lastIndexOf("<div", at);
+        int end = page.indexOf(">", at);
+        return page.substring(start, end + 1);
+    }
+
     /** Extracts the #dialectFamily &lt;select&gt; opening tag. */
     private static String extractSelect(String page, String selectId) {
         int at = page.indexOf("id=\"" + selectId + "\"");
@@ -317,8 +379,8 @@ class DatabaseConfigFormViewTest {
     }
 
     @Test
-    void bundledTypesDisableTheDriverClassOverride() throws Exception {
-        // 内置驱动的类型不需要覆盖；隐藏必须连控件一起禁用，残留值不随表单提交。
+    void bundledStandardTypesDoNotOfferADriverClassOverride() throws Exception {
+        // 标准产品用内置驱动;卡片隐藏时控件必须一起禁用,残留值不随表单提交。
         String page = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN)))
                 .andExpect(status().isOk()));
         assertThat(extractInput(page, "customDriver")).contains("disabled");
@@ -388,7 +450,9 @@ class DatabaseConfigFormViewTest {
     }
 
     @Test
-    void editingADamengConnectionHidesTheJarCard() throws Exception {
+    void editingADamengConnectionHidesTheDriverCard() throws Exception {
+        // 达梦的驱动随发行包内置:没有可填的厂商驱动,整张卡片不应出现(控件仍禁用,
+        // 切换类型复用 DOM 时残留值不提交)。
         DatabaseConfig dm = new DatabaseConfig();
         dm.setId(8L);
         dm.setName("dm-prod");
@@ -398,7 +462,33 @@ class DatabaseConfigFormViewTest {
         String page = html(mvc.perform(get("/databases/8/edit").with(as(UserRole.ADMIN)))
                 .andExpect(status().isOk()));
         assertThat(JAR_CARD_HIDDEN.matcher(page).find())
-                .as("DM is bundled now, jar card must stay hidden")
+                .as("DM ships its driver; no vendor-driver card")
                 .isTrue();
+        assertThat(extractInput(page, "customUrl")).contains("disabled");
+        assertThat(extractInput(page, "customJarPath")).contains("disabled");
+        assertThat(extractInput(page, "customDriver")).contains("disabled");
+    }
+
+    @Test
+    void editingAGoldenDbPresetWithoutOverridesKeepsTheCardCollapsed() throws Exception {
+        // GoldenDB 的专属驱动没有随发行包内置,但默认链路用内置 Connector/J 也能工作,
+        // 所以卡片出现、开关在头部且默认关闭,字段收起并禁用。
+        DatabaseConfig golden = new DatabaseConfig();
+        golden.setId(23L);
+        golden.setName("goldendb-plain");
+        golden.setType(DatabaseType.GOLDENDB);
+        when(service.findById(23L)).thenReturn(Optional.of(golden));
+
+        String page = html(mvc.perform(get("/databases/23/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(JAR_CARD_HIDDEN.matcher(page).find()).isFalse();
+        assertThat(extractInput(page, "vendor-driver-toggle")).doesNotContain("checked");
+        int toggleAt = page.indexOf("id=\"vendor-driver-toggle\"");
+        assertThat(toggleAt).isBetween(page.indexOf("id=\"jar-card\""),
+                page.indexOf("id=\"driver-card-body\""));
+        assertThat(driverCardBodyTag(page)).contains("hidden");
+        assertThat(extractInput(page, "customUrl")).contains("disabled");
+        assertThat(extractInput(page, "customJarPath")).contains("disabled");
+        assertThat(extractInput(page, "customDriver")).contains("disabled");
     }
 }

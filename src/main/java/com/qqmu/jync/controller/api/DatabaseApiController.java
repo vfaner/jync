@@ -83,6 +83,9 @@ public class DatabaseApiController {
         body.put("custom", dbType.isCustom());
         // CUSTOM has no driver class of its own, so it is never "bundled".
         body.put("bundled", DriverPresence.isPresent(dbType.getDriverClassName()));
+        // 商业信创预设才提供厂商 URL / jar / 驱动类覆盖;标准产品与 CUSTOM 不借此字段
+        body.put("vendorDriver", dbType.supportsVendorDriver());
+
         return ResponseEntity.ok(body);
     }
 

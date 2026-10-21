@@ -344,6 +344,11 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 }
 .card-head h2, .card-head h3 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: -.2px; }
 .card-head .hint { font-size: 12.5px; color: var(--ink-mute); font-weight: 400; }
+/* 卡片头部的右侧工具组:说明文字与开关保持同一行 */
+.card-head-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.card-head .switch { margin-bottom: 0; align-items: center; }
+.card-head .switch .track { margin-top: 0; }
+.card-head .switch .switch-text strong { font-size: 12.5px; font-weight: 500; }
 .card-body { padding: 20px; }
 .card-body.tight { padding: 0; }
 .card-foot { padding: 13px 20px; border-top: 1px solid var(--line); background: var(--bg-soft); }

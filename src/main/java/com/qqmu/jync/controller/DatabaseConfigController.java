@@ -3,6 +3,7 @@ package com.qqmu.jync.controller;
 import java.util.List;
 
 import org.springframework.stereotype.Controller;
+import org.springframework.util.StringUtils;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -55,7 +56,7 @@ public class DatabaseConfigController {
         model.addAttribute("config", config);
         model.addAttribute("types", DatabaseType.values());
         model.addAttribute("families", FAMILIES);
-        model.addAttribute("jarCardVisible", jarCardVisible(config.getType()));
+        addDriverCardAttributes(model, config);
         return "database-config-form";
     }
 
@@ -65,7 +66,7 @@ public class DatabaseConfigController {
             model.addAttribute("config", config);
             model.addAttribute("types", DatabaseType.values());
             model.addAttribute("families", FAMILIES);
-            model.addAttribute("jarCardVisible", jarCardVisible(config.getType()));
+            addDriverCardAttributes(model, config);
             return "database-config-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.connection.missing");
@@ -86,17 +87,47 @@ public class DatabaseConfigController {
             DatabaseType.DialectFamily.SQLSERVER,
             DatabaseType.DialectFamily.DB2);
 
+    private static void addDriverCardAttributes(Model model, DatabaseConfig config) {
+        model.addAttribute("driverCardAvailable", driverCardAvailable(config.getType()));
+        model.addAttribute("driverCardRequired", driverCardRequired(config.getType()));
+        model.addAttribute("driverCardEnabled", driverCardEnabled(config));
+    }
+
     /**
-     * The jar-path card is shown for CUSTOM (nothing is bundled) and for preset types whose
-     * driver is not on the classpath (currently GBase, Oscar and Huawei GaussDB), so the first
-     * paint already matches the selected type instead of flashing after the type-defaults
-     * round-trip.
+     * The driver card exists for CUSTOM and for commercial / 信创 presets; a standard product
+     * (MySQL, PostgreSQL, Oracle, ...) never shows it. A preset whose driver is not on the
+     * classpath keeps the card regardless: without a jar it cannot connect at all.
      */
-    private static boolean jarCardVisible(DatabaseType type) {
+    private static boolean driverCardAvailable(DatabaseType type) {
+        if (type == null || type == DatabaseType.CUSTOM || type.supportsVendorDriver()) {
+            return true;
+        }
+        return !DriverPresence.isPresent(type.getDriverClassName());
+    }
+
+    /**
+     * Types that cannot connect without a user-supplied driver: CUSTOM (no preset at all) and
+     * presets whose driver class is not on the classpath (GBase, Oscar, Huawei GaussDB, ...).
+     * Their card is required and open on the first paint, with no switch.
+     */
+    private static boolean driverCardRequired(DatabaseType type) {
         if (type == null || type == DatabaseType.CUSTOM) {
             return true;
         }
         return !DriverPresence.isPresent(type.getDriverClassName());
+    }
+
+    /**
+     * A bundled-driver preset (GoldenDB, TiDB, MySQL, ...) keeps the override controls locked
+     * until the form's vendor-driver switch is on. A saved override of any of the three fields
+     * must reopen them, otherwise an edit page would show the stored values but refuse to
+     * submit them — silently switching the connection back to the bundled driver.
+     */
+    private static boolean driverCardEnabled(DatabaseConfig config) {
+        return driverCardRequired(config.getType())
+                || StringUtils.hasText(config.getCustomUrl())
+                || StringUtils.hasText(config.getCustomDriver())
+                || StringUtils.hasText(config.getCustomJarPath());
     }
 
     @PostMapping("/save")

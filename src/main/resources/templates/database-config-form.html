@@ -147,26 +147,53 @@
                 </div>
             </div>
 
-            <!--/* 未随发行包内置的驱动（CUSTOM，以及 GBase / 神通等预设）从本地 jar 加载。
-                    初始显隐由服务端按 classpath 决定，切换类型时 app.js 再同步，避免首屏闪动。 */-->
+            <!--/* 驱动卡片对每种类型都渲染:GoldenDB/TiDB 等复用内置驱动的预设,也可能
+                    被厂商要求使用专属 URL / jar / 驱动类(例如 com.goldendb.jdbc.Driver
+                    与 jdbc:goldendb://)。内置驱动的预设默认锁住三个覆盖控件,由「使用厂商
+                    自带驱动」开关展开;外部驱动预设(CUSTOM / GaussDB / GBase / 神通)必填,
+                    开关隐藏、控件常开。首屏由服务端决定,切换类型时 app.js 同步。
+
+                    隐藏不等于不提交:hidden 或收起时必须连控件一起禁用,否则残留的 URL
+                    会覆盖预设模板、残留的 jar 路径会劫持内置驱动。 */-->
             <div class="card" id="jar-card"
-                 th:attr="hidden=${jarCardVisible} ? null : 'hidden'">
+                 th:attr="hidden=${driverCardAvailable} ? null : 'hidden',
+                          data-required=${driverCardRequired} ? 'true' : 'false'">
                 <div class="card-head">
-                    <h2><svg class="ico"><use href="#database"/></svg> <span th:text="#{db.jarCard}">Driver jar</span></h2>
-                    <span class="hint" th:text="#{db.jarCardHint}">Not bundled; load it from a vendor jar</span>
+                    <h2><svg class="ico"><use href="#database"/></svg> <span th:text="#{db.jarCard}">Driver settings</span></h2>
+                    <div class="card-head-tools">
+                        <span class="hint"
+                              th:text="${driverCardRequired} ? #{db.jarCardHint} : #{db.jarCardHintOptional}">hint</span>
+                        <!--/* 开关放在卡片头部:打开后才展开下面的三个覆盖字段。必填的预设
+                                (CUSTOM / 未内置驱动)没有开关,字段直接展开。 */-->
+                        <label class="switch" th:if="${!driverCardRequired}">
+                            <input type="checkbox" id="vendor-driver-toggle" data-role="vendor-driver-toggle"
+                                   th:checked="${driverCardEnabled}">
+                            <span class="track"></span>
+                            <span class="switch-text"><strong th:text="#{db.vendorDriver}">Vendor driver</strong></span>
+                        </label>
+                    </div>
                 </div>
-                <div class="card-body">
+                <div class="card-body" id="driver-card-body"
+                     th:attr="hidden=${driverCardEnabled} ? null : 'hidden'">
+                    <div class="help" th:text="#{db.vendorDriverHelp}">help</div>
+                    <div class="field">
+                        <!--/* URL 覆盖对所有类型都有意义(厂商驱动通常只认自家前缀),所以放在
+                                这里而不是 CUSTOM 区块;同一表单只有这一个 customUrl 控件。 */-->
+                        <label for="customUrl" th:text="#{db.customUrl}">JDBC URL</label>
+                        <input type="text" class="input mono" id="customUrl" th:field="*{customUrl}"
+                               placeholder="jdbc:other://host:5236/DBNAME"
+                               th:disabled="${driverCardEnabled} ? null : 'disabled'">
+                        <div class="help" th:text="#{db.customUrlHelp}">help</div>
+                    </div>
                     <div class="field">
                         <label for="customJarPath" th:text="#{db.customJarPath}">Driver jar path</label>
                         <div class="input-group">
-                            <!--/* 卡片隐藏时必须禁用：hidden 不等于不提交，否则选 GBase 填了路径又改选
-                                    达梦，旧路径会劫持内置驱动、去错误的 jar 里加载达梦驱动类 */-->
                             <input type="text" class="input mono" id="customJarPath" th:field="*{customJarPath}"
                                    placeholder="/opt/drivers/gbase-jdbc.jar"
-                                   th:disabled="${jarCardVisible} ? null : 'disabled'">
+                                   th:disabled="${driverCardEnabled} ? null : 'disabled'">
                             <button type="button" class="btn btn-ghost" data-role="find-drivers"
                                     th:attr="data-action=@{/api/databases/discover-drivers}"
-                                    th:disabled="${jarCardVisible} ? null : 'disabled'">
+                                    th:disabled="${driverCardEnabled} ? null : 'disabled'">
                                 <svg class="ico"><use href="#search"/></svg>
                                 <span th:text="#{db.discoverDrivers}">Detect</span>
                             </button>
@@ -176,11 +203,11 @@
                     <div class="field">
                         <!--/* 驱动类属于 jar:厂商 jar 里的类名常与预设不同(GaussDB 的
                                 gsjdbc200.jar 是 com.huawei.gauss200.jdbc.Driver)。留空即用
-                                预设类,提示行显示的就是它。控件随卡片一起禁用,残留值不提交。 */-->
+                                预设类,提示行显示的就是它。控件随开关一起禁用,残留值不提交。 */-->
                         <label for="customDriver" th:text="#{db.customDriver}">Driver class</label>
                         <input type="text" class="input mono" id="customDriver" th:field="*{customDriver}"
                                list="driver-options" placeholder="com.example.jdbc.Driver"
-                               th:disabled="${jarCardVisible} ? null : 'disabled'">
+                               th:disabled="${driverCardEnabled} ? null : 'disabled'">
                         <datalist id="driver-options"></datalist>
                         <div class="help mono" id="driver-hint"
                              th:text="${config.type != null ? config.type.driverClassName : ''}"></div>
@@ -189,21 +216,14 @@
                 </div>
             </div>
 
-            <!--/* CUSTOM 没有预设 URL，需要自己给；驱动类与 jar 都在上面的卡片里 */-->
+            <!--/* CUSTOM 的 URL 与驱动在上面的驱动卡片里;这里只声明 SQL 方言家族 */-->
             <div class="card" id="custom-section"
                  th:attr="hidden=${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'hidden'">
                 <div class="card-head">
                     <h2><svg class="ico"><use href="#puzzle"/></svg> <span th:text="#{db.customSection}">Custom connection</span></h2>
-                    <span class="hint" th:text="#{db.customHint}">No preset URL for this type</span>
+                    <span class="hint" th:text="#{db.customHint}">hint</span>
                 </div>
                 <div class="card-body">
-                    <div class="field">
-                        <label for="customUrl" th:text="#{db.customUrl}">JDBC URL</label>
-                        <input type="text" class="input mono" id="customUrl" th:field="*{customUrl}"
-                               placeholder="jdbc:other://host:5236/DBNAME"
-                               th:disabled="${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'disabled'">
-                        <div class="help" th:text="#{db.customUrlHelp}">help</div>
-                    </div>
                     <!--/* 自定义 JDBC URL 看不出产品语法;方言家族决定生成哪种 upsert/DDL */-->
                     <div class="field">
                         <label for="dialectFamily" th:text="#{db.dialectFamily}">SQL dialect</label>

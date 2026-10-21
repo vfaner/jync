@@ -1,5 +1,9 @@
 package com.qqmu.jync.model;
 
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.Set;
+
 import lombok.Getter;
 
 /**
@@ -115,7 +119,9 @@ public enum DatabaseType {
      * bundled MySQL driver. The default port is the compute node / DBProxy port that
      * applications connect to in a distributed deployment; single-node deployments and
      * proxies mapped to 3306 just edit the port. A deployment that mandates the vendor's
-     * own driver ({@code com.goldendb.jdbc.Driver}, {@code jdbc:goldendb://}) uses CUSTOM.
+     * own driver ({@code com.goldendb.jdbc.Driver}, {@code jdbc:goldendb://}) keeps this
+     * preset: switch on the vendor-driver option on the connection form and fill in the
+     * URL, jar path and driver class.
      */
     GOLDENDB("db.type.GOLDENDB", "com.mysql.cj.jdbc.Driver",
             "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
@@ -149,7 +155,9 @@ public enum DatabaseType {
      * 万里 GreatDB states full compatibility with the native MySQL access interface, and its
      * own development guide connects with Connector/J, so this preset reuses the bundled
      * MySQL driver. The vendor driver ({@code com.greatdb.cj.jdbc.Driver},
-     * {@code jdbc:greatdb://}) and GM/TLS connections belong in CUSTOM.
+     * {@code jdbc:greatdb://}) is supplied through the form's vendor-driver option; GM/TLS
+     * deployments that also need extra URL parameters stay in this preset because the URL
+     * field accepts them.
      */
     GREATDB("db.type.GREATDB", "com.mysql.cj.jdbc.Driver",
             "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
@@ -230,6 +238,26 @@ public enum DatabaseType {
             9092, DialectFamily.GENERIC),
 
     CUSTOM("db.type.CUSTOM", null, null, 0, DialectFamily.GENERIC);
+
+    /**
+     * Products that ship their own JDBC driver which is <em>not</em> redistributed here, while
+     * a bundled substitute still connects them: the vendor driver is optional, so the form
+     * offers it behind a switch instead of demanding a jar.
+     *
+     * <p>Deliberately narrow. A preset whose driver is bundled (达梦, Kingbase, openGauss,
+     * OceanBase, HighGo, Vastbase, YashanDB, ...) has nothing to fill in and gets no card,
+     * and neither has a product whose official access already is the bundled driver
+     * (TiDB, TDSQL, PolarDB, UPDRDB, KunDB, RASESQL, SeaboxSQL). Presets that cannot connect
+     * at all without a jar (GaussDB, GBase, Oscar, DB2) are detected from the classpath and
+     * get a required card instead.
+     */
+    private static final Set<DatabaseType> OPTIONAL_VENDOR_DRIVER_PRESETS =
+            Collections.unmodifiableSet(EnumSet.of(GOLDENDB, GREATDB));
+
+    /** Whether the connection form offers an <em>optional</em> vendor URL / jar / class override. */
+    public boolean supportsVendorDriver() {
+        return OPTIONAL_VENDOR_DRIVER_PRESETS.contains(this);
+    }
 
     /**
      * i18n key for the human label, not the label itself.

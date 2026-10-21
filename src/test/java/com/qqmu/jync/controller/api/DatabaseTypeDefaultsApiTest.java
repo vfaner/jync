@@ -64,6 +64,39 @@ class DatabaseTypeDefaultsApiTest {
     }
 
     @Test
+    @DisplayName("GoldenDB 复用内置 MySQL 驱动,但厂商可要求专属驱动:vendorDriver=true")
+    void goldenDbOffersTheVendorDriverOverride() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "GOLDENDB"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bundled").value(true))
+                .andExpect(jsonPath("$.vendorDriver").value(true));
+    }
+
+    @Test
+    @DisplayName("MySQL 是标准产品:不提供厂商驱动覆盖")
+    void mysqlDoesNotOfferTheVendorDriverOverride() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "MYSQL"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.vendorDriver").value(false));
+    }
+
+    @Test
+    @DisplayName("达梦驱动已内置:不提供厂商驱动覆盖")
+    void damengDoesNotOfferTheVendorDriverOverride() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "DM"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.vendorDriver").value(false));
+    }
+
+    @Test
+    @DisplayName("TiDB 的官方接入就是 Connector/J:不提供厂商驱动覆盖")
+    void tidbDoesNotOfferTheVendorDriverOverride() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "TIDB"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.vendorDriver").value(false));
+    }
+
+    @Test
     @DisplayName("CUSTOM:custom=true 且 bundled=false")
     void customIsNeverBundled() throws Exception {
         mvc.perform(get("/api/databases/type-defaults").param("type", "CUSTOM"))

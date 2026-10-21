@@ -806,6 +806,35 @@
     minerSection.querySelectorAll('input').forEach(function (el) { el.disabled = !showMiner; });
   }
 
+  /* 驱动卡片:只为商业信创预设与 CUSTOM 出现;标准产品整卡隐藏。
+     required(CUSTOM / 驱动未内置)时字段直接展开、没有开关;其余预设由头部开关控制,
+     打开才展开字段。收起或隐藏时必须禁用控件 —— hidden 不等于不提交,残留值会覆盖
+     预设 URL 或劫持内置驱动。 */
+  function setDriverCardState(card, available, required) {
+    if (!card) return;
+    var toggle = card.querySelector('[data-role="vendor-driver-toggle"]');
+    var unlocked = available && (required || !!(toggle && toggle.checked));
+    if (toggle) {
+      toggle.checked = unlocked;
+      toggle.disabled = !available || required;
+      var sw = toggle.closest('.switch');
+      if (sw) sw.hidden = !available || required;
+    }
+    card.hidden = !available;
+    card.querySelectorAll('#customUrl,#customJarPath,#customDriver,button[data-role="find-drivers"]')
+      .forEach(function (el) { el.disabled = !unlocked; });
+    var body = document.getElementById('driver-card-body');
+    if (body) body.hidden = !unlocked;
+  }
+
+  function bindVendorDriverToggle(card) {
+    var toggle = card.querySelector('[data-role="vendor-driver-toggle"]');
+    if (!toggle) return;
+    toggle.addEventListener('change', function () {
+      setDriverCardState(card, true, card.dataset.required === 'true');
+    });
+  }
+
   function bindTypeSelect(select) {
     // 用途单选变化不触发类型默认值接口,只重算挖掘账号区。
     var form = select.closest('form');
@@ -837,18 +866,21 @@
             // handled. The family is a <select>, so the selector must cover selects too.
             custom.querySelectorAll('input, select').forEach(function (el) { el.disabled = !p.custom; });
           }
-          // 未内置的预设（如 GBase / 神通 / GaussDB）也要填 jar；bundled 由服务端查 classpath 得出
+          // 驱动卡片始终渲染:未内置的预设(GBase/神通/GaussDB/CUSTOM)必填,内置驱动的
+          // 预设(GoldenDB/TiDB/MySQL 等)由厂商驱动开关按需展开。bundled 由服务端查 classpath 得出。
           var jarCard = document.getElementById('jar-card');
           if (jarCard) {
-            var showJar = p.custom || p.bundled === false;
-            jarCard.hidden = !showJar;
-            // 只 hidden 还会照常提交，必须连控件一起禁用，否则残留的旧 jar 路径会劫持内置驱动
-            jarCard.querySelectorAll('input,button').forEach(function (el) { el.disabled = !showJar; });
+            // 未内置驱动的预设必须填 jar;自定义连接整卡必填;其余信创预设可选手动开。
+            var required = p.custom || p.bundled === false;
+            var available = required || p.vendorDriver === true;
+            // 切换类型时清空三个覆盖值:上一个类型填的 URL 会覆盖新类型的 URL 模板,
+            // 残留的 jar 路径/驱动类会劫持新类型的内置驱动。清空后回退到预设。
+            ['customUrl', 'customJarPath', 'customDriver'].forEach(function (id) {
+              var el = document.getElementById(id);
+              if (el) el.value = '';
+            });
+            setDriverCardState(jarCard, available, required);
           }
-          // 驱动类覆盖随类型切换清空：两个外部驱动类型之间切换时输入框始终可见，
-          // 上一个类型手填的类名留在这里会悄悄覆盖新类型的预设。清空后回退到预设类。
-          var driverInput = document.getElementById('customDriver');
-          if (driverInput) driverInput.value = '';
           var hint = document.getElementById('url-hint');
           if (hint) hint.textContent = p.urlTemplate || '';
           // 服务名说明只对 Oracle 有意义，其余类型隐藏
@@ -2099,6 +2131,8 @@
     document.querySelectorAll('[data-role="test-conn"]').forEach(bindConnectionTest);
     document.querySelectorAll('[data-role="picker"]').forEach(bindPicker);
     document.querySelectorAll('[data-role="find-drivers"]').forEach(bindDriverDiscovery);
+    var driverCardEl = document.getElementById('jar-card');
+    if (driverCardEl) bindVendorDriverToggle(driverCardEl);
     document.querySelectorAll('[data-role="type-select"]').forEach(bindTypeSelect);
     document.querySelectorAll('[data-role="protocol-select"]').forEach(bindProtocolSelect);
     document.querySelectorAll('[data-role="ai-draft"]').forEach(bindAiDraft);
