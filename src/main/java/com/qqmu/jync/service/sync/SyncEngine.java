@@ -128,6 +128,31 @@ public class SyncEngine {
                 return result;
             }
 
+            // A target name that cannot exist is refused here, before any DDL or row write:
+            // left to the target, the failure arrives mid-load and names neither the mapping
+            // that produced the name nor the limit it broke. Offending tables are dropped from
+            // this cycle's metadata, so neither the structure phase nor the data phase touches
+            // them.
+            List<IdentifierPreflight.Violation> identifierViolations = IdentifierPreflight.check(
+                    ctx.getTargetType(), ctx.getTargetDialect(),
+                    sourceMeta.getTables().stream()
+                            .filter(t -> ctx.getConfig().includesTable(t.getName())).toList(),
+                    ctx.getConfig()::targetTableName);
+            if (!identifierViolations.isEmpty()) {
+                Set<String> offendingNames = new HashSet<>();
+                for (IdentifierPreflight.Violation violation : identifierViolations) {
+                    log.error("Project '{}': {}", ctx.projectName(), violation.getMessage());
+                    result.addError(violation.getMessage());
+                    stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE,
+                            violation.getTableName(), ChangeType.ERROR, violation.getMessage(),
+                            false, 0);
+                    offendingNames.add(violation.getTableName());
+                }
+                sourceMeta.setTables(sourceMeta.getTables().stream()
+                        .filter(t -> !offendingNames.contains(t.getName()))
+                        .collect(java.util.stream.Collectors.toList()));
+            }
+
             // Nothing selected means no table may be touched — including the retry of an
             // index that failed before the selection was narrowed. Without this guard a
             // "sync nothing" project would still issue DDL against its target each cycle.

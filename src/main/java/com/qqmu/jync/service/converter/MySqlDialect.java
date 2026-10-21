@@ -65,6 +65,12 @@ public class MySqlDialect extends AbstractSqlDialect {
         return DatabaseType.DialectFamily.MYSQL;
     }
 
+    /** Table and column names; MariaDB and the MySQL-compatible products share the limit. */
+    @Override
+    public int maxIdentifierBytes() {
+        return 64;
+    }
+
     /**
      * MySQL Connector/J — and the MySQL-protocol forks this family covers (MariaDB,
      * OceanBase, TiDB, GBase) — only stream a result set row-by-row when the fetch size

@@ -24,6 +24,12 @@ public class PostgresDialect extends AbstractSqlDialect {
         return DatabaseType.DialectFamily.POSTGRES;
     }
 
+    /** NAMEDATALEN minus the terminator. PostgreSQL truncates silently, which is worse. */
+    @Override
+    public int maxIdentifierBytes() {
+        return 63;
+    }
+
     @Override
     protected char quoteChar() {
         return '"';

@@ -38,6 +38,20 @@ public class OracleDialect extends AbstractSqlDialect {
         return majorVersion == null ? new OracleDialect() : new OracleDialect(majorVersion);
     }
 
+    /**
+     * 11g caps identifiers at 30 bytes; 12.2 raised the cap to 128. Major 12 spans both
+     * releases, and this dialect already treats 12+ as modern, so 12+ gets the later limit.
+     * An unknown version applies no limit: refusing a name that may well be legal is worse
+     * than the late failure the preflight is meant to improve.
+     */
+    @Override
+    public int maxIdentifierBytes() {
+        if (majorVersion == null) {
+            return 0;
+        }
+        return majorVersion >= 12 ? 128 : 30;
+    }
+
     @Override
     public DatabaseType.DialectFamily family() {
         return DatabaseType.DialectFamily.ORACLE;

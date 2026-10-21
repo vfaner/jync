@@ -23,6 +23,11 @@ public class SqlServerDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public int maxIdentifierBytes() {
+        return 128;
+    }
+
+    @Override
     protected char quoteChar() {
         // Bracket quoting; handled specially since the delimiters differ.
         return '[';

@@ -291,6 +291,17 @@ public interface SqlDialect {
         return sql == null || sql.isBlank() ? List.of() : List.of(sql);
     }
 
+    /**
+     * The product's identifier length limit in bytes, or 0 when it is unknown or unlimited.
+     *
+     * <p>Used to refuse a name before the target rejects it mid-load with an error that names
+     * neither the mapping that produced the name nor the limit it broke. Byte-based, because
+     * Oracle and PostgreSQL measure identifiers in bytes, not characters.
+     */
+    default int maxIdentifierBytes() {
+        return 0;
+    }
+
     String getTruncateSql(String schema, String table);
 
     /** Renders a literal for a DEFAULT clause, quoting only when the type needs it. */
