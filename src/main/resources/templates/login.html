@@ -104,6 +104,13 @@
 <!--/* theme.js 给上面 data-theme-btn 按钮绑定切换、跑旧键迁移和时区上报；
        此前登录页漏引了它，主题按钮点了没反应。 */-->
 <script th:src="@{/js/theme.js}"></script>
+<!--/* app.js 的文案只从 window.JyncMessages 取；登录页不套 layout，而升级重启后的
+       自动刷新会落到这里，由 app.js 弹出「更新成功」提示，所以单独挂上这一个键。 */-->
+<script th:inline="javascript">
+    window.JyncMessages = {
+        'msg.upgrade.success': /*[[#{msg.upgrade.success}]]*/ ''
+    };
+</script>
 <script th:src="@{/js/app.js}"></script>
 </body>
 </html>

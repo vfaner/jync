@@ -22,7 +22,6 @@ import java.util.Enumeration;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -135,9 +134,18 @@ public class UpgradeService {
         }
     }
 
-    /** Downloads {@code url} to {@code target}, reporting bytes read so far. */
+    /**
+     * Download progress: bytes read so far and the total when one is known. {@code bytesTotal}
+     * is 0 for a response that declares neither a release size nor a {@code Content-Length}.
+     */
+    @FunctionalInterface
+    public interface DownloadProgress {
+        void update(long bytesRead, long bytesTotal);
+    }
+
+    /** Downloads {@code url} to {@code target}, reporting progress as it streams. */
     public interface JarDownloader {
-        void download(String url, Path target, Long expectedBytes, LongConsumer progress)
+        void download(String url, Path target, Long expectedBytes, DownloadProgress progress)
                 throws Exception;
     }
 
@@ -343,9 +351,14 @@ public class UpgradeService {
         try {
             Files.deleteIfExists(part);
             Long expected = asset.sizeBytes();
+            long declared = expected != null && expected > 0 ? expected : 0L;
+            // Gitee's API reports no asset size. The downloader reports the response's
+            // Content-Length instead, so the bar shows a real percentage on both mirrors;
+            // when neither source knows a total it stays 0 and the UI goes indeterminate.
             downloader.download(asset.url(), part, expected,
-                    read -> status = new Status(Phase.DOWNLOADING, null, target, source.name(),
-                            read, status.bytesTotal()));
+                    (read, total) -> status = new Status(
+                            Phase.DOWNLOADING, null, target, source.name(),
+                            read, total > 0 ? total : declared));
 
             long actual = Files.size(part);
             if (expected != null && expected > 0 && actual != expected) {
@@ -738,15 +751,21 @@ public class UpgradeService {
                 throw new LocalizedFailure(new Localized("upgrade.failed.http",
                         String.valueOf(response.statusCode())), null);
             }
+            // The asset's published size when the feed has one (GitHub), else the length the
+            // response itself declares. Gitee's API has no size, but its CDN sends
+            // Content-Length, which is what lets the progress bar move for Gitee downloads.
+            long expectedTotal = expectedBytes != null && expectedBytes > 0
+                    ? expectedBytes
+                    : response.headers().firstValueAsLong("Content-Length").orElse(0L);
             try (InputStream in = response.body();
                  OutputStream out = Files.newOutputStream(target)) {
                 byte[] buffer = new byte[64 * 1024];
-                long total = 0;
+                long read = 0;
                 int n;
                 while ((n = in.read(buffer)) > 0) {
                     out.write(buffer, 0, n);
-                    total += n;
-                    progress.accept(total);
+                    read += n;
+                    progress.update(read, expectedTotal);
                 }
             }
         };

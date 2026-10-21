@@ -158,6 +158,26 @@ class SettingsVersionCardViewTest {
     }
 
     @Test
+    void restartingCopyPromisesTheAutomaticRefresh() throws Exception {
+        // 重启由 app.js 轮询 /login 完成后自动 reload；文案要如实告诉用户，
+        // 不能再让人守着页面手动刷新。
+        String page = render(base()
+                .state(VersionInfo.State.UPDATE_AVAILABLE)
+                .latestVersion("1.2.0").latestTag("v1.2.0")
+                .releaseUrl(RELEASE_URL)
+                .build());
+
+        assertThat(page).contains("完成后页面会自动刷新");
+        assertThat(page).contains("data-login-url=\"/login\"");
+        // 轮询有上限：两分钟后停手并提示手动刷新，不能每秒一直打接口。
+        // 文案本身会在内联 JS 字典里做 Unicode 转义，这里只钉住键存在；
+        // 中英两份 bundle 的键一致性由 I18nBundleParityTest 兜底。
+        assertThat(page).contains("msg.upgrade.restartTimeout");
+        // 重启收尾时 app.js 从新版本登录页的字典里取成功文案，字典缺了会显示原始 key。
+        assertThat(page).contains("msg.upgrade.success");
+    }
+
+    @Test
     void viewerStillGetsThePlainReleasePageButtonAndNoUpgradeDialog() throws Exception {
         String page = renderAs(UserRole.VIEWER, base()
                 .state(VersionInfo.State.UPDATE_AVAILABLE)

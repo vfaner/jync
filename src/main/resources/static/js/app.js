@@ -1301,6 +1301,7 @@
     var startUrl = modal.dataset.startUrl;
     var statusUrl = modal.dataset.statusUrl;
     var restartUrl = modal.dataset.restartUrl;
+    var loginUrl = modal.dataset.loginUrl;
 
     var sourceGroup = modal.querySelector('[data-role="upgrade-source-group"]');
     var progressBox = modal.querySelector('[data-role="upgrade-progress"]');
@@ -1349,10 +1350,19 @@
       if (downloading) {
         var total = s.bytesTotal || 0;
         var read = s.bytesRead || 0;
-        // Gitee API 不给文件大小：total 未知时进度条停 0，只显示已下载量
-        if (progressBar) progressBar.value = total > 0 ? Math.floor(read * 100 / total) : 0;
+        if (progressBar) {
+          if (total > 0) {
+            progressBar.value = Math.floor(read * 100 / total);
+          } else {
+            // 连响应头都没给长度：去掉 value 交给浏览器画滚动的不确定进度条，
+            // 比一根永远停在 0 的死条更诚实（仍在下载，只是不知道还剩多少）。
+            progressBar.removeAttribute('value');
+          }
+        }
         if (progressText) {
-          progressText.textContent = total > 0 ? mb(read) + ' / ' + mb(total) : mb(read);
+          progressText.textContent = total > 0
+            ? mb(read) + ' / ' + mb(total) + ' · ' + Math.min(100, Math.floor(read * 100 / total)) + '%'
+            : mb(read);
         }
         if (startBtn) startBtn.disabled = true;
       } else {
@@ -1383,6 +1393,79 @@
       if (startBtn) startBtn.disabled = false;
     }
 
+    /**
+     * 重启后自动刷新：服务端回应后约 3 秒退出，退出期间 /login 请求会失败。
+     *
+     * 必须真的观察到一次失败、再等到请求恢复成功才收尾 —— 否则会在服务端
+     * 尚未退出时抢先判定。若轮询始终没撞上停机窗口（重启极快），
+     * 60 秒后只要服务端仍在线也收尾。
+     *
+     * 每次只发一个请求（上一个结束后才排下一次），并且最多等 2 分钟：服务一直
+     * 起不来就停手、改成提示手动刷新，绝不无限打接口。
+     */
+    var RESTART_WAIT_LIMIT_MS = 120000;
+    /** 成功提示停留多久再刷新：让「更新成功」被看见，又不至于让人干等。 */
+    var UPGRADE_SUCCESS_HOLD_MS = 1200;
+
+    function watchForRestart() {
+      if (!loginUrl) return;
+      var startedAt = Date.now();
+      var sawDown = false;
+
+      function giveUp() {
+        if (messageText) messageText.textContent = t('msg.upgrade.restartTimeout');
+        show(messageBox, true);
+      }
+
+      /**
+       * 服务确认恢复：先弹绿色笑脸「更新成功」，停约一秒再刷新。
+       *
+       * 文案优先从新版本登录页的内联字典里取 —— 当前页面是升级前的旧 jar 渲染的，
+       * 旧版本可能还没有 msg.upgrade.success 这个键，直接用 t() 会露出原始 key。
+       */
+      function finishRestart(res) {
+        var fallback = t('msg.upgrade.success');
+        function showThenReload(text) {
+          JyncDialog.auto(text || fallback, 'ok');
+          setTimeout(function () { window.location.reload(); }, UPGRADE_SUCCESS_HOLD_MS);
+        }
+        res.text().then(function (html) {
+          var text = fallback;
+          var m = /'msg\.upgrade\.success':\s*("(?:[^"\\]|\\.)*")/.exec(html || '');
+          if (m) {
+            try { text = JSON.parse(m[1]) || fallback; } catch (e) { /* 保持兜底文案 */ }
+          }
+          showThenReload(text);
+        }).catch(function () { showThenReload(fallback); });
+      }
+
+      function tick() {
+        var elapsed = Date.now() - startedAt;
+        if (elapsed > RESTART_WAIT_LIMIT_MS) { giveUp(); return; }
+        var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        var abortTimer = ctrl ? setTimeout(function () { ctrl.abort(); }, 4000) : null;
+        fetch(loginUrl, {
+          method: 'GET', cache: 'no-store', credentials: 'same-origin',
+          signal: ctrl ? ctrl.signal : undefined
+        }).then(function (res) {
+          if (abortTimer) clearTimeout(abortTimer);
+          if (!res.ok) { sawDown = true; setTimeout(tick, 1000); return; }
+          var waitedLongEnough = Date.now() - startedAt > 3000;
+          if ((sawDown && waitedLongEnough) || Date.now() - startedAt > 60000) {
+            finishRestart(res);
+            return;
+          }
+          setTimeout(tick, 1000);
+        }).catch(function () {
+          if (abortTimer) clearTimeout(abortTimer);
+          sawDown = true;
+          setTimeout(tick, 1000);
+        });
+      }
+
+      setTimeout(tick, 1000);
+    }
+
     if (startBtn) startBtn.addEventListener('click', function () {
       startBtn.disabled = true;
       postJson(startUrl + '?source=' + encodeURIComponent(selectedSource()))
@@ -1404,6 +1487,7 @@
         .then(function (p) {
           if (p && p.success) {
             render({ phase: 'RESTARTING', message: t('msg.upgrade.restarting') });
+            watchForRestart();
           } else {
             restartBtn.disabled = false;
             fail(t(p && p.message ? p.message : 'error.unexpected'));
@@ -1418,6 +1502,7 @@
       if (!s || s.success === false) return;
       render(s);
       if (s.phase === 'DOWNLOADING') startPolling();
+      if (s.phase === 'RESTARTING') watchForRestart(); // 重启途中手动刷新了页面
       if (s.phase === 'READY' || s.phase === 'DOWNLOADING') setModalOpen(modal.id, true);
     });
   }

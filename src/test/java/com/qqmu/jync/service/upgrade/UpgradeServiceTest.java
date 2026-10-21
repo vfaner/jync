@@ -60,20 +60,24 @@ class UpgradeServiceTest {
         volatile CountDownLatch entered;
         volatile CountDownLatch release;
         volatile RuntimeException failure;
+        /** What the server declares as Content-Length; 0 = the response declares none. */
+        volatile long declaredTotal;
         final AtomicLong lastReported = new AtomicLong();
 
         @Override
         public void download(String url, Path target, Long expectedBytes,
-                             java.util.function.LongConsumer progress) throws Exception {
-            if (entered != null) {
-                entered.countDown();
-                release.await(10, TimeUnit.SECONDS);
-            }
+                             UpgradeService.DownloadProgress progress) throws Exception {
             if (failure != null) {
                 throw failure;
             }
             Files.write(target, blob);
-            progress.accept(blob.length);
+            // Half the blob first, so a test can hold the download open and read the status.
+            progress.update(blob.length / 2, declaredTotal);
+            if (entered != null) {
+                entered.countDown();
+                release.await(10, TimeUnit.SECONDS);
+            }
+            progress.update(blob.length, declaredTotal);
             lastReported.set(blob.length);
         }
     }
@@ -187,6 +191,62 @@ class UpgradeServiceTest {
         }
         assertThat(marker.getProperty("targetVersion")).isEqualTo("1.8.0");
         assertThat(marker.getProperty("backup")).isEqualTo("jync.jar.bak");
+    }
+
+    @Test
+    void downloadProgressCarriesTheServerDeclaredTotalWhenTheReleaseHasNoSize() throws Exception {
+        // Gitee's API reports no asset size, so the progress bar used to sit at 0 for the whole
+        // download. The HTTP response's Content-Length is a total the downloader can report.
+        byte[] nextJar = makeFatJar("new-jar-bytes");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        downloader.declaredTotal = 4096L;
+        downloader.entered = new CountDownLatch(1);
+        downloader.release = new CountDownLatch(1);
+        feed.release = release(Source.GITEE, "v1.8.0", null);
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITEE");
+        assertThat(downloader.entered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        Status status = svc.status();
+        assertThat(status.phase()).isEqualTo(UpgradeService.Phase.DOWNLOADING);
+        assertThat(status.bytesRead()).isEqualTo(nextJar.length / 2);
+        assertThat(status.bytesTotal()).isEqualTo(4096L);
+
+        downloader.release.countDown();
+        awaitPhase(svc, UpgradeService.Phase.READY);
+    }
+
+    @Test
+    void httpDownloaderFallsBackToContentLengthForTheTotal() throws Exception {
+        byte[] payload = new byte[200_000];
+        new java.util.Random(7).nextBytes(payload);
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(
+                new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/jync.jar", exchange -> {
+            exchange.sendResponseHeaders(200, payload.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(payload);
+            }
+        });
+        server.start();
+        try {
+            Path target = tempDir.resolve("downloaded.jar");
+            List<long[]> reports = new java.util.ArrayList<>();
+            UpgradeService.httpDownloader().download(
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/jync.jar",
+                    target, null, (read, total) -> reports.add(new long[]{read, total}));
+
+            assertThat(Files.readAllBytes(target)).isEqualTo(payload);
+            assertThat(reports).isNotEmpty();
+            long[] last = reports.get(reports.size() - 1);
+            assertThat(last[0]).isEqualTo(payload.length);
+            // expectedBytes is null (Gitee): the response's own Content-Length is the total.
+            assertThat(last[1]).isEqualTo(payload.length);
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test
