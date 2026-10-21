@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -163,6 +164,19 @@ class CdcEventApplierTest {
             rs.next();
             assertThat(rs.getInt(1)).isZero(); // rollback 完整回滚整个事务
         }
+    }
+
+    @Test
+    void aNotNullViolationIsNotMistakenForAUniqueConflict() throws SQLException {
+        // 目标比源端更严格:INSERT 撞 NOT NULL(23502)曾被当成"行已存在"重试 UPDATE,
+        // UPDATE 命中 0 行后这行就无声消失了。必须把约束错误抛给 consumer,让位点不前进。
+        try (Statement st = target.createStatement()) {
+            st.execute("ALTER TABLE orders ALTER COLUMN name SET NOT NULL");
+        }
+
+        assertThatThrownBy(() -> applier.applyUpserts(target, binding,
+                List.of(row(1L, null, "1.00"))))
+                .isInstanceOf(SQLException.class);
     }
 
     // —— 原生 upsert 方言(MySQL 等生产主路径)走批量 executeBatch 分支 ——

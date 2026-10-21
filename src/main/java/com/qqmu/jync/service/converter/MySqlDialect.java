@@ -1,7 +1,15 @@
 package com.qqmu.jync.service.converter;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
@@ -13,9 +21,44 @@ import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
+import lombok.extern.slf4j.Slf4j;
+
 /** MySQL / MariaDB dialect. */
+@Slf4j
 @Component
 public class MySqlDialect extends AbstractSqlDialect {
+
+    /** MySQL rejects a longer column comment (error 1629). */
+    private static final int MAX_COMMENT_LENGTH = 1024;
+
+    /** MySQL rejects a longer table comment (error 1629). */
+    private static final int MAX_TABLE_COMMENT_LENGTH = 2048;
+
+    /** InnoDB's 65535-byte row limit minus room for the row header and length bytes. */
+    private static final long ROW_SIZE_BUDGET = 60000L;
+
+    /**
+     * In-row cost of an off-page TEXT/BLOB value in InnoDB's default DYNAMIC row format:
+     * a 20-byte pointer. (COMPACT would need 9-12; charging the larger value keeps the
+     * estimate safe on both.)
+     */
+    private static final long LOB_ROW_BYTES = 20L;
+
+    /**
+     * Characters of a LONGTEXT column an index covers. InnoDB's default row format allows
+     * 3072-byte keys (768 utf8mb4 characters), but 767 bytes / 191 characters is the only
+     * limit every supported server version and row format accepts.
+     */
+    private static final int INDEX_PREFIX_CHARS = 191;
+
+    /**
+     * Which columns a narrowing pass may take, cheapest sacrifice first: unindexed columns,
+     * then columns of ordinary indexes (their index survives as a prefix index), then
+     * UNIQUE columns (their index is skipped).
+     */
+    private static final int PASS_UNINDEXED = 1;
+    private static final int PASS_INDEXED = 2;
+    private static final int PASS_UNIQUE = 3;
 
     @Override
     public DatabaseType.DialectFamily family() {
@@ -41,6 +84,22 @@ public class MySqlDialect extends AbstractSqlDialect {
     @Override
     protected char quoteChar() {
         return '`';
+    }
+
+    /**
+     * MySQL refuses a DEFAULT on TEXT/BLOB/JSON/GEOMETRY columns (error 1101; 8.0 accepts an
+     * expression default only). The row-size plan turns wide VARCHARs into LONGTEXT, so a
+     * source default on such a column must be dropped rather than copied — otherwise the
+     * CREATE TABLE fails outright.
+     */
+    @Override
+    protected boolean defaultClauseAllowed(String targetType) {
+        if (targetType == null) {
+            return true;
+        }
+        String type = targetType.toUpperCase(Locale.ROOT);
+        return !(type.contains("TEXT") || type.contains("BLOB") || type.contains("JSON")
+                || type.contains("GEOMETRY"));
     }
 
     @Override
@@ -163,11 +222,25 @@ public class MySqlDialect extends AbstractSqlDialect {
     @Override
     public String getAddColumnSql(String schema, String table, ColumnMeta column,
                                   DatabaseType sourceType) {
+        return getAddColumnSql(schema, table, column, sourceType, null);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The narrowing plan is recomputed for the whole table: a column the CREATE TABLE
+     * narrowed to LONGTEXT must be added that way too, and a wide column arriving on a
+     * table that already sits at the row-size budget may itself have to be narrowed.
+     */
+    @Override
+    public String getAddColumnSql(String schema, String table, ColumnMeta column,
+                                  DatabaseType sourceType, TableMeta sourceTable) {
         // The unique key must be part of the SAME ALTER statement: MySQL rejects a standalone
         // ADD COLUMN of an AUTO_INCREMENT column without a key (ER_WRONG_AUTO_KEY, 1075), so a
         // follow-up companion statement would arrive too late.
         String sql = "ALTER TABLE " + qualify(schema, table) + " ADD COLUMN "
-                + columnDefinition(column, sourceType);
+                + columnDefinition(column, sourceType, narrowedType(sourceTable, sourceType,
+                        column));
         if (column.isAutoIncrement() && !column.isPrimaryKey()) {
             sql += ", ADD UNIQUE KEY " + quoteIdentifier(autoKeyName(table, column.getName()))
                     + " (" + quoteIdentifier(column.getName()) + ")";
@@ -201,20 +274,348 @@ public class MySqlDialect extends AbstractSqlDialect {
     protected String createTableSuffix(TableMeta table) {
         StringBuilder sb = new StringBuilder(" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         if (table.getRemarks() != null && !table.getRemarks().isBlank()) {
-            sb.append(" COMMENT='").append(escape(table.getRemarks())).append('\'');
+            sb.append(" COMMENT='").append(escape(tableComment(table.getRemarks()))).append('\'');
         }
         return sb.toString();
+    }
+
+    /**
+     * Updates the comment of a table that already exists. MySQL has no {@code COMMENT ON}
+     * statement, but {@code ALTER TABLE ... COMMENT = '...'} is a metadata-only change.
+     * A null/blank comment clears it, so a comment removed at the source does not linger.
+     */
+    @Override
+    public String getAlterTableCommentSql(String schema, String table, String comment) {
+        return "ALTER TABLE " + qualify(schema, table) + " COMMENT='"
+                + escape(tableComment(comment)) + "'";
+    }
+
+    /** MySQL rejects table comments longer than 2048 characters (error 1629). */
+    private static String tableComment(String comment) {
+        if (comment == null) {
+            return "";
+        }
+        return comment.length() > MAX_TABLE_COMMENT_LENGTH
+                ? comment.substring(0, MAX_TABLE_COMMENT_LENGTH) : comment;
     }
 
     private String escape(String s) {
         return s.replace("\\", "\\\\").replace("'", "''");
     }
 
+    /**
+     * MySQL stores a column comment inline in the column definition, so it travels with the
+     * statement that creates or alters the column. Comments longer than 1024 characters are
+     * rejected (error 1629), hence the truncation.
+     */
+    @Override
+    protected String columnCommentClause(ColumnMeta col) {
+        String remarks = col.getRemarks();
+        if (remarks == null || remarks.isBlank()) {
+            return "";
+        }
+        String text = remarks.length() > MAX_COMMENT_LENGTH
+                ? remarks.substring(0, MAX_COMMENT_LENGTH) : remarks;
+        return " COMMENT '" + escape(text) + "'";
+    }
+
+    /**
+     * InnoDB's row limit is 65535 bytes for CHAR/VARCHAR columns, and utf8mb4 charges four
+     * bytes per character. An Oracle table with dozens of {@code VARCHAR2(4000)} columns —
+     * ordinary in Chinese enterprise schemas — maps to far more than that, and CREATE TABLE
+     * fails with ER_TOO_BIG_ROWSIZE (1118), taking the whole table with it.
+     *
+     * <p>Columns that cannot fit are narrowed to LONGTEXT, which costs a 20-byte pointer in
+     * the row regardless of content. Widest columns go first (fewest conversions, least
+     * change), and the order is data first, indexes second: columns no index depends on,
+     * then ordinary-index columns (their index becomes a prefix index), then UNIQUE columns.
+     * A UNIQUE column is narrowed only when nothing else can make the row fit — its index
+     * is then skipped rather than weakened, because prefix uniqueness would reject rows the
+     * source accepts. Primary-key columns are never narrowed at all: MySQL cannot put TEXT
+     * in a PRIMARY KEY. The 60000 budget leaves headroom for the row header, null bitmap
+     * and length bytes.
+     */
+    @Override
+    protected Map<String, String> createColumnTypeOverrides(TableMeta table,
+                                                            DatabaseType sourceType) {
+        return narrowedColumns(table, sourceType, true);
+    }
+
+    /**
+     * @param report whether to log the narrowing and the "still too wide" diagnosis. Index
+     *               DDL recomputes the same plan once per index and must stay quiet: the
+     *               table's own CREATE (or its absence from this cycle) already reported it.
+     */
+    private Map<String, String> narrowedColumns(TableMeta table, DatabaseType sourceType,
+                                                boolean report) {
+        if (table.getColumns() == null || table.getColumns().isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> types = new LinkedHashMap<>();
+        Map<String, Long> bytes = new LinkedHashMap<>();
+        long total = 0;
+        for (ColumnMeta col : table.getColumns()) {
+            String type = mappedType(col, sourceType);
+            types.put(keyOf(col), type);
+            long size = estimateRowBytes(type);
+            bytes.put(keyOf(col), size);
+            total += size;
+        }
+        if (total <= ROW_SIZE_BUDGET) {
+            return Map.of();
+        }
+
+        Set<String> indexed = indexedColumns(table);
+        Set<String> uniqueKeys = uniqueKeyColumns(table);
+        Set<String> primaryKeys = primaryKeyColumns(table);
+        List<ColumnMeta> candidates = new ArrayList<>();
+        for (ColumnMeta col : table.getColumns()) {
+            // A primary-key column can never become LONGTEXT: MySQL cannot put a TEXT
+            // column in a PRIMARY KEY, so converting one would turn the row-size error into
+            // an "incorrect table definition" error. Leave keys alone and narrow the rest.
+            if (!col.isAutoIncrement() && !primaryKeys.contains(keyOf(col))
+                    && isCharType(types.get(keyOf(col)))) {
+                candidates.add(col);
+            }
+        }
+        candidates.sort(Comparator.comparingLong(
+                (ColumnMeta c) -> bytes.get(keyOf(c))).reversed());
+
+        long originalTotal = total;
+        Map<String, String> overrides = new LinkedHashMap<>();
+        List<String> converted = new ArrayList<>();
+        // Data first, indexes last: widening a column costs its index, so columns no index
+        // depends on go first, then ordinary indexes, and UNIQUE columns only when the row
+        // cannot be made to fit any other way.
+        for (int pass = PASS_UNINDEXED; pass <= PASS_UNIQUE; pass++) {
+            total = convertWithinBudget(candidates, pass, indexed, uniqueKeys, types, bytes,
+                    total, overrides, converted);
+        }
+
+        if (report && !converted.isEmpty()) {
+            log.warn("Table {} needs {} bytes per row on MySQL (utf8mb4 limit ~65535); "
+                            + "converted {} column(s) to LONGTEXT, row now ~{} bytes: {}",
+                    table.getName(), originalTotal, converted.size(), total,
+                    String.join(", ", converted));
+        }
+        if (report && total > ROW_SIZE_BUDGET) {
+            // Everything convertible has been converted and the row still does not fit. The
+            // remaining width is in keys or fixed-size types, which cannot be narrowed
+            // without changing the table's meaning; say so once instead of letting MySQL
+            // answer with a bare ER_TOO_BIG_ROWSIZE.
+            log.error("Table {} still needs ~{} bytes per row after narrowing what is safe"
+                            + " (MySQL limit ~65535); CREATE TABLE is likely to fail with"
+                            + " ER_TOO_BIG_ROWSIZE (1118). Review the key columns or shorten"
+                            + " the widest source columns.",
+                    table.getName(), total);
+        }
+        return overrides;
+    }
+
+    private long convertWithinBudget(List<ColumnMeta> candidates, int pass,
+                                     Set<String> indexed, Set<String> uniqueKeys,
+                                     Map<String, String> types, Map<String, Long> bytes,
+                                     long total, Map<String, String> overrides,
+                                     List<String> converted) {
+        for (ColumnMeta col : candidates) {
+            if (total <= ROW_SIZE_BUDGET) {
+                break;
+            }
+            String key = keyOf(col);
+            int columnPass = !indexed.contains(key) ? PASS_UNINDEXED
+                    : (uniqueKeys.contains(key) ? PASS_UNIQUE : PASS_INDEXED);
+            if (pass != columnPass || overrides.containsKey(key)) {
+                continue;
+            }
+            total -= bytes.get(key);
+            total += LOB_ROW_BYTES;
+            overrides.put(key, clobType());
+            converted.add(col.getName() + " (" + types.get(key) + ")");
+        }
+        return total;
+    }
+
+    private String mappedType(ColumnMeta col, DatabaseType sourceType) {
+        if (col.isAutoIncrement() && autoIncrementColumnType(col, sourceType) != null) {
+            return autoIncrementColumnType(col, sourceType);
+        }
+        return mapType(col, sourceType);
+    }
+
+    private static Set<String> primaryKeyColumns(TableMeta table) {
+        Set<String> names = new HashSet<>();
+        if (table.getPrimaryKeys() != null) {
+            for (String pk : table.getPrimaryKeys()) {
+                if (pk != null) {
+                    names.add(pk.toUpperCase(Locale.ROOT));
+                }
+            }
+        }
+        for (ColumnMeta col : table.getColumns()) {
+            if (col.isPrimaryKey() && col.getName() != null) {
+                names.add(keyOf(col));
+            }
+        }
+        return names;
+    }
+
+    /** Columns any primary-key or UNIQUE index covers; narrowing them costs an index. */
+    private static Set<String> uniqueKeyColumns(TableMeta table) {
+        Set<String> names = new HashSet<>(primaryKeyColumns(table));
+        if (table.getIndexes() != null) {
+            for (IndexMeta index : table.getIndexes()) {
+                if (index.getColumns() == null || (!index.isUnique() && !index.isPrimaryKey())) {
+                    continue;
+                }
+                for (String column : index.getColumns()) {
+                    if (column != null) {
+                        names.add(column.toUpperCase(Locale.ROOT));
+                    }
+                }
+            }
+        }
+        return names;
+    }
+
+    private static Set<String> indexedColumns(TableMeta table) {
+        Set<String> names = new HashSet<>(primaryKeyColumns(table));
+        if (table.getIndexes() != null) {
+            for (IndexMeta index : table.getIndexes()) {
+                if (index.getColumns() == null) {
+                    continue;
+                }
+                for (String column : index.getColumns()) {
+                    if (column != null) {
+                        names.add(column.toUpperCase(Locale.ROOT));
+                    }
+                }
+            }
+        }
+        return names;
+    }
+
+    private static final Pattern CHAR_TYPE =
+            Pattern.compile("^(?:VAR)?CHAR\\((\\d+)\\)$", Pattern.CASE_INSENSITIVE);
+
+    private static boolean isCharType(String type) {
+        return type != null && CHAR_TYPE.matcher(type.trim()).matches();
+    }
+
+    /**
+     * Worst-case bytes this mapped type contributes to InnoDB's row size. utf8mb4 charges
+     * four bytes per character; VARCHAR and CHAR count in full (the row limit is about the
+     * declared maximum, not the stored value). TEXT/BLOB/JSON keep only a pointer in the row.
+     */
+    private static long estimateRowBytes(String type) {
+        if (type == null) {
+            return 32;
+        }
+        String upper = type.trim().toUpperCase(Locale.ROOT);
+        Matcher charType = CHAR_TYPE.matcher(upper);
+        if (charType.matches()) {
+            return Long.parseLong(charType.group(1)) * 4L + 2;
+        }
+        if (upper.startsWith("VARBINARY(") || upper.startsWith("BINARY(")) {
+            int open = upper.indexOf('(');
+            int close = upper.indexOf(')', open);
+            try {
+                return Long.parseLong(upper.substring(open + 1, close)) + 2;
+            } catch (RuntimeException e) {
+                return 32;
+            }
+        }
+        if (upper.contains("TEXT") || upper.contains("BLOB") || upper.equals("JSON")) {
+            return LOB_ROW_BYTES;
+        }
+        if (upper.startsWith("DECIMAL") || upper.startsWith("NUMERIC")) {
+            return 32;
+        }
+        return 16;
+    }
+
     @Override
     public String getModifyColumnSql(String schema, String table, ColumnMeta column,
                                      DatabaseType sourceType) {
+        return getModifyColumnSql(schema, table, column, sourceType, null);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Without the table's narrowing plan a comment edit would reissue the column's wide
+     * source type — widening a LONGTEXT column and pushing the table back over MySQL's
+     * row-size limit.
+     */
+    @Override
+    public String getModifyColumnSql(String schema, String table, ColumnMeta column,
+                                     DatabaseType sourceType, TableMeta sourceTable) {
         return "ALTER TABLE " + qualify(schema, table) + " MODIFY COLUMN "
-                + columnDefinition(column, sourceType);
+                + columnDefinition(column, sourceType, narrowedType(sourceTable, sourceType,
+                        column));
+    }
+
+    /** The LONGTEXT override for this column, or null when the plan leaves it as mapped. */
+    private String narrowedType(TableMeta sourceTable, DatabaseType sourceType,
+                                ColumnMeta column) {
+        if (sourceTable == null) {
+            return null;
+        }
+        return narrowedColumns(sourceTable, sourceType, false).get(keyOf(column));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>A column this table had narrowed to LONGTEXT cannot be indexed without a key
+     * length (error 1170), so the index is built as a prefix index over the first
+     * {@value #INDEX_PREFIX_CHARS} characters. That keeps the index usable for lookups on
+     * narrow values, but it no longer covers the whole column or answers range scans over
+     * it, so the divergence is logged.
+     *
+     * <p>A UNIQUE index whose column was narrowed returns {@code null} instead: a prefix
+     * would enforce uniqueness on the first characters only and reject rows the source
+     * accepts. Data sync matters more than the index, so the caller skips it.
+     */
+    @Override
+    public String getCreateIndexSql(IndexMeta index, String schema, String table,
+                                    TableMeta sourceTable, DatabaseType sourceType) {
+        if (sourceTable == null) {
+            return super.getCreateIndexSql(index, schema, table);
+        }
+        Map<String, String> narrowed = narrowedColumns(sourceTable, sourceType, false);
+        if (narrowed.isEmpty()) {
+            return super.getCreateIndexSql(index, schema, table);
+        }
+
+        List<String> columns = new ArrayList<>();
+        List<String> prefixed = new ArrayList<>();
+        for (String column : index.getColumns()) {
+            if (column != null && narrowed.containsKey(column.toUpperCase(Locale.ROOT))) {
+                columns.add(quoteIdentifier(column) + "(" + INDEX_PREFIX_CHARS + ")");
+                prefixed.add(column);
+            } else {
+                columns.add(quoteIdentifier(column));
+            }
+        }
+        if (index.isUnique()) {
+            if (prefixed.isEmpty()) {
+                return super.getCreateIndexSql(index, schema, table);
+            }
+            log.warn("NOT creating unique index {} on {}: column(s) {} had to be widened to "
+                            + "LONGTEXT to fit MySQL's row limit and cannot carry a unique key. "
+                            + "Data still syncs; the target has no uniqueness enforcement for it.",
+                    index.getName(), table, String.join(", ", prefixed));
+            return null;
+        }
+        if (!prefixed.isEmpty()) {
+            log.warn("Index {} on {} covers column(s) {} that were narrowed to LONGTEXT; "
+                            + "created as a prefix index over the first {} characters. The index "
+                            + "still serves lookups but does not cover the full column, unlike "
+                            + "the source index.",
+                    index.getName(), table, String.join(", ", prefixed), INDEX_PREFIX_CHARS);
+        }
+        return "CREATE INDEX " + quoteIdentifier(indexNameFor(index, table)) + " ON "
+                + qualify(schema, table) + " (" + String.join(", ", columns) + ")";
     }
 
     @Override

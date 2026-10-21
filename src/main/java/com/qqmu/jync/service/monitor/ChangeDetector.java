@@ -86,6 +86,13 @@ public class ChangeDetector {
             }
 
             diffColumns(table, previous, events);
+            // A comment edit changes no type, so the column diff above cannot see it. Table
+            // comments are not part of any signature at all: without this event a comment
+            // changed at the source never reaches the target.
+            if (commentChanged(table.getRemarks(), previous.getRemarks())) {
+                events.add(ChangeEvent.of(ObjectType.TABLE, ChangeType.ALTER, table.getName(),
+                        "Table comment changed", table));
+            }
             if (config.isSyncIndexes()) {
                 diffIndexes(table, previous, config, events);
             }
@@ -133,12 +140,20 @@ public class ChangeDetector {
                 ChangeEvent event = ChangeEvent.of(ObjectType.COLUMN, ChangeType.CREATE,
                         current.getName(), "New column " + col.getName() + " " + col.getTypeName(), col);
                 event.setDetailName(col.getName());
+                event.setSourceTable(current);
                 events.add(event);
             } else if (!col.signature().equals(old.signature())) {
                 ChangeEvent event = ChangeEvent.of(ObjectType.COLUMN, ChangeType.ALTER,
                         current.getName(),
                         "Column " + col.getName() + " changed: " + old + " -> " + col, col);
                 event.setDetailName(col.getName());
+                event.setSourceTable(current);
+                events.add(event);
+            } else if (commentChanged(col.getRemarks(), old.getRemarks())) {
+                ChangeEvent event = ChangeEvent.of(ObjectType.COLUMN, ChangeType.ALTER,
+                        current.getName(), "Column " + col.getName() + " comment changed", col);
+                event.setDetailName(col.getName());
+                event.setSourceTable(current);
                 events.add(event);
             }
         }
@@ -168,12 +183,14 @@ public class ChangeDetector {
                 ChangeEvent event = ChangeEvent.of(ObjectType.INDEX, ChangeType.CREATE,
                         current.getName(), "New index " + index, index);
                 event.setDetailName(index.getName());
+                event.setSourceTable(current);
                 events.add(event);
             } else if (!index.signature().equals(old.signature())) {
                 // An index cannot be altered in place; the engine drops and recreates it.
                 ChangeEvent event = ChangeEvent.of(ObjectType.INDEX, ChangeType.ALTER,
                         current.getName(), "Index " + index.getName() + " redefined", index);
                 event.setDetailName(index.getName());
+                event.setSourceTable(current);
                 events.add(event);
             }
         }
@@ -189,6 +206,19 @@ public class ChangeDetector {
                 }
             }
         }
+    }
+
+    /**
+     * Compares comments null-safely and treats "absent" and "blank" as the same thing: a
+     * driver that reports {@code ""} for a comment-less column must not cause an ALTER on
+     * every cycle against a snapshot that recorded {@code null}.
+     */
+    private static boolean commentChanged(String current, String previous) {
+        return !normalizeComment(current).equals(normalizeComment(previous));
+    }
+
+    private static String normalizeComment(String comment) {
+        return comment == null ? "" : comment.trim();
     }
 
     private Map<String, IndexMeta> byUpperName(List<IndexMeta> indexes) {

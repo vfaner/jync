@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.sql.Types;
 import java.util.List;
 import java.util.Map;
 
@@ -12,7 +13,9 @@ import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.dto.ChangeEvent;
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.DatabaseMeta;
+import com.qqmu.jync.dto.meta.IndexMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
@@ -35,6 +38,16 @@ class ChangeDetectorTest {
     void setUp() {
         snapshotService = mock(MetadataSnapshotService.class);
         detector = new ChangeDetector(snapshotService);
+    }
+
+    private static ColumnMeta column(String name, String remarks) {
+        ColumnMeta column = new ColumnMeta();
+        column.setName(name);
+        column.setTypeName("VARCHAR");
+        column.setJdbcType(Types.VARCHAR);
+        column.setSize(50);
+        column.setRemarks(remarks);
+        return column;
     }
 
     private SyncConfig config() {
@@ -227,6 +240,69 @@ class ChangeDetectorTest {
         SyncConfig config = config();
         config.setSyncProcedures(true);
         assertThat(detector.detect(1L, current, config)).isEmpty();
+    }
+
+    @Test
+    void anIndexEventCarriesItsTableSoTheTargetCanAdaptTheIndex() {
+        ColumnMeta column = new ColumnMeta();
+        column.setName("C1");
+        column.setTypeName("VARCHAR");
+        column.setJdbcType(Types.VARCHAR);
+        column.setSize(4000);
+
+        TableMeta stored = new TableMeta();
+        stored.setName("WIDE");
+        stored.getColumns().add(column);
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("WIDE", stored));
+
+        IndexMeta index = new IndexMeta();
+        index.setName("IDX_C1");
+        index.setColumns(List.of("C1"));
+        TableMeta live = new TableMeta();
+        live.setName("WIDE");
+        live.getColumns().add(column);
+        live.setIndexes(List.of(index));
+        DatabaseMeta current = new DatabaseMeta();
+        current.getTables().add(live);
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        config.setSyncIndexes(true);
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        // MySQL builds the index from the table: a column this table had narrowed to
+        // LONGTEXT needs a key length, and only the table tells the dialect that.
+        assertThat(events)
+                .filteredOn(e -> e.getObjectType() == ObjectType.INDEX)
+                .singleElement()
+                .satisfies(e -> assertThat(e.getSourceTable()).isSameAs(live));
+    }
+
+    @Test
+    void aColumnEventCarriesItsTableSoTheTargetCanAdaptTheColumnType() {
+        TableMeta stored = new TableMeta();
+        stored.setName("WIDE");
+        stored.getColumns().add(column("C1", "old comment"));
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("WIDE", stored));
+
+        TableMeta live = new TableMeta();
+        live.setName("WIDE");
+        live.getColumns().add(column("C1", "new comment"));
+        DatabaseMeta current = new DatabaseMeta();
+        current.getTables().add(live);
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        // A comment edit reissues the column definition; on MySQL the table says whether
+        // that column was narrowed to LONGTEXT, and reissuing the wide type would fail.
+        assertThat(events)
+                .filteredOn(e -> e.getObjectType() == ObjectType.COLUMN)
+                .singleElement()
+                .satisfies(e -> assertThat(e.getSourceTable()).isSameAs(live));
     }
 
     @Test

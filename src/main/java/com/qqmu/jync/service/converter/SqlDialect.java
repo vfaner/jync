@@ -129,12 +129,55 @@ public interface SqlDialect {
     /** DDL to add one column to an existing table. */
     String getAddColumnSql(String schema, String table, ColumnMeta column, DatabaseType sourceType);
 
+    /**
+     * {@code ADD COLUMN} for a column of a known source table, so a target with whole-table
+     * constraints (MySQL's row-size budget) can keep using the plan the table was created
+     * with instead of re-mapping the column in isolation.
+     */
+    default String getAddColumnSql(String schema, String table, ColumnMeta column,
+                                   DatabaseType sourceType, TableMeta sourceTable) {
+        return getAddColumnSql(schema, table, column, sourceType);
+    }
+
     /** DDL to widen or otherwise change a column's type or nullability. */
     String getModifyColumnSql(String schema, String table, ColumnMeta column, DatabaseType sourceType);
 
+    /** {@link #getModifyColumnSql(String, String, ColumnMeta, DatabaseType)} with the table. */
+    default String getModifyColumnSql(String schema, String table, ColumnMeta column,
+                                      DatabaseType sourceType, TableMeta sourceTable) {
+        return getModifyColumnSql(schema, table, column, sourceType);
+    }
+
     String getDropColumnSql(String schema, String table, String columnName);
 
+    /**
+     * DDL that sets (or, with a null/blank comment, clears) an existing table's comment.
+     *
+     * <p>Null means the target cannot change a table comment without rebuilding the table,
+     * or the product has no table comments at all; the caller then skips the update instead
+     * of failing the whole structure sync over a cosmetic difference.
+     */
+    default String getAlterTableCommentSql(String schema, String table, String comment) {
+        return null;
+    }
+
     String getCreateIndexSql(IndexMeta index, String schema, String table);
+
+    /**
+     * {@code CREATE INDEX} for an index on a table whose columns may have been narrowed for
+     * the target. Most products accept any column type in a key and ignore the table.
+     *
+     * <p>MySQL is the exception: a column this dialect narrowed to LONGTEXT needs a key
+     * length, and only the table's shape says which columns those are — so the owning table
+     * travels with the index.
+     *
+     * @return the DDL, or {@code null} when this target cannot create the index as the
+     *         source defines it; the caller then skips the index instead of failing.
+     */
+    default String getCreateIndexSql(IndexMeta index, String schema, String table,
+                                     TableMeta sourceTable, DatabaseType sourceType) {
+        return getCreateIndexSql(index, schema, table);
+    }
 
     String getDropIndexSql(IndexMeta index, String schema, String table);
 

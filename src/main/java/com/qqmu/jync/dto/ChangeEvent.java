@@ -1,5 +1,6 @@
 package com.qqmu.jync.dto;
 
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 
@@ -25,6 +26,14 @@ public class ChangeEvent {
 
     /** Payload the sync engine needs to apply the change (TableMeta, ViewMeta, ...). */
     private Object payload;
+
+    /**
+     * The table an INDEX or COLUMN event belongs to. Their DDL is built from the index or
+     * column alone, but MySQL's row-size plan is a property of the whole table: it decides
+     * which columns are LONGTEXT, which the index needs a key length for and which a
+     * reissued column definition must keep. Null for table and other events.
+     */
+    private TableMeta sourceTable;
 
     /**
      * Apply order. Lower runs first: tables before indexes, indexes before views,

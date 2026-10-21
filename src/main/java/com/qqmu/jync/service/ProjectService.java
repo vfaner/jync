@@ -472,6 +472,14 @@ public class ProjectService {
             afterCommit(projectId, "capture-strategy-switch",
                     () -> applyStrategySwitch(saved, to));
         } else {
+            if (cron != null && !cron.isBlank() && !Boolean.TRUE.equals(saved.getEnabled())) {
+                // The most common "cron does not work" report: the schedule was saved on a
+                // stopped project. A saved schedule only runs while the project is started,
+                // so say it plainly instead of leaving the user to wait for a fire.
+                log.info("Project '{}': cron '{}' saved while the project is stopped;"
+                                + " the schedule starts when the project is started",
+                        saved.getName(), cron.trim());
+            }
             // Interval or cron may have changed, so rebuild the trigger.
             afterCommit(saved.getId(), "reschedule", () -> scheduler.reschedule(saved));
         }
@@ -606,6 +614,17 @@ public class ProjectService {
         // button; this is the server-side backstop for a stale page or a direct API call.
         // Bare keys: ApiExceptionHandler returns them as-is and the browser localizes them.
         SyncConfig config = loadConfig(project);
+        // The save path validates the expression, but a config can also arrive by clone, by
+        // a direct database edit, or from an older version that stored it unchecked.
+        // Scheduling runs after commit: an invalid cron there leaves the project enabled
+        // with no job — exactly the "my cron never fires" symptom — so refuse the start.
+        String cron = config.getCronExpression();
+        // A CDC project never gets a Quartz trigger, so a leftover cron must not block it.
+        if (!config.getCaptureStrategyOrDefault().isLogCdc()
+                && cron != null && !cron.isBlank()
+                && !CronExpression.isValidExpression(cron.trim())) {
+            throw new IllegalStateException("error.project.cron.invalid");
+        }
         if (config.hasNoSyncObjects()) {
             throw new IllegalStateException("error.project.no.objects");
         }
@@ -963,6 +982,11 @@ public class ProjectService {
 
     public boolean isScheduled(Long projectId) {
         return scheduler.isScheduled(projectId);
+    }
+
+    /** When the polling job next runs (server zone), or null when it is not scheduled. */
+    public java.time.LocalDateTime nextFireTime(Long projectId) {
+        return scheduler.nextFireTime(projectId);
     }
 
     private Project require(Long projectId) {

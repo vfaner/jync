@@ -60,6 +60,21 @@
                     <dt th:text="#{common.details}">Result</dt>
                     <dd><span class="chip" th:text="${task.lastSyncResult}">result</span></dd>
                 </th:block>
+                <!--/* 下次自动运行：调度是否真的就绪必须在触发前可见。项目未启动时 Quartz
+                       里根本没有这个 job，光看页面和运行中的项目毫无区别，只能等过了时间
+                       才发现没跑。时区随附——cron 按服务器时区求值，服务器在 UTC 时
+                       17:55 会落在本地凌晨。CDC 项目持续消费，没有定时。 */-->
+                <th:block th:unless="${selectedCdc}">
+                    <dt th:text="#{project.nextRun}">Next run</dt>
+                    <dd data-role="next-run">
+                        <span th:if="${nextRunAt != null}"
+                              th:text="${#temporals.format(nextRunAt, 'yyyy-MM-dd HH:mm:ss')}
+                                       + ' (' + ${serverZone} + ')'">2026-10-22 17:55:00</span>
+                        <span th:unless="${nextRunAt != null}" class="muted"
+                              th:text="${project.enabled} ? #{project.nextRun.pending}
+                                       : #{project.nextRun.notStarted}">Not started</span>
+                    </dd>
+                </th:block>
                 <!--/* 锁可见性：持有者 + 租约到期时间。过期的租约标红 —— 持有者已经
                        消失，行还没被回收，管理员可以强制解锁而不必等 TTL。 */-->
                 <th:block th:if="${lockHeld}">

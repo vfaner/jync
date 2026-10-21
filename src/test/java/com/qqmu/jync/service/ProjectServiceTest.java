@@ -813,6 +813,25 @@ class ProjectServiceTest {
     }
 
     @Test
+    void startRefusesAnInvalidStoredCronInsteadOfEnablingAProjectWithNoJob() {
+        Project project = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        // A 5-field Linux cron can reach the row by clone or a direct edit; the start used to
+        // commit the enabled flag and then fail in afterCommit, leaving a "running" project
+        // whose cron never fires.
+        SyncConfig config = new SyncConfig();
+        config.setCronExpression("*/5 * * * *");
+        when(contextFactory.parseConfig(project)).thenReturn(config);
+
+        assertThatThrownBy(() -> service.start(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.cron.invalid");
+        assertThat(project.getEnabled()).isNotEqualTo(Boolean.TRUE);
+        verify(projectRepository, never()).save(any());
+        verify(scheduler, never()).schedule(any());
+    }
+
+    @Test
     void startStillRunsCdcWhenEveryPollingOptionIsOff() {
         Project project = storedProject(1L, false);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));

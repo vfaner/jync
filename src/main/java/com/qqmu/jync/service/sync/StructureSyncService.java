@@ -49,7 +49,15 @@ public class StructureSyncService {
      * per cycle through {@link #retryPendingIndexes}. In-memory by design: a restart loses the
      * queue, and the table then simply runs without that index until re-created or re-detected.
      */
-    private final Map<String, List<IndexMeta>> pendingIndexes = new ConcurrentHashMap<>();
+    private final Map<String, List<PendingIndex>> pendingIndexes = new ConcurrentHashMap<>();
+
+    /**
+     * A queued index plus the table it belongs to. The retry runs in a later cycle with no
+     * structural event in hand, and MySQL needs the table's shape to know which of its
+     * columns became LONGTEXT and therefore need a key length.
+     */
+    private record PendingIndex(IndexMeta index, TableMeta sourceTable) {
+    }
 
     public StructureSyncService(SqlBodyConverter bodyConverter) {
         this.bodyConverter = bodyConverter;
@@ -66,27 +74,33 @@ public class StructureSyncService {
         long projectId = ctx.projectId();
         List<String> recovered = new ArrayList<>();
         DdlExecutor executor = new DdlExecutor(targetConn);
-        Iterator<Map.Entry<String, List<IndexMeta>>> entries =
+        Iterator<Map.Entry<String, List<PendingIndex>>> entries =
                 pendingIndexes.entrySet().iterator();
         while (entries.hasNext()) {
-            Map.Entry<String, List<IndexMeta>> entry = entries.next();
+            Map.Entry<String, List<PendingIndex>> entry = entries.next();
             String sourceTable = tableOfKey(entry.getKey());
             if (projectOfKey(entry.getKey()) != projectId) {
                 continue;
             }
-            Iterator<IndexMeta> pending = entry.getValue().iterator();
+            Iterator<PendingIndex> pending = entry.getValue().iterator();
             while (pending.hasNext()) {
-                IndexMeta index = pending.next();
-                try {
-                    executor.executeIdempotentCreate(ctx.getTargetDialect().getCreateIndexSql(
-                            index, ctx.getTargetSchema(),
-                            ctx.getConfig().targetTableName(sourceTable)));
+                PendingIndex failed = pending.next();
+                String indexSql = ctx.getTargetDialect().getCreateIndexSql(failed.index(),
+                        ctx.getTargetSchema(), ctx.getConfig().targetTableName(sourceTable),
+                        failed.sourceTable(), ctx.getSourceType());
+                if (indexSql == null) {
+                    // Retrying cannot help: the dialect refuses this index by design.
                     pending.remove();
-                    recovered.add("Created previously-failed index " + index.getName() + " on "
-                            + sourceTable);
+                    continue;
+                }
+                try {
+                    executor.executeIdempotentCreate(indexSql);
+                    pending.remove();
+                    recovered.add("Created previously-failed index " + failed.index().getName()
+                            + " on " + sourceTable);
                 } catch (SQLException e) {
                     log.warn("Retry of index {} on {} still failing: {}",
-                            index.getName(), sourceTable, e.getMessage());
+                            failed.index().getName(), sourceTable, e.getMessage());
                 }
             }
             if (entry.getValue().isEmpty()) {
@@ -120,15 +134,19 @@ public class StructureSyncService {
             if (index.getColumns().isEmpty() || index.isUnique()) {
                 continue;
             }
+            String indexSql = ctx.getTargetDialect().getCreateIndexSql(index,
+                    ctx.getTargetSchema(), targetTable, sourceTable, ctx.getSourceType());
+            if (indexSql == null) {
+                continue;
+            }
             try {
-                if (executor.executeIdempotentCreate(ctx.getTargetDialect()
-                        .getCreateIndexSql(index, ctx.getTargetSchema(), targetTable))) {
+                if (executor.executeIdempotentCreate(indexSql)) {
                     created++;
                 }
             } catch (SQLException e) {
                 log.warn("Could not create deferred index {} on {}: {}",
                         index.getName(), targetTable, e.getMessage());
-                queueFailedIndex(ctx.projectId(), sourceTable.getName(), index);
+                queueFailedIndex(ctx.projectId(), sourceTable, index);
             }
         }
         if (created > 0) {
@@ -139,16 +157,16 @@ public class StructureSyncService {
     }
 
     /** Records an index that could not be created with its table, de-duplicated by index name. */
-    private void queueFailedIndex(long projectId, String sourceTable, IndexMeta index) {
-        String key = pendingKey(projectId, sourceTable);
+    private void queueFailedIndex(long projectId, TableMeta sourceTable, IndexMeta index) {
+        String key = pendingKey(projectId, sourceTable.getName());
         pendingIndexes.compute(key, (k, existing) -> {
-            List<IndexMeta> list = existing == null ? new ArrayList<>() : existing;
-            for (IndexMeta queued : list) {
-                if (queued.getName().equalsIgnoreCase(index.getName())) {
+            List<PendingIndex> list = existing == null ? new ArrayList<>() : existing;
+            for (PendingIndex queued : list) {
+                if (queued.index().getName().equalsIgnoreCase(index.getName())) {
                     return list;
                 }
             }
-            list.add(index);
+            list.add(new PendingIndex(index, sourceTable));
             return list;
         });
     }
@@ -260,6 +278,16 @@ public class StructureSyncService {
         List<String> addedColumns = created ? List.of()
                 : addMissingColumns(targetConn, ctx, targetTable, table);
 
+        // A comment edited at the source reaches the target only through an explicit ALTER:
+        // CREATE TABLE ... COMMENT is a no-op once the table exists, and the comment is not
+        // part of any column signature. The detector emits an ALTER event for that case, and
+        // this makes the event's DDL do something. Cosmetic by nature, so a failure here is
+        // reported but must not block data sync (the snapshot would then be withheld and the
+        // same failing ALTER retried forever).
+        if (!created) {
+            applyTableComment(executor, dialect, ctx, targetTable, table);
+        }
+
         // Version-gated companions: sequence + trigger emulating an identity column on
         // pre-12c Oracle. A failure here blocks the table (its autoincrement contract is
         // unfulfilled), so let the SQLException surface to apply()'s failure handling.
@@ -285,16 +313,21 @@ public class StructureSyncService {
                     deferred++;
                     continue;
                 }
+                String indexSql = dialect.getCreateIndexSql(index, ctx.getTargetSchema(),
+                        targetTable, table, ctx.getSourceType());
+                if (indexSql == null) {
+                    // The dialect already explained why; data sync takes priority over it.
+                    continue;
+                }
                 try {
-                    executor.executeIdempotentCreate(
-                            dialect.getCreateIndexSql(index, ctx.getTargetSchema(), targetTable));
+                    executor.executeIdempotentCreate(indexSql);
                     indexCount++;
                 } catch (SQLException e) {
                     // A failed index is a performance problem, not a correctness one, so data
                     // sync proceeds — but queue it for retry instead of giving up permanently.
                     log.warn("Could not create index {} on {}: {}", index.getName(), targetTable,
                             e.getMessage());
-                    queueFailedIndex(ctx.projectId(), table.getName(), index);
+                    queueFailedIndex(ctx.projectId(), table, index);
                     anyQueued = true;
                 }
             }
@@ -340,13 +373,30 @@ public class StructureSyncService {
             // Idempotent: two cycles can race to add the same column, and "already there" is
             // the desired end state just as it is for a table.
             executor.executeIdempotentCreate(dialect.getAddColumnSql(
-                    ctx.getTargetSchema(), targetTable, column, ctx.getSourceType()));
+                    ctx.getTargetSchema(), targetTable, column, ctx.getSourceType(), table));
             runPostColumnDdl(executor, dialect, targetTable, column, ctx);
             added.add(column.getName());
         }
         log.info("Added missing column(s) {} to target table {} (project {})",
                 String.join(", ", added), targetTable, ctx.projectId());
         return added;
+    }
+
+    /** Sets the existing target table's comment to match the source (null/blank clears it). */
+    private void applyTableComment(DdlExecutor executor, SqlDialect dialect, SyncContext ctx,
+                                   String targetTable, TableMeta table) {
+        String sql;
+        try {
+            sql = dialect.getAlterTableCommentSql(ctx.getTargetSchema(), targetTable,
+                    table.getRemarks());
+            if (sql == null) {
+                return;
+            }
+            executor.execute(sql, false);
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not update the comment of target table {}: {}",
+                    targetTable, e.getMessage());
+        }
     }
 
     /** Runs the dialect's ADD/MODIFY companions (pre-12c Oracle identity emulation). */
@@ -366,16 +416,23 @@ public class StructureSyncService {
 
         switch (event.getChangeType()) {
             case CREATE:
+                // The source table travels with the event so a target with a whole-table
+                // constraint (MySQL's row-size budget) keeps the type this table's plan
+                // picked for the column rather than re-mapping it in isolation.
                 executor.executeIdempotentCreate(dialect.getAddColumnSql(
-                        ctx.getTargetSchema(), targetTable, column, ctx.getSourceType()));
+                        ctx.getTargetSchema(), targetTable, column, ctx.getSourceType(),
+                        event.getSourceTable()));
                 runPostColumnDdl(executor, dialect, targetTable, column, ctx);
                 return ApplyOutcome.ok("Added column " + column.getName() + " to " + targetTable);
             case ALTER:
                 if (!dialect.supportsAlterColumnType()) {
                     return ApplyOutcome.skipped("Target dialect cannot alter column types in place");
                 }
+                // A comment-only edit reissues the column definition: re-mapping the source
+                // type here would undo the narrowing and blow the row-size budget.
                 executor.execute(dialect.getModifyColumnSql(
-                        ctx.getTargetSchema(), targetTable, column, ctx.getSourceType()), false);
+                        ctx.getTargetSchema(), targetTable, column, ctx.getSourceType(),
+                        event.getSourceTable()), false);
                 runPostColumnDdl(executor, dialect, targetTable, column, ctx);
                 return ApplyOutcome.ok("Modified column " + column.getName() + " on " + targetTable);
             case DROP:
@@ -404,12 +461,19 @@ public class StructureSyncService {
             return ApplyOutcome.ok("Dropped index " + index.getName());
         }
 
+        String indexSql = dialect.getCreateIndexSql(index, ctx.getTargetSchema(), targetTable,
+                event.getSourceTable(), ctx.getSourceType());
+        if (indexSql == null) {
+            // Checked before the DROP of an ALTER so an unusable definition is not first
+            // dropped and then found impossible to recreate.
+            return ApplyOutcome.skipped("Index " + index.getName()
+                    + " cannot be created on the target; data sync takes priority");
+        }
         if (event.getChangeType() == ChangeType.ALTER) {
             // An index definition cannot be changed in place; drop then recreate.
             executor.execute(dialect.getDropIndexSql(index, ctx.getTargetSchema(), targetTable), true);
         }
-        executor.executeIdempotentCreate(
-                dialect.getCreateIndexSql(index, ctx.getTargetSchema(), targetTable));
+        executor.executeIdempotentCreate(indexSql);
         return ApplyOutcome.ok((event.getChangeType() == ChangeType.ALTER ? "Recreated" : "Created")
                 + " index " + index.getName() + " on " + targetTable);
     }

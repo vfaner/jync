@@ -3,6 +3,7 @@ package com.qqmu.jync.service.converter;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -409,8 +410,9 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         sb.append("CREATE TABLE ").append(qualify(targetSchema, targetTable)).append(" (\n");
 
         List<String> defs = new ArrayList<>();
+        Map<String, String> typeOverrides = createColumnTypeOverrides(table, sourceType);
         for (ColumnMeta col : table.getColumns()) {
-            defs.add("  " + columnDefinition(col, sourceType));
+            defs.add("  " + columnDefinition(col, sourceType, typeOverrides.get(keyOf(col))));
         }
         if (table.hasPrimaryKey()) {
             String pkCols = table.getPrimaryKeys().stream()
@@ -430,14 +432,27 @@ public abstract class AbstractSqlDialect implements SqlDialect {
 
     /** One column's definition inside CREATE TABLE. */
     protected String columnDefinition(ColumnMeta col, DatabaseType sourceType) {
+        return columnDefinition(col, sourceType, null);
+    }
+
+    /**
+     * One column's definition, with an optional target type chosen for the whole table rather
+     * than from the column alone (MySQL's row-size budget is the one user).
+     */
+    protected String columnDefinition(ColumnMeta col, DatabaseType sourceType,
+                                      String typeOverride) {
         StringBuilder sb = new StringBuilder();
         sb.append(quoteIdentifier(col.getName())).append(' ');
 
+        String type;
         if (col.isAutoIncrement() && autoIncrementColumnType(col, sourceType) != null) {
-            sb.append(autoIncrementColumnType(col, sourceType));
+            type = autoIncrementColumnType(col, sourceType);
+        } else if (typeOverride != null) {
+            type = typeOverride;
         } else {
-            sb.append(mapType(col, sourceType));
+            type = mapType(col, sourceType);
         }
+        sb.append(type);
 
         // The auto-increment clause must follow the type IMMEDIATELY. T-SQL rejected the
         // old "type NOT NULL IDENTITY(1,1)" order — IDENTITY has to precede NOT NULL;
@@ -458,6 +473,12 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         }
 
         String def = renderDefaultValue(col);
+        if (def != null && !defaultClauseAllowed(type)) {
+            // Losing a default is recoverable; a CREATE TABLE the target rejects is not.
+            log.debug("Skipping the default of column {}: {} does not accept one",
+                    col.getName(), type);
+            def = null;
+        }
         String defaultClause = def == null ? null : " DEFAULT " + def;
 
         // Oracle's column grammar is name type [DEFAULT expr] [inline constraint ...]: a
@@ -478,7 +499,38 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                 sb.append(defaultClause);
             }
         }
+        sb.append(columnCommentClause(col));
         return sb.toString();
+    }
+
+    /**
+     * Whether a {@code DEFAULT} clause is legal on this already-rendered target type.
+     *
+     * <p>Only MySQL needs this: it rejects a default on TEXT/BLOB (error 1101 on 5.7; 8.0
+     * takes an expression default only), which a row-size narrowing can turn a column into.
+     * Every other product accepts a default on its LOB types.
+     */
+    protected boolean defaultClauseAllowed(String targetType) {
+        return true;
+    }
+
+    /**
+     * Target column types chosen for the whole table instead of per column, keyed by
+     * {@link #keyOf(ColumnMeta)}. Empty when the target has no whole-table constraint.
+     */
+    protected Map<String, String> createColumnTypeOverrides(TableMeta table,
+                                                            DatabaseType sourceType) {
+        return java.util.Collections.emptyMap();
+    }
+
+    /** Case-folded key used by {@link #createColumnTypeOverrides}. */
+    protected static String keyOf(ColumnMeta col) {
+        return col.getName() == null ? "" : col.getName().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    /** Trailing comment clause of a column definition; empty for targets without one. */
+    protected String columnCommentClause(ColumnMeta col) {
+        return "";
     }
 
     /**

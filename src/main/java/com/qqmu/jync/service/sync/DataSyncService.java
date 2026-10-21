@@ -1038,7 +1038,6 @@ public class DataSyncService {
             // One map for every row: a million-row load would otherwise allocate a million.
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                long fetched = System.nanoTime();
                 JdbcRowMapper.readRowInto(rs, columns, jdbcTypes, typeNames,
                         ctx.getSourceType(), row);
                 if (sink != null) {
@@ -1059,7 +1058,7 @@ public class DataSyncService {
                     executeBatch(upsert, targetConn, stats, ctx, throughput);
                     inBatch = 0;
                 }
-                throughput.recordWrite(System.nanoTime() - fetched);
+                throughput.recordWrite(System.nanoTime() - read);
                 mark = System.nanoTime();
             }
             if (inBatch > 0) {
@@ -1115,7 +1114,6 @@ public class DataSyncService {
             // Same reuse as the native writer: one row map for the whole pass.
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                long fetched = System.nanoTime();
                 JdbcRowMapper.readRowInto(rs, columns, jdbcTypes, typeNames,
                         ctx.getSourceType(), row);
                 if (sink != null) {
@@ -1170,7 +1168,7 @@ public class DataSyncService {
                     ctx.requireLease();
                     sinceCommit = 0;
                 }
-                throughput.recordWrite(System.nanoTime() - fetched);
+                throughput.recordWrite(System.nanoTime() - read);
                 mark = System.nanoTime();
             }
         }
@@ -1762,10 +1760,15 @@ public class DataSyncService {
         return types;
     }
 
-    /** SQLState 23xxx is the integrity-constraint class; 23505/23000 are unique violations. */
+    /**
+     * Only a unique-key conflict counts: 23505 (SQL standard, DB2, H2, PostgreSQL) and 23000
+     * (MySQL 1062, SQL Server 2627, Oracle ORA-00001). The rest of SQLState class 23 —
+     * 23502 NOT NULL, 23503 foreign key, 23514 CHECK — is a real integrity failure that must
+     * surface: the retried UPDATE would match no row and the row would vanish silently.
+     */
     private boolean isUniqueViolation(SQLException e) {
         String state = e.getSQLState();
-        if (state != null && state.startsWith("23")) {
+        if (state != null && ("23505".equals(state) || "23000".equals(state))) {
             return true;
         }
         String message = e.getMessage();
@@ -1802,6 +1805,13 @@ public class DataSyncService {
                               SyncContext ctx, ThroughputMeter throughput) throws SQLException {
         try {
             int[] counts = ps.executeBatch();
+            // A rewritten batch (MySQL with rewriteBatchedStatements) answers SUCCESS_NO_INFO
+            // for every row once ANY row changed, so counting row by row would report the
+            // whole batch. ROW_COUNT() still knows the statement's affected-rows total; it
+            // must be read before the commit resets it.
+            long affected = isRewrittenBatch(counts) && mysqlFamily(ctx)
+                    ? readAffectedRowCount(conn) : -1L;
+            int rewrittenChanged = rewrittenBatchChangedRows(counts, affected);
             throughput.recordBatch();
             commitAndRecord(conn, throughput);
             // The batch is a commit boundary and hence a safe renewal point: the rows it holds
@@ -1809,6 +1819,10 @@ public class DataSyncService {
             ctx.requireLease();
             boolean classify = ctx.getTargetType() != null
                     && ctx.getTargetType().upsertCountsDistinguishInsertFromUpdate();
+            if (rewrittenChanged >= 0) {
+                stats.unclassified += rewrittenChanged;
+                return;
+            }
             for (int count : counts) {
                 if (count == 0) {
                     // The row was already present with these exact values: nothing moved.
@@ -1837,6 +1851,57 @@ public class DataSyncService {
                     + (failedIndex >= 0 ? " at row " + (failedIndex + 1) + " of the batch" : "")
                     + ": " + e.getMessage(), e.getSQLState(), e.getErrorCode(), e);
         }
+    }
+
+    /** True for a MySQL-protocol target, whose rewritten batches hide per-row counts. */
+    private static boolean mysqlFamily(SyncContext ctx) {
+        return ctx.getTargetType() != null
+                && ctx.getTargetType().getFamily() == com.qqmu.jync.model.DatabaseType.DialectFamily.MYSQL;
+    }
+
+    /**
+     * Affected rows of the statement just executed on this connection, via MySQL's
+     * {@code ROW_COUNT()}. Called before the commit, which would reset it. {@code -1} when the
+     * question cannot be answered (a non-MySQL driver, a proxy, a failure), in which case the
+     * caller keeps the conservative per-row accounting.
+     */
+    private long readAffectedRowCount(Connection conn) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT ROW_COUNT()")) {
+            return rs.next() ? rs.getLong(1) : -1L;
+        } catch (SQLException e) {
+            log.debug("ROW_COUNT() unavailable after a batched write: {}", e.getMessage());
+            return -1L;
+        }
+    }
+
+    /**
+     * Changed rows of a batch the driver compressed into one statement, bounded by the
+     * statement's affected rows; {@code -1} when the counts are ordinary per-row counts (or
+     * the total is unavailable) and the caller should classify row by row.
+     *
+     * <p>MySQL counts an inserted row as 1 and an updated row as 2, so the affected-rows total
+     * is an upper bound of the changed rows and is capped by the batch size. It is never the
+     * full batch unless the whole batch really moved.
+     */
+    static int rewrittenBatchChangedRows(int[] counts, long affectedRows) {
+        if (affectedRows < 0 || !isRewrittenBatch(counts)) {
+            return -1;
+        }
+        return (int) Math.min(counts.length, affectedRows);
+    }
+
+    /** True when every count is {@link Statement#SUCCESS_NO_INFO}: a compressed batch. */
+    private static boolean isRewrittenBatch(int[] counts) {
+        if (counts == null || counts.length == 0) {
+            return false;
+        }
+        for (int count : counts) {
+            if (count != Statement.SUCCESS_NO_INFO) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

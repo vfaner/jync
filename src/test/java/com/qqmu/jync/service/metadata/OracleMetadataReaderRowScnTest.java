@@ -54,6 +54,11 @@ class OracleMetadataReaderRowScnTest {
         when(md.getImportedKeys(any(), any(), any())).thenReturn(empty);
         Connection conn = mock(Connection.class);
         when(conn.getMetaData()).thenReturn(md);
+        // The comment dictionary is read for every product; with no rows it changes
+        // nothing, but the reader must still get a statement it can execute.
+        PreparedStatement noRows = mock(PreparedStatement.class);
+        when(noRows.executeQuery()).thenReturn(empty);
+        when(conn.prepareStatement(anyString())).thenReturn(noRows);
         return conn;
     }
 
@@ -99,7 +104,8 @@ class OracleMetadataReaderRowScnTest {
         TableMeta table = reader.readTable(conn, "HR", "EMP");
 
         assertThat(table.getRowLevelScn()).isNull();
-        verify(conn, never()).prepareStatement(anyString());
+        // Comments are still read from the (compatible) dictionary; the SCN probe is not.
+        verify(conn, never()).prepareStatement(contains("DEPENDENCIES FROM ALL_TABLES"));
     }
 
     @Test

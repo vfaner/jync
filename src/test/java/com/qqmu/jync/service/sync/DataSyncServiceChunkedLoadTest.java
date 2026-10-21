@@ -253,6 +253,100 @@ class DataSyncServiceChunkedLoadTest {
                 .anyMatch(line -> line.contains("commit=") && !line.contains("commit=0%"));
     }
 
+    /**
+     * Row mapping ({@code ResultSet} → map) belongs to the read share. It used to be charged
+     * to the write share as well, because the write window started at the timestamp taken
+     * before the mapping instead of after it: with an expensive mapping (wide tables, LOBs)
+     * that halved the apparent read share and inflated write, understating the commit
+     * remainder the customer is asked to read.
+     */
+    @Test
+    void theThroughputLineDoesNotChargeRowMappingTimeToTheWriteShare() throws SQLException {
+        createItems(1000);
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(ThroughputMeter.class);
+        try {
+            DataSyncService.TableSyncResult result = service(2000).syncTable(
+                    slowMapping(source), target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+            assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        } finally {
+            LogCapture.detach(ThroughputMeter.class, logs);
+        }
+
+        String line = LogCapture.messagesAt(Level.INFO, logs).stream()
+                .filter(l -> l.contains("read="))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no throughput line: " + logs.list));
+        int readPct = Integer.parseInt(line.replaceAll(".*read=(\\d+)%.*", "$1"));
+        assertThat(readPct)
+                .as("mapping is read work; the write share is cleanse+bind+addBatch only: %s", line)
+                .isGreaterThanOrEqualTo(75);
+    }
+
+    /**
+     * Delegates everything to the real source, but makes every fifth column read take 3ms —
+     * the mapping cost of a wide or LOB-heavy table, without a wide table in the fixture.
+     */
+    private static Connection slowMapping(Connection real) {
+        java.util.concurrent.atomic.AtomicInteger calls =
+                new java.util.concurrent.atomic.AtomicInteger();
+        return (Connection) java.lang.reflect.Proxy.newProxyInstance(
+                DataSyncServiceChunkedLoadTest.class.getClassLoader(),
+                new Class<?>[] {Connection.class},
+                (proxy, method, args) -> {
+                    Object result = invoke(real, method, args);
+                    if (result instanceof java.sql.PreparedStatement ps) {
+                        return slowStatement(ps, calls, java.sql.PreparedStatement.class);
+                    }
+                    if (result instanceof Statement statement) {
+                        return slowStatement(statement, calls, Statement.class);
+                    }
+                    return result;
+                });
+    }
+
+    private static Statement slowStatement(Statement real,
+                                           java.util.concurrent.atomic.AtomicInteger calls,
+                                           Class<?> iface) {
+        return (Statement) java.lang.reflect.Proxy.newProxyInstance(
+                DataSyncServiceChunkedLoadTest.class.getClassLoader(),
+                new Class<?>[] {iface},
+                (proxy, method, args) -> {
+                    Object result = invoke(real, method, args);
+                    if (result instanceof ResultSet rs && "executeQuery".equals(method.getName())) {
+                        return slowResultSet(rs, calls);
+                    }
+                    return result;
+                });
+    }
+
+    private static ResultSet slowResultSet(ResultSet real,
+                                           java.util.concurrent.atomic.AtomicInteger calls) {
+        return (ResultSet) java.lang.reflect.Proxy.newProxyInstance(
+                DataSyncServiceChunkedLoadTest.class.getClassLoader(),
+                new Class<?>[] {ResultSet.class},
+                (proxy, method, args) -> {
+                    if (("getObject".equals(method.getName())
+                            || "getString".equals(method.getName()))
+                            && calls.incrementAndGet() % 5 == 0) {
+                        try {
+                            Thread.sleep(3L);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                    return invoke(real, method, args);
+                });
+    }
+
+    private static Object invoke(Object real, java.lang.reflect.Method method, Object[] args)
+            throws Throwable {
+        try {
+            return method.invoke(real, args);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw e.getCause();
+        }
+    }
+
     /** Delegates everything to the real target, but makes every COMMIT take {@code millis}. */
     private static Connection slowCommit(Connection real) {
         return (Connection) java.lang.reflect.Proxy.newProxyInstance(

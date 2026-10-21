@@ -78,10 +78,65 @@ public class OracleMetadataReader extends GenericMetadataReader {
     @Override
     public TableMeta readTable(Connection conn, String schema, String tableName) throws SQLException {
         TableMeta table = super.readTable(conn, schema, tableName);
-        if (table != null && isOracleProduct(conn)) {
-            table.setRowLevelScn(probeRowDependencies(conn, schema, tableName));
+        if (table != null) {
+            // The dictionary is the only reliable source of comments here: ojdbc returns
+            // REMARKS as null unless the connection was opened with remarksReporting=true,
+            // and 达梦/崖山 follow the same default.
+            readComments(conn, schema, tableName, table);
+            if (isOracleProduct(conn)) {
+                table.setRowLevelScn(probeRowDependencies(conn, schema, tableName));
+            }
         }
         return table;
+    }
+
+    /**
+     * Fills table and column comments from {@code ALL_TAB_COMMENTS} / {@code ALL_COL_COMMENTS},
+     * which all three Oracle-family products implement. A comment found here wins over the
+     * driver's REMARKS; a missing or unreadable dictionary leaves the existing values alone
+     * and never fails the metadata read.
+     */
+    void readComments(Connection conn, String schema, String tableName, TableMeta table) {
+        String tableSql = "SELECT COMMENTS FROM ALL_TAB_COMMENTS "
+                + "WHERE OWNER = NVL(?, USER) AND TABLE_NAME = ?";
+        try (PreparedStatement ps = conn.prepareStatement(tableSql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, upperOrNull(schema));
+            ps.setString(2, tableName.toUpperCase(Locale.ROOT));
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String comment = rs.getString(1);
+                    if (comment != null && !comment.isBlank()) {
+                        table.setRemarks(comment);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("ALL_TAB_COMMENTS read failed for {}: {}", tableName, e.getMessage());
+        }
+
+        if (table.getColumns() == null || table.getColumns().isEmpty()) {
+            return;
+        }
+        String columnSql = "SELECT COLUMN_NAME, COMMENTS FROM ALL_COL_COMMENTS "
+                + "WHERE OWNER = NVL(?, USER) AND TABLE_NAME = ?";
+        try (PreparedStatement ps = conn.prepareStatement(columnSql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, upperOrNull(schema));
+            ps.setString(2, tableName.toUpperCase(Locale.ROOT));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String name = rs.getString(1);
+                    String comment = rs.getString(2);
+                    if (name == null || comment == null || comment.isBlank()) {
+                        continue;
+                    }
+                    table.column(name).ifPresent(col -> col.setRemarks(comment));
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("ALL_COL_COMMENTS read failed for {}: {}", tableName, e.getMessage());
+        }
     }
 
     private boolean isOracleProduct(Connection conn) {

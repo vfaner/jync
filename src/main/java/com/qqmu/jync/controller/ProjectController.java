@@ -242,6 +242,11 @@ public class ProjectController {
         // lets the page show chunk progress and the resume promise per table.
         model.addAttribute("fullLoadProgress", projectService.findFullLoadProgress(id));
         model.addAttribute("scheduled", projectService.isScheduled(id));
+        // "When will it actually run?" has to be visible before the time comes: a stopped
+        // project and a project whose job failed to register look identical otherwise, and
+        // the fire time silently passes. Null when nothing is scheduled.
+        model.addAttribute("nextRunAt", projectService.nextFireTime(id));
+        model.addAttribute("serverZone", java.time.ZoneId.systemDefault().getId());
 
         // --- capture-strategy cards (C1) ---------------------------------------------------
         // The CDC card exists only for a strictly-MySQL or Oracle source; every other type

@@ -1,6 +1,9 @@
 package com.qqmu.jync.service.task;
 
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 
 import org.quartz.CronScheduleBuilder;
@@ -108,6 +111,10 @@ public class SyncScheduler {
                 .withIdentity(jobKey(projectId))
                 .withDescription("Sync project " + project.getName())
                 .usingJobData(SyncJob.PROJECT_ID, projectId)
+                // The run log names the project, and the job must carry that name itself:
+                // the row may already be gone by the time a fire runs.
+                .usingJobData(SyncJob.PROJECT_NAME,
+                        project.getName() == null ? "" : project.getName())
                 .storeDurably()
                 .build();
         Trigger trigger = buildTrigger(projectId, task, config);
@@ -119,8 +126,11 @@ public class SyncScheduler {
             }
             scheduler.scheduleJob(job, trigger);
 
-            log.info("Scheduled sync for project '{}' ({})", project.getName(),
-                    describeTrigger(task, config));
+            // The computed fire time and the zone are the two facts that explain "my cron
+            // did not run when I expected": Quartz evaluates the expression in the JVM's
+            // zone, so a server left on UTC silently shifts a 02:00 schedule by 8 hours.
+            log.info("Scheduled sync for project '{}' ({}), next fire: {}", project.getName(),
+                    describeTrigger(task, config), describeNextFire(trigger));
         } catch (SchedulerException e) {
             if (oldJob != null) {
                 try {
@@ -142,9 +152,18 @@ public class SyncScheduler {
      * Builds the trigger: a cron expression when one is configured, otherwise a fixed
      * interval.
      *
-     * <p>Both use a misfire policy that discards missed fires rather than replaying them. For
-     * a polling sync, catching up on a hundred skipped 2-second fires would be pure waste —
-     * the next single poll already sees everything that accumulated.
+     * <p>The two misfire policies differ on purpose:
+     *
+     * <ul>
+     *   <li><b>Interval</b> discards missed fires. Catching up on a hundred skipped 2-second
+     *       polls would be pure waste — the next single poll already sees everything that
+     *       accumulated.</li>
+     *   <li><b>Cron</b> fires the missed run once as soon as a worker is free. The fire time
+     *       passes while the scheduler is paused, every thread is busy with a long cycle, or
+     *       the machine is overloaded; discarding it then means a once-a-day schedule
+     *       silently skips a whole day — the reported "到时间不生效". A cron the user set is
+     *       a promise to run, not a polling hint.</li>
+     * </ul>
      */
     private Trigger buildTrigger(Long projectId, SyncTask task, SyncConfig config) {
         String cron = config.getCronExpression() != null && !config.getCronExpression().isBlank()
@@ -157,7 +176,7 @@ public class SyncScheduler {
 
         if (cron != null && !cron.isBlank()) {
             return builder.withSchedule(CronScheduleBuilder.cronSchedule(cron.trim())
-                    .withMisfireHandlingInstructionDoNothing()).build();
+                    .withMisfireHandlingInstructionFireAndProceed()).build();
         }
 
         long intervalMs = config.getPollIntervalMs() != null && config.getPollIntervalMs() > 0
@@ -171,6 +190,22 @@ public class SyncScheduler {
                 .withIntervalInMilliseconds(clamped)
                 .repeatForever()
                 .withMisfireHandlingInstructionNextWithRemainingCount()).build();
+    }
+
+    /**
+     * The trigger's first fire time in the JVM's time zone. A trigger with no next fire time
+     * is a trigger that will never run — worth seeing in the log rather than discovering by
+     * waiting.
+     */
+    private static String describeNextFire(Trigger trigger) {
+        Date next = trigger.getNextFireTime();
+        if (next == null) {
+            return "none";
+        }
+        return DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                .withZone(ZoneId.systemDefault())
+                .format(next.toInstant())
+                + " (" + ZoneId.systemDefault().getId() + ")";
     }
 
     private String describeTrigger(SyncTask task, SyncConfig config) {
@@ -204,6 +239,26 @@ public class SyncScheduler {
             scheduler.deleteJob(jobKey(projectId));   // jobKey/group 沿用既有工具;没有 job 也无害
         } catch (SchedulerException e) {
             log.warn("Failed to remove polling job for project {}: {}", projectId, e.getMessage());
+        }
+    }
+
+    /**
+     * When this project's polling job next runs, in the JVM's zone, or null when it is not
+     * scheduled. Read by the project page: a schedule whose next fire is invisible cannot be
+     * checked before the time it was supposed to run.
+     */
+    public java.time.LocalDateTime nextFireTime(Long projectId) {
+        try {
+            Trigger trigger = scheduler.getTrigger(triggerKey(projectId));
+            if (trigger == null || trigger.getNextFireTime() == null) {
+                return null;
+            }
+            return java.time.LocalDateTime.ofInstant(trigger.getNextFireTime().toInstant(),
+                    ZoneId.systemDefault());
+        } catch (SchedulerException e) {
+            log.warn("Could not read the next fire time for project {}: {}",
+                    projectId, e.getMessage());
+            return null;
         }
     }
 

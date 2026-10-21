@@ -217,10 +217,15 @@ public final class CdcEventApplier {
         }
     }
 
-    /** SQLState 23xxx is the integrity-constraint class; 23505/23000 are unique violations. */
+    /**
+     * Only a unique-key conflict counts: 23505 (SQL standard, DB2, H2, PostgreSQL) and 23000
+     * (MySQL 1062, SQL Server 2627, Oracle ORA-00001). The rest of SQLState class 23 —
+     * 23502 NOT NULL, 23503 foreign key, 23514 CHECK — is a real integrity failure that must
+     * surface: the retried UPDATE would match no row and the row would vanish silently.
+     */
     private static boolean isUniqueViolation(SQLException e) {
         String state = e.getSQLState();
-        if (state != null && state.startsWith("23")) {
+        if (state != null && ("23505".equals(state) || "23000".equals(state))) {
             return true;
         }
         String message = e.getMessage();
