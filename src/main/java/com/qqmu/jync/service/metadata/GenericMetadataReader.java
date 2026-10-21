@@ -133,6 +133,18 @@ public class GenericMetadataReader implements MetadataReader {
 
     @Override
     public TableMeta readTable(Connection conn, String schema, String tableName) throws SQLException {
+        return readTable(conn, schema, tableName, true);
+    }
+
+    /**
+     * The table definition.
+     *
+     * @param includeDetail false skips the index and foreign-key dictionaries, which only
+     *                      structure change detection consumes. Columns, the primary key,
+     *                      autoincrement enrichment and the row-level probe are always read.
+     */
+    protected TableMeta readTable(Connection conn, String schema, String tableName,
+                                  boolean includeDetail) throws SQLException {
         DatabaseMetaData md = conn.getMetaData();
         TableMeta table = new TableMeta();
         table.setName(tableName);
@@ -214,8 +226,10 @@ public class GenericMetadataReader implements MetadataReader {
         // 11g sequence+trigger emulation, or identity views the driver misreports).
         enrichAutoIncrementColumns(conn, schema, table);
 
-        table.setIndexes(readIndexes(conn, schema, tableName, pkUpper));
-        table.setForeignKeys(readForeignKeys(conn, schema, tableName));
+        if (includeDetail) {
+            table.setIndexes(readIndexes(conn, schema, tableName, pkUpper));
+            table.setForeignKeys(readForeignKeys(conn, schema, tableName));
+        }
         return table;
     }
 
@@ -411,6 +425,23 @@ public class GenericMetadataReader implements MetadataReader {
     public DatabaseMeta readAll(Connection conn, String schema,
                                 List<String> tables, List<String> views, List<String> procedures,
                                 boolean includeViews, boolean includeProcedures) throws SQLException {
+        return readAll(conn, schema, tables, views, procedures, includeViews, includeProcedures,
+                true);
+    }
+
+    @Override
+    public DatabaseMeta readAllForData(Connection conn, String schema,
+                                       List<String> tables, List<String> views,
+                                       List<String> procedures, boolean includeViews,
+                                       boolean includeProcedures) throws SQLException {
+        return readAll(conn, schema, tables, views, procedures, includeViews, includeProcedures,
+                false);
+    }
+
+    private DatabaseMeta readAll(Connection conn, String schema,
+                                 List<String> tables, List<String> views, List<String> procedures,
+                                 boolean includeViews, boolean includeProcedures,
+                                 boolean includeTableDetail) throws SQLException {
         DatabaseMeta meta = new DatabaseMeta();
         meta.setSchema(schema);
 
@@ -419,7 +450,7 @@ public class GenericMetadataReader implements MetadataReader {
         List<String> tableNames = tables != null ? tables : listTableNames(conn, schema);
         for (String name : tableNames) {
             try {
-                meta.getTables().add(readTable(conn, schema, name));
+                meta.getTables().add(readTable(conn, schema, name, includeTableDetail));
             } catch (SQLException e) {
                 // One unreadable table (e.g. permissions) must not abort the whole pass.
                 // Record it as unreadable (not absent): it demonstrably exists, so the change

@@ -76,13 +76,19 @@ public class OracleMetadataReader extends GenericMetadataReader {
      * unreadable dictionary must not fail the whole metadata read.
      */
     @Override
-    public TableMeta readTable(Connection conn, String schema, String tableName) throws SQLException {
-        TableMeta table = super.readTable(conn, schema, tableName);
+    protected TableMeta readTable(Connection conn, String schema, String tableName,
+                                  boolean includeDetail) throws SQLException {
+        TableMeta table = super.readTable(conn, schema, tableName, includeDetail);
         if (table != null) {
-            // The dictionary is the only reliable source of comments here: ojdbc returns
-            // REMARKS as null unless the connection was opened with remarksReporting=true,
-            // and 达梦/崖山 follow the same default.
-            readComments(conn, schema, tableName, table);
+            if (includeDetail) {
+                // The dictionary is the only reliable source of comments here: ojdbc returns
+                // REMARKS as null unless the connection was opened with remarksReporting=true,
+                // and 达梦/崖山 follow the same default. Comments feed only the structural
+                // diff, so the reduced data read skips both queries.
+                readComments(conn, schema, tableName, table);
+            }
+            // The row-level probe stays in both modes: CursorStrategyResolver chooses the SCN
+            // cursor strategy from it, and the data path runs with structure sync off too.
             if (isOracleProduct(conn)) {
                 table.setRowLevelScn(probeRowDependencies(conn, schema, tableName));
             }

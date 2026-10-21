@@ -213,9 +213,17 @@ public class SyncEngine {
         List<String> procs = selection(ctx.getConfig().getProcedures(),
                 ctx.getConfig().isObjectSelectionExplicit());
 
-        DatabaseMeta meta = ctx.getSourceReader().readAll(sourceConn, ctx.getSourceSchema(),
-                tables, views, procs,
-                ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures());
+        // Structure sync off means change detection never runs, so the index, foreign-key and
+        // comment dictionaries have no consumer this cycle: skip them rather than fetch and
+        // discard them on every poll. Columns, the primary key and the cursor probes are still
+        // read — the data phase needs those.
+        DatabaseMeta meta = ctx.getConfig().isSyncStructure()
+                ? ctx.getSourceReader().readAll(sourceConn, ctx.getSourceSchema(),
+                        tables, views, procs,
+                        ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures())
+                : ctx.getSourceReader().readAllForData(sourceConn, ctx.getSourceSchema(),
+                        tables, views, procs,
+                        ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures());
 
         // Row estimates decide whether full comparison is affordable, so collect them here
         // while the source connection is already open.
@@ -419,7 +427,8 @@ public class SyncEngine {
      *
      * @return true on success (table was there or was just created); false on failure.
      */
-    private boolean ensureTargetTableExists(TableMeta table, Connection targetConn,
+    private boolean ensureTargetTableExists(TableMeta table, Connection sourceConn,
+                                            Connection targetConn,
                                             SyncContext ctx, SyncResult result,
                                             Set<String> knownTargetTables) {
         String targetTable = ctx.getConfig().targetTableName(table.getName());
@@ -427,6 +436,7 @@ public class SyncEngine {
             // 名字在清单里只证明"有这张表"，不证明形状对：手工预建的表可能缺列或类型不对。
             return verifyShapeIfNeeded(table, targetConn, ctx, result, targetTable);
         }
+        table = completeDefinitionForCreate(table, sourceConn, ctx);
         ChangeEvent createEvent = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,
                 table.getName(), "Auto-created before data sync (target table missing)", table);
         StructureSyncService.ApplyOutcome outcome =
@@ -466,6 +476,31 @@ public class SyncEngine {
             knownTargetTables.add(targetTable.toUpperCase());
         }
         return true;
+    }
+
+    /**
+     * The definition handed to an auto-CREATE.
+     *
+     * <p>A structure-off cycle reads tables without their index, foreign-key and comment
+     * detail; building the target from that shape would silently create the table without the
+     * indexes and comments structure sync normally adds — and snapshot it as converged. Re-read
+     * the one table that is actually about to be created (rare: only when the target table has
+     * vanished), so the CREATE is identical to what structure sync would have issued.
+     */
+    TableMeta completeDefinitionForCreate(TableMeta table, Connection sourceConn,
+                                          SyncContext ctx) {
+        if (ctx.getConfig().isSyncStructure()) {
+            return table;
+        }
+        try {
+            TableMeta full = ctx.getSourceReader().readTable(sourceConn, ctx.getSourceSchema(),
+                    table.getName());
+            return full != null ? full : table;
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not re-read the full definition of '{}'; creating it from the"
+                    + " reduced metadata: {}", table.getName(), e.getMessage());
+            return table;
+        }
     }
 
     /**
@@ -690,7 +725,8 @@ public class SyncEngine {
 
         // 目标表可能被手动删除了，或者快照与实际状态不同步。
         // 在开始数据同步前确认一下，缺失就用源表结构建一张，避免后续 upsert 整批失败。
-        if (!ensureTargetTableExists(table, targetConn, ctx, result, knownTargetTables)) {
+        if (!ensureTargetTableExists(table, sourceConn, targetConn, ctx, result,
+                knownTargetTables)) {
             return;
         }
 

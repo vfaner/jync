@@ -112,6 +112,9 @@ class SyncEngineSnapshotGuardTest {
         MetadataReader reader = mock(MetadataReader.class);
         when(reader.readAll(any(), any(), any(), any(), any(), eq(false), eq(false)))
                 .thenReturn(meta);
+        // Structure sync is off in this fixture, so the engine asks for the reduced read.
+        when(reader.readAllForData(any(), any(), any(), any(), any(), eq(false), eq(false)))
+                .thenReturn(meta);
         when(reader.estimateRowCount(any(), any(), anyString())).thenReturn(0L);
 
         // 目标端 reader：syncData 现在每周期先 listTableNames 一次，命中的表跳过 CREATE。

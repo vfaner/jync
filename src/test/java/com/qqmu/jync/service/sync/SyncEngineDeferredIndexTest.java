@@ -95,6 +95,9 @@ class SyncEngineDeferredIndexTest {
         meta.setTables(List.of(orders));
         when(sourceReader.readAll(any(), any(), any(), any(), any(), eq(false), eq(false)))
                 .thenReturn(meta);
+        // Structure sync is off in this fixture, so the engine asks for the reduced read.
+        when(sourceReader.readAllForData(any(), any(), any(), any(), any(), eq(false), eq(false)))
+                .thenReturn(meta);
         when(sourceReader.estimateRowCount(any(), any(), anyString())).thenReturn(0L);
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
 

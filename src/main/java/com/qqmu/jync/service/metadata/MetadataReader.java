@@ -50,6 +50,26 @@ public interface MetadataReader {
                          boolean includeViews, boolean includeProcedures) throws SQLException;
 
     /**
+     * The same selection as {@link #readAll}, without the detail only structure sync consumes:
+     * the index and foreign-key dictionaries and the product's comment dictionaries. Columns,
+     * the primary key, autoincrement enrichment and the row-level SCN probe are always read —
+     * the data path needs all four.
+     *
+     * <p>Used by cycles that have structure sync switched off, where change detection does not
+     * run and those dictionaries would be fetched and then thrown away: two to four extra
+     * dictionary round trips per table on every poll.
+     *
+     * <p>The default implementation delegates to the full read, so a reader that cannot split
+     * the two stays correct — only slower.
+     */
+    default DatabaseMeta readAllForData(Connection conn, String schema,
+                                        List<String> tables, List<String> views,
+                                        List<String> procedures, boolean includeViews,
+                                        boolean includeProcedures) throws SQLException {
+        return readAll(conn, schema, tables, views, procedures, includeViews, includeProcedures);
+    }
+
+    /**
      * The schema to use when the user left it blank — usually the connection user or the
      * current catalog, depending on the product.
      */

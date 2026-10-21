@@ -70,6 +70,8 @@ class SyncEngineObjectSelectionTest {
         when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
         when(reader.readAll(any(), any(), any(), any(), any(), anyBoolean(), anyBoolean()))
                 .thenReturn(new DatabaseMeta());
+        when(reader.readAllForData(any(), any(), any(), any(), any(), anyBoolean(), anyBoolean()))
+                .thenReturn(new DatabaseMeta());
         // Un-stubbed List returns are null here, and the engine iterates them.
         when(structureSync.retryPendingIndexes(any(), any())).thenReturn(List.of());
         when(structureSync.sortByDependency(any())).thenReturn(List.of());
@@ -117,7 +119,7 @@ class SyncEngineObjectSelectionTest {
 
         engine.runCycle(ctx);
 
-        verify(reader).readAll(any(), any(),
+        verify(reader).readAllForData(any(), any(),
                 argThat(l -> l != null && l.isEmpty()),
                 argThat(l -> l != null && l.isEmpty()),
                 argThat(l -> l != null && l.isEmpty()),
@@ -128,7 +130,7 @@ class SyncEngineObjectSelectionTest {
     void legacyEmptySelectionStillReadsEveryObject() throws Exception {
         engine.runCycle(ctx());
 
-        verify(reader).readAll(any(), any(),
+        verify(reader).readAllForData(any(), any(),
                 isNull(), isNull(), isNull(), anyBoolean(), anyBoolean());
     }
 
