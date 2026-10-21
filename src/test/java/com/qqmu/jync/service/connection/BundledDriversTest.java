@@ -121,4 +121,15 @@ class BundledDriversTest {
         // 覆盖成一个同样不在 classpath 的类,仍然需要 jar
         assertTrue(DriverPresence.externalJarRequired(DatabaseType.GBASE, "com.example.X"));
     }
+
+    @Test
+    @DisplayName("内置预设覆盖成 classpath 上不存在的驱动类时,必须要求外部 jar")
+    void overrideOnBundledPresetStillNeedsAJar() {
+        // resolveDriverClass 优先返回 customDriver:预设驱动在 classpath 上并不能替覆盖类加载。
+        // 之前这里回退到预设类判断,保存可以过、连接时才报 error.driver.absent。
+        assertTrue(DriverPresence.externalJarRequired(
+                DatabaseType.MYSQL, "com.example.CustomMysqlDriver"));
+        assertTrue(DriverPresence.externalJarRequired(
+                DatabaseType.GAUSSDB, "com.huawei.gauss200.jdbc.Driver"));
+    }
 }

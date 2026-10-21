@@ -18,18 +18,23 @@ public final class DriverPresence {
     }
 
     /**
-     * Whether a connection of {@code type} can only work with a user-supplied jar: the preset
-     * driver is not on the classpath, and the driver class was not overridden to one that is.
-     * CUSTOM never qualifies — its URL/driver/jar are validated as a package elsewhere.
+     * Whether a connection of {@code type} can only work with a user-supplied jar.
+     *
+     * <p>The class that will actually be loaded is the override when one is given, because
+     * {@code DataSourceManager.resolveDriverClass} prefers it; the preset class is only the
+     * fallback. Judging by the preset class here let a save through whenever the preset was
+     * bundled, even though the jar carrying the overridden class was missing — the failure
+     * then surfaced at connect time as {@code error.driver.absent}. CUSTOM never qualifies —
+     * its URL/driver/jar are validated as a package elsewhere.
      */
     public static boolean externalJarRequired(DatabaseType type, String customDriver) {
         if (type == null || type == DatabaseType.CUSTOM) {
             return false;
         }
-        if (StringUtils.hasText(customDriver) && isPresent(customDriver.trim())) {
-            return false;
-        }
-        return !isPresent(type.getDriverClassName());
+        String effectiveDriver = StringUtils.hasText(customDriver)
+                ? customDriver.trim()
+                : type.getDriverClassName();
+        return !isPresent(effectiveDriver);
     }
 
     /** Whether {@code driverClassName} can be loaded from the application classpath. */

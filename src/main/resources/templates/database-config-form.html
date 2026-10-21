@@ -173,15 +173,28 @@
                         </div>
                         <div class="help" th:text="#{db.customJarPathHelp}">help</div>
                     </div>
+                    <div class="field">
+                        <!--/* 驱动类属于 jar:厂商 jar 里的类名常与预设不同(GaussDB 的
+                                gsjdbc200.jar 是 com.huawei.gauss200.jdbc.Driver)。留空即用
+                                预设类,提示行显示的就是它。控件随卡片一起禁用,残留值不提交。 */-->
+                        <label for="customDriver" th:text="#{db.customDriver}">Driver class</label>
+                        <input type="text" class="input mono" id="customDriver" th:field="*{customDriver}"
+                               list="driver-options" placeholder="com.example.jdbc.Driver"
+                               th:disabled="${jarCardVisible} ? null : 'disabled'">
+                        <datalist id="driver-options"></datalist>
+                        <div class="help mono" id="driver-hint"
+                             th:text="${config.type != null ? config.type.driverClassName : ''}"></div>
+                        <div class="help" th:text="#{db.customDriverHelp}">help</div>
+                    </div>
                 </div>
             </div>
 
-            <!--/* CUSTOM 还需要自己给 URL 与驱动类 */-->
+            <!--/* CUSTOM 没有预设 URL，需要自己给；驱动类与 jar 都在上面的卡片里 */-->
             <div class="card" id="custom-section"
                  th:attr="hidden=${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'hidden'">
                 <div class="card-head">
-                    <h2><svg class="ico"><use href="#puzzle"/></svg> <span th:text="#{db.customSection}">Custom driver</span></h2>
-                    <span class="hint" th:text="#{db.customHint}">Loaded at runtime from a local jar</span>
+                    <h2><svg class="ico"><use href="#puzzle"/></svg> <span th:text="#{db.customSection}">Custom connection</span></h2>
+                    <span class="hint" th:text="#{db.customHint}">No preset URL for this type</span>
                 </div>
                 <div class="card-body">
                     <div class="field">
@@ -190,14 +203,6 @@
                                placeholder="jdbc:other://host:5236/DBNAME"
                                th:disabled="${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'disabled'">
                         <div class="help" th:text="#{db.customUrlHelp}">help</div>
-                    </div>
-                    <div class="field">
-                        <label for="customDriver" th:text="#{db.customDriver}">Driver class</label>
-                        <input type="text" class="input mono" id="customDriver" th:field="*{customDriver}"
-                               list="driver-options" placeholder="com.example.jdbc.Driver"
-                               th:disabled="${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'disabled'">
-                        <datalist id="driver-options"></datalist>
-                        <div class="help mono" id="driver-hint"></div>
                     </div>
                 </div>
             </div>

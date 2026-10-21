@@ -80,11 +80,17 @@ public class DatabaseConfig {
     @Column(name = "miner_password_enc")
     private String minerPassword;
 
-    /** Full JDBC URL, used when {@link #type} is {@link DatabaseType#CUSTOM}. */
+    /** Full JDBC URL; required for {@link DatabaseType#CUSTOM}, overrides the generated URL otherwise. */
     @Lob
     @Column(name = "custom_url")
     private String customUrl;
 
+    /**
+     * Driver class to load instead of the preset one. Required for {@link DatabaseType#CUSTOM};
+     * for other types it overrides the preset class, which is how a vendor jar that declares a
+     * different class name is connected (for example GaussDB's {@code gsjdbc200.jar}, whose
+     * driver is {@code com.huawei.gauss200.jdbc.Driver}). Blank means "use the preset".
+     */
     @Column(name = "custom_driver", length = 255)
     private String customDriver;
 

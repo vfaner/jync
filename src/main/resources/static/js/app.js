@@ -764,26 +764,20 @@
       withBusy(btn, '<span class="spin"></span>', function () {
         return getJson(btn.dataset.action + '?jarPath=' + encodeURIComponent(jar.value.trim()))
           .then(function (p) {
-            // 预设类型（GBase / 神通）的驱动类名由枚举固定，驱动类输入框藏在 CUSTOM 卡片里。
-            // 这时只把检测结果 toast 出来供核对，绝不能写隐藏域 —— 否则服务端会优先用它覆盖预设类名。
-            var customSection = document.getElementById('custom-section');
-            var customEditable = !customSection || !customSection.hidden;
-            if (customEditable) {
-              var list = document.getElementById('driver-options');
-              if (list) {
-                list.innerHTML = '';
-                (p.drivers || []).forEach(function (d) {
-                  var o = document.createElement('option');
-                  o.value = d;
-                  list.appendChild(o);
-                });
-              }
-              if (p.drivers && p.drivers.length) {
-                var input = document.getElementById('customDriver');
-                if (input && !input.value.trim()) input.value = p.drivers[0];
-              }
+            // 驱动类输入框就在 jar 卡片里:卡片隐藏时按钮和输入框都已 disabled,点不到,
+            // 所以检测结果可以直接回填(用户已手填的非空值不覆盖)。
+            var list = document.getElementById('driver-options');
+            if (list) {
+              list.innerHTML = '';
+              (p.drivers || []).forEach(function (d) {
+                var o = document.createElement('option');
+                o.value = d;
+                list.appendChild(o);
+              });
             }
             if (p.drivers && p.drivers.length) {
+              var input = document.getElementById('customDriver');
+              if (input && !input.value.trim()) input.value = p.drivers[0];
               toast(p.drivers.join(', '), 'ok');
             } else {
               // getJson 的兜底载荷（HTTP xxx / error.sessionExpired）没有 drivers 字段，
@@ -842,7 +836,7 @@
             // under another type. Disable them, the same way the jar-card inputs are handled.
             custom.querySelectorAll('input').forEach(function (el) { el.disabled = !p.custom; });
           }
-          // 未内置的预设（如 GBase / 神通）也要填 jar；bundled 由服务端查 classpath 得出
+          // 未内置的预设（如 GBase / 神通 / GaussDB）也要填 jar；bundled 由服务端查 classpath 得出
           var jarCard = document.getElementById('jar-card');
           if (jarCard) {
             var showJar = p.custom || p.bundled === false;
@@ -850,6 +844,10 @@
             // 只 hidden 还会照常提交，必须连控件一起禁用，否则残留的旧 jar 路径会劫持内置驱动
             jarCard.querySelectorAll('input,button').forEach(function (el) { el.disabled = !showJar; });
           }
+          // 驱动类覆盖随类型切换清空：两个外部驱动类型之间切换时输入框始终可见，
+          // 上一个类型手填的类名留在这里会悄悄覆盖新类型的预设。清空后回退到预设类。
+          var driverInput = document.getElementById('customDriver');
+          if (driverInput) driverInput.value = '';
           var hint = document.getElementById('url-hint');
           if (hint) hint.textContent = p.urlTemplate || '';
           // 服务名说明只对 Oracle 有意义，其余类型隐藏

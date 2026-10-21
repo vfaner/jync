@@ -245,6 +245,41 @@ class DatabaseConfigFormViewTest {
                 java.util.regex.Pattern.compile("id=\"customJarPath\"[^>]*disabled"));
     }
 
+    @Test
+    void editingAnExternalDriverPresetAllowsADriverClassOverride() throws Exception {
+        // 厂商 jar 里的驱动类名常与预设不同（GaussDB 的 gsjdbc200.jar 就是
+        // com.huawei.gauss200.jdbc.Driver），外部驱动类型的表单必须能改驱动类。
+        DatabaseConfig gauss = new DatabaseConfig();
+        gauss.setId(12L);
+        gauss.setName("gauss-prod");
+        gauss.setType(DatabaseType.GAUSSDB);
+        when(service.findById(12L)).thenReturn(Optional.of(gauss));
+
+        String page = html(mvc.perform(get("/databases/12/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(JAR_CARD_HIDDEN.matcher(page).find()).isFalse();
+        assertThat(extractInput(page, "customDriver")).doesNotContain("disabled");
+
+        // 驱动类属于 jar 卡片。若同时留在 CUSTOM 卡片里会出现两个同名控件，
+        // 提交顺序决定谁生效——这正是必须搬出来的原因。
+        int jarAt = page.indexOf("id=\"jar-card\"");
+        int customAt = page.indexOf("id=\"custom-section\"");
+        assertThat(jarAt).isPositive();
+        assertThat(customAt).isGreaterThan(jarAt);
+        assertThat(page.substring(jarAt, customAt)).contains("id=\"customDriver\"");
+        assertThat(page.substring(customAt)).doesNotContain("id=\"customDriver\"");
+        // 预设驱动类作为提示展示，用户留空就回退到它
+        assertThat(page.substring(jarAt, customAt)).contains("com.huawei.gaussdb.jdbc.Driver");
+    }
+
+    @Test
+    void bundledTypesDisableTheDriverClassOverride() throws Exception {
+        // 内置驱动的类型不需要覆盖；隐藏必须连控件一起禁用，残留值不随表单提交。
+        String page = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(extractInput(page, "customDriver")).contains("disabled");
+    }
+
     private DatabaseConfig config(long id, String name, ConnectionRole role) {
         DatabaseConfig c = new DatabaseConfig();
         c.setId(id);
