@@ -81,7 +81,7 @@
                 <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">System info</span>
                 <!--/* 更新提示圆点：管理员在每个页面都拿到它，登录后首次加载由 app.js 查一次，
                        之后靠 sessionStorage 留在导航上；进入系统信息页再强制查一次。
-                       服务端先查 Gitee、5 秒无结果再查 GitHub；两边都失败就保持隐藏，不打扰用户。
+                       服务端先查 GitHub、超时无结果再查 Gitee；两边都失败就保持隐藏，不打扰用户。
                        未开启更新检查（app.update-check.enabled=false）时整个圆点不渲染。 */-->
                 <span class="nav-update-dot" id="nav-update-badge"
                       th:if="${updateCheckEnabled and isAdmin}"

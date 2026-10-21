@@ -241,14 +241,15 @@ class VersionServiceTest {
     }
 
     /**
-     * The settings page's own update check: Gitee first (domestic hosts answer fastest),
-     * GitHub second. The badge only needs to know whether a newer release exists, so the
+     * The settings page's own update check: GitHub first — it is the canonical feed, and its
+     * API is the only one that reports download counts — Gitee second as the domestic
+     * fallback. The badge only needs to know whether a newer release exists, so the
      * comparison is the same one the passive snapshot uses.
      */
     @Test
-    void clickCheckAsksGiteeFirstAndSkipsGithubOnceGiteeAnswers() {
-        SourceAwareFakeFeed feed = new SourceAwareFakeFeed().answer(Source.GITEE,
-                release("v1.7.10", "https://gitee.com/super_rgh/jync/releases/tag/v1.7.10", ""));
+    void clickCheckAsksGithubFirstAndSkipsGiteeOnceGithubAnswers() {
+        SourceAwareFakeFeed feed = new SourceAwareFakeFeed().answer(Source.GITHUB,
+                release("v1.7.10", "https://github.com/vfaner/jync/releases/tag/v1.7.10", ""));
         VersionService.UpdateCheck check =
                 new VersionService(() -> "1.7.9", feed, feed, true).checkNow();
 
@@ -258,44 +259,44 @@ class VersionServiceTest {
         assertThat(check.latestVersion()).isEqualTo("1.7.10");
         assertThat(check.latestTag()).isEqualTo("v1.7.10");
         assertThat(check.releaseUrl())
-                .isEqualTo("https://gitee.com/super_rgh/jync/releases/tag/v1.7.10");
-        assertThat(feed.calls).containsExactly(Source.GITEE);
+                .isEqualTo("https://github.com/vfaner/jync/releases/tag/v1.7.10");
+        assertThat(feed.calls).containsExactly(Source.GITHUB);
     }
 
     @Test
-    void clickCheckFallsBackToGithubWhenGiteeFails() {
+    void clickCheckFallsBackToGiteeWhenGithubFails() {
         SourceAwareFakeFeed feed = new SourceAwareFakeFeed()
-                .fail(Source.GITEE, new HttpTimeoutException("gitee slow"))
-                .answer(Source.GITHUB,
+                .fail(Source.GITHUB, new HttpTimeoutException("github slow"))
+                .answer(Source.GITEE,
                         release("v1.7.10",
-                                "https://github.com/vfaner/jync/releases/tag/v1.7.10", ""));
+                                "https://gitee.com/super_rgh/jync/releases/tag/v1.7.10", ""));
         VersionService.UpdateCheck check =
                 new VersionService(() -> "1.7.9", feed, feed, true).checkNow();
 
         assertThat(check.checked()).isTrue();
         assertThat(check.updateAvailable()).isTrue();
         assertThat(check.latestVersion()).isEqualTo("1.7.10");
-        assertThat(feed.calls).containsExactly(Source.GITEE, Source.GITHUB);
+        assertThat(feed.calls).containsExactly(Source.GITHUB, Source.GITEE);
     }
 
     @Test
     void clickCheckStaysSilentWhenBothMirrorsFail() {
         SourceAwareFakeFeed feed = new SourceAwareFakeFeed()
-                .fail(Source.GITEE, new HttpTimeoutException("gitee slow"))
-                .fail(Source.GITHUB, new HttpTimeoutException("github slow"));
+                .fail(Source.GITHUB, new HttpTimeoutException("github slow"))
+                .fail(Source.GITEE, new HttpTimeoutException("gitee slow"));
         VersionService.UpdateCheck check =
                 new VersionService(() -> "1.7.9", feed, feed, true).checkNow();
 
         assertThat(check.checked()).isFalse();
         assertThat(check.updateAvailable()).isFalse();
         assertThat(check.latestVersion()).isNull();
-        assertThat(feed.calls).containsExactly(Source.GITEE, Source.GITHUB);
+        assertThat(feed.calls).containsExactly(Source.GITHUB, Source.GITEE);
     }
 
     @Test
     void clickCheckDoesNotFlagTheRunningVersionAsAnUpdate() {
         SourceAwareFakeFeed feed = new SourceAwareFakeFeed()
-                .answer(Source.GITEE, release("v1.7.9", "https://gitee.com/o/r/releases/tag/v1.7.9", ""));
+                .answer(Source.GITHUB, release("v1.7.9", "https://github.com/o/r/releases/tag/v1.7.9", ""));
         VersionService.UpdateCheck check =
                 new VersionService(() -> "1.7.9", feed, feed, true).checkNow();
 
@@ -307,7 +308,7 @@ class VersionServiceTest {
     @Test
     void clickCheckMakesNoNetworkCallWhenTheFeatureIsDisabled() {
         SourceAwareFakeFeed feed = new SourceAwareFakeFeed()
-                .answer(Source.GITEE, release("v1.7.10", "https://gitee.com/o/r/releases/tag/v1.7.10", ""));
+                .answer(Source.GITHUB, release("v1.7.10", "https://github.com/o/r/releases/tag/v1.7.10", ""));
         VersionService.UpdateCheck check =
                 new VersionService(() -> "1.7.9", feed, feed, false).checkNow();
 

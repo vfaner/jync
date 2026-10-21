@@ -1231,7 +1231,7 @@
   /* ─── 导航项右上角的更新圆点（仅管理员，所有页面） ─────────────
      登录后第一次加载查一次，结果放进 sessionStorage：之后翻到别的菜单直接复用，
      圆点跟着导航一起留在页面上；进入系统信息页再强制查一次。
-     服务端先查 Gitee、5 秒无结果再查 GitHub；两边都失败就静默返回。 */
+     服务端先查 GitHub、超时无结果再查 Gitee；两边都失败就静默返回。 */
   var NAV_UPDATE_CACHE_KEY = 'jync.navUpdateCheck';
 
   function readNavUpdateCache() {

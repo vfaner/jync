@@ -164,10 +164,12 @@ public class VersionService {
     }
 
     /**
-     * One synchronous check for the settings page's nav badge: ask Gitee first, then GitHub.
-     * Each feed is bounded by {@code app.update-check.timeout-ms}, so a dead mirror costs one
-     * timeout rather than a hung page. Never throws; when both mirrors fail — or the feature
-     * is switched off — the caller learns nothing and shows nothing.
+     * One synchronous check for the settings page's nav badge: ask GitHub first, then Gitee.
+     * GitHub is the canonical feed (and the only one whose API exposes download counts); the
+     * Gitee mirror covers hosts that cannot reach github.com. Each feed is bounded by
+     * {@code app.update-check.timeout-ms}, so a dead mirror costs one timeout rather than a
+     * hung page. Never throws; when both mirrors fail — or the feature is switched off — the
+     * caller learns nothing and shows nothing.
      */
     public UpdateCheck checkNow() {
         String current = currentVersionSupplier.get();
@@ -176,7 +178,7 @@ public class VersionService {
         }
         ReleaseFeed.Release latest;
         try {
-            latest = latestGiteeFirst();
+            latest = latestGithubFirst();
         } catch (Exception bothFailed) {
             log.debug("Click-triggered update check failed: {}", bothFailed.toString());
             return new UpdateCheck(false, false, current, null, null, null);
@@ -187,16 +189,19 @@ public class VersionService {
                 trustedReleaseUrl(latest.htmlUrl()));
     }
 
-    /** Gitee first (domestic hosts answer fastest), GitHub only when Gitee fails. */
-    private ReleaseFeed.Release latestGiteeFirst() throws Exception {
+    /**
+     * GitHub first (canonical feed, and its API reports download counts), Gitee as the
+     * fallback for hosts that cannot reach github.com.
+     */
+    private ReleaseFeed.Release latestGithubFirst() throws Exception {
         if (sourceAwareFeed == null) {
             return feed.latest();
         }
         try {
-            return sourceAwareFeed.latestFrom(ReleaseFeed.Source.GITEE);
-        } catch (Exception giteeFailure) {
-            log.debug("Gitee update check failed ({}), trying GitHub", giteeFailure.toString());
             return sourceAwareFeed.latestFrom(ReleaseFeed.Source.GITHUB);
+        } catch (Exception githubFailure) {
+            log.debug("GitHub update check failed ({}), trying Gitee", githubFailure.toString());
+            return sourceAwareFeed.latestFrom(ReleaseFeed.Source.GITEE);
         }
     }
 
