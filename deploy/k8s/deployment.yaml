@@ -32,7 +32,7 @@ spec:
       containers:
         - name: jync
           # 推到自己的镜像仓库后改这里(或用 kustomization.yaml 的 images 变换)
-          image: jync:1.7.6
+          image: jync:1.7.7
           # 私有仓库拉取改 Always;本地 kind/minikube 直接用 docker build 的镜像时保持 IfNotPresent
           imagePullPolicy: IfNotPresent
           ports:
