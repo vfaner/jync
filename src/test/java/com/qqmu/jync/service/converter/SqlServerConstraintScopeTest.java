@@ -46,4 +46,23 @@ class SqlServerConstraintScopeTest {
         assertThat(dialect.getDisableConstraintsSql()).isNull();
         assertThat(dialect.getEnableConstraintsSql()).isNull();
     }
+
+    /**
+     * SQL Server's toggle is persistent table metadata, and a driver abandons the rest of a
+     * multi-statement batch on the first failure. Joined into one script, one bad table would
+     * leave the tables after it either unprotected (disable side) or permanently unenforced
+     * (re-enable side), long after this connection is gone.
+     */
+    @Test
+    void eachTableGetsItsOwnStatement() {
+        assertThat(dialect.getConstraintToggleStatements("dbo", List.of("T1", "T2"), true))
+                .containsExactly(
+                        "ALTER TABLE [dbo].[T1] NOCHECK CONSTRAINT ALL",
+                        "ALTER TABLE [dbo].[T2] NOCHECK CONSTRAINT ALL");
+        assertThat(dialect.getConstraintToggleStatements("dbo", List.of("T1", "T2"), false))
+                .containsExactly(
+                        "ALTER TABLE [dbo].[T1] WITH CHECK CHECK CONSTRAINT ALL",
+                        "ALTER TABLE [dbo].[T2] WITH CHECK CHECK CONSTRAINT ALL");
+        assertThat(dialect.getConstraintToggleStatements("dbo", List.of(), true)).isEmpty();
+    }
 }

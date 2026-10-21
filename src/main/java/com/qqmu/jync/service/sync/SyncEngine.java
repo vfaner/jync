@@ -559,13 +559,15 @@ public class SyncEngine {
                         .map(t -> ctx.getConfig().targetTableName(t.getName()))
                         .collect(java.util.stream.Collectors.toList())
                 : List.of();
-        String disableSql = ctx.getConfig().isDisableTargetConstraints()
-                ? ctx.getTargetDialect().getDisableConstraintsSql(
-                        ctx.getTargetSchema(), toggledTables)
-                : null;
+        List<String> disableStatements = ctx.getConfig().isDisableTargetConstraints()
+                ? ctx.getTargetDialect().getConstraintToggleStatements(
+                        ctx.getTargetSchema(), toggledTables, true)
+                : List.of();
         DdlExecutor executor = new DdlExecutor(targetConn);
-        if (disableSql != null) {
-            executor.executeQuietly(disableSql);
+        for (String sql : disableStatements) {
+            // Per table, best effort: one table the target refuses must not leave the rest
+            // with foreign keys enforced during the load.
+            executor.executeQuietly(sql);
         }
 
         // 目标端表清单每周期只读一次：命中的表跳过每轮一次的幂等 CREATE（那是一批注定被
@@ -613,19 +615,27 @@ public class SyncEngine {
                 }
             }
         } finally {
-            if (disableSql != null) {
-                // Restore enforcement, even when a table failed part-way through. This must
-                // not be quiet: a failed re-enable would return the connection to the pool
-                // with checks still off, so the next borrower (this app's next cycle, or any
-                // other client of the pool) would silently skip foreign-key enforcement.
-                try {
-                    executor.execute(ctx.getTargetDialect().getEnableConstraintsSql(
-                            ctx.getTargetSchema(), toggledTables), false);
-                } catch (SQLException e) {
-                    log.error("Could not re-enable target constraints for project '{}': {};"
-                            + " aborting the physical connection so it cannot be recycled"
-                            + " with constraint checks still disabled",
-                            ctx.projectName(), e.getMessage());
+            if (!disableStatements.isEmpty()) {
+                // Restore enforcement, even when a table failed part-way through, and table by
+                // table: a driver abandons the rest of a multi-statement batch on the first
+                // failure, so one bad table must not leave every later table with checks off.
+                // This must not be quiet: a failed re-enable would return the connection to the
+                // pool with checks still off, so the next borrower (this app's next cycle, or
+                // any other client of the pool) would silently skip foreign-key enforcement.
+                String failed = null;
+                for (String sql : ctx.getTargetDialect().getConstraintToggleStatements(
+                        ctx.getTargetSchema(), toggledTables, false)) {
+                    try {
+                        executor.execute(sql, false);
+                    } catch (SQLException e) {
+                        log.error("Could not re-enable target constraints for project '{}': {}",
+                                ctx.projectName(), e.getMessage());
+                        failed = e.getMessage();
+                    }
+                }
+                if (failed != null) {
+                    log.error("Aborting the physical connection so it cannot be recycled with"
+                            + " constraint checks still disabled");
                     abortPhysicalConnection(targetConn);
                 }
             }

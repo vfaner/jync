@@ -274,6 +274,23 @@ public interface SqlDialect {
         return getEnableConstraintsSql();
     }
 
+    /**
+     * The scoped toggle as individual statements, to be executed one per table.
+     *
+     * <p>A driver aborts the rest of a multi-statement batch on the first failure. That is
+     * tolerable for a session-scoped toggle (MySQL's flags die with the connection) but not
+     * for SQL Server's, which is persistent table metadata: one table whose ALTER fails would
+     * leave every table after it with checks still on — or, on the re-enable path, still off
+     * and unenforced long after the connection is gone. SQL Server therefore overrides this
+     * with one statement per table.
+     */
+    default List<String> getConstraintToggleStatements(String schema, List<String> tables,
+                                                      boolean disable) {
+        String sql = disable ? getDisableConstraintsSql(schema, tables)
+                : getEnableConstraintsSql(schema, tables);
+        return sql == null || sql.isBlank() ? List.of() : List.of(sql);
+    }
+
     String getTruncateSql(String schema, String table);
 
     /** Renders a literal for a DEFAULT clause, quoting only when the type needs it. */

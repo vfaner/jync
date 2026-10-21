@@ -335,6 +335,25 @@ public class SqlServerDialect extends AbstractSqlDialect {
         return sb.toString();
     }
 
+    /**
+     * One ALTER per table: the driver abandons the rest of a batch on the first failure, and
+     * this toggle is persistent table metadata — a table left un-re-enabled stays unenforced
+     * after the connection is gone.
+     */
+    @Override
+    public List<String> getConstraintToggleStatements(String schema, List<String> tables,
+                                                      boolean disable) {
+        if (tables == null || tables.isEmpty()) {
+            return List.of();
+        }
+        String action = disable ? "NOCHECK CONSTRAINT ALL" : "WITH CHECK CHECK CONSTRAINT ALL";
+        List<String> statements = new ArrayList<>(tables.size());
+        for (String table : tables) {
+            statements.add("ALTER TABLE " + qualify(schema, table) + ' ' + action);
+        }
+        return statements;
+    }
+
     @Override
     public String getDropIndexSql(com.qqmu.jync.dto.meta.IndexMeta index, String schema, String table) {
         return "DROP INDEX " + quoteIdentifier(indexNameFor(index, table))
