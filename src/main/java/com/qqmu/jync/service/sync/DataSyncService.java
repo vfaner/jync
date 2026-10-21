@@ -913,6 +913,17 @@ public class DataSyncService {
                 log.error("Rollback failed for {}: {}", targetTable, rollbackError.getMessage());
             }
             throw e;
+        } catch (RuntimeException e) {
+            // Covers a stop request and any unchecked defect in the row mapping or in a driver
+            // that throws past its declared contract. Without this, the finally block's
+            // setAutoCommit(true) makes the driver commit whatever the failing batch applied.
+            try {
+                targetConn.rollback();
+            } catch (SQLException rollbackError) {
+                log.error("Rollback after an unchecked failure failed for {}: {}",
+                        targetTable, rollbackError.getMessage());
+            }
+            throw e;
         } finally {
             if (identityArmed) {
                 String identityOff = targetDialect.getSetIdentityInsertSql(

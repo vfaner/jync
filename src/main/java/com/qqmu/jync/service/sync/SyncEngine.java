@@ -582,8 +582,24 @@ public class SyncEngine {
                 // whole cycle; processed tables keep their advanced cursors and the rest are
                 // picked up by whichever instance holds the lock next.
                 ctx.requireLease();
-                syncOneTable(table, sourceConn, targetConn, ctx, result, blockedTables,
-                        knownTargetTables);
+                try {
+                    syncOneTable(table, sourceConn, targetConn, ctx, result, blockedTables,
+                            knownTargetTables);
+                } catch (StopRequestedException | LockLostException e) {
+                    // Not a table failure: the whole cycle must stop here.
+                    throw e;
+                } catch (RuntimeException e) {
+                    // A mapping or dialect defect on one table must not stop every table after
+                    // it. On a hundred-table database one bad table would otherwise turn into a
+                    // whole-project outage. Structure sync already isolates per-object failures;
+                    // the data phase gets the same contract.
+                    String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    log.error("Data sync failed for table '{}' in project '{}': {}",
+                            table.getName(), ctx.projectName(), msg, e);
+                    result.addError(table.getName() + ": " + msg);
+                    stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
+                            ChangeType.ERROR, msg, false, 0);
+                }
             }
         } finally {
             if (disableSql != null) {
