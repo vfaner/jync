@@ -72,8 +72,10 @@ public class SyncContextFactory {
 
         SyncConfig config = parseConfig(project);
 
-        MetadataReader sourceReader = readerFactory.forType(source.getType());
-        MetadataReader targetReader = readerFactory.forType(target.getType());
+        DatabaseType.DialectFamily sourceFamily = source.resolvedFamily();
+        DatabaseType.DialectFamily targetFamily = target.resolvedFamily();
+        MetadataReader sourceReader = readerFactory.forType(source.getType(), sourceFamily);
+        MetadataReader targetReader = readerFactory.forType(target.getType(), targetFamily);
 
         String sourceSchema = resolveSchema(source, sourceReader);
         String targetSchema = resolveSchema(target, targetReader);
@@ -81,7 +83,7 @@ public class SyncContextFactory {
         // downgraded to the pre-12 emulation when a live grammar probe shows the server does
         // not actually accept AS IDENTITY. DM/YashanDB are routed by the dialect factory
         // itself, not by this number.
-        Integer targetMajorVersion = target.getType() == DatabaseType.ORACLE
+        Integer targetMajorVersion = targetFamily == DatabaseType.DialectFamily.ORACLE
                 ? resolveDialectVersion(target) : null;
 
         // Incremental windows and CDC replay commit in front of live applications, so they
@@ -103,8 +105,9 @@ public class SyncContextFactory {
                 .targetSchema(targetSchema)
                 .sourceReader(sourceReader)
                 .targetReader(targetReader)
-                .sourceDialect(dialectFactory.forType(source.getType()))
-                .targetDialect(dialectFactory.forType(target.getType(), targetMajorVersion))
+                .sourceDialect(dialectFactory.forType(source.getType(), null, sourceFamily))
+                .targetDialect(dialectFactory.forType(target.getType(), targetMajorVersion,
+                        targetFamily))
                 .batchSize(batchSize)
                 .fullLoadBatchSize(fullLoadBatchSize)
                 .fullLoadFetchSize(fullLoadFetchSize)

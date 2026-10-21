@@ -36,6 +36,27 @@ public class DatabaseConfig {
     private DatabaseType type = DatabaseType.MYSQL;
 
     /**
+     * SQL family a CUSTOM connection speaks. The app cannot infer it from a custom JDBC URL,
+     * and generic ANSI SQL is wrong for most real products, so the user picks one. Ignored —
+     * and cleared on save — for every preset, which already declares its own family.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "dialect_family", length = 16)
+    private DatabaseType.DialectFamily dialectFamily;
+
+    /** The SQL family this connection speaks: the preset's own, or CUSTOM's declared one. */
+    public DatabaseType.DialectFamily resolvedFamily() {
+        if (type == null) {
+            return DatabaseType.DialectFamily.GENERIC;
+        }
+        if (type == DatabaseType.CUSTOM) {
+            return dialectFamily == null
+                    ? DatabaseType.DialectFamily.GENERIC : dialectFamily;
+        }
+        return type.getFamily();
+    }
+
+    /**
      * Source (read) or target (write); decides which section and project selector lists it in.
      * The column stays nullable at DDL level on purpose: ddl-auto=update adds it to existing
      * databases whose rows need the startup backfill, and H2 rejects adding a NOT NULL column

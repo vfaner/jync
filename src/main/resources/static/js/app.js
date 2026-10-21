@@ -832,9 +832,10 @@
           var custom = document.getElementById('custom-section');
           if (custom) {
             custom.hidden = !p.custom;
-            // hidden alone still submits the inputs: a stale CUSTOM URL/driver would ride along
-            // under another type. Disable them, the same way the jar-card inputs are handled.
-            custom.querySelectorAll('input').forEach(function (el) { el.disabled = !p.custom; });
+            // hidden alone still submits the controls: a stale CUSTOM URL/dialect family would
+            // ride along under another type. Disable them, the same way the jar-card inputs are
+            // handled. The family is a <select>, so the selector must cover selects too.
+            custom.querySelectorAll('input, select').forEach(function (el) { el.disabled = !p.custom; });
           }
           // 未内置的预设（如 GBase / 神通 / GaussDB）也要填 jar；bundled 由服务端查 classpath 得出
           var jarCard = document.getElementById('jar-card');

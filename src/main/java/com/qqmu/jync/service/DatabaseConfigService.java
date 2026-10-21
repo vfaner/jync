@@ -180,6 +180,12 @@ public class DatabaseConfigService {
             // surface as a generic 500.
             throw new IllegalArgumentException("error.connection.type.required");
         }
+        // The family override only means anything for CUSTOM; a preset already declares its
+        // own family. Clearing it keeps a type switch (or a crafted POST) from carrying a
+        // stale override into the next cycle.
+        if (type != DatabaseType.CUSTOM) {
+            config.setDialectFamily(null);
+        }
         // Column-length guards: an overlong value otherwise fails deep in JPA as an English 500.
         checkLength(config.getHost(), 255, "error.connection.host.too.long");
         checkLength(config.getDatabaseName(), 255, "error.connection.database.too.long");

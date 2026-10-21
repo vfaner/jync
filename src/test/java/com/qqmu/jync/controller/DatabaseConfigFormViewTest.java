@@ -208,6 +208,50 @@ class DatabaseConfigFormViewTest {
         return page.substring(start, end + 1);
     }
 
+    /** Extracts the #dialectFamily &lt;select&gt; opening tag. */
+    private static String extractSelect(String page, String selectId) {
+        int at = page.indexOf("id=\"" + selectId + "\"");
+        assertThat(at).as("select %s rendered", selectId).isPositive();
+        int start = page.lastIndexOf("<select", at);
+        int end = page.indexOf(">", at);
+        return page.substring(start, end + 1);
+    }
+
+    @Test
+    void customConnectionOffersTheDialectFamilyAndKeepsTheStoredOne() throws Exception {
+        // A custom JDBC URL says nothing about the grammar the product speaks, so the user
+        // declares the family; generic ANSI SQL is wrong for most real products.
+        DatabaseConfig custom = new DatabaseConfig();
+        custom.setId(13L);
+        custom.setName("kingbase-prod");
+        custom.setType(DatabaseType.CUSTOM);
+        custom.setDialectFamily(DatabaseType.DialectFamily.POSTGRES);
+        custom.setCustomUrl("jdbc:kingbase8://host:54321/db");
+        custom.setCustomDriver("com.kingbase8.Driver");
+        when(service.findById(13L)).thenReturn(Optional.of(custom));
+
+        String page = html(mvc.perform(get("/databases/13/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(extractSelect(page, "dialectFamily")).doesNotContain("disabled");
+        assertThat(page).contains("value=\"ORACLE\"", "value=\"POSTGRES\"",
+                "value=\"SQLSERVER\"", "value=\"GENERIC\"");
+        // th:field marks the stored enum value as selected
+        assertThat(page).containsPattern(
+                "<option[^>]*value=\"POSTGRES\"[^>]*selected|"
+                + "value=\"POSTGRES\"[^>]*selected[^>]*>");
+        assertThat(page).doesNotContain("??db.dialectFamily", "??db.family");
+    }
+
+    @Test
+    void aPresetConnectionDisablesTheDialectFamilySelect() throws Exception {
+        // The family only means something for CUSTOM; a disabled control also keeps a stale
+        // value from riding along when the user switches a connection back to a preset.
+        String page = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(extractSelect(page, "dialectFamily")).contains("disabled");
+    }
+
     @Test
     void jsMessageBundleCarriesAllCdcCheckKeys() throws Exception {
         // 连接测试结果由 app.js 用 window.JyncMessages 翻译;Oracle/PG/SQLServer 的

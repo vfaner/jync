@@ -204,6 +204,16 @@
                                th:disabled="${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'disabled'">
                         <div class="help" th:text="#{db.customUrlHelp}">help</div>
                     </div>
+                    <!--/* 自定义 JDBC URL 看不出产品语法;方言家族决定生成哪种 upsert/DDL */-->
+                    <div class="field">
+                        <label for="dialectFamily" th:text="#{db.dialectFamily}">SQL dialect</label>
+                        <select class="select" id="dialectFamily" th:field="*{dialectFamily}"
+                                th:disabled="${config.type != null and config.type.name() == 'CUSTOM'} ? null : 'disabled'">
+                            <option th:each="f : ${families}" th:value="${f.name()}"
+                                    th:text="#{${'db.family.' + f.name()}}">Generic</option>
+                        </select>
+                        <div class="help" th:text="#{db.dialectFamilyHelp}">help</div>
+                    </div>
                 </div>
             </div>
 

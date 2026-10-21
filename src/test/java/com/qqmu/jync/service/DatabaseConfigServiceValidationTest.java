@@ -293,6 +293,37 @@ class DatabaseConfigServiceValidationTest {
     }
 
     @Test
+    void aPresetDropsACustomFamilyOverride() {
+        // A stale select value from the form (or a crafted POST) must not survive on a preset:
+        // the preset's own family is what the cycle reads.
+        DatabaseConfig preset = preset(DatabaseType.MYSQL, null);
+        preset.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+        when(cryptoUtil.encrypt("pw")).thenReturn("enc");
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig saved = service.save(preset, "pw", null);
+
+        assertThat(saved.getDialectFamily()).isNull();
+    }
+
+    @Test
+    void aCustomConnectionKeepsItsDeclaredFamily() {
+        DatabaseConfig custom = new DatabaseConfig();
+        custom.setName("custom-pg");
+        custom.setType(DatabaseType.CUSTOM);
+        custom.setRole(ConnectionRole.SOURCE);
+        custom.setCustomUrl("jdbc:other://host/db");
+        custom.setCustomDriver("com.example.Driver");
+        custom.setDialectFamily(DatabaseType.DialectFamily.POSTGRES);
+        when(cryptoUtil.encrypt("pw")).thenReturn("enc");
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig saved = service.save(custom, "pw", null);
+
+        assertThat(saved.getDialectFamily()).isEqualTo(DatabaseType.DialectFamily.POSTGRES);
+    }
+
+    @Test
     void deletingAMissingConnectionIsRejectedWithAnI18nKey() {
         // findById rather than existsById: delete() loads the row so the audit entry can
         // name the connection it destroyed.

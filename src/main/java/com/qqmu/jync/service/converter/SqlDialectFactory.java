@@ -27,7 +27,35 @@ public class SqlDialectFactory {
      * does not vary by version return the same instance.
      */
     public SqlDialect forType(DatabaseType type, Integer targetMajorVersion) {
+        return forType(type, targetMajorVersion, null);
+    }
+
+    /**
+     * Variant for a CUSTOM connection that declared the family it speaks. The override applies
+     * to CUSTOM only: a preset already declares its own family, and honouring a stale or
+     * crafted value would emit SQL for the wrong product.
+     *
+     * @param familyOverride the CUSTOM connection's declared family; null or GENERIC means
+     *                       the generic ANSI-leaning fallback
+     */
+    public SqlDialect forType(DatabaseType type, Integer targetMajorVersion,
+                              DatabaseType.DialectFamily familyOverride) {
         if (type == null) {
+            return fallback;
+        }
+        if (type == DatabaseType.CUSTOM) {
+            if (familyOverride == null || familyOverride == DatabaseType.DialectFamily.GENERIC) {
+                return fallback;
+            }
+            // Prefer the family's generic dialect: product-specific dialects carry assumptions
+            // (openGauss's upsert form, say) that a custom product may not share.
+            Integer oracleVersion = familyOverride == DatabaseType.DialectFamily.ORACLE
+                    ? targetMajorVersion : null;
+            for (SqlDialect dialect : dialects) {
+                if (dialect.explicitType() == null && dialect.family() == familyOverride) {
+                    return dialect.withServerMajorVersion(oracleVersion);
+                }
+            }
             return fallback;
         }
         // OracleDialect also serves 达梦/崖山, whose identity syntax and version numbering

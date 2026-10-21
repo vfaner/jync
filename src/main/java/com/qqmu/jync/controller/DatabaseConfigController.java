@@ -1,5 +1,7 @@
 package com.qqmu.jync.controller;
 
+import java.util.List;
+
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -52,6 +54,7 @@ public class DatabaseConfigController {
         config.setPort(DatabaseType.MYSQL.getDefaultPort());
         model.addAttribute("config", config);
         model.addAttribute("types", DatabaseType.values());
+        model.addAttribute("families", FAMILIES);
         model.addAttribute("jarCardVisible", jarCardVisible(config.getType()));
         return "database-config-form";
     }
@@ -61,6 +64,7 @@ public class DatabaseConfigController {
         return service.findById(id).map(config -> {
             model.addAttribute("config", config);
             model.addAttribute("types", DatabaseType.values());
+            model.addAttribute("families", FAMILIES);
             model.addAttribute("jarCardVisible", jarCardVisible(config.getType()));
             return "database-config-form";
         }).orElseGet(() -> {
@@ -68,6 +72,19 @@ public class DatabaseConfigController {
             return "redirect:/databases";
         });
     }
+
+    /**
+     * Families offered for a CUSTOM connection, GENERIC first: an unset family must display as
+     * generic (a browser preselects the first option), which is also how it resolves at sync
+     * time, so opening the form and saving without touching it changes no behaviour.
+     */
+    private static final List<DatabaseType.DialectFamily> FAMILIES = List.of(
+            DatabaseType.DialectFamily.GENERIC,
+            DatabaseType.DialectFamily.ORACLE,
+            DatabaseType.DialectFamily.MYSQL,
+            DatabaseType.DialectFamily.POSTGRES,
+            DatabaseType.DialectFamily.SQLSERVER,
+            DatabaseType.DialectFamily.DB2);
 
     /**
      * The jar-path card is shown for CUSTOM (nothing is bundled) and for preset types whose
