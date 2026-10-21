@@ -228,6 +228,55 @@ class SyncEngineSnapshotGuardTest {
         verify(stateWriter, never()).saveSnapshot(anyLong(), any(), anyString(), any());
     }
 
+    /**
+     * The pending-index queue is in memory, so the snapshot must stay unconverged for as long
+     * as an index is queued: after a restart the queue is gone, and a saved snapshot would tell
+     * the detector the index landed — the target would keep running without it forever.
+     */
+    @Test
+    void anOutstandingIndexRetryWithholdsTheTableSnapshot() throws Exception {
+        ChangeEvent indexEvent = ChangeEvent.of(ObjectType.INDEX, ChangeType.CREATE, "ORDERS",
+                "New index", new IndexMeta());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(indexEvent));
+        when(structureSync.apply(any(), any(), any()))
+                .thenReturn(StructureSyncService.ApplyOutcome.ok("Created index IX_ORDERS"));
+        when(structureSync.hasPendingIndexes(PROJECT_ID, "ORDERS")).thenReturn(true);
+
+        engine.runCycle(ctx(true, false));
+
+        verify(stateWriter, never()).saveSnapshot(anyLong(), any(), anyString(), any());
+    }
+
+    @Test
+    void anOutstandingIndexRetryAlsoBlocksTheDataPhaseSnapshot() throws Exception {
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
+        when(structureSync.hasPendingIndexes(PROJECT_ID, "ORDERS")).thenReturn(true);
+
+        engine.runCycle(ctx(true, true), () -> true);
+
+        verify(stateWriter, never()).saveSnapshot(anyLong(), any(), anyString(), any());
+        // A snapshot saved earlier in the cycle (the table was just auto-created) would hide
+        // the missing index from the next cycle's detector; it has to go.
+        verify(stateWriter).deleteSnapshot(PROJECT_ID, ObjectType.TABLE, "ORDERS");
+    }
+
+    @Test
+    void anAutoCreatedTableWithAnOutstandingIndexRetryDoesNotSaveItsSnapshot() throws Exception {
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        stubSuccessfulDataPhase();
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of());
+        when(structureSync.apply(any(),
+                argThat(e -> e != null && e.getObjectType() == ObjectType.TABLE), any()))
+                .thenReturn(StructureSyncService.ApplyOutcome.ok("Created table ORDERS"));
+        when(structureSync.hasPendingIndexes(PROJECT_ID, "ORDERS")).thenReturn(true);
+
+        engine.runCycle(ctx(true, true), () -> true);
+
+        verify(stateWriter, never()).saveSnapshot(anyLong(), any(), anyString(), any());
+    }
+
     @Test
     void viewsSnapshotImmediatelyEvenWhileATableIsBlocked() throws Exception {
         ViewMeta view = new ViewMeta();

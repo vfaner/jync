@@ -292,8 +292,15 @@ public class SyncEngine {
                     System.currentTimeMillis() - eventStart);
 
             if (affectsTableShape(event)) {
-                deferredTableSnapshots.putIfAbsent(event.getObjectName(),
-                        () -> updateSnapshotFor(ctx.projectId(), event, sourceMeta));
+                if (structureSync.hasPendingIndexes(ctx.projectId(), event.getObjectName())) {
+                    // The shape landed but an index did not. The retry queue is in memory, so
+                    // the snapshot is the only record that survives a restart; saving it now
+                    // would make the missing index undetectable forever.
+                    blockedTables.add(event.getObjectName());
+                } else {
+                    deferredTableSnapshots.putIfAbsent(event.getObjectName(),
+                            () -> updateSnapshotFor(ctx.projectId(), event, sourceMeta));
+                }
             } else {
                 updateSnapshotFor(ctx.projectId(), event, sourceMeta);
             }
@@ -415,7 +422,11 @@ public class SyncEngine {
             log.info("Auto-created missing target table {}", targetTable);
             stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE, table.getName(),
                     ChangeType.CREATE, outcome.detail, true, 0);
-            stateWriter.saveSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName(), table);
+            // An index that failed during creation is only queued in memory; the snapshot is
+            // what keeps it detectable after a restart, so it waits until the queue is empty.
+            if (!structureSync.hasPendingIndexes(ctx.projectId(), table.getName())) {
+                stateWriter.saveSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName(), table);
+            }
             verifiedTables.add(verifiedKey(ctx.projectId(), targetTable));
         } else if (outcome.applied && outcome.detail != null
                 && outcome.detail.startsWith("Table already present")) {
@@ -786,7 +797,15 @@ public class SyncEngine {
         //   Its withheld snapshot is the retry record; writing the fresh shape here would
         //   undo exactly the protection applyStructuralChanges set up.
         if (ctx.getConfig().isSyncStructure() && !blockedTables.contains(table.getName())) {
-            stateWriter.saveSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName(), table);
+            if (structureSync.hasPendingIndexes(ctx.projectId(), table.getName())) {
+                // Same rule as the structure phase: while an index is queued, the snapshot must
+                // not claim convergence. Deleting it also covers a table whose snapshot this
+                // cycle already wrote (an auto-created table, whose deferred indexes are built
+                // only after the load), so the next cycle re-detects and retries the index.
+                stateWriter.deleteSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName());
+            } else {
+                stateWriter.saveSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName(), table);
+            }
         }
     }
 

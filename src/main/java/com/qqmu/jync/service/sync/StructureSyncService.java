@@ -171,6 +171,18 @@ public class StructureSyncService {
         });
     }
 
+    /**
+     * Whether this table still has an index creation queued for retry.
+     *
+     * <p>The queue is in memory, so the table snapshot must not be certified as converged while
+     * it is non-empty: after a restart the queue is gone, and a saved snapshot would tell the
+     * detector the index landed — leaving the target permanently without it.
+     */
+    public boolean hasPendingIndexes(long projectId, String sourceTable) {
+        List<PendingIndex> queued = pendingIndexes.get(pendingKey(projectId, sourceTable));
+        return queued != null && !queued.isEmpty();
+    }
+
     /** Drops the retry queue for a project (project deleted or reset). */
     public void evictProject(long projectId) {
         String prefix = projectId + "|";
