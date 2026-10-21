@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.sync;
 
 import java.time.Instant;
+import java.util.Objects;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -56,29 +57,51 @@ public class SyncStateWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advanceCursor(SyncProgress progress, DataSyncService.TableSyncResult result,
                               CursorStrategy strategy) {
-        if (result.getNewCursorValue() != null) {
+        boolean changed = false;
+        if (result.getNewCursorValue() != null
+                && !result.getNewCursorValue().equals(progress.getLastSyncValue())) {
             progress.setLastSyncValue(result.getNewCursorValue());
+            changed = true;
         }
-        progress.setCursorColumn(strategy.getColumn());
-        progress.setCursorStrategy(strategy.getKind().name());
+        if (!Objects.equals(progress.getCursorColumn(), strategy.getColumn())) {
+            progress.setCursorColumn(strategy.getColumn());
+            changed = true;
+        }
+        if (!Objects.equals(progress.getCursorStrategy(), strategy.getKind().name())) {
+            progress.setCursorStrategy(strategy.getKind().name());
+            changed = true;
+        }
         // Only full-load cycles decide this; incremental cycles leave the recorded value alone.
-        if (result.getResumableLoad() != null) {
+        if (result.getResumableLoad() != null
+                && !result.getResumableLoad().equals(progress.getResumableLoad())) {
             progress.setResumableLoad(result.getResumableLoad());
+            changed = true;
         }
-        progress.setInitialLoadDone(true);
+        if (!Boolean.TRUE.equals(progress.getInitialLoadDone())) {
+            progress.setInitialLoadDone(true);
+            changed = true;
+        }
         // This method runs on every successful cycle, idle ones included — carrying the cursor
         // forward is exactly what stops an idle table re-reading the same window, so the
         // timestamp cannot ride along with it. Same rule as the project's 上次同步: it marks the
         // last cycle that delivered a change (deletes included; getRowsChanged() omits them).
         if (result.getRowsChanged() > 0 || result.getRowsDeleted() > 0) {
             progress.setLastSyncTime(Instant.now());
+            changed = true;
         }
         // Counts rows the target actually changed, not rows scanned. A full-compare table is
         // re-read in its entirety every cycle, so accumulating the scan size would inflate this
         // total by the table's row count every few seconds and tell the user nothing.
-        progress.setRowsSyncedTotal((progress.getRowsSyncedTotal() == null ? 0L
-                : progress.getRowsSyncedTotal()) + result.getRowsChanged());
-        progressRepository.save(progress);
+        if (result.getRowsChanged() > 0) {
+            progress.setRowsSyncedTotal((progress.getRowsSyncedTotal() == null ? 0L
+                    : progress.getRowsSyncedTotal()) + result.getRowsChanged());
+            changed = true;
+        }
+        // An idle cycle rewrites an identical row otherwise: one UPDATE per table per poll
+        // interval, forever, against what is usually the customer's shared production server.
+        if (changed) {
+            progressRepository.save(progress);
+        }
     }
 
     /**
