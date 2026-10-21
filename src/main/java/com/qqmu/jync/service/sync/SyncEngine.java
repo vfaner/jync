@@ -451,16 +451,17 @@ public class SyncEngine {
      * target with "already exists". A table absent from the listing takes the CREATE path and is
      * added to the set, so the listing stays true for the rest of the cycle.
      *
-     * @return true on success (table was there or was just created); false on failure.
+     * @return the table definition to use for the rest of the cycle — the full re-read when this
+     *     call had to build it, so later steps see its indexes — or null on failure.
      */
-    private boolean ensureTargetTableExists(TableMeta table, Connection sourceConn,
-                                            Connection targetConn,
-                                            SyncContext ctx, SyncResult result,
-                                            Set<String> knownTargetTables) {
+    private TableMeta ensureTargetTableExists(TableMeta table, Connection sourceConn,
+                                              Connection targetConn,
+                                              SyncContext ctx, SyncResult result,
+                                              Set<String> knownTargetTables) {
         String targetTable = ctx.getConfig().targetTableName(table.getName());
         if (knownTargetTables != null && knownTargetTables.contains(targetTable.toUpperCase())) {
             // 名字在清单里只证明"有这张表"，不证明形状对：手工预建的表可能缺列或类型不对。
-            return verifyShapeIfNeeded(table, targetConn, ctx, result, targetTable);
+            return verifyShapeIfNeeded(table, targetConn, ctx, result, targetTable) ? table : null;
         }
         table = completeDefinitionForCreate(table, sourceConn, ctx);
         ChangeEvent createEvent = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,
@@ -474,7 +475,7 @@ public class SyncEngine {
             stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE, table.getName(),
                     ChangeType.ERROR, msg, false, 0);
             result.addError(table.getName() + ": " + outcome.error);
-            return false;
+            return null;
         }
 
         // 只在真的创建了的时候记日志、更新快照。
@@ -493,7 +494,7 @@ public class SyncEngine {
                 && outcome.detail.startsWith("Table already present")) {
             // 表已存在但不是我们这轮建的：核对列形状，不合规就拦住数据同步。
             if (!verifyShapeIfNeeded(table, targetConn, ctx, result, targetTable)) {
-                return false;
+                return null;
             }
         }
         // 不管这轮是新建的还是本来就在（清单读取失败时才走到这），都登记进清单，
@@ -501,7 +502,7 @@ public class SyncEngine {
         if (knownTargetTables != null) {
             knownTargetTables.add(targetTable.toUpperCase());
         }
-        return true;
+        return table;
     }
 
     /**
@@ -755,10 +756,15 @@ public class SyncEngine {
 
         // 目标表可能被手动删除了，或者快照与实际状态不同步。
         // 在开始数据同步前确认一下，缺失就用源表结构建一张，避免后续 upsert 整批失败。
-        if (!ensureTargetTableExists(table, sourceConn, targetConn, ctx, result,
-                knownTargetTables)) {
+        // The returned definition is the one the CREATE actually used: a structure-off cycle
+        // read the reduced shape, so the deferred-index step below would otherwise see no
+        // indexes and silently build none.
+        TableMeta effective = ensureTargetTableExists(table, sourceConn, targetConn, ctx, result,
+                knownTargetTables);
+        if (effective == null) {
             return;
         }
+        table = effective;
 
         boolean firstLoad = progress.getInitialLoadDone() == null || !progress.getInitialLoadDone();
         if (firstLoad && ctx.getConfig().isTruncateBeforeInitialLoad()) {
