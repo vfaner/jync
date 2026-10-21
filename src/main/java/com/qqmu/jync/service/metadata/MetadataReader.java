@@ -55,9 +55,11 @@ public interface MetadataReader {
      * the primary key, autoincrement enrichment and the row-level SCN probe are always read —
      * the data path needs all four.
      *
-     * <p>Used by cycles that have structure sync switched off, where change detection does not
-     * run and those dictionaries would be fetched and then thrown away: two to four extra
-     * dictionary round trips per table on every poll.
+     * <p>Used by cycles that have structure sync switched off and whose load order is
+     * indifferent (the target can switch constraint enforcement off), where change detection
+     * does not run and those dictionaries would be fetched and then thrown away: two to four
+     * extra dictionary round trips per table on every poll. When the load order does matter,
+     * {@link #readAllForDataWithForeignKeys} keeps the one dictionary the engine reads.
      *
      * <p>The default implementation delegates to the full read, so a reader that cannot split
      * the two stays correct — only slower.
@@ -66,6 +68,28 @@ public interface MetadataReader {
                                         List<String> tables, List<String> views,
                                         List<String> procedures, boolean includeViews,
                                         boolean includeProcedures) throws SQLException {
+        return readAll(conn, schema, tables, views, procedures, includeViews, includeProcedures);
+    }
+
+    /**
+     * The same data read as {@link #readAllForData}, keeping the foreign-key dictionary.
+     *
+     * <p>Needed when the data phase itself consumes the dictionary: tables are loaded parent
+     * first, which the engine derives from each table's outgoing foreign keys. Skipping the
+     * dictionary there silently degraded that order to the source listing order, and a child
+     * loaded before its parent fails on any target whose constraint enforcement cannot be
+     * switched off for the load. Indexes and comments stay skipped — the data phase has no
+     * use for them.
+     *
+     * <p>As with {@link #readAllForData}, the default implementation delegates to the full
+     * read, so a reader that cannot split the dictionaries stays correct — only slower.
+     */
+    default DatabaseMeta readAllForDataWithForeignKeys(Connection conn, String schema,
+                                                       List<String> tables, List<String> views,
+                                                       List<String> procedures,
+                                                       boolean includeViews,
+                                                       boolean includeProcedures)
+            throws SQLException {
         return readAll(conn, schema, tables, views, procedures, includeViews, includeProcedures);
     }
 

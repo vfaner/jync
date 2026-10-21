@@ -91,9 +91,12 @@ class SyncEngineIdentifierPreflightTest {
         MetadataReader sourceReader = mock(MetadataReader.class);
         when(sourceReader.readAll(any(), any(), any(), any(), any(), eq(false), eq(false)))
                 .thenReturn(meta);
-        // Structure sync is off in this fixture, so the engine asks for the reduced read.
+        // Structure sync is off, but an Oracle target cannot switch constraints off, so the
+        // engine keeps the foreign-key dictionary for the parent-first load order.
         when(sourceReader.readAllForData(any(), any(), any(), any(), any(), eq(false), eq(false)))
                 .thenReturn(meta);
+        when(sourceReader.readAllForDataWithForeignKeys(any(), any(), any(), any(), any(),
+                eq(false), eq(false))).thenReturn(meta);
         when(sourceReader.estimateRowCount(any(), any(), anyString())).thenReturn(0L);
         MetadataReader targetReader = mock(MetadataReader.class);
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));

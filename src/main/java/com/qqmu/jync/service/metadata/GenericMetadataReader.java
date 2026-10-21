@@ -133,18 +133,22 @@ public class GenericMetadataReader implements MetadataReader {
 
     @Override
     public TableMeta readTable(Connection conn, String schema, String tableName) throws SQLException {
-        return readTable(conn, schema, tableName, true);
+        return readTable(conn, schema, tableName, true, true);
     }
 
     /**
      * The table definition.
      *
-     * @param includeDetail false skips the index and foreign-key dictionaries, which only
-     *                      structure change detection consumes. Columns, the primary key,
-     *                      autoincrement enrichment and the row-level probe are always read.
+     * @param includeDetail       false skips the index dictionary and the product's comment
+     *                            dictionaries. Columns, the primary key, autoincrement
+     *                            enrichment and the row-level probe are always read.
+     * @param includeForeignKeys  false skips the foreign-key dictionary. Structure sync reads
+     *                            it through {@code includeDetail}; a data-only cycle passes it
+     *                            explicitly when the load order is derived from it.
      */
     protected TableMeta readTable(Connection conn, String schema, String tableName,
-                                  boolean includeDetail) throws SQLException {
+                                  boolean includeDetail, boolean includeForeignKeys)
+            throws SQLException {
         DatabaseMetaData md = conn.getMetaData();
         TableMeta table = new TableMeta();
         table.setName(tableName);
@@ -228,6 +232,8 @@ public class GenericMetadataReader implements MetadataReader {
 
         if (includeDetail) {
             table.setIndexes(readIndexes(conn, schema, tableName, pkUpper));
+        }
+        if (includeDetail || includeForeignKeys) {
             table.setForeignKeys(readForeignKeys(conn, schema, tableName));
         }
         return table;
@@ -426,7 +432,7 @@ public class GenericMetadataReader implements MetadataReader {
                                 List<String> tables, List<String> views, List<String> procedures,
                                 boolean includeViews, boolean includeProcedures) throws SQLException {
         return readAll(conn, schema, tables, views, procedures, includeViews, includeProcedures,
-                true);
+                true, true);
     }
 
     @Override
@@ -435,13 +441,25 @@ public class GenericMetadataReader implements MetadataReader {
                                        List<String> procedures, boolean includeViews,
                                        boolean includeProcedures) throws SQLException {
         return readAll(conn, schema, tables, views, procedures, includeViews, includeProcedures,
-                false);
+                false, false);
+    }
+
+    @Override
+    public DatabaseMeta readAllForDataWithForeignKeys(Connection conn, String schema,
+                                                      List<String> tables, List<String> views,
+                                                      List<String> procedures,
+                                                      boolean includeViews,
+                                                      boolean includeProcedures)
+            throws SQLException {
+        return readAll(conn, schema, tables, views, procedures, includeViews, includeProcedures,
+                false, true);
     }
 
     private DatabaseMeta readAll(Connection conn, String schema,
                                  List<String> tables, List<String> views, List<String> procedures,
                                  boolean includeViews, boolean includeProcedures,
-                                 boolean includeTableDetail) throws SQLException {
+                                 boolean includeTableDetail, boolean includeForeignKeys)
+            throws SQLException {
         DatabaseMeta meta = new DatabaseMeta();
         meta.setSchema(schema);
 
@@ -450,7 +468,8 @@ public class GenericMetadataReader implements MetadataReader {
         List<String> tableNames = tables != null ? tables : listTableNames(conn, schema);
         for (String name : tableNames) {
             try {
-                meta.getTables().add(readTable(conn, schema, name, includeTableDetail));
+                meta.getTables().add(readTable(conn, schema, name, includeTableDetail,
+                        includeForeignKeys));
             } catch (SQLException e) {
                 // One unreadable table (e.g. permissions) must not abort the whole pass.
                 // Record it as unreadable (not absent): it demonstrably exists, so the change

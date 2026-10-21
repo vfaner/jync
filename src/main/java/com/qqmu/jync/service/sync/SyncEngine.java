@@ -204,6 +204,23 @@ public class SyncEngine {
         return result;
     }
 
+    /**
+     * Whether this cycle's data phase loads with the target's foreign keys enforced.
+     *
+     * <p>The engine derives load order from each table's outgoing foreign keys, so the
+     * dictionary is only worth reading when a child loaded before its parent would actually be
+     * rejected: the user can keep the target's constraints on, or the dialect may have no
+     * toggle at all (Oracle and its look-alikes, PostgreSQL), which leaves them on regardless
+     * of the switch.
+     */
+    private static boolean dataPhaseNeedsForeignKeys(SyncContext ctx) {
+        if (!ctx.getConfig().isSyncData()) {
+            return false;
+        }
+        return !ctx.getConfig().isDisableTargetConstraints()
+                || !ctx.getTargetDialect().supportsConstraintToggle();
+    }
+
     private DatabaseMeta readSourceMetadata(Connection sourceConn, SyncContext ctx)
             throws SQLException {
         List<String> tables = selection(ctx.getConfig().getTables(),
@@ -213,17 +230,26 @@ public class SyncEngine {
         List<String> procs = selection(ctx.getConfig().getProcedures(),
                 ctx.getConfig().isObjectSelectionExplicit());
 
-        // Structure sync off means change detection never runs, so the index, foreign-key and
-        // comment dictionaries have no consumer this cycle: skip them rather than fetch and
-        // discard them on every poll. Columns, the primary key and the cursor probes are still
-        // read — the data phase needs those.
-        DatabaseMeta meta = ctx.getConfig().isSyncStructure()
-                ? ctx.getSourceReader().readAll(sourceConn, ctx.getSourceSchema(),
-                        tables, views, procs,
-                        ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures())
-                : ctx.getSourceReader().readAllForData(sourceConn, ctx.getSourceSchema(),
-                        tables, views, procs,
-                        ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures());
+        // Structure sync off means change detection never runs, so the index and comment
+        // dictionaries have no consumer this cycle: skip them rather than fetch and discard
+        // them on every poll. The foreign-key dictionary is not in that group — the data phase
+        // orders tables parent-first from it, and that order only becomes visible when the
+        // target loads with its constraints enforced. Columns, the primary key and the cursor
+        // probes are always read — the data phase needs those.
+        DatabaseMeta meta;
+        if (ctx.getConfig().isSyncStructure()) {
+            meta = ctx.getSourceReader().readAll(sourceConn, ctx.getSourceSchema(),
+                    tables, views, procs,
+                    ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures());
+        } else if (dataPhaseNeedsForeignKeys(ctx)) {
+            meta = ctx.getSourceReader().readAllForDataWithForeignKeys(sourceConn,
+                    ctx.getSourceSchema(), tables, views, procs,
+                    ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures());
+        } else {
+            meta = ctx.getSourceReader().readAllForData(sourceConn, ctx.getSourceSchema(),
+                    tables, views, procs,
+                    ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures());
+        }
 
         // Row estimates decide whether full comparison is affordable, so collect them here
         // while the source connection is already open.
@@ -645,6 +671,10 @@ public class SyncEngine {
         }
 
         try {
+            // Parent-first order is derived from the source foreign-key dictionary; a data-only
+            // cycle reads that dictionary only when the target loads with its constraints
+            // enforced (see readSourceMetadata). Otherwise every table has zero foreign keys
+            // and this sort degrades to the source listing order, which is harmless there.
             for (TableMeta table : structureSync.sortByDependency(sourceMeta.getTables())) {
                 if (!ctx.getConfig().includesTable(table.getName())) {
                     continue;

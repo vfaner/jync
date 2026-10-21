@@ -292,6 +292,19 @@ public interface SqlDialect {
     }
 
     /**
+     * Whether this dialect can switch foreign-key enforcement off for the duration of a load,
+     * in either the session-scoped or the per-table form.
+     *
+     * <p>When it cannot (Oracle and its look-alikes, PostgreSQL, ...), the data phase loads
+     * with the target's foreign keys enforced, so the engine must load parents before children
+     * and therefore keeps reading the source foreign-key dictionary.
+     */
+    default boolean supportsConstraintToggle() {
+        String sql = getDisableConstraintsSql();
+        return sql != null && !sql.isBlank();
+    }
+
+    /**
      * The product's identifier length limit in bytes, or 0 when it is unknown or unlimited.
      *
      * <p>Used to refuse a name before the target rejects it mid-load with an error that names

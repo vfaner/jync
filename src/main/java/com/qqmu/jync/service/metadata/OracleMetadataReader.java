@@ -77,8 +77,10 @@ public class OracleMetadataReader extends GenericMetadataReader {
      */
     @Override
     protected TableMeta readTable(Connection conn, String schema, String tableName,
-                                  boolean includeDetail) throws SQLException {
-        TableMeta table = super.readTable(conn, schema, tableName, includeDetail);
+                                  boolean includeDetail, boolean includeForeignKeys)
+            throws SQLException {
+        TableMeta table = super.readTable(conn, schema, tableName, includeDetail,
+                includeForeignKeys);
         if (table != null) {
             if (includeDetail) {
                 // The dictionary is the only reliable source of comments here: ojdbc returns

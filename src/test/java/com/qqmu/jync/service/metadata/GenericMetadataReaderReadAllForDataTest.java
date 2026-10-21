@@ -64,6 +64,21 @@ class GenericMetadataReaderReadAllForDataTest {
     }
 
     @Test
+    void theForeignKeyOnlyReadSkipsIndexesButKeepsForeignKeys() throws Exception {
+        // A data-only cycle whose target cannot switch constraint enforcement off still needs
+        // the FK dictionary to order parents before children; the index dictionary has no
+        // consumer and stays skipped.
+        Connection conn = connection();
+        DatabaseMetaData md = conn.getMetaData();
+
+        reader.readAllForDataWithForeignKeys(conn, null, List.of("ORDERS"), null, null,
+                false, false);
+
+        verify(md, never()).getIndexInfo(any(), any(), anyString(), anyBoolean(), anyBoolean());
+        verify(md).getImportedKeys(any(), any(), anyString());
+    }
+
+    @Test
     void theFullReadStillAsksForTheIndexAndForeignKeyDictionaries() throws Exception {
         Connection conn = connection();
         DatabaseMetaData md = conn.getMetaData();

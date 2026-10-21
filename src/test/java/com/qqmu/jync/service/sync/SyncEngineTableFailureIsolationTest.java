@@ -100,9 +100,12 @@ class SyncEngineTableFailureIsolationTest {
         meta.setTables(List.of(first, second));
         when(sourceReader.readAll(any(), any(), any(), any(), any(), eq(false), eq(false)))
                 .thenReturn(meta);
-        // Structure sync is off in this fixture, so the engine asks for the reduced read.
+        // Structure sync is off, but the generic target cannot switch constraints off, so the
+        // engine keeps the foreign-key dictionary for the parent-first load order.
         when(sourceReader.readAllForData(any(), any(), any(), any(), any(), eq(false), eq(false)))
                 .thenReturn(meta);
+        when(sourceReader.readAllForDataWithForeignKeys(any(), any(), any(), any(), any(),
+                eq(false), eq(false))).thenReturn(meta);
         when(sourceReader.estimateRowCount(any(), any(), anyString())).thenReturn(0L);
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("T1", "T2"));
 

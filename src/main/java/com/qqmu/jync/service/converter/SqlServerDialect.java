@@ -312,6 +312,12 @@ public class SqlServerDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean supportsConstraintToggle() {
+        // No unscoped form, but the per-table variant above is a real toggle.
+        return true;
+    }
+
+    @Override
     public String getDisableConstraintsSql(String schema, List<String> tables) {
         // Per-table DDL, never sp_MSforeachtable: that undocumented proc walked EVERY table
         // in the database, disabling constraints on tables belonging to other applications
