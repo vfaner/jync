@@ -28,7 +28,7 @@
 
 - **从真实迁移项目里长出来**：政企信创改造中，MySQL / Oracle / SQL Server 等存量库既要迁移到国产数据库，又要长期保持一致。商业同步工具按节点授权、成本高；Debezium 一类开源方案则要先搭 Kafka 全家桶，实施和运维门槛都不低。
 - **把同步做成一个可交付的软件**：我们把内部反复使用的同步逻辑沉淀为单体 Web 应用 —— 一个 jar 交付，实施人员用浏览器点选即可完成建连接、选表、启动同步，不必编写作业脚本或维护消息队列。
-- **国产数据库一等公民**：达梦、人大金仓、OceanBase、TiDB、GoldenDB、TDSQL、PolarDB、瀚高、海量、崖山、GBase、神通、华为 GaussDB 等均有内置方言适配，中文界面与中文文档优先。
+- **国产数据库一等公民**：达梦、人大金仓、OceanBase、TiDB、GoldenDB、TDSQL、PolarDB、万里 GreatDB、银联 UPDRDB、星环 KunDB、平安 RASESQL、东方金信 SeaboxSQL、瀚高、海量、崖山、GBase、神通、华为 GaussDB 等均有内置方言适配，中文界面与中文文档优先。
 - **国产开源、可私有化部署**：项目以 MIT 协议开源，代码可审计，不依赖任何云服务，适合内网与信创环境；由**沐沐开源工坊**维护，官网 <https://jync.qqmu.com>。
 
 ---
@@ -88,12 +88,13 @@
 
 ## 支持的数据库
 
-内置 **21 种**：MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**华为 GaussDB**、**达梦**、**人大金仓**、**OceanBase**、**TiDB**、**中兴 GoldenDB**、**腾讯 TDSQL（MySQL 版）**、**阿里 PolarDB（MySQL 版）**、**瀚高**、**海量**、**崖山**、**南大通用 (GBase)**、**神通 (Oscar)**、H2。
+内置 **26 种**：MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**华为 GaussDB**、**达梦**、**人大金仓**、**OceanBase**、**TiDB**、**中兴 GoldenDB**、**腾讯 TDSQL（MySQL 版）**、**阿里 PolarDB（MySQL 版）**、**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB**、**平安 RASESQL**、**东方金信 SeaboxSQL**、**瀚高**、**海量**、**崖山**、**南大通用 (GBase)**、**神通 (Oscar)**、H2。
 
 - **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时动态加载。
 - **驱动内置**：除 **GBase**、**神通** 与 **华为 GaussDB** 外均随包内置；这三家未在 Maven Central 发布官方构件，需自备 jar 并填写路径（独立 `URLClassLoader` 加载，不污染主程序）。厂商 jar 里的驱动类名与预设不同时，可在同一张卡片里覆盖驱动类（留空即用预设），例如 GaussDB 的 `gsjdbc200.jar` 使用 `com.huawei.gauss200.jdbc.Driver`。
 - **华为 GaussDB**：与 openGauss 是两个产品（驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`），方言归入 PostgreSQL 系；使用随库提供的 `gaussdbjdbc.jar` 即可，不要按 openGauss 的方式连接。
 - **PolarDB / TDSQL 分版本**：MySQL 版有独立预置（内置 MySQL 驱动，端口按控制台改）；PostgreSQL 版选 PostgreSQL 预置；PolarDB Oracle 兼容版协议是 PostgreSQL、驱动为 `com.aliyun.polardb2.Driver`，请用自定义类型并自备 jar。
+- **协议兼容预设**：**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB** 兼容 MySQL 协议，**平安 RASESQL**、**东方金信 SeaboxSQL** 兼容 PostgreSQL 协议，均复用内置驱动与对应方言族——表结构、索引、视图、函数/存储过程、数据 upsert 走的是 MySQL/PostgreSQL 同一条已验证链路。KunDB 预设只覆盖 MySQL 模式；TeleDB 的 MySQL/PostgreSQL 版分别选 MySQL/PostgreSQL 预置；中移磐维为 openGauss 内核，选 openGauss 预置；虚谷、优炫的原生驱动需自备，请用自定义类型。
 - **许可证**：驱动版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 
 ---

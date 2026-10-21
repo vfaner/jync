@@ -45,13 +45,13 @@ class BundledDriversTest {
     }
 
     @Test
-    @DisplayName("内置驱动预设共 18 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/OceanBase/TiDB/GoldenDB/TDSQL/PolarDB/瀚高/海量/崖山/H2")
-    void eighteenDriversAreBundled() {
+    @DisplayName("内置驱动预设共 23 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/OceanBase/TiDB/GoldenDB/TDSQL/PolarDB/万里 GreatDB/银联 UPDRDB/星环 KunDB/平安 RASESQL/东方金信 SeaboxSQL/瀚高/海量/崖山/H2")
+    void twentyThreeDriversAreBundled() {
         long bundled = Arrays.stream(DatabaseType.values())
                 .filter(t -> !EXTERNAL.contains(t))
                 .filter(t -> DriverPresence.isPresent(t.getDriverClassName()))
                 .count();
-        assertEquals(18, bundled);
+        assertEquals(23, bundled);
     }
 
     /**

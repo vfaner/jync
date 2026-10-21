@@ -159,6 +159,62 @@
         </div>
     </div>
 
+    <!-- 全量加载：项目详情页可逐项目覆盖，这里展示全局默认值 -->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#activity"/></svg>
+                <span th:text="#{settings.fullLoad}">Full-load performance</span></h2>
+        </div>
+        <div class="card-body">
+            <dl class="dl pairs">
+                <div class="kv wide">
+                    <dt th:text="#{settings.fullLoadBatch}">Full-load batch size</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.fullLoadBatchSize}">2000</span>
+                        <div class="help" th:text="#{settings.fullLoadBatchHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.fullLoadFetch}">Full-load fetch size</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.fullLoadFetchSize}">2000</span>
+                        <div class="help" th:text="#{settings.fullLoadFetchHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.fullLoadParallelism}">Full-load parallelism</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.fullLoadParallelism}">2</span>
+                        <div class="help" th:text="#{settings.fullLoadParallelismHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.chunkSize}">Chunk size</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.chunkSize}">100000</span>
+                        <div class="help" th:text="#{settings.chunkSizeHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.deferSecondaryIndexes}">Defer secondary indexes</dt>
+                    <dd>
+                        <span class="chip"
+                              th:text="${properties.deferSecondaryIndexes} ? #{settings.on} : #{settings.off}">On</span>
+                        <div class="help" th:text="#{settings.deferSecondaryIndexesHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.oracleInsertFirst}">Oracle insert-first load</dt>
+                    <dd>
+                        <span class="chip"
+                              th:text="${properties.oracleInitialLoadInsertFirst} ? #{settings.on} : #{settings.off}">On</span>
+                        <div class="help" th:text="#{settings.oracleInsertFirstHelp}">help</div>
+                    </dd>
+                </div>
+            </dl>
+        </div>
+    </div>
+
     <!-- 让并发与恢复机制对用户可见，而不是埋在代码里 -->
     <div class="card">
         <div class="card-head">
@@ -181,6 +237,104 @@
                     <dd>
                         <span class="chip" th:text="${properties.lockTtlMs} + ' ms'">300000 ms</span>
                         <div class="help" th:text="#{settings.lockTtlHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.maxPoolSize}">Pool size per database</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.maxPoolSize}">5</span>
+                        <div class="help" th:text="#{settings.maxPoolSizeHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.rowCountAudit}">Row-count audit interval</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.rowCountAuditIntervalMs} + ' ms'">60000 ms</span>
+                        <div class="help" th:text="#{settings.rowCountAuditHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.queryTimeout}">Data query timeout</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.queryTimeoutSeconds} + ' s'">300 s</span>
+                        <div class="help" th:text="#{settings.queryTimeoutHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.metadataTimeout}">Metadata query timeout</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.metadataQueryTimeoutSeconds} + ' s'">60 s</span>
+                        <div class="help" th:text="#{settings.metadataTimeoutHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.shutdownWait}">Shutdown wait</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.shutdownWaitMs} + ' ms'">20000 ms</span>
+                        <div class="help" th:text="#{settings.shutdownWaitHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.reconcileInterval}">Schedule reconcile interval</dt>
+                    <dd>
+                        <span class="chip" th:text="${reconcileIntervalMs} + ' ms'">30000 ms</span>
+                        <div class="help" th:text="#{settings.reconcileIntervalHelp}">help</div>
+                    </dd>
+                </div>
+            </dl>
+        </div>
+    </div>
+
+    <!-- CDC 内部参数：只放运维排障时真会调的几项，完整清单留在 application.yml -->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#arrow-repeat"/></svg>
+                <span th:text="#{settings.cdc}">CDC engine parameters</span></h2>
+        </div>
+        <div class="card-body">
+            <p class="small soft" style="margin:0 0 16px;max-width:1080px"
+               th:text="#{settings.cdcNote}">note</p>
+            <dl class="dl pairs">
+                <div class="kv wide">
+                    <dt th:text="#{settings.cdcReconnectMax}">Reconnect backoff ceiling</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.cdc.reconnectBackoffMaxMs} + ' ms'">60000 ms</span>
+                        <div class="help" th:text="#{settings.cdcReconnectMaxHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.cdcSupervise}">Consumer supervise interval</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.cdc.superviseIntervalMs} + ' ms'">10000 ms</span>
+                        <div class="help" th:text="#{settings.cdcSuperviseHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.cdcChangeWindow}">Aggregated change window</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.cdc.changeWindowMs} + ' ms'">10000 ms</span>
+                        <div class="help" th:text="#{settings.cdcChangeWindowHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.cdcLogminerBatch}">LogMiner batch size</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.cdc.logminer.batchSize}">10000</span>
+                        <div class="help" th:text="#{settings.cdcLogminerBatchHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.cdcPgBatch}">PostgreSQL logical batch size</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.cdc.pg.batchSize}">1000</span>
+                        <div class="help" th:text="#{settings.cdcPgBatchHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.cdcMssqlBatch}">SQL Server CDC batch size</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.cdc.mssql.batchSize}">1000</span>
+                        <div class="help" th:text="#{settings.cdcMssqlBatchHelp}">help</div>
                     </dd>
                 </div>
             </dl>

@@ -145,6 +145,55 @@ public enum DatabaseType {
                     + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
             3306, DialectFamily.MYSQL),
 
+    /**
+     * 万里 GreatDB states full compatibility with the native MySQL access interface, and its
+     * own development guide connects with Connector/J, so this preset reuses the bundled
+     * MySQL driver. The vendor driver ({@code com.greatdb.cj.jdbc.Driver},
+     * {@code jdbc:greatdb://}) and GM/TLS connections belong in CUSTOM.
+     */
+    GREATDB("db.type.GREATDB", "com.mysql.cj.jdbc.Driver",
+            "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+                    + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
+            3306, DialectFamily.MYSQL),
+
+    /**
+     * UnionPay UPDRDB is compatible with MySQL 5.7 protocol; its documentation connects an
+     * instance with any generic MySQL client or JDBC driver, so the bundled Connector/J and
+     * the MYSQL family apply unchanged.
+     */
+    UPDRDB("db.type.UPDRDB", "com.mysql.cj.jdbc.Driver",
+            "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+                    + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
+            3306, DialectFamily.MYSQL),
+
+    /**
+     * Transwarp KunDB exposes a MySQL-protocol mode, which is the only mode this preset
+     * covers; an Oracle-mode deployment uses CUSTOM with an Oracle-family URL. The JDBC
+     * port depends on the deployment (9669 is the documented JDBC default, 2.1.x behind
+     * KunGate commonly listens on 15307), so the form's port field is expected to be edited.
+     */
+    KUNDB("db.type.KUNDB", "com.mysql.cj.jdbc.Driver",
+            "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+                    + "&characterEncoding=utf8&useAffectedRows=true&rewriteBatchedStatements=true",
+            9669, DialectFamily.MYSQL),
+
+    /**
+     * Ping An RASESQL is fully compatible with PostgreSQL 13/15, so the bundled PostgreSQL
+     * driver, dialect and metadata reader apply unchanged.
+     */
+    RASESQL("db.type.RASESQL", "org.postgresql.Driver",
+            "jdbc:postgresql://%s:%d/%s",
+            5432, DialectFamily.POSTGRES),
+
+    /**
+     * Dongfang Jinxin SeaboxSQL supports the PostgreSQL syntax and driver ecosystem; its
+     * documentation gives 5432 as the default service port. SeaBoxMPP is an MPP product
+     * built from several SeaboxSQL instances and is reached through the same protocol.
+     */
+    SEABOXSQL("db.type.SEABOXSQL", "org.postgresql.Driver",
+            "jdbc:postgresql://%s:%d/%s",
+            5432, DialectFamily.POSTGRES),
+
     HIGHGO("db.type.HIGHGO", "com.highgo.jdbc.Driver",
             "jdbc:highgo://%s:%d/%s",
             5866, DialectFamily.POSTGRES),

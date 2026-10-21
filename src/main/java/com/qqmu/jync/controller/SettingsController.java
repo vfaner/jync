@@ -28,6 +28,7 @@ public class SettingsController {
     private final String contactQqGroup;
     private final String contactEmail;
     private final String contactWechat;
+    private final long reconcileIntervalMs;
 
     public SettingsController(SyncProperties properties, SyncScheduler scheduler,
                               SyncLockService lockService, VersionService versionService,
@@ -36,7 +37,9 @@ public class SettingsController {
                               @Value("${app.contact-qq:}") String contactQq,
                               @Value("${app.contact-qq-group:}") String contactQqGroup,
                               @Value("${app.contact-email:}") String contactEmail,
-                              @Value("${app.contact-wechat:}") String contactWechat) {
+                              @Value("${app.contact-wechat:}") String contactWechat,
+                              @Value("${sync.reconcile-interval-ms:30000}")
+                              long reconcileIntervalMs) {
         this.properties = properties;
         this.scheduler = scheduler;
         this.lockService = lockService;
@@ -47,6 +50,7 @@ public class SettingsController {
         this.contactQqGroup = contactQqGroup;
         this.contactEmail = contactEmail;
         this.contactWechat = contactWechat;
+        this.reconcileIntervalMs = reconcileIntervalMs;
     }
 
     /** One config value may carry several handles: "817094/2912167928" or a comma/space list. */
@@ -63,6 +67,7 @@ public class SettingsController {
     @GetMapping("/settings")
     public String settings(Model model) {
         model.addAttribute("properties", properties);
+        model.addAttribute("reconcileIntervalMs", reconcileIntervalMs);
         model.addAttribute("supportedTypes", DatabaseType.values());
         model.addAttribute("scheduledProjectIds", scheduler.scheduledProjectIds());
         model.addAttribute("instanceId", lockService.getOwnerId());
