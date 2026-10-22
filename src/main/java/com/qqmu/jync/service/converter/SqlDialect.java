@@ -55,6 +55,17 @@ public interface SqlDialect {
     }
 
     /**
+     * Whether a stream obtained from a result set stays readable after another column's
+     * stream getter has been called on the same row. PostgreSQL, Oracle and MySQL keep the
+     * streams independent; the SQL Server driver closes the previous stream as soon as the
+     * next column's stream is requested, so a large value there must be drained into its
+     * {@code LobValue} before the row mapper moves on to the next column.
+     */
+    default boolean streamsValidAcrossColumns() {
+        return true;
+    }
+
+    /**
      * Largest string/byte value this dialect can bind inline; anything larger must be sent
      * as a LOB handle. Oracle's answer is 32767 because a {@code MERGE ... USING (SELECT ?)}
      * projection binds the placeholder as a LONG — not as the CLOB column it is assigned to —

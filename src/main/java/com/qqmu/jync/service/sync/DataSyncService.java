@@ -912,9 +912,11 @@ public class DataSyncService {
                         ctx.getConfig(), table.getName());
                 boolean emulated = emulateUpsert && !pkColumns.isEmpty();
                 LobReadPolicy lobPolicy = buildLobPolicy(table, columns, md,
-                        pkColumns, pkTrack, cleanser, emulated);
-                // An emulated upsert binds the same row up to three times, so its large values
-                // must be replayable and therefore live in a temp file.
+                        pkColumns, pkTrack, cleanser, emulated,
+                        !ctx.getSourceDialect().streamsValidAcrossColumns());
+                // An emulated upsert binds the same row up to three times, and a source whose
+                // driver invalidates a stream once the next column is read cannot keep a live
+                // reader at all: both cases need the value on disk before the row moves on.
                 LobSpillSession spillSession = lobPolicy.largeMode() == LobReadPolicy.Mode.SPILL
                         ? spillStore().open() : null;
                 ThroughputMeter throughput = new ThroughputMeter(table.getName());
@@ -1077,13 +1079,16 @@ public class DataSyncService {
     /**
      * Builds the per-table read policy: every PK/cursor/cleansed column stays inline, and
      * declared sizes come from the result-set metadata. An emulated-upsert target spills
-     * large values so the row can be bound repeatedly; a native target keeps them one-shot
+     * large values so the row can be bound repeatedly, and a source driver that invalidates
+     * a stream once the next column is read ({@code drainEagerly}) spills them because no
+     * reader may stay open across columns; a native target otherwise keeps them one-shot
      * and the writer executes those rows immediately.
      */
     private LobReadPolicy buildLobPolicy(TableMeta table, List<String> columns,
                                          ResultSetMetaData md, List<String> pkColumns,
                                          List<String> pkTrack, ColumnCleanser cleanser,
-                                         boolean emulatedUpsert) throws SQLException {
+                                         boolean emulatedUpsert, boolean drainEagerly)
+            throws SQLException {
         SyncProperties.Lob config = properties.getLob();
         if (config == null || !config.isStreamingEnabled()) {
             return LobReadPolicy.disabled();
@@ -1103,7 +1108,7 @@ public class DataSyncService {
             }
         }
         return LobReadPolicy.forTable(table.getName(),
-                        emulatedUpsert ? LobReadPolicy.Mode.SPILL
+                        emulatedUpsert || drainEagerly ? LobReadPolicy.Mode.SPILL
                                 : LobReadPolicy.Mode.ONE_SHOT,
                         config.getInlineMaxBytes(), config.getForceInlineMaxBytes(), forceInline)
                 .withDeclaredSizes(declaredSizes);

@@ -22,6 +22,12 @@ public class SqlServerDialect extends AbstractSqlDialect {
         return DatabaseType.DialectFamily.SQLSERVER;
     }
 
+    /** mssql-jdbc closes the previous column's stream when the next one is requested. */
+    @Override
+    public boolean streamsValidAcrossColumns() {
+        return false;
+    }
+
     @Override
     public String mapType(ColumnMeta column, DatabaseType sourceType) {
         // A SQL Server target keeps its native UUID type: an NVARCHAR(36) source value
