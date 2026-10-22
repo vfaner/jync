@@ -62,7 +62,8 @@ public final class TargetTableVerifier {
                         + " source). Turn structure sync on so Jync adds the missing column,"
                         + " or add it yourself.";
             }
-            if (sourceFamily(sourceColumn) != targetFamily(found, targetType)) {
+            if (!compatibleFamilies(sourceFamily(sourceColumn),
+                    targetFamily(found, targetType))) {
                 return "target table " + lookupTable + " column " + sourceColumn.getName()
                         + " has an incompatible type (source JDBC type " + sourceColumn.getJdbcType()
                         + " vs target " + found.jdbcType() + "). Align the column types.";
@@ -277,6 +278,22 @@ public final class TargetTableVerifier {
             // View absent (11g) or not exposed by a look-alike: nothing to pre-check.
         }
         return null;
+    }
+
+    /**
+     * Whether values of one family can be written into a column of another.
+     *
+     * <p>Only one direction is allowed: a boolean (family 5) fits any numeric column. Oracle has
+     * no boolean column type — {@code OracleDialect.booleanType()} renders a source boolean as
+     * {@code NUMBER(1)}, and DB2 / the ANSI fallback render it as {@code SMALLINT}; both are
+     * family 2. Without this allowance the shape check rejected the column the generator had
+     * just created for a MySQL {@code TINYINT(1)} / PostgreSQL {@code boolean} / SQL Server
+     * {@code BIT} source, and the baseline stopped on Jync's own DDL. The reverse is still a
+     * mismatch: a numeric source may hold values other than 0/1 and a boolean target would
+     * reject or truncate them.
+     */
+    private static boolean compatibleFamilies(int sourceFamily, int targetFamily) {
+        return sourceFamily == targetFamily || (sourceFamily == 5 && targetFamily == 2);
     }
 
     /**

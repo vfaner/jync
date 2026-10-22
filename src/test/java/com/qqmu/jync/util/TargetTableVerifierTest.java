@@ -210,6 +210,31 @@ class TargetTableVerifierTest {
         assertThat(reason).isNull();
     }
 
+    @Test
+    void booleanSourceAcceptsTheNumericColumnOracleAndDb2Build() throws SQLException {
+        // Oracle 没有布尔列，OracleDialect.booleanType() 给源端布尔列建的是 NUMBER(1)；
+        // DB2 与通用方言建的是 SMALLINT。两者都归「数值」族，而布尔源归第 5 族，
+        // 于是 shape check 会拒绝本项目自己刚建出来的表，基线全量在第一条布尔列上中止。
+        createTarget("CREATE TABLE T (C_FLAG NUMERIC(1))");
+
+        String reason = TargetTableVerifier.verify(conn, null, "T",
+                source(bitCol("C_FLAG", 1)));
+
+        assertThat(reason).isNull();
+    }
+
+    @Test
+    void numericSourceStillRejectsABooleanTarget() throws SQLException {
+        // 放行是单向的：布尔(只有 0/1)可以落进任何数值列；反过来数值塞进布尔列
+        // 可能丢值，仍然要拦。
+        createTarget("CREATE TABLE T (C_FLAG BOOLEAN)");
+
+        String reason = TargetTableVerifier.verify(conn, null, "T",
+                source(col("C_FLAG", Types.INTEGER)));
+
+        assertThat(reason).contains("incompatible type");
+    }
+
     // —— 缺列的「诊断」与「医治」分开：verify 只报告，补列由 StructureSyncService 执行。
     // 这里钉住诊断那一半：目标表有、源表没有的列不动，源表有、目标表没有的列按源顺序列出。 ——
 
