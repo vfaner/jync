@@ -153,11 +153,11 @@ java -jar target/jync.jar
 ### 方式三：Docker
 
 ```bash
-docker build -t jync:1.7.7 .
+docker build -t jync:1.7.8 .
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
-  --restart unless-stopped jync:1.7.7
+  --restart unless-stopped jync:1.7.8
 ```
 
 或用 Compose 一键构建启动：
@@ -174,22 +174,22 @@ docker compose up -d --build
 
 ```bash
 # 1) 构建并推送镜像（kind / minikube 可直接本地加载）
-docker build -t registry.example.com/qqmu/jync:1.7.7 .
-docker push registry.example.com/qqmu/jync:1.7.7
+docker build -t registry.example.com/qqmu/jync:1.7.8 .
+docker push registry.example.com/qqmu/jync:1.7.8
 
-# 2) 指定镜像（部署清单默认 jync:1.7.7，可改 deployment.yaml
+# 2) 指定镜像（部署清单默认 jync:1.7.8，可改 deployment.yaml
 #    或使用 kustomize 的 images 变换）
 # images:
 #   - name: jync
 #     newName: registry.example.com/qqmu/jync
-#     newTag: "1.7.7"
+#     newTag: "1.7.8"
 
 # 3) 部署 Namespace / PVC / Deployment / Service / Ingress
 kubectl apply -k deploy/k8s/
 kubectl -n jync get pods
 ```
 
-- 清单位于 [deploy/k8s/](deploy/k8s/)，默认镜像 `jync:1.7.7`，需访问集群外数据库时按实际网络调整。
+- 清单位于 [deploy/k8s/](deploy/k8s/)，默认镜像 `jync:1.7.8`，需访问集群外数据库时按实际网络调整。
 - `ingress.yaml` 为可选文件；不用 Ingress 就从 `kustomization.yaml` 移除，或改域名 / TLS。
 - Service 类型为 `ClusterIP`，集群外访问用 `kubectl -n jync port-forward svc/jync 8080:80` 或配置 Ingress。
 - H2 元数据库使用 `ReadWriteOnce` PVC，**副本数必须为 1**；需要多副本时先把元数据库换成外部 MySQL / PostgreSQL（`SPRING_DATASOURCE_*` 环境变量），再调大 `replicas`。
