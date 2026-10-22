@@ -25,6 +25,22 @@ class SqlServerCdcConsumerTest {
         assertThat(sql).contains("ORDER BY __$start_lsn, __$seqval");
     }
 
+    /**
+     * 位置列必须是 CONVERT(varchar(32), __$start_lsn, 1) 的规范形式,不能直接选裸 binary(10)。
+     * 实测(mssql-jdbc 12.10.2 + SQL Server 2022):getString 读 binary(10) 返回无 0x 前缀的
+     * 大写十六进制("0000002857AE0258000A"),而回绑用的是 CONVERT(binary(10), ?, 1) ——
+     * Style 1 要求 0x 前缀,无前缀直接 Msg 8114 "Error converting data type varchar to
+     * varbinary"。该值被 advanceLsn 持久化后,进程一重启就会每个周期都转换失败,最终
+     * APPLY_STRIKE_OUT 把项目钉在 ERROR(只能全量重基线恢复)。
+     */
+    @Test
+    void changePullProjectsStartLsnInItsCanonicalConvertForm() {
+        assertThat(SqlServerCdcConsumer.changesSql("dbo_orders_CT"))
+                .startsWith("SELECT CONVERT(varchar(32), __$start_lsn, 1), __$operation, *");
+        assertThat(SqlServerCdcConsumer.changesSqlInclusive("dbo_orders_CT"))
+                .startsWith("SELECT CONVERT(varchar(32), __$start_lsn, 1), __$operation, *");
+    }
+
     @Test
     void captureInstanceNamesAreWhitelisted() {
         assertThat(SqlServerCdcConsumer.isSafeCaptureInstanceName("dbo_orders_CT")).isTrue();

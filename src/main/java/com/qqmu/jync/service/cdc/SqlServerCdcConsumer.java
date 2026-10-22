@@ -481,7 +481,16 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 // consults this to distinguish "not captured" from genuine errors.
                 Set<String> availableCols = availableColumns(rs);
                 while (running && !Thread.currentThread().isInterrupted() && rs.next()) {
-                    String startLsn = rs.getString(1); // already CONVERT(varchar, 1) shape
+                    // Column 1 is projected as CONVERT(varchar(32), __$start_lsn, 1) by
+                    // changesSql/changesSqlInclusive. Do NOT select the raw binary column:
+                    // mssql-jdbc renders a binary(10) through getString as UPPERCASE hex
+                    // WITHOUT the 0x prefix (DDC.convertBytesToObject), and that value is
+                    // persisted by advanceLsn and later rebound with
+                    // CONVERT(binary(10), ?, 1) — style 1 REQUIRES the 0x prefix, so Msg
+                    // 8114 "Error converting data type varchar to varbinary" made every
+                    // cycle after a restart fail until APPLY_STRIKE_OUT parked the project.
+                    // Verified on SQL Server 2022 with mssql-jdbc 12.10.2.
+                    String startLsn = rs.getString(1);
                     int op = rs.getInt(2);
                     CdcTableBinding binding = supplier.binding(ci);
                     if (binding == null || !binding.isApplicable()) {
@@ -510,7 +519,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * is documented behavior, the ORDER BY is a guarantee.
      */
     static String changesSql(String captureInstance) {
-        return "SELECT __$start_lsn, __$operation, *"
+        return "SELECT CONVERT(varchar(32), __$start_lsn, 1), __$operation, *"
                 + " FROM cdc.fn_cdc_get_all_changes_" + captureInstance
                 + "((SELECT sys.fn_cdc_increment_lsn(CONVERT(binary(10), ?, 1))),"
                 + " CONVERT(binary(10), ?, 1),'all update old')"
@@ -526,7 +535,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * the boundary row. Replaying a row is safe (idempotent upserts); skipping is loss.
      */
     static String changesSqlInclusive(String captureInstance) {
-        return "SELECT __$start_lsn, __$operation, *"
+        return "SELECT CONVERT(varchar(32), __$start_lsn, 1), __$operation, *"
                 + " FROM cdc.fn_cdc_get_all_changes_" + captureInstance
                 + "(CONVERT(binary(10), ?, 1), CONVERT(binary(10), ?, 1),'all update old')"
                 + " ORDER BY __$start_lsn, __$seqval";
