@@ -16,7 +16,7 @@ A ready-to-run web application that keeps **schema and data** in sync **across h
 
 - Releases: GitHub <https://github.com/vfaner/jync/releases/latest> · Gitee <https://gitee.com/super_rgh/jync/releases/latest>
 - Website: <https://jync.qqmu.com>
-- Demo video: <https://www.bilibili.com/video/BV1iHYJ6vEEd> (Bilibili, ~14 min; narration in Chinese)
+- Demo video: <https://www.bilibili.com/video/BV1iHYJ6vEEd> (Bilibili, ~19 min; narration in Chinese)
 
 Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz scheduling + embedded H2 metadata store. **Zero external dependencies, fully usable on an air-gapped intranet.**
 
@@ -86,15 +86,15 @@ The "中 / EN" button in the navbar flips every menu, form, status, and error me
 
 ### Database connections — sources and targets in separate lists, test before you save
 
-Connections are split by purpose into a Source table and a Target table, each paginated on its own; the project form's source and target selectors only offer connections from the matching list, so the two sides can no longer be mixed up. Pick a database type and the JDBC URL is generated for you — preview it, test it. Nearly every database driver ships inside the distribution; for GBase, Oscar, Huawei GaussDB, and custom drivers, just point at a jar and it loads dynamically.
+Connections are split by purpose into a Source table and a Target table, each paginated on its own; the project form's source and target selectors only offer connections from the matching list, so the two sides can no longer be mixed up.
 
 ![Database connections](docs/images/jync_db.png)
 
-### Adding a connection — pick the purpose first; the URL writes itself
+### Adding a connection — 26 presets, and the URL writes itself
 
-Choose Source (data is read from it during sync) or Target (data is written into it), then fill in host, port, and database name; the JDBC URL appears as you type, so there is no need to remember each vendor's connection-string shape. The password is encrypted on the way into storage, and the connection can be tested before you commit it.
+Choose Source (data is read from it during sync) or Target (data is written into it), then pick from 26 preset database types — including the major Chinese databases — and fill in host, port, and database name. The default port follows the type, the JDBC URL is assembled for you, and the connection can be tested before saving; the password is encrypted on the way into storage. Nearly every driver ships inside the distribution; for GBase, Oscar, Huawei GaussDB, and custom drivers, point at a jar and it loads dynamically.
 
-![Adding a connection](docs/images/jync_db_add.png)
+![Adding a connection with the full type list](docs/images/jync_db_add.png)
 
 ### Projects — many pipelines in parallel, start and pause at will
 
@@ -112,8 +112,26 @@ Fill in the name and description, pick one tested connection from each of the so
 
 Tables / views / stored procedures grouped for selection, with search and bulk actions. Every table's incremental detection strategy is labeled inline — `IDENTITY` and `NONE` are called out prominently, because they mean updates may not propagate. Clicking "Sync now" while a cycle is in flight is not discarded: one extra round runs automatically once the current round releases the lock, and any number of clicks coalesce into exactly one such rerun.
 
-![Project detail — polling](docs/images/jync_xl.png)
-![Project detail — log CDC](docs/images/jync_cdc.png)
+![Project detail — polling](docs/images/jync_lx.jpg)
+![Project detail — log CDC](docs/images/jync_cdc.jpg)
+
+### Schedule settings — polling interval or Cron, per project
+
+Polling and full-compare projects can turn on **Custom schedule** to override the global 2-second poll interval with a millisecond value or a Quartz Cron expression (6 or 7 fields, seconds first). Cron takes precedence; leaving a field blank falls back to the global default. Streaming CDC projects hide this card entirely — their long-running consumer replays the log continuously and does not use Quartz.
+
+![Schedule settings](docs/images/jync_diaodu.png)
+
+### Full-load performance — batch size and parallelism
+
+**Batch size** controls rows per JDBC batch during the initial full load (default 2000, range 1–20000). **Parallelism** controls how many chunk workers load a large table with a single-column integer primary key (default 2, up to 8); the effective value is capped again by the connection pool. Both settings apply only to the initial full load and CDC baseline rebuilds — incremental polling and CDC replay keep their own batch settings. On a database under pressure, set parallelism to 1 and lower the batch size.
+
+![Full-load performance](docs/images/jync_xn.png)
+
+### Column cleansing — rules run just before the write
+
+Add rules per table and column; they run in the order listed, in memory, just before values are written to the target, so source data is never modified. Supported rules: trim leading/trailing whitespace, upper case, lower case, blank → `NULL`, strip prefix, strip suffix, and regex replacement (with `$1` group references). Only string columns are touched; numbers and dates pass through untouched. Regex arguments and replacement strings are validated when the rule is saved, and a damaged stored rule is skipped at runtime rather than stopping the sync.
+
+![Column cleansing](docs/images/jync_lqx.png)
 
 ### Change log — every change is traceable
 
@@ -530,6 +548,17 @@ Login passwords are stored as one-way BCrypt hashes, unlike the database and AI 
 - **Column cleansing** — per-table, per-column rules applied before rows are written: `TRIM`, `UPPER`, `LOWER`, blank → `NULL`, strip prefix, strip suffix, and regex replacement. Rules apply to **string columns only**; numeric and date columns pass through untouched.
 - **Validation at save time** — a regex replacement string is checked against Java's own semantics (`$n` group references, `${name}` named groups, backslash escaping) when the rule is saved, not on every sync cycle.
 - **Editing while running** — stop the project first; cleansing rules cannot be changed mid-run.
+
+---
+
+## Full-Load Performance Settings
+
+The project detail page exposes two settings that are independent of the schedule:
+
+- **Batch size** — rows per JDBC batch for the initial full load, default **2000** (1–20000). Larger batches mean fewer commits and higher throughput, at the cost of larger transactions and longer rollback.
+- **Parallelism** — chunk workers for a large table with a single-column integer primary key, default **2** (1–8). Each worker borrows one source and one target connection, so the effective value is capped by the connection pool; set it to 1 when the databases are load-sensitive.
+
+Both apply only to the initial full load and CDC baseline rebuild; incremental polling and CDC replay continue to use the global `sync.batch-size` / `sync.fetch-size`. The global defaults are `sync.full-load-batch-size=2000`, `sync.full-load-fetch-size=2000`, and `sync.full-load-parallelism=2`.
 
 ---
 

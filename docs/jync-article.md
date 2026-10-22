@@ -1,7 +1,7 @@
 # Jync 捷同 · 最受欢迎的异构数据库实时同步工具
 
 > 单 JAR 开箱即用 —— 不要 Kafka，不要 ZooKeeper，不要一行代码。
-> 项目地址：[GitHub](https://github.com/vfaner/jync) ｜ [Gitee 镜像](https://gitee.com/super_rgh/jync) ｜ [14 分钟演示视频](https://www.bilibili.com/video/BV1iHYJ6vEEd)
+> 项目地址：[GitHub](https://github.com/vfaner/jync) ｜ [Gitee 镜像](https://gitee.com/super_rgh/jync) ｜ [19 分钟演示视频](https://www.bilibili.com/video/BV1iHYJ6vEEd)
 > 下载地址：[GitHub Releases](https://github.com/vfaner/jync/releases/latest) ｜ [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) ｜ [详细教程](https://jync.qqmu.com/deploy.html)
 
 ## 开发背景
@@ -62,11 +62,11 @@ java -jar target/jync.jar
 ![看板](images/jync_kanban.png)
 看板：项目数、连接数、同步表数、24 小时变更量与最近活动一屏掌握
 
-![项目详情](images/jync_xl.png)
-项目详情：表/视图/存储过程逐表勾选，每张表的增量检测策略直接标注
+![项目详情](images/jync_lx.jpg)
+项目详情：表/视图/存储过程逐表勾选，每张表的增量检测策略直接标注；调度、全量加载性能与列清洗集中配置
 
 ![新增连接](images/jync_db_add.png)
-新增连接：先定源/目标用途，类型选好 JDBC URL 自动拼装，测通再保存
+新增连接：26 种预置类型可选，先定源/目标用途，类型选好 JDBC URL 自动拼装，测通再保存
 
 ![变更日志](images/jync_log.png)
 变更日志：每次变更的对象、类型、影响行数、耗时与错误详情均可追溯

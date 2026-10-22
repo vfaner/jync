@@ -20,7 +20,7 @@
 
 - **下载与发版**：GitHub <https://github.com/vfaner/jync/releases/latest>　Gitee <https://gitee.com/super_rgh/jync/releases/latest>
 - **官网**：<https://jync.qqmu.com>
-- **视频演示**：<https://www.bilibili.com/video/BV1iHYJ6vEEd>（14 分钟，从建连接到实时同步）
+- **视频演示**：<https://www.bilibili.com/video/BV1iHYJ6vEEd>（19 分钟，从建连接到实时同步）
 
 ---
 
@@ -46,23 +46,30 @@
   </tr>
   <tr>
     <td align="center"><img src="docs/images/jync_db.png" alt="数据库连接" width="100%"><br><sub><b>连接管理</b> · 源 / 目标分栏，各自独立分页</sub></td>
-    <td align="center"><img src="docs/images/jync_db_add.png" alt="新增连接" width="100%"><br><sub><b>新增连接</b> · 类型选好后 JDBC URL 自动拼装，先测通再保存</sub></td>
+    <td align="center"><img src="docs/images/jync_db_add.png" alt="新增连接" width="100%"><br><sub><b>新增连接</b> · 26 种预置类型（含国产库），选好即自动拼装 JDBC URL，先测通再保存</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/jync_lx.jpg" alt="项目详情 · 轮询" width="100%"><br><sub><b>项目详情 · 轮询</b> · 逐表勾选、游标策略标注，调度 / 性能 / 列清洗集中配置</sub></td>
+    <td align="center"><img src="docs/images/jync_cdc.jpg" alt="项目详情 · 日志 CDC" width="100%"><br><sub><b>项目详情 · 日志 CDC</b> · 位点 / 落后秒数 / 吞吐 / 跳过计数面板</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/jync_diaodu.png" alt="调度设置" width="100%"><br><sub><b>调度设置</b> · 自定义轮询间隔（毫秒）或 Cron；CDC 模式下自动隐藏</sub></td>
+    <td align="center"><img src="docs/images/jync_xn.png" alt="全量加载性能" width="100%"><br><sub><b>全量加载性能</b> · 批量大小（默认 2000）与并行度（默认 2，上限 8）</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/jync_lqx.png" alt="列清洗" width="100%"><br><sub><b>列清洗</b> · 按表 / 列配置规则，写入前生效，不改源数据</sub></td>
+    <td align="center"><img src="docs/images/jync_log.png" alt="变更日志" width="100%"><br><sub><b>变更日志</b> · 对象、类型、行数、耗时与错误详情</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/images/jync_xiangmu.png" alt="项目列表" width="100%"><br><sub><b>项目列表</b> · 多任务并行启停，分页可跳页</sub></td>
     <td align="center"><img src="docs/images/jync_xiangmu_add.png" alt="新建项目" width="100%"><br><sub><b>新建项目</b> · 源与目标各选一条已测通的连接</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/jync_xl.png" alt="项目详情" width="100%"><br><sub><b>项目详情 · 轮询</b> · 逐表勾选、游标策略标注与手动指定</sub></td>
-    <td align="center"><img src="docs/images/jync_cdc.png" alt="日志 CDC" width="100%"><br><sub><b>项目详情 · 日志 CDC</b> · 位点 / 落后秒数 / 吞吐 / 跳过计数面板</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="docs/images/jync_log.png" alt="变更日志" width="100%"><br><sub><b>变更日志</b> · 对象、类型、行数、耗时与错误详情</sub></td>
     <td align="center"><img src="docs/images/jync_ai.png" alt="AI 配置" width="100%"><br><sub><b>AI 配置</b> · 多供应商共存，同一时刻只启用一个</sub></td>
+    <td align="center"><img src="docs/images/jync_ai_add.png" alt="新增供应商" width="100%"><br><sub><b>新增供应商</b> · 保存前发真实请求探测端点</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/jync_ai_add.png" alt="新增供应商" width="100%"><br><sub><b>新增供应商</b> · 保存前发真实请求探测端点</sub></td>
-    <td align="center"><img src="docs/images/jync_xiangmu_suoyin_ai.png" alt="AI 起草" width="100%"><br><sub><b>AI 起草</b> · 候选 SQL 流式进编辑器，保存前人工审阅</sub></td>
+    <td align="center" colspan="2"><img src="docs/images/jync_xiangmu_suoyin_ai.png" alt="AI 起草" width="60%"><br><sub><b>AI 起草</b> · 候选 SQL 流式进编辑器，保存前人工审阅</sub></td>
   </tr>
   <tr>
     <td align="center" colspan="2"><img src="docs/images/jync_system.png" alt="系统信息" width="60%"><br><sub><b>系统信息</b> · 运行参数、版本与更新内容只读集中展示</sub></td>
@@ -78,11 +85,18 @@
 | 项目 / 连接 | 多项目并行互不干扰；连接按源 / 目标分栏独立分页；保存前可测连通并预览自动拼装的 JDBC URL |
 | 对象与结构 | 表 / 视图 / 存储过程分组勾选（搜索 + 批量）；目标库缺失时按目标方言自动建表 / 索引 / 视图 / 过程 |
 | 方言适配 | 类型映射、函数名转换、标识符引号、分页语法、存储过程包装 |
-| 实时同步 | 轮询（默认 2s）或 Cron 编排；四种日志 CDC（MySQL binlog / Oracle LogMiner / PG 逻辑解码 / SQL Server CDC），秒级延迟 |
+| 实时同步 | 轮询（全局默认 2s）或 Cron 编排，项目可单独覆盖；四种日志 CDC（MySQL binlog / Oracle LogMiner / PG 逻辑解码 / SQL Server CDC），秒级延迟 |
 | 可靠性 | 全量按主键 keyset 分块 + 检查点续传；单列整数主键表内并行（上限 8）；重启从游标继续并补齐停机变更；写入全部幂等 |
-| 数据加工 | 项目克隆、只读数据预览、按表按列配置字符串清洗规则（去空格 / 大小写 / 前后缀 / 正则替换） |
+| 全量性能 | 项目级「全量加载性能」：批量大小默认 2000（1–20000），并行度默认 2（1–8，受连接池约束）；只影响首次全量与重建基线，不改变增量 / CDC 回放 |
+| 数据加工 | 项目克隆、只读数据预览；列清洗按表 / 列配置，支持去首尾空白、转大写 / 小写、空串转 NULL、去前缀 / 后缀、正则替换，写入目标库前在内存中生效 |
 | 控制与观测 | 启停 / 立即同步（运行中点击合并为一轮补跑）；看板 + 变更日志 + 行数审计 |
 | 前端 | 中 / 英切换（默认按时区推断）、昼夜主题（跟随系统）、无 CDN 无 webfont，静态资源约 440KB 全本地化 |
+
+### 项目详情里的三块配置
+
+- **调度设置**：轮询 / 全量比对项目可开启「自定义调度」，单独填写轮询间隔（毫秒）或 Quartz Cron（6 / 7 段，秒在最前）。Cron 优先于轮询间隔；留空使用全局默认值。日志 CDC 项目由长驻消费线程流式回放，该卡片会自动隐藏。
+- **全量加载性能**：批量大小决定每个 JDBC 批次的行数（默认 2000），并行度决定单列整数主键大表的分片 worker 数（默认 2，上限 8）。两者只作用于首次全量与重建基线；并行度还会被连接池上限二次收敛，数据库敏感时设为 1。
+- **列清洗**：按「表 + 列」添加规则，写入目标库前在内存中依次执行，源库数据不受影响。支持去首尾空白、转大写、转小写、空串转 NULL、去前缀、去后缀与正则替换；只处理字符串列，非字符串值原样通过。
 
 ---
 
