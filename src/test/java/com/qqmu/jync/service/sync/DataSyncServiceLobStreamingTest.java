@@ -196,6 +196,54 @@ class DataSyncServiceLobStreamingTest {
         assertThat(spillFiles()).isZero();
     }
 
+    /** A one-byte budget forces a flush before every row; all rows must still land intact. */
+    @Test
+    void byteBudgetFlushesBetweenRowsWithoutLosingData() throws SQLException {
+        properties.getLob().setBatchMaxBytes(1);
+        insertRow(1, "a".repeat(1000));
+        insertRow(2, "b".repeat(1000));
+        insertRow(3, "c".repeat(1000));
+
+        DataSyncService.TableSyncResult result = sync();
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        try (Statement st = target.createStatement();
+             ResultSet rs = st.executeQuery("SELECT ID, BODY FROM DOCS ORDER BY ID")) {
+            for (int id = 1; id <= 3; id++) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getLong("ID")).isEqualTo(id);
+                assertThat(rs.getString("BODY")).hasSize(1000);
+            }
+        }
+        assertThat(spillFiles()).isZero();
+    }
+
+    /** A failed copy must still delete every spilled file before the error surfaces. */
+    @Test
+    void spillFilesAreDeletedWhenTheCopyFails() throws SQLException {
+        exec(target, "DROP TABLE DOCS");
+        exec(target, "CREATE TABLE DOCS (ID BIGINT PRIMARY KEY CHECK (ID < 2),"
+                + " BODY CLOB, PAYLOAD BLOB, NOTE VARCHAR(2000))");
+        insertRow(1, "p".repeat(20_000));
+        insertRow(2, "q".repeat(20_000));
+
+        DataSyncService.TableSyncResult result = sync();
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(spillFiles()).isZero();
+    }
+
+    private void insertRow(long id, String body) throws SQLException {
+        try (PreparedStatement ps = source.prepareStatement(
+                "INSERT INTO DOCS (ID, BODY, PAYLOAD, NOTE) VALUES (?, ?, ?, ?)")) {
+            ps.setLong(1, id);
+            ps.setCharacterStream(2, new StringReader(body), body.length());
+            ps.setBytes(3, new byte[] {1});
+            ps.setString(4, "n");
+            ps.executeUpdate();
+        }
+    }
+
     private DataSyncService.TableSyncResult sync() throws SQLException {
         DataSyncService service = new DataSyncService(properties,
                 mock(ChunkCheckpointRepository.class));

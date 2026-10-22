@@ -1,7 +1,5 @@
 package com.qqmu.jync.service.lob;
 
-import java.nio.charset.StandardCharsets;
-
 /**
  * Tracks the approximate heap held by the rows currently in a JDBC batch.
  *
@@ -61,7 +59,9 @@ public final class BatchByteBudget {
             return length > 0 ? length : 0L;
         }
         if (value instanceof CharSequence) {
-            return ((CharSequence) value).toString().getBytes(StandardCharsets.UTF_8).length;
+            // Allocation-free: a per-row getBytes() would add a full copy of every string
+            // just to decide when to flush.
+            return LobBinder.utf8ByteLength((CharSequence) value);
         }
         if (value instanceof byte[]) {
             return ((byte[]) value).length;

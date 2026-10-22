@@ -1150,6 +1150,11 @@ public class DataSyncService {
             throws SQLException {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
+        // Row count alone cannot bound a batch of LOBs; the budget flushes by size too.
+        com.qqmu.jync.service.lob.BatchByteBudget byteBudget =
+                new com.qqmu.jync.service.lob.BatchByteBudget(
+                        properties.getLob() == null ? 0L
+                                : properties.getLob().getBatchMaxBytes());
         // Temporary LOBs bound into the batch stay alive until it executes, then are freed.
         com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker =
                 com.qqmu.jync.service.lob.LobBinder.newTracker();
@@ -1175,19 +1180,22 @@ public class DataSyncService {
 
                 cleanser.apply(row);
                 boolean immediate = false;
+                long rowBytes = 0L;
                 for (Object value : row.values()) {
                     if (LobValues.requiresImmediateExecution(value)) {
                         immediate = true;
-                        break;
                     }
+                    rowBytes += com.qqmu.jync.service.lob.BatchByteBudget.sizeOf(value);
                 }
-                if (immediate && inBatch > 0) {
-                    // The stream is valid only until the cursor moves. Everything already in
-                    // the batch must be durable before this row is read again.
+                boolean budgetFlush = !immediate && byteBudget.wouldExceed(rowBytes);
+                if ((immediate || budgetFlush) && inBatch > 0) {
+                    // The stream is valid only until the cursor moves, and an oversized row
+                    // must not be added to a batch that is already over budget.
                     executeBatch(upsert, targetConn, stats, ctx, throughput);
                     releaseAll(pendingLobs);
                     lobTracker.releaseAll();
                     inBatch = 0;
+                    byteBudget.reset();
                 }
                 JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn,
                         ctx.getTargetDialect(), lobTracker);
@@ -1198,12 +1206,14 @@ public class DataSyncService {
                 } else {
                     upsert.addBatch();
                     inBatch++;
+                    byteBudget.add(rowBytes);
                     trackRowLobs(row, pendingLobs);
                     if (inBatch >= batchSize) {
                         executeBatch(upsert, targetConn, stats, ctx, throughput);
                         releaseAll(pendingLobs);
                         lobTracker.releaseAll();
                         inBatch = 0;
+                        byteBudget.reset();
                     }
                 }
                 stats.read++;
