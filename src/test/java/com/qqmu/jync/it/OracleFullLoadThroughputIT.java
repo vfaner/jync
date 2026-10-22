@@ -89,6 +89,8 @@ class OracleFullLoadThroughputIT {
     private static final int CHUNK_SIZE = 100_000;
     private static final int FULL_LOAD_BATCH = 2_000;
     private static final int FULL_LOAD_FETCH = 2_000;
+    /** Live-traffic batch: the incremental and CDC paths keep the conservative default. */
+    private static final int INCREMENTAL_BATCH = 500;
     /** Conservative read-side fetch for the raw-JDBC control runs. */
     private static final int CONTROL_FETCH = 1_000;
 
@@ -357,6 +359,102 @@ class OracleFullLoadThroughputIT {
         }
     }
 
+    // --- 3) engine incremental: the MERGE path every later cycle uses ----------------------
+
+    /**
+     * The incremental window is not an initial load, so it goes through the dialect's upsert
+     * ({@code MERGE}) rather than INSERT-first. The target is seeded with different values so
+     * every matched row has to be updated: a run that only re-read and skipped would look
+     * fast and do nothing.
+     */
+    @Test
+    void engineIncrementalUpsertThroughput() throws SQLException {
+        String target = "INCR_TGT";
+        recreate(target);
+        seedIncrementalTarget(target);
+
+        ListAppender<ILoggingEvent> meterLogs = attachMeterLog();
+        DataSyncService.TableSyncResult result;
+        long start = System.nanoTime();
+        try {
+            result = syncIncremental(target);
+        } finally {
+            detachMeterLog(meterLogs);
+        }
+        long nanos = System.nanoTime() - start;
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(result.getRowsWritten()).isEqualTo(ROWS);
+        assertThat(count(target)).isEqualTo(ROWS);
+        assertThat(sumId(target)).isEqualTo(checksum(SRC));
+        assertThat(queryLong("SELECT COUNT(*) FROM " + target + " WHERE NAME LIKE 'old-%'"))
+                .as("every seeded row must have been updated")
+                .isZero();
+        assertThat(meterLogs.list)
+                .as("the throughput meter must have reported the pass")
+                .anyMatch(e -> e.getFormattedMessage().contains("rows/s="));
+
+        System.out.println();
+        System.out.println("Engine incremental upsert (window " + ROWS + " rows, batch "
+                + INCREMENTAL_BATCH + ", 10 columns)");
+        System.out.println(String.format("%-24s %10s %12s%n", "variant", "seconds", "rows/s")
+                + String.format("%-24s %10s %12.0f%n", "engine incremental",
+                        seconds(nanos), ROWS * 1_000_000_000.0 / nanos));
+    }
+
+    private DataSyncService.TableSyncResult syncIncremental(String targetTable)
+            throws SQLException {
+        ChunkCheckpointRepository checkpoints = mock(ChunkCheckpointRepository.class);
+        SyncProperties properties = new SyncProperties();
+
+        SyncConfig config = new SyncConfig();
+        config.setTableNameMapping(new LinkedHashMap<>(Map.of(SRC, targetTable)));
+
+        DatabaseConfig sourceCfg = new DatabaseConfig();
+        sourceCfg.setId(11L);
+        sourceCfg.setType(DatabaseType.ORACLE);
+        DatabaseConfig targetCfg = new DatabaseConfig();
+        targetCfg.setId(12L);
+        targetCfg.setType(DatabaseType.ORACLE);
+
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("throughput-bench");
+
+        SyncContext ctx = SyncContext.builder()
+                .project(project)
+                .config(config)
+                .sourceConfig(sourceCfg)
+                .targetConfig(targetCfg)
+                .sourceType(DatabaseType.ORACLE)
+                .targetType(DatabaseType.ORACLE)
+                .sourceSchema(schema)
+                .targetSchema(schema)
+                .sourceDialect(new OracleDialect())
+                .targetDialect(new OracleDialect())
+                .batchSize(INCREMENTAL_BATCH)
+                .connectionProvider(cfg -> open())
+                .build();
+
+        TableMeta meta;
+        try (Connection conn = open()) {
+            meta = new OracleMetadataReader().readTable(conn, schema, SRC);
+        }
+        CursorStrategy strategy = CursorStrategy.identity("ID", Types.NUMERIC,
+                "numeric primary key");
+
+        // initial-load-done plus a cursor at 0 routes syncTable to the incremental window,
+        // whose upper bound is MAX(ID): every source row is in the window exactly once.
+        SyncProgress progress = new SyncProgress();
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue("0");
+
+        DataSyncService service = new DataSyncService(properties, checkpoints);
+        try (Connection sourceConn = open(); Connection targetConn = open()) {
+            return service.syncTable(sourceConn, targetConn, meta, strategy, progress, ctx);
+        }
+    }
+
     // --- fixtures ---------------------------------------------------------------------------
 
     private static Connection open() throws SQLException {
@@ -383,6 +481,15 @@ class OracleFullLoadThroughputIT {
             st.execute("CREATE INDEX IX_LOAD_SRC_NAME ON " + SRC + " (NAME)");
             st.execute("CREATE INDEX IX_LOAD_SRC_QTY ON " + SRC + " (QTY)");
         }
+    }
+
+    /** Same shape as the source, different values: every row must be an actual update. */
+    private static void seedIncrementalTarget(String table) throws SQLException {
+        exec("INSERT /*+ APPEND */ INTO " + table
+                + " SELECT LEVEL, 'old-' || LEVEL, 0, SYSDATE, RPAD('old', 120, 'x'),"
+                + " 0, 'NEW', SYSTIMESTAMP, 'old', 0"
+                + " FROM dual CONNECT BY LEVEL <= " + ROWS);
+        exec("COMMIT");
     }
 
     private static void recreate(String table) throws SQLException {
