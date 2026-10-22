@@ -394,7 +394,7 @@ java -jar jync.jar --spring.config.additional-location=file:./application.yml
 > 🔐 **Encryption keys:** `sync.crypto-password` and `sync.crypto-salt` encrypt the stored connection passwords.
 > - **A fresh install needs no configuration**: the first start generates a strong key and writes it to `<store>.key` next to the database file (e.g. `data/jync.key`).
 > - **Back up `<store>.key` together with `./data`**: without it, previously saved connection passwords cannot be decrypted and must be re-entered in the UI.
-> - **Keep the defaults when upgrading an existing install**: they are what decrypts the old ciphertext. Changing them invalidates every stored password.
+> - **Keep the defaults when upgrading an existing install**: the first v1.7.8 start uses them to read the old ciphertext, then generates a new key, re-encrypts every stored password and writes `<store>.key`; the public defaults are not used again. Changing them by hand invalidates every stored password.
 > - Set the two keys explicitly (environment variables or a Kubernetes Secret) if you prefer to manage them yourself; `crypto-salt` must be valid hexadecimal.
 
 > 🔇 **Air-gapped / offline:** uncomment `sync.ai.enabled` and `app.update-check.enabled` above and restart — the application then makes no outbound requests at all. The AI menu is hidden and AI drafting is blocked before any request; the boot-time update pre-check is disabled and Settings shows "update check disabled". Both default to enabled, so networked deployments need no change.
@@ -513,7 +513,7 @@ On first start two accounts are seeded into the `app_user` table of the metadata
 | `admin` | Administrator | `123456` | Everything |
 | `view` | Viewer | `123456` | Read-only |
 
-> ⚠️ **Change both passwords immediately after your first sign-in.** The jar is publicly downloadable, so the initial password is not a secret. Any account still on it sees a persistent yellow banner at the top of every page; clicking it jumps to the change-password form.
+> ⚠️ **The initial password is not a secret** — the jar is publicly downloadable. Both seeded accounts must therefore change it on first sign-in: until they do, every other page and API is refused and only the change-password form is reachable. An account still on the initial password also shows a yellow banner at the top of every page.
 
 ### What the two roles differ on
 
@@ -1006,8 +1006,8 @@ Under `sync.*` in `application.yml`:
 | `sync.lob.enable-source-streaming` | `true` | PostgreSQL/openGauss sources hold a read-only transaction during the read (without it fetch size is ignored) |
 | `sync.lob.oracle-empty-string-as-empty-clob` | `true` | An empty string bound to an Oracle CLOB target becomes an empty CLOB, not NULL |
 | `sync.lob.metrics-log-interval-ms` | `60000` | Interval for LOB statistics logs and throttled warnings (ms) |
-| `crypto-password` | *(default)* | Password encryption key — **must be changed in production** |
-| `crypto-salt` | *(default)* | Encryption salt (hex) — **must be changed in production** |
+| `crypto-password` | *(default)* | Password encryption key. Blank/generated on a fresh install; an existing store with the defaults is re-encrypted under a generated key on first boot (v1.7.8). Set explicitly to manage it yourself |
+| `crypto-salt` | *(default)* | Encryption salt (hex). Same behaviour as `crypto-password`; explicit values must be valid hexadecimal |
 | `ai.enabled` | `true` | Whether AI-assisted conversion may be configured. `false` removes the menu and its endpoints |
 | `app.update-check.enabled` | `true` | New-version check (GitHub first, Gitee fallback). `false` also removes the in-app upgrade entry point |
 | `app.update-check.timeout-ms` | `5000` | Per-request timeout (ms) of the update check; on timeout the other platform takes over |

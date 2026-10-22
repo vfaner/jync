@@ -200,7 +200,8 @@ sync:
   # NOTE: the literals below are deliberately kept at their pre-rename default — stored
   # connection passwords were AES-encrypted with them, and changing the default would make
   # every existing installation's saved credentials undecryptable after upgrade. An existing
-  # database therefore keeps them (see CryptoKeyResolver).
+  # database therefore boots with them and LegacyCryptoKeyMigration then re-encrypts every
+  # stored secret under a generated key, promoting it to <name>.key once the rows commit.
   crypto-password: synctool-default-key-change-me
   crypto-salt: 5c0744940b5c369b
   ai:

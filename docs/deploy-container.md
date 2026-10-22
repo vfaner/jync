@@ -37,7 +37,7 @@ docker run -d --name jync \
   jync:1.7.8
 ```
 
-打开 <http://localhost:8080>，默认账号 `admin` / `view`，密码 `123456`，**登录后立即修改**。
+打开 <http://localhost:8080>，默认账号 `admin` / `view`，密码 `123456`，**首次登录必须先修改密码**（未修改前只能停留在改密页）。
 
 ## 3. Docker Compose
 

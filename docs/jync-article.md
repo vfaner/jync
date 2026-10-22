@@ -55,7 +55,7 @@ java -jar target/jync.jar
 
 不想从源码构建的话，也可以直接从 Releases 下载成品 `jync.jar`（[GitHub](https://github.com/vfaner/jync/releases/latest) / [Gitee](https://gitee.com/super_rgh/jync/releases/latest)），`java -jar jync.jar` 一条命令启动。
 
-浏览器打开 `http://localhost:8080`，默认账号 `admin / 123456`（**首次登录后请立即改密**，未改密前页面会一直挂红色警告）。接下来的使用流程只有五步：建源库连接 → 建目标库连接 → 新建项目选两端 → 勾选要同步的表/视图/存储过程 → 点「启动同步」。生产环境建议用 systemd 托管，并修改 `application.yml` 中的 `sync.crypto-password` 与 `crypto-salt`；生产配置、后台常驻、外部驱动加载等更完整的部署说明见[详细教程](https://jync.qqmu.com/deploy.html)。
+浏览器打开 `http://localhost:8080`，默认账号 `admin / 123456`（**首次登录必须先改密**，未改密前只能停留在改密页，其他页面与 API 均不可用）。接下来的使用流程只有五步：建源库连接 → 建目标库连接 → 新建项目选两端 → 勾选要同步的表/视图/存储过程 → 点「启动同步」。生产环境建议用 systemd 托管，并修改 `application.yml` 中的 `sync.crypto-password` 与 `crypto-salt`；生产配置、后台常驻、外部驱动加载等更完整的部署说明见[详细教程](https://jync.qqmu.com/deploy.html)。
 
 ## 效果截图
 
