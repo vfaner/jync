@@ -1,5 +1,8 @@
 package com.qqmu.jync.service.task;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.Job;
 import org.quartz.JobExecutionContext;
@@ -39,6 +42,21 @@ public class SyncJob implements Job {
     public static final String PROJECT_NAME = "projectName";
 
     /**
+     * How often an idle project still writes one completion line at INFO. The per-fire
+     * details stay at DEBUG: with a 2-second poll interval, two INFO lines per fire turn one
+     * idle project into ~86,000 lines a day, which buries the cycles that actually changed
+     * something. A periodic heartbeat keeps the "did my schedule fire?" answer without it.
+     */
+    private static final long IDLE_HEARTBEAT_MS = 10 * 60 * 1000L;
+
+    private static final ConcurrentMap<Long, Long> LAST_IDLE_HEARTBEAT =
+            new ConcurrentHashMap<>();
+
+    static void resetIdleHeartbeatForTests() {
+        LAST_IDLE_HEARTBEAT.clear();
+    }
+
+    /**
      * Injected by {@link org.springframework.scheduling.quartz.SpringBeanJobFactory}; Quartz
      * instantiates the job itself, so constructor injection is not available.
      */
@@ -50,10 +68,9 @@ public class SyncJob implements Job {
         Long projectId = context.getMergedJobDataMap().getLong(PROJECT_ID);
         String project = label(context.getMergedJobDataMap().getString(PROJECT_NAME), projectId);
         long startedAt = System.nanoTime();
-        // Operators read these two lines to answer "did my schedule fire, and how long did
-        // it take?" — a question the old debug-level completion line could not answer at
-        // the default INFO level.
-        log.info("Project '{}': scheduled sync starting", project);
+        // Per-fire detail is DEBUG; finish() promotes a cycle that changed something, failed,
+        // or is due for the idle heartbeat to INFO.
+        log.debug("Project '{}': scheduled sync starting", project);
 
         if (!runner.projectExists(projectId)) {
             // The project was deleted but a delete-vs-schedule race left the Quartz job
@@ -65,7 +82,8 @@ public class SyncJob implements Job {
                 log.error("Could not delete the orphaned job for project {}: {}",
                         projectId, e.getMessage());
             }
-            finish(project, startedAt, "project no longer exists; orphaned job removed");
+            finish(projectId, project, startedAt,
+                    "project no longer exists; orphaned job removed", true);
             return;
         }
         if (!runner.projectEnabled(projectId)) {
@@ -80,28 +98,49 @@ public class SyncJob implements Job {
                 log.error("Could not remove the stale schedule for disabled project {}: {}",
                         projectId, e.getMessage());
             }
-            finish(project, startedAt, "project is stopped; schedule removed");
+            finish(projectId, project, startedAt, "project is stopped; schedule removed", true);
             return;
         }
         try {
-            String detail = runner.runOnce(projectId)
-                    .result()
+            SyncTaskRunner.Outcome outcome = runner.runOnce(projectId);
+            String detail = outcome.result()
                     .map(SyncResult::summary)
                     .orElse("another cycle is still running; this fire was queued");
-            finish(project, startedAt, detail);
+            boolean noteworthy = outcome.result()
+                    .map(result -> result.hasChanges() || !result.isSuccess())
+                    .orElse(false);
+            finish(projectId, project, startedAt, detail, noteworthy);
         } catch (RuntimeException e) {
             // Never let an exception escape into Quartz: an unhandled error can cause the
             // trigger to be unscheduled, which would silently stop syncing this project.
             log.error("Scheduled sync of project {} threw an unexpected exception", projectId, e);
-            finish(project, startedAt, "failed: " + e.getMessage());
+            finish(projectId, project, startedAt, "failed: " + e.getMessage(), true);
         }
     }
 
-    private static void finish(String project, long startedAt, String detail) {
-        log.info("Project '{}': scheduled sync finished in {}s — {}", project,
-                String.format(java.util.Locale.ROOT, "%.1f",
-                        (System.nanoTime() - startedAt) / 1_000_000_000.0),
-                detail);
+    private static void finish(Long projectId, String project, long startedAt, String detail,
+                               boolean noteworthy) {
+        String elapsed = String.format(java.util.Locale.ROOT, "%.1f",
+                (System.nanoTime() - startedAt) / 1_000_000_000.0);
+        if (noteworthy || idleHeartbeatDue(projectId)) {
+            log.info("Project '{}': scheduled sync finished in {}s — {}", project, elapsed, detail);
+        } else {
+            log.debug("Project '{}': scheduled sync finished in {}s — {}", project, elapsed, detail);
+        }
+    }
+
+    /** True for the first idle fire and then at most once per {@link #IDLE_HEARTBEAT_MS}. */
+    private static boolean idleHeartbeatDue(Long projectId) {
+        long now = System.currentTimeMillis();
+        boolean[] due = {false};
+        LAST_IDLE_HEARTBEAT.compute(projectId, (id, last) -> {
+            if (last == null || now - last >= IDLE_HEARTBEAT_MS) {
+                due[0] = true;
+                return now;
+            }
+            return last;
+        });
+        return due[0];
     }
 
     private static String label(String name, Long projectId) {

@@ -145,7 +145,10 @@ public class SyncLockService {
         }
         try {
             if (!store.acquire(projectId, ownerId, ttlMs)) {
-                log.info("Project {} is locked by another instance; skipping this fire", projectId);
+                // Steady state for the passive side of a multi-instance deployment: the other
+                // instance holds the lease and runs the cycle. Logging this per fire at INFO
+                // turns an idle project into a line every poll interval.
+                log.debug("Project {} is locked by another instance; skipping this fire", projectId);
                 jvmLock.release();
                 return null;
             }

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Test-run logging stays on the console only.
+
+  Without this file, a Spring Boot test picks up application.yml's
+  logging.file.name and writes into the same ./logs/jync.log the running
+  application uses. A suite run dumps hundreds of MB of expected-exception
+  stack traces there, which buries the runtime history and defeats the
+  size caps: the caps bound a rolling policy, not one test-minded JVM
+  appending to the live file.
+-->
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="org.hibernate.SQL" level="WARN"/>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+</configuration>

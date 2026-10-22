@@ -213,7 +213,9 @@ public class SyncTaskRunner {
                 }
                 int attempt = rerunAttempts.merge(projectId, 1, Integer::sum);
                 if (attempt >= MAX_RERUN_ATTEMPTS) {
-                    log.info("Queued rerun for project '{}' gave up after {} attempts to take"
+                    // Another instance holding the lock is the expected steady state, and
+                    // this repeats on every scheduled fire while it lasts; keep it at DEBUG.
+                    log.debug("Queued rerun for project '{}' gave up after {} attempts to take"
                             + " a lock held outside this process; it will run at the next"
                             + " scheduled or manual trigger", project.getName(), attempt);
                     queuedReruns.remove(projectId);

@@ -181,3 +181,12 @@ logging:
     org.hibernate.SQL: WARN
   file:
     name: ./logs/jync.log
+  # 日志文件的上限。Spring Boot 默认只按时长保留（7 天）且没有总量上限，长期运行会把
+  # ./logs 撑到数十 GB；这里给出明确的单文件大小、保留天数与总量三重限制。
+  # 清理在启动时也会执行一次，因此异常退出留下的 .tmp 中转文件与超限历史会被回收。
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 14
+      total-size-cap: 500MB
+      clean-history-on-start: true
