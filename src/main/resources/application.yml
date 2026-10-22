@@ -83,6 +83,11 @@ app:
     enabled: true
     # 单次请求超时（毫秒）：任一平台超过这个时长仍无结果即改查另一平台
     timeout-ms: 5000
+  security:
+    # 反向代理地址（逗号分隔，支持 IPv4/IPv6 CIDR），回环地址总是信任。
+    # 只有这里列出的机器发来的 X-Forwarded-For / X-Real-IP 才会被采信；留空表示没有代理。
+    # 曾经把"私网直连"当作代理，导致同网段客户端可以每次伪造不同 IP，绕过登录锁定并污染审计。
+    trusted-proxies: ${JYN_TRUSTED_PROXIES:}
 
 sync:
   # Default polling interval in milliseconds for change detection

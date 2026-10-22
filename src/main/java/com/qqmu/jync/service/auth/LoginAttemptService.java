@@ -25,6 +25,28 @@ public class LoginAttemptService {
     /** How long the pair stays blocked once the threshold is hit. */
     public static final long LOCK_MS = 15 * 60 * 1000L;
 
+    /**
+     * Usernames longer than this are truncated before they become a key.
+     *
+     * <p>The sign-in form caps the field at 64 characters, but that cap lives in the browser.
+     * The HTTP body can be up to Tomcat's form-post limit (~2 MB), and an entry keyed by a
+     * 2 MB username is retained for as long as the process lives — a handful of unauthenticated
+     * requests would otherwise pin hundreds of megabytes. No real account name is this long.
+     */
+    public static final int MAX_USERNAME_LENGTH = 64;
+
+    /**
+     * Upper bound on tracked pairs.
+     *
+     * <p>Every failed sign-in with a previously unseen username creates an entry, and an
+     * unauthenticated caller controls the username. Without a bound the map is an unbounded
+     * memory sink; entries are tiny (a truncated key plus a counter), so 10 000 of them cost
+     * a couple of megabytes. Once the cap is reached, expired entries are reclaimed first and
+     * then arbitrary ones — a flooded map protects the specific account being guessed no worse
+     * than the attacker's own rotating usernames already do.
+     */
+    public static final int MAX_TRACKED_KEYS = 10_000;
+
     private record Attempts(int count, long windowStart) {
     }
 
@@ -63,6 +85,9 @@ public class LoginAttemptService {
             }
             return new Attempts(previous.count + 1, previous.windowStart);
         });
+        if (attempts.size() > MAX_TRACKED_KEYS) {
+            prune();
+        }
     }
 
     /** Clears the counter after a successful sign-in. */
@@ -70,8 +95,39 @@ public class LoginAttemptService {
         attempts.remove(key);
     }
 
-    /** Lockout key: username (case-insensitive) plus the client IP. */
+    /** Number of tracked pairs; package-private so the cap can be asserted directly. */
+    int trackedKeys() {
+        return attempts.size();
+    }
+
+    /**
+     * Reclaims expired windows, then drops arbitrary entries if the map is still over the cap.
+     * Called only when the cap is exceeded, so the steady state costs one size check per failure.
+     */
+    private void prune() {
+        long now = clock.getAsLong();
+        attempts.entrySet().removeIf(e -> now - e.getValue().windowStart() >= LOCK_MS);
+        var it = attempts.keySet().iterator();
+        while (attempts.size() > MAX_TRACKED_KEYS && it.hasNext()) {
+            it.next();
+            it.remove();
+        }
+    }
+
+    /**
+     * Lockout key: username (case-insensitive, length-capped) plus the client IP.
+     *
+     * <p>The username is trimmed and truncated <em>before</em> the upper-casing so an oversized
+     * body is never copied whole into a longer-lived string.
+     */
     public static String key(String username, String clientIp) {
-        return (username == null ? "" : username.trim().toUpperCase()) + "|" + clientIp;
+        if (username == null) {
+            return "|" + clientIp;
+        }
+        String trimmed = username.trim();
+        if (trimmed.length() > MAX_USERNAME_LENGTH) {
+            trimmed = trimmed.substring(0, MAX_USERNAME_LENGTH);
+        }
+        return trimmed.toUpperCase() + "|" + clientIp;
     }
 }

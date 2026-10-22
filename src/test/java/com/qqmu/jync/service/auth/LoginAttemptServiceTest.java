@@ -74,4 +74,41 @@ class LoginAttemptServiceTest {
         assertThat(LoginAttemptService.key(" Admin ", "1.2.3.4"))
                 .isEqualTo(LoginAttemptService.key("admin", "1.2.3.4"));
     }
+
+    @Test
+    void aHugeUsernameIsTruncatedBeforeItBecomesAKey() {
+        // The login form caps the field at 64 characters client-side; the server must not
+        // retain a multi-megabyte body just because someone posted one.
+        String key = LoginAttemptService.key("x".repeat(2_000_000), "1.2.3.4");
+
+        assertThat(key.length())
+                .isLessThanOrEqualTo(LoginAttemptService.MAX_USERNAME_LENGTH + 1 + "1.2.3.4".length());
+    }
+
+    @Test
+    void distinctFailuresNeverGrowTheTrackingMapPastItsCap() {
+        // Every unknown username creates an entry. Before the cap, an unauthenticated flood
+        // of random usernames retained every one of them for the life of the process.
+        int flood = LoginAttemptService.MAX_TRACKED_KEYS + 2_000;
+        for (int i = 0; i < flood; i++) {
+            service.recordFailure(LoginAttemptService.key("user" + i, "10.0.0.1"));
+        }
+
+        assertThat(service.trackedKeys()).isLessThanOrEqualTo(LoginAttemptService.MAX_TRACKED_KEYS);
+    }
+
+    @Test
+    void pruningKeepsRecentLockoutsAndDropsExpiredOnes() {
+        // Fill to the cap inside one window, advance past it, then add one more failure:
+        // everything expired should be reclaimed rather than permanently displacing new keys.
+        for (int i = 0; i < LoginAttemptService.MAX_TRACKED_KEYS; i++) {
+            service.recordFailure(LoginAttemptService.key("user" + i, "10.0.0.1"));
+        }
+        now.addAndGet(LoginAttemptService.LOCK_MS + 1);
+
+        service.recordFailure(key);
+
+        assertThat(service.trackedKeys()).isLessThan(LoginAttemptService.MAX_TRACKED_KEYS);
+        assertThat(service.isBlocked(key)).isFalse();
+    }
 }
