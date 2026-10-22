@@ -31,6 +31,12 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <lombok.version>1.18.30</lombok.version>
+        <!-- Spring Boot 2.7.18 is the last OSS release of the 2.7 line, so its managed
+             versions stop at 2023. These overrides pick up the security fixes published
+             afterwards on the same minor lines; Boot supports overriding all three. -->
+        <tomcat.version>9.0.123</tomcat.version>
+        <spring-framework.version>5.3.39</spring-framework.version>
+        <spring-security.version>5.7.14</spring-security.version>
         <!-- JVM args for the forked test JVM; the lob-memory-it profile sets a small heap
              so PostgresToOracleLobIT proves the LOB read path does not buffer whole values. -->
         <jync.test.jvmArgs></jync.test.jvmArgs>

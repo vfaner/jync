@@ -67,11 +67,14 @@ public class SecurityConfig {
             // button, so the status poll must not answer for one either.
             "/api/upgrade/status",
             // Preview returns row data straight out of the configured databases, and the two
-            // lookups expose an arbitrary table's schema. All three back admin-only controls
-            // on the project detail page; a viewer must not call them directly.
+            // lookups expose an arbitrary table's schema. The CDC probe is read-only in the
+            // HTTP sense but opens a connection to the configured source and runs capability
+            // queries there. All four back admin-only controls on the project detail page; a
+            // viewer must not call them directly.
             "/api/projects/*/preview",
             "/api/projects/*/columns",
-            "/api/projects/*/cursor-candidates"
+            "/api/projects/*/cursor-candidates",
+            "/api/projects/*/cdc-probe"
     };
 
     @Bean

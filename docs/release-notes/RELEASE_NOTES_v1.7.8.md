@@ -17,6 +17,13 @@
 - **主键 / 游标 / 清洗列被误当大字段流式处理**：这些列永远物化，清洗规则仍生效；超过 `force-inline-max-bytes` 时明确报错并指明表、列与配置键，不静默截断。
 - **模拟 upsert 与 CDC 重放重复绑定**：同一值需要绑定多次时，一次性流会在第一次绑定前报错，可重放值（内存或落盘）正常执行。
 
+## 安全加固
+
+- **未认证请求可以耗尽内存**：登录失败计数按「用户名 + 客户端 IP」记账，此前用户名不截断、计数表也没有上限——未登录的攻击者每次提交一个随机（甚至上兆字节的）用户名，就能让进程永久保留这些条目。现在用户名在入 key 前截断到 64 字符，计数表上限 10000 条，超限时先回收过期条目再淘汰任意条目。
+- **转发头信任范围过宽**：`X-Forwarded-For` / `X-Real-IP` 此前对任何私网直连都采信。内网部署中客户端本身就是私网地址，于是任何同网段用户都能逐次伪造来源 IP，使 5 次失败锁定形同虚设，并把伪造地址写进审计。现在只信任回环地址与 `app.security.trusted-proxies` 中显式列出的代理（支持 IPv4/IPv6 CIDR），配置写错会在启动时直接失败而不是静默退化。
+- **只读账号可以触发源库探测**：`GET /api/projects/{id}/cdc-probe` 会以管理员配置的凭据连接源库并执行探测查询，此前未列入管理员专属 GET，viewer 也能调用；现已收紧为管理员。
+- **依赖版本补齐**：Spring Boot 2.7.18 是 2.7 线最后一个 OSS 版本，其管理版本停在 2023 年。本次覆盖到同主版本线上后续发布的安全修复：Tomcat `9.0.83 → 9.0.123`、Spring Framework `5.3.31 → 5.3.39`、Spring Security `5.7.11 → 5.7.14`（分别覆盖 CVE-2024-24549 / CVE-2024-23672、CVE-2024-22243 / CVE-2024-22259、CVE-2024-22257）。
+
 ## 新功能
 
 - **大字段与流式设置卡片**：系统信息页新增「大字段与流式」，展示流式开关、内联阈值、CDC 落盘阈值、单批字节预算、源端流式、落盘目录与容量、清理保留期与 LogMiner 缺失 LOB 策略，中英文同步。
@@ -45,10 +52,11 @@
 - 落盘目录默认 `${java.io.tmpdir}/jync-lob`，需要确保该分区有足够空间；容量由 `spill-max-bytes` 约束。
 - Oracle `MERGE` 大值绑定的行为变化只在目标为 Oracle 时生效，其他方言仍走流式绑定。
 - 配置项 `oracle-initial-load-insert-first` 更名 `initial-load-insert-first`；旧键仍可绑定，无需改 YAML。该开关现在同时作用于 MySQL 与 PostgreSQL 目标。
+- **部署了跨机反向代理的用户必须配置 `app.security.trusted-proxies`**（或环境变量 `JYN_TRUSTED_PROXIES`，逗号分隔的地址或 CIDR）。默认只信任回环地址；未配置时，经代理转发的请求一律按代理 IP 计算登录锁定与审计来源，多个用户会共用同一个锁定计数。同机（回环）代理无需配置。
 
 ## 测试
 
-- 1919 个单测：1918 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
+- 1928 个单测：1927 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
 - 新增/扩充的大字段集成测试：Oracle → MySQL（600 KB CLOB + 1 MB BLOB 的基线与增量 upsert）、SQL Server → Oracle（`NVARCHAR(MAX)` / `VARBINARY(MAX)` 的基线与增量 MERGE）、MySQL → Oracle（100k 汉字增量 MERGE、5 MB CLOB/BLOB、`NOT NULL CLOB` 空串、厂商类型）、Oracle → openGauss（行外 LOB 跳过）、MySQL CDC 事务落盘（2 MB 行、提交后无残留）、可选 PostgreSQL → Oracle 60 行 × 约 5 MB 大字段（300 MB 源数据，`-Plob-memory-it` 在 96 MB 堆下完成基线与增量 MERGE）。
 
 ## 升级

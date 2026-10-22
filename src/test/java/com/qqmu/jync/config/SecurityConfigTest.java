@@ -244,7 +244,10 @@ class SecurityConfigTest {
         for (String path : new String[] {
                 "/api/projects/1/preview?table=T&side=source",
                 "/api/projects/1/columns?table=T",
-                "/api/projects/1/cursor-candidates?table=T"}) {
+                "/api/projects/1/cursor-candidates?table=T",
+                // The CDC probe is read-only in the HTTP sense, but it opens a connection to
+                // the configured source and runs capability queries there.
+                "/api/projects/1/cdc-probe"}) {
             assertThat(statusOf(get(path).with(asViewer()))).as(path).isEqualTo(403);
             assertThat(statusOf(get(path).with(asAdmin()))).as(path).isNotEqualTo(403);
         }
