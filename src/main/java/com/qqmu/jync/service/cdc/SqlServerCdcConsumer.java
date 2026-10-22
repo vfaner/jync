@@ -26,6 +26,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
+import com.qqmu.jync.service.lob.LobSpillStore;
 import com.qqmu.jync.service.sync.JdbcValueNormalizer;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
@@ -126,6 +127,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     /** Per-table aggregated change-log flusher (10s windows, final flush on stop). */
     private final CdcChangeWindowLogger windowLogger;
+
+    /** LOB spill store for buffered rows, built on first use; null when switched off. */
+    private volatile LobSpillStore lobSpillStore;
+    /** Owns the files of the window currently folded; null between drains. */
+    private CdcLobSpiller spiller;
 
     public SqlServerCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                 SyncContext ctx, CdcPositionStore positionStore,
@@ -278,6 +284,16 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * entire interval — no rows are skipped silently.
      */
     DrainResult drain(Connection conn, String fromLsn) throws Exception {
+        try {
+            return drainWindow(conn, fromLsn);
+        } finally {
+            // Rows a stop left unflushed are re-read from the capture tables next start;
+            // their spilled files have no reader left.
+            resetSpiller();
+        }
+    }
+
+    private DrainResult drainWindow(Connection conn, String fromLsn) throws Exception {
         long projectId = project.getId();
         DrainResult out = new DrainResult();
         String maxLsn = readMaxLsn(conn);
@@ -451,6 +467,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                         continue;
                     }
                     Map<String, Object> row = readRow(rs, binding, availableCols);
+                    if (op == 1 || op == 4) {
+                        // Insert / update-after images reach the target whole. Delete and
+                        // update-before images only supply primary keys to the fold.
+                        row = spiller().spill(binding, row);
+                    }
                     fold.accept(startLsn, binding, op, row);
                     out.rows++;
                     stats.touchEvent(System.currentTimeMillis());
@@ -507,6 +528,41 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             }
         }
         return true;
+    }
+
+    /** This drain window's spiller, disposed when the window ends. */
+    private CdcLobSpiller spiller() {
+        if (spiller == null) {
+            LobSpillStore store = spillStore();
+            spiller = store == null ? CdcLobSpiller.disabled()
+                    : new CdcLobSpiller(store, properties.getLob().getCdcSpillThresholdBytes(),
+                            ctx.getConfig());
+        }
+        return spiller;
+    }
+
+    private void resetSpiller() {
+        if (spiller != null) {
+            spiller.close();
+            spiller = null;
+        }
+    }
+
+    private LobSpillStore spillStore() {
+        if (!properties.getLob().isStreamingEnabled()) {
+            return null;
+        }
+        LobSpillStore store = lobSpillStore;
+        if (store == null) {
+            synchronized (this) {
+                store = lobSpillStore;
+                if (store == null) {
+                    store = LobSpillStore.from(properties);
+                    lobSpillStore = store;
+                }
+            }
+        }
+        return store;
     }
 
     private void flushTransaction(long projectId, String txLsn,

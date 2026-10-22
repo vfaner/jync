@@ -1103,9 +1103,7 @@ public class DataSyncService {
             synchronized (this) {
                 store = lobSpillStore;
                 if (store == null) {
-                    SyncProperties.Lob config = properties.getLob();
-                    store = LobSpillStore.of(java.nio.file.Paths.get(config.getSpillDir()),
-                            config.getSpillMaxBytes());
+                    store = LobSpillStore.from(properties);
                     lobSpillStore = store;
                 }
             }

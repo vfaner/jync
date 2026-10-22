@@ -22,6 +22,7 @@ import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.lob.LobSpillStore;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
@@ -104,6 +105,12 @@ public final class CdcConsumer implements ManagedCdcConsumer {
 
     /** Per-table aggregated change-log flusher (10s windows, final flush on stop). */
     private final CdcChangeWindowLogger windowLogger;
+
+    /**
+     * Temp files for oversized values in a buffered binlog transaction. Built on first
+     * use, and only when {@code sync.lob.streaming-enabled} is on.
+     */
+    private volatile LobSpillStore lobSpillStore;
 
     /**
      * Ruling R3b: a connection must demonstrably LIVE before the reconnect backoff may
@@ -196,6 +203,10 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     awaitStreamEnd(client);
                 } catch (Exception e) {
                     lastFailure.compareAndSet(null, e);
+                } finally {
+                    // A failed flush keeps its buffer (and spilled files) for the replay
+                    // story, but this handler dies with the connection: release now.
+                    handler.releaseSpill();
                 }
                 stats.setConnected(false);
                 if (!running) {
@@ -395,7 +406,8 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     private CdcEventStreamHandler wire(BinaryLogClient client) {
         CdcEventStreamHandler handler = new CdcEventStreamHandler(
                 ctx.getConfig(), ctx.getSourceSchema(), supplier, new CdcRowMapper(), stats,
-                client::getGtidSet, sink);
+                client::getGtidSet, sink, spillStore(),
+                properties.getLob().getCdcSpillThresholdBytes());
         handler.attachClient(client);                            // R1:choke 时自行断连
         client.registerEventListener(handler);
         client.registerLifecycleListener(new BinaryLogClient.AbstractLifecycleListener() {
@@ -436,6 +448,24 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             }
         });
         return handler;
+    }
+
+    /** The LOB spill store, or {@code null} when streaming is switched off. */
+    private LobSpillStore spillStore() {
+        if (!properties.getLob().isStreamingEnabled()) {
+            return null;
+        }
+        LobSpillStore store = lobSpillStore;
+        if (store == null) {
+            synchronized (this) {
+                store = lobSpillStore;
+                if (store == null) {
+                    store = LobSpillStore.from(properties);
+                    lobSpillStore = store;
+                }
+            }
+        }
+        return store;
     }
 
     /**

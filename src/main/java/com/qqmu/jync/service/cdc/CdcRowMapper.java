@@ -31,6 +31,17 @@ public final class CdcRowMapper {
 
     public Map<String, Object> mapRow(Serializable[] binlogRow, CdcTableBinding binding,
                                       CdcRuntimeStats stats) throws CdcUnmappableValueException {
+        return mapRow(binlogRow, binding, stats, CdcLobSpiller.disabled());
+    }
+
+    /**
+     * Maps one row image and hands oversized values to {@code spiller}. The spiller is the
+     * transaction buffer's: it owns the files until the buffer is cleared, so the mapper
+     * only rewrites values in place.
+     */
+    public Map<String, Object> mapRow(Serializable[] binlogRow, CdcTableBinding binding,
+                                      CdcRuntimeStats stats, CdcLobSpiller spiller)
+            throws CdcUnmappableValueException {
         java.util.List<ColumnMeta> columns = binding.getMeta().getColumns();
         if (binlogRow.length != columns.size()) {
             throw new CdcUnmappableValueException(binding.getTable(), "row-image",
@@ -44,7 +55,7 @@ public final class CdcRowMapper {
                     .get(column.getName().toUpperCase(Locale.ROOT));
             row.put(column.getName(), mapValue(binlogRow[i], column, charset, stats));
         }
-        return row;
+        return spiller.spill(binding, row);
     }
 
     static Object mapValue(Serializable raw, ColumnMeta column, String charsetName,

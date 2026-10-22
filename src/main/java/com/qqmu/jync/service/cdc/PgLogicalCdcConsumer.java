@@ -22,6 +22,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
+import com.qqmu.jync.service.lob.LobSpillStore;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -83,6 +84,11 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
 
     /** Per-table aggregated change-log flusher (10s windows, final flush on stop). */
     private final CdcChangeWindowLogger windowLogger;
+
+    /** LOB spill store for buffered rows, built on first use; null when switched off. */
+    private volatile LobSpillStore lobSpillStore;
+    /** Owns the current transaction's spilled values; null between transactions. */
+    private CdcLobSpiller spiller;
 
     public PgLogicalCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                 SyncContext ctx, CdcPositionStore positionStore,
@@ -324,6 +330,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 // as part of the wrong transaction.
                                 upserts.clear();
                                 deletes.clear();
+                                resetSpiller();
                                 currentTxLsn = null;
                                 continue;
                             }
@@ -339,6 +346,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                     upserts.clear();
                                     deletes.clear();
                                 }
+                                resetSpiller();
                                 advanceSlot(conn, slotName, commitLsn);
                                 lastCommitLsn = commitLsn;
                                 currentTxLsn = null;
@@ -365,7 +373,10 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                             if (change.op == PgTestDecodingParser.Op.DELETE) {
                                 deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(change.row);
                             } else {
-                                upserts.computeIfAbsent(binding, k -> new ArrayList<>()).add(change.row);
+                                // Only upserts can carry large payloads to the target; a
+                                // delete binds primary keys alone and stays in memory.
+                                upserts.computeIfAbsent(binding, k -> new ArrayList<>())
+                                        .add(spiller().spill(binding, change.row));
                             }
                             stats.touchEvent(System.currentTimeMillis());
                         }
@@ -414,6 +425,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             }
             throw e;
         } finally {
+            // A half transaction is re-peeked from the slot: its spilled files have no
+            // reader left in this process.
+            resetSpiller();
             try {
                 conn.setAutoCommit(originalAutoCommit);
             } catch (SQLException | RuntimeException ignored) {
@@ -424,6 +438,41 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             stats.recordPositionLsn(lastCommitLsn);
         }
         return total;
+    }
+
+    /** This transaction's spiller; one per buffered transaction, disposed on its boundary. */
+    private CdcLobSpiller spiller() {
+        if (spiller == null) {
+            LobSpillStore store = spillStore();
+            spiller = store == null ? CdcLobSpiller.disabled()
+                    : new CdcLobSpiller(store, properties.getLob().getCdcSpillThresholdBytes(),
+                            ctx.getConfig());
+        }
+        return spiller;
+    }
+
+    private void resetSpiller() {
+        if (spiller != null) {
+            spiller.close();
+            spiller = null;
+        }
+    }
+
+    private LobSpillStore spillStore() {
+        if (!properties.getLob().isStreamingEnabled()) {
+            return null;
+        }
+        LobSpillStore store = lobSpillStore;
+        if (store == null) {
+            synchronized (this) {
+                store = lobSpillStore;
+                if (store == null) {
+                    store = LobSpillStore.from(properties);
+                    lobSpillStore = store;
+                }
+            }
+        }
+        return store;
     }
 
     /**

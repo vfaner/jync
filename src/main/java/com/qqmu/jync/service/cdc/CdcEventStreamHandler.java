@@ -22,6 +22,7 @@ import com.github.shyiko.mysql.binlog.event.TableMapEventData;
 import com.github.shyiko.mysql.binlog.event.UpdateRowsEventData;
 import com.github.shyiko.mysql.binlog.event.WriteRowsEventData;
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.service.lob.LobSpillStore;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -73,6 +74,19 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     private final Supplier<String> gtidSetSupplier;
     private final TransactionSink sink;
 
+    /**
+     * Spill store for the current transaction's oversized values; {@code null} disables
+     * spilling entirely (streaming switched off, or a hand-built handler in a test).
+     */
+    private final LobSpillStore spillStore;
+    private final long spillThresholdBytes;
+
+    /**
+     * Owns the files of the transaction currently buffered. Created lazily on the first
+     * oversized value, closed on every path that clears the buffer.
+     */
+    private volatile CdcLobSpiller spiller;
+
     /** tableId -> TABLE_MAP payload; kept only to name tables in ignored-row diagnostics. */
     private final Map<Long, TableMapEventData> tableMaps = new LinkedHashMap<>();
     /** tableId -> binding; filtered ids (wrong schema, unselected, no PK) are absent. */
@@ -90,6 +104,17 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     public CdcEventStreamHandler(SyncConfig config, String sourceSchema, CdcTableMetaSupplier supplier,
                                  CdcRowMapper mapper, CdcRuntimeStats stats,
                                  Supplier<String> gtidSetSupplier, TransactionSink sink) {
+        this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink, null, 0L);
+    }
+
+    /**
+     * The spilling overload: values above {@code spillThresholdBytes} in the buffered
+     * transaction are written to {@code spillStore} and replaced by replayable handles.
+     */
+    public CdcEventStreamHandler(SyncConfig config, String sourceSchema, CdcTableMetaSupplier supplier,
+                                 CdcRowMapper mapper, CdcRuntimeStats stats,
+                                 Supplier<String> gtidSetSupplier, TransactionSink sink,
+                                 LobSpillStore spillStore, long spillThresholdBytes) {
         this.config = config;
         this.sourceSchema = sourceSchema;
         this.supplier = supplier;
@@ -97,6 +122,8 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         this.stats = stats;
         this.gtidSetSupplier = gtidSetSupplier;
         this.sink = sink;
+        this.spillStore = spillStore;
+        this.spillThresholdBytes = Math.max(0L, spillThresholdBytes);
     }
 
     /**
@@ -215,7 +242,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         TableChange change = changeFor(binding);
         for (Serializable[] row : data.getRows()) {
             try {
-                appendUpsert(change, mapper.mapRow(row, binding, stats));
+                appendUpsert(change, mapper.mapRow(row, binding, stats, spiller()));
             } catch (CdcUnmappableValueException e) {
                 countAndLogUnmappable(binding, "INSERT", e);
             }
@@ -232,8 +259,10 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         TableChange change = changeFor(binding);
         for (Map.Entry<Serializable[], Serializable[]> entry : data.getRows()) {
             try {
+                // The before-image only feeds the PK comparison and a possible delete;
+                // spilling its payload would write a file nobody ever reads.
                 Map<String, Object> before = mapper.mapRow(entry.getKey(), binding, stats);
-                Map<String, Object> after = mapper.mapRow(entry.getValue(), binding, stats);
+                Map<String, Object> after = mapper.mapRow(entry.getValue(), binding, stats, spiller());
                 appendUpsert(change, after);
                 if (primaryKeyChanged(before, after, binding)) {
                     appendDelete(change, before);
@@ -256,6 +285,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         TableChange change = changeFor(binding);
         for (Serializable[] row : data.getRows()) {
             try {
+                // A delete binds primary keys only: keep its row image out of the spiller.
                 appendDelete(change, mapper.mapRow(row, binding, stats));
             } catch (CdcUnmappableValueException e) {
                 countAndLogUnmappable(binding, "DELETE", e);
@@ -292,7 +322,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             // 事务已被源端回滚:它的行事件在 XA PREPARE 时刻已写入 binlog 并进了
             // buffer,而回滚后永远不会再来该事务的提交事件。不清空的话,这些已回滚的
             // 行会搭上「下一个正常事务」的提交边界泄漏到目标端(源端没有的行凭空出现)。
-            buffered.clear();
+            clearBuffer();
             return;
         }
         if (upper.startsWith("XA COMMIT")) {
@@ -326,7 +356,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                 normalized.length() > DDL_LOG_SQL_CHARS
                         ? normalized.substring(0, DDL_LOG_SQL_CHARS) + "..." : normalized);
         supplier.invalidate(null, null);
-        buffered.clear();
+        clearBuffer();
     }
 
     /** Contract 7: one XID = one sink call = one position mark; empty buffers never flush. */
@@ -351,7 +381,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             // The transaction touched nothing we track (other schemas, unselected or
             // unsupported tables, only unmappable rows): never call the sink — an empty
             // apply would push the position forward with no data behind it.
-            buffered.clear();
+            clearBuffer();
             return;
         }
         CdcPositionMark mark = new CdcPositionMark(currentFile, pos, gtidSetSupplier.get());
@@ -366,7 +396,40 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             throw new RuntimeException("CDC transaction flush failed at "
                     + mark.getFile() + ":" + mark.getPos(), e);
         }
+        clearBuffer();
+    }
+
+    /** Lazily builds this transaction's spiller; a handler without a store pays nothing. */
+    private CdcLobSpiller spiller() {
+        CdcLobSpiller current = spiller;
+        if (current != null) {
+            return current;
+        }
+        if (spillStore == null || spillThresholdBytes <= 0) {
+            return CdcLobSpiller.disabled();
+        }
+        current = new CdcLobSpiller(spillStore, spillThresholdBytes, config);
+        spiller = current;
+        return current;
+    }
+
+    /** Drops the buffered transaction together with the files it spilled. */
+    private void clearBuffer() {
         buffered.clear();
+        releaseSpill();
+    }
+
+    /**
+     * Releases the current transaction's spilled files. Called by the consumer after the
+     * stream ends (a failed flush deliberately keeps them open while the buffer is still
+     * retained, but that buffer dies with this handler). Idempotent.
+     */
+    public synchronized void releaseSpill() {
+        CdcLobSpiller current = spiller;
+        spiller = null;
+        if (current != null) {
+            current.close();
+        }
     }
 
     private TableChange changeFor(CdcTableBinding binding) {

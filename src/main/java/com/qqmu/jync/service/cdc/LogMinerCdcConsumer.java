@@ -21,6 +21,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
+import com.qqmu.jync.service.lob.LobSpillStore;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -106,6 +107,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     /** Per-table aggregated change-log flusher (10s windows, final flush on stop). */
     private final CdcChangeWindowLogger windowLogger;
+
+    /** LOB spill store for buffered rows, built on first use; null when switched off. */
+    private volatile LobSpillStore lobSpillStore;
+    /** Owns the files of the buffered transaction; null between transactions. */
+    private CdcLobSpiller spiller;
 
     public LogMinerCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                SyncContext ctx, CdcPositionStore positionStore,
@@ -357,6 +363,16 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
      * past lastScn — the caller idles.
      */
     private List<LogMinerSession.Row> drain(LogMinerSession session) throws Exception {
+        try {
+            return drainSession(session);
+        } finally {
+            // A half transaction is re-mined next session; its spilled files have no
+            // reader left.
+            resetSpiller();
+        }
+    }
+
+    private List<LogMinerSession.Row> drainSession(LogMinerSession session) throws Exception {
         long projectId = project.getId();
         long currentCsn = -1L;
         Map<CdcTableBinding, List<Map<String, Object>>> upserts = new LinkedHashMap<>();
@@ -419,6 +435,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     flushTransaction(projectId, currentCsn, upserts, deletes);
                     upserts.clear();
                     deletes.clear();
+                    resetSpiller();
                     currentCsn = row.csn;
                 }
                 SqlRedoParser.ParsedChange parsed = parser.parse(op, row.sqlRedo, binding);
@@ -437,9 +454,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 // strike-out parking.
                 parseFailures.set(0);
                 if (op == SqlRedoParser.Op.DELETE) {
+                    // Deletes bind primary keys only; no reason to write their payload.
                     deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(parsed.row);
                 } else {
-                    upserts.computeIfAbsent(binding, k -> new ArrayList<>()).add(parsed.row);
+                    upserts.computeIfAbsent(binding, k -> new ArrayList<>())
+                            .add(spiller().spill(binding, parsed.row));
                 }
                 if (row.rowTime != null) {
                     stats.touchEvent(row.rowTime.getTime());
@@ -490,6 +509,41 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         // F-12: a transaction genuinely landed — any earlier failed cycles are old news
         // and must not park the project later.
         applyFailures.set(0);
+    }
+
+    /** This transaction's spiller, disposed at the CSN boundary. */
+    private CdcLobSpiller spiller() {
+        if (spiller == null) {
+            LobSpillStore store = spillStore();
+            spiller = store == null ? CdcLobSpiller.disabled()
+                    : new CdcLobSpiller(store, properties.getLob().getCdcSpillThresholdBytes(),
+                            ctx.getConfig());
+        }
+        return spiller;
+    }
+
+    private void resetSpiller() {
+        if (spiller != null) {
+            spiller.close();
+            spiller = null;
+        }
+    }
+
+    private LobSpillStore spillStore() {
+        if (!properties.getLob().isStreamingEnabled()) {
+            return null;
+        }
+        LobSpillStore store = lobSpillStore;
+        if (store == null) {
+            synchronized (this) {
+                store = lobSpillStore;
+                if (store == null) {
+                    store = LobSpillStore.from(properties);
+                    lobSpillStore = store;
+                }
+            }
+        }
+        return store;
     }
 
     private boolean matchesProjectTable(String owner, String table) {

@@ -134,5 +134,6 @@ public final class LobSpillSession implements AutoCloseable {
             value.release();
         }
         values.clear();
+        store.sessionClosed(this);
     }
 }
