@@ -124,18 +124,36 @@ public final class JdbcRowMapper {
                                                   com.qqmu.jync.service.lob.LobReadPolicy policy,
                                                   com.qqmu.jync.service.lob.LobSpillSession spillSession)
             throws SQLException {
+        // Convenience for one-off reads: a caller looping over rows should build the plan
+        // once outside the loop instead.
+        return readRowInto(rs, RowReadPlan.of(columns, types, typeNames, policy),
+                sourceType, row, spillSession);
+    }
+
+    /**
+     * As the policy form, with the per-column decisions already resolved for this table.
+     *
+     * <p>The hot path passes a plan built once per table: the LOB mode and the
+     * vendor-normalizer decision are functions of the column, so resolving them per row
+     * only costs an allocation on every value.
+     */
+    public static Map<String, Object> readRowInto(ResultSet rs, RowReadPlan plan,
+                                                  com.qqmu.jync.model.DatabaseType sourceType,
+                                                  Map<String, Object> row,
+                                                  com.qqmu.jync.service.lob.LobSpillSession spillSession)
+            throws SQLException {
         row.clear();
-        com.qqmu.jync.service.lob.LobReadPolicy effective = policy == null
-                ? com.qqmu.jync.service.lob.LobReadPolicy.disabled() : policy;
-        for (int i = 0; i < columns.size(); i++) {
-            String column = columns.get(i);
+        for (int i = 0; i < plan.size(); i++) {
+            String column = plan.column(i);
             int idx = i + 1;
-            int type = types.get(i);
-            String typeName = typeNames == null ? null : typeNames.get(i);
-            com.qqmu.jync.service.lob.LobReadPolicy.Mode mode = effective.modeFor(column, type);
+            int type = plan.type(i);
+            String typeName = plan.typeName(i);
+            com.qqmu.jync.service.lob.LobReadPolicy.Mode mode = plan.mode(i);
             Object value;
             if (mode == com.qqmu.jync.service.lob.LobReadPolicy.Mode.INLINE) {
-                Object normalized = JdbcValueNormalizer.read(rs, idx, type, typeName, sourceType);
+                Object normalized = plan.vendorHandled(i)
+                        ? JdbcValueNormalizer.read(rs, idx, type, typeName, sourceType)
+                        : JdbcValueNormalizer.UNHANDLED;
                 value = normalized != JdbcValueNormalizer.UNHANDLED
                         ? normalized
                         : readValue(rs, idx, type, typeName, sourceType);
@@ -143,7 +161,7 @@ public final class JdbcRowMapper {
                 try {
                     java.io.Reader reader = rs.getCharacterStream(idx);
                     value = reader == null ? null : com.qqmu.jync.service.lob.LobStreams
-                            .readText(reader, effective, spillSession);
+                            .readText(reader, plan.policy(), spillSession);
                 } catch (java.io.IOException e) {
                     throw new SQLException("Failed to stream text column " + column, e);
                 }
@@ -151,7 +169,7 @@ public final class JdbcRowMapper {
                 try {
                     java.io.InputStream stream = rs.getBinaryStream(idx);
                     value = stream == null ? null : com.qqmu.jync.service.lob.LobStreams
-                            .readBinary(stream, effective, spillSession);
+                            .readBinary(stream, plan.policy(), spillSession);
                 } catch (java.io.IOException e) {
                     throw new SQLException("Failed to stream binary column " + column, e);
                 }

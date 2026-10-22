@@ -932,14 +932,19 @@ public class DataSyncService {
                 // reader at all: both cases need the value on disk before the row moves on.
                 LobSpillSession spillSession = lobPolicy.largeMode() == LobReadPolicy.Mode.SPILL
                         ? spillStore().open() : null;
+                // One plan for the whole table: the LOB mode and normalizer decision are
+                // functions of the column, and re-deriving them per row cost ~9% of a
+                // single-worker full load.
+                RowReadPlan readPlan = RowReadPlan.of(
+                        columns, jdbcTypes, typeNames, lobPolicy);
                 ThroughputMeter throughput = new ThroughputMeter(table.getName());
                 try {
                     total = emulated
                             ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
-                                    typeByColumn, rs, jdbcTypes, typeNames, ctx, cleanser, pkTrack,
+                                    typeByColumn, rs, readPlan, ctx, cleanser, pkTrack,
                                     sink, throughput, batchSize, lobPolicy, spillSession)
                             : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
-                                    rs, columns, jdbcTypes, typeNames, ctx, cleanser, pkTrack,
+                                    rs, readPlan, ctx, cleanser, pkTrack,
                                     sink, throughput, batchSize, lobPolicy, spillSession);
                 } finally {
                     if (spillSession != null) {
@@ -1182,8 +1187,8 @@ public class DataSyncService {
     private WriteStats writeWithNativeUpsert(Connection targetConn, String upsertSql,
                                              List<String> bindOrder,
                                              Map<String, Integer> typeByColumn,
-                                             ResultSet rs, List<String> columns,
-                                             List<Integer> jdbcTypes, List<String> typeNames,
+                                             ResultSet rs,
+                                             RowReadPlan readPlan,
                                              SyncContext ctx, ColumnCleanser cleanser,
                                              List<String> pkTrack, PkCursor sink,
                                              ThroughputMeter throughput, int batchSize,
@@ -1210,8 +1215,7 @@ public class DataSyncService {
             // One map for every row: a million-row load would otherwise allocate a million.
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                JdbcRowMapper.readRowInto(rs, columns, jdbcTypes, typeNames,
-                        ctx.getSourceType(), row, lobPolicy, spillSession);
+                JdbcRowMapper.readRowInto(rs, readPlan, ctx.getSourceType(), row, spillSession);
                 if (sink != null) {
                     // The keyset boundary is bound against the RAW source keys on the next
                     // page, so it must be captured before the cleanser rewrites them.
@@ -1310,7 +1314,7 @@ public class DataSyncService {
     private WriteStats writeWithEmulatedUpsert(Connection targetConn, String targetTable,
                                                List<String> columns, List<String> pkColumns,
                                                Map<String, Integer> typeByColumn, ResultSet rs,
-                                               List<Integer> jdbcTypes, List<String> typeNames,
+                                               RowReadPlan readPlan,
                                                SyncContext ctx, ColumnCleanser cleanser,
                                                List<String> pkTrack, PkCursor sink,
                                                ThroughputMeter throughput, int batchSize,
@@ -1349,8 +1353,7 @@ public class DataSyncService {
             // Same reuse as the native writer: one row map for the whole pass.
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                JdbcRowMapper.readRowInto(rs, columns, jdbcTypes, typeNames,
-                        ctx.getSourceType(), row, lobPolicy, spillSession);
+                JdbcRowMapper.readRowInto(rs, readPlan, ctx.getSourceType(), row, spillSession);
                 if (sink != null) {
                     // Same rule as the native writer: the boundary must stay a raw source key.
                     sink.values = extractPk(row, pkTrack);
