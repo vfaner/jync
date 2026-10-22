@@ -855,11 +855,20 @@ public class DataSyncService {
                 List<String> columns = JdbcRowMapper.columnNames(md);
                 List<Integer> jdbcTypes = JdbcRowMapper.columnTypes(md);
                 List<String> typeNames = JdbcRowMapper.columnTypeNames(md);
+                // Target metadata by name, so a column's type can be refined by the dialect:
+                // a text LOB lands in a CLOB and must be bound (and null-typed) as one.
+                Map<String, ColumnMeta> metaByColumn = new HashMap<>();
+                for (ColumnMeta column : table.getColumns()) {
+                    metaByColumn.put(column.getName().toUpperCase(java.util.Locale.ROOT), column);
+                }
                 Map<String, Integer> typeByColumn = new HashMap<>();
                 for (int i = 0; i < columns.size(); i++) {
-                    typeByColumn.put(columns.get(i),
-                            effectiveTargetType(ctx.getSourceType(), jdbcTypes.get(i),
-                                    typeNames.get(i), md.getPrecision(i + 1)));
+                    int effectiveType = effectiveTargetType(ctx.getSourceType(), jdbcTypes.get(i),
+                            typeNames.get(i), md.getPrecision(i + 1));
+                    ColumnMeta columnMeta = metaByColumn.get(
+                            columns.get(i).toUpperCase(java.util.Locale.ROOT));
+                    typeByColumn.put(columns.get(i), targetDialect.bindJdbcType(
+                            columnMeta, ctx.getSourceType(), effectiveType));
                 }
 
                 // An INSERT has no match clause, so the key columns only decide that shape —
@@ -1041,6 +1050,9 @@ public class DataSyncService {
             throws SQLException {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
+        // Temporary LOBs bound into the batch stay alive until it executes, then are freed.
+        com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker =
+                com.qqmu.jync.service.lob.LobBinder.newTracker();
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
             JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
             // `mark` sits at the end of the previous row's write, so the gap it opens with is
@@ -1060,13 +1072,15 @@ public class DataSyncService {
                 throughput.recordRead(read - mark);
 
                 cleanser.apply(row);
-                JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn, ctx.getTargetDialect());
+                JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn,
+                        ctx.getTargetDialect(), lobTracker);
                 upsert.addBatch();
                 inBatch++;
                 stats.read++;
 
                 if (inBatch >= batchSize) {
                     executeBatch(upsert, targetConn, stats, ctx, throughput);
+                    lobTracker.releaseAll();
                     inBatch = 0;
                 }
                 throughput.recordWrite(System.nanoTime() - read);
@@ -1077,6 +1091,8 @@ public class DataSyncService {
                 executeBatch(upsert, targetConn, stats, ctx, throughput);
                 throughput.recordWrite(System.nanoTime() - tailStart);
             }
+        } finally {
+            lobTracker.releaseAll();
         }
         return stats;
     }
@@ -1134,41 +1150,55 @@ public class DataSyncService {
                 long read = System.nanoTime();
                 throughput.recordRead(read - mark);
                 cleanser.apply(row);
-                int updated = 0;
-                if (update != null) {
-                    JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn, ctx.getTargetDialect());
-                    updated = update.executeUpdate();
-                }
-                if (updated == 0) {
-                    JdbcRowMapper.bind(insert, row, columns, typeByColumn, ctx.getTargetDialect());
-                    try {
-                        // This path issues the INSERT and the UPDATE as separate statements, so
-                        // it knows which one happened without the target having to say.
-                        if (insert.executeUpdate() != 0) {
-                            stats.inserted++;
-                        }
-                    } catch (SQLException e) {
-                        if (isUniqueViolation(e) && update != null) {
-                            // A concurrent writer may have inserted the same key between our
-                            // UPDATE and INSERT. Retrying the update converges without failing.
-                            JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn, ctx.getTargetDialect());
-                            if (update.executeUpdate() != 0) {
-                                stats.updated++;
-                            }
-                        } else if (isUniqueViolation(e)) {
-                            // Key-only table — update is null exactly when every column is
-                            // part of the key, so there is no UPDATE to retry. None is needed:
-                            // a row already holding this key is identical to the one rejected,
-                            // making re-delivery a no-op. Rethrowing here would wedge the
-                            // table permanently, since every replay hits the same conflict.
-                            log.debug("Row already present in key-only table {}; re-delivery"
-                                    + " is a no-op", targetTable);
-                        } else {
-                            throw e;
-                        }
+                // A row may bind twice (update then insert, or update again after a unique
+                // violation); each bind gets its own temporary LOBs, freed at row end.
+                com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker =
+                        com.qqmu.jync.service.lob.LobBinder.newTracker();
+                try {
+                    int updated = 0;
+                    if (update != null) {
+                        JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn,
+                                ctx.getTargetDialect(), lobTracker);
+                        updated = update.executeUpdate();
                     }
-                } else {
-                    stats.updated++;
+                    if (updated == 0) {
+                        JdbcRowMapper.bind(insert, row, columns, typeByColumn,
+                                ctx.getTargetDialect(), lobTracker);
+                        try {
+                            // This path issues the INSERT and the UPDATE as separate
+                            // statements, so it knows which one happened without the target
+                            // having to say.
+                            if (insert.executeUpdate() != 0) {
+                                stats.inserted++;
+                            }
+                        } catch (SQLException e) {
+                            if (isUniqueViolation(e) && update != null) {
+                                // A concurrent writer may have inserted the same key between
+                                // our UPDATE and INSERT. Retrying the update converges without
+                                // failing.
+                                JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn,
+                                        ctx.getTargetDialect(), lobTracker);
+                                if (update.executeUpdate() != 0) {
+                                    stats.updated++;
+                                }
+                            } else if (isUniqueViolation(e)) {
+                                // Key-only table — update is null exactly when every column
+                                // is part of the key, so there is no UPDATE to retry. None is
+                                // needed: a row already holding this key is identical to the
+                                // one rejected, making re-delivery a no-op. Rethrowing here
+                                // would wedge the table permanently, since every replay hits
+                                // the same conflict.
+                                log.debug("Row already present in key-only table {};"
+                                        + " re-delivery is a no-op", targetTable);
+                            } else {
+                                throw e;
+                            }
+                        }
+                    } else {
+                        stats.updated++;
+                    }
+                } finally {
+                    lobTracker.releaseAll();
                 }
                 stats.read++;
                 if (++sinceCommit >= batchSize) {

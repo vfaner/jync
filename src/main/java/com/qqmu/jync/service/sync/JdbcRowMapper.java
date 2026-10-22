@@ -232,6 +232,18 @@ public final class JdbcRowMapper {
                             Map<String, Integer> types,
                             com.qqmu.jync.service.converter.SqlDialect targetDialect)
             throws SQLException {
+        bind(ps, row, bindOrder, types, targetDialect, null);
+    }
+
+    /**
+     * As the 5-arg form, collecting any temporary LOB the target dialect must create so the
+     * caller can free it once the batch has executed.
+     */
+    public static void bind(PreparedStatement ps, Map<String, Object> row, List<String> bindOrder,
+                            Map<String, Integer> types,
+                            com.qqmu.jync.service.converter.SqlDialect targetDialect,
+                            com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker)
+            throws SQLException {
         for (int i = 0; i < bindOrder.size(); i++) {
             String column = bindOrder.get(i);
             Object value = row.get(column);
@@ -242,14 +254,24 @@ public final class JdbcRowMapper {
                 ps.setNull(idx, type == null ? Types.NULL : type);
             } else {
                 bindValue(ps, idx, value, types.get(column),
-                        targetDialect != null && targetDialect.requiresTypedTemporalBind());
+                        targetDialect != null && targetDialect.requiresTypedTemporalBind(),
+                        targetDialect, lobTracker);
             }
         }
     }
 
     private static void bindValue(PreparedStatement ps, int idx, Object value,
-                                  Integer targetType, boolean typedTemporal)
+                                  Integer targetType, boolean typedTemporal,
+                                  com.qqmu.jync.service.converter.SqlDialect targetDialect,
+                                  com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker)
             throws SQLException {
+        // A value above the target's inline ceiling (Oracle's MERGE binds placeholders as
+        // LONGs, capped at 32767 bytes) needs a server-side temporary LOB; an empty string
+        // into a CLOB must go the same way, because Oracle binds '' as NULL.
+        if (com.qqmu.jync.service.lob.LobBinder.bind(ps, idx, value, targetType,
+                targetDialect, lobTracker)) {
+            return;
+        }
         // Normalize the java.time types some drivers return so every target accepts them.
         if (value instanceof Instant) {
             ps.setTimestamp(idx, Timestamp.from((Instant) value));

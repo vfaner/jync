@@ -262,4 +262,82 @@ class MysqlToOracleIT extends CdcMySqlContainerHarnessIT {
         manager.ensureStopped(project.getId());
         disableProject(project);
     }
+
+    /**
+     * 生产事故的回归:大于 32767 字节的文本经 Oracle 的 {@code MERGE ... USING (SELECT ?)}
+     * 绑定时报 ORA-01461 —— 占位符被当成 LONG,而不是它要写入的 CLOB 列。CDC 增量回放
+     * 走的正是 MERGE,基线走 INSERT-first 躲过了这个问题。二进制同理。
+     */
+    @Test
+    void largeTextAndBinaryThroughMergeDoNotRaiseOra01461() throws Exception {
+        dropSource("ora_lob");
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("CREATE TABLE ora_lob (id BIGINT PRIMARY KEY,"
+                    + " body LONGTEXT, bin LONGBLOB)");
+            st.execute("INSERT INTO ora_lob VALUES (1, REPEAT('a', 1000), REPEAT(UNHEX('41'), 10))");
+        }
+        dropTarget("ORA_LOB");
+
+        Project project = newProject("ora-lob-merge", cdcConfig("ora_lob"));
+        manager.ensureStarted(project);
+        waitFor("baseline done", 180_000, () -> positionStore.find(project.getId())
+                .map(p -> p.isBaselineDone()).orElse(false));
+        waitFor("seeded row", 120_000, () -> countTarget("ORA_LOB") == 1);
+
+        // 120000 个汉字 = 360000 字节,远超 LONG 上限;40 KB 二进制走临时 BLOB。
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("UPDATE ora_lob SET body = REPEAT('中', 120000),"
+                    + " bin = REPEAT(UNHEX('42'), 40000) WHERE id = 1");
+        }
+        waitFor("streamed large lob", 180_000, () -> {
+            try {
+                Map<String, Object> row = queryTarget(
+                        "SELECT DBMS_LOB.GETLENGTH(body) AS \"tl\","
+                        + " DBMS_LOB.GETLENGTH(bin) AS \"bl\" FROM ORA_LOB WHERE id = 1").get(0);
+                return ((Number) row.get("tl")).longValue() == 120000L
+                        && ((Number) row.get("bl")).longValue() == 40000L;
+            } catch (RuntimeException e) {
+                return false;
+            }
+        });
+
+        // JDBC 返回的是 oracle.sql.CLOB 句柄,内容用 SQL 侧函数校验。
+        // DBMS_LOB.SUBSTR 的数量/起点按字符计(不是字节)。
+        Map<String, Object> edges = queryTarget("SELECT DBMS_LOB.SUBSTR(body, 3, 1) AS \"head\","
+                + " DBMS_LOB.SUBSTR(body, 3, 119998) AS \"tail\" FROM ORA_LOB WHERE id = 1")
+                .get(0);
+        assertThat(edges.get("head")).isEqualTo("中中中");
+        assertThat(edges.get("tail")).isEqualTo("中中中");
+
+        manager.ensureStopped(project.getId());
+        disableProject(project);
+    }
+
+    /**
+     * Oracle 把 {@code ''} 绑定成 NULL,{@code NOT NULL CLOB} 目标会以 ORA-01400 拒绝。
+     * 空串必须用空临时 CLOB 写入,保留"非空但长度为 0"的语义。
+     */
+    @Test
+    void emptyStringIntoNotNullClobIsPreserved() throws Exception {
+        dropSource("ora_empty");
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("CREATE TABLE ora_empty (id BIGINT PRIMARY KEY,"
+                    + " body LONGTEXT NOT NULL)");
+            st.execute("INSERT INTO ora_empty VALUES (1, '')");
+        }
+        dropTarget("ORA_EMPTY");
+
+        Project project = newProject("ora-empty-clob", cdcConfig("ora_empty"));
+        manager.ensureStarted(project);
+        awaitRowsOrError(project, "ORA_EMPTY", 1, 180_000);
+
+        Map<String, Object> row = queryTarget("SELECT NVL(DBMS_LOB.GETLENGTH(body), -1)"
+                + " AS \"len\" FROM ORA_EMPTY WHERE id = 1").get(0);
+        assertThat(((Number) row.get("len")).longValue())
+                .as("-1 表示 SQL NULL;0 表示保留下来的空值")
+                .isZero();
+
+        manager.ensureStopped(project.getId());
+        disableProject(project);
+    }
 }

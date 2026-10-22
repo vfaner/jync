@@ -44,6 +44,34 @@ public interface SqlDialect {
     }
 
     /**
+     * Largest string/byte value this dialect can bind inline; anything larger must be sent
+     * as a LOB handle. Oracle's answer is 32767 because a {@code MERGE ... USING (SELECT ?)}
+     * projection binds the placeholder as a LONG — not as the CLOB column it is assigned to —
+     * and a LONG is capped at 32767 bytes, failing with ORA-01461 above it.
+     */
+    default int maxInlineBindBytes() {
+        return Integer.MAX_VALUE;
+    }
+
+    /**
+     * Whether an empty string bound to a LOB column must be sent as an empty LOB rather than
+     * an ordinary empty string. Oracle treats {@code ''} as NULL, so a NOT NULL CLOB column
+     * would reject it with ORA-01400; an empty temporary CLOB keeps the value non-null.
+     */
+    default boolean bindsEmptyStringAsLob() {
+        return false;
+    }
+
+    /**
+     * The JDBC type a value should be bound with for a column whose target type is
+     * {@code effectiveType} (the mapped target type, not the source's). Dialects whose LOB
+     * placeholders need to be typed override this; everyone else keeps the effective type.
+     */
+    default int bindJdbcType(ColumnMeta column, DatabaseType sourceType, int effectiveType) {
+        return effectiveType;
+    }
+
+    /**
      * Whether a temporal target column must receive a real {@code java.sql} temporal value
      * instead of text. The row reader hands MySQL DATETIME over as the server's wall-clock
      * literal — Connector/J's {@code getTimestamp} would shift it across zones — and this

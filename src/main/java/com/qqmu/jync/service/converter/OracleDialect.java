@@ -180,6 +180,40 @@ public class OracleDialect extends AbstractSqlDialect {
         return "RAW(" + size + ")";
     }
 
+    /**
+     * A {@code MERGE ... USING (SELECT ? AS c FROM DUAL)} placeholder is bound as a LONG:
+     * 32767 bytes, counted in the server charset. Above it the driver raises ORA-01461 even
+     * though the column is a CLOB, and no driver convenience (setStringForClob,
+     * setCharacterStream, setObject with Types.CLOB) avoids it — only a temporary CLOB does.
+     * The binder measures UTF-8 bytes, which over-estimates AL16UTF16/GBK sized text and so
+     * sends a borderline value through the safe path.
+     */
+    @Override
+    public int maxInlineBindBytes() {
+        return 32767;
+    }
+
+    @Override
+    public boolean bindsEmptyStringAsLob() {
+        return true;
+    }
+
+    @Override
+    public int bindJdbcType(ColumnMeta column, DatabaseType sourceType, int effectiveType) {
+        switch (effectiveType) {
+            case java.sql.Types.LONGVARCHAR:
+            case java.sql.Types.LONGNVARCHAR:
+            case java.sql.Types.CLOB:
+            case java.sql.Types.NCLOB:
+                return java.sql.Types.CLOB;
+            case java.sql.Types.LONGVARBINARY:
+            case java.sql.Types.BLOB:
+                return java.sql.Types.BLOB;
+            default:
+                return effectiveType;
+        }
+    }
+
     @Override
     protected int maxIdentifierLength() {
         // 30 before 12.2; 128 after. 30 is the safe choice across versions.

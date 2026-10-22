@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.qqmu.jync.service.converter.GenericSqlDialect;
+import com.qqmu.jync.service.lob.LobBinder;
 import com.qqmu.jync.service.sync.ColumnCleanser;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
 import com.qqmu.jync.service.sync.SyncContext;
@@ -89,7 +90,7 @@ public final class CdcEventApplier {
         List<String> pkColumns = binding.pkNames();
         String sql = ctx.getTargetDialect().getDeleteByPkSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), pkColumns);
-        Map<String, Integer> types = binding.typeByColumn();
+        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.getSourceType());
         try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
@@ -129,24 +130,29 @@ public final class CdcEventApplier {
                                     List<Map<String, Object>> rows) throws SQLException {
         List<String> columns = binding.columnNames();
         List<String> pkColumns = binding.pkNames();
-        Map<String, Integer> types = binding.typeByColumn();
+        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.getSourceType());
         String sql = ctx.getTargetDialect().getUpsertSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns, types);
         List<String> bindOrder = ctx.getTargetDialect().upsertBindOrder(columns, pkColumns);
+        // Temporary LOBs live until the batch is executed; they are freed right after.
+        LobBinder.Tracker lobTracker = LobBinder.newTracker();
         try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
             for (Map<String, Object> row : rows) {
-                JdbcRowMapper.bind(ps, row, bindOrder, types, ctx.getTargetDialect());
+                JdbcRowMapper.bind(ps, row, bindOrder, types, ctx.getTargetDialect(), lobTracker);
                 ps.addBatch();
                 if (++inBatch >= ctx.getBatchSize()) {
                     ps.executeBatch();
+                    lobTracker.releaseAll();
                     inBatch = 0;
                 }
             }
             if (inBatch > 0) {
                 ps.executeBatch();
             }
+        } finally {
+            lobTracker.releaseAll();
         }
     }
 
@@ -165,7 +171,7 @@ public final class CdcEventApplier {
                 ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns);
         String insertSql = ctx.getTargetDialect().getUpsertSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), columns, List.of(),
-                binding.typeByColumn());
+                binding.typeByColumn(ctx.getTargetDialect(), ctx.getSourceType()));
 
         List<String> updateBindOrder = new ArrayList<>();
         if (updateSql != null) {
@@ -178,40 +184,49 @@ public final class CdcEventApplier {
             updateBindOrder.addAll(pkColumns);
         }
 
-        Map<String, Integer> types = binding.typeByColumn();
+        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.getSourceType());
         try (PreparedStatement insert = targetConn.prepareStatement(insertSql);
              PreparedStatement update = updateSql == null ? null
                      : targetConn.prepareStatement(updateSql)) {
             JdbcUtil.applyQueryTimeout(insert, queryTimeoutSeconds);
             JdbcUtil.applyQueryTimeout(update, queryTimeoutSeconds);
             for (Map<String, Object> row : rows) {
-                int updated = 0;
-                if (update != null) {
-                    JdbcRowMapper.bind(update, row, updateBindOrder, types, ctx.getTargetDialect());
-                    updated = update.executeUpdate();
-                }
-                if (updated > 0) {
-                    continue;
-                }
-                JdbcRowMapper.bind(insert, row, columns, types, ctx.getTargetDialect());
+                // Each statement binds its own temporary LOBs; the row may bind twice
+                // (update then insert, or update again after a unique violation).
+                LobBinder.Tracker lobTracker = LobBinder.newTracker();
                 try {
-                    insert.executeUpdate();
-                } catch (SQLException e) {
-                    if (isUniqueViolation(e) && update != null) {
-                        // A concurrent writer may have inserted the same key between our
-                        // UPDATE and INSERT. Retrying the update converges without failing.
-                        JdbcRowMapper.bind(update, row, updateBindOrder, types, ctx.getTargetDialect());
-                        update.executeUpdate();
-                    } else if (isUniqueViolation(e)) {
-                        // Key-only table — update is null exactly when every column is part
-                        // of the key. A row already holding this key is identical to the one
-                        // rejected, so re-delivery is a no-op; rethrowing would wedge the
-                        // pipeline permanently on the same conflict every replay.
-                        log.debug("Row already present in key-only table {}; re-delivery"
-                                + " is a no-op", binding.getTargetTable());
-                    } else {
-                        throw e;
+                    int updated = 0;
+                    if (update != null) {
+                        JdbcRowMapper.bind(update, row, updateBindOrder, types,
+                                ctx.getTargetDialect(), lobTracker);
+                        updated = update.executeUpdate();
                     }
+                    if (updated > 0) {
+                        continue;
+                    }
+                    JdbcRowMapper.bind(insert, row, columns, types, ctx.getTargetDialect(), lobTracker);
+                    try {
+                        insert.executeUpdate();
+                    } catch (SQLException e) {
+                        if (isUniqueViolation(e) && update != null) {
+                            // A concurrent writer may have inserted the same key between our
+                            // UPDATE and INSERT. Retrying the update converges without failing.
+                            JdbcRowMapper.bind(update, row, updateBindOrder, types,
+                                    ctx.getTargetDialect(), lobTracker);
+                            update.executeUpdate();
+                        } else if (isUniqueViolation(e)) {
+                            // Key-only table — update is null exactly when every column is part
+                            // of the key. A row already holding this key is identical to the one
+                            // rejected, so re-delivery is a no-op; rethrowing would wedge the
+                            // pipeline permanently on the same conflict every replay.
+                            log.debug("Row already present in key-only table {}; re-delivery"
+                                    + " is a no-op", binding.getTargetTable());
+                        } else {
+                            throw e;
+                        }
+                    }
+                } finally {
+                    lobTracker.releaseAll();
                 }
             }
         }
