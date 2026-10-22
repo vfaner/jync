@@ -23,6 +23,7 @@
 - **CDC 状态面板新增缺失 LOB 计数**：`skippedMissingLob` 全局计数与 `missingLobByTable` 按表计数，可与 `skippedUnsupported` 区分——前者表示 LogMiner 结构上无法还原，后者表示语句不被解析。
 - **全量并行支持所有有主键的键形态**：此前只有单列整数主键能切成互斥区间；现在复合键（整数前导列按 MIN/MAX 算术切分）与字符串/UUID、小数、文本前导复合键（用两级窗口函数从源端采样桶首键作为边界）都能并行全量。无窗口函数的库（如 MySQL 5.7）运行期自动回退顺序分块；断点续传会校验区间边界，边界随并行度或数据范围变化时整表重载而不是跳过数据。
 - **空表 INSERT-first 推广到 MySQL / PostgreSQL**：首次全量写入空目标表时，MySQL 用普通 `INSERT` 代替 `INSERT ... ON DUPLICATE KEY UPDATE`，PostgreSQL 代替 `ON CONFLICT`（Oracle 的 INSERT 代替 MERGE 保持不变）。目标表仍是一次性探测，非空表继续走幂等 upsert。
+- **无主键表的全量可按页续传**：目标表为空且存在可排序列时，首次全量改为按可排序列 `ORDER BY` + `OFFSET/LIMIT` 分页，每页提交后写检查点。重启**从目标表行数续读**而不是从检查点续读——崩溃恰好发生在「页已提交、检查点未写」之间时，检查点会落后一页，按检查点续读会把该页整页重抄一遍，而无主键表没有唯一键可以吸收重复。目标非空、全部列都是 LOB，或源库无法可靠表达非零 OFFSET（SQL Server 2012 之前、DB2 11.1 之前）时仍走原来的单条流式读取，并继续显示「无法续传」标记。
 
 ## 限制（升级前务必阅读）
 
@@ -34,6 +35,8 @@
 - **厂商原语语义降级**：`ENUM` / `SET` → `VARCHAR`、`XMLTYPE` / `XML` → `CLOB`、几何 → `WKB` 二进制、`SQL_VARIANT` 丢失类型、`TIMESTAMP WITH LOCAL TIME ZONE` 依赖源会话时区。
 - **PostgreSQL 长读事务代价**：`enable-source-streaming` 开启时，读取期间源库 vacuum 被推迟；只读从库或短连接环境可关闭。
 - **DB2 无本地镜像**：厂商类型映射仅有单元测试覆盖，实机验证需用户环境。
+- **无主键表的 OFFSET 续传按位置定位行**：装载期间源库的并发插入/删除可能使后续页的窗口偏移，导致个别行漏读或重复。有主键的表按主键值定位，不受影响；对写入频繁的无主键表，建议在业务低峰执行首次全量，或事后核对行数。
+- **无主键续传只在本次装载自己留下空表时启用**：目标表已有数据时无法区分「上次装载了一半」和「外部写入的数据」，此时仍走单条流式读取。
 
 ## 兼容性说明
 
@@ -45,7 +48,7 @@
 
 ## 测试
 
-- 1907 个单测：1906 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
+- 1919 个单测：1918 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
 - 新增/扩充的大字段集成测试：Oracle → MySQL（600 KB CLOB + 1 MB BLOB 的基线与增量 upsert）、SQL Server → Oracle（`NVARCHAR(MAX)` / `VARBINARY(MAX)` 的基线与增量 MERGE）、MySQL → Oracle（100k 汉字增量 MERGE、5 MB CLOB/BLOB、`NOT NULL CLOB` 空串、厂商类型）、Oracle → openGauss（行外 LOB 跳过）、MySQL CDC 事务落盘（2 MB 行、提交后无残留）、可选 PostgreSQL → Oracle 60 行 × 约 5 MB 大字段（300 MB 源数据，`-Plob-memory-it` 在 96 MB 堆下完成基线与增量 MERGE）。
 
 ## 升级

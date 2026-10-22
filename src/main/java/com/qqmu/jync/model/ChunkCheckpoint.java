@@ -52,6 +52,14 @@ public class ChunkCheckpoint {
     /** The whole range is committed; a resumed load skips it without reading anything. */
     public static final String STATUS_RANGE_DONE = "RANGE_DONE";
 
+    /**
+     * One committed page of a keyless table's OFFSET walk. There is no key boundary to store:
+     * {@code rowsCopied} is the cumulative offset, and a restarted load derives its real resume
+     * point from the target's row count instead — the checkpoint can lag the target by one page
+     * when the process dies between a page's commit and this row's write.
+     */
+    public static final String STATUS_KEYLESS_CHUNK = "KEYLESS_CHUNK";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -112,7 +120,7 @@ public class ChunkCheckpoint {
     @Column(name = "range_upper_key")
     private String rangeUpperKey;
 
-    /** {@link #STATUS_CHUNK} or {@link #STATUS_RANGE_DONE}. */
+    /** {@link #STATUS_CHUNK}, {@link #STATUS_RANGE_DONE} or {@link #STATUS_KEYLESS_CHUNK}. */
     @Column(name = "status", nullable = false, length = 16)
     private String status = STATUS_CHUNK;
 

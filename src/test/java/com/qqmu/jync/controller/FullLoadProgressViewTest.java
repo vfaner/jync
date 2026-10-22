@@ -136,10 +136,12 @@ class FullLoadProgressViewTest {
 
         String html = render();
 
-        // Task book A1: the streamed load of a PK-less table cannot resume; the page must
-        // say so, with the remedy (add a primary key) in the tooltip.
+        // Task book A1: this particular streamed load of a PK-less table could not resume; the
+        // page must say so, and the tooltip explains when a keyless table can resume and that a
+        // primary key is always safer.
         assertThat(html).contains("No checkpointed resume");
-        assertThat(html).contains("Add a primary key to enable chunked, resumable loading");
+        assertThat(html).contains("Keyless tables can resume in pages when the target is empty");
+        assertThat(html).contains("adding a primary key is always the safer option");
     }
 
     @Test

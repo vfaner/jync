@@ -258,6 +258,18 @@ public class Db2Dialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean supportsOffsetPaging() {
+        // OFFSET ... ROWS needs DB2 11.1; FETCH FIRST alone cannot express a non-zero offset.
+        return false;
+    }
+
+    @Override
+    public String emptyTargetProbeSql(String schema, String table) {
+        // DB2 has no LIMIT; FETCH FIRST stops after the first row on every supported release.
+        return "SELECT 1 FROM " + qualify(schema, table) + " FETCH FIRST 1 ROW ONLY";
+    }
+
+    @Override
     public String getTruncateSql(String schema, String table) {
         // DB2 requires IMMEDIATE for the statement to take effect without a commit.
         return "TRUNCATE TABLE " + qualify(schema, table) + " IMMEDIATE";

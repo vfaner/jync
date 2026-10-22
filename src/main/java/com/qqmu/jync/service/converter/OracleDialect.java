@@ -524,6 +524,20 @@ public class OracleDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public String getProjectedPaginationSql(String baseSql, List<String> columnRefs,
+                                            long offset, int limit) {
+        // The offset wrapper needs the rnum_ helper column; an outer SELECT * would project it
+        // into the result metadata as well (see getPaginationSql). Naming the columns here keeps
+        // the copied row shape exactly the table's own.
+        if (offset <= 0) {
+            return getPaginationSql(baseSql, offset, limit);
+        }
+        return "SELECT " + String.join(", ", columnRefs)
+                + " FROM (SELECT a.*, ROWNUM rnum_ FROM (" + baseSql + ") a "
+                + "WHERE ROWNUM <= " + (offset + limit) + ") WHERE rnum_ > " + offset;
+    }
+
+    @Override
     public String getTruncateSql(String schema, String table) {
         return "TRUNCATE TABLE " + qualify(schema, table);
     }

@@ -336,6 +336,33 @@ public interface SqlDialect {
     /** Paged read of a source table, used for the initial full load. */
     String getPaginationSql(String baseSql, long offset, int limit);
 
+    /**
+     * Whether {@link #getPaginationSql} can express a non-zero offset, which a keyless table's
+     * OFFSET walk needs from its second page on. Dialects whose offset form needs a server
+     * release they cannot verify at this point answer false: failing on page two — after page
+     * one committed — is worse than keeping the classic single streamed read.
+     */
+    default boolean supportsOffsetPaging() {
+        return true;
+    }
+
+    /**
+     * Paged read that also projects exactly {@code columnRefs} in the pagination wrapper.
+     *
+     * <p>Most products page by appending {@code LIMIT/OFFSET} or {@code OFFSET/FETCH} to the
+     * statement, so the default is {@link #getPaginationSql}. It matters only where the wrapper
+     * adds a helper column that an outer {@code SELECT *} would surface: Oracle's ROWNUM form
+     * does, and a leaked {@code RNUM_} column would enter the copy's INSERT column list and fail
+     * every page with "column not found". Such dialects override this method.
+     *
+     * @param baseSql    statement selecting the same columns, already ordered
+     * @param columnRefs quoted column references, in projection order
+     */
+    default String getProjectedPaginationSql(String baseSql, List<String> columnRefs,
+                                             long offset, int limit) {
+        return getPaginationSql(baseSql, offset, limit);
+    }
+
     /** Statement that disables foreign key enforcement, or null when unsupported. */
     String getDisableConstraintsSql();
 

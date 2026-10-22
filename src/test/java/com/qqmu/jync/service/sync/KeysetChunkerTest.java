@@ -193,4 +193,44 @@ class KeysetChunkerTest {
                 new ArrayList<>()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void aKeylessPageProjectsEveryColumnAndOrdersByTheOrderableOnes() {
+        // The projection must stay every column (the copy needs them all); ORDER BY only the
+        // orderable subset, because a LOB column is not orderable on every product.
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.keylessPageSql(new MySqlDialect(), null, "EVENTS",
+                List.of("SEQ", "NAME", "BODY"), List.of("SEQ", "NAME"),
+                CursorStrategy.none("full load only"), null, 3, 2, params);
+
+        assertThat(sql).isEqualTo("SELECT `SEQ`, `NAME`, `BODY` FROM `EVENTS`"
+                + " ORDER BY `SEQ`, `NAME` LIMIT 2 OFFSET 3");
+        assertThat(params).isEmpty();
+    }
+
+    @Test
+    void aKeylessOraclePageKeepsRnumOutOfTheProjection() {
+        // Oracle's offset wrapper needs a ROWNUM helper; an outer SELECT * would surface it in
+        // the result metadata and every page would fail on an INSERT column that does not exist.
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.keylessPageSql(new OracleDialect(), "APP", "EVENTS",
+                List.of("SEQ", "NAME"), List.of("SEQ"), IDENTITY, new Timestamp(5L), 3, 2, params);
+
+        assertThat(sql).startsWith(
+                "SELECT \"SEQ\", \"NAME\" FROM (SELECT a.*, ROWNUM rnum_ FROM (");
+        assertThat(sql).contains("WHERE (\"ID\" <= ? OR \"ID\" IS NULL)");
+        assertThat(sql).contains("ORDER BY \"SEQ\"");
+        assertThat(sql).endsWith(") WHERE rnum_ > 3");
+        assertThat(params).containsExactly(new Timestamp(5L));
+    }
+
+    @Test
+    void theFirstKeylessOraclePageHasNoHelperColumnAtAll() {
+        String sql = KeysetChunker.keylessPageSql(new OracleDialect(), "APP", "EVENTS",
+                List.of("SEQ", "NAME"), List.of("SEQ"),
+                CursorStrategy.none("full load only"), null, 0, 2, new ArrayList<>());
+
+        assertThat(sql).doesNotContain("rnum_");
+        assertThat(sql).startsWith("SELECT * FROM (SELECT \"SEQ\", \"NAME\" FROM \"APP\".\"EVENTS\"");
+    }
 }

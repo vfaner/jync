@@ -20,6 +20,7 @@ import org.mockito.ArgumentCaptor;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.service.converter.Db2Dialect;
 import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.converter.OpenGaussDialect;
 import com.qqmu.jync.service.converter.OracleDialect;
@@ -88,6 +89,26 @@ class InitialLoadInsertFirstProbeTest {
                 "T_ORDERS", List.of("ID"))).isTrue();
 
         assertThat(probedSql()).isEqualTo("SELECT 1 FROM \"APP\".\"T_ORDERS\" LIMIT 1");
+    }
+
+    @Test
+    void theSqlServerAndDb2ProbesUseTheirOwnRowLimitingSyntax() {
+        // The keyless OFFSET walk probes the target on every dialect, including those without
+        // the INSERT shortcut, so each needs a valid one-row query: neither has LIMIT.
+        assertThat(new SqlServerDialect().emptyTargetProbeSql("APP", "T_ORDERS"))
+                .isEqualTo("SELECT TOP 1 1 FROM [APP].[T_ORDERS]");
+        assertThat(new Db2Dialect().emptyTargetProbeSql("APP", "T_ORDERS"))
+                .isEqualTo("SELECT 1 FROM \"APP\".\"T_ORDERS\" FETCH FIRST 1 ROW ONLY");
+    }
+
+    @Test
+    void dialectsWhoseOffsetNeedsAnUnverifiableServerReleaseCannotPageKeylessTables() {
+        // The keyless walk needs a non-zero offset from page two on; a dialect that cannot
+        // promise it must keep the classic streamed read rather than fail mid-load.
+        assertThat(new SqlServerDialect().supportsOffsetPaging()).isFalse();
+        assertThat(new Db2Dialect().supportsOffsetPaging()).isFalse();
+        assertThat(new MySqlDialect().supportsOffsetPaging()).isTrue();
+        assertThat(new OracleDialect().supportsOffsetPaging()).isTrue();
     }
 
     @Test

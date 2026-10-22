@@ -127,10 +127,11 @@ public class DataSyncService {
         private String newCursorValue;
         private boolean initialLoad;
         /**
-         * Whether this table's full load is checkpointed and therefore resumable: true when
-         * the keyset-chunked path ran, false when a PK-less table fell back to the single
-         * streamed read (task book A1: the UI must say such tables cannot resume), null when
-         * the question was not decided this cycle (incremental cycle, chunking switched off).
+         * Whether this table's full load is checkpointed and therefore resumable: true when the
+         * keyset-chunked path ran, or when a keyless table ran as OFFSET pages; false when a
+         * PK-less table fell back to the single streamed read (task book A1: the UI must say
+         * such tables cannot resume); null when the question was not decided this cycle
+         * (incremental cycle, chunking switched off).
          */
         @lombok.Setter
         private Boolean resumableLoad;
@@ -350,6 +351,17 @@ public class DataSyncService {
                 || !ctx.getTargetDialect().supportsInsertFirstInitialLoad()) {
             return false;
         }
+        return Boolean.TRUE.equals(probeTargetEmpty(targetConn, ctx, targetTable));
+    }
+
+    /**
+     * Asks the target whether a table holds any row: {@code TRUE} / {@code FALSE} when the
+     * probe ran, {@code null} when it failed. Null must never be read as "empty" — an INSERT
+     * into a table that already holds a key raises a unique violation, so an unknown answer
+     * keeps the idempotent upsert.
+     */
+    private Boolean probeTargetEmpty(Connection targetConn, SyncContext ctx,
+                                     String targetTable) {
         String probe = ctx.getTargetDialect()
                 .emptyTargetProbeSql(ctx.getTargetSchema(), targetTable);
         try (Statement st = targetConn.createStatement();
@@ -366,7 +378,7 @@ public class DataSyncService {
         } catch (SQLException e) {
             log.debug("Could not probe {} for the initial-load INSERT path ({}); keeping the"
                     + " upsert", targetTable, e.getMessage());
-            return false;
+            return null;
         }
     }
 
@@ -1463,8 +1475,9 @@ public class DataSyncService {
      * of re-read work: the restarted load resumes after the last checkpointed boundary, and
      * the replayed partial page is absorbed by the idempotent upserts.
      *
-     * <p>Skips itself (returns false, caller keeps the classic path) when the table has no PK,
-     * chunking is switched off, or no checkpoint repository is wired. On success it fills the
+     * <p>Skips itself (returns false, caller keeps the classic path) when chunking is switched
+     * off, no checkpoint repository is wired, or a keyless table cannot be walked by OFFSET
+     * (see {@link #keylessChunkedLoad}). On success it fills the
      * result exactly like the classic full load does — row counts, the safety-lagged cursor for
      * keyed incremental strategies, the {@code fc:} fingerprint for FULL_COMPARE — and clears
      * the table's checkpoints, which only ever describe an in-flight load. Note that after a
@@ -1476,14 +1489,18 @@ public class DataSyncService {
                                        Object upperBound, SyncContext ctx,
                                        TableSyncResult result) throws SQLException {
         FullLoadRoute route = FullLoadRoute.route(table);
-        if (checkpoints != null && properties.getChunkSize() > 0
-                && route == FullLoadRoute.STREAMING_FALLBACK) {
-            // No key to chunk on: the classic streamed read runs instead and cannot resume.
-            // Recorded for the UI rather than left implicit (task book A1).
-            result.resumableLoad = false;
+        if (checkpoints == null || properties.getChunkSize() <= 0) {
+            return false;
         }
-        if (checkpoints == null || properties.getChunkSize() <= 0
-                || route == FullLoadRoute.STREAMING_FALLBACK) {
+        if (route == FullLoadRoute.STREAMING_FALLBACK) {
+            if (keylessChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
+                    watermark, upperBound, ctx, result)) {
+                return true;
+            }
+            // No key to chunk on and the OFFSET walk does not apply: the classic streamed read
+            // runs instead and cannot resume. Recorded for the UI rather than left implicit
+            // (task book A1).
+            result.resumableLoad = false;
             return false;
         }
         List<ChunkCheckpoint> saved = checkpoints
@@ -1524,6 +1541,7 @@ public class DataSyncService {
         boolean foreignModel = saved.stream().anyMatch(c ->
                 (c.getRangeIndex() != null && c.getRangeIndex() != 0)
                         || ChunkCheckpoint.STATUS_RANGE_DONE.equals(c.getStatus())
+                        || ChunkCheckpoint.STATUS_KEYLESS_CHUNK.equals(c.getStatus())
                         || c.getRangeLower() != null || c.getRangeUpper() != null
                         || c.getRangeLowerKey() != null || c.getRangeUpperKey() != null);
         if (foreignModel) {
@@ -1595,6 +1613,176 @@ public class DataSyncService {
         result.rowsWritten = totalRead;
         result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, totalRead);
         return true;
+    }
+
+    /**
+     * Resumable full load for a table without a primary key.
+     *
+     * <p>Without a key there is no keyset boundary to page over, so the load walks the source
+     * in OFFSET pages over a deterministic order of the table's own columns. The interesting
+     * part is the resume point: the target's <em>row count</em>, not the checkpoint, is where a
+     * restarted load continues. A crash between a page's commit and its checkpoint write leaves
+     * the checkpoint one page stale, and trusting it would copy that page again — on a keyless
+     * table there is no unique key to absorb the duplicate. Counting the target measures exactly
+     * how far the committed prefix reached.
+     *
+     * <p>This only applies to a table the load itself left empty. A target that already holds
+     * rows cannot be told apart from a half-done load, and no offset would be safe; such tables
+     * keep the classic single streamed read (returns false, {@code resumableLoad} stays false).
+     * Tables with no orderable column (LOBs only) do the same — without a stable order an
+     * OFFSET boundary can skip or repeat rows.
+     */
+    private boolean keylessChunkedLoad(Connection sourceConn, Connection targetConn,
+                                       TableMeta table, String targetTable,
+                                       CursorStrategy strategy, String watermark,
+                                       Object upperBound, SyncContext ctx,
+                                       TableSyncResult result) throws SQLException {
+        if (!ctx.getSourceDialect().supportsOffsetPaging()) {
+            log.info("Keyless full load of {} keeps the streamed read: the source dialect cannot"
+                    + " page by offset", table.getName());
+            return false;
+        }
+        List<String> orderColumns = keylessOrderColumns(table);
+        if (orderColumns.isEmpty()) {
+            log.info("Keyless full load of {} keeps the streamed read: no column can be ordered",
+                    table.getName());
+            return false;
+        }
+        List<ChunkCheckpoint> saved = checkpoints
+                .findByProjectIdAndTableName(ctx.projectId(), table.getName());
+        // Keyed checkpoints describe a keyset walk this path does not perform — a table that
+        // changed shape, or a saved load from a version without keyless resumes. They never
+        // describe rows committed by this walk, so dropping them costs nothing.
+        boolean foreign = saved.stream()
+                .anyMatch(c -> !ChunkCheckpoint.STATUS_KEYLESS_CHUNK.equals(c.getStatus()));
+        if (foreign) {
+            log.info("Discarding keyed checkpoints for {}: reloading it as a keyless table",
+                    table.getName());
+            checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+            saved = List.of();
+        }
+
+        long offset;
+        if (saved.isEmpty()) {
+            if (!Boolean.TRUE.equals(probeTargetEmpty(targetConn, ctx, targetTable))) {
+                return false;
+            }
+            offset = 0;
+        } else {
+            Long count = targetRowCount(targetConn, ctx, targetTable);
+            if (count == null) {
+                return false;
+            }
+            offset = count;
+            log.info("Resuming keyless full load of {} at offset {}", table.getName(), offset);
+        }
+
+        int chunkIndex = 0;
+        for (ChunkCheckpoint checkpoint : saved) {
+            chunkIndex = Math.max(chunkIndex, checkpoint.getChunkIndex() + 1);
+        }
+        int chunkSize = properties.getChunkSize();
+        List<String> columns = new ArrayList<>(table.getColumns().size());
+        for (ColumnMeta column : table.getColumns()) {
+            columns.add(column.getName());
+        }
+        // Probed once, above: from the first page on the target holds this load's own rows, and
+        // every page writes only rows not copied yet, so the INSERT stays safe for all of them.
+        boolean insertFirst = properties.isInitialLoadInsertFirst()
+                && ctx.getTargetDialect().supportsInsertFirstInitialLoad();
+
+        int totalRead = 0;
+        long position = offset;
+        while (true) {
+            // Same stop-requested abort point as the keyed chunk loop: the previous page is
+            // committed and checkpointed, and the interrupt flag stays set for the CDC code
+            // that distinguishes a legitimate stop from a failure.
+            if (Thread.currentThread().isInterrupted()) {
+                throw new StopRequestedException("Full load of " + table.getName()
+                        + " aborted at offset " + position
+                        + ": stop requested (thread interrupted)");
+            }
+            List<Object> params = new ArrayList<>();
+            String pageSql = KeysetChunker.keylessPageSql(ctx.getSourceDialect(),
+                    ctx.getSourceSchema(), table.getName(), columns, orderColumns,
+                    strategy, upperBound, position, chunkSize, params);
+            WriteStats stats = copyRows(sourceConn, targetConn, pageSql, params,
+                    table, targetTable, ctx, null, null,
+                    fullLoadBatchSize(ctx), fullLoadFetchSize(ctx), insertFirst);
+            if (stats.read == 0) {
+                break;
+            }
+            totalRead += stats.read;
+            position += stats.read;
+            result.rowsInserted += stats.inserted;
+            result.rowsUpdated += stats.updated;
+            result.rowsChangedUnclassified += stats.unclassified;
+            // The checkpoint records the offset reached, but only as diagnostics: a resumed
+            // load counts the target instead (see the class-level note above).
+            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), 0, chunkIndex,
+                    null, (int) Math.min(position, Integer.MAX_VALUE),
+                    ChunkCheckpoint.STATUS_KEYLESS_CHUNK));
+            chunkIndex++;
+            if (stats.read < chunkSize) {
+                break;
+            }
+            ctx.requireLease();
+        }
+
+        checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+        result.rowsWritten = totalRead;
+        result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, totalRead);
+        result.resumableLoad = true;
+        return true;
+    }
+
+    /** The target's row count, or null when it cannot be read. */
+    private Long targetRowCount(Connection targetConn, SyncContext ctx, String targetTable) {
+        String sql = "SELECT COUNT(*) FROM "
+                + ctx.getTargetDialect().qualify(ctx.getTargetSchema(), targetTable);
+        try (Statement st = targetConn.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            return rs.next() ? rs.getLong(1) : null;
+        } catch (SQLException e) {
+            log.debug("Could not count {} for the keyless resume ({}); keeping the streamed read",
+                    targetTable, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Columns a keyless OFFSET walk can order by: everything except the LOB and opaque types no
+     * supported product accepts in an ORDER BY. The result is the walk's deterministic total
+     * order; rows that tie on every column here are indistinguishable to the walk, which is as
+     * much ordering as a keyless table can offer.
+     */
+    static List<String> keylessOrderColumns(TableMeta table) {
+        List<String> columns = new ArrayList<>();
+        for (ColumnMeta column : table.getColumns()) {
+            if (column.getName() != null && isOrderable(column.getJdbcType())) {
+                columns.add(column.getName());
+            }
+        }
+        return columns;
+    }
+
+    private static boolean isOrderable(int jdbcType) {
+        switch (jdbcType) {
+            case Types.CLOB:
+            case Types.NCLOB:
+            case Types.BLOB:
+            case Types.LONGVARCHAR:
+            case Types.LONGNVARCHAR:
+            case Types.LONGVARBINARY:
+            case Types.SQLXML:
+            case Types.ARRAY:
+            case Types.STRUCT:
+            case Types.JAVA_OBJECT:
+            case Types.OTHER:
+                return false;
+            default:
+                return true;
+        }
     }
 
     /** Same cursor semantics as the classic full load, computed over the chunks' totals. */

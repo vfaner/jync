@@ -113,7 +113,9 @@ sync:
   defer-secondary-indexes: true
   # Rows per keyset chunk of an initial full load; each chunk commits and checkpoints on its
   # own, so a crash mid-table resumes at the last chunk instead of re-reading everything.
-  # 0 disables chunking (classic single streamed read). Keyless tables never chunk.
+  # 0 disables chunking (classic single streamed read). Keyless tables use this as the OFFSET
+  # page size when the target is empty and at least one column can be ordered; a resumed load
+  # continues from the target's row count.
   chunk-size: 100000
   # Worker threads for one chunked initial full load. Requires a single-column integer primary
   # key (MIN/MAX range split); other tables stay sequential. Workers borrow their own

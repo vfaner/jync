@@ -325,6 +325,18 @@ public class SqlServerDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean supportsOffsetPaging() {
+        // OFFSET/FETCH arrived in 2012 and the dialect cannot tell the server version here.
+        return false;
+    }
+
+    @Override
+    public String emptyTargetProbeSql(String schema, String table) {
+        // TOP exists since 2005; LIMIT does not exist at all.
+        return "SELECT TOP 1 1 FROM " + qualify(schema, table);
+    }
+
+    @Override
     public String getDisableConstraintsSql() {
         // No database-wide form; callers must use the table-scoped variant.
         return null;

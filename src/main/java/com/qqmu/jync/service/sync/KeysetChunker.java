@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.sync;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -95,18 +96,9 @@ public final class KeysetChunker {
             if (where.length() > 0) {
                 where.append(" AND ");
             }
-            String cursor = sqlRef(dialect, strategy);
-            if (strategy.isPseudoColumn()) {
-                // ORA_ROWSCN is never NULL, so the NULL-margin inclusion below would be
-                // dead weight (and quoting the pseudo-column would be a syntax error).
-                where.append('(').append(cursor).append(" <= ?)");
-            } else {
-                // Same NULL-cursor inclusion as the classic full load: rows with a NULL cursor
-                // value fall outside every comparison and would be silently lost otherwise.
-                where.append('(').append(cursor).append(" <= ? OR ")
-                        .append(cursor).append(" IS NULL)");
-            }
-            paramsOut.add(upperBound);
+            where.append('(')
+                    .append(cursorPredicate(dialect, strategy, upperBound, paramsOut))
+                    .append(')');
         }
 
         StringBuilder sql = new StringBuilder("SELECT * FROM ")
@@ -123,6 +115,64 @@ public final class KeysetChunker {
         }
         // offset 0: the keyset predicate already did the seeking, LIMIT only caps the page.
         return dialect.getPaginationSql(sql.toString(), 0, limit);
+    }
+
+    /**
+     * One page of a keyless table's full load.
+     *
+     * <p>There is no key to seek with, so the page walk uses OFFSET — the one shape every
+     * supported product accepts — over a deterministic total order given by the table's own
+     * orderable columns. The projection is explicit rather than {@code SELECT *} so that
+     * pagination wrappers which add helper columns (Oracle's ROWNUM) cannot leak one into the
+     * copied row shape. Callers must only use this walk on a target they left empty themselves:
+     * an offset says nothing about <em>which</em> rows are already there.
+     *
+     * @param columns      all table columns, in table order (the projection)
+     * @param orderColumns the orderable subset of {@code columns}, used for ORDER BY
+     * @param offset       rows already copied by this load
+     */
+    public static String keylessPageSql(SqlDialect dialect, String schema, String table,
+                                        List<String> columns, List<String> orderColumns,
+                                        CursorStrategy strategy, Object upperBound,
+                                        long offset, int limit, List<Object> paramsOut) {
+        if (columns == null || columns.isEmpty()) {
+            throw new IllegalArgumentException("Keyless paging requires at least one column");
+        }
+        if (orderColumns == null || orderColumns.isEmpty()) {
+            throw new IllegalArgumentException("Keyless paging requires an orderable column");
+        }
+        List<String> projected = new ArrayList<>(columns.size());
+        for (String column : columns) {
+            projected.add(dialect.quoteIdentifier(column));
+        }
+        List<String> ordered = new ArrayList<>(orderColumns.size());
+        for (String column : orderColumns) {
+            ordered.add(dialect.quoteIdentifier(column));
+        }
+        StringBuilder sql = new StringBuilder("SELECT ").append(String.join(", ", projected))
+                .append(" FROM ").append(dialect.qualify(schema, table));
+        if (upperBound != null && strategy != null && strategy.getColumn() != null) {
+            sql.append(" WHERE (")
+                    .append(cursorPredicate(dialect, strategy, upperBound, paramsOut))
+                    .append(')');
+        }
+        sql.append(" ORDER BY ").append(String.join(", ", ordered));
+        return dialect.getProjectedPaginationSql(sql.toString(), projected, offset, limit);
+    }
+
+    /**
+     * The watermark bound shared by every paged read: the cursor column at or below the
+     * captured watermark, plus rows whose cursor is NULL (they fall outside every comparison
+     * and would be silently lost). A pseudo-column such as {@code ORA_ROWSCN} is never NULL, so
+     * the inclusion would be dead weight — and quoting the pseudo-column is a syntax error.
+     */
+    private static String cursorPredicate(SqlDialect dialect, CursorStrategy strategy,
+                                          Object upperBound, List<Object> paramsOut) {
+        String cursor = sqlRef(dialect, strategy);
+        paramsOut.add(upperBound);
+        return strategy.isPseudoColumn()
+                ? cursor + " <= ?"
+                : cursor + " <= ? OR " + cursor + " IS NULL";
     }
 
     /**
