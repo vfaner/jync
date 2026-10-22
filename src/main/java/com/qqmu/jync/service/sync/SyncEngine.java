@@ -67,7 +67,9 @@ public class SyncEngine {
      * <p>In-memory on purpose: the check is one round of {@code DatabaseMetaData.getColumns}
      * per table, so it runs once per process lifetime, not once per poll. A table fixed
      * manually after being flagged is picked up after a restart (or by resetting the project,
-     * which evicts the key).
+     * which evicts the key). The verdict is also dropped when that table's data sync fails
+     * ({@link #forgetVerifiedShape}): the target may have been altered after the check, and a
+     * stale verdict would keep the repair path from ever running again.
      */
     private final Set<String> verifiedTables = ConcurrentHashMap.newKeySet();
 
@@ -627,6 +629,21 @@ public class SyncEngine {
         return projectId + ":" + targetTable.toUpperCase();
     }
 
+    /**
+     * Drops the cached shape verdict for a table whose data sync just failed.
+     *
+     * <p>The verdict says "verified once", not "verified now": an administrator migration that
+     * drops a column afterwards leaves it true only in the cache. Without this eviction the
+     * table fails on the same JDBC error every cycle and the missing-column repair — the point
+     * of the shape check when structure sync is on — never runs again until restart. The cost
+     * is one extra {@code getColumns} on the next cycle, and only for a table that is already
+     * failing.
+     */
+    private void forgetVerifiedShape(SyncContext ctx, TableMeta table) {
+        verifiedTables.remove(verifiedKey(ctx.projectId(),
+                ctx.getConfig().targetTableName(table.getName())));
+    }
+
     /** Synchronizes rows for every selected table, one table at a time. */
     private void syncData(DatabaseMeta sourceMeta, Connection sourceConn, Connection targetConn,
                           SyncContext ctx, SyncResult result, Set<String> blockedTables) {
@@ -703,6 +720,7 @@ public class SyncEngine {
                     result.addError(table.getName() + ": " + msg);
                     stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
                             ChangeType.ERROR, msg, false, 0);
+                    forgetVerifiedShape(ctx, table);
                 }
             }
         } finally {
@@ -813,6 +831,11 @@ public class SyncEngine {
             stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
                     ChangeType.ERROR, tableResult.getError(), false,
                     System.currentTimeMillis() - tableStart);
+            // The cached "shape is fine" verdict may be why this failed: a column dropped on
+            // the target after verification makes every write fail while the check is skipped.
+            // Drop it so the next cycle re-checks (and, with structure sync on, re-attempts the
+            // missing-column repair) instead of trusting a verdict reality has outgrown.
+            forgetVerifiedShape(ctx, table);
             // The cursor is intentionally left untouched so this window is retried.
             return;
         }
