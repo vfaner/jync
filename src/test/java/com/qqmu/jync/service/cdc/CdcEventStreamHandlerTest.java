@@ -83,6 +83,16 @@ class CdcEventStreamHandlerTest {
         return CdcTableBinding.of("app", "orders", meta, "orders_dst", null);
     }
 
+    /** 二进制主键表:UUID/摘要类主键在 MySQL 里就是 BINARY(16)/VARBINARY(n)。 */
+    private static CdcTableBinding binaryKeyBinding() {
+        TableMeta meta = new TableMeta();
+        meta.setName("assets");
+        meta.getColumns().add(column("id", Types.BINARY, "binary", true));
+        meta.getColumns().add(column("name", Types.VARCHAR, "varchar", false));
+        meta.getPrimaryKeys().add("id");
+        return CdcTableBinding.of("app", "assets", meta, "assets_dst", null);
+    }
+
     @BeforeEach
     void setUp() {
         supplier = mock(CdcTableMetaSupplier.class);
@@ -199,6 +209,56 @@ class CdcEventStreamHandlerTest {
                 row(1L, "a"), row(1L, "b"))));
         handler.onEvent(event(EventType.EXT_UPDATE_ROWS, data, 310L));
         xid(311L);
+        assertThat(sink.changes.get(0).deletes).isEmpty();
+        assertThat(sink.changes.get(0).upserts).hasSize(1);
+    }
+
+    /**
+     * byte[] 列(MySQL BINARY/VARBINARY/BLOB)是 CDC 里唯一没有值相等的 Java 类型:
+     * before/after 两幅镜像各自由 binlog 反序列化出一个新数组,Objects.equals 按引用
+     * 比较必然为 false。旧实现据此把「主键没变」误判成「主键变更」,于是每个普通
+     * UPDATE 都多出一条 delete 旧主键的记录;sink 先 upsert 后 delete,目标行被删掉
+     * ——静默丢数据,且与主键是否真的变了无关。
+     */
+    @Test
+    void binaryPkUpdateWithUnchangedKeyDoesNotEmitADelete() {
+        when(supplier.binding("app", "assets")).thenReturn(binaryKeyBinding());
+        config.getTables().add("assets");
+        tableMap(21L, "app", "assets");
+        UpdateRowsEventData data = new UpdateRowsEventData();
+        data.setTableId(21L);
+        data.setRows(List.of(new AbstractMap.SimpleEntry<Serializable[], Serializable[]>(
+                new Serializable[] {new byte[] {1, 2, 3}, "before".getBytes(StandardCharsets.UTF_8)},
+                new Serializable[] {new byte[] {1, 2, 3}, "after".getBytes(StandardCharsets.UTF_8)})));
+        handler.onEvent(event(EventType.EXT_UPDATE_ROWS, data, 340L));
+        xid(341L);
+
+        assertThat(sink.changes.get(0).upserts).hasSize(1);
+        assertThat(sink.changes.get(0).deletes).isEmpty();
+    }
+
+    /**
+     * REPLACE INTO 在 ROW binlog 里是 Delete_rows + Write_rows 同主键两条事件。折叠
+     * (FIX C)靠 pkKey 的 List.equals 判同键,byte[] 同样按引用比较,折不掉 → sink
+     * 先 upsert 后 delete,目标行被删掉。REPLACE 的语义是「留下新行」,不是删掉。
+     */
+    @Test
+    void binaryPkReplaceFoldsToASingleUpsert() {
+        when(supplier.binding("app", "assets")).thenReturn(binaryKeyBinding());
+        config.getTables().add("assets");
+        tableMap(21L, "app", "assets");
+        DeleteRowsEventData delete = new DeleteRowsEventData();
+        delete.setTableId(21L);
+        delete.setRows(List.<Serializable[]>of(
+                new Serializable[] {new byte[] {9}, "v1".getBytes(StandardCharsets.UTF_8)}));
+        handler.onEvent(event(EventType.EXT_DELETE_ROWS, delete, 350L));
+        WriteRowsEventData write = new WriteRowsEventData();
+        write.setTableId(21L);
+        write.setRows(List.<Serializable[]>of(
+                new Serializable[] {new byte[] {9}, "v2".getBytes(StandardCharsets.UTF_8)}));
+        handler.onEvent(event(EventType.EXT_WRITE_ROWS, write, 360L));
+        xid(361L);
+
         assertThat(sink.changes.get(0).deletes).isEmpty();
         assertThat(sink.changes.get(0).upserts).hasSize(1);
     }

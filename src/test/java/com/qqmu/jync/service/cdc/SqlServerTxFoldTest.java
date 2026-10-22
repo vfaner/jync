@@ -66,6 +66,23 @@ class SqlServerTxFoldTest {
         return row;
     }
 
+    /** 二进制主键表:SQL Server binary/varbinary 列经 ResultSet.getObject 回来就是 byte[]。 */
+    private static CdcTableBinding assetsBinding() {
+        TableMeta meta = new TableMeta();
+        meta.setName("assets");
+        meta.getColumns().add(column("id", Types.BINARY, true));
+        meta.getColumns().add(column("name", Types.VARCHAR, false));
+        meta.getPrimaryKeys().add("id");
+        return CdcTableBinding.of("dbo", "assets", meta, "assets_dst", null);
+    }
+
+    private static Map<String, Object> binaryRow(byte[] id, Object name) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", id);
+        row.put("name", name);
+        return row;
+    }
+
     private static List<Long> ids(List<Map<String, Object>> rows) {
         List<Long> out = new ArrayList<>();
         for (Map<String, Object> row : rows) {
@@ -128,6 +145,37 @@ class SqlServerTxFoldTest {
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
         assertThat(buf.upserts).hasSize(1);
         assertThat(buf.upserts.get(0).get("name")).isEqualTo("new");
+        assertThat(buf.deletes).isEmpty();
+    }
+
+    /**
+     * byte[] 主键:op=3/op=4 两幅镜像各是一个新数组,按引用比较必然「不等」。旧实现
+     * 据此把主键没变的 UPDATE 当成主键变更,多补一条旧主键 delete;sink 先 upsert
+     * 后 delete → 目标行被删。与 MySQL 端同一根因,同一修复(CdcPrimaryKey)。
+     */
+    @Test
+    void binaryPkUpdateWithUnchangedKeyDoesNotDeleteTheRow() {
+        SqlServerTxFold fold = new SqlServerTxFold();
+        CdcTableBinding b = assetsBinding();
+        fold.accept(TX_A, b, 3, binaryRow(new byte[] {1, 2, 3}, "old"));
+        fold.accept(TX_A, b, 4, binaryRow(new byte[] {1, 2, 3}, "new"));
+
+        SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
+        assertThat(buf.upserts).hasSize(1);
+        assertThat(buf.upserts.get(0).get("name")).isEqualTo("new");
+        assertThat(buf.deletes).isEmpty();
+    }
+
+    /** 二进制主键的 DELETE→INSERT 同事务折叠:净效果是行存在(REPLACE/MERGE 场景)。 */
+    @Test
+    void binaryPkDeleteThenInsertFoldsToTheInsert() {
+        SqlServerTxFold fold = new SqlServerTxFold();
+        CdcTableBinding b = assetsBinding();
+        fold.accept(TX_A, b, 1, binaryRow(new byte[] {9}, "gone"));
+        fold.accept(TX_A, b, 2, binaryRow(new byte[] {9}, "back"));
+
+        SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
+        assertThat(buf.upserts).hasSize(1);
         assertThat(buf.deletes).isEmpty();
     }
 

@@ -8,7 +8,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -264,7 +263,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                 Map<String, Object> before = mapper.mapRow(entry.getKey(), binding, stats);
                 Map<String, Object> after = mapper.mapRow(entry.getValue(), binding, stats, spiller());
                 appendUpsert(change, after);
-                if (primaryKeyChanged(before, after, binding)) {
+                if (CdcPrimaryKey.changed(before, after, binding)) {
                     appendDelete(change, before);
                 }
             } catch (CdcUnmappableValueException e) {
@@ -437,16 +436,6 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         return buffered.computeIfAbsent(key, k -> new TableChange(binding));
     }
 
-    private static boolean primaryKeyChanged(Map<String, Object> before, Map<String, Object> after,
-                                             CdcTableBinding binding) {
-        for (String pk : binding.pkNames()) {
-            if (!Objects.equals(before.get(pk), after.get(pk))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     /**
      * Same-PK last-op-wins folding within one transaction (FIX C). The sink applies
      * upserts BEFORE deletes — that order is what makes PK chains (A→B, B→C) safe — so an
@@ -459,30 +448,19 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      * <p>Cost: one O(n) scan of the opposite list per append — fine for typical small CDC
      * transactions; a rare bulk {@code REPLACE ... SELECT} pays a one-time quadratic.
      *
-     * <p>Limitation: PK columns that map to {@code byte[]} never fold (list equality uses
-     * element {@code equals}, arrays compare by identity) — such tables degrade to the
-     * previous naive buffering, which is acceptable: correctness then matches pre-fix
-     * behavior rather than regressing.
+     * <p>Key identity (including {@code byte[]} PK columns) is {@link CdcPrimaryKey}'s:
+     * binary keys compare by content, never by array identity.
      */
     private static void appendUpsert(TableChange change, Map<String, Object> row) {
-        List<Object> key = pkKey(row, change.binding);
-        change.deletes.removeIf(buffered -> pkKey(buffered, change.binding).equals(key));
+        List<Object> key = CdcPrimaryKey.of(row, change.binding);
+        change.deletes.removeIf(buffered -> CdcPrimaryKey.of(buffered, change.binding).equals(key));
         change.upserts.add(row);
     }
 
     private static void appendDelete(TableChange change, Map<String, Object> row) {
-        List<Object> key = pkKey(row, change.binding);
-        change.upserts.removeIf(buffered -> pkKey(buffered, change.binding).equals(key));
+        List<Object> key = CdcPrimaryKey.of(row, change.binding);
+        change.upserts.removeIf(buffered -> CdcPrimaryKey.of(buffered, change.binding).equals(key));
         change.deletes.add(row);
-    }
-
-    /** The row's primary-key tuple, extracted exactly like {@link #primaryKeyChanged} reads it. */
-    private static List<Object> pkKey(Map<String, Object> row, CdcTableBinding binding) {
-        List<Object> key = new ArrayList<>(binding.pkNames().size());
-        for (String pk : binding.pkNames()) {
-            key.add(row.get(pk));
-        }
-        return key;
     }
 
     private void countAndLogUnmappable(CdcTableBinding binding, String operation,

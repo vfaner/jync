@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.TreeMap;
 
 import lombok.extern.slf4j.Slf4j;
@@ -62,7 +61,7 @@ final class SqlServerTxFold {
                 Map<String, Object> before = pendingBefore.remove(binding);
                 Buffer buf = buffer(txLsn, binding);
                 appendUpsert(buf, binding, row);
-                if (before != null && primaryKeyChanged(before, row, binding)) {
+                if (before != null && CdcPrimaryKey.changed(before, row, binding)) {
                     appendDelete(buf, binding, before);
                 }
                 return;
@@ -90,32 +89,14 @@ final class SqlServerTxFold {
     }
 
     private static void appendUpsert(Buffer buf, CdcTableBinding binding, Map<String, Object> row) {
-        List<Object> key = pkKey(row, binding);
-        buf.deletes.removeIf(buffered -> pkKey(buffered, binding).equals(key));
+        List<Object> key = CdcPrimaryKey.of(row, binding);
+        buf.deletes.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
         buf.upserts.add(row);
     }
 
     private static void appendDelete(Buffer buf, CdcTableBinding binding, Map<String, Object> row) {
-        List<Object> key = pkKey(row, binding);
-        buf.upserts.removeIf(buffered -> pkKey(buffered, binding).equals(key));
+        List<Object> key = CdcPrimaryKey.of(row, binding);
+        buf.upserts.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
         buf.deletes.add(row);
-    }
-
-    private static boolean primaryKeyChanged(Map<String, Object> before, Map<String, Object> after,
-                                             CdcTableBinding binding) {
-        for (String pk : binding.pkNames()) {
-            if (!Objects.equals(before.get(pk), after.get(pk))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static List<Object> pkKey(Map<String, Object> row, CdcTableBinding binding) {
-        List<Object> key = new ArrayList<>(binding.pkNames().size());
-        for (String pk : binding.pkNames()) {
-            key.add(row.get(pk));
-        }
-        return key;
     }
 }
