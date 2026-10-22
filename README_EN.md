@@ -849,7 +849,7 @@ The entry point is the same strategy card as MySQL binlog / Oracle LogMiner. A *
 
 1. **Record the position** — on start, the current LSN (`pg_current_wal_lsn()` as text, e.g. `0/167D3F8`) is persisted to `cdc_position.lsn` *before* the full load, so changes made during the baseline are already covered by the slot's later reads.
 2. **Chunked full-load baseline** — keyset chunked load of existing rows, reusing the same chunk/checkpoint machinery as MySQL binlog and Oracle LogMiner.
-3. **Streamed replay** — from the recorded LSN, cycle `pg_logical_slot_get_changes('jync_<projectId>', NULL, <batch-size>, 'include-xids', '1')` and parse each row against the `test_decoding` text protocol (`BEGIN/COMMIT` boundaries, single-quoted strings with `''` escapes, `NULL` columns, UPDATE `old key-` image skipped), replaying events transaction by transaction into the target.
+3. **Streamed replay** — from the recorded LSN, cycle `pg_logical_slot_get_changes('jync_<projectId>', NULL, <batch-size>, 'include-xids', '1')` and parse each row against the `test_decoding` text protocol (`BEGIN/COMMIT` boundaries, single-quoted strings with `''` escapes, lower-case `null` columns, UPDATE `old-key:` / `new-tuple:` images with the new image applied, `unchanged-toast-datum` placeholders skipped), replaying events transaction by transaction into the target.
 
 The same **at-least-once** contract: commit to target → re-check lease → advance LSN. Crash replay absorbs the overlap window with idempotent upserts.
 
@@ -868,7 +868,8 @@ The same **at-least-once** contract: commit to target → re-check lease → adv
 - **PostgreSQL only**: 9.4+ natively supports logical decoding; 12+ recommended. OpenGauss / HighGo / Vastbase PG-compatible variants are not yet validated.
 - **Slot lifecycle**: consumer auto-creates `jync_<projectId>` on first connect and **never drops it on stop** (dropping would lose the watermark and WAL retention becomes unbounded). Long-idle slots should be cleaned up by DBA: `SELECT pg_drop_replication_slot('jync_<projectId>')`.
 - **DDL not captured**: DDL rows degrade to an unsupported-table counter; cached metadata is invalidated.
-- **Keyless tables**: seeded once during baseline; UPDATE/DELETE still locate rows when `REPLICA IDENTITY = FULL`.
+- **Keyless tables**: seeded once during baseline; the stream skips their changes, because every replay path locates the target row by primary key. Add a primary key (and rebuild the baseline) for ongoing replication.
+- **Unchanged TOASTed values**: `test_decoding` prints `unchanged-toast-datum` instead of the value for a TOASTed column the UPDATE did not touch, and for inserts that reuse another tuple's on-disk value. Jync skips those rows (counted as unsupported, never written as the placeholder); the real value is not recoverable from the slot stream.
 
 ### Failure handling
 

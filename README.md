@@ -350,7 +350,8 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 **共同边界**
 
 - 不捕获 DDL：记 WARN 并失效结构缓存，差异大时用「重建基线」。
-- 无主键表仅基线播种，流式阶段跳过。
+- 无主键表仅基线播种，流式阶段跳过（回放按主键定位目标行）。
+- PG 逻辑解码：UPDATE 未改动的 TOAST 大字段、以及复用其他元组磁盘值的 INSERT，`test_decoding` 只输出占位符 `unchanged-toast-datum`（真实值不在流里）——这类行按不支持计数并跳过，绝不把占位符写进目标。
 - CDC 会复制 DELETE。
 - 切换 CDC 即重新全量；切回轮询保留位点，但游标清零先全量对齐。
 

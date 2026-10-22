@@ -35,13 +35,39 @@ class PgTestDecodingParserTest {
     }
 
     @Test
-    void updateRowSkipsOldImageAndKeepsNewImage() {
+    void updateRowSkipsOldKeyAndKeepsNewTuple() {
+        // docker 实测(postgres:16,REPLICA IDENTITY FULL):真实的分隔标记是
+        // "old-key:" … "new-tuple:",旧实现找的 " : new " 是 PostgreSQL 从不输出的格式。
         PgTestDecodingParser.SlotLine line = parser.parse(
-                "table public.orders: UPDATE: old key-id[integer]:1 : new id[integer]:1"
-                        + " status[text]:'paid' total[numeric]:19.98");
+                "table public.og_full: UPDATE: old-key: id[bigint]:1 name[text]:'a'"
+                        + " new-tuple: id[bigint]:1 name[text]:'b'");
         assertThat(line.change.op).isEqualTo(PgTestDecodingParser.Op.UPDATE);
-        assertThat(line.change.row.get("status")).isEqualTo("paid");
-        assertThat(line.change.row.get("total")).isEqualTo(new java.math.BigDecimal("19.98"));
+        assertThat(line.change.row).containsOnlyKeys("id", "name");
+        assertThat(line.change.row.get("id")).isEqualTo(1L);
+        assertThat(line.change.row.get("name")).isEqualTo("b");
+    }
+
+    @Test
+    void updateWhoseKeyChangedKeepsTheNewKey() {
+        // 主键变更时的真实输出(docker 实测):旧实现把 "old-key: id" 当作列名,
+        // 新行里没有真正的主键列 → 目标端 upsert 绑 NULL 主键,重放永远失败直到 strike-out。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.og_pk: UPDATE: old-key: id[bigint]:1"
+                        + " new-tuple: id[bigint]:2 name[text]:'a'");
+        assertThat(line.change.row).containsOnlyKeys("id", "name");
+        assertThat(line.change.row.get("id")).isEqualTo(2L);
+        assertThat(line.change.row.get("name")).isEqualTo("a");
+    }
+
+    @Test
+    void updateWithoutOldKeyParsesTheNewImageDirectly() {
+        // 默认 REPLICA IDENTITY 且主键未变:没有 old-key/new-tuple 段,整行即新镜像
+        // (docker 实测的 IT 流就是这个形态)。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.orders: UPDATE: id[integer]:7 status[text]:'changed'");
+        assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.row.get("id")).isEqualTo(7);
+        assertThat(line.change.row.get("status")).isEqualTo("changed");
     }
 
     @Test
@@ -53,11 +79,18 @@ class PgTestDecodingParserTest {
     }
 
     @Test
-    void nullColumnParsesAsJavaNull() {
+    void nullTokenIsCaseInsensitiveAndParsesAsJavaNull() {
+        // docker 实测(postgres:16):test_decoding 把 SQL NULL 打成小写 null
+        // (test_decoding.c: appendStringInfoString(s, "null"))。旧实现只认大写 "NULL":
+        // text 列被写成字符串 "null"(静默损坏),int/numeric 列绑定失败、事务重放
+        // 直到 APPLY_STRIKE_OUT。
         PgTestDecodingParser.SlotLine line = parser.parse(
-                "table public.t: INSERT: id[integer]:1 note[text]:NULL");
+                "table public.og_nulls: INSERT: id[bigint]:1 note[text]:null n[integer]:null"
+                        + " legacy[text]:NULL");
         assertThat(line.change.row.get("note")).isNull();
-        assertThat(line.change.row.get("id")).isEqualTo(1);
+        assertThat(line.change.row.get("n")).isNull();
+        assertThat(line.change.row.get("legacy")).isNull();
+        assertThat(line.change.row.get("id")).isEqualTo(1L);
     }
 
     @Test
@@ -168,36 +201,68 @@ class PgTestDecodingParserTest {
         assertThat(line.change.row.get("e")).isEqualTo(true);
     }
 
-    // —— P2-2:UPDATE " new " 分隔符必须是 quote-aware 状态机 ——
+    // —— P2-2:"new-tuple:" 分隔符的扫描必须是 quote-aware 的 ——
 
     @Test
-    void updateOldValueContainingSpaceNewSpaceDoesNotCorruptNewImage() {
-        // old key 的 text 值恰含 " new "(如 'buy new car')时,裸 indexOf(" new ")
-        // 会命中引号内文本 → new image 被拦腰截断、目标端收到损坏行。
+    void updateOldValueContainingTheNewTupleMarkerDoesNotCorruptNewImage() {
+        // old-key 的 text 值恰含 "new-tuple:" 字样:标记扫描必须跳过引号内文本,
+        // 否则 new image 被拦腰截断、目标端收到损坏行。
         PgTestDecodingParser.SlotLine line = parser.parse(
-                "table public.orders: UPDATE: old key-username[text]:'buy new car'"
-                        + " : new username[text]:'bob' status[text]:'paid'");
+                "table public.orders: UPDATE: old-key: username[text]:'see new-tuple: x'"
+                        + " new-tuple: username[text]:'bob' status[text]:'paid'");
         assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.row).containsOnlyKeys("username", "status");
         assertThat(line.change.row.get("username")).isEqualTo("bob");
         assertThat(line.change.row.get("status")).isEqualTo("paid");
     }
 
     @Test
-    void updateOldValueContainingColonNewPatternParsesNewImage() {
-        // 更强的对抗形态:引号值内含完整的 " : new " 序列。
+    void updateOldValueContainingQuotedColonMarkerParsesTheNewImage() {
+        // 更强的对抗形态:引号值内含完整的 " : new-tuple: " 序列。
         PgTestDecodingParser.SlotLine line = parser.parse(
-                "table public.t: UPDATE: old key-note[text]:'see : new doc'"
-                        + " : new note[text]:'x'");
+                "table public.t: UPDATE: old-key: note[text]:'see : new-tuple: doc'"
+                        + " new-tuple: note[text]:'x'");
+        assertThat(line.change.row).containsOnlyKeys("note");
         assertThat(line.change.row.get("note")).isEqualTo("x");
     }
 
+    // —— test_decoding 的 TOAST 占位符:unchanged-toast-datum ——
+    // 未修改的 TOASTed 值(test_decoding.c: VARATT_IS_EXTERNAL_ONDISK)只输出占位符,
+    // 真实值不在流里。把它当普通字符串写进目标 = 静默损坏。
+
     @Test
-    void bareValueNewBeforeRealSeparatorIsNotTheMarker() {
-        // enum/裸词值恰好是 new:列值的冒号紧贴 ']'(前面无空白),不构成分隔符
-        // 形态「空白 + ':' + 空白 + new」;状态机不得误认。
+    void unchangedToastDatumOnUpdateSkipsTheRowInsteadOfWritingTheSentinel() {
         PgTestDecodingParser.SlotLine line = parser.parse(
-                "table public.t: UPDATE: old key-mood[public.mood]:new"
-                        + " : new mood[public.mood]:happy");
-        assertThat(line.change.row.get("mood")).isEqualTo("happy");
+                "table public.t: UPDATE: id[bigint]:1 body[text]:unchanged-toast-datum");
+        assertThat(line.change.isSkipped()).isTrue();
+        assertThat(line.change.unsupportedReason).contains("unchanged-toast-datum");
+    }
+
+    @Test
+    void unchangedToastDatumOnInsertSkipsTheRowToo() {
+        // INSERT ... SELECT 可以复用另一个元组的磁盘 TOAST 值,同样只输出占位符。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: INSERT: id[bigint]:1 body[text]:unchanged-toast-datum");
+        assertThat(line.change.isSkipped()).isTrue();
+    }
+
+    @Test
+    void unchangedToastDatumOnDeleteDropsOnlyThatColumn() {
+        // DELETE 的关键镜像在 REPLICA IDENTITY FULL 下是整行,但应用端只绑定主键列:
+        // 丢掉无法还原的 TOAST 列,删除照常执行。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: DELETE: id[bigint]:1 body[text]:unchanged-toast-datum");
+        assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.row).containsOnlyKeys("id");
+        assertThat(line.change.row.get("id")).isEqualTo(1L);
+    }
+
+    @Test
+    void quotedLiteralThatLooksLikeTheToastSentinelIsKeptAsData() {
+        // 引号值才是真正的文本数据——“unchanged-toast-datum” 作为列值必须原样保留。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: INSERT: id[bigint]:1 body[text]:'unchanged-toast-datum'");
+        assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.row.get("body")).isEqualTo("unchanged-toast-datum");
     }
 }

@@ -11,11 +11,14 @@ import java.util.Map;
  * {@code pg_logical_slot_get_changes(..., 'include-xids', '1')} /
  * {@code pg_logical_slot_peek_changes}.
  *
- * <p>Typical stream (a committed transaction on {@code public.orders}):
+ * <p>Typical stream (a committed transaction on {@code public.orders}; captured verbatim
+ * from a postgres:16 slot):
  * <pre>
  *   BEGIN 12345
- *   table public.orders: INSERT: id[integer]:1 status[text]:'new' total[numeric]:9.99
- *   table public.orders: UPDATE: old key-id[integer]:1 : new id[integer]:1 status[text]:'paid'
+ *   table public.og_nulls: INSERT: id[bigint]:1 note[text]:null
+ *   table public.og_full: UPDATE: old-key: id[bigint]:1 name[text]:'a' new-tuple: id[bigint]:1 name[text]:'b'
+ *   table public.og_pk: UPDATE: old-key: id[bigint]:1 new-tuple: id[bigint]:2 name[text]:'a'
+ *   table public.orders: UPDATE: id[integer]:7 status[text]:'paid'
  *   table public.orders: DELETE: id[integer]:1
  *   COMMIT 12345
  * </pre>
@@ -23,11 +26,14 @@ import java.util.Map;
  * <p>Format quirks this parser tolerates:
  * <ul>
  *   <li>Values are written as {@code name[jdbctype-ish]:literal}; strings are single-quoted
- *       with {@code ''} escaping; NULL is rendered as just {@code NULL} with no
- *       brackets/value;</li>
- *   <li>UPDATE events emit both the OLD key columns ({@code old key-...}) and the NEW image
- *       ({@code new ...}); when {@code REPLICA IDENTITY FULL} is set the old row is a full
- *       image, otherwise only key columns appear after {@code old key-};</li>
+ *       with {@code ''} escaping; SQL NULL is rendered as bare lower-case {@code null}
+ *       (test_decoding.c: {@code appendStringInfoString(s, "null")}) — matched
+ *       case-insensitively for older/odd builds;</li>
+ *   <li>UPDATE events print {@code old-key:} + the old image + {@code new-tuple:} + the new
+ *       image whenever the old tuple is logged (REPLICA IDENTITY FULL, or a key change);
+ *       plain updates print only the new image;</li>
+ *   <li>A TOASTed value that was not modified prints as {@code unchanged-toast-datum} —
+ *       the real value is not in the stream and must never be written to the target;</li>
  *   <li>Column names are preserved case exactly as PG stored them — a quoted identifier
  *       such as {@code "OrderID"} keeps mixed case here, so the parser must NOT lower-case
  *       them; the caller's {@link CdcTableBinding} uses the exact column name.</li>
@@ -37,6 +43,24 @@ import java.util.Map;
  * row with a reason — never a guess, mirroring {@link SqlRedoParser}'s contract.
  */
 public final class PgTestDecodingParser {
+
+    /**
+     * The placeholder test_decoding prints for a TOASTed value it cannot reproduce
+     * (unchanged by the UPDATE, or an insert that reuses another tuple's on-disk value).
+     */
+    private static final String UNCHANGED_TOAST = "unchanged-toast-datum";
+
+    /**
+     * Parsed in place of the sentinel so it is distinguishable from a quoted text column
+     * whose real value happens to be the same literal.
+     */
+    private static final Object UNCHANGED_TOAST_MARKER = new Object();
+
+    /** "new-tuple:" starts the new image of an UPDATE that logged the old tuple. */
+    private static final String NEW_TUPLE_MARKER = "new-tuple:";
+
+    /** "old-key:" starts the old image — present exactly when NEW_TUPLE_MARKER is. */
+    private static final String OLD_KEY_MARKER = "old-key:";
 
     /** The kind of event one parsed row represents. */
     public enum Op { INSERT, UPDATE, DELETE }
@@ -138,6 +162,19 @@ public final class PgTestDecodingParser {
         if (row == null) {
             return SlotLine.row(ParsedChange.skip("malformed column payload: " + payload));
         }
+        if (row.containsValue(UNCHANGED_TOAST_MARKER)) {
+            if (op == Op.DELETE) {
+                // Under REPLICA IDENTITY FULL a DELETE carries the whole old row, but the
+                // applier binds only the key columns — drop what cannot be reproduced.
+                row.values().removeIf(value -> value == UNCHANGED_TOAST_MARKER);
+            } else {
+                // The real value is not in the stream. Writing the literal would silently
+                // corrupt the target, so skip the row loudly (counted like every other
+                // undecodable line) instead of guessing.
+                return SlotLine.row(ParsedChange.skip("unchanged-toast-datum: test_decoding"
+                        + " cannot reproduce a TOASTed value on " + op + " for " + qualified));
+            }
+        }
         return SlotLine.row(ParsedChange.ok(op, qualified.toLowerCase(Locale.ROOT), row));
     }
 
@@ -151,22 +188,20 @@ public final class PgTestDecodingParser {
 
     /**
      * Parse "col[type]:val col2[type]:'quoted val with '' inside' ...". When
-     * {@code skipOldImage} is true, the leading "old key-<col>[type]:val ..." fragment
-     * (only present on UPDATE) is skipped up to (and including) the " new " marker.
+     * {@code skipOldImage} is true, the leading "old-key:" fragment (only present on an
+     * UPDATE that logged the old tuple) is skipped up to (and including) the
+     * "new-tuple:" marker.
      */
     static Map<String, Object> parseColumns(String payload, boolean skipOldImage) {
         String body = payload;
         if (skipOldImage) {
-            // P2-2: a bare indexOf(" new ") also fires inside quoted old-image values
-            // (a text column holding 'buy new car' truncated the new image mid-token,
-            // corrupting the row) — locate the " : new " separator quote-aware instead.
             int newIdx = findNewImageStart(body);
             if (newIdx >= 0) {
                 body = body.substring(newIdx);
-            } else {
-                // No "new" marker — the event is only the key image (UPDATE on a row
-                // that didn't change any non-key column? still safe to parse as-is).
-                body = body.startsWith("new ") ? body.substring(4) : body;
+            } else if (body.startsWith(OLD_KEY_MARKER)) {
+                // The old image is present but the new image never followed: parsing the
+                // old image as if it were the new one would apply stale values. Refuse.
+                return null;
             }
         }
         Map<String, Object> row = new LinkedHashMap<>();
@@ -189,10 +224,13 @@ public final class PgTestDecodingParser {
             while (i < n && Character.isWhitespace(body.charAt(i))) i++;
             if (i >= n || body.charAt(i) != ':') return null;
             i++; // consume ':'
-            // read value: either NULL (bare word up to whitespace), or a quoted string, or
+            // read value: either null (bare word up to whitespace), or a quoted string, or
             // an unquoted token up to whitespace.
             Object value;
-            if (i + 4 <= n && body.startsWith("NULL", i)
+            // test_decoding prints SQL NULL as lower-case "null"; old builds/fixtures may
+            // carry "NULL" — match case-insensitively, but never a longer word such as
+            // "nullable" (hence the trailing-boundary check).
+            if (i + 4 <= n && body.regionMatches(true, i, "null", 0, 4)
                     && (i + 4 == n || Character.isWhitespace(body.charAt(i + 4)))) {
                 value = null;
                 i += 4;
@@ -217,7 +255,10 @@ public final class PgTestDecodingParser {
             } else {
                 int start = i;
                 while (i < n && !Character.isWhitespace(body.charAt(i))) i++;
-                value = body.substring(start, i);
+                String token = body.substring(start, i);
+                // Unquoted by construction: a text column is always printed quoted, so this
+                // exact token can only be test_decoding's TOAST placeholder, never data.
+                value = UNCHANGED_TOAST.equals(token) ? UNCHANGED_TOAST_MARKER : token;
             }
             // Coerce unquoted scalar values by their declared jdbc type. Quoted strings are
             // left as-is (they came from a text/varchar column). The target JDBC driver
@@ -232,15 +273,14 @@ public final class PgTestDecodingParser {
     }
 
     /**
-     * P2-2: locate the start of an UPDATE's new image. test_decoding separates the
-     * old-key segment from the new image with " : new " — a ':' preceded by whitespace
-     * (a column-value colon sits glued to its ']' with none) whose next word is exactly
-     * "new". Scanning quote-aware keeps quoted value text ('see : new doc') from
-     * matching, and a bare enum value that happens to be "new"
-     * ({@code mood[public.mood]:new}) cannot be mistaken either: its ':' has no
-     * preceding whitespace.
+     * P2-2: locate the start of an UPDATE's new image. test_decoding prints
+     * {@code old-key: <old image> new-tuple: <new image>}
+     * (test_decoding.c, {@code pg_decode_change}), so the separator is the literal word
+     * {@code new-tuple:} standing at a whitespace boundary. Scanning quote-aware keeps a
+     * quoted old-image value ('see new-tuple: x') from matching; the boundary check keeps
+     * a quoted identifier ({@code "new-tuple"}) or a type tag from matching too.
      *
-     * @return index just past the "new" marker word, or -1 when absent
+     * @return index just past the marker, or -1 when absent
      */
     static int findNewImageStart(String body) {
         boolean inQuote = false;
@@ -258,19 +298,24 @@ public final class PgTestDecodingParser {
             }
             if (c == '\'') {
                 inQuote = true;
-            } else if (c == ':' && i > 0 && Character.isWhitespace(body.charAt(i - 1))) {
-                int j = i + 1;
-                while (j < body.length() && Character.isWhitespace(body.charAt(j))) {
-                    j++;
-                }
-                if (body.startsWith("new", j)
-                        && (j + 3 >= body.length()
-                                || Character.isWhitespace(body.charAt(j + 3)))) {
-                    return j + 3;
-                }
+            } else if (isMarkerAt(body, i, NEW_TUPLE_MARKER)) {
+                return i + NEW_TUPLE_MARKER.length();
             }
         }
         return -1;
+    }
+
+    /** {@code marker} starts at {@code i}, preceded by whitespace (or the payload start)
+     * and followed by whitespace or the end — i.e. a standalone token. */
+    private static boolean isMarkerAt(String body, int i, String marker) {
+        if (!body.startsWith(marker, i)) {
+            return false;
+        }
+        if (i > 0 && !Character.isWhitespace(body.charAt(i - 1))) {
+            return false;
+        }
+        int end = i + marker.length();
+        return end == body.length() || Character.isWhitespace(body.charAt(end));
     }
 
     /**
