@@ -68,7 +68,10 @@ public final class PgTestDecodingParser {
     /** One decoded row event, ready for {@link CdcEventApplier}. */
     public static final class ParsedChange {
         public final Op op;
-        /** Lower-case "{@code schema.table}" — matches the binding key. */
+        /**
+         * Bare "{@code schema.table}" (quotes stripped, case preserved) — matches the
+         * binding key and the driver's metadata names.
+         */
         public final String qualifiedTable;
         /** Column name (case-preserved) → typed Java value. */
         public final Map<String, Object> row;
@@ -175,7 +178,42 @@ public final class PgTestDecodingParser {
                         + " cannot reproduce a TOASTed value on " + op + " for " + qualified));
             }
         }
-        return SlotLine.row(ParsedChange.ok(op, qualified.toLowerCase(Locale.ROOT), row));
+        return SlotLine.row(ParsedChange.ok(op, unquoteQualified(qualified), row));
+    }
+
+    /**
+     * test_decoding prints identifiers through {@code quote_qualified_identifier} /
+     * {@code quote_identifier}: a mixed-case or reserved-word name arrives wrapped in double
+     * quotes with {@code ""} escaping ({@code table public."Orders": ... "OrderID"[integer]:1}).
+     * The driver metadata reports the bare name, so the parser has to strip the quotes and
+     * keep the case — otherwise the qualified name never matches the project's table
+     * selection (every row silently ignored) and every quoted column key misses the bind
+     * list (the column is written as NULL). Unquoted identifiers arrive already folded
+     * lower-case by PostgreSQL, so they pass through unchanged.
+     */
+    static String unquoteQualified(String qualified) {
+        boolean inQuote = false;
+        for (int i = 0; i < qualified.length(); i++) {
+            char c = qualified.charAt(i);
+            if (c == '"') {
+                inQuote = !inQuote; // "" toggles twice, staying inside the name
+            } else if (c == '.' && !inQuote) {
+                // The first dot separates schema from table; anything after it belongs to
+                // the table name (which may itself contain a quoted dot).
+                return unquoteIdentifier(qualified.substring(0, i)) + "."
+                        + unquoteIdentifier(qualified.substring(i + 1));
+            }
+        }
+        return unquoteIdentifier(qualified);
+    }
+
+    /** A single quoted identifier with its {@code ""} escapes resolved, or the input as-is. */
+    static String unquoteIdentifier(String identifier) {
+        String name = identifier.trim();
+        if (name.length() < 2 || name.charAt(0) != '"' || name.charAt(name.length() - 1) != '"') {
+            return name;
+        }
+        return name.substring(1, name.length() - 1).replace("\"\"", "\"");
     }
 
     private static Long parseXid(String s) {
@@ -214,7 +252,7 @@ public final class PgTestDecodingParser {
             // read column name up to '['
             int nameEnd = body.indexOf('[', i);
             if (nameEnd < 0) return null;
-            String name = body.substring(i, nameEnd).trim();
+            String name = unquoteIdentifier(body.substring(i, nameEnd).trim());
             // read type up to ']'
             int typeEnd = body.indexOf(']', nameEnd + 1);
             if (typeEnd < 0) return null;

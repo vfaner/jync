@@ -265,4 +265,39 @@ class PgTestDecodingParserTest {
         assertThat(line.change.isSkipped()).isFalse();
         assertThat(line.change.row.get("body")).isEqualTo("unchanged-toast-datum");
     }
+
+    // —— test_decoding 对"需要引用的标识符"（混合大小写、保留字）会输出
+    // quote_identifier/quote_qualified_identifier 的结果：table public."Orders":
+    // ... "OrderID"[integer]:1。解析结果必须还原成裸名字，否则表名永远匹配不上
+    // 选择列表（整表静默丢行），列名与元数据对不上（绑定写 NULL）。 ——
+
+    @Test
+    void quotedMixedCaseIdentifiersAreUnquotedAndKeepTheirCase() {
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.\"Orders\": INSERT: \"OrderID\"[integer]:1 \"Status\"[text]:'paid'");
+
+        assertThat(line.change.qualifiedTable).isEqualTo("public.Orders");
+        assertThat(line.change.row).containsOnlyKeys("OrderID", "Status");
+        assertThat(line.change.row.get("OrderID")).isEqualTo(1);
+        assertThat(line.change.row.get("Status")).isEqualTo("paid");
+    }
+
+    @Test
+    void quotedSchemaAndReservedWordTableAndColumnAreUnquoted() {
+        // 保留字同样会被 quote_identifier 加上引号（order 是保留字）。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table \"Sales\".\"order\": INSERT: id[integer]:1 \"user\"[text]:'u1'");
+
+        assertThat(line.change.qualifiedTable).isEqualTo("Sales.order");
+        assertThat(line.change.row).containsOnlyKeys("id", "user");
+        assertThat(line.change.row.get("user")).isEqualTo("u1");
+    }
+
+    @Test
+    void doubledQuoteInsideAQuotedIdentifierUnescapes() {
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.\"we\"\"ird\": INSERT: id[integer]:1");
+
+        assertThat(line.change.qualifiedTable).isEqualTo("public.we\"ird");
+    }
 }
