@@ -78,6 +78,8 @@ public class DatabaseApiController {
         body.put("success", true);
         body.put("type", dbType.name());
         body.put("defaultPort", dbType.getDefaultPort());
+        // SQL Server 命名实例没有固定端口：表单据此把端口留空，而不是自动填 1433。
+        body.put("portOptional", dbType.allowsBlankPort());
         body.put("driverClass", dbType.getDriverClassName());
         body.put("urlTemplate", dbType.getUrlTemplate());
         body.put("custom", dbType.isCustom());

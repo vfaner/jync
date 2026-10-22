@@ -82,6 +82,10 @@
                                     会把 3306 当成用户手填值，切换类型时拒绝覆盖；编辑页是已保存端口，不打标 */-->
                             <input type="number" class="input" id="port" th:field="*{port}"
                                    th:attr="data-autofilled=${config.id == null} ? 'true' : null">
+                            <!--/* 命名实例靠 SQL Browser 解析端口,留空才连得上;切换类型时 app.js 同步显隐 */-->
+                            <div class="help" id="sqlserver-port-help"
+                                 th:attr="hidden=${config.type != null and config.type.name() == 'SQLSERVER'} ? null : 'hidden'"
+                                 th:text="#{db.portHelpSqlServer}">help</div>
                         </div>
                     </div>
 

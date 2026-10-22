@@ -852,11 +852,22 @@
           if (p.success === false) return;
           var port = document.getElementById('port');
           // 只在端口为空或还是上一个类型的默认值时才覆盖，避免抹掉用户手填的值
-          if (port && p.defaultPort) {
+          if (port && p.portOptional) {
+            // SQL Server 的命名实例没有固定端口（由 SQL Browser 解析），普通实例留空也
+            // 默认 1433：切到该类型时清掉上一类型自动填的端口，别让 1433 混进 URL。
+            if (!port.value.trim() || port.dataset.autofilled === 'true') {
+              port.value = '';
+              port.dataset.autofilled = 'true';
+            }
+          } else if (port && p.defaultPort) {
             if (!port.value.trim() || port.dataset.autofilled === 'true') {
               port.value = p.defaultPort;
               port.dataset.autofilled = 'true';
             }
+          }
+          var sqlServerPortHelp = document.getElementById('sqlserver-port-help');
+          if (sqlServerPortHelp) {
+            sqlServerPortHelp.hidden = p.portOptional !== true;
           }
           var custom = document.getElementById('custom-section');
           if (custom) {

@@ -210,6 +210,45 @@ class DatabaseConfigFormViewTest {
         assertThat(page).doesNotContain("data-autofilled");
     }
 
+    @Test
+    void sqlServerEditFormShowsTheBlankPortHelp() throws Exception {
+        DatabaseConfig sqlServer = new DatabaseConfig();
+        sqlServer.setId(9L);
+        sqlServer.setName("mssql-prod");
+        sqlServer.setType(DatabaseType.SQLSERVER);
+        sqlServer.setPort(null);
+        when(service.findById(9L)).thenReturn(Optional.of(sqlServer));
+
+        String page = html(mvc.perform(get("/databases/9/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(portHelpTag(page)).doesNotContain("hidden");
+    }
+
+    @Test
+    void otherTypesHideTheSqlServerPortHelp() throws Exception {
+        DatabaseConfig dm = new DatabaseConfig();
+        dm.setId(9L);
+        dm.setName("dm-prod");
+        dm.setType(DatabaseType.DM);
+        dm.setPort(5236);
+        when(service.findById(9L)).thenReturn(Optional.of(dm));
+
+        String page = html(mvc.perform(get("/databases/9/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(portHelpTag(page)).contains("hidden");
+    }
+
+    /** Extracts the #sqlserver-port-help element's opening div tag. */
+    private static String portHelpTag(String page) {
+        int at = page.indexOf("id=\"sqlserver-port-help\"");
+        assertThat(at).as("sqlserver port help is rendered").isPositive();
+        int start = page.lastIndexOf("<div", at);
+        int end = page.indexOf(">", at);
+        return page.substring(start, end + 1);
+    }
+
     /** Extracts the #miner-section element's opening div tag. */
     private static String minerSectionTag(String page) {
         int at = page.indexOf("id=\"miner-section\"");

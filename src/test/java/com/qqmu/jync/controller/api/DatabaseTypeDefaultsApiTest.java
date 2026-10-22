@@ -106,6 +106,25 @@ class DatabaseTypeDefaultsApiTest {
     }
 
     @Test
+    @DisplayName("SQL Server 命名实例:portOptional=true,表单不自动填 1433")
+    void sqlServerPortIsOptional() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "SQLSERVER"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.portOptional").value(true));
+    }
+
+    @Test
+    @DisplayName("其他类型端口必填:portOptional=false")
+    void otherTypesRequireAPort() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "MYSQL"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.portOptional").value(false));
+        mvc.perform(get("/api/databases/type-defaults").param("type", "ORACLE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.portOptional").value(false));
+    }
+
+    @Test
     @DisplayName("未知类型回退 CUSTOM,而不是报错")
     void unknownTypeFallsBackToCustom() throws Exception {
         mvc.perform(get("/api/databases/type-defaults").param("type", "WHATEVER"))

@@ -141,8 +141,10 @@ public class DatabaseConfigService {
             }
         }
 
-        // Default the port from the product when the user left it blank.
-        if (config.getPort() == null && config.getType() != null && !config.getType().isCustom()) {
+        // Default the port from the product when the user left it blank — except where a
+        // blank port is deliberate (SQL Server named instances, which have no fixed port).
+        if (config.getPort() == null && config.getType() != null && !config.getType().isCustom()
+                && !config.getType().allowsBlankPort()) {
             config.setPort(config.getType().getDefaultPort());
         }
 

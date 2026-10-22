@@ -219,11 +219,17 @@ public class DataSourceManager {
         if (type == null) {
             throw new IllegalArgumentException("error.connection.type.required");
         }
-        String template = type.getUrlTemplate();
-        int port = config.getPort() != null ? config.getPort() : type.getDefaultPort();
         String host = StringUtils.hasText(config.getHost()) ? config.getHost() : "localhost";
         String dbName = config.getDatabaseName() == null ? "" : config.getDatabaseName();
-        return appendExtraParams(String.format(template, host, port, dbName), config);
+        // A named SQL Server instance has no fixed port; the driver resolves it via the
+        // SQL Browser. Emitting the default-instance port 1433 there guarantees a timeout,
+        // so a blank port is honored for products that declare a portless template.
+        if (config.getPort() == null && type.allowsBlankPort()) {
+            return appendExtraParams(
+                    String.format(type.getPortlessUrlTemplate(), host, dbName), config);
+        }
+        int port = config.getPort() != null ? config.getPort() : type.getDefaultPort();
+        return appendExtraParams(String.format(type.getUrlTemplate(), host, port, dbName), config);
     }
 
     /**

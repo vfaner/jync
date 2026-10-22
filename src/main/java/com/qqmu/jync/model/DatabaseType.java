@@ -57,8 +57,16 @@ public enum DatabaseType {
             "jdbc:oracle:thin:@//%s:%d/%s",
             1521, DialectFamily.ORACLE),
 
+    /**
+     * SQL Server is the one preset whose port may be left blank. A named instance
+     * ({@code host\INSTANCE}, or the {@code instanceName} property) is resolved through the
+     * SQL Browser service and has no fixed port; substituting the default-instance port
+     * 1433 makes every such connection time out. The portless template is used only when
+     * the user clears the port field — an explicit port still wins.
+     */
     SQLSERVER("db.type.SQLSERVER", "com.microsoft.sqlserver.jdbc.SQLServerDriver",
             "jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=false;trustServerCertificate=true",
+            "jdbc:sqlserver://%s;databaseName=%s;encrypt=false;trustServerCertificate=true",
             1433, DialectFamily.SQLSERVER),
 
     DB2("db.type.DB2", "com.ibm.db2.jcc.DB2Driver",
@@ -273,20 +281,39 @@ public enum DatabaseType {
 
     private final String driverClassName;
     private final String urlTemplate;
+    /** Template without a port, for products where a blank port is meaningful. */
+    private final String portlessUrlTemplate;
     private final int defaultPort;
     private final DialectFamily family;
 
     DatabaseType(String messageKey, String driverClassName, String urlTemplate,
                  int defaultPort, DialectFamily family) {
+        this(messageKey, driverClassName, urlTemplate, null, defaultPort, family);
+    }
+
+    DatabaseType(String messageKey, String driverClassName, String urlTemplate,
+                 String portlessUrlTemplate, int defaultPort, DialectFamily family) {
         this.messageKey = messageKey;
         this.driverClassName = driverClassName;
         this.urlTemplate = urlTemplate;
+        this.portlessUrlTemplate = portlessUrlTemplate;
         this.defaultPort = defaultPort;
         this.family = family;
     }
 
     public boolean isCustom() {
         return this == CUSTOM;
+    }
+
+    /**
+     * Whether leaving the port blank is a supported choice that must be preserved.
+     *
+     * <p>Only products with a {@link #portlessUrlTemplate} qualify. For everything else a
+     * blank port still means "use the preset default", so the form and the save path keep
+     * substituting it.
+     */
+    public boolean allowsBlankPort() {
+        return portlessUrlTemplate != null;
     }
 
     /**
