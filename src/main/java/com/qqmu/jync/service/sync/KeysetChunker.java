@@ -306,15 +306,17 @@ public final class KeysetChunker {
     }
 
     /**
-     * Inverse of {@link #encodePk}, restoring temporal key values to the JDBC type the source
-     * metadata reports.
+     * Inverse of {@link #encodePk}, restoring temporal and binary key values to the JDBC type
+     * the source metadata reports.
      *
-     * <p>JSON has no date type: a {@link java.sql.Timestamp} boundary is written as epoch
-     * milliseconds and comes back as a number. Rebinding that number to a TIMESTAMP/DATE
-     * column is an error on Oracle and PostgreSQL and compares the wrong domain on other
-     * products — so a resumed load would fail (or silently mis-boundary) on any table whose
-     * key contains a temporal column. The caller passes the PK columns' JDBC types; a null
-     * or shorter type list leaves those positions untouched.
+     * <p>JSON has no date or binary type: a {@link java.sql.Timestamp} boundary is written as
+     * epoch milliseconds and comes back as a number, and a {@code byte[]} boundary is written
+     * as Base64 text and comes back as a string. Rebinding either to its column's type is
+     * wrong: a TIMESTAMP/DATE column rejects the number on Oracle and PostgreSQL and compares
+     * the wrong domain on other products, while a BINARY/VARBINARY column compares the
+     * characters of the Base64 encoding with the key's bytes (every key below that text is
+     * skipped) or refuses the comparison outright. The caller passes the PK columns' JDBC
+     * types; a null or shorter type list leaves those positions untouched.
      */
     @SuppressWarnings("unchecked")
     public static List<Object> decodePk(String json, List<Integer> pkJdbcTypes) {
@@ -330,7 +332,19 @@ public final class KeysetChunker {
         for (int i = 0; i < values.size() && i < pkJdbcTypes.size(); i++) {
             Object value = values.get(i);
             Integer type = pkJdbcTypes.get(i);
-            if (!(value instanceof Number) || type == null) {
+            if (type == null) {
+                continue;
+            }
+            if (value instanceof String && isBinaryType(type)) {
+                try {
+                    values.set(i, java.util.Base64.getDecoder().decode((String) value));
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalStateException(
+                            "Cannot restore the binary keyset boundary: " + json, e);
+                }
+                continue;
+            }
+            if (!(value instanceof Number)) {
                 continue;
             }
             long millis = ((Number) value).longValue();
@@ -342,5 +356,13 @@ public final class KeysetChunker {
             }
         }
         return values;
+    }
+
+    /** The JDBC types Jackson writes as Base64 text and a key column can carry. */
+    private static boolean isBinaryType(int type) {
+        return type == java.sql.Types.BINARY
+                || type == java.sql.Types.VARBINARY
+                || type == java.sql.Types.LONGVARBINARY
+                || type == java.sql.Types.BLOB;
     }
 }

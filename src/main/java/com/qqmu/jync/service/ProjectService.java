@@ -963,6 +963,12 @@ public class ProjectService {
             int rangesDone = 0;
             int rangesSeen = 0;
             for (ChunkCheckpoint c : rows) {
+                // A negative chunk index is the keyless walk's pre-first-page marker: it guards
+                // the crash window before the first checkpoint row and commits no rows, so it
+                // is not a chunk and must not advance the panel.
+                if (c.getChunkIndex() != null && c.getChunkIndex() < 0) {
+                    continue;
+                }
                 if (ChunkCheckpoint.STATUS_RANGE_DONE.equals(c.getStatus())) {
                     rangesDone++;
                 } else {

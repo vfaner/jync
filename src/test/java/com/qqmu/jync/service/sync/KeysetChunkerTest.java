@@ -170,6 +170,20 @@ class KeysetChunkerTest {
     }
 
     @Test
+    void binaryBoundariesComeBackAsBytesSoAResumedPageSeeksWithTheRealValue() {
+        List<Object> pk = List.of(new byte[] {1, 2, 3}, "tail");
+
+        List<Object> back = KeysetChunker.decodePk(KeysetChunker.encodePk(pk),
+                List.of(Types.VARBINARY, Types.VARCHAR));
+
+        // JSON has no binary type: a byte[] key is stored as Base64 text. Rebinding that text
+        // against a BINARY/VARBINARY key compares the characters of the encoding with the key's
+        // bytes — every key below it is skipped — so the resume must restore the bytes.
+        assertThat(back.get(0)).isEqualTo(new byte[] {1, 2, 3});
+        assertThat(back.get(1)).isEqualTo("tail");
+    }
+
+    @Test
     void keylessTablesAreRejectedInsteadOfPagingUnbounded() {
         assertThatThrownBy(() -> KeysetChunker.pageSql(new MySqlDialect(), null, "LOGS",
                 List.of(), null, null, IDENTITY, null, 50, new ArrayList<>()))

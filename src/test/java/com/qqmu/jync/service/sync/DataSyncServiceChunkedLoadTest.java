@@ -125,6 +125,31 @@ class DataSyncServiceChunkedLoadTest {
     }
 
     @Test
+    void aResumedLoadOfABinaryKeySeeksWithTheStoredBytes() throws SQLException {
+        exec(source, "CREATE TABLE BIN_ITEMS (ID VARBINARY(16) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE BIN_ITEMS (ID VARBINARY(16) PRIMARY KEY, NAME VARCHAR(50))");
+        for (int i = 1; i <= 5; i++) {
+            exec(source, "INSERT INTO BIN_ITEMS VALUES (X'" + String.format("%02X", i)
+                    + "', 'n" + i + "')");
+        }
+        // A crash left the first chunk (keys 01, 02) committed on the target, its last key
+        // recorded through the checkpoint's JSON boundary.
+        exec(target, "INSERT INTO BIN_ITEMS VALUES (X'01','n1'), (X'02','n2')");
+        when(checkpoints.findByProjectIdAndTableName(7L, "BIN_ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "BIN_ITEMS", 0, 0,
+                        KeysetChunker.encodePk(List.of(new byte[] {2})), 2,
+                        ChunkCheckpoint.STATUS_CHUNK)));
+
+        DataSyncService.TableSyncResult result = service(2).syncTable(source, target,
+                binItemsMeta(), CursorStrategy.none("full load only"), new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        // Only the tail is re-read, and every row is present exactly once.
+        assertThat(count("BIN_ITEMS")).isEqualTo(5);
+        assertThat(result.getRowsWritten()).isEqualTo(3);
+    }
+
+    @Test
     void aKeyedFullCompareSeedStoresTheRowCountFingerprintThroughTheChunkedPath()
             throws SQLException {
         createItems(5);
@@ -392,6 +417,22 @@ class DataSyncServiceChunkedLoadTest {
 
         TableMeta table = new TableMeta();
         table.setName("ITEMS");
+        table.setPrimaryKeys(List.of("ID"));
+        table.setColumns(List.of(id, name));
+        return table;
+    }
+
+    /** Same shape as {@link #itemsMeta()}, with a binary key the JSON boundary cannot hold. */
+    private TableMeta binItemsMeta() {
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(Types.VARBINARY);
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
+
+        TableMeta table = new TableMeta();
+        table.setName("BIN_ITEMS");
         table.setPrimaryKeys(List.of("ID"));
         table.setColumns(List.of(id, name));
         return table;

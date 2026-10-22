@@ -1,8 +1,10 @@
 package com.qqmu.jync.service.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -16,8 +18,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -95,9 +99,10 @@ class DataSyncServiceKeylessChunkedLoadTest {
         verify(checkpoints, atLeastOnce()).save(saved.capture());
         assertThat(saved.getAllValues()).allSatisfy(c ->
                 assertThat(c.getStatus()).isEqualTo(ChunkCheckpoint.STATUS_KEYLESS_CHUNK));
-        // Offsets are recorded as rows copied so far, one after each committed page.
+        // A marker is written before the first page (see the crash test below), then the
+        // offsets are recorded as rows copied so far, one after each committed page.
         assertThat(saved.getAllValues()).extracting(ChunkCheckpoint::getRowsCopied)
-                .containsExactly(2, 4, 5);
+                .containsExactly(0, 2, 4, 5);
         verify(checkpoints).deleteByProjectIdAndTableName(7L, "EVENTS");
 
         assertThat(prepared).anyMatch(sql -> sql.contains("ORDER BY"));
@@ -125,6 +130,47 @@ class DataSyncServiceKeylessChunkedLoadTest {
         assertThat(count("EVENTS")).isEqualTo(5);
         assertThat(result.getRowsWritten()).isEqualTo(2);
         verify(checkpoints).deleteByProjectIdAndTableName(7L, "EVENTS");
+    }
+
+    @Test
+    void aPageCommittedBeforeItsCheckpointIsResumedInsteadOfCopiedAgain() throws SQLException {
+        createTables();
+        insertEvents(1, 5);
+        // The checkpoint repository holds exactly what survived each step, so the second
+        // attempt below sees the state a real crash leaves behind.
+        List<ChunkCheckpoint> stored = new ArrayList<>();
+        AtomicBoolean crashed = new AtomicBoolean();
+        when(checkpoints.findByProjectIdAndTableName(7L, "EVENTS"))
+                .thenAnswer(invocation -> List.copyOf(stored));
+        doAnswer(invocation -> {
+            ChunkCheckpoint checkpoint = invocation.getArgument(0);
+            // Die after the first page's commit, before its checkpoint row is written.
+            if (checkpoint.getRowsCopied() > 0 && crashed.compareAndSet(false, true)) {
+                throw new IllegalStateException("process died before the checkpoint write");
+            }
+            stored.add(checkpoint);
+            return null;
+        }).when(checkpoints).save(any(ChunkCheckpoint.class));
+        doAnswer(invocation -> {
+            stored.clear();
+            return null;
+        }).when(checkpoints).deleteByProjectIdAndTableName(7L, "EVENTS");
+
+        assertThatThrownBy(() -> service(2).syncTable(source, target, eventsMeta(), FULL_ONLY,
+                new SyncProgress(), ctx)).isInstanceOf(IllegalStateException.class);
+        // The first page did reach the target before the crash.
+        assertThat(count("EVENTS")).isEqualTo(2);
+
+        DataSyncService.TableSyncResult result =
+                service(2).syncTable(source, target, eventsMeta(), FULL_ONLY,
+                        new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        // Without a marker written before the first page, an empty checkpoint table reads as
+        // "a target somebody else filled": the load falls back to the single streamed read and
+        // plain-INSERTs the whole source, duplicating the page the crash left behind. A keyless
+        // table has no key to absorb that duplicate.
+        assertThat(count("EVENTS")).isEqualTo(5);
     }
 
     @Test

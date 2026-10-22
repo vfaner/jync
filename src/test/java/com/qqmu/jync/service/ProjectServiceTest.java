@@ -124,6 +124,24 @@ class ProjectServiceTest {
     }
 
     @Test
+    void theKeylessWalkMarkerIsNotCountedAsACommittedChunk() {
+        // The keyless walk writes a marker (chunk index -1) before its first page so a crash
+        // there is not read as a target somebody else filled. It commits no rows, so the
+        // panel must not tell the user a chunk has landed.
+        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of(
+                new com.qqmu.jync.model.ChunkCheckpoint(1L, "EVENTS", 0, -1, null, 0,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_KEYLESS_CHUNK),
+                new com.qqmu.jync.model.ChunkCheckpoint(1L, "EVENTS", 0, 0, null, 2,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_KEYLESS_CHUNK)));
+
+        java.util.Map<String, ProjectService.FullLoadProgress> progress =
+                service.findFullLoadProgress(1L);
+
+        assertThat(progress).containsOnlyKeys("EVENTS");
+        assertThat(progress.get("EVENTS").getChunksDone()).isEqualTo(1);
+    }
+
+    @Test
     void fullLoadProgressIsEmptyWhenNoLoadIsInFlight() {
         when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
 

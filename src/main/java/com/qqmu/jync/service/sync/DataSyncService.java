@@ -1680,6 +1680,17 @@ public class DataSyncService {
             log.info("Resuming keyless full load of {} at offset {}", table.getName(), offset);
         }
 
+        if (saved.isEmpty()) {
+            // Mark the walk before its first page. A page commits inside copyRows, so a crash
+            // between that commit and the checkpoint row leaves this load's own rows in a
+            // target with no checkpoint at all — and the branch above reads an unmarked target
+            // as "somebody else filled it", falls back to the streamed read and plain-INSERTs
+            // the whole source. This table has no key to absorb that duplicate. The marker
+            // stays invisible to the resume itself (the offset comes from the target count)
+            // and is deleted with the rest on completion.
+            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), 0, -1,
+                    null, 0, ChunkCheckpoint.STATUS_KEYLESS_CHUNK));
+        }
         int chunkIndex = 0;
         for (ChunkCheckpoint checkpoint : saved) {
             chunkIndex = Math.max(chunkIndex, checkpoint.getChunkIndex() + 1);

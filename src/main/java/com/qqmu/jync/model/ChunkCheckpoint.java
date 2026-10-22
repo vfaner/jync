@@ -74,7 +74,12 @@ public class ChunkCheckpoint {
     @Column(name = "range_index", nullable = false)
     private Integer rangeIndex = 0;
 
-    /** Zero-based position of the chunk inside its range; resume continues at max+1. */
+    /**
+     * Zero-based position of the chunk inside its range; resume continues at max+1.
+     * {@code -1} is not a chunk: it marks a keyless walk that has started but not yet
+     * committed its first page (see {@link #STATUS_KEYLESS_CHUNK}), so a crash there is not
+     * mistaken for a target filled by someone else.
+     */
     @Column(name = "chunk_index", nullable = false)
     private Integer chunkIndex;
 
