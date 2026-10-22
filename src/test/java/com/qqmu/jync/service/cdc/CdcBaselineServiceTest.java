@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
@@ -239,6 +240,57 @@ class CdcBaselineServiceTest {
                 org.mockito.ArgumentMatchers.anyLong(), any(), anyLong());
         verify(stateWriter).resetProject(12L);
         verify(positionStore).markBaselineDone(12L);
+    }
+
+    // —— SQL Server LSN 锚点 ——
+
+    /**
+     * 实证(SQL Server 2022 容器):库级 CDC 已启用、表 capture 实例也建好,但只要 capture
+     * 作业还没处理过任何事务,{@code sys.fn_cdc_get_max_lsn()} 就返回 NULL —— 这不是
+     * 「CDC 未启用」。旧代码据此直接抛异常:消费者戴上 ERROR 帽停机,只能人工 rebaseline,
+     * 而启用后暂时没有写入的小表会一直停在这里。此刻库里没有任何已捕获变更,锚定 0 等价于
+     * 「从此刻开始」:回放不可能早于任何真实事件。
+     */
+    @Test
+    void sqlServerBaselineAnchorsAtZeroWhenCdcIsEnabledButNothingWasCapturedYet()
+            throws SQLException {
+        Connection mssql = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(mssql.createStatement()).thenReturn(st);
+        ResultSet maxRs = mock(ResultSet.class);
+        when(maxRs.next()).thenReturn(true);
+        when(maxRs.getString(1)).thenReturn(null);
+        when(st.executeQuery(contains("fn_cdc_get_max_lsn"))).thenReturn(maxRs);
+        ResultSet enabledRs = mock(ResultSet.class);
+        when(enabledRs.next()).thenReturn(true);
+        when(enabledRs.getBoolean(1)).thenReturn(true);
+        when(st.executeQuery(contains("is_cdc_enabled"))).thenReturn(enabledRs);
+        when(dataSourceManager.getConnection(any())).thenReturn(mssql);
+
+        assertThat(service.readCurrentLsnSqlServer(source()))
+                .isEqualTo("0x00000000000000000000");
+    }
+
+    @Test
+    void sqlServerBaselineStillFailsWhenCdcIsGenuinelyDisabled() throws SQLException {
+        // 区分两种 NULL:库级 is_cdc_enabled=0 是真关闭(基线必须失败并说清原因),
+        // 已启用只是还没有已捕获变更(上一条测试)才锚定 0。
+        Connection mssql = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(mssql.createStatement()).thenReturn(st);
+        ResultSet maxRs = mock(ResultSet.class);
+        when(maxRs.next()).thenReturn(true);
+        when(maxRs.getString(1)).thenReturn(null);
+        when(st.executeQuery(contains("fn_cdc_get_max_lsn"))).thenReturn(maxRs);
+        ResultSet enabledRs = mock(ResultSet.class);
+        when(enabledRs.next()).thenReturn(true);
+        when(enabledRs.getBoolean(1)).thenReturn(false);
+        when(st.executeQuery(contains("is_cdc_enabled"))).thenReturn(enabledRs);
+        when(dataSourceManager.getConnection(any())).thenReturn(mssql);
+
+        assertThatThrownBy(() -> service.readCurrentLsnSqlServer(source()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("is_cdc_enabled=0");
     }
 
     @Test

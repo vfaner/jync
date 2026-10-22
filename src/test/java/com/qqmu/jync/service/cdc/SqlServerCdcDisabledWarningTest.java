@@ -14,6 +14,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -52,8 +54,54 @@ class SqlServerCdcDisabledWarningTest {
 
     @Test
     void disabledSourceCdcEmitsAVisibleWarningAndDoesNotPark() throws SQLException {
-        // fn_cdc_get_max_lsn() == NULL → CDC 库级关闭。drain() 在 readMaxLsn 早返回,
-        // 不触及 discovery/changes/target,故只需 maxLsn 这一路 mock。
+        // fn_cdc_get_max_lsn() == NULL + is_cdc_enabled=0 → CDC 库级关闭。drain() 在
+        // readMaxLsn 早返回,不触及 discovery/changes/target,故只需 maxLsn 这一路 mock。
+        Run run = runOneCycle(Boolean.FALSE);
+
+        assertThat(run.events).anySatisfy(ev -> {
+            assertThat(ev.getLevel()).isEqualTo(Level.WARN);
+            assertThat(ev.getFormattedMessage()).contains("disabled");
+        });
+        // 启动行与停机行配对,重启不再看起来像崩溃。
+        verify(run.stateWriter).recordLog(1L, ObjectType.PROJECT, "mssql-cdc-off",
+                ChangeType.INFO, "SQLServer consumer started", true, 0L);
+        verify(run.taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
+    /**
+     * 实证(SQL Server 2022 容器):库级 CDC 已启用、capture 实例已建好,但只要 capture
+     * 作业还没处理过任何事务,max_lsn 就是 NULL。旧代码把这条 NULL 一律说成「CDC 已在
+     * 库级关闭」,会把 DBA 引向一次没必要的 sp_cdc_enable_db;真正的线索是 Agent 没跑。
+     */
+    @Test
+    void enabledButNothingCapturedYetWarnsAboutTheAgentNotAboutDisabledCdc()
+            throws SQLException {
+        Run run = runOneCycle(Boolean.TRUE);
+
+        assertThat(run.events).anySatisfy(ev -> {
+            assertThat(ev.getLevel()).isEqualTo(Level.WARN);
+            assertThat(ev.getFormattedMessage())
+                    .contains("Agent")
+                    .doesNotContain("disabled at the database level");
+        });
+        verify(run.taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
+    /** One consumer run against a source whose fn_cdc_get_max_lsn() is NULL. */
+    private static final class Run {
+        final List<ILoggingEvent> events;
+        final SyncStateWriter stateWriter;
+        final SyncTaskStore taskStore;
+
+        Run(List<ILoggingEvent> events, SyncStateWriter stateWriter, SyncTaskStore taskStore) {
+            this.events = events;
+            this.stateWriter = stateWriter;
+            this.taskStore = taskStore;
+        }
+    }
+
+    /** @param cdcEnabled the stubbed sys.databases.is_cdc_enabled value. */
+    private Run runOneCycle(Boolean cdcEnabled) throws SQLException {
         Connection sourceConn = mock(Connection.class);
         PreparedStatement maxPs = mock(PreparedStatement.class);
         ResultSet maxRs = mock(ResultSet.class);
@@ -61,6 +109,12 @@ class SqlServerCdcDisabledWarningTest {
         when(maxRs.getString(1)).thenReturn(null);
         when(maxPs.executeQuery()).thenReturn(maxRs);
         when(sourceConn.prepareStatement(contains("fn_cdc_get_max_lsn"))).thenReturn(maxPs);
+        Statement probe = mock(Statement.class);
+        ResultSet enabledRs = mock(ResultSet.class);
+        when(enabledRs.next()).thenReturn(true);
+        when(enabledRs.getBoolean(1)).thenReturn(cdcEnabled);
+        when(probe.executeQuery(contains("is_cdc_enabled"))).thenReturn(enabledRs);
+        when(sourceConn.createStatement()).thenReturn(probe);
 
         DataSourceManager dsm = mock(DataSourceManager.class);
         when(dsm.getConnection(any())).thenReturn(sourceConn);
@@ -98,15 +152,7 @@ class SqlServerCdcDisabledWarningTest {
         } finally {
             LogCapture.detach(SqlServerCdcConsumer.class, appender);
         }
-
-        assertThat(appender.list).anySatisfy(ev -> {
-            assertThat(ev.getLevel()).isEqualTo(Level.WARN);
-            assertThat(ev.getFormattedMessage()).contains("disabled");
-        });
-        // 启动行与停机行配对,重启不再看起来像崩溃。
-        verify(stateWriter).recordLog(1L, ObjectType.PROJECT, "mssql-cdc-off",
-                ChangeType.INFO, "SQLServer consumer started", true, 0L);
-        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+        return new Run(new java.util.ArrayList<>(appender.list), stateWriter, taskStore);
     }
 
     /** Lock renews for {@code grants} cycles, then refuses — bounds the loop in every path. */

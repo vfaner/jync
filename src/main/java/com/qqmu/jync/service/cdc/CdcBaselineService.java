@@ -141,28 +141,63 @@ public class CdcBaselineService {
         }
     }
 
+    /** The lowest LSN SQL Server accepts; used when nothing has been captured yet. */
+    static final String SQLSERVER_ZERO_LSN = "0x00000000000000000000";
+
     /**
      * SQL Server: max committed LSN across all capture instances
      * ({@code sys.fn_cdc_get_max_lsn()}) — the baseline anchor; read back as a hex string
      * because the JDBC driver hands it back as binary(10).
+     *
+     * <p>{@code fn_cdc_get_max_lsn()} reads {@code cdc.lsn_time_mapping}, which stays
+     * EMPTY until the capture job has processed its first transaction. A freshly enabled
+     * database therefore returns NULL even though CDC is on — verified on SQL Server 2022:
+     * after {@code sp_cdc_enable_db} + {@code sp_cdc_enable_table}, before any capture run,
+     * the function returns NULL. Treating that as "CDC disabled" parked the consumer in the
+     * ERROR hat and demanded a manual rebaseline. Since nothing has been captured at that
+     * moment, anchoring at LSN zero is equivalent to "start from now": replay cannot begin
+     * before any real event, and the first captured change is applied in order.
+     *
+     * <p>Genuine {@code is_cdc_enabled=0} still fails — that state must not be papered over.
      */
     public String readCurrentLsnSqlServer(DatabaseConfig source) {
         try (Connection conn = dataSourceManager.getConnection(source);
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(
-                     "SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)")) {
-            if (!rs.next()) {
-                throw new IllegalStateException("Could not read sys.fn_cdc_get_max_lsn()");
+             Statement st = conn.createStatement()) {
+            String lsn;
+            try (ResultSet rs = st.executeQuery(
+                    "SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)")) {
+                lsn = rs.next() ? rs.getString(1) : null;
             }
-            String lsn = rs.getString(1);
-            if (lsn == null || lsn.isBlank()) {
-                throw new IllegalStateException(
-                        "fn_cdc_get_max_lsn() returned empty — is SQL Server CDC enabled?");
+            if (lsn != null && !lsn.isBlank()) {
+                return lsn.trim();
             }
-            return lsn.trim();
+            Boolean enabled = readCdcDbEnabled(st);
+            if (Boolean.TRUE.equals(enabled)) {
+                log.info("SQL Server CDC: fn_cdc_get_max_lsn() is NULL but the database has"
+                        + " CDC enabled — no change has been captured yet; anchoring the"
+                        + " baseline at {}", SQLSERVER_ZERO_LSN);
+                return SQLSERVER_ZERO_LSN;
+            }
+            if (Boolean.FALSE.equals(enabled)) {
+                throw new IllegalStateException("fn_cdc_get_max_lsn() returned NULL and"
+                        + " sys.databases.is_cdc_enabled=0 — SQL Server CDC is not enabled"
+                        + " on this database; run EXEC sys.sp_cdc_enable_db;");
+            }
+            throw new IllegalStateException(
+                    "Could not read sys.fn_cdc_get_max_lsn() — is SQL Server CDC enabled?");
         } catch (SQLException e) {
             throw new IllegalStateException(
                     "Failed to read SQL Server CDC LSN: " + e.getMessage(), e);
+        }
+    }
+
+    /** db-level CDC flag, or null when undeterminable (old server, missing permission). */
+    private static Boolean readCdcDbEnabled(Statement st) {
+        try (ResultSet rs = st.executeQuery(
+                "SELECT is_cdc_enabled FROM sys.databases WHERE name = DB_NAME()")) {
+            return rs.next() ? rs.getBoolean(1) : null;
+        } catch (SQLException e) {
+            return null;
         }
     }
 

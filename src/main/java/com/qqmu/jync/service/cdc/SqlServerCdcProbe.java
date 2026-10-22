@@ -204,6 +204,7 @@ public class SqlServerCdcProbe {
         // that depends on @role_name chosen at enable_table time. Probe with a real
         // top-1 call; if even this 0-row call throws, runtime will fail on the first
         // drain, so fail early.
+        List<String> unprobed = new ArrayList<>();
         for (String ci : ciNames) {
             // P1-7: same whitelist the consumer enforces (isSafeCaptureInstanceName) —
             // the name is inlined into the fn call below, and a CI outside [A-Za-z0-9_]
@@ -216,12 +217,24 @@ public class SqlServerCdcProbe {
                                 + " can never be synced; recreate it with"
                                 + " sys.sp_cdc_enable_table @capture_instance=N'<schema>_<table>'");
             }
-            String sql = "SELECT TOP(1) * FROM cdc.fn_cdc_get_all_changes_" + ci
-                    + "(sys.fn_cdc_get_min_lsn(?), sys.fn_cdc_get_max_lsn(), 'all')";
-            try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, ci);
-                try (ResultSet rs = ps.executeQuery()) {
-                    // 0 rows is fine — we only care that the function is callable.
+            try {
+                // A capture instance that has captured NOTHING yet cannot be probed:
+                // fn_cdc_get_max_lsn() is NULL, and EVERY fn_cdc_get_all_changes call
+                // then raises Msg 313 (verified on SQL Server 2022 — even a zero-width
+                // range). Reporting that as "not readable, check @role_name" sends the
+                // DBA after a permission problem that does not exist on a perfectly
+                // fresh setup. Skip the probe; check ③ tells them if the Agent is down.
+                if (!hasCapturedChanges(conn, ci)) {
+                    unprobed.add(ci);
+                    continue;
+                }
+                String sql = "SELECT TOP(1) * FROM cdc.fn_cdc_get_all_changes_" + ci
+                        + "(sys.fn_cdc_get_min_lsn(?), sys.fn_cdc_get_max_lsn(), 'all')";
+                try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+                    ps.setString(1, ci);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        // 0 rows is fine — we only care that the function is callable.
+                    }
                 }
             } catch (SQLException e) {
                 return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
@@ -229,8 +242,29 @@ public class SqlServerCdcProbe {
                                 + " — check @role_name on sp_cdc_enable_table");
             }
         }
+        if (unprobed.isEmpty()) {
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, true,
+                    schemaTables.size() + " table(s) with CDC capture instance (readable)");
+        }
+        int readable = ciNames.size() - unprobed.size();
         return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, true,
-                schemaTables.size() + " table(s) with CDC capture instance (readable)");
+                schemaTables.size() + " table(s) with CDC capture instance ("
+                        + readable + " readable, " + unprobed.size()
+                        + " not probed: no change captured yet — start the SQL Server"
+                        + " Agent so the capture job runs)");
+    }
+
+    /** min_lsn and max_lsn both non-NULL ⇔ the capture table holds at least one change. */
+    private static boolean hasCapturedChanges(Connection conn, String captureInstance)
+            throws SQLException {
+        try (java.sql.PreparedStatement ps = conn.prepareStatement(
+                "SELECT sys.fn_cdc_get_min_lsn(?) AS min_lsn,"
+                        + " sys.fn_cdc_get_max_lsn() AS max_lsn")) {
+            ps.setString(1, captureInstance);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getBytes(1) != null && rs.getBytes(2) != null;
+            }
+        }
     }
 
     private static String msg(SQLException e) {

@@ -64,6 +64,17 @@ class SqlServerCdcProbeTest {
         ResultSet fnRs = mock(ResultSet.class);
         when(fnRs.next()).thenReturn(false);
         when(fnPs.executeQuery()).thenReturn(fnRs);
+
+        // 已捕获过变更的常态:min_lsn / max_lsn 都非 NULL,可调 fn 探测。
+        // 匹配用 "AS min_lsn" 而不是 fn_cdc_get_min_lsn:后者也出现在
+        // fn_cdc_get_all_changes 探测语句的参数里,两个桩会互相吞掉。
+        PreparedStatement boundsPs = mock(PreparedStatement.class);
+        when(conn.prepareStatement(contains("AS min_lsn"))).thenReturn(boundsPs);
+        ResultSet boundsRs = mock(ResultSet.class);
+        when(boundsRs.next()).thenReturn(true, false);
+        when(boundsRs.getBytes(1)).thenReturn(new byte[10]);
+        when(boundsRs.getBytes(2)).thenReturn(new byte[10]);
+        when(boundsPs.executeQuery()).thenReturn(boundsRs);
     }
 
     /** change_tables 对 [dbo, orders] 返回给定的 capture_instance 名。 */
@@ -107,6 +118,36 @@ class SqlServerCdcProbeTest {
         // 白名单外的名字绝不允许进入任何拼接语句。
         verify(conn, never()).prepareStatement(contains("fn_cdc_get_all_changes"));
         assertThat(result.passed()).isFalse();
+    }
+
+    /**
+     * 实证(SQL Server 2022 容器):capture 实例刚建好、capture 作业还没处理过任何事务时,
+     * {@code sys.fn_cdc_get_max_lsn()} 为 NULL,此时任何 {@code fn_cdc_get_all_changes}
+     * 调用都报 Msg 313 —— 旧实现把它当成「实例存在但不可读,去查 @role_name」,在完全
+     * 正常的首次配置上给出误导性结论。实例本身是就绪的,只是可读性暂时无从探测。
+     */
+    @Test
+    void freshCaptureInstanceWithNoCapturedChangeIsNotMisreportedAsUnreadable()
+            throws SQLException {
+        captureInstanceNamed("dbo_t1");
+        PreparedStatement boundsPs = mock(PreparedStatement.class);
+        when(conn.prepareStatement(contains("AS min_lsn"))).thenReturn(boundsPs);
+        ResultSet boundsRs = mock(ResultSet.class);
+        when(boundsRs.next()).thenReturn(true, false);
+        when(boundsRs.getBytes(1)).thenReturn(new byte[10]);   // CI 起始 LSN 已有
+        when(boundsRs.getBytes(2)).thenReturn(null);           // 但没有任何已捕获变更
+        when(boundsPs.executeQuery()).thenReturn(boundsRs);
+
+        CdcProbeResult result = probe.probe(conn,
+                Collections.singletonList(new String[]{"dbo", "t1"}));
+
+        CdcProbeResult.Check ci = check(result);
+        assertThat(ci.isPassed()).isTrue();
+        assertThat(ci.getDetail()).contains("Agent")
+                .doesNotContain("not readable")
+                .doesNotContain("@role_name");
+        // Msg 313 是必然结果,不该再去踩。
+        verify(conn, never()).prepareStatement(contains("fn_cdc_get_all_changes"));
     }
 
     @Test

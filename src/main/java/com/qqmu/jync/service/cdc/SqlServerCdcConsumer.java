@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -298,19 +299,40 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         DrainResult out = new DrainResult();
         String maxLsn = readMaxLsn(conn);
         if (maxLsn == null) {
-            // #4: sys.fn_cdc_get_max_lsn() returns NULL only when CDC is disabled at the
-            // DB level. The old code returned silently here, so a DBA disabling CDC
-            // mid-flight left the consumer idle-spinning forever with no signal — the
-            // same "silent stall" class as 22054. Warn instead, throttled to once per
-            // DISCOVERY_REFRESH_MS so the 1s idle poll cannot spam, and keep polling:
-            // do NOT park — re-enabling CDC resumes the stream automatically.
+            // #4: a NULL here used to be silent, so an idle consumer spun forever with no
+            // signal — the same "silent stall" class as 22054. Warn instead, throttled to
+            // once per DISCOVERY_REFRESH_MS so the 1s idle poll cannot spam, and keep
+            // polling: do NOT park — the stream resumes automatically.
+            //
+            // The cause is NOT always "CDC disabled": fn_cdc_get_max_lsn() reads
+            // cdc.lsn_time_mapping, which stays empty until the capture job processes its
+            // first transaction (verified on SQL Server 2022). On a freshly enabled but
+            // so-far quiet database the old wording sent DBAs to sp_cdc_enable_db when the
+            // real clue was a stopped SQL Server Agent. Ask the database-level flag.
             long now = System.currentTimeMillis();
             if (now - lastCdcOffWarnMs >= DISCOVERY_REFRESH_MS) {
                 lastCdcOffWarnMs = now;
-                log.warn("SQLServer CDC for project {} is disabled at the database level"
-                        + " (sys.fn_cdc_get_max_lsn() returned NULL); no changes will be"
-                        + " captured until a DBA re-enables CDC. The consumer keeps polling"
-                        + " and resumes automatically once it is back on.", projectId);
+                Boolean dbEnabled = readCdcDbEnabled(conn);
+                if (Boolean.FALSE.equals(dbEnabled)) {
+                    log.warn("SQLServer CDC for project {} is disabled at the database level"
+                            + " (sys.fn_cdc_get_max_lsn() returned NULL, is_cdc_enabled=0);"
+                            + " no changes will be captured until a DBA re-enables CDC. The"
+                            + " consumer keeps polling and resumes automatically once it is"
+                            + " back on.", projectId);
+                } else if (Boolean.TRUE.equals(dbEnabled)) {
+                    log.warn("SQLServer CDC for project {} has captured nothing yet"
+                            + " (sys.fn_cdc_get_max_lsn() returned NULL while"
+                            + " is_cdc_enabled=1) — the capture job has not processed a"
+                            + " transaction; make sure the SQL Server Agent is running. The"
+                            + " consumer keeps polling and resumes automatically at the first"
+                            + " captured change.", projectId);
+                } else {
+                    log.warn("SQLServer CDC for project {} sees sys.fn_cdc_get_max_lsn() ="
+                            + " NULL — either CDC is disabled at the database level or"
+                            + " nothing has been captured yet; check"
+                            + " sys.databases.is_cdc_enabled and the SQL Server Agent. The"
+                            + " consumer keeps polling and resumes automatically.", projectId);
+                }
             }
             return out;
         }
@@ -617,6 +639,17 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 "SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)");
              ResultSet rs = ps.executeQuery()) {
             return rs.next() ? rs.getString(1) : null;
+        }
+    }
+
+    /** Database-level CDC flag, or null when undeterminable (old server, permissions). */
+    private static Boolean readCdcDbEnabled(Connection conn) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT is_cdc_enabled FROM sys.databases WHERE name = DB_NAME()")) {
+            return rs.next() ? rs.getBoolean(1) : null;
+        } catch (SQLException e) {
+            return null;
         }
     }
 
