@@ -105,87 +105,101 @@ public final class JdbcRowMapper {
             int idx = i + 1;
             int type = types.get(i);
             String typeName = typeNames == null ? null : typeNames.get(i);
-            Object value;
-            switch (type) {
-                case Types.BLOB:
-                case Types.LONGVARBINARY:
-                case Types.VARBINARY:
-                case Types.BINARY:
-                    value = rs.getBytes(idx);
-                    break;
-                case Types.CLOB:
-                case Types.NCLOB:
-                case Types.LONGVARCHAR:
-                case Types.LONGNVARCHAR:
-                    value = rs.getString(idx);
-                    break;
-                case Types.TIMESTAMP:
-                case Types.TIMESTAMP_WITH_TIMEZONE:
-                    if (isMysqlDatetime(typeName)) {
-                        // Connector/J converts DATETIME from the server session zone to the
-                        // JVM zone inside getTimestamp, shifting the wall clock. The server
-                        // literal is the displayed wall time and must survive verbatim; the
-                        // bind side casts it explicitly (?::timestamp on PG-family targets).
-                        value = rs.getString(idx);
-                    } else {
-                        value = rs.getTimestamp(idx);
-                    }
-                    break;
-                case Types.DATE:
-                    if (isMysqlYear(typeName)) {
-                        // YEAR reports DATE but carries an integer year; getDate produced a
-                        // "2026-01-01" literal the integer target could not parse. getInt is
-                        // the only primitive read here, so it is the only one that needs the
-                        // wasNull check — every object-returning getter already yields null
-                        // for SQL NULL, and checking all of them cost a call per column.
-                        int year = rs.getInt(idx);
-                        value = rs.wasNull() ? null : year;
-                    } else {
-                        value = rs.getDate(idx);
-                    }
-                    break;
-                case Types.OTHER:
-                    if (isPostgresFamily(sourceType)) {
-                        // Every PG-only OTHER (json/jsonb/uuid/xml plus enums and geometry
-                        // types) builds onto a TEXT/CLOB target — getObject would hand the
-                        // target driver a private PGobject it cannot infer. The text payload
-                        // is the universal landing form; json/uuid also bind to native target
-                        // columns through their assignment casts.
-                        value = rs.getString(idx);
-                    } else if (isPgTextBorneOther(typeName)) {
-                        // Source family unknown (older call paths): the known text-borne
-                        // names still take the safe read.
-                        value = rs.getString(idx);
-                    } else {
-                        value = rs.getObject(idx);
-                    }
-                    break;
-                case Types.ARRAY:
-                    if (isPostgresFamily(sourceType)) {
-                        // PG arrays report ARRAY with internal names like "_int4"; the
-                        // generated column is TEXT/CLOB and accepts the "{1,2,3}" literal,
-                        // while a PgArray object is rejected by every target driver.
-                        value = rs.getString(idx);
-                    } else {
-                        value = rs.getObject(idx);
-                    }
-                    break;
-                case Types.TIME:
-                case Types.TIME_WITH_TIMEZONE:
-                    // Ruling R5: rs.getTime cannot carry MySQL's TIME domain — Connector/J's
-                    // SqlTimeValueFactory REJECTS hours<0 or >=24 with a DataReadException
-                    // (which parked whole baselines over one extreme row), and the write side
-                    // wraps them through a SimpleDateFormat("HH:mm:ss"). getString yields the
-                    // server's literal (sign, full hour range, fraction), which bindValue
-                    // sends back verbatim; normal values keep their exact stored form.
-                    value = rs.getString(idx);
-                    break;
-                default:
-                    value = rs.getObject(idx);
-            }
+            Object normalized = JdbcValueNormalizer.read(rs, idx, type, typeName, sourceType);
+            Object value = normalized != JdbcValueNormalizer.UNHANDLED
+                    ? normalized
+                    : readValue(rs, idx, type, typeName, sourceType);
             row.put(columns.get(i), value);
         }
         return row;
+    }
+
+    /**
+     * Reads one column with the getter its JDBC type needs. Split out of {@link #readRowInto}
+     * so the vendor-type normalization above stays the first thing the reader sees.
+     */
+    private static Object readValue(ResultSet rs, int idx, int type, String typeName,
+                                    com.qqmu.jync.model.DatabaseType sourceType)
+            throws SQLException {
+        Object value;
+        switch (type) {
+            case Types.BLOB:
+            case Types.LONGVARBINARY:
+            case Types.VARBINARY:
+            case Types.BINARY:
+                value = rs.getBytes(idx);
+                break;
+            case Types.CLOB:
+            case Types.NCLOB:
+            case Types.LONGVARCHAR:
+            case Types.LONGNVARCHAR:
+                value = rs.getString(idx);
+                break;
+            case Types.TIMESTAMP:
+            case Types.TIMESTAMP_WITH_TIMEZONE:
+                if (isMysqlDatetime(typeName)) {
+                    // Connector/J converts DATETIME from the server session zone to the
+                    // JVM zone inside getTimestamp, shifting the wall clock. The server
+                    // literal is the displayed wall time and must survive verbatim; the
+                    // bind side casts it explicitly (?::timestamp on PG-family targets).
+                    value = rs.getString(idx);
+                } else {
+                    value = rs.getTimestamp(idx);
+                }
+                break;
+            case Types.DATE:
+                if (isMysqlYear(typeName)) {
+                    // YEAR reports DATE but carries an integer year; getDate produced a
+                    // "2026-01-01" literal the integer target could not parse. getInt is
+                    // the only primitive read here, so it is the only one that needs the
+                    // wasNull check — every object-returning getter already yields null
+                    // for SQL NULL, and checking all of them cost a call per column.
+                    int year = rs.getInt(idx);
+                    value = rs.wasNull() ? null : year;
+                } else {
+                    value = rs.getDate(idx);
+                }
+                break;
+            case Types.OTHER:
+                if (isPostgresFamily(sourceType)) {
+                    // Every PG-only OTHER (json/jsonb/uuid/xml plus enums and geometry
+                    // types) builds onto a TEXT/CLOB target — getObject would hand the
+                    // target driver a private PGobject it cannot infer. The text payload
+                    // is the universal landing form; json/uuid also bind to native target
+                    // columns through their assignment casts.
+                    value = rs.getString(idx);
+                } else if (isPgTextBorneOther(typeName)) {
+                    // Source family unknown (older call paths): the known text-borne
+                    // names still take the safe read.
+                    value = rs.getString(idx);
+                } else {
+                    value = rs.getObject(idx);
+                }
+                break;
+            case Types.ARRAY:
+                if (isPostgresFamily(sourceType)) {
+                    // PG arrays report ARRAY with internal names like "_int4"; the
+                    // generated column is TEXT/CLOB and accepts the "{1,2,3}" literal,
+                    // while a PgArray object is rejected by every target driver.
+                    value = rs.getString(idx);
+                } else {
+                    value = rs.getObject(idx);
+                }
+                break;
+            case Types.TIME:
+            case Types.TIME_WITH_TIMEZONE:
+                // Ruling R5: rs.getTime cannot carry MySQL's TIME domain — Connector/J's
+                // SqlTimeValueFactory REJECTS hours<0 or >=24 with a DataReadException
+                // (which parked whole baselines over one extreme row), and the write side
+                // wraps them through a SimpleDateFormat("HH:mm:ss"). getString yields the
+                // server's literal (sign, full hour range, fraction), which bindValue
+                // sends back verbatim; normal values keep their exact stored form.
+                value = rs.getString(idx);
+                break;
+            default:
+                value = rs.getObject(idx);
+        }
+        return value;
     }
 
     private static boolean isMysqlYear(String typeName) {

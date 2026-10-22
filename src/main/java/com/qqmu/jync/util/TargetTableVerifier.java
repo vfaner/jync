@@ -13,6 +13,7 @@ import java.util.Map;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.service.converter.VendorTypeMap;
 
 /**
  * Checks that an already-existing target table can actually receive the source's rows.
@@ -60,7 +61,7 @@ public final class TargetTableVerifier {
                         + " source). Turn structure sync on so Jync adds the missing column,"
                         + " or add it yourself.";
             }
-            if (sourceFamily(sourceColumn) != targetFamily(found, oracleFamily)) {
+            if (sourceFamily(sourceColumn) != targetFamily(found, targetType)) {
                 return "target table " + lookupTable + " column " + sourceColumn.getName()
                         + " has an incompatible type (source JDBC type " + sourceColumn.getJdbcType()
                         + " vs target " + found.jdbcType() + "). Align the column types.";
@@ -143,7 +144,7 @@ public final class TargetTableVerifier {
         for (String column : columns) {
             TargetColumn found = column == null ? null
                     : targetTypes.get(column.toUpperCase(Locale.ROOT));
-            if (found == null || !supportsEquality(found.jdbcType())) {
+            if (found == null || !supportsEquality(found)) {
                 uncomparable.add(column);
             }
         }
@@ -157,8 +158,11 @@ public final class TargetTableVerifier {
      * or a vendor type this code cannot classify, and in both cases standing down is the safe
      * answer.
      */
-    static boolean supportsEquality(int jdbcType) {
-        switch (jdbcType) {
+    static boolean supportsEquality(TargetColumn column) {
+        if (VendorTypeMap.isNonComparableName(column.typeName())) {
+            return false;
+        }
+        switch (column.jdbcType()) {
             case java.sql.Types.CHAR:
             case java.sql.Types.VARCHAR:
             case java.sql.Types.NCHAR:
@@ -212,7 +216,8 @@ public final class TargetTableVerifier {
         try (ResultSet rs = metaData.getColumns(null, schema, tableName, "%")) {
             while (rs.next()) {
                 columns.put(rs.getString("COLUMN_NAME").toUpperCase(Locale.ROOT),
-                        new TargetColumn(rs.getInt("DATA_TYPE"), rs.getInt("COLUMN_SIZE")));
+                        new TargetColumn(rs.getInt("DATA_TYPE"), rs.getInt("COLUMN_SIZE"),
+                                rs.getString("TYPE_NAME")));
             }
         }
         return columns;
@@ -278,17 +283,11 @@ public final class TargetTableVerifier {
                 && isTextBorneOther(column.getTypeName())) {
             return 1;
         }
-        return family(column.getJdbcType());
+        return VendorTypeMap.family(null, column.getJdbcType(), column.getTypeName());
     }
 
-    /** Oracle JDBC's vendor code for its native BINARY_FLOAT (measured on 23ai Free). */
-    static final int ORACLE_BINARY_FLOAT = 100;
-
-    /** Oracle JDBC's vendor code for its native BINARY_DOUBLE (measured on 23ai Free). */
-    static final int ORACLE_BINARY_DOUBLE = 101;
-
-    /** The target column's dictionary entry: its JDBC type and its declared width. */
-    private record TargetColumn(int jdbcType, int columnSize) {
+    /** The target column's dictionary entry: JDBC type, declared width and type name. */
+    private record TargetColumn(int jdbcType, int columnSize, String typeName) {
     }
 
     /**
@@ -308,16 +307,12 @@ public final class TargetTableVerifier {
      * both sides report JDBC type -7, and a family that ignored the width called the source's
      * own shape incompatible and aborted the baseline.
      */
-    private static int targetFamily(TargetColumn column, boolean oracleFamily) {
+    private static int targetFamily(TargetColumn column, DatabaseType targetType) {
         int jdbcType = column.jdbcType();
-        if (oracleFamily
-                && (jdbcType == ORACLE_BINARY_FLOAT || jdbcType == ORACLE_BINARY_DOUBLE)) {
-            return 2; // numeric
-        }
         if (jdbcType == java.sql.Types.BIT && column.columnSize() > 1) {
             return 2; // MySQL BIT(n>1) holds an unsigned integer, as on the source side
         }
-        return family(jdbcType);
+        return VendorTypeMap.family(targetType, jdbcType, column.typeName());
     }
 
     private static boolean isTextBorneOther(String typeName) {
@@ -329,44 +324,4 @@ public final class TargetTableVerifier {
                 || n.equals("xml");
     }
 
-    /** Broad compatibility family; families may freely receive one another's values. */
-    private static int family(int jdbcType) {
-        switch (jdbcType) {
-            case java.sql.Types.CHAR:
-            case java.sql.Types.VARCHAR:
-            case java.sql.Types.LONGVARCHAR:
-            case java.sql.Types.NCHAR:
-            case java.sql.Types.NVARCHAR:
-            case java.sql.Types.LONGNVARCHAR:
-            case java.sql.Types.CLOB:
-            case java.sql.Types.NCLOB:
-                return 1; // string
-            case java.sql.Types.TINYINT:
-            case java.sql.Types.SMALLINT:
-            case java.sql.Types.INTEGER:
-            case java.sql.Types.BIGINT:
-            case java.sql.Types.FLOAT:
-            case java.sql.Types.REAL:
-            case java.sql.Types.DOUBLE:
-            case java.sql.Types.NUMERIC:
-            case java.sql.Types.DECIMAL:
-                return 2; // numeric
-            case java.sql.Types.DATE:
-            case java.sql.Types.TIME:
-            case java.sql.Types.TIME_WITH_TIMEZONE:
-            case java.sql.Types.TIMESTAMP:
-            case java.sql.Types.TIMESTAMP_WITH_TIMEZONE:
-                return 3; // temporal
-            case java.sql.Types.BINARY:
-            case java.sql.Types.VARBINARY:
-            case java.sql.Types.LONGVARBINARY:
-            case java.sql.Types.BLOB:
-                return 4; // binary
-            case java.sql.Types.BOOLEAN:
-            case java.sql.Types.BIT:
-                return 5; // boolean
-            default:
-                return 100 + jdbcType; // unknown types must match exactly
-        }
-    }
 }

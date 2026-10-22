@@ -17,13 +17,16 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
+import com.qqmu.jync.service.sync.JdbcValueNormalizer;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -669,11 +672,21 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             if (!availableCols.contains(col.toLowerCase(Locale.ROOT))) {
                 continue; // not captured by this CDC instance — leave absent
             }
+            ColumnMeta column = binding.getMeta().column(col).orElse(null);
+            Object normalized = column != null && JdbcValueNormalizer.handles(column.getTypeName())
+                    ? JdbcValueNormalizer.read(rs, rs.findColumn(col), column.getJdbcType(),
+                            column.getTypeName(), DatabaseType.SQLSERVER)
+                    : JdbcValueNormalizer.UNHANDLED;
+            if (normalized != JdbcValueNormalizer.UNHANDLED) {
+                // UNIQUEIDENTIFIER/MONEY/DATETIMEOFFSET/XML/geometry: the identity the
+                // target driver can actually bind (String/BigDecimal/OffsetDateTime/WKB).
+                row.put(col, normalized);
+                continue;
+            }
             Object value = rs.getObject(col);
-            // Unknown JDBC types (hierarchyid, geography, sqlxml from SQL Server) arrive
-            // as driver-proprietary classes that the target JDBC cannot bind. Fall back
-            // to getString() so the row still flows through — with a string, the target
-            // driver has a known coercion path.
+            // Remaining unknown types (hierarchyid, geography) arrive as driver-proprietary
+            // classes that the target JDBC cannot bind. Fall back to getString() so the row
+            // still flows through — with a string, the target driver has a coercion path.
             if (value != null && looksLikeDriverProprietary(value.getClass().getName())) {
                 row.put(col, rs.getString(col));
             } else {

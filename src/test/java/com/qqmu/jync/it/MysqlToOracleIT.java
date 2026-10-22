@@ -340,4 +340,39 @@ class MysqlToOracleIT extends CdcMySqlContainerHarnessIT {
         manager.ensureStopped(project.getId());
         disableProject(project);
     }
+
+    /**
+     * MySQL 专属类型跨族落到 Oracle:ENUM/SET 退化为变长字符,JSON 落 CLOB,GEOMETRY 落
+     * BLOB(WKB 字节)。这些类型名此前会原样透传,Oracle 建表直接 00902 失败。
+     */
+    @Test
+    void mysqlVendorTypesReachOracle() throws Exception {
+        dropSource("ora_vendor");
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("CREATE TABLE ora_vendor (id INT PRIMARY KEY,"
+                    + " color ENUM('red','green') NOT NULL, perms SET('read','write'),"
+                    + " doc JSON, geo GEOMETRY)");
+            st.execute("INSERT INTO ora_vendor VALUES (1, 'green', 'read,write',"
+                    + " '{\"a\": 1}', ST_GeomFromText('POINT(1 2)'))");
+        }
+        dropTarget("ORA_VENDOR");
+
+        Project project = newProject("ora-vendor", cdcConfig("ora_vendor"));
+        manager.ensureStarted(project);
+        awaitRowsOrError(project, "ORA_VENDOR", 1, 180_000);
+
+        Map<String, Object> row = queryTarget("SELECT color AS \"color\","
+                + " perms AS \"perms\", DBMS_LOB.SUBSTR(doc, 100, 1) AS \"doc\","
+                + " DBMS_LOB.GETLENGTH(geo) AS \"glen\" FROM ORA_VENDOR WHERE id = 1")
+                .get(0);
+        assertThat(row.get("color")).isEqualTo("green");
+        assertThat(row.get("perms")).isEqualTo("read,write");
+        assertThat(String.valueOf(row.get("doc"))).contains("\"a\"");
+        assertThat(((Number) row.get("glen")).longValue())
+                .as("GEOMETRY 以 WKB 字节写入 BLOB")
+                .isPositive();
+
+        manager.ensureStopped(project.getId());
+        disableProject(project);
+    }
 }

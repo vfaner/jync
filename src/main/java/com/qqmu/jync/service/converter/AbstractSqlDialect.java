@@ -78,18 +78,49 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                     || column.getJdbcType() == java.sql.Types.ARRAY)) {
             return postgresOtherType(column);
         }
-        // Unclassified type: pass the source name through and let the target complain.
-        // This is preferable to guessing, and the failure names the exact column.
-        log.warn("No type mapping for column {} (type {} / JDBC {}); passing through as-is",
-                column.getName(), column.getTypeName(), column.getJdbcType());
-        return column.getTypeName();
+        // Unclassified type. Passing the source spelling through is only safe inside the
+        // same product family, where the target's own dictionary knows it. A cross-family
+        // pass-through (Oracle BINARY_FLOAT → MySQL, say) is invalid DDL, so those fall back
+        // to the portable shape that can hold any value of the unknown type.
+        String name = column.getTypeName();
+        boolean sameFamily = sourceType != null && sourceType.getFamily() == family();
+        if (sameFamily && name != null && !name.isBlank()) {
+            log.warn("No type mapping for column {} (type {} / JDBC {}); passing through inside"
+                    + " the same product family", column.getName(), name, column.getJdbcType());
+            return name;
+        }
+        String fallback = looksBinary(name) ? blobType() : clobType();
+        log.error("No portable mapping for column {} (type {} / JDBC {}); using {} so the"
+                + " target DDL stays valid", column.getName(), name, column.getJdbcType(),
+                fallback);
+        return fallback;
+    }
+
+    private static boolean looksBinary(String typeName) {
+        if (typeName == null) {
+            return false;
+        }
+        String n = typeName.trim().toLowerCase(java.util.Locale.ROOT);
+        return n.contains("binary") || n.contains("blob") || n.contains("image")
+                || n.contains("geometry") || n.contains("geography") || n.contains("bytea");
     }
 
     /** Maps by {@link Types} category; returns null when the category is unknown. */
     protected String mapByJdbcType(ColumnMeta c, DatabaseType sourceType) {
-        int size = c.getSize() == null ? 0 : c.getSize();
+        // A vendor type name or code canonicalizes first: the switch below only knows the
+        // portable {@link Types} categories.
+        VendorTypeMap.Canonical canonical = VendorTypeMap.canonical(sourceType, c);
+        int jdbcType = canonical.jdbcType();
+        int size = canonical.size() != null ? canonical.size()
+                : (c.getSize() == null ? 0 : c.getSize());
 
-        switch (c.getJdbcType()) {
+        // JSON keeps its native type on targets that have one (MySQL, PostgreSQL) and
+        // degrades to text elsewhere.
+        if (VendorTypeMap.isJsonTypeName(c.getTypeName())) {
+            return jsonType();
+        }
+
+        switch (jdbcType) {
             case Types.BIT: {
                 // BIT(1) is a boolean; MySQL's BIT(n>1) is an n-bit UNSIGNED integer the
                 // driver returns as a byte array, so it needs an integer target (mapping

@@ -23,6 +23,18 @@ public class SqlServerDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public String mapType(ColumnMeta column, DatabaseType sourceType) {
+        // A SQL Server target keeps its native UUID type: an NVARCHAR(36) source value
+        // converts implicitly, and the column keeps its index/storage semantics. Other
+        // targets have no equivalent and get NVARCHAR(36) through the canonical mapping.
+        if (column.getTypeName() != null
+                && "UNIQUEIDENTIFIER".equalsIgnoreCase(column.getTypeName().trim())) {
+            return "UNIQUEIDENTIFIER";
+        }
+        return super.mapType(column, sourceType);
+    }
+
+    @Override
     public int maxIdentifierBytes() {
         return 128;
     }

@@ -139,6 +139,26 @@
             <artifactId>orai18n</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- Oracle's XMLType implementation. Without it, reading a table that contains an
+             XMLTYPE column (or even advancing past it in a result set) dies with
+             NoClassDefFoundError oracle/xdb/XMLType, which used to abort the whole sync.
+             Version pinned to the ojdbc8 above; the two are released together. -->
+        <dependency>
+            <groupId>com.oracle.database.xml</groupId>
+            <artifactId>xdb</artifactId>
+            <version>21.5.0.0</version>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- Oracle's XML parser classes (oracle.xml.parser.v2.*), required by xdb's XMLType
+             implementation. The "_sans_jaxp_services" variant is deliberate: the plain jar
+             registers itself as the JAXP provider, which would replace the JDK parsers for
+             every other part of the application. -->
+        <dependency>
+            <groupId>com.oracle.database.xml</groupId>
+            <artifactId>xmlparserv2_sans_jaxp_services</artifactId>
+            <version>23.8.0.25.04</version>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>com.ibm.db2</groupId>
             <artifactId>jcc</artifactId>
