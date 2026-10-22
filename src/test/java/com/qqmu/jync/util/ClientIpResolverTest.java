@@ -41,12 +41,59 @@ class ClientIpResolverTest {
     }
 
     @Test
-    void honorsForwardedForFromLoopback() {
+    void honorsTheNearestUntrustedHopAppendedByTheProxy() {
+        // nginx's documented default is $proxy_add_x_forwarded_for, which APPENDS the peer it
+        // saw: "<whatever the client sent>, <real client ip>". The leftmost entry is therefore
+        // client-controlled, and trusting it lets every request forge a fresh lockout key.
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setRemoteAddr("127.0.0.1");
         request.addHeader("X-Forwarded-For", "203.0.113.9, 10.0.0.1");
 
+        assertThat(ClientIpResolver.resolve(request)).isEqualTo("10.0.0.1");
+    }
+
+    @Test
+    void ignoresAClientSuppliedPrefixWhenTheProxyAppends() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRemoteAddr("127.0.0.1");
+        request.addHeader("X-Forwarded-For", "198.51.100.7, 203.0.113.9");
+
         assertThat(ClientIpResolver.resolve(request)).isEqualTo("203.0.113.9");
+    }
+
+    @Test
+    void skipsARightmostHopThatIsItselfATrustedProxy() {
+        // Two proxies in the chain: the rightmost hop is the inner trusted proxy, so the
+        // client is the first untrusted address to its left.
+        ClientIpResolver.configureTrustedProxies("10.0.0.0/8");
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRemoteAddr("127.0.0.1");
+        request.addHeader("X-Forwarded-For", "203.0.113.5, 10.0.0.9");
+
+        assertThat(ClientIpResolver.resolve(request)).isEqualTo("203.0.113.5");
+    }
+
+    @Test
+    void ignoresUnparseableEntriesInsteadOfReturningThem() {
+        // Only the address a proxy appended can be trusted; junk on its left is the client's
+        // own text and must never become the lockout key or the audited source address.
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRemoteAddr("127.0.0.1");
+        request.addHeader("X-Forwarded-For", "not-an-ip, 203.0.113.9");
+
+        assertThat(ClientIpResolver.resolve(request)).isEqualTo("203.0.113.9");
+    }
+
+    @Test
+    void fallsBackToTheSocketAddressWhenEveryHopIsATrustedProxy() {
+        ClientIpResolver.configureTrustedProxies("10.0.0.0/8");
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setRemoteAddr("127.0.0.1");
+        request.addHeader("X-Forwarded-For", "10.0.0.5, 10.0.0.9");
+
+        assertThat(ClientIpResolver.resolve(request)).isEqualTo("127.0.0.1");
     }
 
     @Test

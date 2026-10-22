@@ -19,8 +19,13 @@ import javax.servlet.http.HttpServletRequest;
  * therefore a configuration list that defaults to loopback only; a proxy on another host must
  * be named in {@code app.security.trusted-proxies}.
  *
- * <p>Only the first XFF value is used (the client-supplied one; later hops are appended by
- * proxies). An empty or unparseable value falls back to the socket address.
+ * <p>XFF is read right-to-left, skipping hops that are themselves trusted proxies, and the
+ * first untrusted address found is returned. The leftmost entry cannot be used: nginx's
+ * documented default ({@code $proxy_add_x_forwarded_for}) appends the address it saw to any
+ * header the client already sent, so everything to the left of that last appended value is
+ * client-controlled. Walking from the right is also correct for a proxy configured to
+ * overwrite the header ({@code $remote_addr}), where the header holds exactly one entry. An
+ * empty, unparseable, or entirely trusted-proxy chain falls back to the socket address.
  */
 public final class ClientIpResolver {
 
@@ -99,36 +104,111 @@ public final class ClientIpResolver {
     }
 
     public static String resolve(HttpServletRequest request) {
-        if (isTrustedProxyPeer(request.getRemoteAddr())) {
+        String peer = request.getRemoteAddr();
+        if (isTrustedProxyPeer(peer)) {
             String forwarded = request.getHeader("X-Forwarded-For");
             if (forwarded != null && !forwarded.isBlank()) {
-                String first = forwarded.split(",")[0].trim();
-                if (!first.isEmpty()) {
-                    return first;
+                String[] hops = forwarded.split(",");
+                for (int i = hops.length - 1; i >= 0; i--) {
+                    String hop = hops[i].trim();
+                    InetAddress address = parseIpLiteral(hop);
+                    if (address == null) {
+                        // Not an address a proxy could have appended: client-supplied text.
+                        continue;
+                    }
+                    if (isTrustedProxy(address)) {
+                        // Another proxy of ours; the client is further left.
+                        continue;
+                    }
+                    return hop;
                 }
             }
             String realIp = request.getHeader("X-Real-IP");
             if (realIp != null && !realIp.isBlank()) {
-                return realIp.trim();
+                String trimmed = realIp.trim();
+                if (parseIpLiteral(trimmed) != null) {
+                    return trimmed;
+                }
             }
         }
-        return request.getRemoteAddr();
+        return peer;
     }
 
     private static boolean isTrustedProxyPeer(String remoteAddr) {
-        if (remoteAddr == null || remoteAddr.isBlank()) {
-            return false;
+        InetAddress address = parseIpLiteral(remoteAddr);
+        return address != null && isTrustedProxy(address);
+    }
+
+    private static boolean isTrustedProxy(InetAddress address) {
+        for (ProxyRule rule : trustedProxies) {
+            if (rule.matches(address)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Parses an IP literal without ever asking DNS. {@link InetAddress#getByName} resolves
+     * hostnames, which would turn a forwarding header into an outbound lookup; the structural
+     * checks below admit only syntactically valid IPv4/IPv6 forms, and a malformed one of those
+     * makes the JVM reject the literal rather than resolve it.
+     */
+    private static InetAddress parseIpLiteral(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.trim();
+        // Optional IPv6 zone id ("fe80::1%eth0"): it does not affect the address bytes.
+        int zone = value.indexOf('%');
+        if (zone >= 0) {
+            value = value.substring(0, zone);
+        }
+        if (value.isEmpty() || value.length() > 45) {
+            return null;
+        }
+        if (!looksLikeIpv4(value) && !looksLikeIpv6(value)) {
+            return null;
         }
         try {
-            InetAddress addr = InetAddress.getByName(remoteAddr);
-            for (ProxyRule rule : trustedProxies) {
-                if (rule.matches(addr)) {
-                    return true;
-                }
-            }
-            return false;
+            return InetAddress.getByName(value);
         } catch (UnknownHostException e) {
+            return null;
+        }
+    }
+
+    private static boolean looksLikeIpv4(String value) {
+        String[] parts = value.split("\\.", -1);
+        if (parts.length != 4) {
             return false;
         }
+        for (String part : parts) {
+            if (part.isEmpty() || part.length() > 3) {
+                return false;
+            }
+            for (int i = 0; i < part.length(); i++) {
+                if (!Character.isDigit(part.charAt(i))) {
+                    return false;
+                }
+            }
+            if (Integer.parseInt(part) > 255) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean looksLikeIpv6(String value) {
+        if (value.indexOf(':') < 0) {
+            return false;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            if (!hex && c != ':' && c != '.') {
+                return false;
+            }
+        }
+        return true;
     }
 }
