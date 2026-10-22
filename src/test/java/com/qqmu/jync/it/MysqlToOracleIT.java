@@ -314,6 +314,57 @@ class MysqlToOracleIT extends CdcMySqlContainerHarnessIT {
     }
 
     /**
+     * v1.7.8 流式路径:5MB 级 CLOB/BLOB 走两条入口 —— 空表的 INSERT-first 基线,以及随后
+     * 的增量 MERGE。读端用 {@code getCharacterStream}/{@code getBinaryStream} 分块读入并
+     * 在超阈值时落临时文件;写端在 Oracle 上复制进临时 CLOB/BLOB,绝不把 5MB 交给 LONG
+     * 占位符。校验内容头尾,而不只是长度。
+     */
+    @Test
+    void fiveMegabyteLobSurvivesBaselineInsertAndIncrementalMerge() throws Exception {
+        dropSource("ora_big");
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("CREATE TABLE ora_big (id BIGINT PRIMARY KEY,"
+                    + " body LONGTEXT, bin LONGBLOB)");
+            st.execute("INSERT INTO ora_big VALUES (1, REPEAT('中', 2000000),"
+                    + " REPEAT(UNHEX('41'), 5000000))");
+        }
+        dropTarget("ORA_BIG");
+
+        Project project = newProject("ora-big-lob", cdcConfig("ora_big"));
+        manager.ensureStarted(project);
+        waitFor("baseline 5MB lob", 300_000, () -> {
+            try {
+                Map<String, Object> row = queryTarget(
+                        "SELECT DBMS_LOB.GETLENGTH(body) AS \"tl\","
+                        + " DBMS_LOB.GETLENGTH(bin) AS \"bl\" FROM ORA_BIG WHERE id = 1").get(0);
+                return ((Number) row.get("tl")).longValue() == 2_000_000L
+                        && ((Number) row.get("bl")).longValue() == 5_000_000L;
+            } catch (RuntimeException e) {
+                return false;
+            }
+        });
+
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
+            st.execute("UPDATE ora_big SET body = REPEAT('文', 2000000),"
+                    + " bin = REPEAT(UNHEX('42'), 5000000) WHERE id = 1");
+        }
+        waitFor("incremental 5MB lob", 300_000, () -> {
+            try {
+                Map<String, Object> row = queryTarget(
+                        "SELECT DBMS_LOB.SUBSTR(body, 2, 1) AS \"head\","
+                        + " DBMS_LOB.GETLENGTH(bin) AS \"bl\" FROM ORA_BIG WHERE id = 1").get(0);
+                return "文文".equals(row.get("head"))
+                        && ((Number) row.get("bl")).longValue() == 5_000_000L;
+            } catch (RuntimeException e) {
+                return false;
+            }
+        });
+
+        manager.ensureStopped(project.getId());
+        disableProject(project);
+    }
+
+    /**
      * Oracle 把 {@code ''} 绑定成 NULL,{@code NOT NULL CLOB} 目标会以 ORA-01400 拒绝。
      * 空串必须用空临时 CLOB 写入,保留"非空但长度为 0"的语义。
      */

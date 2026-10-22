@@ -36,6 +36,16 @@ class SqlDialectLobBindTest {
     }
 
     @Test
+    void onlyOracleNeedsAServerSideLobForAStreamedValue() {
+        // Oracle's MERGE placeholder is sent as a LONG; a stream bound directly would hit
+        // the same 32767-byte ceiling. Copying into a temporary CLOB is the only way.
+        assertThat(new OracleDialect().requiresServerSideLob()).isTrue();
+        assertThat(new MySqlDialect().requiresServerSideLob()).isFalse();
+        assertThat(new PostgresDialect().requiresServerSideLob()).isFalse();
+        assertThat(new SqlServerDialect().requiresServerSideLob()).isFalse();
+    }
+
+    @Test
     void oracleMapsTextLobBindTypesToClob() {
         OracleDialect dialect = new OracleDialect();
         for (int type : new int[] {Types.LONGVARCHAR, Types.LONGNVARCHAR,

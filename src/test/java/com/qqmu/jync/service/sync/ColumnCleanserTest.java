@@ -157,4 +157,19 @@ class ColumnCleanserTest {
 
         assertThat(cleanser.apply(row("name", "alice")).get("name")).isEqualTo("alice");
     }
+
+    @Test
+    void columnsListsEveryRuleColumnSoTheReaderCanKeepThemInMemory() {
+        // A cleansed column must never reach apply() as a LobValue: the rules only look at
+        // String values, so a streamed value would silently skip TRIM/UPPER. The read policy
+        // uses this list to force those columns inline.
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "name", ColumnRuleType.TRIM, null, null),
+                rule("users", "NAME", ColumnRuleType.UPPER, null, null),
+                rule("other", "note", ColumnRuleType.TRIM, null, null),
+                rule("users", "broken", ColumnRuleType.STRIP_PREFIX, "", null)),
+                "users");
+
+        assertThat(cleanser.columns()).containsExactly("name", "NAME");
+    }
 }

@@ -179,6 +179,44 @@ public class SyncProperties {
         private boolean enabled = true;
     }
 
+    /** Large-field handling (v1.7.8). Bound from {@code sync.lob.*}. */
+    private final Lob lob = new Lob();
+
+    /**
+     * Streaming and spill thresholds for LOBs.
+     *
+     * <p>Streaming is on by default; a project that wants 1.7.7 behavior verbatim sets
+     * {@code sync.lob.streaming-enabled=false}. The inline threshold is deliberately well
+     * above the size of an ordinary VARCHAR/TEXT value so bulk loads keep batching.
+     */
+    @Getter
+    @Setter
+    public static class Lob {
+        /** Master switch: turn off to read every LOB with getString/getBytes as before. */
+        private boolean streamingEnabled = true;
+        /** Values at or below this size are materialized on the heap. */
+        private long inlineMaxBytes = 65_536L;
+        /** Values above this size spill to disk while a CDC transaction is buffered. */
+        private long cdcSpillThresholdBytes = 1_048_576L;
+        /** Approximate heap budget for one JDBC batch; 0 disables the byte check. */
+        private long batchMaxBytes = 16_777_216L;
+        /** Ceiling for columns that must be materialized (PK, cursor, cleansed). */
+        private long forceInlineMaxBytes = 1_048_576L;
+        /** Directory for spilled values; created on demand. */
+        private String spillDir = java.nio.file.Paths.get(
+                System.getProperty("java.io.tmpdir"), "jync-lob").toString();
+        /** Disk cap for one spill session; 0 means unlimited. */
+        private long spillMaxBytes = 1_073_741_824L;
+        /** Temp files older than this are removed at startup. */
+        private long spillRetentionHours = 24L;
+        /** PostgreSQL/openGauss sources: keep a read transaction open for streamed reads. */
+        private boolean enableSourceStreaming = true;
+        /** Bind an empty string into an Oracle CLOB target as an empty non-null CLOB. */
+        private boolean oracleEmptyStringAsEmptyClob = true;
+        /** Interval for LOB statistics logs and throttled warnings. */
+        private long metricsLogIntervalMs = 60_000L;
+    }
+
     /** MySQL binlog CDC settings (v1.5.0, task book 阶段 B). Bound from {@code sync.cdc.*}. */
     private final Cdc cdc = new Cdc();
 

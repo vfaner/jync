@@ -101,6 +101,10 @@ public abstract class CdcMySqlContainerHarnessIT {
      * mode on, fixed UTC clock) plus {@code --sql-mode=ALLOW_INVALID_DATES}, which replaces
      * the stock sql_mode (dropping NO_ZERO_DATE and strict mode) so the zero-date fixture
      * can insert {@code '0000-00-00'}.
+     *
+     * <p>{@code --max-allowed-packet=64M} is required by the v1.7.8 5MB LOB test: the stock
+     * 1MB ceiling truncates both {@code REPEAT()} on the server and the binlog event on the
+     * wire, which would fail before the sync code is reached.
      */
     protected static MySQLContainer<?> configuredMySql() {
         return new MySQLContainer<>("mysql:8.0")
@@ -111,6 +115,7 @@ public abstract class CdcMySqlContainerHarnessIT {
                         "--gtid-mode=ON",
                         "--enforce-gtid-consistency=ON",
                         "--default-time-zone=+00:00",
+                        "--max-allowed-packet=64M",
                         "--sql-mode=ALLOW_INVALID_DATES");
     }
 

@@ -33,6 +33,10 @@ import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.service.lob.LobReadPolicy;
+import com.qqmu.jync.service.lob.LobSpillSession;
+import com.qqmu.jync.service.lob.LobSpillStore;
+import com.qqmu.jync.service.lob.LobValues;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 import com.qqmu.jync.util.CollectionUtil;
 import com.qqmu.jync.util.TargetTableVerifier;
@@ -79,6 +83,13 @@ public class DataSyncService {
      * (unit tests); when null, initial loads keep using the single streamed read.
      */
     private final ChunkCheckpointRepository checkpoints;
+
+    /**
+     * Temp-file store for spilled LOB values. Built on first use so a hand-constructed
+     * instance in a unit test never touches the filesystem; the directory is created only
+     * when a value actually spills.
+     */
+    private volatile LobSpillStore lobSpillStore;
 
     public DataSyncService(SyncProperties properties) {
         this(properties, null);
@@ -894,14 +905,27 @@ public class DataSyncService {
 
                 ColumnCleanser cleanser = ColumnCleanser.forTable(
                         ctx.getConfig(), table.getName());
+                boolean emulated = emulateUpsert && !pkColumns.isEmpty();
+                LobReadPolicy lobPolicy = buildLobPolicy(table, columns, md,
+                        pkColumns, pkTrack, cleanser, emulated);
+                // An emulated upsert binds the same row up to three times, so its large values
+                // must be replayable and therefore live in a temp file.
+                LobSpillSession spillSession = lobPolicy.largeMode() == LobReadPolicy.Mode.SPILL
+                        ? spillStore().open() : null;
                 ThroughputMeter throughput = new ThroughputMeter(table.getName());
-                total = emulateUpsert && !pkColumns.isEmpty()
-                        ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
-                                typeByColumn, rs, jdbcTypes, typeNames, ctx, cleanser, pkTrack,
-                                sink, throughput, batchSize)
-                        : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
-                                rs, columns, jdbcTypes, typeNames, ctx, cleanser, pkTrack, sink,
-                                throughput, batchSize);
+                try {
+                    total = emulated
+                            ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
+                                    typeByColumn, rs, jdbcTypes, typeNames, ctx, cleanser, pkTrack,
+                                    sink, throughput, batchSize, lobPolicy, spillSession)
+                            : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
+                                    rs, columns, jdbcTypes, typeNames, ctx, cleanser, pkTrack,
+                                    sink, throughput, batchSize, lobPolicy, spillSession);
+                } finally {
+                    if (spillSession != null) {
+                        spillSession.close();
+                    }
+                }
                 throughput.logSummary();
             }
             targetConn.commit();
@@ -1038,6 +1062,80 @@ public class DataSyncService {
         return sourceJdbcType;
     }
 
+    /**
+     * Builds the per-table read policy: every PK/cursor/cleansed column stays inline, and
+     * declared sizes come from the result-set metadata. An emulated-upsert target spills
+     * large values so the row can be bound repeatedly; a native target keeps them one-shot
+     * and the writer executes those rows immediately.
+     */
+    private LobReadPolicy buildLobPolicy(TableMeta table, List<String> columns,
+                                         ResultSetMetaData md, List<String> pkColumns,
+                                         List<String> pkTrack, ColumnCleanser cleanser,
+                                         boolean emulatedUpsert) throws SQLException {
+        SyncProperties.Lob config = properties.getLob();
+        if (config == null || !config.isStreamingEnabled()) {
+            return LobReadPolicy.disabled();
+        }
+        List<String> forceInline = new ArrayList<>();
+        forceInline.addAll(pkColumns);
+        if (pkTrack != null) {
+            forceInline.addAll(pkTrack);
+        }
+        forceInline.addAll(cleanser.columns());
+
+        Map<String, Long> declaredSizes = new HashMap<>();
+        for (int i = 0; i < columns.size(); i++) {
+            long precision = md.getPrecision(i + 1);
+            if (precision > 0) {
+                declaredSizes.put(columns.get(i), precision);
+            }
+        }
+        return LobReadPolicy.forTable(table.getName(),
+                        emulatedUpsert ? LobReadPolicy.Mode.SPILL
+                                : LobReadPolicy.Mode.ONE_SHOT,
+                        config.getInlineMaxBytes(), config.getForceInlineMaxBytes(), forceInline)
+                .withDeclaredSizes(declaredSizes);
+    }
+
+    private LobSpillStore spillStore() {
+        LobSpillStore store = lobSpillStore;
+        if (store == null) {
+            synchronized (this) {
+                store = lobSpillStore;
+                if (store == null) {
+                    SyncProperties.Lob config = properties.getLob();
+                    store = LobSpillStore.of(java.nio.file.Paths.get(config.getSpillDir()),
+                            config.getSpillMaxBytes());
+                    lobSpillStore = store;
+                }
+            }
+        }
+        return store;
+    }
+
+    /** Releases every {@code LobValue} in a row after it has been executed. */
+    private static void releaseRowLobs(Map<String, Object> row) {
+        for (Object value : row.values()) {
+            LobValues.release(value);
+        }
+    }
+
+    private static void releaseAll(List<Object> lobs) {
+        for (Object lob : lobs) {
+            LobValues.release(lob);
+        }
+        lobs.clear();
+    }
+
+    /** Adds the row's LOB values to the batch-owned list so a failure can free them. */
+    private static void trackRowLobs(Map<String, Object> row, List<Object> pending) {
+        for (Object value : row.values()) {
+            if (LobValues.isLob(value)) {
+                pending.add(value);
+            }
+        }
+    }
+
     /** The normal path: one idempotent statement per row, executed in JDBC batches. */
     private WriteStats writeWithNativeUpsert(Connection targetConn, String upsertSql,
                                              List<String> bindOrder,
@@ -1046,13 +1144,17 @@ public class DataSyncService {
                                              List<Integer> jdbcTypes, List<String> typeNames,
                                              SyncContext ctx, ColumnCleanser cleanser,
                                              List<String> pkTrack, PkCursor sink,
-                                             ThroughputMeter throughput, int batchSize)
+                                             ThroughputMeter throughput, int batchSize,
+                                             LobReadPolicy lobPolicy,
+                                             LobSpillSession spillSession)
             throws SQLException {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
         // Temporary LOBs bound into the batch stay alive until it executes, then are freed.
         com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker =
                 com.qqmu.jync.service.lob.LobBinder.newTracker();
+        // Spilled values must survive until their batch executes; a failure frees them here.
+        List<Object> pendingLobs = new ArrayList<>();
         try (PreparedStatement upsert = targetConn.prepareStatement(upsertSql)) {
             JdbcUtil.applyQueryTimeout(upsert, properties.getQueryTimeoutSeconds());
             // `mark` sits at the end of the previous row's write, so the gap it opens with is
@@ -1062,7 +1164,7 @@ public class DataSyncService {
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
                 JdbcRowMapper.readRowInto(rs, columns, jdbcTypes, typeNames,
-                        ctx.getSourceType(), row);
+                        ctx.getSourceType(), row, lobPolicy, spillSession);
                 if (sink != null) {
                     // The keyset boundary is bound against the RAW source keys on the next
                     // page, so it must be captured before the cleanser rewrites them.
@@ -1072,29 +1174,81 @@ public class DataSyncService {
                 throughput.recordRead(read - mark);
 
                 cleanser.apply(row);
-                JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn,
-                        ctx.getTargetDialect(), lobTracker);
-                upsert.addBatch();
-                inBatch++;
-                stats.read++;
-
-                if (inBatch >= batchSize) {
+                boolean immediate = false;
+                for (Object value : row.values()) {
+                    if (LobValues.requiresImmediateExecution(value)) {
+                        immediate = true;
+                        break;
+                    }
+                }
+                if (immediate && inBatch > 0) {
+                    // The stream is valid only until the cursor moves. Everything already in
+                    // the batch must be durable before this row is read again.
                     executeBatch(upsert, targetConn, stats, ctx, throughput);
+                    releaseAll(pendingLobs);
                     lobTracker.releaseAll();
                     inBatch = 0;
                 }
+                JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn,
+                        ctx.getTargetDialect(), lobTracker);
+                if (immediate) {
+                    executeSingle(upsert, targetConn, stats, ctx, throughput);
+                    lobTracker.releaseAll();
+                    releaseRowLobs(row);
+                } else {
+                    upsert.addBatch();
+                    inBatch++;
+                    trackRowLobs(row, pendingLobs);
+                    if (inBatch >= batchSize) {
+                        executeBatch(upsert, targetConn, stats, ctx, throughput);
+                        releaseAll(pendingLobs);
+                        lobTracker.releaseAll();
+                        inBatch = 0;
+                    }
+                }
+                stats.read++;
+
                 throughput.recordWrite(System.nanoTime() - read);
                 mark = System.nanoTime();
             }
             if (inBatch > 0) {
                 long tailStart = System.nanoTime();
                 executeBatch(upsert, targetConn, stats, ctx, throughput);
+                releaseAll(pendingLobs);
                 throughput.recordWrite(System.nanoTime() - tailStart);
             }
         } finally {
+            releaseAll(pendingLobs);
             lobTracker.releaseAll();
         }
         return stats;
+    }
+
+    /** Executes one row outside the batch, for values whose stream ends when the cursor moves. */
+    private void executeSingle(PreparedStatement ps, Connection conn, WriteStats stats,
+                               SyncContext ctx, ThroughputMeter throughput) throws SQLException {
+        int count;
+        try {
+            count = ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new SQLException("Row write failed: " + e.getMessage(),
+                    e.getSQLState(), e.getErrorCode(), e);
+        }
+        throughput.recordBatch();
+        commitAndRecord(conn, throughput);
+        ctx.requireLease();
+        if (count == 0) {
+            return;
+        }
+        boolean classify = ctx.getTargetType() != null
+                && ctx.getTargetType().upsertCountsDistinguishInsertFromUpdate();
+        if (!classify) {
+            stats.unclassified++;
+        } else if (count == 1) {
+            stats.inserted++;
+        } else {
+            stats.updated++;
+        }
     }
 
     /**
@@ -1107,7 +1261,9 @@ public class DataSyncService {
                                                List<Integer> jdbcTypes, List<String> typeNames,
                                                SyncContext ctx, ColumnCleanser cleanser,
                                                List<String> pkTrack, PkCursor sink,
-                                               ThroughputMeter throughput, int batchSize)
+                                               ThroughputMeter throughput, int batchSize,
+                                               LobReadPolicy lobPolicy,
+                                               LobSpillSession spillSession)
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
         GenericSqlDialect generic = dialect instanceof GenericSqlDialect
@@ -1142,7 +1298,7 @@ public class DataSyncService {
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
                 JdbcRowMapper.readRowInto(rs, columns, jdbcTypes, typeNames,
-                        ctx.getSourceType(), row);
+                        ctx.getSourceType(), row, lobPolicy, spillSession);
                 if (sink != null) {
                     // Same rule as the native writer: the boundary must stay a raw source key.
                     sink.values = extractPk(row, pkTrack);
@@ -1150,6 +1306,19 @@ public class DataSyncService {
                 long read = System.nanoTime();
                 throughput.recordRead(read - mark);
                 cleanser.apply(row);
+                // A row may bind twice (update then insert, or update again after a unique
+                // violation), so a streamed value must be replayable. The read policy spills
+                // for this path; this is a guard against a future policy regression, and it
+                // fails before the first bind rather than midway through the row.
+                for (Object value : row.values()) {
+                    if (!LobValues.isReplayable(value)) {
+                        throw new SQLException("Table " + targetTable + " is written through"
+                                + " an emulated upsert, which binds each row more than once;"
+                                + " its large values must be replayable. Enable"
+                                + " sync.lob.streaming-enabled (spill mode) or exclude the"
+                                + " column.");
+                    }
+                }
                 // A row may bind twice (update then insert, or update again after a unique
                 // violation); each bind gets its own temporary LOBs, freed at row end.
                 com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker =
@@ -1199,6 +1368,7 @@ public class DataSyncService {
                     }
                 } finally {
                     lobTracker.releaseAll();
+                    releaseRowLobs(row);
                 }
                 stats.read++;
                 if (++sinceCommit >= batchSize) {

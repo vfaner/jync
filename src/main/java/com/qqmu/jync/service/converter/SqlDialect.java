@@ -54,6 +54,16 @@ public interface SqlDialect {
     }
 
     /**
+     * Whether a streamed LOB must first be copied into a server-side temporary LOB.
+     * Oracle's MERGE projection binds the placeholder as a LONG, so
+     * {@code setCharacterStream} hits the same 32767-byte ceiling as {@code setString};
+     * {@code createClob()} + {@code setClob} is the only way to send a larger value.
+     */
+    default boolean requiresServerSideLob() {
+        return false;
+    }
+
+    /**
      * Whether an empty string bound to a LOB column must be sent as an empty LOB rather than
      * an ordinary empty string. Oracle treats {@code ''} as NULL, so a NOT NULL CLOB column
      * would reject it with ORA-01400; an empty temporary CLOB keeps the value non-null.

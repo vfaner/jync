@@ -199,6 +199,11 @@ public class OracleDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean requiresServerSideLob() {
+        return true;
+    }
+
+    @Override
     public int bindJdbcType(ColumnMeta column, DatabaseType sourceType, int effectiveType) {
         switch (effectiveType) {
             case java.sql.Types.LONGVARCHAR:

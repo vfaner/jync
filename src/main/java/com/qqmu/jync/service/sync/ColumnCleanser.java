@@ -86,6 +86,19 @@ public final class ColumnCleanser {
     }
 
     /**
+     * Columns that carry at least one active rule, in the order the rules were saved.
+     * The reader forces these inline: {@link #apply(Map)} only touches {@code String}
+     * values, so a streamed value would silently skip its cleansing rule.
+     */
+    public List<String> columns() {
+        List<String> names = new ArrayList<>(rules.size());
+        for (Rule rule : rules) {
+            names.add(rule.column());
+        }
+        return List.copyOf(names);
+    }
+
+    /**
      * Returns the same row map with configured columns transformed. Keys are matched
      * case-insensitively, like the database identifiers they came from.
      */

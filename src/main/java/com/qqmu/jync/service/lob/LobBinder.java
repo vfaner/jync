@@ -66,7 +66,13 @@ public final class LobBinder {
     public static boolean bind(PreparedStatement ps, int index, Object value,
                                @Nullable Integer targetType, @Nullable SqlDialect dialect,
                                @Nullable Tracker tracker) throws SQLException {
-        if (dialect == null || value == null || targetType == null) {
+        if (dialect == null || value == null) {
+            return false;
+        }
+        if (value instanceof LobValue) {
+            return bindLobValue(ps, index, (LobValue) value, dialect, tracker);
+        }
+        if (targetType == null) {
             return false;
         }
         if (value instanceof CharSequence && isTextLob(targetType)) {
@@ -98,6 +104,90 @@ public final class LobBinder {
             return true;
         }
         return false;
+    }
+
+    /**
+     * A value that already gave up being a {@code String}/{@code byte[]}. Oracle gets a
+     * copy in a temporary LOB; every other target gets the stream and reads it at execute
+     * time, which is why a non-replayable value must be executed before the cursor moves.
+     */
+    private static boolean bindLobValue(PreparedStatement ps, int index, LobValue lob,
+                                        SqlDialect dialect, @Nullable Tracker tracker)
+            throws SQLException {
+        try {
+            if (lob.kind() == LobValue.Kind.TEXT) {
+                java.io.Reader reader = lob.openReader();
+                if (dialect.requiresServerSideLob()) {
+                    Clob clob = ps.getConnection().createClob();
+                    try (java.io.Writer out = clob.setCharacterStream(1)) {
+                        copy(reader, out);
+                    } catch (java.io.IOException e) {
+                        throw new SQLException("Failed to fill a temporary CLOB", e);
+                    } finally {
+                        closeQuietly(reader);
+                    }
+                    ps.setClob(index, clob);
+                    if (tracker != null) {
+                        tracker.track(clob);
+                    }
+                } else if (lob.length() > 0) {
+                    ps.setCharacterStream(index, reader, lob.length());
+                } else {
+                    // Length 0 means "unknown" to the driver, which is exactly the case
+                    // for a one-shot value read from a result set.
+                    ps.setCharacterStream(index, reader);
+                }
+                return true;
+            }
+            java.io.InputStream stream = lob.openStream();
+            if (dialect.requiresServerSideLob()) {
+                Blob blob = ps.getConnection().createBlob();
+                try (java.io.OutputStream out = blob.setBinaryStream(1)) {
+                    copy(stream, out);
+                } catch (java.io.IOException e) {
+                    throw new SQLException("Failed to fill a temporary BLOB", e);
+                } finally {
+                    closeQuietly(stream);
+                }
+                ps.setBlob(index, blob);
+                if (tracker != null) {
+                    tracker.track(blob);
+                }
+            } else if (lob.length() > 0) {
+                ps.setBinaryStream(index, stream, lob.length());
+            } else {
+                ps.setBinaryStream(index, stream);
+            }
+            return true;
+        } catch (java.io.IOException e) {
+            throw new SQLException("Failed to stream a LOB value", e);
+        }
+    }
+
+    private static void copy(java.io.Reader reader, java.io.Writer out)
+            throws java.io.IOException {
+        char[] buffer = new char[8192];
+        int n;
+        while ((n = reader.read(buffer)) != -1) {
+            out.write(buffer, 0, n);
+        }
+    }
+
+    private static void copy(java.io.InputStream in, java.io.OutputStream out)
+            throws java.io.IOException {
+        byte[] buffer = new byte[8192];
+        int n;
+        while ((n = in.read(buffer)) != -1) {
+            out.write(buffer, 0, n);
+        }
+    }
+
+    private static void closeQuietly(AutoCloseable closeable) {
+        try {
+            closeable.close();
+        } catch (Exception ignored) {
+            // The writer releases the value again after the batch executes.
+        }
     }
 
     /**

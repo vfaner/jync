@@ -100,18 +100,97 @@ public final class JdbcRowMapper {
                                                   com.qqmu.jync.model.DatabaseType sourceType,
                                                   Map<String, Object> row)
             throws SQLException {
+        return readRowInto(rs, columns, types, typeNames, sourceType, row,
+                com.qqmu.jync.service.lob.LobReadPolicy.disabled(), null);
+    }
+
+    /**
+     * As the 6-arg form, but with a per-table LOB read policy.
+     *
+     * <p>Columns the policy marks as large are read through
+     * {@code getCharacterStream}/{@code getBinaryStream}, never {@code getString}/
+     * {@code getBytes}: those are the calls that materialize the entire value. Values
+     * below the inline threshold still come back as plain {@code String}/{@code byte[]},
+     * so the batch path is unaffected for ordinary rows. A value that overflows becomes a
+     * one-shot (or spilled) {@code LobValue}, and the writer must execute its row before
+     * advancing the cursor.
+     *
+     * @param spillSession required only when the policy's large mode is {@code SPILL}
+     */
+    public static Map<String, Object> readRowInto(ResultSet rs, List<String> columns,
+                                                  List<Integer> types, List<String> typeNames,
+                                                  com.qqmu.jync.model.DatabaseType sourceType,
+                                                  Map<String, Object> row,
+                                                  com.qqmu.jync.service.lob.LobReadPolicy policy,
+                                                  com.qqmu.jync.service.lob.LobSpillSession spillSession)
+            throws SQLException {
         row.clear();
+        com.qqmu.jync.service.lob.LobReadPolicy effective = policy == null
+                ? com.qqmu.jync.service.lob.LobReadPolicy.disabled() : policy;
         for (int i = 0; i < columns.size(); i++) {
+            String column = columns.get(i);
             int idx = i + 1;
             int type = types.get(i);
             String typeName = typeNames == null ? null : typeNames.get(i);
-            Object normalized = JdbcValueNormalizer.read(rs, idx, type, typeName, sourceType);
-            Object value = normalized != JdbcValueNormalizer.UNHANDLED
-                    ? normalized
-                    : readValue(rs, idx, type, typeName, sourceType);
-            row.put(columns.get(i), value);
+            com.qqmu.jync.service.lob.LobReadPolicy.Mode mode = effective.modeFor(column, type);
+            Object value;
+            if (mode == com.qqmu.jync.service.lob.LobReadPolicy.Mode.INLINE) {
+                Object normalized = JdbcValueNormalizer.read(rs, idx, type, typeName, sourceType);
+                value = normalized != JdbcValueNormalizer.UNHANDLED
+                        ? normalized
+                        : readValue(rs, idx, type, typeName, sourceType);
+            } else if (isTextType(type)) {
+                try {
+                    java.io.Reader reader = rs.getCharacterStream(idx);
+                    value = reader == null ? null : com.qqmu.jync.service.lob.LobStreams
+                            .readText(reader, effective, spillSession);
+                } catch (java.io.IOException e) {
+                    throw new SQLException("Failed to stream text column " + column, e);
+                }
+            } else if (isBinaryType(type)) {
+                try {
+                    java.io.InputStream stream = rs.getBinaryStream(idx);
+                    value = stream == null ? null : com.qqmu.jync.service.lob.LobStreams
+                            .readBinary(stream, effective, spillSession);
+                } catch (java.io.IOException e) {
+                    throw new SQLException("Failed to stream binary column " + column, e);
+                }
+            } else {
+                // A size above the threshold on a non-LOB type (INTEGER with a bogus
+                // precision, say) has no safe stream getter; read it as usual.
+                value = readValue(rs, idx, type, typeName, sourceType);
+            }
+            row.put(column, value);
         }
         return row;
+    }
+
+    private static boolean isTextType(int type) {
+        switch (type) {
+            case Types.CHAR:
+            case Types.VARCHAR:
+            case Types.LONGVARCHAR:
+            case Types.NCHAR:
+            case Types.NVARCHAR:
+            case Types.LONGNVARCHAR:
+            case Types.CLOB:
+            case Types.NCLOB:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean isBinaryType(int type) {
+        switch (type) {
+            case Types.BINARY:
+            case Types.VARBINARY:
+            case Types.LONGVARBINARY:
+            case Types.BLOB:
+                return true;
+            default:
+                return false;
+        }
     }
 
     /**
