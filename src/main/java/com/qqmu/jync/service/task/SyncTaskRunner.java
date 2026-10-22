@@ -230,6 +230,10 @@ public class SyncTaskRunner {
             execute(project, lock);
             rerunAttempts.remove(projectId);
         }
+        // A rerun is a holder too: a click that arrived while ITS cycle ran was coalesced
+        // into queuedReruns and is waiting for this drain. Same ordering rule as runOnce —
+        // after the lock release, or the check-then-release window strands the entry.
+        startQueuedRerun(projectId);
     }
 
     /** Whether a project row still exists; an orphaned Quartz job uses it to self-delete. */

@@ -120,6 +120,39 @@ class SyncTaskRunnerRerunTest {
     }
 
     @Test
+    void aClickDuringARerunIsDrainedByThatRerunToo() throws Exception {
+        // The post-cycle drain exists so a click that arrives while a cycle holds the lock is
+        // served right after it. A queued rerun runs a cycle too, and a click can land during
+        // THAT one — the rerun is then the holder, so it must drain the queue as well.
+        // Only runOnce used to drain, so the click stranded in the queue until the project's
+        // next natural cycle — a ghost extra cycle later, or nothing at all for a manual project.
+        cycleEntered = new CountDownLatch(1);
+        stubEngine(400);
+        queuedReruns().add(1L);
+
+        Method runClaimed = SyncTaskRunner.class.getDeclaredMethod(
+                "runClaimedRerun", Long.class);
+        runClaimed.setAccessible(true);
+        Thread rerun = new Thread(() -> {
+            try {
+                runClaimed.invoke(runner, 1L);
+            } catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        rerun.start();
+        assertThat(cycleEntered.await(3, TimeUnit.SECONDS)).isTrue();
+
+        // The click lands while the rerun's cycle holds the lock: coalesced, not executed.
+        assertThat(runner.runOnce(1L).kind()).isEqualTo(SyncTaskRunner.Outcome.Kind.QUEUED);
+
+        rerun.join(5000);
+        // The rerun must serve the click itself: two cycles, and nothing left behind.
+        awaitCycles(2);
+        awaitQueueDrained();
+    }
+
+    @Test
     void aClickWithNoCycleInFlightExecutesImmediatelyAndQueuesNothing() throws Exception {
         stubEngine(0);
 
