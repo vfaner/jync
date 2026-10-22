@@ -43,10 +43,11 @@ public final class KeysetChunker {
      * @param table      source table name
      * @param pkColumns  primary-key columns in key order; must not be empty
      * @param lastPk     boundary values of the previous chunk's last row, or null for the
-     *                   first chunk (same order as {@code pkColumns})
-     * @param pkUpper    inclusive upper edge of this worker's key range, or null for an
-     *                   unbounded (sequential) load; only meaningful on the first key column,
-     *                   which is all a range-split load ever has
+     *                   first chunk (same order as {@code pkColumns}, possibly a prefix)
+     * @param upperKey   inclusive upper edge of this worker's key range as a full or prefix
+     *                   key tuple, or null for an unbounded (sequential) load. A one-element
+     *                   tuple is a numeric/leading-column edge; the full tuple is what a
+     *                   sampled range boundary records
      * @param strategy   cursor strategy; when it names a column and {@code upperBound} is set,
      *                   the page is also bounded by the watermark exactly like the classic
      *                   full load, so load and stored cursor keep agreeing
@@ -55,27 +56,40 @@ public final class KeysetChunker {
      * @param paramsOut  receives the bind values in statement order (appended, not cleared)
      */
     public static String pageSql(SqlDialect dialect, String schema, String table,
-                                 List<String> pkColumns, List<Object> lastPk, Object pkUpper,
+                                 List<String> pkColumns, List<Object> lastPk,
+                                 List<Object> upperKey,
                                  CursorStrategy strategy, Object upperBound,
                                  int limit, List<Object> paramsOut) {
         if (pkColumns == null || pkColumns.isEmpty()) {
             throw new IllegalArgumentException("Keyset paging requires a primary key");
         }
-        if (lastPk != null && lastPk.size() != pkColumns.size()) {
+        // A shorter boundary is a prefix: "leading column > lo" is exactly the lower edge of
+        // a range split on that column, and it is what a composite key's first chunk starts
+        // from (there is no earlier full tuple to compare against).
+        if (lastPk != null && (lastPk.isEmpty() || lastPk.size() > pkColumns.size())) {
             throw new IllegalArgumentException("Keyset boundary has " + lastPk.size()
+                    + " values but the key has " + pkColumns.size() + " columns");
+        }
+        if (upperKey != null && (upperKey.isEmpty() || upperKey.size() > pkColumns.size())) {
+            throw new IllegalArgumentException("Keyset upper edge has " + upperKey.size()
                     + " values but the key has " + pkColumns.size() + " columns");
         }
 
         StringBuilder where = new StringBuilder();
         if (lastPk != null) {
-            where.append(keysetWhere(dialect, pkColumns, lastPk, paramsOut));
+            // The lower edge is an OR-chain; without its own parentheses the following
+            // "AND upper-edge" would bind only to the chain's last term, letting a page read
+            // past its range whenever the leading column alone matched. A single term is
+            // already parenthesized by the builder itself.
+            String lower = keysetWhere(dialect, pkColumns, lastPk, paramsOut);
+            where.append(lastPk.size() > 1 ? "(" + lower + ")" : lower);
         }
-        if (pkUpper != null) {
+        if (upperKey != null) {
             if (where.length() > 0) {
                 where.append(" AND ");
             }
-            where.append('(').append(dialect.quoteIdentifier(pkColumns.get(0))).append(" <= ?)");
-            paramsOut.add(pkUpper);
+            String upper = upperWhere(dialect, pkColumns, upperKey, paramsOut);
+            where.append(upperKey.size() > 1 ? "(" + upper + ")" : upper);
         }
         if (upperBound != null && strategy != null && strategy.getColumn() != null) {
             if (where.length() > 0) {
@@ -118,7 +132,9 @@ public final class KeysetChunker {
     private static String keysetWhere(SqlDialect dialect, List<String> pkColumns,
                                       List<Object> lastPk, List<Object> paramsOut) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < pkColumns.size(); i++) {
+        // A prefix boundary stops at its own last column; the columns it does not name are
+        // free, which is what makes "leading column > lo" a correct range edge.
+        for (int i = 0; i < lastPk.size(); i++) {
             if (i > 0) {
                 sb.append(" OR ");
             }
@@ -131,6 +147,87 @@ public final class KeysetChunker {
             paramsOut.add(lastPk.get(i));
         }
         return sb.toString();
+    }
+
+    /**
+     * Inclusive upper edge as the mirror-image OR-chain: {@code (a < ?) OR (a = ? AND b < ?)
+     * OR ... OR (a = ? AND ... AND z <= ?)}. A one-element tuple gives the plain
+     * {@code a <= ?} used by numeric range splits.
+     */
+    private static String upperWhere(SqlDialect dialect, List<String> pkColumns,
+                                     List<Object> upperKey, List<Object> paramsOut) {
+        StringBuilder sb = new StringBuilder();
+        boolean last = false;
+        for (int i = 0; i < upperKey.size(); i++) {
+            if (i > 0) {
+                sb.append(" OR ");
+            }
+            last = i == upperKey.size() - 1;
+            sb.append('(');
+            for (int j = 0; j < i; j++) {
+                sb.append(dialect.quoteIdentifier(pkColumns.get(j))).append(" = ? AND ");
+                paramsOut.add(upperKey.get(j));
+            }
+            sb.append(dialect.quoteIdentifier(pkColumns.get(i)))
+                    .append(last ? " <= ?)" : " < ?)");
+            paramsOut.add(upperKey.get(i));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * One query returning the <em>first key of every bucket</em> of the ordered, watermark-
+     * bounded key set, which is how a table without an integral leading key gets range
+     * boundaries at all: the ordinal key span cannot be cut arithmetically, but the source
+     * itself can hand back roughly evenly spaced keys.
+     *
+     * <p>Two window levels are needed: {@code NTILE} labels the buckets, and an outer
+     * {@code ROW_NUMBER PARTITION BY} keeps only the first row of each. The caller drops the
+     * first row (the global minimum) and uses the rest as inclusive upper edges; the final
+     * range is unbounded above, so no MAX query is needed. Requires window functions; the
+     * caller falls back to the sequential load when the product rejects the statement.
+     *
+     * @param buckets number of NTILE buckets; the caller asks for one more than the desired
+     *                number of ranges because the first returned row is discarded
+     */
+    public static String sampledBoundarySql(SqlDialect dialect, String schema, String table,
+                                            List<String> pkColumns, CursorStrategy strategy,
+                                            Object upperBound, int buckets,
+                                            List<Object> paramsOut) {
+        if (pkColumns == null || pkColumns.isEmpty()) {
+            throw new IllegalArgumentException("Boundary sampling requires a primary key");
+        }
+        if (buckets < 2) {
+            throw new IllegalArgumentException("Boundary sampling needs at least 2 buckets");
+        }
+        StringBuilder columns = new StringBuilder();
+        for (int i = 0; i < pkColumns.size(); i++) {
+            if (i > 0) {
+                columns.append(", ");
+            }
+            columns.append(dialect.quoteIdentifier(pkColumns.get(i)));
+        }
+        String order = columns.toString();
+
+        StringBuilder inner = new StringBuilder("SELECT ").append(columns)
+                .append(", NTILE(").append(buckets).append(") OVER (ORDER BY ").append(order)
+                .append(") AS jync_bucket FROM ")
+                .append(dialect.qualify(schema, table));
+        if (upperBound != null && strategy != null && strategy.getColumn() != null) {
+            String cursor = sqlRef(dialect, strategy);
+            inner.append(" WHERE (").append(cursor).append(" <= ?");
+            if (!strategy.isPseudoColumn()) {
+                inner.append(" OR ").append(cursor).append(" IS NULL");
+            }
+            inner.append(')');
+            paramsOut.add(upperBound);
+        }
+
+        return "SELECT " + columns
+                + " FROM (SELECT " + columns + ", jync_bucket,"
+                + " ROW_NUMBER() OVER (PARTITION BY jync_bucket ORDER BY " + order
+                + ") AS jync_rn FROM (" + inner + ") jync_buckets) jync_first_rows"
+                + " WHERE jync_rn = 1 ORDER BY " + order;
     }
 
     /** Serializes one chunk's boundary (its last row's PK values) for the checkpoint table. */

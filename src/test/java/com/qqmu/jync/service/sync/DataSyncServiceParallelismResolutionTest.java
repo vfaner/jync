@@ -52,7 +52,7 @@ class DataSyncServiceParallelismResolutionTest {
     }
 
     @Test
-    void aKeyThatCannotBeRangeSplitStaysSequential() {
+    void aTextKeyIsParallelizableThroughSampledBoundaries() {
         properties.setFullLoadParallelism(4);
 
         TableMeta varcharKey = new TableMeta();
@@ -63,8 +63,28 @@ class DataSyncServiceParallelismResolutionTest {
         varcharKey.setPrimaryKeys(List.of("ID"));
         varcharKey.setColumns(List.of(id));
 
-        assertThat(service.resolveParallelism(FullLoadRoute.KEYSET_NUMERIC, varcharKey,
-                ctx(4))).isEqualTo(1);
+        // Whether the source can sample is only known at load time; a product without
+        // window functions falls back then, so the gate no longer refuses the shape.
+        assertThat(service.resolveParallelism(FullLoadRoute.KEYSET_COMPOSITE, varcharKey,
+                ctx(4))).isEqualTo(4);
+    }
+
+    @Test
+    void aCompositeKeyWithAnIntegralLeadingColumnCanBeRangeSplit() {
+        properties.setFullLoadParallelism(4);
+        TableMeta table = compositeKeyTable(Types.BIGINT, Types.VARCHAR);
+
+        assertThat(service.resolveParallelism(FullLoadRoute.KEYSET_COMPOSITE, table, ctx(2)))
+                .isEqualTo(2);
+    }
+
+    @Test
+    void aCompositeKeyWhoseLeadingColumnIsTextIsAlsoParallelizable() {
+        properties.setFullLoadParallelism(4);
+        TableMeta table = compositeKeyTable(Types.VARCHAR, Types.BIGINT);
+
+        assertThat(service.resolveParallelism(FullLoadRoute.KEYSET_COMPOSITE, table, ctx(4)))
+                .isEqualTo(4);
     }
 
     @Test
@@ -116,6 +136,21 @@ class DataSyncServiceParallelismResolutionTest {
         table.setName("ITEMS");
         table.setPrimaryKeys(List.of("ID"));
         table.setColumns(List.of(id));
+        return table;
+    }
+
+    /** Two-column PK {@code (ID, TENANT)} whose leading column's JDBC type is given. */
+    private static TableMeta compositeKeyTable(int leadingType, int trailingType) {
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(leadingType);
+        ColumnMeta tenant = new ColumnMeta();
+        tenant.setName("TENANT");
+        tenant.setJdbcType(trailingType);
+        TableMeta table = new TableMeta();
+        table.setName("LEDGER");
+        table.setPrimaryKeys(List.of("ID", "TENANT"));
+        table.setColumns(List.of(id, tenant));
         return table;
     }
 }

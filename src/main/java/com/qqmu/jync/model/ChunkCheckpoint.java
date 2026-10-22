@@ -84,7 +84,8 @@ public class ChunkCheckpoint {
 
     /**
      * Inclusive lower bound of the parallel range this row belongs to ({@code lo} of
-     * {@code (lo, hi]}). Null on sequential loads. A resumed parallel load re-splits the key
+     * {@code (lo, hi]}). Null on sequential loads and on sampled ranges, whose bounds are
+     * key tuples instead. A resumed parallel load re-splits the key
      * span with the current parallelism, so a saved range index alone does not identify the
      * slice it covered; when these bounds no longer match the recomputed range the
      * checkpoints are discarded and the table is reloaded instead of skipping rows.
@@ -95,6 +96,21 @@ public class ChunkCheckpoint {
     /** Inclusive upper bound of the parallel range; null on sequential loads. */
     @Column(name = "range_upper")
     private Long rangeUpper;
+
+    /**
+     * Lower bound of a {@link #rangeLower}/{@link #rangeUpper}-incompatible range — one whose
+     * key is not a single integral column (a text/UUID key, or a composite key without an
+     * integral leading column). The value is the boundary key tuple as JSON, so it round-trips
+     * whatever type the key has; null means the range is unbounded below.
+     */
+    @Lob
+    @Column(name = "range_lower_key")
+    private String rangeLowerKey;
+
+    /** Upper bound of the same sampled range as JSON; null means unbounded above. */
+    @Lob
+    @Column(name = "range_upper_key")
+    private String rangeUpperKey;
 
     /** {@link #STATUS_CHUNK} or {@link #STATUS_RANGE_DONE}. */
     @Column(name = "status", nullable = false, length = 16)
@@ -117,6 +133,18 @@ public class ChunkCheckpoint {
     public ChunkCheckpoint(Long projectId, String tableName, int rangeIndex, int chunkIndex,
                            String lastPkJson, int rowsCopied, String status,
                            Long rangeLower, Long rangeUpper) {
+        this(projectId, tableName, rangeIndex, chunkIndex, lastPkJson, rowsCopied, status,
+                rangeLower, rangeUpper, null, null);
+    }
+
+    /**
+     * Sampled-range form: the slice bounds are key tuples (JSON), for keys the numeric
+     * columns cannot express. {@code rangeLower}/{@code rangeUpper} stay null in this form.
+     */
+    public ChunkCheckpoint(Long projectId, String tableName, int rangeIndex, int chunkIndex,
+                           String lastPkJson, int rowsCopied, String status,
+                           Long rangeLower, Long rangeUpper,
+                           String rangeLowerKey, String rangeUpperKey) {
         this.projectId = projectId;
         this.tableName = tableName;
         this.rangeIndex = rangeIndex;
@@ -126,6 +154,8 @@ public class ChunkCheckpoint {
         this.status = status;
         this.rangeLower = rangeLower;
         this.rangeUpper = rangeUpper;
+        this.rangeLowerKey = rangeLowerKey;
+        this.rangeUpperKey = rangeUpperKey;
         this.updatedAt = Instant.now();
     }
 }

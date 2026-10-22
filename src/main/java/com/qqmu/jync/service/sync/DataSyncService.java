@@ -1523,7 +1523,8 @@ public class DataSyncService {
         boolean foreignModel = saved.stream().anyMatch(c ->
                 (c.getRangeIndex() != null && c.getRangeIndex() != 0)
                         || ChunkCheckpoint.STATUS_RANGE_DONE.equals(c.getStatus())
-                        || c.getRangeLower() != null || c.getRangeUpper() != null);
+                        || c.getRangeLower() != null || c.getRangeUpper() != null
+                        || c.getRangeLowerKey() != null || c.getRangeUpperKey() != null);
         if (foreignModel) {
             log.info("Discarding parallel-range checkpoints for {}: reloading sequentially",
                     table.getName());
@@ -1621,16 +1622,24 @@ public class DataSyncService {
                 || ctx.getTargetConfig() == null) {
             return 1;
         }
-        if (route != FullLoadRoute.KEYSET_NUMERIC || !hasIntegerPk(table)) {
-            log.info("Parallel full load needs a single-column integer primary key;"
+        // Any keyed table is splittable: an integral leading column splits arithmetically on
+        // its span, and every other shape (text/UUID keys, composite keys with a text lead)
+        // splits on boundaries sampled from the source's own key order. Sampling can still
+        // fail on a product without window functions; the load then falls back to the
+        // sequential model at runtime, which is why the gate no longer rejects it here.
+        if (route == FullLoadRoute.STREAMING_FALLBACK) {
+            log.info("Parallel full load needs a primary key to split;"
                     + " loading {} sequentially in chunks", table.getName());
             return 1;
         }
         return Math.min(configured, 8);
     }
 
-    /** True when the single PK column is a plain integer type, so its span can be split. */
-    private static boolean hasIntegerPk(TableMeta table) {
+    /**
+     * True when the leading PK column is a plain integer type, so its span can be split.
+     * For a composite key the remaining columns ride along inside each leading-column slice.
+     */
+    private static boolean hasIntegralLeadingKey(TableMeta table) {
         return table.column(table.getPrimaryKeys().get(0)).map(c -> {
             int t = c.getJdbcType();
             if (t == Types.INTEGER || t == Types.BIGINT
@@ -1650,11 +1659,16 @@ public class DataSyncService {
     }
 
     /**
-     * Parallel variant: the key span [MIN(pk), MAX(pk)] (within the watermark bound) is split
-     * into disjoint ranges and one worker per range walks its slice with the same
-     * chunk-and-checkpoint rhythm as the sequential path. Ranges complete independently and
-     * out of order — correctness rests on the ranges being disjoint and every write being an
-     * idempotent upsert, never on completion order.
+     * Parallel variant: the key order is cut into disjoint ranges and one worker per range
+     * walks its slice with the same chunk-and-checkpoint rhythm as the sequential path.
+     * Ranges complete independently and out of order — correctness rests on the ranges being
+     * disjoint and every write being an idempotent upsert, never on completion order.
+     *
+     * <p>How the cut is made depends on the key: an integral leading column is split
+     * arithmetically over its {@code [MIN, MAX]} span (cheap, no extra scan), while any other
+     * key shape samples boundaries from the source's ordered key set. Sampling can be
+     * unsupported (a product without window functions), in which case the load keeps the
+     * sequential model instead of failing.
      */
     private boolean parallelChunkedLoad(Connection sourceConn, Connection targetConn,
                                         TableMeta table, String targetTable,
@@ -1662,28 +1676,54 @@ public class DataSyncService {
                                         Object upperBound, SyncContext ctx,
                                         TableSyncResult result, List<ChunkCheckpoint> saved,
                                         int parallelism, boolean insertFirst) throws SQLException {
-        String pk = table.getPrimaryKeys().get(0);
-        long[] bounds = readPkBounds(sourceConn, table, pk, strategy, upperBound, ctx);
-        if (bounds == null) {
-            // Empty table (within the watermark bound): finalize like the sequential path
-            // finalizes an empty load.
-            checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
-            result.rowsWritten = 0;
-            result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, 0);
-            return true;
+        List<KeyRange> ranges;
+        String split;
+        if (hasIntegralLeadingKey(table)) {
+            String pk = table.getPrimaryKeys().get(0);
+            long[] bounds = readPkBounds(sourceConn, table, pk, strategy, upperBound, ctx);
+            if (bounds == null) {
+                // Empty table (within the watermark bound): finalize like the sequential
+                // path finalizes an empty load.
+                return finalizeEmptyLoad(table, strategy, watermark, ctx, result);
+            }
+            List<long[]> splitRanges = splitRanges(bounds[0], bounds[1], parallelism);
+            if (splitRanges == null) {
+                // Key span too wide to split without overflow; sequential chunking handles
+                // any span.
+                return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
+                        strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+            }
+            ranges = new ArrayList<>(splitRanges.size());
+            for (long[] r : splitRanges) {
+                ranges.add(KeyRange.numeric(r[0], r[1]));
+            }
+            split = "key span [" + bounds[0] + ", " + bounds[1] + "]";
+        } else {
+            List<List<Object>> boundaries = sampleKeyBoundaries(sourceConn, table, strategy,
+                    upperBound, ctx, parallelism);
+            if (boundaries == null) {
+                // The product rejected the sampling query (no window functions).
+                return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
+                        strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+            }
+            if (boundaries.isEmpty()) {
+                return finalizeEmptyLoad(table, strategy, watermark, ctx, result);
+            }
+            ranges = sampledRanges(boundaries);
+            if (ranges.size() <= 1) {
+                // One row, or every sampled row landing in the same slice: nothing to split.
+                return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
+                        strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+            }
+            split = "sampled " + boundaries.size() + " key buckets";
         }
-        List<long[]> ranges = splitRanges(bounds[0], bounds[1], parallelism);
-        if (ranges == null) {
-            // Key span too wide to split without overflow; sequential chunking spans anything.
-            return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                    watermark, upperBound, ctx, result, saved, insertFirst);
-        }
-        // The split is recomputed on every attempt from the current parallelism and MIN/MAX.
-        // A saved range index without its bounds cannot prove it covers the range it is now
-        // mapped onto; trusting it can skip whole slices, so a mismatch is a full reload.
+        // The split is recomputed on every attempt from the current parallelism and the
+        // source's current MIN/MAX (or sampled boundaries). A saved range index without its
+        // bounds cannot prove it covers the range it is now mapped onto; trusting it can skip
+        // whole slices, so a mismatch is a full reload.
         List<ChunkCheckpoint> usable = validRangeCheckpoints(saved, ranges, table, ctx);
-        log.info("Parallel full load of {}: key span [{}, {}] split into {} ranges ({} workers)",
-                table.getName(), bounds[0], bounds[1], ranges.size(), parallelism);
+        log.info("Parallel full load of {}: {} split into {} ranges ({} workers)",
+                table.getName(), split, ranges.size(), parallelism);
 
         ExecutorService pool = Executors.newFixedThreadPool(ranges.size(), r -> {
             Thread t = new Thread(r, "full-load-" + table.getName());
@@ -1695,7 +1735,7 @@ public class DataSyncService {
             List<Future<WriteStats>> futures = new ArrayList<>(ranges.size());
             for (int i = 0; i < ranges.size(); i++) {
                 final int rangeIndex = i;
-                final long[] range = ranges.get(i);
+                final KeyRange range = ranges.get(i);
                 futures.add(pool.submit(() -> copyRange(table, targetTable, strategy, upperBound,
                         ctx, range, rangeIndex, resumePoint(usable, rangeIndex, table),
                         insertFirst)));
@@ -1808,18 +1848,24 @@ public class DataSyncService {
         }
     }
 
-    /** One parallel worker: walks its own {@code (lo, hi]} key slice, checkpointing per chunk. */
+    /** One parallel worker: walks its own {@code (lower, upper]} key slice, per-chunk checkpoints. */
     private WriteStats copyRange(TableMeta table, String targetTable, CursorStrategy strategy,
-                                 Object upperBound, SyncContext ctx, long[] range, int rangeIndex,
-                                 RangeResume resume, boolean insertFirst) throws SQLException {
+                                 Object upperBound, SyncContext ctx, KeyRange range,
+                                 int rangeIndex, RangeResume resume, boolean insertFirst)
+            throws SQLException {
         WriteStats totals = new WriteStats();
         if (resume.done) {
             return totals;
         }
-        String pk = table.getPrimaryKeys().get(0);
-        List<String> pkColumns = List.of(pk);
+        // Page by the whole key, never the leading column alone: rows that share a leading
+        // value would otherwise be cut across chunks and the "leading > last" resume would
+        // skip the rest of that value's rows. The range bounds stay on the leading column.
+        List<String> pkColumns = table.getPrimaryKeys();
         int chunkSize = properties.getChunkSize();
-        List<Object> lastPk = resume.boundary != null ? resume.boundary : List.of(range[0]);
+        // A resumed chunk continues after a full key tuple; a fresh range starts at its own
+        // lower edge, which may be a single leading-column value (numeric split) or null
+        // (the sampled split's first range is unbounded below).
+        List<Object> lastPk = resume.boundary != null ? resume.boundary : range.lower;
         int chunkIndex = resume.nextChunkIndex;
         while (true) {
             // Same stop contract as the sequential path: a chunk boundary is a safe abort
@@ -1832,7 +1878,7 @@ public class DataSyncService {
             }
             List<Object> params = new ArrayList<>();
             String pageSql = KeysetChunker.pageSql(ctx.getSourceDialect(), ctx.getSourceSchema(),
-                    table.getName(), pkColumns, lastPk, range[1], strategy, upperBound,
+                    table.getName(), pkColumns, lastPk, range.upper, strategy, upperBound,
                     chunkSize, params);
             PkCursor sink = new PkCursor();
             WriteStats stats;
@@ -1853,7 +1899,8 @@ public class DataSyncService {
             totals.unclassified += stats.unclassified;
             checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
                     chunkIndex++, KeysetChunker.encodePk(sink.values), stats.read,
-                    ChunkCheckpoint.STATUS_CHUNK, range[0], range[1]));
+                    ChunkCheckpoint.STATUS_CHUNK, range.lowerLong(), range.upperLong(),
+                    range.lowerKeyJson(), range.upperKeyJson()));
             lastPk = sink.values;
             if (stats.read < chunkSize) {
                 break;
@@ -1862,8 +1909,119 @@ public class DataSyncService {
         }
         // Marks the slice complete: a resumed load skips this range without reading it again.
         checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
-                chunkIndex, null, 0, ChunkCheckpoint.STATUS_RANGE_DONE, range[0], range[1]));
+                chunkIndex, null, 0, ChunkCheckpoint.STATUS_RANGE_DONE, range.lowerLong(),
+                range.upperLong(), range.lowerKeyJson(), range.upperKeyJson()));
         return totals;
+    }
+
+    /** Finalizes a full load whose source set turned out to be empty. */
+    private boolean finalizeEmptyLoad(TableMeta table, CursorStrategy strategy, String watermark,
+                                      SyncContext ctx, TableSyncResult result) {
+        checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+        result.rowsWritten = 0;
+        result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, 0);
+        return true;
+    }
+
+    /**
+     * One key per roughly equal bucket of the source's ordered, watermark-bounded key set.
+     *
+     * @return the first key of every bucket in key order; an empty list when the set is
+     *         empty; {@code null} when the product rejected the sampling query (no window
+     *         functions, as on MySQL 5.7). The caller falls back to the sequential model on
+     *         null rather than failing the load.
+     */
+    private List<List<Object>> sampleKeyBoundaries(Connection sourceConn, TableMeta table,
+                                                   CursorStrategy strategy, Object upperBound,
+                                                   SyncContext ctx, int parallelism)
+            throws SQLException {
+        List<String> pkColumns = table.getPrimaryKeys();
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.sampledBoundarySql(ctx.getSourceDialect(),
+                ctx.getSourceSchema(), table.getName(), pkColumns, strategy, upperBound,
+                parallelism + 1, params);
+        List<List<Object>> boundaries = new ArrayList<>();
+        try (PreparedStatement st = sourceConn.prepareStatement(sql)) {
+            JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
+            for (int i = 0; i < params.size(); i++) {
+                st.setObject(i + 1, params.get(i));
+            }
+            try (ResultSet rs = st.executeQuery()) {
+                while (rs.next()) {
+                    List<Object> key = new ArrayList<>(pkColumns.size());
+                    for (int i = 1; i <= pkColumns.size(); i++) {
+                        key.add(rs.getObject(i));
+                    }
+                    boundaries.add(key);
+                }
+            }
+        } catch (SQLException e) {
+            log.info("Source cannot split {} on sampled key boundaries ({});"
+                    + " loading it sequentially in chunks", table.getName(), e.getMessage());
+            return null;
+        }
+        return boundaries;
+    }
+
+    /**
+     * Turns sampled bucket starts {@code B1..Bm} into disjoint ranges. {@code B1} is the
+     * global minimum and is dropped: the first range is unbounded below and ends at
+     * {@code B2}, each middle range is {@code (Bi, Bi+1]}, and the last is unbounded above
+     * (the watermark still bounds it), so no MAX query is needed.
+     */
+    private static List<KeyRange> sampledRanges(List<List<Object>> boundaries) {
+        List<KeyRange> ranges = new ArrayList<>();
+        if (boundaries.size() < 2) {
+            return List.of();
+        }
+        ranges.add(KeyRange.sampled(null, boundaries.get(1)));
+        for (int i = 2; i < boundaries.size(); i++) {
+            ranges.add(KeyRange.sampled(boundaries.get(i - 1), boundaries.get(i)));
+        }
+        ranges.add(KeyRange.sampled(boundaries.get(boundaries.size() - 1), null));
+        return ranges;
+    }
+
+    /**
+     * One disjoint slice of the key order: {@code (lower, upper]}, either edge possibly
+     * unbounded. A numeric split's edges are single leading-column values; a sampled split's
+     * are full key tuples. {@code numericBounds} decides which checkpoint columns hold the
+     * bounds, so a resumed load can prove an index still names the same slice.
+     */
+    private static final class KeyRange {
+        private final List<Object> lower;
+        private final List<Object> upper;
+        private final boolean numericBounds;
+
+        private KeyRange(List<Object> lower, List<Object> upper, boolean numericBounds) {
+            this.lower = lower;
+            this.upper = upper;
+            this.numericBounds = numericBounds;
+        }
+
+        static KeyRange numeric(long lo, long hi) {
+            return new KeyRange(List.of(lo), List.of(hi), true);
+        }
+
+        static KeyRange sampled(List<Object> lower, List<Object> upper) {
+            return new KeyRange(lower, upper, false);
+        }
+
+        Long lowerLong() {
+            return numericBounds ? ((Number) lower.get(0)).longValue() : null;
+        }
+
+        Long upperLong() {
+            return numericBounds ? ((Number) upper.get(0)).longValue() : null;
+        }
+
+        String lowerKeyJson() {
+            return !numericBounds && lower != null ? KeysetChunker.encodePk(lower) : null;
+        }
+
+        String upperKeyJson() {
+            return !numericBounds && upper != null ? KeysetChunker.encodePk(upper) : null;
+        }
     }
 
     /**
@@ -1955,19 +2113,24 @@ public class DataSyncService {
      * because every write is an idempotent upsert.
      */
     private List<ChunkCheckpoint> validRangeCheckpoints(List<ChunkCheckpoint> saved,
-                                                        List<long[]> ranges,
+                                                        List<KeyRange> ranges,
                                                         TableMeta table, SyncContext ctx) {
         if (saved.isEmpty()) {
             return saved;
         }
         boolean matches = saved.stream().allMatch(c -> {
             Integer index = c.getRangeIndex();
-            if (index == null || index < 0 || index >= ranges.size()
-                    || c.getRangeLower() == null || c.getRangeUpper() == null) {
+            if (index == null || index < 0 || index >= ranges.size()) {
                 return false;
             }
-            long[] range = ranges.get(index);
-            return c.getRangeLower() == range[0] && c.getRangeUpper() == range[1];
+            KeyRange range = ranges.get(index);
+            if (range.numericBounds) {
+                return c.getRangeLower() != null && c.getRangeUpper() != null
+                        && c.getRangeLower().equals(range.lowerLong())
+                        && c.getRangeUpper().equals(range.upperLong());
+            }
+            return java.util.Objects.equals(c.getRangeLowerKey(), range.lowerKeyJson())
+                    && java.util.Objects.equals(c.getRangeUpperKey(), range.upperKeyJson());
         });
         if (matches) {
             return saved;

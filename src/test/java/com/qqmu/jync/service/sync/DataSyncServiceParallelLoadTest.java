@@ -261,7 +261,90 @@ class DataSyncServiceParallelLoadTest {
     }
 
     @Test
-    void aCompositeKeyTableStaysSequentialEvenWithParallelismConfigured() throws SQLException {
+    void aCompositeKeyWhoseLeadingColumnIsIntegralLoadsInParallel() throws SQLException {
+        exec(source, "CREATE TABLE LEDGER (ID BIGINT, TENANT VARCHAR(10), NAME VARCHAR(50),"
+                + " PRIMARY KEY (ID, TENANT))");
+        exec(target, "CREATE TABLE LEDGER (ID BIGINT, TENANT VARCHAR(10), NAME VARCHAR(50),"
+                + " PRIMARY KEY (ID, TENANT))");
+        exec(source, "INSERT INTO LEDGER VALUES (1,'a','x'), (2,'a','y'), (3,'a','z'),"
+                + " (4,'b','p'), (5,'b','q'), (6,'b','r')");
+
+        DataSyncService.TableSyncResult result = service(4, 2).syncTable(
+                source, target, ledgerMeta(Types.BIGINT, Types.VARCHAR), IDENTITY,
+                new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(count(target, "LEDGER")).isEqualTo(6);
+        // Ranges split on the leading column; a parallel load numbers them 0..n-1.
+        ArgumentCaptor<ChunkCheckpoint> captor = ArgumentCaptor.forClass(ChunkCheckpoint.class);
+        verify(checkpoints, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getAllValues())
+                .anyMatch(c -> c.getRangeIndex() != null && c.getRangeIndex() > 0);
+    }
+
+    @Test
+    void compositeKeyChunksDoNotSkipRowsSharingTheLeadingKeyValue() throws SQLException {
+        // The leading column alone is not a key: several tenants share an id. A chunk
+        // boundary recorded as "id = 1" would resume at "id > 1" and drop (1,'c') forever.
+        exec(source, "CREATE TABLE LEDGER (ID BIGINT, TENANT VARCHAR(10), NAME VARCHAR(50),"
+                + " PRIMARY KEY (ID, TENANT))");
+        exec(target, "CREATE TABLE LEDGER (ID BIGINT, TENANT VARCHAR(10), NAME VARCHAR(50),"
+                + " PRIMARY KEY (ID, TENANT))");
+        exec(source, "INSERT INTO LEDGER VALUES (1,'a','x'), (1,'b','y'), (1,'c','z'),"
+                + " (2,'a','p'), (2,'b','q'), (3,'a','r')");
+
+        DataSyncService.TableSyncResult result = service(2, 2).syncTable(
+                source, target, ledgerMeta(Types.BIGINT, Types.VARCHAR), IDENTITY,
+                new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(count(target, "LEDGER")).isEqualTo(6);
+        // Each row belongs to exactly one range. An OR-chain bound combined with the upper
+        // edge without parentheses would let a worker read past its slice (and the row to be
+        // counted twice), even though upserts mask it in the final table.
+        assertThat(result.getRowsWritten()).isEqualTo(6);
+    }
+
+    @Test
+    void aTextPrimaryKeyLoadsInParallelThroughSampledBoundaries() throws SQLException {
+        exec(source, "CREATE TABLE ITEMS (ID VARCHAR(20) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE ITEMS (ID VARCHAR(20) PRIMARY KEY, NAME VARCHAR(50))");
+        StringBuilder insert = new StringBuilder("INSERT INTO ITEMS VALUES ");
+        for (int i = 1; i <= 10; i++) {
+            insert.append(i > 1 ? ", " : "").append("('k").append(i).append("', 'v").append(i)
+                    .append("')");
+        }
+        exec(source, insert.toString());
+
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(Types.VARCHAR);
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
+        TableMeta table = new TableMeta();
+        table.setName("ITEMS");
+        table.setPrimaryKeys(List.of("ID"));
+        table.setColumns(List.of(id, name));
+
+        DataSyncService.TableSyncResult result = service(2, 2).syncTable(
+                source, target, table, CursorStrategy.none("full load only"),
+                new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(count(target, "ITEMS")).isEqualTo(10);
+        assertThat(result.getRowsWritten()).isEqualTo(10);
+        ArgumentCaptor<ChunkCheckpoint> captor = ArgumentCaptor.forClass(ChunkCheckpoint.class);
+        verify(checkpoints, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getAllValues())
+                .anyMatch(c -> c.getRangeIndex() != null && c.getRangeIndex() > 0);
+        // Sampled slices carry string bounds, which the long range columns cannot hold.
+        assertThat(captor.getAllValues())
+                .anyMatch(c -> c.getRangeUpperKey() != null);
+    }
+
+    @Test
+    void aCompositeKeyWithATextLeadingColumnLoadsInParallelThroughSampling() throws SQLException {
         exec(source, "CREATE TABLE LEDGER (TENANT VARCHAR(10), ID BIGINT, NAME VARCHAR(50),"
                 + " PRIMARY KEY (TENANT, ID))");
         exec(target, "CREATE TABLE LEDGER (TENANT VARCHAR(10), ID BIGINT, NAME VARCHAR(50),"
@@ -285,13 +368,14 @@ class DataSyncServiceParallelLoadTest {
 
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
         assertThat(count(target, "LEDGER")).isEqualTo(6);
-        // Sequential model: every checkpoint in range 0, no range-done markers.
+        assertThat(result.getRowsWritten()).isEqualTo(6);
         ArgumentCaptor<ChunkCheckpoint> captor = ArgumentCaptor.forClass(ChunkCheckpoint.class);
         verify(checkpoints, atLeastOnce()).save(captor.capture());
-        assertThat(captor.getAllValues()).allSatisfy(c -> {
-            assertThat(c.getRangeIndex()).isZero();
-            assertThat(c.getStatus()).isEqualTo(ChunkCheckpoint.STATUS_CHUNK);
-        });
+        assertThat(captor.getAllValues())
+                .anyMatch(c -> c.getRangeIndex() != null && c.getRangeIndex() > 0);
+        // A text-led key's slice bounds cannot live in the numeric columns.
+        assertThat(captor.getAllValues())
+                .anyMatch(c -> c.getRangeUpperKey() != null);
     }
 
     @Test
@@ -315,10 +399,10 @@ class DataSyncServiceParallelLoadTest {
     }
 
     @Test
-    void aFractionalNumberKeyStaysSequential() throws SQLException {
-        // Scale > 0: truncating fractional keys to long range boundaries would break the
-        // disjointness the parallel workers rely on, so the gate must refuse and the load
-        // keeps the sequential model (every checkpoint in range 0).
+    void aFractionalNumberKeyIsSplitOnExactSampledBoundaries() throws SQLException {
+        // Scale > 0 forbids the arithmetic long split, but sampled boundaries keep the key's
+        // exact type — no truncation — so the ranges stay disjoint and the parallel model
+        // applies. Rows must be delivered exactly once.
         exec(source, "CREATE TABLE ITEMS (ID NUMERIC(10,2) PRIMARY KEY, NAME VARCHAR(50))");
         exec(target, "CREATE TABLE ITEMS (ID NUMERIC(10,2) PRIMARY KEY, NAME VARCHAR(50))");
         exec(source, "INSERT INTO ITEMS VALUES (1.5,'a'), (2.5,'b'), (3.5,'c'), (4.5,'d')");
@@ -328,12 +412,11 @@ class DataSyncServiceParallelLoadTest {
 
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
         assertThat(count(target, "ITEMS")).isEqualTo(4);
+        assertThat(result.getRowsWritten()).isEqualTo(4);
         ArgumentCaptor<ChunkCheckpoint> captor = ArgumentCaptor.forClass(ChunkCheckpoint.class);
         verify(checkpoints, atLeastOnce()).save(captor.capture());
-        assertThat(captor.getAllValues()).allSatisfy(c -> {
-            assertThat(c.getRangeIndex()).isZero();
-            assertThat(c.getStatus()).isEqualTo(ChunkCheckpoint.STATUS_CHUNK);
-        });
+        assertThat(captor.getAllValues())
+                .anyMatch(c -> c.getRangeIndex() != null && c.getRangeIndex() > 0);
     }
 
     @Test
@@ -451,6 +534,24 @@ class DataSyncServiceParallelLoadTest {
         table.setName("ITEMS");
         table.setPrimaryKeys(List.of("ID"));
         table.setColumns(List.of(id, name));
+        return table;
+    }
+
+    /** LEDGER metadata with a two-column PK {@code (ID, TENANT)}. */
+    private static TableMeta ledgerMeta(int leadingType, int trailingType) {
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(leadingType);
+        ColumnMeta tenant = new ColumnMeta();
+        tenant.setName("TENANT");
+        tenant.setJdbcType(trailingType);
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
+        TableMeta table = new TableMeta();
+        table.setName("LEDGER");
+        table.setPrimaryKeys(List.of("ID", "TENANT"));
+        table.setColumns(List.of(id, tenant, name));
         return table;
     }
 

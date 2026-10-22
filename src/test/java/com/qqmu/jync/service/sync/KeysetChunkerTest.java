@@ -40,12 +40,39 @@ class KeysetChunkerTest {
     void aParallelRangePageIsBoundedOnBothKeyEdges() {
         List<Object> params = new ArrayList<>();
         String sql = KeysetChunker.pageSql(new MySqlDialect(), null, "ITEMS",
-                List.of("ID"), List.of(4L), 8L, IDENTITY, null, 50, params);
+                List.of("ID"), List.of(4L), List.of(8L), IDENTITY, null, 50, params);
 
         // The worker's slice of the key span: (4, 8] — disjoint from its siblings' pages.
         assertThat(sql).isEqualTo("SELECT * FROM `ITEMS`"
                 + " WHERE (`ID` > ?) AND (`ID` <= ?) ORDER BY `ID` LIMIT 50 OFFSET 0");
         assertThat(params).containsExactly(4L, 8L);
+    }
+
+    @Test
+    void aSampledUpperBoundExpandsToTheWholeKeyTuple() {
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.pageSql(new MySqlDialect(), null, "LEDGER",
+                List.of("TENANT", "ID"), List.of("acme"), List.of("globex", 9),
+                IDENTITY, null, 10, params);
+
+        // (acme, ...] up to and including (globex, 9).
+        assertThat(sql).contains("WHERE (`TENANT` > ?)"
+                + " AND ((`TENANT` < ?) OR (`TENANT` = ? AND `ID` <= ?))");
+        assertThat(params).containsExactly("acme", "globex", "globex", 9);
+    }
+
+    @Test
+    void sampledBoundarySqlPicksTheFirstKeyOfEachBucket() {
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.sampledBoundarySql(new MySqlDialect(), null, "ITEMS",
+                List.of("ID"), IDENTITY, null, 4, params);
+
+        assertThat(sql).contains("NTILE(4) OVER (ORDER BY `ID`) AS jync_bucket");
+        assertThat(sql).contains(
+                "ROW_NUMBER() OVER (PARTITION BY jync_bucket ORDER BY `ID`) AS jync_rn");
+        assertThat(sql).contains("WHERE jync_rn = 1");
+        assertThat(sql).contains("ORDER BY `ID`");
+        assertThat(params).isEmpty();
     }
 
     @Test
@@ -60,8 +87,10 @@ class KeysetChunkerTest {
 
         // Row comparison as OR-chain (SQL Server rejects the (a,b) > (?,?) tuple form), plus
         // the same watermark bound — including the NULL-cursor rescue — as the classic load.
+        // The chain is parenthesized: without it the following AND would attach to the last
+        // term only and the page could read past its upper edge.
         assertThat(sql).isEqualTo("SELECT * FROM `LEDGER`"
-                + " WHERE (`TENANT` > ?) OR (`TENANT` = ? AND `ID` > ?)"
+                + " WHERE ((`TENANT` > ?) OR (`TENANT` = ? AND `ID` > ?))"
                 + " AND (`UPDATED` <= ? OR `UPDATED` IS NULL)"
                 + " ORDER BY `TENANT`, `ID` LIMIT 10 OFFSET 0");
         assertThat(params).containsExactly("acme", "acme", 41, upper);
@@ -148,9 +177,19 @@ class KeysetChunkerTest {
     }
 
     @Test
-    void aBoundaryWhoseWidthDoesNotMatchTheKeyIsRejected() {
+    void aPrefixBoundaryBoundsTheLeadingColumnAndOverWideBoundariesAreRejected() {
+        // The first chunk of a composite key's range starts from the leading column's range
+        // edge, not from a full key tuple.
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.pageSql(new MySqlDialect(), null, "LEDGER",
+                List.of("TENANT", "ID"), List.of("acme"), null, IDENTITY, null, 50, params);
+
+        assertThat(sql).contains("`TENANT` > ?");
+        assertThat(sql).doesNotContain("`ID` > ?");
+        assertThat(params).containsExactly("acme");
+
         assertThatThrownBy(() -> KeysetChunker.pageSql(new MySqlDialect(), null, "LEDGER",
-                List.of("TENANT", "ID"), List.of("acme"), null, IDENTITY, null, 50,
+                List.of("TENANT", "ID"), List.of("acme", 7, "extra"), null, IDENTITY, null, 50,
                 new ArrayList<>()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
