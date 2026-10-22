@@ -78,6 +78,27 @@ class TargetTableVerifierTest {
         assertThat(reason).contains("column NAME", "incompatible type");
     }
 
+    /**
+     * getColumns 的 tableName 参数是 LIKE 模式(下划线匹配任意字符),所以读 A_B 同时会
+     * 返回 AB 兄弟表的列。把它们并进同一张表会让校验误以为目标已有 EXTRA 列,补列逻辑
+     * 因此永不触发,数据侧则每轮报一次 Unknown column——与 GenericMetadataReader 里
+     * 同样问题的修法一致:读回每行的 TABLE_NAME,只保留真正被问的那张表。
+     */
+    @Test
+    void columnsOfASiblingTableThatMatchesTheNamePatternAreNotMergedIn() throws SQLException {
+        try (Statement st = conn.createStatement()) {
+            st.execute("DROP TABLE IF EXISTS A_B");
+            st.execute("DROP TABLE IF EXISTS AXB");
+            st.execute("CREATE TABLE A_B (ID BIGINT)");
+            st.execute("CREATE TABLE AXB (ID BIGINT, EXTRA VARCHAR(10))");
+        }
+
+        List<ColumnMeta> missing = TargetTableVerifier.missingColumns(conn, null, "A_B",
+                source(col("ID", Types.BIGINT), col("EXTRA", Types.VARCHAR)));
+
+        assertThat(missing).extracting(ColumnMeta::getName).containsExactly("EXTRA");
+    }
+
     @Test
     void safeWideningWithinTheNumericFamilyPasses() throws SQLException {
         createTarget("CREATE TABLE T (ID BIGINT)");
@@ -424,6 +445,7 @@ class TargetTableVerifierTest {
         when(connection.getMetaData()).thenReturn(metaData);
         when(metaData.getColumns(any(), any(), any(), any())).thenReturn(columns);
         when(columns.next()).thenReturn(true, false);
+        when(columns.getString("TABLE_NAME")).thenReturn("T");
         when(columns.getString("COLUMN_NAME")).thenReturn(columnName);
         when(columns.getInt("DATA_TYPE")).thenReturn(dataType);
         when(columns.getInt("COLUMN_SIZE")).thenReturn(columnSize);

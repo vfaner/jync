@@ -51,7 +51,8 @@ public final class TargetTableVerifier {
         boolean oracleFamily = isOracleFamily(targetType);
         String lookupSchema = foldIfOracle(oracleFamily, normalizeSchema(schema));
         String lookupTable = foldIfOracle(oracleFamily, tableName);
-        Map<String, TargetColumn> targetTypes = readTargetColumns(conn, lookupSchema, lookupTable);
+        Map<String, TargetColumn> targetTypes = readTargetColumns(conn, lookupSchema, lookupTable,
+                targetType);
 
         for (ColumnMeta sourceColumn : sourceTable.getColumns()) {
             TargetColumn found = targetTypes.get(sourceColumn.getName().toUpperCase(Locale.ROOT));
@@ -102,7 +103,7 @@ public final class TargetTableVerifier {
         boolean oracleFamily = isOracleFamily(targetType);
         Map<String, TargetColumn> targetTypes = readTargetColumns(conn,
                 foldIfOracle(oracleFamily, normalizeSchema(schema)),
-                foldIfOracle(oracleFamily, tableName));
+                foldIfOracle(oracleFamily, tableName), targetType);
         List<ColumnMeta> missing = new ArrayList<>();
         for (ColumnMeta sourceColumn : sourceTable.getColumns()) {
             if (!targetTypes.containsKey(sourceColumn.getName().toUpperCase(Locale.ROOT))) {
@@ -139,7 +140,7 @@ public final class TargetTableVerifier {
         boolean oracleFamily = isOracleFamily(targetType);
         Map<String, TargetColumn> targetTypes = readTargetColumns(conn,
                 foldIfOracle(oracleFamily, normalizeSchema(schema)),
-                foldIfOracle(oracleFamily, tableName));
+                foldIfOracle(oracleFamily, tableName), targetType);
         List<String> uncomparable = new ArrayList<>();
         for (String column : columns) {
             TargetColumn found = column == null ? null
@@ -208,19 +209,42 @@ public final class TargetTableVerifier {
 
     /** Column name (upper-cased) to JDBC type of the target table. Empty when it is absent. */
     private static Map<String, TargetColumn> readTargetColumns(Connection conn, String schema,
-                                                               String tableName)
+                                                               String tableName,
+                                                               DatabaseType targetType)
             throws SQLException {
         DatabaseMetaData metaData = conn.getMetaData();
         Map<String, TargetColumn> columns = new LinkedHashMap<>();
-        // Catalog stays null: MySQL uses the current database, others key on schema/owner.
-        try (ResultSet rs = metaData.getColumns(null, schema, tableName, "%")) {
+        // MySQL 家族把库名放在 JDBC 的 catalog 里、schema 恒为 null(与
+        // MySQLMetadataReader.catalogFor 同一套对调)。把库名当 schema 传时 Connector/J
+        // 忽略它、catalog 为 null 又会跨库返回所有同名表的列——docker 实测 8.0.33:连
+        // db_a、问 db_b,返回 db_a.t 与 db_b.t 两套列。另一个库里同名同列不同类型的表
+        // 会让校验拿错类型判成 incompatible type,同名缺列也会被误判成已存在。
+        boolean mysqlFamily = targetType != null
+                && targetType.getFamily() == DatabaseType.DialectFamily.MYSQL;
+        String catalog = mysqlFamily ? blankToNull(schema) : null;
+        String schemaPattern = mysqlFamily ? null : blankToNull(schema);
+        try (ResultSet rs = metaData.getColumns(catalog, schemaPattern, tableName, "%")) {
             while (rs.next()) {
+                // tableName 是 LIKE 模式(下划线也匹配任意字符),读 A_B 会同时带回 AXB
+                // 的列。并进同一张表会把兄弟表的列当成目标已有的列,缺列修补因此永不触发,
+                // 数据侧每轮报一次 Unknown column。与 GenericMetadataReader 的修法一致:
+                // 用读回的 TABLE_NAME 只留真正被问的那张表。大小写不敏感,因为大小写不
+                // 敏感的服务器(MySQL on Windows/macOS、SQL Server 默认排序规则)会以磁盘
+                // 上的写法回名,与配置里的大小写不一定一致。
+                String reportedTable = rs.getString("TABLE_NAME");
+                if (reportedTable == null || !reportedTable.equalsIgnoreCase(tableName)) {
+                    continue;
+                }
                 columns.put(rs.getString("COLUMN_NAME").toUpperCase(Locale.ROOT),
                         new TargetColumn(rs.getInt("DATA_TYPE"), rs.getInt("COLUMN_SIZE"),
                                 rs.getString("TYPE_NAME")));
             }
         }
         return columns;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     /**

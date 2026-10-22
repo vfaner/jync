@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
@@ -51,6 +52,8 @@ class TargetTableVerifierVendorTypeTest {
 
         AtomicInteger row = new AtomicInteger();
         when(rs.next()).thenAnswer(invocation -> row.getAndIncrement() < rows.size());
+        // The verifier keeps only rows whose TABLE_NAME is the table it asked for ("T"/"t").
+        when(rs.getString("TABLE_NAME")).thenReturn("T");
         AtomicInteger nameIdx = new AtomicInteger();
         when(rs.getString("COLUMN_NAME"))
                 .thenAnswer(invocation -> rows.get(nameIdx.getAndIncrement()).name());
@@ -81,6 +84,23 @@ class TargetTableVerifierVendorTypeTest {
             table.getColumns().add(column);
         }
         return table;
+    }
+
+    /**
+     * MySQL 把库名放在 JDBC 的 catalog 里,schema 参数被忽略。把配置的库名当 schema 传,
+     * Connector/J 会返回服务器上所有同名表的列(docker 实测 8.0.33:连 db_a、问 db_b,
+     * 返回 db_a.t 与 db_b.t 两套列);同名表在另一个库里类型不同时,校验就会拿错类型
+     * 判成 incompatible type。必须与 MySQLMetadataReader.catalogFor 同一套目录/模式对调。
+     */
+    @Test
+    void mysqlTargetLooksColumnsUpInTheConfiguredDatabaseCatalog() throws SQLException {
+        Connection conn = connectionWithColumns(new Target("C", Types.VARCHAR, 10, "varchar"));
+        DatabaseMetaData metaData = conn.getMetaData();
+
+        TargetTableVerifier.missingColumns(conn, "db_b", "t",
+                tableOf(sourceColumn("C", Types.VARCHAR, "VARCHAR")), DatabaseType.MYSQL);
+
+        verify(metaData).getColumns("db_b", null, "t", "%");
     }
 
     @Test
