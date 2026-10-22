@@ -164,6 +164,21 @@ class AppUserServiceTest {
                 .hasMessage("account.error.sameAsCurrent");
     }
 
+    /**
+     * The forced-change gate exists because the seeded password is public knowledge; letting the
+     * user set it back would turn the gate into a formality that ends by restoring the very
+     * credential it was meant to remove.
+     */
+    @Test
+    void refusesTheDefaultPasswordAsTheNewOne() {
+        service.seedIfEmpty();
+        service.changeOwnPassword("admin", "123456", "newPw1", "newPw1");
+
+        assertThatThrownBy(() -> service.changeOwnPassword("admin", "newPw1", "123456", "123456"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("account.error.defaultPassword");
+    }
+
     @Test
     void viewUserCanAlsoChangePassword() {
         service.seedIfEmpty();

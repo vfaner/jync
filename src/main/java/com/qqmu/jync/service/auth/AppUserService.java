@@ -122,6 +122,11 @@ public class AppUserService implements UserDetailsService {
         if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
             throw new IllegalArgumentException("account.error.sameAsCurrent");
         }
+        // The seeded password is public knowledge; picking it back would restore exactly the
+        // state the forced-change gate exists to end.
+        if (DEFAULT_PASSWORD.equals(newPassword)) {
+            throw new IllegalArgumentException("account.error.defaultPassword");
+        }
 
         user.setPasswordHash(passwordEncoder.encode(newPassword));
         repository.save(user);

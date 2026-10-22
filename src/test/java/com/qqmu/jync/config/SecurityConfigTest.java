@@ -97,12 +97,17 @@ class SecurityConfigTest {
      * mock user would arrive as {@code null} there.
      */
     private static RequestPostProcessor as(String username, UserRole role) {
+        return as(username, role, false);
+    }
+
+    private static RequestPostProcessor as(String username, UserRole role,
+                                           boolean usingDefaultPassword) {
         AppUser user = new AppUser();
         user.setId(1L);
         user.setUsername(username);
         user.setPasswordHash("not-checked-here");
         user.setRole(role);
-        SyncUserDetails principal = new SyncUserDetails(user, false);
+        SyncUserDetails principal = new SyncUserDetails(user, usingDefaultPassword);
         return authentication(new UsernamePasswordAuthenticationToken(
                 principal, null, principal.getAuthorities()));
     }
@@ -208,6 +213,60 @@ class SecurityConfigTest {
     void aViewerCanOpenTheChangePasswordPage() throws Exception {
         assertThat(statusOf(get("/account/password").with(asViewer())))
                 .isEqualTo(200);
+    }
+
+    // ── Default password must be changed before anything else ──────────────────
+
+    /**
+     * A name that does not exist in the database, so the password form can be exercised for
+     * "was it allowed through" without actually changing a seeded account's password and
+     * leaking that state into the next test.
+     */
+    private static RequestPostProcessor asDefaultPasswordUser() {
+        return as("seeded-password-user", UserRole.ADMIN, true);
+    }
+
+    @Test
+    void aDefaultPasswordUserIsSentToThePasswordPage() throws Exception {
+        mvc.perform(get("/projects").with(asDefaultPasswordUser()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/account/password"));
+    }
+
+    /** The gate must not block its own form, or the account can never escape it. */
+    @Test
+    void aDefaultPasswordUserCanStillOpenAndSubmitThePasswordForm() throws Exception {
+        assertThat(statusOf(get("/account/password").with(asDefaultPasswordUser())))
+                .isEqualTo(200);
+        assertThat(statusOf(post("/account/password")
+                .with(asDefaultPasswordUser())
+                .with(csrf())
+                .param("currentPassword", "123456")
+                .param("newPassword", "abc123")
+                .param("confirmPassword", "abc123")))
+                .isNotEqualTo(403);
+    }
+
+    @Test
+    void aDefaultPasswordUsersApiCallIsRefusedInJson() throws Exception {
+        mvc.perform(get("/api/projects/1/preview?table=T&side=source")
+                        .with(asDefaultPasswordUser()))
+                .andExpect(status().isForbidden())
+                .andExpect(result -> assertThat(result.getResponse().getContentType())
+                        .contains("application/json"));
+    }
+
+    /**
+     * The seeded accounts are public knowledge, so the whole point of the gate is that the very
+     * first sign-in with the shipped password lands on the change form.
+     */
+    @Test
+    void signingInWithTheSeededPasswordGoesStraightToTheChangeForm() throws Exception {
+        mvc.perform(post("/login").with(csrf())
+                        .param("username", "admin")
+                        .param("password", "123456"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/account/password"));
     }
 
     // ── Admin audit trail ──────────────────────────────────────────────────────

@@ -24,8 +24,10 @@ import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.auth.ForcePasswordChangeFilter;
 import com.qqmu.jync.service.auth.LoginAttemptService;
 import com.qqmu.jync.service.auth.LoginLockoutFilter;
+import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.util.ClientIpResolver;
 
 /**
@@ -115,13 +117,35 @@ public class SecurityConfig {
         return registration;
     }
 
+    /** The gate that keeps a default-password account on the change form until it is changed. */
+    @Bean
+    public ForcePasswordChangeFilter forcePasswordChangeFilter() {
+        return new ForcePasswordChangeFilter();
+    }
+
+    /** Same reason as the lockout filter: it belongs to the security chain, not a second one. */
+    @Bean
+    public FilterRegistrationBean<ForcePasswordChangeFilter> forcePasswordChangeFilterRegistration(
+            ForcePasswordChangeFilter filter) {
+        FilterRegistrationBean<ForcePasswordChangeFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            LoginAttemptService attemptService,
                                            LoginLockoutFilter loginLockoutFilter,
+                                           ForcePasswordChangeFilter forcePasswordChangeFilter,
                                            AdminAuditService auditService) throws Exception {
         http
                 .addFilterBefore(loginLockoutFilter, UsernamePasswordAuthenticationFilter.class)
+                // After authentication, because it reads the principal. The success handler below
+                // sends the first request of a seeded account straight here as well; this filter
+                // is what covers every request after it.
+                .addFilterAfter(forcePasswordChangeFilter,
+                        UsernamePasswordAuthenticationFilter.class)
 
                 .authorizeHttpRequests(reg -> reg
                         .antMatchers(PUBLIC).permitAll()
@@ -188,6 +212,14 @@ public class SecurityConfig {
             auditService.record(AuditAction.LOGIN,
                     "Signed in from " + ClientIpResolver.resolve(request),
                     authentication.getName());
+            // The seeded password is public; land on the change form instead of the saved
+            // request, which the filter below would redirect away from anyway (one hop less).
+            if (authentication.getPrincipal() instanceof SyncUserDetails
+                    && ((SyncUserDetails) authentication.getPrincipal()).isUsingDefaultPassword()) {
+                response.sendRedirect(
+                        request.getContextPath() + ForcePasswordChangeFilter.PASSWORD_PATH);
+                return;
+            }
             delegate.onAuthenticationSuccess(request, response, authentication);
         };
     }
