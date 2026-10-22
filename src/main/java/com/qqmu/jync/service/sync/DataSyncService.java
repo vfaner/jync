@@ -672,7 +672,7 @@ public class DataSyncService {
         Object bound = cursor;
         if (cursor instanceof Timestamp) {
             int scale = targetCursorScale(targetConn, ctx.getTargetSchema(), targetTable,
-                    strategy.getColumn());
+                    strategy.getColumn(), mysqlFamily(ctx));
             bound = truncateToScale((Timestamp) cursor, scale);
         }
 
@@ -690,16 +690,27 @@ public class DataSyncService {
         return new RowCountAudit(sourceRows, targetRows);
     }
 
-    /** DECIMAL_DIGITS of the target cursor column, or -1 when the driver will not say. */
+    /**
+     * DECIMAL_DIGITS of the target cursor column, or -1 when the driver will not say.
+     *
+     * <p>MySQL 家族把库名放在 JDBC 的 catalog 里、schema 恒为 null(与
+     * TargetTableVerifier.readTargetColumns、MySQLMetadataReader.catalogFor 同一套对调)。
+     * 把库名当 schema 传时 Connector/J 忽略它,catalog 为 null 又会跨库返回所有同名表的
+     * 行——docker 实测 8.0.33:同时返回别的库里同名列的精度。用别的库的精度截断游标上下界,
+     * 要么把真实缺口藏起来(截多了),要么让刚同步的行永远"缺失"(截少了),后者会每个审计
+     * 周期清游标整表重载。先按目标族选对槽位,再退到另一种布局兜底。
+     */
     private int targetCursorScale(Connection targetConn, String schema, String table,
-                                  String column) {
+                                  String column, boolean mysqlFamily) {
         try {
             DatabaseMetaData md = targetConn.getMetaData();
-            int scale = columnScale(md, null, schema, table, column);
+            int scale = mysqlFamily
+                    ? columnScale(md, schema, null, table, column)
+                    : columnScale(md, null, schema, table, column);
             if (scale < 0) {
-                // MySQL-family drivers carry the database in the CATALOG and report a
-                // null schema; retry with the schema name in the catalog slot.
-                scale = columnScale(md, schema, null, table, column);
+                scale = mysqlFamily
+                        ? columnScale(md, null, schema, table, column)
+                        : columnScale(md, schema, null, table, column);
             }
             return scale;
         } catch (SQLException e) {
@@ -711,8 +722,9 @@ public class DataSyncService {
     private int columnScale(DatabaseMetaData md, String catalog, String schema,
                             String table, String column) throws SQLException {
         try (ResultSet rs = md.getColumns(catalog, schema, table, column)) {
-            if (rs.next()) {
-                return rs.getInt("DECIMAL_DIGITS");
+            int scale = scaleOfRequestedColumn(rs, table, column);
+            if (scale >= 0) {
+                return scale;
             }
         }
         // Oracle and DB2 fold identifiers to upper case in their dictionaries.
@@ -720,9 +732,32 @@ public class DataSyncService {
                 catalog == null ? null : catalog.toUpperCase(),
                 schema == null ? null : schema.toUpperCase(),
                 table.toUpperCase(), column.toUpperCase())) {
-            if (rs.next()) {
-                return rs.getInt("DECIMAL_DIGITS");
+            return scaleOfRequestedColumn(rs, table, column);
+        }
+    }
+
+    /**
+     * DECIMAL_DIGITS of the first row for the column actually asked about, or -1 when the
+     * answer set holds none.
+     *
+     * <p>Both name arguments are LIKE patterns in JDBC ({@code _} matches any character), so
+     * asking for {@code T_1} also returns a sibling {@code TA1}'s columns — and the first row
+     * is not guaranteed to be the requested table (H2 2.2.224 returns the sibling first).
+     * Taking its precision for the bound would truncate a fractional cursor to the wrong
+     * scale: too coarse hides a real deficit, too fine keeps the false one this truncation
+     * exists to prevent. Only positively matching rows count.
+     */
+    private int scaleOfRequestedColumn(ResultSet rs, String table, String column)
+            throws SQLException {
+        while (rs.next()) {
+            String reportedTable = rs.getString("TABLE_NAME");
+            String reportedColumn = rs.getString("COLUMN_NAME");
+            if (reportedTable == null || reportedColumn == null
+                    || !reportedTable.equalsIgnoreCase(table)
+                    || !reportedColumn.equalsIgnoreCase(column)) {
+                continue;
             }
+            return rs.getInt("DECIMAL_DIGITS");
         }
         return -1;
     }

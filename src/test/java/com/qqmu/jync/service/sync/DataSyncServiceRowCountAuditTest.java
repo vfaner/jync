@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Timestamp;
 import java.sql.Types;
 
 import org.junit.jupiter.api.AfterEach;
@@ -120,6 +121,40 @@ class DataSyncServiceRowCountAuditTest {
         assertThat(audit.isTargetShort()).isTrue();
     }
 
+    /**
+     * The bound is truncated to the precision of the target's own cursor column. JDBC's
+     * table-name argument is a LIKE pattern, so asking for {@code T_1} also matches
+     * {@code TA1}; reading that sibling's precision (6) leaves the fractional bound intact
+     * and the row rounded up into the next second looks permanently missing — every audit
+     * clears the cursor and reloads the table. The precision must come from the row whose
+     * TABLE_NAME is the table actually being audited (H2 2.2.224: the wildcard match returns
+     * TA1 first, DECIMAL_DIGITS 6, then T_1, DECIMAL_DIGITS 0).
+     */
+    @Test
+    void usesTheAuditedTablesOwnPrecisionWhenASiblingMatchesTheNamePattern() throws SQLException {
+        exec(source, "CREATE TABLE T_1 (ID BIGINT PRIMARY KEY, TS TIMESTAMP(6))");
+        exec(target, "CREATE TABLE TA1 (ID BIGINT, TS TIMESTAMP(6))");
+        exec(target, "CREATE TABLE T_1 (ID BIGINT PRIMARY KEY, TS TIMESTAMP(0))");
+        insertTs(source, "T_1", 1, "2026-01-01 00:00:00.5");   // exactly at the bound
+        insertTs(target, "T_1", 1, "2026-01-01 00:00:01");     // rounded up by the load
+
+        TableMeta t1 = new TableMeta();
+        t1.setName("T_1");
+        SyncProgress progress = new SyncProgress();
+        progress.setLastSyncValue(JdbcRowMapper.cursorToString(
+                Timestamp.valueOf("2026-01-01 00:00:00.5")));
+
+        DataSyncService.RowCountAudit audit = service.auditSyncedRowCounts(source, target, t1,
+                CursorStrategy.timestamp("TS", Types.TIMESTAMP, "timestamp cursor"), progress,
+                ctx);
+
+        assertThat(audit).isNotNull();
+        // Both counts use the whole-second bound taken from T_1 itself, so they agree.
+        assertThat(audit.getSourceRows()).isZero();
+        assertThat(audit.getTargetRows()).isZero();
+        assertThat(audit.isTargetShort()).isFalse();
+    }
+
     @Test
     void declinesToAuditBeforeACursorExists() throws SQLException {
         insert(source, 1, 2, 3);
@@ -149,6 +184,10 @@ class DataSyncServiceRowCountAuditTest {
         for (long id : ids) {
             exec(conn, "INSERT INTO ITEMS VALUES (" + id + ", 'row" + id + "')");
         }
+    }
+
+    private void insertTs(Connection conn, String table, long id, String ts) throws SQLException {
+        exec(conn, "INSERT INTO " + table + " (ID, TS) VALUES (" + id + ", TIMESTAMP '" + ts + "')");
     }
 
     private void exec(Connection conn, String sql) throws SQLException {
