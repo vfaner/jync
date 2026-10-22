@@ -337,6 +337,17 @@ public class UpgradeService {
                 if (status.phase() == Phase.READY) {
                     status = Status.idle();
                 }
+            } else if (target != null && running != null && !target.equals(running)
+                    && !markerBackupPresent(marker, dir)) {
+                // The target never booted and the backup is gone: the helper script rolled the
+                // old jar back (it moves .bak over the jar), so there is nothing pending. Keeping
+                // the marker would restore READY forever and make every restart announce a
+                // success that never happened.
+                Files.deleteIfExists(dir.resolve(MARKER_NAME));
+                Files.deleteIfExists(dir.resolve(SHELL_SCRIPT_NAME));
+                Files.deleteIfExists(dir.resolve(PS1_SCRIPT_NAME));
+                log.info("Upgrade marker for {} was left by a rolled-back upgrade; removed the"
+                        + " stale marker (running {})", target, running);
             }
         } catch (Exception e) {
             log.warn("Upgrade boot cleanup failed: {}", e.toString());
@@ -533,11 +544,23 @@ public class UpgradeService {
         }
         String target = marker.getProperty("targetVersion");
         String running = currentVersion.get();
-        if (StringUtils.hasText(target) && !target.equals(running)) {
+        Path jar = jarLocation.get();
+        Path dir = jar == null ? null : jar.getParent();
+        // A marker without its backup is the aftermath of a rollback, not a pending upgrade:
+        // the script moved .bak over the jar, so restarting would only relaunch the old one.
+        if (StringUtils.hasText(target) && !target.equals(running)
+                && markerBackupPresent(marker, dir)) {
             status = new Status(Phase.READY,
                     new Localized("upgrade.ready", target), target,
                     marker.getProperty("source"), 0, 0);
         }
+    }
+
+    /** Whether the backup recorded in the marker still exists beside the jar. */
+    private static boolean markerBackupPresent(Properties marker, Path dir) {
+        String backupName = marker.getProperty("backup");
+        return dir != null && StringUtils.hasText(backupName)
+                && Files.isRegularFile(dir.resolve(backupName));
     }
 
     private Path requireJarFile() {
@@ -580,9 +603,12 @@ public class UpgradeService {
 
     private Integer parsePort() {
         try {
-            return port == null ? null : Integer.valueOf(port.trim());
+            Integer parsed = port == null ? null : Integer.valueOf(port.trim());
+            // 0 means "pick any free port", so probing it can never succeed and would make the
+            // helper roll every upgrade back after its 180-second wait.
+            return parsed == null || parsed <= 0 ? null : parsed;
         } catch (NumberFormatException e) {
-            return null; // e.g. server.port=0 or a placeholder: skip the readiness probe
+            return null; // a placeholder rather than a number: skip the readiness probe
         }
     }
 

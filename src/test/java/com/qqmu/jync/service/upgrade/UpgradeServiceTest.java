@@ -115,6 +115,11 @@ class UpgradeServiceTest {
     }
 
     private UpgradeService service(String currentVersion, ScriptedDownloader downloader) {
+        return service(currentVersion, downloader, "8081");
+    }
+
+    private UpgradeService service(String currentVersion, ScriptedDownloader downloader,
+                                   String port) {
         return new UpgradeService(
                 () -> currentVersion,
                 feed,
@@ -123,7 +128,7 @@ class UpgradeServiceTest {
                 shutdown,
                 () -> jarFile,
                 () -> workDir,
-                "8081",
+                port,
                 messages());
     }
 
@@ -441,6 +446,46 @@ class UpgradeServiceTest {
         service("1.7.2", new ScriptedDownloader()).cleanupAfterBoot();
 
         assertThat(backup).exists();
+    }
+
+    /**
+     * After the helper script rolls back, it moves {@code .bak} over the jar, so the backup is
+     * gone while the marker survives. The old version then boots, sees a marker whose target
+     * differs, and used to report READY: the settings page kept the "restart to finish upgrade"
+     * badge forever, and restarting launched the old jar again while the browser announced a
+     * success that never happened. No backup means nothing is pending — the marker is stale.
+     */
+    @Test
+    void aRolledBackUpgradeDoesNotLeaveAStaleReadyState() throws Exception {
+        Properties p = new Properties();
+        p.setProperty("targetVersion", "1.8.0");
+        p.setProperty("backup", "jync.jar.bak");
+        try (OutputStream os = Files.newOutputStream(
+                tempDir.resolve("app/.jync-update.properties"))) {
+            p.store(os, null);
+        }
+        // No jync.jar.bak: the rollback consumed it restoring the old jar.
+
+        UpgradeService svc = service("1.7.2", new ScriptedDownloader());
+        assertThat(svc.status().phase()).isEqualTo(UpgradeService.Phase.IDLE);
+
+        svc.cleanupAfterBoot();
+        assertThat(tempDir.resolve("app/.jync-update.properties")).doesNotExist();
+    }
+
+    /** {@code server.port=0} means "any free port"; probing port 0 can never succeed. */
+    @Test
+    void aZeroPortSkipsTheReadinessProbe() throws Exception {
+        byte[] nextJar = makeFatJar("new");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITEE, "v1.8.0", null);
+        UpgradeService svc = service("1.7.2", downloader, "0");
+        runToReady(svc);
+
+        svc.restart();
+
+        assertThat(Files.readString(launcher.script)).doesNotContain("/dev/tcp");
     }
 
     @Test
