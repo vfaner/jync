@@ -8,10 +8,15 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -21,11 +26,15 @@ import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.dto.meta.ColumnMeta;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeType;
+import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -184,5 +193,68 @@ class LogMinerCdcConsumerTest {
         assertThat(t.isAlive()).isFalse();
         verify(taskStore, never()).recordCdcFailure(anyLong(), any());
         verify(lock).close();
+    }
+
+    @Test
+    void aTableWithoutAPrimaryKeyIsInspectedOnceNotOncePerRow() throws Exception {
+        // 无主键表的事件无法应用(BindingSupplier 返回 null),但空结果不进缓存:每一条
+        // 事件都重新开源连接、重读元数据、再打一行同样的 WARN。SqlServerCdcConsumer 已用
+        // 哨兵缓存空结果;LogMiner 漏了同一处。
+        Project project = project(10L);
+        SyncLockService.LockHandle lock = boundedLock(2);
+        MetadataReader reader = mock(MetadataReader.class);
+        TableMeta noPk = new TableMeta();
+        noPk.setName("OG_LOB");
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(Types.BIGINT);
+        noPk.getColumns().add(id);
+        when(reader.readTable(any(), anyString(), anyString())).thenReturn(noPk);
+
+        SyncContext ctx = SyncContext.builder().project(project)
+                .config(new SyncConfig()).sourceConfig(new DatabaseConfig())
+                .sourceReader(reader).build();
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(10L)).thenReturn(Optional.of(scnPosition(10L, 100L)));
+        DataSourceManager dataSourceManager = mock(DataSourceManager.class);
+        Connection sourceConn = mock(Connection.class);
+        Statement probeStmt = mock(Statement.class);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(probeStmt.executeQuery(anyString())).thenReturn(emptyRs);
+        when(sourceConn.createStatement()).thenReturn(probeStmt);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+
+        Timestamp now = new Timestamp(System.currentTimeMillis());
+        FakeSession session = new FakeSession(List.of(
+                new LogMinerSession.Row("rs1", 101L, "INSERT", "SRC", "OG_LOB",
+                        "insert into \"SRC\".\"OG_LOB\"(\"ID\") values ('1');", now, 0),
+                new LogMinerSession.Row("rs2", 102L, "INSERT", "SRC", "OG_LOB",
+                        "insert into \"SRC\".\"OG_LOB\"(\"ID\") values ('2');", now, 0)));
+        SyncProperties properties = new SyncProperties();
+        properties.getCdc().setReconnectBackoffMs(1L);
+        properties.getCdc().setReconnectBackoffMaxMs(1L);
+        properties.getCdc().getLogminer().setIdlePollMs(1);
+
+        LogMinerCdcConsumer consumer = new LogMinerCdcConsumer(project, lock, ctx,
+                positionStore, mock(CdcBaselineService.class), mock(SyncTaskStore.class),
+                mock(SyncStateWriter.class), dataSourceManager, new CdcRuntimeStats(),
+                properties, (c, s, b) -> session);
+
+        Thread t = new Thread(consumer);
+        t.start();
+        t.join(5_000);
+
+        assertThat(t.isAlive()).isFalse();
+        verify(reader, times(1)).readTable(any(), eq("SRC"), eq("OG_LOB"));
+    }
+
+    /** Lock that allows {@code grants} renews, then reports the least lost. */
+    private static SyncLockService.LockHandle boundedLock(int grants) {
+        java.util.concurrent.atomic.AtomicInteger remaining =
+                new java.util.concurrent.atomic.AtomicInteger(grants);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenAnswer(inv -> remaining.decrementAndGet() >= 0);
+        return lock;
     }
 }

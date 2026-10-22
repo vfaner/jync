@@ -705,12 +705,18 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
      * the already-lower-case "{@code schema.table}" qualified name from the slot stream.
      */
     private final class BindingSupplier {
-        private final Map<String, CdcTableBinding> cache =
+        /**
+         * Marker for "this table cannot be applied". Cached like a binding: without it every
+         * row event of a no-PK/hot table re-opens a source connection, re-reads metadata and
+         * logs the same WARN — the exact storm SqlServerCdcConsumer's sentinel prevents.
+         */
+        private final Object unmappable = new Object();
+        private final Map<String, Object> cache =
                 Collections.synchronizedMap(new LinkedHashMap<>());
 
         CdcTableBinding binding(String qualified) {
-            CdcTableBinding cached = cache.get(qualified);
-            if (cached != null) return cached;
+            Object cached = cache.get(qualified);
+            if (cached != null) return cached == unmappable ? null : (CdcTableBinding) cached;
             int dot = qualified.indexOf('.');
             String schema = dot < 0 ? "public" : qualified.substring(0, dot);
             String table = dot < 0 ? qualified : qualified.substring(dot + 1);
@@ -720,6 +726,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 if (meta == null || !meta.hasPrimaryKey()) {
                     log.warn("PG cannot map source table {}.{} (missing or no PK);"
                             + " skipping its row events", schema, table);
+                    cache.put(qualified, unmappable);
                     return null;
                 }
                 CdcTableBinding b = CdcTableBinding.of(schema, table, meta,

@@ -76,6 +76,7 @@ class PgLogicalCdcConsumerDrainTest {
     private CdcPositionStore positionStore;
     private DataSourceManager dataSourceManager;
     private SyncProperties properties;
+    private MetadataReader reader;
     private PgLogicalCdcConsumer consumer;
 
     private static ColumnMeta column(String name, int jdbcType, boolean pk) {
@@ -137,7 +138,7 @@ class PgLogicalCdcConsumerDrainTest {
         meta.getColumns().add(column("id", Types.BIGINT, true));
         meta.getColumns().add(column("name", Types.VARCHAR, false));
         meta.getPrimaryKeys().add("id");
-        MetadataReader reader = mock(MetadataReader.class);
+        reader = mock(MetadataReader.class);
         when(reader.readTable(any(), anyString(), anyString())).thenReturn(meta);
 
         SyncContext ctx = SyncContext.builder()
@@ -306,5 +307,27 @@ class PgLogicalCdcConsumerDrainTest {
         assertThat(targetRowCount()).isZero();
         verify(advancePs, times(1)).setString(eq(2), eq("0/1002"));
         verify(advancePs, times(1)).executeQuery();
+    }
+
+    @Test
+    void aTableWithoutAPrimaryKeyIsInspectedOnceNotOncePerRow() throws Exception {
+        // 无主键表的事件无法应用(BindingSupplier 返回 null),但空结果不进缓存:
+        // 每一条事件都要重新开一个源连接、重读一遍元数据、再打一行同样的 WARN。
+        // 一条无主键的热表就是连接池 + 日志的双重风暴。SqlServerCdcConsumer 已用
+        // 哨兵缓存空结果解决同一问题,PG 这里漏了。
+        TableMeta noPk = new TableMeta();
+        noPk.setName("nopk");
+        noPk.getColumns().add(column("id", Types.BIGINT, false));
+        when(reader.readTable(any(), eq("public"), eq("nopk"))).thenReturn(noPk);
+
+        scriptCall(
+                new String[]{"0/2000", BEGIN},
+                new String[]{"0/2001", "table public.nopk: INSERT: id[bigint]:1"},
+                new String[]{"0/2002", "table public.nopk: INSERT: id[bigint]:2"},
+                new String[]{"0/2003", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        verify(reader, times(1)).readTable(any(), eq("public"), eq("nopk"));
     }
 }

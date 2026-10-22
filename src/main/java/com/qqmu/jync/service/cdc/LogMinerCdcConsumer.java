@@ -688,14 +688,21 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
      * UPPER-case spelling so the generic reader's exact-name filter matches.
      */
     private final class BindingSupplier {
-        private final Map<String, CdcTableBinding> cache =
+        /**
+         * Marker for "this table cannot be applied". Cached like a binding: without it every
+         * row event of a no-PK/hot table re-opens a source connection, re-reads metadata and
+         * logs the same WARN — the exact storm SqlServerCdcConsumer's sentinel prevents. A
+         * DDL event on the table evicts the marker, so a later PK addition self-heals.
+         */
+        private final Object unmappable = new Object();
+        private final Map<String, Object> cache =
                 Collections.synchronizedMap(new LinkedHashMap<>());
 
         CdcTableBinding binding(String owner, String table) {
             String key = (owner + "." + table).toUpperCase(Locale.ROOT);
-            CdcTableBinding cached = cache.get(key);
+            Object cached = cache.get(key);
             if (cached != null) {
-                return cached;
+                return cached == unmappable ? null : (CdcTableBinding) cached;
             }
             try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                 MetadataReader reader = ctx.getSourceReader();
@@ -704,6 +711,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 if (meta == null || !meta.hasPrimaryKey()) {
                     log.warn("LogMiner cannot map source table {}.{} (missing or no PK);"
                             + " skipping its row events", owner, table);
+                    cache.put(key, unmappable);
                     return null;
                 }
                 CdcTableBinding b = CdcTableBinding.of(owner.toUpperCase(Locale.ROOT),
@@ -721,7 +729,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         /** Drop the cached binding so the next DML on this table re-reads source columns. */
         void invalidate(String owner, String table) {
             String key = (owner + "." + table).toUpperCase(Locale.ROOT);
-            CdcTableBinding removed = cache.remove(key);
+            Object removed = cache.remove(key);
             if (removed != null) {
                 log.info("Invalidated LogMiner binding for {}.{} after DDL event",
                         owner, table);
