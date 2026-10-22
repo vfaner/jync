@@ -182,7 +182,7 @@ When a newer release exists, admins get a **one-click upgrade**: pick a download
 | **Real-time sync** | Polling (2s default), or precise orchestration via Cron expressions; four log-CDC engines (MySQL binlog / Oracle LogMiner / PG logical decoding / SQL Server CDC), each switchable per project — a drained cycle starts the next one immediately (zero extra wait) and only a truly idle cycle sleeps, for second-level latency that captures DELETEs too |
 | **Crash recovery** | Resumes from the last cursor after a restart; changes made while down are backfilled |
 | **Chunked initial load** | The full load commits and checkpoints per primary-key keyset chunk; an interruption resumes at the last chunk instead of re-reading the whole table |
-| **Parallel full load** | Single-column integer-PK tables split into disjoint MIN/MAX ranges copied in parallel (`sync.full-load-parallelism`, capped at 8) |
+| **Parallel full load** | Keyed tables split into disjoint ranges copied in parallel: integer leading keys arithmetically (MIN/MAX), other key shapes on sampled boundaries (`sync.full-load-parallelism`, capped at 8) |
 | **Start/stop control** | Start or pause anytime; manual "Sync Now" supported |
 | **Sync-now rerun** | A click during a run is not discarded: one extra round follows automatically, and repeated clicks coalesce into one |
 | **Change records** | Object, change type, row count, duration, and error detail for every run |
@@ -368,7 +368,7 @@ sync:
   full-load-fetch-size: 2000       # initial full load only: source fetch size
   full-load-parallelism: 2         # parallel workers (recommended 1-4, pool-capped, max 8)
   chunk-size: 100000               # rows per full-load chunk; each commits + checkpoints; 0 = no chunking
-  oracle-initial-load-insert-first: true   # empty Oracle target: INSERT instead of MERGE (~2.5x)
+  initial-load-insert-first: true  # empty Oracle/MySQL/PG target: plain INSERT instead of upsert
   defer-secondary-indexes: true    # build non-unique indexes after the initial load (~40% faster)
   safety-lag-ms: 1000
   lock-ttl-ms: 300000
@@ -576,7 +576,7 @@ The initial full load is no longer "one big query that reads the whole table". T
 - `sync.chunk-size: 0` disables chunking and restores the classic single streamed read
 - **Keyless tables** cannot chunk (no key to page on, no idempotency): they are still streamed in one read and an interruption restarts the table from the beginning — the project detail page badges them "no checkpointed resume"
 
-On top of chunking, tables with a **single-column integer primary key** (including Oracle `NUMBER(p≤18,0)` zero-scale keys) can also load in parallel: `SELECT MIN(pk), MAX(pk)` bounds the key space, which is split into disjoint ranges that up to `sync.full-load-parallelism` workers (capped at 8) page through independently. Workers borrow and return their connection per chunk, so parallelism beyond `sync.max-pool-size` (5 by default) simply queues on the pool. A key span wider than a long can safely express, or bounds that cannot be read, fall back to sequential; composite-key and keyless tables stay sequential — parallelism is enabled only where splitting is provably safe. While a load runs, the project detail page shows "x of y ranges done, n chunks committed" live.
+On top of chunking, tables with a primary key can also load in parallel: an **integer leading key** (including Oracle `NUMBER(p≤18,0)` zero-scale keys) is bounded by `SELECT MIN(pk), MAX(pk)` and split arithmetically, while every other key shape (text/UUID, fractional numbers, composite keys without an integral lead) gets boundaries sampled from the source's own key order with two window functions. Up to `sync.full-load-parallelism` workers (capped at 8) page through the disjoint ranges independently. Workers borrow and return their connection per chunk, so parallelism beyond `sync.max-pool-size` (5 by default) simply queues on the pool. A key span wider than a long can safely express, bounds that cannot be read, or a product without window functions (MySQL 5.7) fall back to sequential; keyless tables stay sequential — parallelism is enabled only where splitting is provably safe. While a load runs, the project detail page shows "x of y ranges done, n chunks committed" live.
 
 ### The incremental window is a closed interval
 
@@ -974,8 +974,8 @@ Under `sync.*` in `application.yml`:
 | `full-load-batch-size` | `2000` | Initial full load only: rows per batch; recommended 1000-5000, capped at 20000 |
 | `full-load-fetch-size` | `2000` | Initial full load only: source result-set fetch size |
 | `chunk-size` | `100000` | Rows per chunk of the initial full load; each chunk commits and checkpoints on its own; `0` disables chunking (classic streamed read) |
-| `full-load-parallelism` | `2` | Parallel workers per full load; single-column integer-PK tables only, recommended 1-4, capped at 8 and by the connection pool |
-| `oracle-initial-load-insert-first` | `true` | Empty Oracle target: plain INSERT instead of MERGE (~2.5x); a non-empty table keeps the idempotent MERGE |
+| `full-load-parallelism` | `2` | Parallel workers per full load; integer leading keys split arithmetically, other key shapes on sampled boundaries, recommended 1-4, capped at 8 and by the connection pool |
+| `initial-load-insert-first` | `true` | Empty Oracle/MySQL/PostgreSQL target: plain INSERT instead of the upsert (Oracle MERGE measured ~2.5x); a non-empty table keeps the idempotent upsert. The old key `oracle-initial-load-insert-first` still binds |
 | `defer-secondary-indexes` | `true` | Build a new table's non-unique secondary indexes after its initial load (~40% faster end to end); the PK and unique indexes are still created immediately |
 | `max-pool-size` | `5` | Maximum connections per database connection pool |
 | `max-retries` | `3` | Consecutive failures before a task is marked ERROR |

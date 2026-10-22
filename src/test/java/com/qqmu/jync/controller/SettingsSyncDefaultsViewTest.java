@@ -43,7 +43,7 @@ import com.qqmu.jync.service.version.VersionService;
         "sync.full-load-parallelism=2",
         "sync.chunk-size=100000",
         "sync.defer-secondary-indexes=true",
-        "sync.oracle-initial-load-insert-first=true",
+        "sync.initial-load-insert-first=true",
         "sync.max-pool-size=5",
         "sync.row-count-audit-interval-ms=60000",
         "sync.query-timeout-seconds=300",
@@ -101,7 +101,7 @@ class SettingsSyncDefaultsViewTest {
         assertThat(page).contains("全量并行度");
         assertThat(page).contains("分块行数");
         assertThat(page).contains("延迟创建二级索引");
-        assertThat(page).contains("Oracle 空表全量用 INSERT");
+        assertThat(page).contains("空表全量用 INSERT");
         assertThat(page).contains("100000");
     }
 
@@ -159,6 +159,7 @@ class SettingsSyncDefaultsViewTest {
         String page = render(Locale.ENGLISH);
 
         assertThat(page).contains("Full-load performance");
+        assertThat(page).contains("Insert-first initial load");
         assertThat(page).contains("CDC engine parameters");
         assertThat(page).contains("Large objects and streaming");
         assertThat(page).contains("LogMiner missing-LOB policy");

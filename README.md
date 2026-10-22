@@ -86,7 +86,7 @@
 | 对象与结构 | 表 / 视图 / 存储过程分组勾选（搜索 + 批量）；目标库缺失时按目标方言自动建表 / 索引 / 视图 / 过程 |
 | 方言适配 | 类型映射、函数名转换、标识符引号、分页语法、存储过程包装 |
 | 实时同步 | 轮询（全局默认 2s）或 Cron 编排，项目可单独覆盖；四种日志 CDC（MySQL binlog / Oracle LogMiner / PG 逻辑解码 / SQL Server CDC），秒级延迟 |
-| 可靠性 | 全量按主键 keyset 分块 + 检查点续传；单列整数主键表内并行（上限 8）；重启从游标继续并补齐停机变更；写入全部幂等 |
+| 可靠性 | 全量按主键 keyset 分块 + 检查点续传；有主键的表内并行（整数前导键算术分片、其他键形态采样分片，上限 8）；重启从游标继续并补齐停机变更；写入全部幂等 |
 | 全量性能 | 项目级「全量加载性能」：批量大小默认 2000（1–20000），并行度默认 2（1–8，受连接池约束）；只影响首次全量与重建基线，不改变增量 / CDC 回放 |
 | 数据加工 | 项目克隆、只读数据预览；列清洗按表 / 列配置，支持去首尾空白、转大写 / 小写、空串转 NULL、去前缀 / 后缀、正则替换，写入目标库前在内存中生效 |
 | 控制与观测 | 启停 / 立即同步（运行中点击合并为一轮补跑）；看板 + 变更日志 + 行数审计 |
@@ -95,7 +95,7 @@
 ### 项目详情里的三块配置
 
 - **调度设置**：轮询 / 全量比对项目可开启「自定义调度」，单独填写轮询间隔（毫秒）或 Quartz Cron（6 / 7 段，秒在最前）。Cron 优先于轮询间隔；留空使用全局默认值。日志 CDC 项目由长驻消费线程流式回放，该卡片会自动隐藏。
-- **全量加载性能**：批量大小决定每个 JDBC 批次的行数（默认 2000），并行度决定单列整数主键大表的分片 worker 数（默认 2，上限 8）。两者只作用于首次全量与重建基线；并行度还会被连接池上限二次收敛，数据库敏感时设为 1。
+- **全量加载性能**：批量大小决定每个 JDBC 批次的行数（默认 2000），并行度决定大表的分片 worker 数（默认 2，上限 8；整数前导主键按 MIN/MAX 算术切分，字符串/UUID/复合键按源端采样边界切分，无窗口函数的库自动回退顺序分块）。两者只作用于首次全量与重建基线；并行度还会被连接池上限二次收敛，数据库敏感时设为 1。
 - **列清洗**：按「表 + 列」添加规则，写入目标库前在内存中依次执行，源库数据不受影响。支持去首尾空白、转大写、转小写、空串转 NULL、去前缀、去后缀与正则替换；只处理字符串列，非字符串值原样通过。
 
 ---
@@ -210,7 +210,7 @@ sync:
   full-load-fetch-size: 2000       # 仅首次全量：结果集批量
   full-load-parallelism: 2         # 全量并行 worker 数（建议 1-4，受连接池约束，上限 8）
   chunk-size: 100000               # 全量每块行数，每块提交 + 写检查点；0 = 不分块
-  oracle-initial-load-insert-first: true   # 目标为空的 Oracle 表用 INSERT 代替 MERGE（约 2.5 倍）
+  initial-load-insert-first: true  # 目标为空的 Oracle/MySQL/PG 表用 INSERT 代替 upsert
   defer-secondary-indexes: true    # 新建表先灌数据、全量完成后再建非唯一二级索引（实测快约 40%）
   safety-lag-ms: 1000
   lock-ttl-ms: 300000
@@ -394,8 +394,8 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 | `full-load-batch-size` | `2000` | 仅首次全量：每批行数，建议 1000-5000，上限 20000。吞吐日志里 `commit%` 偏高（目标库提交慢，如 redo 慢盘、Data Guard 同步传输）时加大此值，提交次数随之减少 |
 | `full-load-fetch-size` | `2000` | 仅首次全量：源库结果集批量 |
 | `chunk-size` | `100000` | 全量每块行数，每块提交 + 写检查点；`0` 关闭分块 |
-| `full-load-parallelism` | `2` | 单表全量并行 worker 数（仅单列整数主键表，上限 8，受连接池约束） |
-| `oracle-initial-load-insert-first` | `true` | 目标为空的 Oracle 表时用 INSERT 代替 MERGE（约 2.5 倍）；非空表仍走幂等 MERGE |
+| `full-load-parallelism` | `2` | 单表全量并行 worker 数（整数前导主键按区间算术切分，其他键形态按采样边界切分；上限 8，受连接池约束） |
+| `initial-load-insert-first` | `true` | 目标为空的 Oracle/MySQL/PostgreSQL 表时用 INSERT 代替 upsert（Oracle MERGE 实测约 2.5 倍）；非空表仍走幂等 upsert。旧键 `oracle-initial-load-insert-first` 仍可绑定 |
 | `defer-secondary-indexes` | `true` | 新建表的非唯一二级索引延到首次全量完成后再建（实测整体快约 40%）；主键与唯一索引仍立即创建 |
 | `max-pool-size` / `max-retries` | `5` / `3` | 每库连接池上限 / 连续失败置 ERROR 的次数 |
 | `safety-lag-ms` | `1000` | 时间戳水位线回退量，防晚提交事务被跳过 |

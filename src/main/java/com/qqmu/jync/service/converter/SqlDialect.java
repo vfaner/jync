@@ -168,6 +168,29 @@ public interface SqlDialect {
         return "SELECT MAX(" + quoteIdentifier(column) + ") FROM " + qualify(schema, table);
     }
 
+    /**
+     * Whether an initial full load into a <em>confirmed-empty</em> target of this dialect may
+     * write plain {@code INSERT} instead of the upsert. On an empty table the upsert's match
+     * test can never fire, so it only adds per-row work; on a non-empty one the INSERT fails
+     * with a unique violation, which is why the caller probes first and treats "could not
+     * tell" as not empty.
+     *
+     * <p>True for the Oracle, MySQL and PostgreSQL families — the products whose upsert is a
+     * per-row match/arbiter step a plain INSERT can skip.
+     */
+    default boolean supportsInsertFirstInitialLoad() {
+        return false;
+    }
+
+    /**
+     * One-row query that answers "does this target table have any rows?" for
+     * {@link #supportsInsertFirstInitialLoad()}. The default LIMIT form fits the MySQL and
+     * PostgreSQL families; products without LIMIT override it.
+     */
+    default String emptyTargetProbeSql(String schema, String table) {
+        return "SELECT 1 FROM " + qualify(schema, table) + " LIMIT 1";
+    }
+
     /** Wraps an identifier so reserved words and mixed case survive. */
     String quoteIdentifier(String name);
 

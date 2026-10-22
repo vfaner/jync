@@ -329,6 +329,11 @@ public class PostgresDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean supportsInsertFirstInitialLoad() {
+        return true;
+    }
+
+    @Override
     public String getPaginationSql(String baseSql, long offset, int limit) {
         return baseSql + " LIMIT " + limit + " OFFSET " + offset;
     }

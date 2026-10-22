@@ -21,6 +21,8 @@
 
 - **大字段与流式设置卡片**：系统信息页新增「大字段与流式」，展示流式开关、内联阈值、CDC 落盘阈值、单批字节预算、源端流式、落盘目录与容量、清理保留期与 LogMiner 缺失 LOB 策略，中英文同步。
 - **CDC 状态面板新增缺失 LOB 计数**：`skippedMissingLob` 全局计数与 `missingLobByTable` 按表计数，可与 `skippedUnsupported` 区分——前者表示 LogMiner 结构上无法还原，后者表示语句不被解析。
+- **全量并行支持所有有主键的键形态**：此前只有单列整数主键能切成互斥区间；现在复合键（整数前导列按 MIN/MAX 算术切分）与字符串/UUID、小数、文本前导复合键（用两级窗口函数从源端采样桶首键作为边界）都能并行全量。无窗口函数的库（如 MySQL 5.7）运行期自动回退顺序分块；断点续传会校验区间边界，边界随并行度或数据范围变化时整表重载而不是跳过数据。
+- **空表 INSERT-first 推广到 MySQL / PostgreSQL**：首次全量写入空目标表时，MySQL 用普通 `INSERT` 代替 `INSERT ... ON DUPLICATE KEY UPDATE`，PostgreSQL 代替 `ON CONFLICT`（Oracle 的 INSERT 代替 MERGE 保持不变）。目标表仍是一次性探测，非空表继续走幂等 upsert。
 
 ## 限制（升级前务必阅读）
 
@@ -39,10 +41,11 @@
 - 所有新增开关默认值都以「行为与 1.7.7 一致或更安全」为准，且均可关闭：`sync.lob.streaming-enabled=false` 回到整块读取，`sync.lob.enable-source-streaming=false` 关闭源端事务，`sync.cdc.logminer.missing-lob-policy=skip`（默认）保持原跳过行为。
 - 落盘目录默认 `${java.io.tmpdir}/jync-lob`，需要确保该分区有足够空间；容量由 `spill-max-bytes` 约束。
 - Oracle `MERGE` 大值绑定的行为变化只在目标为 Oracle 时生效，其他方言仍走流式绑定。
+- 配置项 `oracle-initial-load-insert-first` 更名 `initial-load-insert-first`；旧键仍可绑定，无需改 YAML。该开关现在同时作用于 MySQL 与 PostgreSQL 目标。
 
 ## 测试
 
-- 1891 个单测：1890 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
+- 1907 个单测：1906 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
 - 新增/扩充的大字段集成测试：Oracle → MySQL（600 KB CLOB + 1 MB BLOB 的基线与增量 upsert）、SQL Server → Oracle（`NVARCHAR(MAX)` / `VARBINARY(MAX)` 的基线与增量 MERGE）、MySQL → Oracle（100k 汉字增量 MERGE、5 MB CLOB/BLOB、`NOT NULL CLOB` 空串、厂商类型）、Oracle → openGauss（行外 LOB 跳过）、MySQL CDC 事务落盘（2 MB 行、提交后无残留）、可选 PostgreSQL → Oracle 60 行 × 约 5 MB 大字段（300 MB 源数据，`-Plob-memory-it` 在 96 MB 堆下完成基线与增量 MERGE）。
 
 ## 升级

@@ -204,11 +204,11 @@
                     </dd>
                 </div>
                 <div class="kv wide">
-                    <dt th:text="#{settings.oracleInsertFirst}">Oracle insert-first load</dt>
+                    <dt th:text="#{settings.insertFirst}">Insert-first initial load</dt>
                     <dd>
                         <span class="chip"
-                              th:text="${properties.oracleInitialLoadInsertFirst} ? #{settings.on} : #{settings.off}">On</span>
-                        <div class="help" th:text="#{settings.oracleInsertFirstHelp}">help</div>
+                              th:text="${properties.initialLoadInsertFirst} ? #{settings.on} : #{settings.off}">On</span>
+                        <div class="help" th:text="#{settings.insertFirstHelp}">help</div>
                     </dd>
                 </div>
             </dl>

@@ -98,11 +98,12 @@ sync:
   full-load-batch-size: 2000
   # Cursor fetch size of the initial/full load only. Clamped to 20000.
   full-load-fetch-size: 2000
-  # Initial load into an EMPTY Oracle target writes INSERT instead of MERGE (measured ~2.5x
-  # faster: nothing can match on an empty table, so the match test buys nothing). The target
-  # is probed once per table load; a table that already has rows keeps the idempotent MERGE.
-  # Other target databases are unaffected.
-  oracle-initial-load-insert-first: true
+  # Initial load into an EMPTY Oracle / MySQL / PostgreSQL target writes plain INSERT instead
+  # of the upsert (on Oracle this measured ~2.5x faster: nothing can match on an empty table,
+  # so the match test buys nothing). The target is probed once per table load; a table that
+  # already has rows keeps the idempotent upsert. Other target databases are unaffected.
+  # The former key sync.oracle-initial-load-insert-first is still accepted as an alias.
+  initial-load-insert-first: true
   # A newly created table's non-unique secondary indexes are built AFTER its initial load,
   # not while the rows arrive: maintaining them per row roughly doubled the load in the
   # 500k-row Oracle benchmark (11.1s vs 5.9s), while creating both afterwards took 0.5s.

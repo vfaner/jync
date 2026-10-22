@@ -499,6 +499,17 @@ public class OracleDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean supportsInsertFirstInitialLoad() {
+        return true;
+    }
+
+    @Override
+    public String emptyTargetProbeSql(String schema, String table) {
+        // Oracle has no LIMIT; ROWNUM stops the scan after the first row.
+        return "SELECT 1 FROM " + qualify(schema, table) + " WHERE ROWNUM = 1";
+    }
+
+    @Override
     public String getPaginationSql(String baseSql, long offset, int limit) {
         // OFFSET/FETCH requires 12c; ROWNUM nesting works on every supported release.
         // offset 0 (the keyset page-cap case) must not use the rnum_ helper: the wrapper

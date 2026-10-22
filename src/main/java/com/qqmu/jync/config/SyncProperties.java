@@ -35,16 +35,35 @@ public class SyncProperties {
     private int fullLoadFetchSize = 2000;
 
     /**
-     * Whether an initial full load into an <em>empty</em> Oracle target writes plain
-     * {@code INSERT} instead of {@code MERGE}.
+     * Whether an initial full load into an <em>empty</em> target writes plain {@code INSERT}
+     * instead of the dialect's upsert ({@code MERGE} on Oracle, {@code ON DUPLICATE KEY
+     * UPDATE} on MySQL, {@code ON CONFLICT} on PostgreSQL).
      *
      * <p>Nothing can match on an empty table, so the upsert's match test buys nothing there
-     * while costing roughly 2.5x per row (container benchmark, 500k rows at batch 2000:
-     * ~84k rows/s MERGE vs ~211k rows/s INSERT). The target is probed once per table load,
-     * before the first chunk; a table that already has rows — a resumed load, a re-run
-     * without truncate — keeps the idempotent MERGE. Other target types are untouched.
+     * while costing per-row work that a plain INSERT skips (container benchmark on Oracle,
+     * 500k rows at batch 2000: ~84k rows/s MERGE vs ~211k rows/s INSERT). The target is
+     * probed once per table load, before the first chunk; a table that already has rows — a
+     * resumed load, a re-run without truncate — keeps the idempotent upsert. Target types
+     * outside the Oracle/MySQL/PostgreSQL families are untouched.
      */
-    private boolean oracleInitialLoadInsertFirst = true;
+    private boolean initialLoadInsertFirst = true;
+
+    /**
+     * Former name of {@link #initialLoadInsertFirst}, kept so an existing
+     * {@code sync.oracle-initial-load-insert-first} setting still binds.
+     *
+     * @deprecated use {@link #isInitialLoadInsertFirst()}
+     */
+    @Deprecated
+    public boolean isOracleInitialLoadInsertFirst() {
+        return initialLoadInsertFirst;
+    }
+
+    /** @deprecated use {@link #setInitialLoadInsertFirst(boolean)} */
+    @Deprecated
+    public void setOracleInitialLoadInsertFirst(boolean value) {
+        this.initialLoadInsertFirst = value;
+    }
 
     /**
      * Rows per keyset chunk of an initial full load; 0 disables chunking.

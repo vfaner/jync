@@ -336,23 +336,22 @@ public class DataSyncService {
     }
 
     /**
-     * Whether this initial load may write plain {@code INSERT}s: an Oracle target whose table
-     * is still empty.
+     * Whether this initial load may write plain {@code INSERT}s: a target of a dialect that has
+     * the shortcut (Oracle, MySQL, PostgreSQL families) whose table is still empty.
      *
-     * <p>On an empty table the upsert's match test can never fire, and the benchmark measured
-     * the INSERT that remains at roughly 2.5x the MERGE throughput. Everything that is not a
-     * <em>confirmed</em>-empty Oracle table keeps the idempotent upsert: an INSERT against an
-     * existing key raises a unique violation, so "could not tell" must never mean "empty".
+     * <p>On an empty table the upsert's match test can never fire, and the Oracle benchmark
+     * measured the INSERT that remains at roughly 2.5x the MERGE throughput. Everything that
+     * is not a <em>confirmed</em>-empty table keeps the idempotent upsert: an INSERT against
+     * an existing key raises a unique violation, so "could not tell" must never mean "empty".
      */
     boolean useInsertFirst(Connection targetConn, SyncContext ctx, String targetTable,
                            List<String> pkColumns) {
-        if (!properties.isOracleInitialLoadInsertFirst() || pkColumns.isEmpty()
-                || ctx.getTargetType() != DatabaseType.ORACLE) {
+        if (!properties.isInitialLoadInsertFirst() || pkColumns.isEmpty()
+                || !ctx.getTargetDialect().supportsInsertFirstInitialLoad()) {
             return false;
         }
-        String probe = "SELECT 1 FROM "
-                + ctx.getTargetDialect().qualify(ctx.getTargetSchema(), targetTable)
-                + " WHERE ROWNUM = 1";
+        String probe = ctx.getTargetDialect()
+                .emptyTargetProbeSql(ctx.getTargetSchema(), targetTable);
         try (Statement st = targetConn.createStatement();
              ResultSet rs = st.executeQuery(probe)) {
             boolean empty = !rs.next();
@@ -360,13 +359,13 @@ public class DataSyncService {
                 log.info("Initial load of {} writes INSERT: the target table is empty",
                         targetTable);
             } else {
-                log.debug("Initial load of {} keeps MERGE: the target table already has rows",
+                log.debug("Initial load of {} keeps the upsert: the target table already has rows",
                         targetTable);
             }
             return empty;
         } catch (SQLException e) {
-            log.debug("Could not probe {} for the initial-load INSERT path ({}); keeping MERGE",
-                    targetTable, e.getMessage());
+            log.debug("Could not probe {} for the initial-load INSERT path ({}); keeping the"
+                    + " upsert", targetTable, e.getMessage());
             return false;
         }
     }
@@ -815,14 +814,16 @@ public class DataSyncService {
                                 int batchSize, int fetchSize)
             throws SQLException {
         // Incremental windows and CDC replay never take the INSERT-only initial-load shortcut:
-        // their rows routinely hit keys that already exist, which is exactly what MERGE is for.
+        // their rows routinely hit keys that already exist, which is exactly what the upsert
+        // is for.
         return copyRows(sourceConn, targetConn, selectSql, params, table, targetTable, ctx,
                 pkTrack, sink, batchSize, fetchSize, false);
     }
 
     /**
      * As above, with the writer's statement shape decided by the caller: an initial load into
-     * a confirmed-empty Oracle table writes {@code INSERT}, everything else keeps the upsert.
+     * a confirmed-empty table of a supporting dialect writes {@code INSERT}, everything else
+     * keeps the upsert.
      */
     private WriteStats copyRows(Connection sourceConn, Connection targetConn, String selectSql,
                                 List<Object> params, TableMeta table, String targetTable,
@@ -1490,8 +1491,8 @@ public class DataSyncService {
         int parallelism = resolveParallelism(route, table, ctx);
         // Asked once per table load, never per chunk: from the second chunk on the table holds
         // the first chunk's rows and would answer "not empty", quietly dropping every later
-        // chunk back to MERGE. The ranges of a parallel load are disjoint, so a table that was
-        // empty at this point is a safe INSERT target for every worker as well.
+        // chunk back to the upsert. The ranges of a parallel load are disjoint, so a table that
+        // was empty at this point is a safe INSERT target for every worker as well.
         boolean insertFirst = useInsertFirst(targetConn, ctx, targetTable,
                 table.getPrimaryKeys());
         boolean done = parallelism > 1
