@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.dto.DatabaseConfigForm;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -131,19 +132,19 @@ public class DatabaseConfigController {
     }
 
     @PostMapping("/save")
-    public String save(@ModelAttribute DatabaseConfig config,
+    public String save(@ModelAttribute DatabaseConfigForm form,
                        @RequestParam(required = false) String rawPassword,
                        @RequestParam(required = false) String rawMinerPassword,
                        RedirectAttributes flash) {
         try {
-            service.save(config, rawPassword, rawMinerPassword);
+            service.save(form.toEntity(), rawPassword, rawMinerPassword);
             flash.addFlashAttribute("message", "msg.connection.saved");
             return "redirect:/databases";
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
             // Send the user back to the form rather than losing their input to a list page.
-            return config.getId() != null
-                    ? "redirect:/databases/" + config.getId() + "/edit"
+            return form.getId() != null
+                    ? "redirect:/databases/" + form.getId() + "/edit"
                     : "redirect:/databases/new";
         }
     }

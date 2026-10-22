@@ -12,8 +12,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.qqmu.jync.dto.AiProviderForm;
 import com.qqmu.jync.model.AiProtocol;
-import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.service.ai.AiConnectionTestService;
 import com.qqmu.jync.service.ai.AiProviderService;
 
@@ -42,9 +42,9 @@ public class AiApiController {
      */
     @PostMapping("/test")
     public ResponseEntity<Map<String, Object>> testTransient(
-            @ModelAttribute AiProvider provider,
+            @ModelAttribute AiProviderForm form,
             @RequestParam(required = false) String rawApiKey) {
-        return ResponseEntity.ok(describe(service.testTransient(provider, rawApiKey)));
+        return ResponseEntity.ok(describe(service.testTransient(form.toEntity(), rawApiKey)));
     }
 
     /** Default base URL for a protocol, to prefill the form when the selection changes. */

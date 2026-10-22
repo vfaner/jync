@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.dto.AiProviderForm;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.AiReasoningEffort;
@@ -61,18 +62,18 @@ public class AiProviderController {
     }
 
     @PostMapping("/save")
-    public String save(@ModelAttribute AiProvider provider,
+    public String save(@ModelAttribute AiProviderForm form,
                        @RequestParam(required = false) String rawApiKey,
                        RedirectAttributes flash) {
         try {
-            service.save(provider, rawApiKey);
+            service.save(form.toEntity(), rawApiKey);
             flash.addFlashAttribute("message", "msg.ai.saved");
             return "redirect:/ai";
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
             // Back to the form rather than the list, so the user does not lose their input.
-            return provider.getId() != null
-                    ? "redirect:/ai/" + provider.getId() + "/edit"
+            return form.getId() != null
+                    ? "redirect:/ai/" + form.getId() + "/edit"
                     : "redirect:/ai/new";
         }
     }

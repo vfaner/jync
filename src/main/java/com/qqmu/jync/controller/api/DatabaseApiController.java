@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.qqmu.jync.dto.DatabaseConfigForm;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.DatabaseConfigService;
@@ -49,8 +50,9 @@ public class DatabaseApiController {
      */
     @PostMapping("/test")
     public ResponseEntity<Map<String, Object>> testTransient(
-            @ModelAttribute DatabaseConfig config,
+            @ModelAttribute DatabaseConfigForm form,
             @RequestParam(required = false) String rawPassword) {
+        DatabaseConfig config = form.toEntity();
         Map<String, Object> body = describe(service.testTransient(config, rawPassword));
         body.put("jdbcUrl", service.previewUrl(config));
         return ResponseEntity.ok(body);
