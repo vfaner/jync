@@ -44,6 +44,17 @@ public interface SqlDialect {
     }
 
     /**
+     * Whether a streamed read of this source needs the connection inside an explicit
+     * transaction. The PostgreSQL driver buffers the whole result set when autocommit is
+     * on, so its fetch size has no effect until a transaction is open; MySQL takes the
+     * opposite route (a streaming sentinel in {@link #streamingFetchSize}) and everyone
+     * else honors the plain fetch size.
+     */
+    default boolean requiresTransactionalSourceForStreaming() {
+        return false;
+    }
+
+    /**
      * Largest string/byte value this dialect can bind inline; anything larger must be sent
      * as a LOB handle. Oracle's answer is 32767 because a {@code MERGE ... USING (SELECT ?)}
      * projection binds the placeholder as a LONG — not as the CLOB column it is assigned to —

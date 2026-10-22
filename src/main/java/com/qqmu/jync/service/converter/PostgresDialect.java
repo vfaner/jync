@@ -30,6 +30,16 @@ public class PostgresDialect extends AbstractSqlDialect {
         return 63;
     }
 
+    /**
+     * The driver's {@code setFetchSize} is silently ignored with autocommit on — it reads
+     * the entire result set into memory — so a streamed read has to run in a transaction.
+     * openGauss and GaussDB speak the same protocol and inherit this.
+     */
+    @Override
+    public boolean requiresTransactionalSourceForStreaming() {
+        return true;
+    }
+
     @Override
     protected char quoteChar() {
         return '"';

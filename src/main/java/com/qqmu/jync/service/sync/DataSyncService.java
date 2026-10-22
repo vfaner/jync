@@ -845,7 +845,12 @@ public class DataSyncService {
 
         WriteStats total = new WriteStats();
         boolean identityArmed = false;
+        // PostgreSQL-family drivers only honor a fetch size inside a transaction; opening one
+        // around the read is what makes a large source stream instead of landing in a heap
+        // buffer. Other families read the same rows with autocommit untouched.
+        SourceReadSession sourceRead = null;
         try (PreparedStatement select = sourceConn.prepareStatement(selectSql)) {
+            sourceRead = SourceReadSession.begin(sourceConn, needsSourceTransaction(ctx));
             JdbcUtil.applyQueryTimeout(select, properties.getQueryTimeoutSeconds());
             if (identityOn != null) {
                 try (Statement idStmt = targetConn.createStatement()) {
@@ -928,6 +933,9 @@ public class DataSyncService {
                 }
                 throughput.logSummary();
             }
+            // The read is over before the target commits: the source transaction holds no
+            // locks the target needs, and ending it here keeps it as short as the copy.
+            sourceRead.commit();
             targetConn.commit();
         } catch (LockLostException e) {
             // Discard the uncommitted tail before autocommit is restored (which would otherwise
@@ -958,6 +966,10 @@ public class DataSyncService {
             }
             throw e;
         } finally {
+            if (sourceRead != null) {
+                // Rolls back a read that never reached its commit and restores autocommit.
+                sourceRead.close();
+            }
             if (identityArmed) {
                 String identityOff = targetDialect.getSetIdentityInsertSql(
                         ctx.getTargetSchema(), targetTable, false);
@@ -1095,6 +1107,20 @@ public class DataSyncService {
                                 : LobReadPolicy.Mode.ONE_SHOT,
                         config.getInlineMaxBytes(), config.getForceInlineMaxBytes(), forceInline)
                 .withDeclaredSizes(declaredSizes);
+    }
+
+    /**
+     * Whether the source copy should run inside an explicit read transaction. Both LOB
+     * switches gate it: turning streaming off must restore the 1.7.7 connection behaviour
+     * as well as the read path, and {@code enable-source-streaming} is the narrow escape
+     * hatch for a PostgreSQL source where the long read transaction costs too much.
+     */
+    private boolean needsSourceTransaction(SyncContext ctx) {
+        SyncProperties.Lob lob = properties.getLob();
+        SqlDialect sourceDialect = ctx.getSourceDialect();
+        return lob != null && lob.isStreamingEnabled() && lob.isEnableSourceStreaming()
+                && sourceDialect != null
+                && sourceDialect.requiresTransactionalSourceForStreaming();
     }
 
     private LobSpillStore spillStore() {
