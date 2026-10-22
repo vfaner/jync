@@ -18,20 +18,39 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class DdlExecutor {
 
-    /** Substrings that indicate "the thing I tried to drop was not there". */
+    /**
+     * Substrings that indicate "the thing I tried to drop was not there".
+     *
+     * <p>No bare "cannot drop": SQL Server opens its missing-object message that way, but so
+     * do PostgreSQL and MySQL when they <em>refuse</em> a drop ("cannot drop table x because
+     * other objects depend on it", "Cannot drop table 'x' referenced by a foreign key
+     * constraint"). The benign SQL Server case is already covered by "does not exist", while
+     * the refusals must surface — treating one as success deletes the table's snapshot and
+     * the change is never re-detected.
+     */
     private static final String[] BENIGN_DROP_MARKERS = {
             "does not exist", "doesn't exist", "not exist", "unknown table",
-            "cannot drop", "no such table", "not found", "invalid object name",
+            "no such table", "not found", "invalid object name",
             "undefined table", "unknown object",
             // 达梦 DM / 金仓 KingBase 等国产库的中文"不存在"/"无效对象"错误
             "不存在", "未找到", "无法找到", "无效的表或视图名"
     };
 
-    /** Substrings that indicate "the thing I tried to create is already there". */
+    /**
+     * Substrings that indicate "the thing I tried to create is already there".
+     *
+     * <p>No bare "exists": an unrelated error merely mentioning existence ("foreign key
+     * target does not exist") must not be laundered into "create succeeded".
+     *
+     * <p>No bare "duplicate" either. MySQL's 1061 "Duplicate key name" and 1060 "Duplicate
+     * column name" are the object-already-there cases, but every vendor says "duplicate" for
+     * a unique index that could not be built because the target's existing rows violate it —
+     * MySQL 1062 "Duplicate entry", Oracle ORA-01452, PostgreSQL "is duplicated". Those are
+     * genuine failures; calling them success certifies a table shape that lacks the index.
+     */
     private static final String[] BENIGN_CREATE_MARKERS = {
-            // No bare "exists": an unrelated error merely mentioning existence ("foreign key
-            // target does not exist") must not be laundered into "create succeeded".
-            "already exists", "duplicate", "name is already used",
+            "already exists", "duplicate key name", "duplicate column name",
+            "name is already used",
             // SQL Server: "There is already an object named 'x' in the database."
             "already an object named",
             // 达梦 DM / 金仓 KingBase 等国产库的中文"已存在"错误
