@@ -49,6 +49,11 @@ import lombok.extern.slf4j.Slf4j;
  * startup. A failure after the commit is different: the row ciphertext already belongs to the
  * pending key, so the file is kept and the instance runs on it, leaving only the promotion for
  * the next start.
+ *
+ * <p>Instances sharing one store start one at a time: whoever holds {@code <store>.key.lock}
+ * migrates, and a second instance that finds the lock taken refuses to start rather than run on
+ * the public default key for its lifetime. Once the key file exists every instance adopts it,
+ * including one whose environment was resolved before the file appeared.
  */
 @Component
 @Slf4j
@@ -85,7 +90,14 @@ public class LegacyCryptoKeyMigration {
             return;
         }
         CryptoKeyResolver resolver = CryptoKeyResolver.forStoreBase(storeBase);
-        if (!resolver.storeExists() || resolver.keyFileExists()) {
+        if (!resolver.storeExists()) {
+            return;
+        }
+        if (resolver.keyFileExists()) {
+            // Usually the bootstrap already loaded it. The other case is another instance that
+            // promoted it between that bootstrap and now: adopting it keeps this instance on
+            // the same key as the rows instead of on the public default for its lifetime.
+            adoptKeyFile(resolver);
             return;
         }
 
@@ -97,21 +109,36 @@ public class LegacyCryptoKeyMigration {
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock lock = channel.tryLock()) {
             if (lock == null) {
-                log.info("Another Jync instance is migrating the stored crypto key; skipping.");
-                return;
+                throw migratingElsewhere(lockFile);
             }
             migrateLocked(resolver);
         } catch (OverlappingFileLockException e) {
-            log.info("Another Jync instance is migrating the stored crypto key; skipping.");
+            throw migratingElsewhere(lockFile);
         } catch (IOException e) {
             log.warn("Could not lock {} for the crypto-key migration; stored credentials keep "
                     + "using the built-in key.", lockFile, e);
         }
     }
 
+    /**
+     * Refuses to start while another instance is re-encrypting the credentials.
+     *
+     * <p>Continuing would leave this instance on the shipped default key while the rows belong
+     * to the other instance's generated key: every credential saved here until the next restart
+     * would be encrypted with a publicly known key and be unreadable everywhere else. Failing
+     * to start is recoverable — the migration is short, so a restart after it finishes boots
+     * normally against the promoted key file.
+     */
+    private IllegalStateException migratingElsewhere(Path lockFile) {
+        return new IllegalStateException("Another Jync instance is migrating the stored crypto "
+                + "key (" + lockFile + " is locked). Start this instance again once that has "
+                + "finished; the generated key file is then picked up on boot.");
+    }
+
     private void migrateLocked(CryptoKeyResolver resolver) {
         if (resolver.keyFileExists()) {
             // Another instance finished between our first check and taking the lock.
+            adoptKeyFile(resolver);
             return;
         }
         CryptoKeyResolver.Secrets target;
@@ -209,6 +236,12 @@ public class LegacyCryptoKeyMigration {
         } catch (RuntimeException e) {
             return false;
         }
+    }
+
+    private void adoptKeyFile(CryptoKeyResolver resolver) {
+        adopt(resolver.readKeyFile());
+        log.info("Stored database passwords and API keys are encrypted with the key in {}; "
+                + "using it for this instance too.", resolver.keyFile());
     }
 
     private void adopt(CryptoKeyResolver.Secrets target) {

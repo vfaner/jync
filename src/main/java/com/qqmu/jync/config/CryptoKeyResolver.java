@@ -133,6 +133,12 @@ public final class CryptoKeyResolver {
         return Files.exists(pendingKeyFile());
     }
 
+    /** Reads the live key file; used when it appeared after the environment was resolved. */
+    public Secrets readKeyFile() {
+        Loaded loaded = loadFrom(keyFile());
+        return new Secrets(loaded.password(), loaded.salt(), Source.KEY_FILE);
+    }
+
     /** Reads the pending key; it must be complete. */
     public Secrets readPending() {
         Loaded loaded = loadFrom(pendingKeyFile());

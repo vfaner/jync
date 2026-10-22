@@ -1,6 +1,7 @@
 package com.qqmu.jync.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -122,17 +123,21 @@ class LegacyCryptoKeyMigrationTest {
     }
 
     @Test
-    void anExistingKeyFileMeansTheWorkIsAlreadyDone() throws IOException {
+    void anExistingKeyFileMeansTheWorkIsAlreadyDoneAndIsUsed() throws IOException {
         // What the EnvironmentPostProcessor leaves behind on a fresh install or after a
-        // previous migration.
+        // previous migration — or what another instance promoted while this one was booting.
         Files.writeString(dir.resolve("jync.key"),
                 "password=already-generated\nsalt=00112233445566778899aabbccddeeff\n");
 
         migration.migrate();
 
         verify(configRepository, never()).findAll();
-        assertThat(properties.getCryptoPassword())
-                .isEqualTo(SyncProperties.DEFAULT_CRYPTO_PASSWORD);
+        // The rows already belong to this key, so nothing may be re-encrypted; but an instance
+        // that reached this point on the defaults must switch to it rather than spend its whole
+        // lifetime encrypting new credentials with the public default.
+        assertThat(properties.getCryptoPassword()).isEqualTo("already-generated");
+        assertThat(properties.getCryptoSalt()).isEqualTo("00112233445566778899aabbccddeeff");
+        assertThat(crypto.isUsingDefaultKey()).isFalse();
     }
 
     @Test
@@ -212,15 +217,21 @@ class LegacyCryptoKeyMigrationTest {
     }
 
     @Test
-    void aLockHeldByAnotherInstanceIsLeftInPlace() throws IOException {
-        // Deleting a lock file another process holds unlinks the inode it locked: a third
-        // process would then create a fresh file, lock that, and migrate concurrently.
+    void aMigrationRunningInAnotherInstanceFailsThisStartInsteadOfUsingThePublicKey() throws IOException {
+        // Starting anyway would leave this instance on the public default key for its whole
+        // lifetime while the other one writes under the generated key — every credential saved
+        // here would be undecryptable for everyone else. Refusing to start is recoverable;
+        // silently splitting the keys is not.
         Path lockFile = dir.resolve("jync.key.lock");
         try (FileChannel channel = FileChannel.open(lockFile,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock lock = channel.lock()) {
-            migration.migrate();
+            assertThatThrownBy(migration::migrate)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("jync.key.lock");
 
+            // Deleting a lock file another process holds would let a third process lock a fresh
+            // file and migrate concurrently.
             assertThat(lockFile).exists();
             verify(configRepository, never()).findAll();
         }
