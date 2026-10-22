@@ -173,4 +173,17 @@ class CryptoKeyResolverTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("jync.key");
     }
+
+    @Test
+    void aDirectoryAtTheKeyPathIsNotAKeyAndIsIgnored() throws Exception {
+        Files.createDirectory(keyFile());
+        createStore("jync.mv.db");
+
+        Secrets secrets = resolver().resolve(
+                SyncProperties.DEFAULT_CRYPTO_PASSWORD, SyncProperties.DEFAULT_CRYPTO_SALT);
+
+        // Treating a directory as "the key file" would abort startup on an unreadable
+        // "file"; the migration can still finish the job once the directory is removed.
+        assertThat(secrets.source()).isEqualTo(Source.LEGACY_DEFAULT);
+    }
 }

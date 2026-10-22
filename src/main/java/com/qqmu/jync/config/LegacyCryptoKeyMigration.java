@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
@@ -45,8 +44,11 @@ import lombok.extern.slf4j.Slf4j;
  * detects that the pending key cannot read the rows and redoes the migration with it. A crash
  * after the commit leaves the pending file and new ciphertext: the next boot sees that it
  * reads the rows and only promotes. An explicit operator key, an existing key file, and a
- * fresh install are all left alone. Any failure — including a value no key can read — discards
- * the pending file and keeps the previous behaviour rather than blocking startup.
+ * fresh install are all left alone. A failure before the commit — including a value no key can
+ * read — discards the pending file and keeps the previous behaviour rather than blocking
+ * startup. A failure after the commit is different: the row ciphertext already belongs to the
+ * pending key, so the file is kept and the instance runs on it, leaving only the promotion for
+ * the next start.
  */
 @Component
 @Slf4j
@@ -88,6 +90,9 @@ public class LegacyCryptoKeyMigration {
         }
 
         Path lockFile = resolver.lockFile();
+        // The lock file is never deleted: unlinking one that another process still holds would
+        // let a third process create a fresh file, lock that, and migrate concurrently. An empty
+        // leftover is harmless — the OS releases the lock when the holder exits.
         try (FileChannel channel = FileChannel.open(lockFile,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock lock = channel.tryLock()) {
@@ -101,12 +106,6 @@ public class LegacyCryptoKeyMigration {
         } catch (IOException e) {
             log.warn("Could not lock {} for the crypto-key migration; stored credentials keep "
                     + "using the built-in key.", lockFile, e);
-        } finally {
-            try {
-                Files.deleteIfExists(lockFile);
-            } catch (IOException ignored) {
-                // A stale empty lock file is harmless: the next boot tries the same lock.
-            }
         }
     }
 
@@ -115,11 +114,12 @@ public class LegacyCryptoKeyMigration {
             // Another instance finished between our first check and taking the lock.
             return;
         }
+        CryptoKeyResolver.Secrets target;
         try {
             List<DatabaseConfig> configs = configRepository.findAll();
             List<AiProvider> providers = providerRepository.findAll();
 
-            CryptoKeyResolver.Secrets target = resolver.pendingKeyFileExists()
+            target = resolver.pendingKeyFileExists()
                     ? resolver.readPending()
                     : resolver.generatePending();
             TextEncryptor targetEncryptor = Encryptors.delux(target.password(), target.salt());
@@ -128,18 +128,36 @@ public class LegacyCryptoKeyMigration {
                 transactionTemplate.executeWithoutResult(
                         status -> reencrypt(configs, providers, targetEncryptor));
             }
-            // The key file is the commit marker: never present before the rows are readable.
-            resolver.promotePending();
-            adopt(target);
-            log.info("Re-encrypted the stored database passwords and API keys with a key "
-                    + "generated for this installation.");
         } catch (RuntimeException e) {
+            // Nothing reached the database: drop the half-made key and try again next boot.
             resolver.discardPending();
             log.warn("Could not migrate the stored credentials to a generated crypto key; "
                     + "they keep using the built-in, publicly known key. Re-enter the "
                     + "connection password if it can no longer be decrypted: "
                     + e.getMessage(), e);
+            return;
         }
+
+        try {
+            // The key file is the commit marker: never present before the rows are readable.
+            resolver.promotePending();
+        } catch (RuntimeException e) {
+            // The rows are already committed under this key. Deleting the pending file here
+            // would make every stored credential permanently unreadable, and running on the old
+            // key would encrypt anything saved from now on under a key the database no longer
+            // matches. Use the pending key in memory and leave it in place: the next start sees
+            // the rows are already readable by it and only has to promote.
+            adopt(target);
+            log.error("Stored credentials were re-encrypted, but the generated key could not be "
+                    + "written to {}. This process uses {} instead — keep that file until the "
+                    + "move succeeds. Fix the data-directory permissions and restart so it "
+                    + "becomes {}: {}", resolver.keyFile(), resolver.pendingKeyFile(),
+                    resolver.keyFile(), e.getMessage(), e);
+            return;
+        }
+        adopt(target);
+        log.info("Re-encrypted the stored database passwords and API keys with a key "
+                + "generated for this installation.");
     }
 
     private void reencrypt(List<DatabaseConfig> configs, List<AiProvider> providers,

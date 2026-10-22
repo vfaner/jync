@@ -15,6 +15,10 @@ import org.springframework.core.env.MapPropertySource;
  * resolved password/salt are seen by {@link com.qqmu.jync.config.SyncProperties} binding.
  * If the operator has overridden either half, this does nothing — explicit configuration
  * always wins.
+ *
+ * <p>An existing store with the shipped defaults is deliberately left on them here: only the
+ * running context can read the stored secrets and re-encrypt them, which
+ * {@link LegacyCryptoKeyMigration} does once the repositories are available.
  */
 public class CryptoKeyBootstrap implements EnvironmentPostProcessor {
 

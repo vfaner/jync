@@ -9,8 +9,11 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Properties;
 
@@ -176,6 +179,54 @@ class LegacyCryptoKeyMigrationTest {
     }
 
     @Test
+    void aFailedPromotionKeepsThePendingKeyForTheNextBoot() throws IOException {
+        // The rows were already committed under the pending key. If the promotion fails, that
+        // file is the only way to read them: discarding it loses every stored credential.
+        TextEncryptor pending = Encryptors.delux(
+                "pending-password-0123456789012345678901", "aaaabbbbccccddddeeeeffff00001111");
+        Files.writeString(dir.resolve("jync.key.pending"),
+                "password=pending-password-0123456789012345678901\n"
+                        + "salt=aaaabbbbccccddddeeeeffff00001111\n");
+        DatabaseConfig config = new DatabaseConfig();
+        config.setPassword("enc:" + pending.encrypt("db-password"));
+        when(configRepository.findAll()).thenReturn(List.of(config));
+        // A directory occupies the key path, so the atomic rename cannot succeed while the
+        // pending file itself stays deletable.
+        Files.createDirectory(dir.resolve("jync.key"));
+        Files.createFile(dir.resolve("jync.key").resolve("occupied"));
+
+        migration.migrate();
+
+        assertThat(dir.resolve("jync.key.pending")).exists();
+        assertThat(readPendingPassword())
+                .isEqualTo("pending-password-0123456789012345678901");
+        // The rows are committed under the pending key, so this process must use it too:
+        // otherwise anything saved from now on would be encrypted with the old key and the
+        // next start would see a database it can only half read.
+        assertThat(properties.getCryptoPassword())
+                .isEqualTo("pending-password-0123456789012345678901");
+        assertThat(crypto.isUsingDefaultKey()).isFalse();
+        assertThat(decryptWith(config.getPassword(),
+                Encryptors.delux("pending-password-0123456789012345678901",
+                        "aaaabbbbccccddddeeeeffff00001111"))).isEqualTo("db-password");
+    }
+
+    @Test
+    void aLockHeldByAnotherInstanceIsLeftInPlace() throws IOException {
+        // Deleting a lock file another process holds unlinks the inode it locked: a third
+        // process would then create a fresh file, lock that, and migrate concurrently.
+        Path lockFile = dir.resolve("jync.key.lock");
+        try (FileChannel channel = FileChannel.open(lockFile,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             FileLock lock = channel.lock()) {
+            migration.migrate();
+
+            assertThat(lockFile).exists();
+            verify(configRepository, never()).findAll();
+        }
+    }
+
+    @Test
     void anUndecryptableValueAbortsWithoutWritingAKeyFile() {
         DatabaseConfig config = new DatabaseConfig();
         config.setPassword("enc:not-readable-by-any-key");
@@ -207,8 +258,18 @@ class LegacyCryptoKeyMigrationTest {
     private Properties readKey() {
         Path key = dir.resolve("jync.key");
         assertThat(key).exists();
+        return loadProperties(key);
+    }
+
+    private String readPendingPassword() {
+        Path pending = dir.resolve("jync.key.pending");
+        assertThat(pending).exists();
+        return loadProperties(pending).getProperty("password");
+    }
+
+    private static Properties loadProperties(Path file) {
         Properties props = new Properties();
-        try (InputStream in = Files.newInputStream(key)) {
+        try (InputStream in = Files.newInputStream(file)) {
             props.load(in);
         } catch (IOException e) {
             throw new IllegalStateException(e);

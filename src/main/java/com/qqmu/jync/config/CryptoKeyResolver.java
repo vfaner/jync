@@ -24,8 +24,9 @@ import java.util.Properties;
  * <ul>
  *   <li>An explicit operator override always wins and never writes a file.</li>
  *   <li>An existing database — including an un-migrated {@code synctool.mv.db} whose stored
- *       ciphertext was produced with the shipped defaults — keeps those defaults, because a
- *       generated key cannot decrypt what an earlier version stored.</li>
+ *       ciphertext was produced with the shipped defaults — boots on those defaults, because a
+ *       generated key cannot decrypt what an earlier version stored. {@link
+ *       LegacyCryptoKeyMigration} then re-encrypts the rows and promotes a generated key.</li>
  *   <li>The key file, once present, is the source of truth and is loaded verbatim.</li>
  * </ul>
  */
@@ -77,7 +78,7 @@ public final class CryptoKeyResolver {
         }
 
         Path keyFile = keyFile();
-        if (Files.exists(keyFile)) {
+        if (keyFileExists()) {
             Loaded loaded = loadFrom(keyFile);
             return new Secrets(loaded.password(), loaded.salt(), Source.KEY_FILE);
         }
@@ -114,9 +115,11 @@ public final class CryptoKeyResolver {
                 || Files.exists(dir.resolve(LegacyStoreMigration.LEGACY_BASENAME + ".mv.db"));
     }
 
-    /** Whether a persisted key is already in place. */
+    /** Whether a usable persisted key is already in place. */
     public boolean keyFileExists() {
-        return Files.exists(keyFile());
+        // A directory at this path is not a key; treating it as "already done" would silently
+        // strand the installation on the public default.
+        return Files.isRegularFile(keyFile());
     }
 
     /**
@@ -174,14 +177,14 @@ public final class CryptoKeyResolver {
         return keyFile().resolveSibling(keyFile().getFileName() + ".lock");
     }
 
-    private Path keyFile() {
+    Path keyFile() {
         Path base = storeBase.toAbsolutePath();
         String name = base.getFileName().toString() + KEY_FILE_NAME;
         Path dir = base.getParent();
         return (dir == null ? base : dir).resolve(name);
     }
 
-    private Path pendingKeyFile() {
+    Path pendingKeyFile() {
         Path keyFile = keyFile();
         return keyFile.resolveSibling(keyFile.getFileName() + ".pending");
     }
