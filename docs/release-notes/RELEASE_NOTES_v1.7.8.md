@@ -12,6 +12,7 @@
 - **厂商专属类型跨方言产出非法 DDL**：`java.sql.Types` 之外的厂商码此前原样透传源类型名。现在先归一化再映射：Oracle `BINARY_FLOAT` / `BINARY_DOUBLE` / `TIMESTAMP WITH TIME ZONE` / `INTERVAL` / `ROWID` / `XMLTYPE` / `SDO_GEOMETRY`，SQL Server `UNIQUEIDENTIFIER` / `MONEY` / `DATETIMEOFFSET` / `SQL_VARIANT` / 几何，DB2 `DECFLOAT` / `XML` / `ROWID`，MySQL `JSON` / `ENUM` / `SET` / `GEOMETRY` 均有显式目标类型；同族保留原生类型，跨族回退到可移植类型并记录日志，绝不再透传未知类型名。
 - **厂商类型取值未归一化**：Oracle `XMLTYPE` / `INTERVAL` / `ROWID` → `String`、`BINARY_FLOAT` → `Float`；SQL Server `UNIQUEIDENTIFIER` → `String`、`MONEY` → `BigDecimal`、`DATETIMEOFFSET` → 带时区时间、几何 → `byte[]`；DB2 `DECFLOAT` → `BigDecimal`、`XML` → `String`；MySQL `ENUM` / `SET` / `JSON` → `String`。全量、增量与三种 CDC 读取共用同一套归一化。
 - **LogMiner 行外 LOB 静默跳过**：`SQL_REDO` 对行外存储的 LOB 没有取值，回查会破坏事务顺序。此前只记一条 DEBUG。现在计入 `skippedMissingLob` 与按表计数并暴露到 CDC 状态面板，按表限流告警（含表名、跳过数、配置键与补救建议）；`sync.cdc.logminer.missing-lob-policy=fail` 可改为在第一条此类变更处停住且不推进位点。
+- **SQL Server 源多列大字段在流式读取下提前断流**：mssql-jdbc 在读取同一行的下一列时会关闭上一列已打开的流，默认流式下 SQL Server 源表中只要有两个大字段列（例如 `NVARCHAR(MAX)` 后面跟着 `VARBINARY(MAX)`），基线就会以 `Failed to fill a temporary CLOB` / `Stream closed` 失败。SQL Server 源现在在读取大值所在列时即落盘（复用 `spill-dir` 与 `spill-max-bytes`），不再跨列持有驱动流；全量与增量共用该路径。
 - **临时 LOB 与落盘文件泄漏**：所有成功、回滚、锁丢失与异常路径都会释放临时 LOB 并删除本次会话的落盘文件；sink 失败保留缓冲与文件以便重试，由事务边界释放。
 - **主键 / 游标 / 清洗列被误当大字段流式处理**：这些列永远物化，清洗规则仍生效；超过 `force-inline-max-bytes` 时明确报错并指明表、列与配置键，不静默截断。
 - **模拟 upsert 与 CDC 重放重复绑定**：同一值需要绑定多次时，一次性流会在第一次绑定前报错，可重放值（内存或落盘）正常执行。
@@ -24,6 +25,7 @@
 ## 限制（升级前务必阅读）
 
 - **不是零拷贝**：Oracle `MERGE` 必须使用服务端临时 LOB；模拟 upsert 与 CDC 重放要求同一值可重放；PostgreSQL 逻辑解码与 SQL Server CDC 仍由驱动/函数整行物化；MySQL 单个值受源库 `max_allowed_packet` 限制。v1.7.8 做到的是内存有界并可落盘——上限是「单值 × 读取批量」，不再是整表。
+- **SQL Server 源的大字段需要落盘空间**：读到的超阈值大值会立即写入 `spill-dir`，该分区必须能容纳当前读取窗口内的值（容量受 `spill-max-bytes` 约束）。
 - **PostgreSQL 源库的大字段需要更小的读取批量**：pgjdbc 在 `getCharacterStream` 内部把文本解码为 `String`（约 UTF-8 字节数的 2-3 倍），带 fetch size 时还会持有最多该行数的原始字节。数 MB 单值时请调低 `full-load-fetch-size`（1-10），并保证堆至少能容纳最大单值的 3 倍。
 - **LogMiner 行外 LOB 不可还原**：只能跳过或失败，二者都显式可见。补救方式是重建基线，或该表改用轮询。
 - **Oracle `VARCHAR2` / `CHAR` 的空串仍是 `NULL`**，只有 `CLOB` 目标保留空串。
@@ -40,8 +42,8 @@
 
 ## 测试
 
-- 1889 个单测：1888 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
-- 新增/扩充的大字段集成测试：MySQL → Oracle（100k 汉字增量 MERGE、5 MB CLOB/BLOB、`NOT NULL CLOB` 空串、厂商类型）、Oracle → openGauss（行外 LOB 跳过）、MySQL CDC 事务落盘（2 MB 行、提交后无残留）、可选 PostgreSQL → Oracle 60 行 × 约 5 MB 大字段（300 MB 源数据，`-Plob-memory-it` 在 96 MB 堆下完成基线与增量 MERGE）。
+- 1891 个单测：1890 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
+- 新增/扩充的大字段集成测试：Oracle → MySQL（600 KB CLOB + 1 MB BLOB 的基线与增量 upsert）、SQL Server → Oracle（`NVARCHAR(MAX)` / `VARBINARY(MAX)` 的基线与增量 MERGE）、MySQL → Oracle（100k 汉字增量 MERGE、5 MB CLOB/BLOB、`NOT NULL CLOB` 空串、厂商类型）、Oracle → openGauss（行外 LOB 跳过）、MySQL CDC 事务落盘（2 MB 行、提交后无残留）、可选 PostgreSQL → Oracle 60 行 × 约 5 MB 大字段（300 MB 源数据，`-Plob-memory-it` 在 96 MB 堆下完成基线与增量 MERGE）。
 
 ## 升级
 
