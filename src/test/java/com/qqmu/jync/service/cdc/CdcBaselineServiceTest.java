@@ -25,6 +25,7 @@ import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
 import com.qqmu.jync.service.sync.SyncStateWriter;
@@ -187,6 +188,27 @@ class CdcBaselineServiceTest {
         verify(positionStore, never()).markBaselineDone(anyLong());
         verify(taskStore).recordCdcFailure(eq(7L),
                 org.mockito.ArgumentMatchers.contains("lease lost"));
+    }
+
+    /**
+     * R1(租约丢失):基线全量期间租约被他节点接管时,引擎把 {@link LockLostException}
+     * 折进失败 result。旧代码按普通失败处理 —— 删掉位点行(可能正砸掉接管节点刚写的
+     * 基线锚点)并按 ERROR 帽子停摆(所有节点的 supervise 因 ERROR-skip 冻结)。租约
+     * 已丢 = 本节点无权收尾:安静退出,位点行留给接管节点,基线由它重跑。
+     */
+    @Test
+    void leaseLostMidBaselineLeavesThePositionRowAndSkipsTheErrorHat() throws SQLException {
+        Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+        SyncResult failed = new SyncResult();
+        failed.addError("Sync lock lost mid-run (lease expired or reclaimed by another instance)");
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(failed);
+
+        assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> false))  // renew 返回 false
+                .isInstanceOf(LockLostException.class);
+        verify(positionStore, never()).delete(anyLong());        // 不砸接管节点的锚点
+        verify(taskStore, never()).recordCdcFailure(anyLong(), any());  // 绝不 ERROR 帽子
+        verify(positionStore, never()).markBaselineDone(anyLong());     // 基线绝不算完成
     }
 
     /**

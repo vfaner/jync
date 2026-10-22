@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
 import com.qqmu.jync.service.sync.SyncStateWriter;
@@ -250,12 +251,28 @@ public class CdcBaselineService {
             // 失败的全量必须在这里转成异常,否则残缺快照会被标成 baseline_done,流从
             // 记下的位点回放,漏掉的行永久丢失(任务书 B4:全量失败整体重来)。
             if (result == null || !result.isSuccess()) {
+                if (!lockRenewer.getAsBoolean()) {
+                    // R1: the lease is gone — another node may already be running its own
+                    // baseline against the same position row. Deleting the row or raising
+                    // the ERROR hat here would clobber that node's fresh anchor and, via the
+                    // ERROR-skip, freeze every node's supervise. This node has no right to
+                    // finalise anything; exit quietly and let the owner redo the baseline.
+                    throw new LockLostException("CDC baseline for project " + projectId
+                            + " lost its lease mid-load; leaving the position row to the"
+                            + " instance that took over");
+                }
                 throw new IllegalStateException("CDC baseline full load failed: "
                         + (result == null ? "no result" : result.summary()));
             }
             positionStore.markBaselineDone(projectId);
             log.info("CDC baseline for project {} completed", projectId);
         } catch (RuntimeException | Error e) {
+            if (e instanceof LockLostException) {
+                log.info("CDC baseline for project {} stopped: lease lost (another node may"
+                        + " have taken over); it stays not-done and the owner reruns it",
+                        projectId);
+                throw e;
+            }
             if (Thread.currentThread().isInterrupted()) {
                 // Stop-requested abort (final review FIX 2): a disable/rebaseline/shutdown
                 // interrupted the chunked load, which left the flag set on its way out.

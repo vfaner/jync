@@ -24,6 +24,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.lob.LobSpillStore;
 import com.qqmu.jync.service.metadata.MetadataReader;
+import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -264,7 +265,13 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 }
             }
         } catch (RuntimeException | Error e) {
-            if (!running || Thread.currentThread().isInterrupted()) {
+            if (e instanceof LockLostException) {
+                // R1 reached through the baseline path: the lease went away while the
+                // full load ran, and runBaseline left the position row for the takeover
+                // node. Quiet exit — an ERROR here would stomp the owner's state.
+                log.info("CDC consumer for project {} stopped: lease lost during the"
+                        + " baseline ({}); not parking it in ERROR", projectId, e.toString());
+            } else if (!running || Thread.currentThread().isInterrupted()) {
                 // Stop-requested abort (final review FIX 2): the failure surfaced while a
                 // stop was in flight — typically the baseline's chunked load interrupted at
                 // a chunk boundary. Exit quietly: no ERROR hat, no recordCdcFailure (an

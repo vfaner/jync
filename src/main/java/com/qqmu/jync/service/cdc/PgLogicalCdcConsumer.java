@@ -23,6 +23,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.lob.LobSpillStore;
+import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -211,7 +212,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         } catch (RuntimeException | Error | SQLException e) {
             // SQLException 只可能来自基线前的 ensureSlot 短连接(F-8):建槽失败=无法安全
             // 基线,与 runBaseline 读位点失败同等待遇 —— park ERROR,交监督/人工重启。
-            if (!running || Thread.currentThread().isInterrupted()) {
+            if (e instanceof LockLostException) {
+                // R1: the baseline lost the lease to another node; that node owns the
+                // position row and will redo the baseline. Quiet exit, never ERROR.
+                log.info("PG consumer for project {} stopped: lease lost during the"
+                        + " baseline ({}); not parking it in ERROR", projectId, e.toString());
+            } else if (!running || Thread.currentThread().isInterrupted()) {
                 log.info("PG consumer for project {} stopped by request while unwinding"
                         + " ({}); not parking it in ERROR", projectId, e.toString());
             } else {

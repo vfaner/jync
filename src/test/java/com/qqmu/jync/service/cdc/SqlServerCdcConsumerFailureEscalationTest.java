@@ -1,10 +1,12 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -29,12 +31,14 @@ import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CdcPosition;
+import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.sync.ConnectionProvider;
+import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -234,5 +238,36 @@ class SqlServerCdcConsumerFailureEscalationTest {
 
         verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
         verify(targetConn, times(1)).commit();
+    }
+
+    @Test
+    void baselineLeaseLossExitsQuietlyWithoutError() throws Exception {
+        // 基线全量期间租约被接管:runBaseline 抛 LockLostException。R1 要求安静退出 ——
+        // 不得 recordCdcFailure / 写 ERROR 行(接管节点可能已把状态标成 RUNNING)。
+        when(positionStore.find(1L)).thenReturn(Optional.empty());
+        CdcBaselineService baselineService = mock(CdcBaselineService.class);
+        doThrow(new LockLostException("lease lost mid-baseline"))
+                .when(baselineService).runBaseline(any(), any());
+        SyncStateWriter stateWriter = mock(SyncStateWriter.class);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(false);
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("mssql-1");
+        SyncContext ctx = SyncContext.builder()
+                .config(new SyncConfig())
+                .sourceConfig(new DatabaseConfig())
+                .build();
+
+        SqlServerCdcConsumer consumer = new SqlServerCdcConsumer(project, lock, ctx,
+                positionStore, baselineService, taskStore, stateWriter, dsm,
+                new CdcRuntimeStats(), properties);
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+        verify(stateWriter, never()).recordLog(anyLong(), any(), anyString(),
+                eq(ChangeType.ERROR), anyString(), anyBoolean(), anyLong());
+        verify(lock).close();
     }
 }

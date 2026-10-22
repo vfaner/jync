@@ -22,6 +22,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.lob.LobSpillStore;
+import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -250,7 +251,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 }
             }
         } catch (RuntimeException | Error e) {
-            if (!running || Thread.currentThread().isInterrupted()) {
+            if (e instanceof LockLostException) {
+                // R1: the baseline lost the lease to another node; that node owns the
+                // position row and will redo the baseline. Quiet exit, never ERROR.
+                log.info("LogMiner consumer for project {} stopped: lease lost during the"
+                        + " baseline ({}); not parking it in ERROR", projectId, e.toString());
+            } else if (!running || Thread.currentThread().isInterrupted()) {
                 log.info("LogMiner consumer for project {} stopped by request while unwinding"
                         + " ({}); not parking it in ERROR", projectId, e.toString());
             } else {

@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -50,6 +51,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
+import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -121,6 +123,40 @@ class CdcConsumerTest {
         verify(stateWriter).recordLog(7L, ObjectType.PROJECT, "cdc-7", ChangeType.INFO,
                 "CDC consumer started", true, 0L);
         verify(lock).close();                                  // 租约句柄仍按 owner 守卫释放
+    }
+
+    @Test
+    void baselineLeaseLossExitsQuietlyWithoutError() throws Exception {
+        // 基线期间租约被接管:runBaseline 抛 LockLostException。R1 要求安静退出 ——
+        // 旧代码的 catch-all 会 recordCdcFailure + ERROR 行,把接管节点刚标好的 RUNNING
+        // 踩成 ERROR,并借 B7 的 ERROR-skip 冻结所有节点的 supervise。
+        Project project = project(9L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(false);
+        SyncContext ctx = SyncContext.builder()
+                .project(project).config(new SyncConfig()).build();
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(9L)).thenReturn(Optional.empty());   // 基线还没做
+        CdcBaselineService baselineService = mock(CdcBaselineService.class);
+        doThrow(new LockLostException("lease lost mid-baseline"))
+                .when(baselineService).runBaseline(any(), any());
+        SyncTaskStore taskStore = mock(SyncTaskStore.class);
+        SyncStateWriter stateWriter = mock(SyncStateWriter.class);
+
+        CdcConsumer consumer = new CdcConsumer(project, lock, ctx,
+                mock(BinlogClientFactory.class), positionStore, baselineService, taskStore,
+                stateWriter, mock(DataSourceManager.class), new CdcRuntimeStats(),
+                new SyncProperties());
+
+        Thread thread = new Thread(consumer, "cdc-test-9");
+        thread.start();
+        thread.join(10_000);
+
+        assertThat(thread.isAlive()).isFalse();
+        verify(taskStore, never()).recordCdcFailure(anyLong(), any());   // 绝不是致命错
+        verify(stateWriter, never()).recordLog(anyLong(), any(), anyString(),
+                eq(ChangeType.ERROR), anyString(), anyBoolean(), anyLong());
+        verify(lock).close();
     }
 
     @Test
