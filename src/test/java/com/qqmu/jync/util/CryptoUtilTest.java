@@ -1,9 +1,12 @@
 package com.qqmu.jync.util;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.crypto.encrypt.Encryptors;
+import org.springframework.security.crypto.encrypt.TextEncryptor;
 
 import com.qqmu.jync.config.SyncProperties;
 
@@ -93,5 +96,66 @@ class CryptoUtilTest {
         assertThat(crypto.encrypt("")).isEmpty();
         assertThat(crypto.decrypt(null)).isNull();
         assertThat(crypto.decrypt("")).isEmpty();
+    }
+
+    @Test
+    void reencryptMovesAValueToTheTargetKeyWithoutChangingThePlaintext() {
+        // Used by the first-boot key migration: every stored secret must come out
+        // decryptable by the new key and by no other.
+        TextEncryptor target = Encryptors.delux("target-key", "aaaabbbbccccddddeeeeffff00001111");
+        String stored = crypto.encrypt("db-password");
+
+        String moved = crypto.reencrypt(stored, target);
+
+        assertThat(moved).startsWith(CryptoUtil.PREFIX);
+        assertThat(target.decrypt(moved.substring(CryptoUtil.PREFIX.length())))
+                .isEqualTo("db-password");
+        assertThat(moved).isNotEqualTo(stored);
+    }
+
+    @Test
+    void reencryptEncryptsPlaintextLeftByAnEarlierVersion() {
+        TextEncryptor target = Encryptors.delux("target-key", "aaaabbbbccccddddeeeeffff00001111");
+
+        String moved = crypto.reencrypt("legacy-plaintext", target);
+
+        assertThat(moved).startsWith(CryptoUtil.PREFIX);
+        assertThat(target.decrypt(moved.substring(CryptoUtil.PREFIX.length())))
+                .isEqualTo("legacy-plaintext");
+    }
+
+    @Test
+    void reencryptRefusesCiphertextThatThisKeyCannotRead() {
+        // Silently "migrating" an unreadable value would overwrite the only copy of the
+        // ciphertext with garbage; the migration must abort instead.
+        TextEncryptor target = Encryptors.delux("target-key", "aaaabbbbccccddddeeeeffff00001111");
+
+        assertThatThrownBy(() -> crypto.reencrypt("enc:not-readable", target))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void reencryptPassesNullAndEmptyValuesThrough() {
+        TextEncryptor target = Encryptors.delux("target-key", "aaaabbbbccccddddeeeeffff00001111");
+
+        assertThat(crypto.reencrypt(null, target)).isNull();
+        assertThat(crypto.reencrypt("", target)).isEmpty();
+    }
+
+    @Test
+    void rotateToSwitchesEveryLaterOperationToTheNewKey() {
+        SyncProperties initial = new SyncProperties();
+        CryptoUtil rotated = new CryptoUtil(initial);
+        assertThat(rotated.isUsingDefaultKey()).isTrue();
+        String oldCiphertext = rotated.encrypt("pw");
+
+        rotated.rotateTo("fresh-key", "00112233445566778899aabbccddeeff");
+
+        assertThat(rotated.isUsingDefaultKey()).isFalse();
+        assertThat(rotated.decrypt(rotated.encrypt("later"))).isEqualTo("later");
+        // The old ciphertext is no longer readable, which is why the migration re-encrypts
+        // the rows before calling this.
+        assertThatThrownBy(() -> rotated.decrypt(oldCiphertext))
+                .isInstanceOf(IllegalStateException.class);
     }
 }

@@ -3,8 +3,10 @@ package com.qqmu.jync.config;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.Properties;
@@ -100,7 +102,8 @@ public final class CryptoKeyResolver {
                 || SyncProperties.DEFAULT_CRYPTO_SALT.equals(value);
     }
 
-    private boolean storeExists() {
+    /** Whether an H2 store file (current or pre-rename) already exists for this base. */
+    public boolean storeExists() {
         Path base = storeBase.toAbsolutePath();
         Path dir = base.getParent();
         if (dir == null) {
@@ -111,11 +114,76 @@ public final class CryptoKeyResolver {
                 || Files.exists(dir.resolve(LegacyStoreMigration.LEGACY_BASENAME + ".mv.db"));
     }
 
+    /** Whether a persisted key is already in place. */
+    public boolean keyFileExists() {
+        return Files.exists(keyFile());
+    }
+
+    /**
+     * Whether an interrupted migration left its key behind.
+     *
+     * <p>The pending file is promoted only after the re-encrypted rows commit, so its presence
+     * at boot means either "database already migrated, promote" or "database not migrated,
+     * redo with this key" (see {@link LegacyCryptoKeyMigration}).
+     */
+    public boolean pendingKeyFileExists() {
+        return Files.exists(pendingKeyFile());
+    }
+
+    /** Reads the pending key; it must be complete. */
+    public Secrets readPending() {
+        Loaded loaded = loadFrom(pendingKeyFile());
+        return new Secrets(loaded.password(), loaded.salt(), Source.GENERATED);
+    }
+
+    /** Generates a strong key and writes it as the pending file. */
+    public Secrets generatePending() {
+        String password = randomHex(64);
+        String salt = randomHex(16);
+        persist(pendingKeyFile(), password, salt);
+        return new Secrets(password, salt, Source.GENERATED);
+    }
+
+    /** Promotes the pending key to the live one, atomically where the filesystem allows. */
+    public void promotePending() {
+        try {
+            try {
+                Files.move(pendingKeyFile(), keyFile(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(pendingKeyFile(), keyFile(), StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not promote the pending crypto key to "
+                    + keyFile() + "; stored passwords would become unreadable on the next "
+                    + "boot. Ensure the data directory is writable.", e);
+        }
+    }
+
+    /** Removes the pending key after a failed migration. Best effort. */
+    public void discardPending() {
+        try {
+            Files.deleteIfExists(pendingKeyFile());
+        } catch (IOException ignored) {
+            // A leftover pending file is handled at the next boot (promote or redo).
+        }
+    }
+
+    /** Lock file serialising the migration across processes sharing the store. */
+    public Path lockFile() {
+        return keyFile().resolveSibling(keyFile().getFileName() + ".lock");
+    }
+
     private Path keyFile() {
         Path base = storeBase.toAbsolutePath();
         String name = base.getFileName().toString() + KEY_FILE_NAME;
         Path dir = base.getParent();
         return (dir == null ? base : dir).resolve(name);
+    }
+
+    private Path pendingKeyFile() {
+        Path keyFile = keyFile();
+        return keyFile.resolveSibling(keyFile.getFileName() + ".pending");
     }
 
     private record Loaded(String password, String salt) {
