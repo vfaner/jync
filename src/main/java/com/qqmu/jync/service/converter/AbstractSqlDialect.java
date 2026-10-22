@@ -647,8 +647,10 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     /** Converts a double-quoted default (PostgreSQL style) into single quotes. */
     protected String normalizeQuotedDefault(String value) {
         String v = value;
-        // PostgreSQL appends a cast, e.g. 'active'::character varying.
-        int cast = v.indexOf("::");
+        // PostgreSQL appends a cast, e.g. 'active'::character varying. For a quoted literal
+        // only a cast that follows its closing quote may be stripped: the literal itself can
+        // contain "::", and cutting at the first occurrence leaves an unterminated string.
+        int cast = v.startsWith("'") ? castAfterLiteral(v) : v.indexOf("::");
         if (cast > 0) {
             v = v.substring(0, cast);
         }
@@ -656,6 +658,25 @@ public abstract class AbstractSqlDialect implements SqlDialect {
             v = "'" + v.substring(1, v.length() - 1).replace("'", "''") + "'";
         }
         return v;
+    }
+
+    /**
+     * Index of the {@code ::} that starts a cast following a SQL string literal, or -1 when
+     * there is none. Doubled quotes inside the literal are skipped so an apostrophe cannot be
+     * mistaken for its end.
+     */
+    private static int castAfterLiteral(String value) {
+        for (int i = 1; i < value.length(); i++) {
+            if (value.charAt(i) != '\'') {
+                continue;
+            }
+            if (i + 1 < value.length() && value.charAt(i + 1) == '\'') {
+                i++; // escaped quote inside the literal
+                continue;
+            }
+            return value.startsWith("::", i + 1) ? i + 1 : -1;
+        }
+        return -1;
     }
 
     protected boolean isCurrentTimestampDefault(String upper) {

@@ -156,7 +156,27 @@ public class PostgresDialect extends AbstractSqlDialect {
         if ("SMALLINT".equals(base)) {
             return "SMALLSERIAL";
         }
+        // An identity declared over a wider numeric — Oracle's NUMBER, MySQL's BIGINT
+        // UNSIGNED — maps to DECIMAL(p,0), and SERIAL is a 32-bit INTEGER: every key above
+        // 2^31 would fail to insert. Take the 64-bit sequence once nine digits no longer fit.
+        if (base.startsWith("DECIMAL(") || base.startsWith("NUMERIC(")) {
+            return numericPrecision(base) > 9 ? "BIGSERIAL" : "SERIAL";
+        }
         return "SERIAL";
+    }
+
+    /** Declared precision of a rendered {@code DECIMAL(p,s)}; wide when it cannot be read. */
+    private static int numericPrecision(String type) {
+        int open = type.indexOf('(');
+        int end = type.indexOf(',', open);
+        if (end < 0) {
+            end = type.indexOf(')', open);
+        }
+        try {
+            return Integer.parseInt(type.substring(open + 1, end).trim());
+        } catch (RuntimeException e) {
+            return Integer.MAX_VALUE;
+        }
     }
 
     @Override

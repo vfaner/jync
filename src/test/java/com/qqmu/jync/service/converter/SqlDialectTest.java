@@ -241,6 +241,37 @@ class SqlDialectTest {
     }
 
     @Test
+    void wideOracleIdentityBecomesBigserialNotA32BitSerial() {
+        // Oracle identity columns are NUMBER, which maps to DECIMAL(19,0) here. SERIAL is a
+        // 32-bit INTEGER, so every key above 2^31 would fail to insert.
+        TableMeta table = new TableMeta();
+        table.setName("t");
+        ColumnMeta id = column("id", "NUMBER", Types.NUMERIC, 19);
+        id.setDecimalDigits(0);
+        id.setNullable(false);
+        id.setAutoIncrement(true);
+        id.setPrimaryKey(true);
+        table.setColumns(List.of(id));
+        table.setPrimaryKeys(List.of("id"));
+
+        String ddl = postgres.getCreateTableSql(table, null, "t", DatabaseType.ORACLE);
+        assertThat(ddl).contains("BIGSERIAL");
+
+        // The ordinary INT identity keeps the narrow form: widening every sequence would
+        // change existing target schemas for no gain.
+        ColumnMeta intId = column("id", "INT", Types.INTEGER, 10);
+        intId.setNullable(false);
+        intId.setAutoIncrement(true);
+        intId.setPrimaryKey(true);
+        TableMeta intTable = new TableMeta();
+        intTable.setName("t");
+        intTable.setColumns(List.of(intId));
+        intTable.setPrimaryKeys(List.of("id"));
+        assertThat(postgres.getCreateTableSql(intTable, null, "t", DatabaseType.MYSQL))
+                .contains("\"id\" SERIAL");
+    }
+
+    @Test
     void db2IdentityColumnIsNotFollowedByNotNull() {
         // DB2's grammar is "<type> [NOT NULL] GENERATED ... AS IDENTITY"; appending NOT NULL
         // AFTER the identity clause is a syntax error (SQL0104). Identity columns are
@@ -384,6 +415,16 @@ class SqlDialectTest {
         col.setDefaultValue("'active'::character varying");
         // The cast must be stripped or the target will reject the literal.
         assertThat(mysql.renderDefaultValue(col)).isEqualTo("'active'");
+    }
+
+    @Test
+    void aCastInsideTheLiteralIsNotMistakenForATrailingCast() {
+        // PostgreSQL appends the column cast after the literal. The literal itself may
+        // contain "::", and stripping at the first occurrence truncates the default into an
+        // unterminated string, which the target rejects with a syntax error.
+        ColumnMeta col = column("pattern", "VARCHAR", Types.VARCHAR, 20);
+        col.setDefaultValue("'a::b'::character varying");
+        assertThat(mysql.renderDefaultValue(col)).isEqualTo("'a::b'");
     }
 
     @Test
