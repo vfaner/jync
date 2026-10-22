@@ -254,6 +254,8 @@
                     <dd th:text="${stats.unmappable}">0</dd>
                     <dt th:text="#{cdc.status.zero.date}">Zero dates</dt>
                     <dd th:text="${stats.zeroDateCoerced}">0</dd>
+                    <dt th:text="#{cdc.status.skipped.missinglob}">Missing-LOB changes skipped</dt>
+                    <dd th:text="${stats.skippedMissingLob}">0</dd>
                 </th:block>
                 <th:block th:if="${lastErrorShort != null}">
                     <dt th:text="#{cdc.status.lastError}">Last error</dt>
@@ -267,6 +269,14 @@
                      th:text="#{cdc.status.unsupported.tables}">No-PK tables</div>
                 <span class="badge badge-warn mono" style="margin:0 6px 6px 0"
                       th:each="tbl : ${stats.unsupportedTables}" th:text="${tbl}">db.tbl</span>
+            </div>
+            <!--/* LogMiner 行外 LOB:按表给出跳过数,便于判断是单表问题还是普遍的 LOB 表。 */-->
+            <div th:if="${stats != null and !#maps.isEmpty(stats.missingLobByTable)}" style="margin-top:12px">
+                <div class="small muted" style="margin-bottom:6px"
+                     th:text="#{cdc.status.missinglob.tables}">Tables with unrecoverable LOB changes</div>
+                <span class="badge badge-warn mono" style="margin:0 6px 6px 0"
+                      th:each="entry : ${stats.missingLobByTable}"
+                      th:text="${entry.key} + ' (' + ${entry.value} + ')'">db.tbl (12)</span>
             </div>
         </div>
     </div>

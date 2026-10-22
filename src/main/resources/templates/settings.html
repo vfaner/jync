@@ -341,6 +341,85 @@
         </div>
     </div>
 
+    <!-- 大字段：v1.7.8 引入的流式/落盘子系统，只在排查内存或临时文件问题时才需要改 -->
+    <div class="card">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#hdd-network"/></svg>
+                <span th:text="#{settings.lob}">Large objects and streaming</span></h2>
+        </div>
+        <div class="card-body">
+            <p class="small soft" style="margin:0 0 16px;max-width:1080px"
+               th:text="#{settings.lobNote}">note</p>
+            <dl class="dl pairs">
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobStreaming}">Streaming LOB reads and writes</dt>
+                    <dd>
+                        <span class="chip"
+                              th:text="${properties.lob.streamingEnabled} ? #{settings.lobOn} : #{settings.lobOff}">on</span>
+                        <div class="help" th:text="#{settings.lobStreamingHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobInline}">In-memory inline threshold</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.lob.inlineMaxBytes} + ' B'">65536 B</span>
+                        <div class="help" th:text="#{settings.lobInlineHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobCdcSpill}">CDC spill threshold</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.lob.cdcSpillThresholdBytes} + ' B'">1048576 B</span>
+                        <div class="help" th:text="#{settings.lobCdcSpillHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobBatchBudget}">Per-batch byte budget</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.lob.batchMaxBytes} + ' B'">16777216 B</span>
+                        <div class="help" th:text="#{settings.lobBatchBudgetHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobSourceStreaming}">Source-side streaming reads</dt>
+                    <dd>
+                        <span class="chip"
+                              th:text="${properties.lob.enableSourceStreaming} ? #{settings.lobOn} : #{settings.lobOff}">on</span>
+                        <div class="help" th:text="#{settings.lobSourceStreamingHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobSpillDir}">Spill directory</dt>
+                    <dd>
+                        <span class="chip mono" th:text="${properties.lob.spillDir}">/tmp/jync-lob</span>
+                        <div class="help" th:text="#{settings.lobSpillDirHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobSpillMax}">Spill capacity ceiling</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.lob.spillMaxBytes} + ' B'">1073741824 B</span>
+                        <div class="help" th:text="#{settings.lobSpillMaxHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobRetention}">Spill cleanup retention</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.lob.spillRetentionHours} + ' h'">24 h</span>
+                        <div class="help" th:text="#{settings.lobRetentionHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.lobMissingLobPolicy}">LogMiner missing-LOB policy</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.cdc.logminer.missingLobPolicy}">skip</span>
+                        <div class="help" th:text="#{settings.lobMissingLobPolicyHelp}">help</div>
+                    </dd>
+                </div>
+            </dl>
+        </div>
+    </div>
+
     <!-- 版本信息：当前版本、GitHub 最新版本、当前版本更新内容 -->
     <div class="card" id="version-info">
         <div class="card-head">

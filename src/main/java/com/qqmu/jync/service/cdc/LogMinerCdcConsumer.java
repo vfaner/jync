@@ -56,6 +56,8 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     /** DDL SQL_REDO truncation for WARN logs — same cap as the binlog handler (200 chars). */
     private static final int DDL_LOG_SQL_CHARS = 200;
+    /** Named in warnings and in the fail-policy park message, so the remedy is searchable. */
+    static final String MISSING_LOB_POLICY_KEY = "sync.cdc.logminer.missing-lob-policy";
     /** Parse strike-out: same threshold as {@link CdcConsumer} (5 consecutive poison rows). */
     static final int MAX_PARSE_FAILURES = 5;
     /**
@@ -440,11 +442,50 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 }
                 SqlRedoParser.ParsedChange parsed = parser.parse(op, row.sqlRedo, binding);
                 if (parsed.op == null) {
+                    boolean missingColumns = !parsed.missingColumns.isEmpty();
+                    if (missingColumns) {
+                        // Out-of-line LOBs are structural: every change to the table will hit
+                        // this. Report them as their own class with a throttled warning, so a
+                        // hot table cannot flood the log and the operator still sees the drift.
+                        String tableKey = row.segOwner + "." + row.tableName;
+                        CdcRuntimeStats.MissingLobHit hit = stats.recordMissingLob(tableKey,
+                                properties.getLob().getMetricsLogIntervalMs());
+                        if (hit.warnDue()) {
+                            log.warn("{} change(s) on {} skipped so far: the redo text carries"
+                                    + " no value for column(s) {} (out-of-line LOB — LogMiner"
+                                    + " records the row without the LOB content). The target"
+                                    + " row keeps its previous version; run a full sync of the"
+                                    + " table (policy {}={}) to catch up.",
+                                    hit.count(), tableKey,
+                                    String.join(", ", parsed.missingColumns),
+                                    MISSING_LOB_POLICY_KEY, missingLobPolicy());
+                        }
+                        if (missingLobPolicyFail()) {
+                            // Fail loudly at the first such change and never advance the
+                            // position past it: the stream is now permanently incomplete.
+                            parseFailures.set(MAX_PARSE_FAILURES + 1);
+                            // The policy key leads the message: the park detail is
+                            // truncated downstream, and this is the part users search for.
+                            throw new IllegalStateException(MISSING_LOB_POLICY_KEY + "=fail: "
+                                    + tableKey + " change carries no value for column(s) "
+                                    + String.join(", ", parsed.missingColumns)
+                                    + " (out-of-line LOB). Applying it would NULL those"
+                                    + " target columns, so the project is parked here and"
+                                    + " the position is not advanced; run a full sync of "
+                                    + tableKey + " and set the policy back to skip to continue.");
+                        }
+                    }
                     parseFailures.incrementAndGet();
                     stats.addSkippedUnsupported(1);
-                    log.warn("Skipping {} row on {}.{}: {} (sample: {})", row.operation,
-                            row.segOwner, row.tableName, parsed.unsupportedReason,
-                            truncate(row.sqlRedo, 120));
+                    if (missingColumns) {
+                        // The throttled warning above already names the table and the tally.
+                        log.debug("Skipping {} row on {}.{}: {}", row.operation,
+                                row.segOwner, row.tableName, parsed.unsupportedReason);
+                    } else {
+                        log.warn("Skipping {} row on {}.{}: {} (sample: {})", row.operation,
+                                row.segOwner, row.tableName, parsed.unsupportedReason,
+                                truncate(row.sqlRedo, 120));
+                    }
                     continue;
                 }
                 // H3 fix: a successfully parsed row resets the consecutive-failure counter.
@@ -559,6 +600,16 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             return false;
         }
         return ctx.getConfig().includesTable(table);
+    }
+
+    /** Configured policy; anything unrecognised is read as the default, {@code skip}. */
+    private String missingLobPolicy() {
+        String policy = properties.getCdc().getLogminer().getMissingLobPolicy();
+        return policy == null || policy.isBlank() ? "skip" : policy.trim();
+    }
+
+    private boolean missingLobPolicyFail() {
+        return "fail".equalsIgnoreCase(missingLobPolicy());
     }
 
     private boolean parseStrikeOut() {

@@ -31,6 +31,9 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <lombok.version>1.18.30</lombok.version>
+        <!-- JVM args for the forked test JVM; the lob-memory-it profile sets a small heap
+             so PostgresToOracleLobIT proves the LOB read path does not buffer whole values. -->
+        <jync.test.jvmArgs></jync.test.jvmArgs>
     </properties>
 
     <dependencies>
@@ -331,6 +334,13 @@
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>${jync.test.jvmArgs}</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <annotationProcessorPaths>
@@ -344,4 +354,15 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Runs the optional memory-bound LOB IT in a 96 MB heap:
+             mvn test -Dtest=PostgresToOracleLobIT -Djync.lob.memoryIT=true -Plob-memory-it -->
+        <profile>
+            <id>lob-memory-it</id>
+            <properties>
+                <jync.test.jvmArgs>-Xmx96m</jync.test.jvmArgs>
+            </properties>
+        </profile>
+    </profiles>
 </project>

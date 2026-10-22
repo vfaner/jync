@@ -266,6 +266,14 @@ public class SyncProperties {
             private long batchSize = 10_000L;
             /** Idle poll interval when the mining session drained the redo stream. */
             private long idlePollMs = 1_000L;
+            /**
+             * What to do when a change cannot be reproduced because a LOB is stored out of
+             * line (LogMiner's SQL_REDO simply has no value for the column): {@code skip}
+             * counts it, warns with the table name and keeps the project running; {@code
+             * fail} parks the project at the first such change without advancing the
+             * position. Anything else is read as {@code skip}.
+             */
+            private String missingLobPolicy = "skip";
         }
 
         @Getter

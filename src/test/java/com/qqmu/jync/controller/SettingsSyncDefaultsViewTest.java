@@ -131,13 +131,39 @@ class SettingsSyncDefaultsViewTest {
         assertThat(page).contains("SQL Server CDC 批次");
     }
 
+    /**
+     * v1.7.8 added a whole LOB subsystem (streaming, spill-to-disk, source read
+     * transactions, the LogMiner policy) whose knobs a user can only discover from this
+     * page or the YAML. They get their own card, translated in both languages.
+     */
+    @Test
+    void largeObjectParametersHaveTheirOwnCard() throws Exception {
+        String page = render(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(page).contains("大字段与流式");
+        assertThat(page).contains("流式读写");
+        assertThat(page).contains("内存内联阈值");
+        assertThat(page).contains("CDC 落盘阈值");
+        assertThat(page).contains("单批字节预算");
+        assertThat(page).contains("源端流式读取");
+        assertThat(page).contains("落盘目录");
+        assertThat(page).contains("落盘容量上限");
+        assertThat(page).contains("清理保留期");
+        assertThat(page).contains("LogMiner 缺失 LOB 策略");
+        assertThat(page).contains("65536");
+        assertThat(page).contains("skip");
+    }
+
     @Test
     void englishPageTranslatesEveryNewLabel() throws Exception {
         String page = render(Locale.ENGLISH);
 
         assertThat(page).contains("Full-load performance");
         assertThat(page).contains("CDC engine parameters");
+        assertThat(page).contains("Large objects and streaming");
+        assertThat(page).contains("LogMiner missing-LOB policy");
         assertThat(page).doesNotContain("全量加载性能");
+        assertThat(page).doesNotContain("大字段与流式");
         assertThat(page).doesNotContain("??settings.");
     }
 }

@@ -48,6 +48,7 @@ Stack: Spring Boot 2.7 monolith + Thymeleaf server-side rendering + Quartz sched
 - [Log CDC (Oracle LogMiner)](#log-cdc-oracle-logminer)
 - [Log CDC (PostgreSQL logical decoding)](#log-cdc-postgresql-logical-decoding)
 - [Log CDC (SQL Server CDC)](#log-cdc-sql-server-cdc)
+- [Large Objects and Streaming](#large-objects-and-streaming-v178)
 - [Configuration](#configuration)
 - [AI-Assisted Conversion (optional)](#ai-assisted-conversion-optional)
 - [Architecture](#architecture)
@@ -940,6 +941,26 @@ While CDC runs, the change log is **aggregated per table**: at most one row per 
 
 ---
 
+## Large Objects and Streaming (v1.7.8)
+
+Large text (`LONGTEXT` / `CLOB` / `TEXT` / `NVARCHAR(MAX)`) and large binary (`LONGBLOB` / `BLOB` / `BYTEA` / `VARBINARY(MAX)`) values can dwarf an ordinary column. Before 1.7.7 every value was read whole into the heap and bound whole, which both hit Oracle's bind limit and exhausted memory on large tables. v1.7.8 separates reading, binding and CDC buffering:
+
+- **Read** — columns declared as large objects go through `getCharacterStream` / `getBinaryStream`. Values up to `inline-max-bytes` (64 KB by default) still sit in memory; larger ones are consumed in chunks.
+- **Write** — an Oracle target binds through a temporary `CLOB` / `BLOB` (the `USING` projection of `MERGE` caps a `String` bind at 32767 bytes, which is `ORA-01461`; a temporary LOB is the only working form, and plain `INSERT` uses it too). Other dialects bind streams. An empty string bound to an Oracle `CLOB` target becomes an empty `CLOB` instead of `NULL` (`VARCHAR2` / `CHAR` targets keep Oracle's `NULL` semantics).
+- **Batches** — committed by `batch-max-bytes` as well as row count; a value over the budget gets a batch of its own. A one-shot stream never enters a JDBC batch: the batch flushes first and the row executes alone.
+- **CDC** — a buffered transaction value above `cdc-spill-threshold-bytes` (1 MB by default) is written to `spill-dir` and deleted on commit, rollback, DDL, a dropped stream or stop. Total spill is bounded by `spill-max-bytes`. Files left by an abnormal exit are removed at the next startup per `spill-retention-hours`, and only `jync-lob-*` prefixed files are touched.
+- **Source transaction** — PostgreSQL / openGauss sources hold a read-only transaction for the duration of the read; under autocommit the JDBC driver ignores fetch size and buffers the whole result set. The cost is that the source's vacuum is held off while the read runs; `enable-source-streaming=false` turns it off.
+
+**Limits you must know**
+
+- **Not zero-copy.** Oracle `MERGE` requires a server-side temporary LOB; emulated upserts (dialects without a native upsert) and CDC replay bind the same value more than once, so those values must be replayable (in memory or on disk). MySQL still caps a single value at `max_allowed_packet`, which must exceed the largest row on the source.
+- **Memory is bounded by "one value × fetch size", not by the table.** Jync no longer accumulates the result set, the batch or the whole transaction, but a JDBC driver always materializes the current value. PostgreSQL's `getCharacterStream` decodes the value into a `String` inside the driver (roughly 2-3x its UTF-8 size), and with a fetch size the driver holds up to `full-load-fetch-size` rows' raw bytes. A PostgreSQL source with multi-megabyte values should therefore also lower `full-load-fetch-size` (1-10), and the heap must hold at least 3x the largest single value.
+- **Out-of-line LOBs cannot be reconstructed by LogMiner.** When the LOB is stored out of line, `SQL_REDO` carries no value, and querying it back would break transaction order — so the change is either skipped or fails. Default `skip` counts it, warns per table with a throttle and continues; `fail` parks at the first such change without advancing the position. Both are visible on the CDC status panel; recover by rebuilding the baseline or switching to polling.
+- **PK, cursor and cleansed columns must be materialized.** Exceeding `force-inline-max-bytes` fails with the table, column and config key named — never a silent truncation.
+- Vendor primitives degrade: `ENUM` / `SET` → `VARCHAR`, `XMLTYPE` / `XML` → `CLOB`, geometry → `WKB` binary, `SQL_VARIANT` loses its type.
+
+---
+
 ## Configuration
 
 Under `sync.*` in `application.yml`:
@@ -972,6 +993,18 @@ Under `sync.*` in `application.yml`:
 | `sync.cdc.pg.idle-poll-ms` | `500` | Idle sleep (ms) for PG logical decoding |
 | `sync.cdc.mssql.idle-poll-ms` | `1000` | Idle sleep (ms) for SQL Server CDC |
 | `sync.cdc.change-window-ms` | `10000` | Per-table CDC change-log aggregation window (ms); `0` disables aggregated entries |
+| `sync.cdc.logminer.missing-lob-policy` | `skip` | When an out-of-line LOB cannot be reconstructed from redo: `skip` counts it, warns and continues; `fail` parks at the first such change without advancing the position |
+| `sync.lob.streaming-enabled` | `true` | Master switch for large-field streaming; `false` restores the 1.7.7 whole-value read |
+| `sync.lob.inline-max-bytes` | `65536` | Values up to this many bytes stay on the heap |
+| `sync.lob.cdc-spill-threshold-bytes` | `1048576` | A single value above this many bytes spills to disk while a CDC transaction is buffered |
+| `sync.lob.batch-max-bytes` | `16777216` | Approximate byte budget per JDBC batch; reaching it commits early; `0` disables the check |
+| `sync.lob.force-inline-max-bytes` | `1048576` | Materialization ceiling for PK, cursor and cleansed columns; exceeding it fails with the table and column named |
+| `sync.lob.spill-dir` | `${java.io.tmpdir}/jync-lob` | Spill directory, created on demand; only this tool's prefixed files are cleaned up |
+| `sync.lob.spill-max-bytes` | `1073741824` | Disk ceiling for one CDC session; `0` means unlimited |
+| `sync.lob.spill-retention-hours` | `24` | Startup cleanup removes leftover temp files older than this |
+| `sync.lob.enable-source-streaming` | `true` | PostgreSQL/openGauss sources hold a read-only transaction during the read (without it fetch size is ignored) |
+| `sync.lob.oracle-empty-string-as-empty-clob` | `true` | An empty string bound to an Oracle CLOB target becomes an empty CLOB, not NULL |
+| `sync.lob.metrics-log-interval-ms` | `60000` | Interval for LOB statistics logs and throttled warnings (ms) |
 | `crypto-password` | *(default)* | Password encryption key — **must be changed in production** |
 | `crypto-salt` | *(default)* | Encryption salt (hex) — **must be changed in production** |
 | `ai.enabled` | `true` | Whether AI-assisted conversion may be configured. `false` removes the menu and its endpoints |

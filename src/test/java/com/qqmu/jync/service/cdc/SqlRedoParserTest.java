@@ -89,6 +89,32 @@ class SqlRedoParserTest {
         assertThat(c.unsupportedReason).contains("CLOB_IN");
     }
 
+    /**
+     * The refusal has to say <em>which</em> columns were missing, not just "unsupported":
+     * the CDC pipeline counts and warns about out-of-line LOBs separately from every other
+     * unparseable statement, and that classification comes from this list.
+     */
+    @Test
+    void aRefusalCausedByMissingColumnsNamesThem() {
+        String sql = "update \"SRC\".\"OG_LOB\" set \"BLOB_IN\" = HEXTORAW('deadbeef')"
+                + " where \"ID\" = '1' and ROWID = 'AAAR4TAAYAAAAALAAA';";
+
+        SqlRedoParser.ParsedChange c =
+                parser.parse(SqlRedoParser.Op.UPDATE, sql, lobBinding());
+
+        assertThat(c.missingColumns).containsExactly("CLOB_IN");
+    }
+
+    /** Every other refusal is a parse problem, not a missing-LOB problem. */
+    @Test
+    void otherRefusalsCarryNoMissingColumns() {
+        SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE,
+                "update \"SRC\".\"SPIKE_T\" set \"NAME\" = 'x';", spikeBinding());
+
+        assertThat(c.op).isNull();
+        assertThat(c.missingColumns).isEmpty();
+    }
+
     @Test
     void updateCarryingUnchangedColumnsInTheWhereStillParses() {
         // 守护:补全日志生效时,未变更的列会出现在 WHERE 的旧镜像里(实机样本见下),

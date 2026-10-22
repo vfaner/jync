@@ -362,6 +362,26 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 
 ---
 
+## 大字段与流式（v1.7.8）
+
+大文本（`LONGTEXT` / `CLOB` / `TEXT` / `NVARCHAR(MAX)`）与大二进制（`LONGBLOB` / `BLOB` / `BYTEA` / `VARBINARY(MAX)`）的值可能远大于普通列。1.7.7 之前每个值都整块读入堆内存并整块绑定，既会撞上 Oracle 的绑定上限，也会让大表全量耗尽内存。1.7.8 把读取、绑定和 CDC 缓冲分开处理：
+
+- **读**：声明为大字段的列走 `getCharacterStream` / `getBinaryStream`。不超过 `inline-max-bytes`（默认 64 KB）的值仍在内存中，超过的部分按块消费。
+- **写**：Oracle 目标用临时 `CLOB` / `BLOB` 绑定（`MERGE` 的 `USING` 投影对 `String` 的绑定上限是 32767 字节，超过即 `ORA-01461`，临时 LOB 是唯一可行写法；普通 `INSERT` 同样适用）；其他方言走流式绑定。空串写入 Oracle `CLOB` 目标时绑定为空 `CLOB` 而非 `NULL`（`VARCHAR2` / `CHAR` 目标仍按 Oracle 语义存 `NULL`）。
+- **批**：按 `batch-max-bytes` 而非仅按行数提交；单个值超过预算时独占一批。一次性流不会进入 JDBC batch，会先提交再单行执行。
+- **CDC**：事务缓冲中超过 `cdc-spill-threshold-bytes`（默认 1 MB）的值先落到 `spill-dir`，提交、回滚、DDL、断流与停止时删除；落盘总量受 `spill-max-bytes` 约束。异常退出留下的文件在下次启动时按 `spill-retention-hours` 清理，只删除 `jync-lob-*` 前缀。
+- **源端事务**：PostgreSQL / openGauss 源库在流式读取期间保持一个只读事务——JDBC 驱动在 autocommit 下会忽略 fetch size 并缓冲整个结果集。代价是读取期间源库的 vacuum 被推迟；`enable-source-streaming=false` 可关闭。
+
+**边界（必须知道）**
+
+- **不是零拷贝**：Oracle `MERGE` 必须使用服务端临时 LOB；模拟 upsert（非原生 upsert 的方言）与 CDC 重放要求同一个值绑定多次，因此这些值必须可重放（内存或落盘）。MySQL 单个值仍受 `max_allowed_packet` 限制，源库该参数须大于最大的单行。
+- **内存上限是「单值 × 读取批量」而不是整表**：Jync 不再累积结果集、批次或整个事务，但 JDBC 驱动总会物化当前值。PostgreSQL 的 `getCharacterStream` 会在驱动内部把值解码成 `String`（约为 UTF-8 字节数的 2-3 倍），并且带 fetch size 时驱动会持有最多 `full-load-fetch-size` 行的原始字节。因此 PG 源库若有数 MB 的大字段，应同时调低 `full-load-fetch-size`（例如 1-10），并让堆大小至少容纳最大单值的 3 倍。
+- **LogMiner 行外 LOB 无法还原**：LOB 存放在行外时 `SQL_REDO` 没有取值，回查会破坏事务顺序，因此只能跳过或失败。默认 `skip`：计数、按表和间隔告警后继续；`fail` 停在第一条此类变更且不推进位点。两者都在 CDC 状态面板可见，补救方式是重建基线或改用轮询。
+- **清洗列与主键列必须物化**：超过 `force-inline-max-bytes` 会明确报错并指明表、列与配置键，不会静默截断。
+- 厂商原语会降级：`ENUM` / `SET` → `VARCHAR`、`XMLTYPE` / `XML` → `CLOB`、几何 → `WKB` 二进制、`SQL_VARIANT` 丢失类型信息。
+
+---
+
 ## 配置项
 
 `application.yml` 的 `sync.*`：
@@ -392,6 +412,18 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 | `sync.cdc.pg.idle-poll-ms` | `500` | PG 逻辑解码真空闲时的休眠间隔（毫秒） |
 | `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲时的休眠间隔（毫秒） |
 | `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口（毫秒）；`0` 关闭聚合落点 |
+| `sync.cdc.logminer.missing-lob-policy` | `skip` | 行外 LOB 无法从 redo 还原时：`skip` 计数 + 限流告警后继续，`fail` 停在第一条此类变更且不推进位点 |
+| `sync.lob.streaming-enabled` | `true` | 大字段流式总开关；`false` 回到 1.7.7 的整块读取 |
+| `sync.lob.inline-max-bytes` | `65536` | 不超过该字节数的值留在堆内存 |
+| `sync.lob.cdc-spill-threshold-bytes` | `1048576` | CDC 事务缓冲中单个值超过该字节数先落盘 |
+| `sync.lob.batch-max-bytes` | `16777216` | 单批累计字节预算，达到即提交；`0` 不检查 |
+| `sync.lob.force-inline-max-bytes` | `1048576` | 主键/游标/清洗列的物化上限，超出报错并指明表与列 |
+| `sync.lob.spill-dir` | `${java.io.tmpdir}/jync-lob` | 落盘目录，按需创建；只清理本工具前缀的文件 |
+| `sync.lob.spill-max-bytes` | `1073741824` | 单个 CDC 会话的磁盘上限；`0` 不限制 |
+| `sync.lob.spill-retention-hours` | `24` | 启动时清理超过该时长的遗留临时文件 |
+| `sync.lob.enable-source-streaming` | `true` | PG/openGauss 源端读取期间保持只读事务（否则 fetch size 不生效） |
+| `sync.lob.oracle-empty-string-as-empty-clob` | `true` | 空串写入 Oracle CLOB 目标时保留为空 CLOB 而非 NULL |
+| `sync.lob.metrics-log-interval-ms` | `60000` | LOB 统计日志与限流告警的间隔（毫秒） |
 | `crypto-password` / `crypto-salt` | *(留空即首启自动生成)* | 连接密码的加密密钥与盐（十六进制）。留空则首次启动生成并保存到 `<库名>.key`（与数据库同目录，须随数据库一起备份）；显式配置则以配置为准 |
 | `ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
 | `app.update-check.enabled` | `true` | 新版本检查（GitHub 优先、Gitee 兜底）；关闭后系统信息页不再出现升级入口 |

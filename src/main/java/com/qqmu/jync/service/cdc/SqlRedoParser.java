@@ -45,19 +45,31 @@ public class SqlRedoParser {
         /** Upper-case column name → canonical value (null for SQL NULL). */
         public final Map<String, Object> row;
         public final String unsupportedReason;
+        /**
+         * The binding columns the redo text carried no value for; empty for every refusal
+         * that is not a missing-column one. Out-of-line LOBs are the normal cause, and the
+         * consumer reports this class separately from ordinary parse failures.
+         */
+        public final List<String> missingColumns;
 
-        private ParsedChange(Op op, Map<String, Object> row, String unsupportedReason) {
+        private ParsedChange(Op op, Map<String, Object> row, String unsupportedReason,
+                             List<String> missingColumns) {
             this.op = op;
             this.row = row;
             this.unsupportedReason = unsupportedReason;
+            this.missingColumns = missingColumns == null ? List.of() : List.copyOf(missingColumns);
         }
 
         public static ParsedChange unsupported(String reason) {
-            return new ParsedChange(null, null, reason);
+            return new ParsedChange(null, null, reason, List.of());
+        }
+
+        static ParsedChange missingValues(String reason, List<String> missingColumns) {
+            return new ParsedChange(null, null, reason, missingColumns);
         }
 
         static ParsedChange of(Op op, Map<String, Object> row) {
-            return new ParsedChange(op, row, null);
+            return new ParsedChange(op, row, null, List.of());
         }
     }
 
@@ -219,14 +231,14 @@ public class SqlRedoParser {
         if (missing.isEmpty()) {
             return null;
         }
-        return ParsedChange.unsupported(op + ": redo text carries no value for column(s) "
+        return ParsedChange.missingValues(op + ": redo text carries no value for column(s) "
                 + String.join(", ", missing)
                 + " — LogMiner renders only what the redo record holds, and neither out-of-line"
                 + " LOB content nor (under MINIMAL supplemental logging) the unchanged values of"
                 + " an UPDATE are recorded. Applying this change would NULL those target"
                 + " column(s) instead. The whole change is skipped so the target row keeps its"
                 + " previous consistent version; add SUPPLEMENTAL LOG DATA (ALL) COLUMNS on the"
-                + " source table so updates carry the full old image.");
+                + " source table so updates carry the full old image.", missing);
     }
 
     // —— DELETE ——

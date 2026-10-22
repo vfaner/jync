@@ -63,6 +63,16 @@ public final class CdcRuntimeStats {
     private final AtomicLong skippedUnsupported = new AtomicLong();
     private final AtomicLong unmappable = new AtomicLong();
     private final AtomicLong zeroDateCoerced = new AtomicLong();
+    /**
+     * Rows refused because the redo text carried no value for one of their columns — in
+     * practice an out-of-line LOB. Kept apart from {@code skippedUnsupported} so the user
+     * can tell "LogMiner structurally cannot reproduce this table" from "we don't parse
+     * this statement".
+     */
+    private final AtomicLong skippedMissingLob = new AtomicLong();
+    /** Per-table tallies of the same, plus each table's last warning time (throttling). */
+    private final ConcurrentMap<String, MissingLobTable> missingLobTables =
+            new ConcurrentSkipListMap<>(String.CASE_INSENSITIVE_ORDER);
 
     /** Tables CDC cannot handle here (no PK, unsupported engine); ordered for stable UI display. */
     private final Set<String> unsupportedTables =
@@ -128,6 +138,52 @@ public final class CdcRuntimeStats {
 
     public void addZeroDateCoerced(long n) {
         zeroDateCoerced.addAndGet(n);
+    }
+
+    // —— missing columns (out-of-line LOBs) ——
+
+    /** One table's running tally and whether a warning is due now. */
+    public record MissingLobHit(long count, boolean warnDue) { }
+
+    private static final class MissingLobTable {
+        private long count;
+        private long lastWarnMillis;
+    }
+
+    /**
+     * Counts one skipped change against the table and decides whether it is time to warn.
+     * The decision lives here, not in the caller, so the throttle is testable without
+     * capturing logs.
+     */
+    public MissingLobHit recordMissingLob(String table, long warnIntervalMs) {
+        String key = table == null || table.isEmpty() ? "(unknown table)" : table;
+        long now = clockMillis.getAsLong();
+        long interval = Math.max(0L, warnIntervalMs);
+        long[] count = {0L};
+        boolean[] due = {false};
+        missingLobTables.compute(key, (k, existing) -> {
+            MissingLobTable tally = existing != null ? existing : new MissingLobTable();
+            tally.count++;
+            if (now - tally.lastWarnMillis >= interval) {
+                tally.lastWarnMillis = now;
+                due[0] = true;
+            }
+            count[0] = tally.count;
+            return tally;
+        });
+        skippedMissingLob.incrementAndGet();
+        return new MissingLobHit(count[0], due[0]);
+    }
+
+    public long getSkippedMissingLob() {
+        return skippedMissingLob.get();
+    }
+
+    /** Per-table skipped counts, ordered for stable UI display. */
+    public Map<String, Long> missingLobByTable() {
+        Map<String, Long> copy = new LinkedHashMap<>();
+        missingLobTables.forEach((table, tally) -> copy.put(table, tally.count));
+        return Collections.unmodifiableMap(copy);
     }
 
     /** Rows actually written downstream: upserts plus deletes. */
@@ -337,6 +393,8 @@ public final class CdcRuntimeStats {
         snapshot.put("skippedUnsupported", skippedUnsupported.get());
         snapshot.put("unmappable", unmappable.get());
         snapshot.put("zeroDateCoerced", zeroDateCoerced.get());
+        snapshot.put("skippedMissingLob", skippedMissingLob.get());
+        snapshot.put("missingLobByTable", missingLobByTable());
         snapshot.put("unsupportedTables", new LinkedHashSet<>(unsupportedTables));
         return snapshot;
     }
