@@ -95,6 +95,16 @@ public interface SqlDialect {
     }
 
     /**
+     * Returns this dialect with the empty-string LOB rescue switched on or off, for
+     * {@code sync.lob.oracle-empty-string-as-empty-clob}. Dialects that have no rescue
+     * return themselves unchanged; the ones that do carry the choice into every instance
+     * they derive (for example a version-specific copy rebuilt for a target server).
+     */
+    default SqlDialect withEmptyStringAsLob(boolean enabled) {
+        return this;
+    }
+
+    /**
      * The JDBC type a value should be bound with for a column whose target type is
      * {@code effectiveType} (the mapped target type, not the source's). Dialects whose LOB
      * placeholders need to be typed override this; everyone else keeps the effective type.

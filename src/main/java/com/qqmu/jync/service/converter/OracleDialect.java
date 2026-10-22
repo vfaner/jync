@@ -25,17 +25,34 @@ public class OracleDialect extends AbstractSqlDialect {
     /** Null = unknown, in which case modern syntax (IDENTITY, 12c+) is assumed. */
     private final Integer majorVersion;
 
+    /**
+     * Whether an empty string bound into a CLOB target becomes an empty non-null CLOB.
+     * Defaults to true; {@code sync.lob.oracle-empty-string-as-empty-clob=false} restores
+     * Oracle's native ''→NULL semantics for installations that relied on them.
+     */
+    private final boolean emptyStringAsLob;
+
     public OracleDialect() {
         this(null);
     }
 
     public OracleDialect(Integer majorVersion) {
+        this(majorVersion, true);
+    }
+
+    private OracleDialect(Integer majorVersion, boolean emptyStringAsLob) {
         this.majorVersion = majorVersion;
+        this.emptyStringAsLob = emptyStringAsLob;
     }
 
     @Override
     public SqlDialect withServerMajorVersion(Integer majorVersion) {
-        return majorVersion == null ? new OracleDialect() : new OracleDialect(majorVersion);
+        return new OracleDialect(majorVersion, emptyStringAsLob);
+    }
+
+    @Override
+    public SqlDialect withEmptyStringAsLob(boolean enabled) {
+        return new OracleDialect(majorVersion, enabled);
     }
 
     /**
@@ -195,7 +212,7 @@ public class OracleDialect extends AbstractSqlDialect {
 
     @Override
     public boolean bindsEmptyStringAsLob() {
-        return true;
+        return emptyStringAsLob;
     }
 
     @Override

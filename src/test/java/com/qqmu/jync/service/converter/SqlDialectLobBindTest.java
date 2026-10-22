@@ -36,6 +36,19 @@ class SqlDialectLobBindTest {
     }
 
     @Test
+    void theEmptyStringRescueCanBeSwitchedOffAndSurvivesAReversion() {
+        // sync.lob.oracle-empty-string-as-empty-clob=false must actually restore the old
+        // ''→NULL binding; a setting that is documented but ignored is worse than none.
+        SqlDialect off = new OracleDialect().withEmptyStringAsLob(false);
+        assertThat(off.bindsEmptyStringAsLob()).isFalse();
+        // The per-target instance is rebuilt from the server version; the switch rides along
+        // so a 19c→11g downgrade cannot silently re-enable the rescue.
+        assertThat(off.withServerMajorVersion(11).bindsEmptyStringAsLob()).isFalse();
+        assertThat(new OracleDialect().withEmptyStringAsLob(true).bindsEmptyStringAsLob())
+                .isTrue();
+    }
+
+    @Test
     void onlyOracleNeedsAServerSideLobForAStreamedValue() {
         // Oracle's MERGE placeholder is sent as a LONG; a stream bound directly would hit
         // the same 32767-byte ceiling. Copying into a temporary CLOB is the only way.

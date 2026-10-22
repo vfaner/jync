@@ -107,7 +107,12 @@ public class SyncContextFactory {
                 .targetReader(targetReader)
                 .sourceDialect(dialectFactory.forType(source.getType(), null, sourceFamily))
                 .targetDialect(dialectFactory.forType(target.getType(), targetMajorVersion,
-                        targetFamily))
+                                targetFamily)
+                        // sync.lob.oracle-empty-string-as-empty-clob reaches every bind path
+                        // through the dialect; only Oracle acts on it, everyone else returns
+                        // itself unchanged.
+                        .withEmptyStringAsLob(
+                                properties.getLob().isOracleEmptyStringAsEmptyClob()))
                 .batchSize(batchSize)
                 .fullLoadBatchSize(fullLoadBatchSize)
                 .fullLoadFetchSize(fullLoadFetchSize)

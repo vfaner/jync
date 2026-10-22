@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,6 +38,19 @@ class LobBinderStreamTest {
         StringWriter writer = new StringWriter();
         when(clob.setCharacterStream(1L)).thenReturn(writer);
         return writer;
+    }
+
+    @Test
+    void anEmptyStringIsLeftToTheDriverWhenTheRescueIsSwitchedOff() throws Exception {
+        PreparedStatement ps = mock(PreparedStatement.class);
+        Connection conn = mock(Connection.class);
+        when(ps.getConnection()).thenReturn(conn);
+
+        // With sync.lob.oracle-empty-string-as-empty-clob=false the caller binds '' itself
+        // and Oracle stores its usual NULL; no temporary CLOB may be created.
+        assertThat(LobBinder.bind(ps, 1, "", Types.CLOB,
+                new OracleDialect().withEmptyStringAsLob(false), LobBinder.NOOP)).isFalse();
+        verify(conn, never()).createClob();
     }
 
     @Test
