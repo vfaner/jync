@@ -23,6 +23,9 @@
 - **转发头信任范围过宽**：`X-Forwarded-For` / `X-Real-IP` 此前对任何私网直连都采信。内网部署中客户端本身就是私网地址，于是任何同网段用户都能逐次伪造来源 IP，使 5 次失败锁定形同虚设，并把伪造地址写进审计。现在只信任回环地址与 `app.security.trusted-proxies` 中显式列出的代理（支持 IPv4/IPv6 CIDR），配置写错会在启动时直接失败而不是静默退化。
 - **只读账号可以触发源库探测**：`GET /api/projects/{id}/cdc-probe` 会以管理员配置的凭据连接源库并执行探测查询，此前未列入管理员专属 GET，viewer 也能调用；现已收紧为管理员。
 - **依赖版本补齐**：Spring Boot 2.7.18 是 2.7 线最后一个 OSS 版本，其管理版本停在 2023 年。本次覆盖到同主版本线上后续发布的安全修复：Tomcat `9.0.83 → 9.0.123`、Spring Framework `5.3.31 → 5.3.39`、Spring Security `5.7.11 → 5.7.14`（分别覆盖 CVE-2024-24549 / CVE-2024-23672、CVE-2024-22243 / CVE-2024-22259、CVE-2024-22257）。
+- **默认口令账号可先改密再使用**：`admin` / `view` 仍使用初始口令 `123456` 时，登录后只能进入修改密码页，其他页面与 API 一律拒绝（页面重定向，API 返回 403 JSON），新口令也不能继续使用默认值。此前只能靠页面上的提醒，用户不改也能照常操作。
+- **既有安装的内置密钥仍是公开值**：数据库密码与 AI 密钥此前用源码里公开的默认密钥加密，等同明文。现在升级后首次启动会自动生成随机密钥，在一个事务里重加密全部已存密钥，提交成功后才落盘为 `<store>.key`；中途崩溃会在下次启动时按 `key.pending` 续做，无法解密的旧值则放弃迁移并保留原行为（不阻断启动）。显式配置 `sync.crypto-password` / `sync.crypto-salt` 的部署不受影响。
+- **表单绑定可覆盖不可编辑字段**：数据库连接与 AI 提供商的新增/编辑接口此前直接绑定 JPA 实体，手工构造的 POST 可以写入页面上不存在或不可编辑的字段（如已存密文、启用状态、上次测试结果）。现在改为专用表单对象，只接收页面实际提交的字段。
 
 ## 新功能
 
@@ -53,14 +56,15 @@
 - Oracle `MERGE` 大值绑定的行为变化只在目标为 Oracle 时生效，其他方言仍走流式绑定。
 - 配置项 `oracle-initial-load-insert-first` 更名 `initial-load-insert-first`；旧键仍可绑定，无需改 YAML。该开关现在同时作用于 MySQL 与 PostgreSQL 目标。
 - **部署了跨机反向代理的用户必须配置 `app.security.trusted-proxies`**（或环境变量 `JYN_TRUSTED_PROXIES`，逗号分隔的地址或 CIDR）。默认只信任回环地址；未配置时，经代理转发的请求一律按代理 IP 计算登录锁定与审计来源，多个用户会共用同一个锁定计数。同机（回环）代理无需配置。
+- **升级后首次启动会重加密已存凭据**：使用内置默认密钥的既有安装会在启动时生成 `./data/jync.key`（或与数据库同名的 `.key`）并重加密数据库密码与 AI 密钥。该文件是这些凭据的唯一密钥，必须随 `./data` 一起备份；丢失后已存密码无法恢复，需要重新录入。`jync.key.pending` 与 `jync.key.lock` 是迁移中的临时文件，无需备份。
 
 ## 测试
 
-- 1928 个单测：1927 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
+- 1959 个单测：1958 通过，1 个按环境条件跳过；`*IT` 需 Docker 另跑。
 - 新增/扩充的大字段集成测试：Oracle → MySQL（600 KB CLOB + 1 MB BLOB 的基线与增量 upsert）、SQL Server → Oracle（`NVARCHAR(MAX)` / `VARBINARY(MAX)` 的基线与增量 MERGE）、MySQL → Oracle（100k 汉字增量 MERGE、5 MB CLOB/BLOB、`NOT NULL CLOB` 空串、厂商类型）、Oracle → openGauss（行外 LOB 跳过）、MySQL CDC 事务落盘（2 MB 行、提交后无残留）、可选 PostgreSQL → Oracle 60 行 × 约 5 MB 大字段（300 MB 源数据，`-Plob-memory-it` 在 96 MB 堆下完成基线与增量 MERGE）。
 
 ## 升级
 
-- 替换 `jync.jar` 重启即可，无需数据库迁移。
+- 替换 `jync.jar` 重启即可，无需手工迁移。使用内置默认密钥的既有安装会在首次启动时自动重加密已存凭据，并生成需要随 `./data` 一起备份的 `.key` 文件。
 - 升级前备份 `./data` 与 `application.yml`。
 - 容器部署将镜像 tag 更新为 `jync:1.7.8`（Docker Compose 与 `deploy/k8s/` 清单已同步）。
