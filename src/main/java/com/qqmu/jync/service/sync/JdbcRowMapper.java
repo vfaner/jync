@@ -432,6 +432,17 @@ public final class JdbcRowMapper {
             // ("2026-10-13 12:34:56" → "13-10月-26 12.34.56.000000 下午"). Only text that
             // merely looks like a timestamp is at risk, and it must survive verbatim.
             Timestamp parsed = timestampFromText((String) value);
+            if (parsed == null && targetType == Types.TIME) {
+                // A TIME column reaches the binder as the server's literal text on every
+                // source (see readValue), and Oracle has no TIME type: structure sync
+                // creates it as TIMESTAMP. Bound verbatim, Oracle parses "12:34:56"
+                // through NLS_TIMESTAMP_FORMAT and rejects the batch — docker 实测
+                // 23ai Free: ORA-01843 "指定的月份无效", the time-of-day sibling of the
+                // DATETIME failure above. The parsed value carries 1970-01-01, the same
+                // anchor the driver applies to a java.sql.Time bound to Oracle DATE, so
+                // native temporal sources land identically.
+                parsed = timestampFromTimeOfDay((String) value);
+            }
             if (parsed == null) {
                 ps.setObject(idx, value);
             } else {
@@ -447,6 +458,29 @@ public final class JdbcRowMapper {
         String t = text.trim();
         try {
             return Timestamp.valueOf(t);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** Date the driver itself uses when a {@code java.sql.Time} lands on an Oracle DATE. */
+    private static final String TIME_OF_DAY_ANCHOR = "1970-01-01 ";
+
+    /**
+     * The literal as a {@code Timestamp} on {@value #TIME_OF_DAY_ANCHOR}, or null when it is
+     * not a clock time {@code HH:mm:ss[.f…]}. Deliberately strict about the hour of day: the
+     * MySQL extended domain (hours past 23, negative values) has no {@code Timestamp} form,
+     * and pretending otherwise would write a date the source never meant.
+     */
+    private static Timestamp timestampFromTimeOfDay(String text) {
+        String t = text.trim();
+        // Two-digit hours only: Timestamp.valueOf reads fixed offsets, so "9:05:07" would
+        // be misparsed rather than rejected.
+        if (!t.matches("([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(\\.\\d{1,9})?")) {
+            return null;
+        }
+        try {
+            return Timestamp.valueOf(TIME_OF_DAY_ANCHOR + t);
         } catch (IllegalArgumentException e) {
             return null;
         }

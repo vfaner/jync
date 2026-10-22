@@ -62,6 +62,36 @@ class JdbcRowMapperTemporalTextBindTest {
         verify(ps).setObject(1, DATETIME_TEXT);
     }
 
+    /**
+     * TIME 列:Xync 读取路径对所有源端的 TIME 都取服务器字面量文本("12:34:56"),而 Oracle
+     * 目标端没有 TIME 类型——结构同步把 TIME 建成了 TIMESTAMP。文本一旦原样绑定,
+     * Oracle 会用 NLS_TIMESTAMP_FORMAT 去解析只带时分秒的字面量,整批行报
+     * ORA-01861 "literal does not match format string"(与 DATETIME 的 ORA-01843 同源)。
+     * 解析成 Timestamp 时必须补一个日期锚点;1970-01-01 是驱动把 java.sql.Time 映射到
+     * Oracle DATE 时用的同一个锚点,因此与原生时态源端的行为一致。
+     */
+    @Test
+    void timeOfDayTextBecomesAnAnchoredTimestampForAnOracleTarget() throws Exception {
+        bind(ps, "12:34:56", Types.TIME, new OracleDialect(23));
+
+        verify(ps).setTimestamp(1, Timestamp.valueOf("1970-01-01 12:34:56"));
+    }
+
+    @Test
+    void timeOfDayTextKeepsItsFractionalSeconds() throws Exception {
+        bind(ps, "12:34:56.789", Types.TIME, new OracleDialect(23));
+
+        verify(ps).setTimestamp(1, Timestamp.valueOf("1970-01-01 12:34:56.789"));
+    }
+
+    /** MySQL 的扩展 TIME 域(小时数 ≥ 24、负数)没有任何时间类型能承载,保持原样绑定。 */
+    @Test
+    void extendedMysqlTimeStaysVerbatimOnOracle() throws Exception {
+        bind(ps, "838:59:59", Types.TIME, new OracleDialect(23));
+
+        verify(ps).setObject(1, "838:59:59");
+    }
+
     @Test
     void textNoTemporalCanHoldStillBindsVerbatimOnOracle() throws Exception {
         // MySQL TIME 的域(-838:59:59)超出任何 java.sql 时间类型;解析不了就原样绑定,
