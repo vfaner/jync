@@ -329,6 +329,46 @@ public class ProjectService {
     }
 
     /**
+     * Sets or clears the explicit cursor column of one table and re-baselines that table.
+     *
+     * <p>A stored cursor belongs to the column that produced it: feeding its value to a
+     * different column compares two unrelated value domains, so rows whose value in the new
+     * column sits below the old watermark would never be delivered — most commonly when the
+     * project was stopped for a while and the undelivered updates move to a different column.
+     * Any change to the setting therefore clears that table's cursor and lets the next cycle
+     * reload it, the same state {@link #resetProgress} produces for every table.
+     *
+     * <p>Refused while a cycle is running or still holds its lease: the in-flight cycle read
+     * the old setting at its start, and a change mid-run would mix the two columns across
+     * cycle boundaries.
+     *
+     * @param cursorColumn the column name, or blank to fall back to auto-detection
+     * @throws IllegalArgumentException when the project does not exist
+     * @throws IllegalStateException    when a cycle is running or its lease is still held
+     */
+    @Transactional
+    public void saveCursorColumn(Long projectId, String tableName, String cursorColumn) {
+        Project project = require(projectId);
+        if (isRunning(project)) {
+            throw new IllegalStateException("error.project.stop.before.config");
+        }
+        SyncConfig config = loadConfig(project);
+        String value = cursorColumn == null || cursorColumn.isBlank() ? null : cursorColumn.trim();
+        if (Objects.equals(config.cursorColumnFor(tableName), value)) {
+            // Same setting: no write, and no needless full reload of the table.
+            return;
+        }
+        // cursorColumnFor matches case-insensitively, so a differently-cased key must be
+        // replaced rather than joined by a second entry, which would make the lookup ambiguous.
+        config.getCursorColumns().keySet().removeIf(key -> key.equalsIgnoreCase(tableName));
+        if (value != null) {
+            config.getCursorColumns().put(tableName, value);
+        }
+        saveConfig(projectId, config);
+        stateWriter.clearCursor(projectId, tableName);
+    }
+
+    /**
      * Creates a new project carrying the stored sync settings of {@code sourceProjectId}.
      *
      * <p>One save in one transaction: the row and its settings commit together, so a failure

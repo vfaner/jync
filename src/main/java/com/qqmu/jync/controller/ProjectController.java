@@ -759,22 +759,20 @@ public class ProjectController {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    /** Sets an explicit cursor column for one table, overriding auto-detection. */
+    /**
+     * Sets an explicit cursor column for one table, overriding auto-detection.
+     *
+     * <p>The service owns the rules that make the override safe: a running project refuses
+     * it, and a changed column re-baselines the table (the stored watermark belongs to the
+     * column that produced it).
+     */
     @PostMapping("/{id}/cursor")
     public String saveCursor(@PathVariable Long id,
                             @RequestParam String tableName,
                             @RequestParam(required = false) String cursorColumn,
                             RedirectAttributes flash) {
         try {
-            var project = projectService.findById(id)
-                    .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
-            SyncConfig config = projectService.loadConfig(project);
-            if (cursorColumn == null || cursorColumn.isBlank()) {
-                config.getCursorColumns().remove(tableName);
-            } else {
-                config.getCursorColumns().put(tableName, cursorColumn.trim());
-            }
-            projectService.saveConfig(id, config);
+            projectService.saveCursorColumn(id, tableName, cursorColumn);
             flash.addFlashAttribute("message", "msg.cursor.saved");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());

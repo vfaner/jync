@@ -139,6 +139,29 @@ public class SyncStateWriter {
         }
     }
 
+    /**
+     * Clears one table's cursor so the next cycle reloads that table from scratch.
+     *
+     * <p>Used when the table's explicit cursor column changes: the stored watermark was
+     * produced by the old column, and a window built from it against a different column
+     * compares two unrelated value domains — rows whose value in the new column sits below
+     * the old watermark would never be delivered. Other tables keep their cursors.
+     *
+     * <p>{@code initialLoadDone} stays set for the same reason as
+     * {@link #clearCursor(SyncProgress)}: a null cursor already routes the table through the
+     * full-load path, and clearing the flag would additionally re-arm
+     * {@code truncateBeforeInitialLoad}. A table with no progress row yet is a no-op.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void clearCursor(Long projectId, String tableName) {
+        progressRepository
+                .findByProjectIdAndObjectTypeAndObjectName(projectId, ObjectType.TABLE, tableName)
+                // Self-invocation is deliberate: this method's REQUIRES_NEW transaction
+                // already holds, and routing through the single-row variant keeps the clear
+                // in one place.
+                .ifPresent(this::clearCursor);
+    }
+
     /** Loads a table's progress row, creating a fresh one on first sight. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public SyncProgress loadOrCreateProgress(Long projectId, String tableName) {

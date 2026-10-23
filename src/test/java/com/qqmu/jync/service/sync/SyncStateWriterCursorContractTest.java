@@ -135,6 +135,25 @@ class SyncStateWriterCursorContractTest {
     }
 
     /**
+     * The table-scoped variant used when a table's cursor column changes: that table loses
+     * its watermark while the others keep theirs, and {@code initialLoadDone} stays set so
+     * the reload it triggers does not also re-arm {@code truncateBeforeInitialLoad}. A table
+     * with no progress row yet is a no-op rather than a failure.
+     */
+    @Test
+    void theTableScopedClearRebaselinesOnlyThatTable() {
+        seededProgress(904L, "orders", "41");
+        seededProgress(904L, "customers", "77");
+
+        writer.clearCursor(904L, "orders");
+        writer.clearCursor(904L, "not_synced_yet");
+
+        assertThat(reload(904L, "orders").getLastSyncValue()).isNull();
+        assertThat(reload(904L, "orders").getInitialLoadDone()).isTrue();
+        assertThat(reload(904L, "customers").getLastSyncValue()).isEqualTo("77");
+    }
+
+    /**
      * The resume verdict (task book A1's UI signal) is decided by full-load cycles only:
      * recorded when the result carries one, preserved when a later incremental cycle does not.
      */
