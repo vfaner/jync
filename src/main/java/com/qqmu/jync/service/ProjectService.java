@@ -701,6 +701,15 @@ public class ProjectService {
         if (Boolean.TRUE.equals(project.getEnabled())) {
             throw new IllegalStateException("error.project.stop.before.reset");
         }
+        // stop() only clears the flag: a cycle already in flight keeps its lease until it
+        // finishes, and a peer node's cycle holds one the flag cannot describe at all.
+        // Resetting underneath it races the very rows this reset deletes — the cycle writes
+        // its cursors back after the purge, so the reset reports success while the next run
+        // still resumes from the old watermark. An expired lease does not block: the holder
+        // is gone and TTL reclaim / force-unlock is the documented remedy.
+        if (isRunning(project)) {
+            throw new IllegalStateException("error.project.sync.in.progress");
+        }
         syncEngine.resetProject(projectId);
     }
 

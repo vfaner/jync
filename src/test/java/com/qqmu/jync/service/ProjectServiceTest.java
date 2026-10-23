@@ -666,6 +666,40 @@ class ProjectServiceTest {
     }
 
     @Test
+    void resettingProgressWhileAStoppedProjectStillHasALiveCycleIsRefused() {
+        Project existing = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // stop() 只清 enabled:已经跑起来的周期会继续持有租约直到自己结束。此刻清游标
+        // 是在和它抢同一批状态行——周期会把自己刚写的游标再写回来,重置报成功却不
+        // 生效,下一次增量仍旧从旧水位继续。
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a:8081");
+        running.setLockExpiresAt(Instant.now().plusSeconds(60));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+
+        assertThatThrownBy(() -> service.resetProgress(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.sync.in.progress");
+        verify(syncEngine, never()).resetProject(1L);
+    }
+
+    @Test
+    void resettingProgressAfterALiveCycleFinishedIsAllowed() {
+        Project existing = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // 租约过期意味着持有者已经不在了:按既有约定由 TTL 回收/强制解锁处理,
+        // 不能把重置永久挡住。
+        SyncTask stale = new SyncTask();
+        stale.setLockOwner("node-a:8081");
+        stale.setLockExpiresAt(Instant.now().minusSeconds(60));
+        when(taskStore.find(1L)).thenReturn(Optional.of(stale));
+
+        service.resetProgress(1L);
+
+        verify(syncEngine).resetProject(1L);
+    }
+
+    @Test
     void keepingTheSameEndpointsDoesNotClearSyncState() {
         Project existing = storedProject(1L, false);
         stubLookup(existing);              // 内容未变:save() 不会被调用,不需要它的 stub
