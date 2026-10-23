@@ -227,6 +227,15 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 }
                 if (!running) break;
                 Throwable failure = lastFailure.get();
+                if (failure == null) {
+                    // F-13 counts CONSECUTIVE failed cycles. A cycle that completed
+                    // without an exception — even one that drained zero rows and flushed
+                    // no transaction — proves the connect/read path is healthy, so the
+                    // old tally must go. Clearing it only in flushTransaction meant an
+                    // idle tracked table never cleared it: transient blips accumulated
+                    // forever and eventually parked a perfectly healthy project.
+                    applyFailures.set(0);
+                }
                 CdcFailureClassifier.Kind kind = failure == null
                         ? CdcFailureClassifier.Kind.TRANSIENT
                         : CdcFailureClassifier.classify(failure);

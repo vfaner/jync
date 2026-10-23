@@ -231,6 +231,33 @@ class PgLogicalCdcConsumerFailureEscalationTest {
         assertThat(targetRowCount()).isEqualTo(1);
     }
 
+    @Test
+    void aHealthyIdleCycleResetsTheFailureEscalation() throws Exception {
+        // 5 败 → 1 个无异常但 slot 里没有变更的空闲周期 → 5 败。计数器语义是
+        // "连续失败周期",而旧实现只在事务落库时清零:被同步的表空闲时没有
+        // flush,网络抖动留下的旧账一直累积,最终把健康项目 APPLY_STRIKE_OUT
+        // 永久 park。空 peek 成功读通同样证明连接与解码通路健康。
+        PreparedStatement ps = mock(PreparedStatement.class);
+        AtomicInteger peeks = new AtomicInteger();
+        when(ps.executeQuery()).thenAnswer(inv -> peeks.getAndIncrement() == 5
+                ? emptyPeekResultSet() : oneTransactionResultSet());
+        when(source.prepareStatement(anyString())).thenReturn(ps);
+
+        PgLogicalCdcConsumer consumer = newConsumer(stagedTargetContext(false, false,
+                false, false, false, false, false, false, false, false), boundedLock(11));
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(any(), anyString());
+    }
+
+    /** 空 peek:slot 里这段时间没有任何变更。 */
+    private static ResultSet emptyPeekResultSet() throws SQLException {
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.next()).thenReturn(false);
+        return rs;
+    }
+
     /** BEGIN/message/COMMIT:一个只有 test_decoding 消息行的事务,没有任何可应用的行。 */
     private ResultSet messageOnlyResultSet() throws SQLException {
         ResultSet rs = mock(ResultSet.class);

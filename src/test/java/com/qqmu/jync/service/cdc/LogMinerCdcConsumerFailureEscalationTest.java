@@ -245,6 +245,50 @@ class LogMinerCdcConsumerFailureEscalationTest {
         assertThat(targetRowCount()).isEqualTo(1);
     }
 
+    /** 一个不含任何变更的会话。 */
+    private LogMinerSession emptySession() {
+        return new LogMinerSession(null, 1_000L, 1_000L, null, null) {
+            @Override
+            public java.util.List<LogMinerSession.Row> nextBatch() {
+                return Collections.emptyList();
+            }
+
+            @Override
+            public long highWaterScn() {
+                return 1_000L;
+            }
+
+            @Override
+            public void close() {
+                // real close() runs END_LOGMNR on the super's (null) source connection
+            }
+        };
+    }
+
+    @Test
+    void aHealthyIdleSessionResetsTheFailureEscalation() throws Exception {
+        // 5 败 → 1 个无异常但 nextBatch 为空的空闲会话 → 5 败。计数器语义是
+        // "连续失败周期",而旧实现只在事务落库时清零:被同步的表空闲时没有
+        // flush,网络抖动留下的旧账一直累积,最终把健康项目 APPLY_STRIKE_OUT
+        // 永久 park。空会话成功开/关证明连接与挖掘通路健康。
+        AtomicInteger sessions = new AtomicInteger();
+        LogMinerSessionFactory factory = (c, s, b) -> sessions.getAndIncrement() == 5
+                ? emptySession() : oneInsertSession();
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("lm-1");
+        LogMinerCdcConsumer consumer = new LogMinerCdcConsumer(project, boundedLock(11),
+                stagedTargetContext(false, false, false, false, false, false, false,
+                        false, false, false),
+                positionStore, mock(CdcBaselineService.class), taskStore,
+                mock(SyncStateWriter.class), dataSourceManager, new CdcRuntimeStats(),
+                properties, factory);
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
     @Test
     void baselineLeaseLossExitsQuietlyWithoutError() throws Exception {
         // 基线全量期间租约被接管:runBaseline 抛 LockLostException。R1 要求安静退出 ——

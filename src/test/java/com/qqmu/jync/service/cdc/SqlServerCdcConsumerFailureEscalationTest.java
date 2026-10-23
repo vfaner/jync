@@ -114,20 +114,7 @@ class SqlServerCdcConsumerFailureEscalationTest {
         when(sourceConn.prepareStatement(contains("cdc.change_tables"))).thenReturn(discoveryPs);
 
         PreparedStatement changesPs = mock(PreparedStatement.class);
-        when(changesPs.executeQuery()).thenAnswer(inv -> {
-            ResultSet rs = mock(ResultSet.class);
-            ResultSetMetaData md = mock(ResultSetMetaData.class);
-            when(md.getColumnCount()).thenReturn(3);
-            when(md.getColumnName(1)).thenReturn("__$start_lsn");
-            when(md.getColumnName(2)).thenReturn("__$operation");
-            when(md.getColumnName(3)).thenReturn("ID");
-            when(rs.getMetaData()).thenReturn(md);
-            when(rs.next()).thenReturn(true, false);
-            when(rs.getString(1)).thenReturn(TX_LSN);
-            when(rs.getInt(2)).thenReturn(2); // INSERT
-            when(rs.getObject("ID")).thenReturn(1);
-            return rs;
-        });
+        when(changesPs.executeQuery()).thenAnswer(inv -> oneInsertChangesRs());
         when(sourceConn.prepareStatement(contains("fn_cdc_get_all_changes_")))
                 .thenReturn(changesPs);
 
@@ -159,6 +146,32 @@ class SqlServerCdcConsumerFailureEscalationTest {
         properties.getCdc().setReconnectBackoffMs(1L);
         properties.getCdc().setReconnectBackoffMaxMs(1L);
         properties.getCdc().getMssql().setIdlePollMs(1);
+    }
+
+    /** One INSERT row in one transaction — the shape every failing cycle re-reads. */
+    private static ResultSet oneInsertChangesRs() throws SQLException {
+        ResultSet rs = mock(ResultSet.class);
+        ResultSetMetaData md = mock(ResultSetMetaData.class);
+        when(md.getColumnCount()).thenReturn(3);
+        when(md.getColumnName(1)).thenReturn("__$start_lsn");
+        when(md.getColumnName(2)).thenReturn("__$operation");
+        when(md.getColumnName(3)).thenReturn("ID");
+        when(rs.getMetaData()).thenReturn(md);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getString(1)).thenReturn(TX_LSN);
+        when(rs.getInt(2)).thenReturn(2); // INSERT
+        when(rs.getObject("ID")).thenReturn(1);
+        return rs;
+    }
+
+    /** A captured-but-empty window: the capture job has not written a row this cycle. */
+    private static ResultSet emptyChangesRs() throws SQLException {
+        ResultSet rs = mock(ResultSet.class);
+        ResultSetMetaData md = mock(ResultSetMetaData.class);
+        when(md.getColumnCount()).thenReturn(0);
+        when(rs.getMetaData()).thenReturn(md);
+        when(rs.next()).thenReturn(false);
+        return rs;
     }
 
     private SyncContext contextWithStagedTarget(final boolean... cycleSucceeds) throws SQLException {
@@ -238,6 +251,29 @@ class SqlServerCdcConsumerFailureEscalationTest {
 
         verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
         verify(targetConn, times(1)).commit();
+    }
+
+    @Test
+    void aHealthyIdleCycleResetsTheFailureEscalation() throws Exception {
+        // 5 败 → 1 个无异常但 0 行的空闲周期 → 5 败。计数器语义是"连续失败周期",
+        // 而旧实现只在事务落库时清零:被同步的表恰好空闲时没有任何 flush,网络抖动
+        // 留下的旧账会一直累积,最终把一个完全健康的项目 APPLY_STRIKE_OUT 永久 park。
+        // 空窗口成功读通证明连接与读取通路健康,必须清零。
+        PreparedStatement idleCapable = mock(PreparedStatement.class);
+        AtomicInteger drains = new AtomicInteger();
+        when(idleCapable.executeQuery()).thenAnswer(inv -> drains.getAndIncrement() == 5
+                ? emptyChangesRs() : oneInsertChangesRs());
+        when(sourceConn.prepareStatement(contains("fn_cdc_get_all_changes_")))
+                .thenReturn(idleCapable);
+
+        SqlServerCdcConsumer consumer = newConsumer(
+                contextWithStagedTarget(false, false, false, false, false, false, false,
+                        false, false, false),
+                boundedLock(11));
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
     }
 
     @Test
