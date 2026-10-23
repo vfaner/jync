@@ -2,6 +2,7 @@ package com.qqmu.jync.controller;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -400,6 +401,10 @@ public class ProjectController {
                             @RequestParam(required = false) List<String> tables,
                             @RequestParam(required = false) List<String> views,
                             @RequestParam(required = false) List<String> procedures,
+                            // 同步对象面板里每张表一行的目标表名:隐藏的 mappingSource 与
+                            // 输入框 mappingTarget 按文档顺序成对提交。
+                            @RequestParam(required = false) List<String> mappingSource,
+                            @RequestParam(required = false) List<String> mappingTarget,
                             @RequestParam(defaultValue = "false") boolean syncStructure,
                             @RequestParam(defaultValue = "false") boolean syncData,
                             @RequestParam(defaultValue = "false") boolean syncIndexes,
@@ -468,6 +473,12 @@ public class ProjectController {
                 config.setProcedures(procedures == null ? new LinkedHashSet<>()
                         : new LinkedHashSet<>(procedures));
             }
+            // 表名映射:只有面板真的渲染了这些行(mappingSource 在场)才按提交内容整体
+            // 替换。字段缺席表示源库列举失败或旧客户端提交,此时不能把已存映射清空。
+            if (mappingSource != null) {
+                config.setTableNameMapping(
+                        readTableNameMapping(mappingSource, mappingTarget, config));
+            }
             // CDC 空闲轮询间隔:留空=引擎默认;给值就不得低于安全下限,
             // 否则等于对源库做紧密挖掘会话循环(读侧还有一层兜底 clamp)。
             if (cdcIdlePollMs != null && cdcIdlePollMs < CdcReconnectBackoff.MIN_IDLE_POLL_MS) {
@@ -515,6 +526,35 @@ public class ProjectController {
             flash.addFlashAttribute("error", e.getMessage());
         }
         return "redirect:/projects/" + id;
+    }
+
+    /**
+     * Pairs the form's per-table mapping rows: the hidden {@code mappingSource} and the
+     * {@code mappingTarget} input are submitted in document order, one pair per source
+     * table. Only checked tables keep a mapping — an unchecked table is not synced, so it
+     * has no target table to rename even if its input still shows an old value.
+     *
+     * <p>Values are stored as typed; whitespace stripping and blank/self-mapping removal
+     * happen once in {@link ProjectService#saveConfig}, which also guards direct callers.
+     */
+    private static Map<String, String> readTableNameMapping(List<String> sources,
+                                                             List<String> targets,
+                                                             SyncConfig config) {
+        Map<String, String> mapping = new LinkedHashMap<>();
+        if (targets == null) {
+            return mapping;
+        }
+        int rows = Math.min(sources.size(), targets.size());
+        for (int i = 0; i < rows; i++) {
+            String source = sources.get(i);
+            String target = targets.get(i);
+            if (source == null || source.isBlank() || target == null
+                    || !config.includesTable(source)) {
+                continue;
+            }
+            mapping.put(source, target);
+        }
+        return mapping;
     }
 
     /** Server-side bounds for the full-load knobs; the form's min/max is only a hint. */

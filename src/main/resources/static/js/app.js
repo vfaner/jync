@@ -699,6 +699,12 @@
     var counter = panel.querySelector('[data-count]');
 
     function refresh() {
+      // 映射行的视觉状态跟着勾选走；全选/清空是程序化改动，不会触发 change，
+      // 所以统一在这里刷新，而不是各自监听。
+      panel.querySelectorAll('.map-row').forEach(function (row) {
+        var cb = row.querySelector('input[type="checkbox"]');
+        row.classList.toggle('is-unchecked', !(cb && cb.checked));
+      });
       if (!counter) return;
       var n = 0;
       boxes.forEach(function (cb) { if (cb.checked) n++; });
@@ -744,6 +750,24 @@
           var text = label ? label.textContent.toLowerCase() : '';
           row.style.display = (!term || text.indexOf(term) !== -1) ? '' : 'none';
         });
+      });
+    });
+
+    // 目标表名输入框实时去掉空格——目标表名是数据库标识符，空格不可能是它的一部分。
+    // 勾选状态与箭头/输入框的明暗由 refresh() 统一刷新（全选/清空也要跟随）。
+    panel.querySelectorAll('.map-target').forEach(function (target) {
+      target.addEventListener('input', function (e) {
+        // 中文等输入法组合期间不打断用户输入，组合结束后再清理。
+        if (e.isComposing) return;
+        var value = target.value;
+        var cleaned = value.replace(/\s+/g, '');
+        if (cleaned === value) return;
+        // 保持光标位置：减去它前面被删掉的空格数。
+        var pos = target.selectionStart;
+        var caret = pos === null ? cleaned.length
+          : value.slice(0, pos).replace(/\s+/g, '').length;
+        target.value = cleaned;
+        try { target.setSelectionRange(caret, caret); } catch (err) { /* 非文本输入框 */ }
       });
     });
 

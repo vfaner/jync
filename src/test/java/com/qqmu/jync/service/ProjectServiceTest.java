@@ -770,6 +770,64 @@ class ProjectServiceTest {
     }
 
     @Test
+    void whitespaceInsideMappedTargetNamesIsRemovedBeforeSaving() {
+        Project existing = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("orders")));
+        // 含普通空格、全角空格(U+3000)与制表符:浏览器侧 /\s/ 会去掉它们,
+        // 服务端必须与之一致,不能只认 ASCII 空格。
+        config.getTableNameMapping().put("orders", " ord\u3000ers_copy\t");
+
+        service.saveConfig(1L, config);
+
+        ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
+        verify(contextFactory).serializeConfig(captor.capture());
+        assertThat(captor.getValue().getTableNameMapping())
+                .containsExactly(java.util.Map.entry("orders", "orders_copy"));
+    }
+
+    @Test
+    void blankTargetsAndMappingsToTheSameNameAreNotPersisted() {
+        Project existing = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(
+                java.util.List.of("orders", "products")));
+        // A blank input means "keep the source name"; a target identical to its source is
+        // the same statement written out. Neither belongs in the stored map.
+        config.getTableNameMapping().put("orders", "   ");
+        config.getTableNameMapping().put("products", " products ");
+
+        service.saveConfig(1L, config);
+
+        ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
+        verify(contextFactory).serializeConfig(captor.capture());
+        assertThat(captor.getValue().getTableNameMapping()).isEmpty();
+    }
+
+    @Test
+    void aLegacyMappingThatNormalisesToNothingDoesNotBlockSavingWhileEnabled() {
+        Project existing = storedProject(1L, true);
+        // Hand-edited legacy value: the form resubmits exactly what it displayed, and
+        // normalisation drops it on both sides, so this is not a topology change.
+        existing.setSyncConfig("{\"tables\":[\"A\"],\"tableNameMapping\":{\"A\":\" A \"}}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("A")));
+        config.getTableNameMapping().put("A", " A ");
+
+        assertThatCode(() -> service.saveConfig(1L, config)).doesNotThrowAnyException();
+        verify(projectRepository).save(any());
+    }
+
+    @Test
     void anUnchangedMappingStillSavesWhileEnabled() {
         Project existing = storedProject(1L, true);
         existing.setSyncConfig("{\"tables\":[\"A\"]}");

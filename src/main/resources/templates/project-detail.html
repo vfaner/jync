@@ -451,11 +451,29 @@
                              周期检测不到对象就空转(不报错)。includesTable 已经区分了
                              "老配置的空集合=全部"与"保存过的空集合=全不选"。 -->
                         <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.tables)}">
-                            <label class="pick" th:each="tbl,i : ${sourceObjects.tables}">
-                                <input type="checkbox" name="tables" th:value="${tbl}"
-                                       th:checked="${config.includesTable(tbl)}">
-                                <span th:text="${tbl}">table</span>
-                            </label>
+                            <!--/* 每张表一行:左侧源表勾选框,中间虚线箭头,右侧目标表名。
+                                   目标表名留空 = 与源表同名(placeholder 显示源表名);输入中的
+                                   空格由 app.js 实时去掉,保存时服务端再规范化一次。隐藏的
+                                   mappingSource 与输入框按文档顺序成对提交,控制器据此重建映射。 */-->
+                            <div class="map-head">
+                                <span th:text="#{project.tableMap.source}">Source</span>
+                                <span aria-hidden="true"></span>
+                                <span th:text="#{project.tableMap.target}">Target</span>
+                            </div>
+                            <div class="pick map-row" th:each="tbl : ${sourceObjects.tables}"
+                                 th:with="mapped=${config.targetTableName(tbl)}">
+                                <label class="map-source">
+                                    <input type="checkbox" name="tables" th:value="${tbl}"
+                                           th:checked="${config.includesTable(tbl)}">
+                                    <span th:text="${tbl}">table</span>
+                                </label>
+                                <span class="map-arrow" aria-hidden="true"></span>
+                                <input type="hidden" name="mappingSource" th:value="${tbl}">
+                                <input type="text" class="input map-target" name="mappingTarget"
+                                       maxlength="128" th:value="${mapped == tbl ? '' : mapped}"
+                                       th:placeholder="${tbl}"
+                                       th:attr="data-source=${tbl}">
+                            </div>
                             <div class="help" style="margin:6px 2px 0">
                                 <span th:text="#{project.picker.emptyMeansNone}">Only checked objects are synced; unchecking every table means no table is synced.</span>
                             </div>

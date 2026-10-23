@@ -105,7 +105,7 @@ Each project is one source → target pair, independently startable and pausable
 
 ### New project — one tested connection per side
 
-Fill in the name and description, pick one tested connection from each of the source and target lists; saving lands you on the project detail page to choose sync objects.
+Fill in the name and description, pick one tested connection from each of the source and target lists; saving lands you on the project detail page to choose sync objects. A target-name field beside each table renames it on the target — leave it empty to keep the source name; spaces are removed automatically.
 
 ![New project](docs/images/jync_xiangmu_add.png)
 

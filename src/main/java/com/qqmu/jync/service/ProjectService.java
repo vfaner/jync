@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.quartz.CronExpression;
 import org.springframework.data.domain.PageRequest;
@@ -72,6 +73,14 @@ public class ProjectService {
      *  error rather than a H2 22001 constraint failure rendered as a generic 500. */
     private static final int NAME_MAX_LENGTH = 128;
     private static final int DESCRIPTION_MAX_LENGTH = 512;
+
+    /**
+     * Whitespace can never appear inside a mapped target table name. UNICODE_CHARACTER_CLASS
+     * makes {@code \s} match the same set the browser's {@code /\s/} does, including the
+     * full-width space (U+3000) Chinese users type and the non-breaking space (U+00A0).
+     */
+    private static final Pattern WHITESPACE =
+            Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS);
 
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
@@ -434,6 +443,9 @@ public class ProjectService {
     @Transactional
     public Project saveConfig(Long projectId, SyncConfig config, String captureStrategy) {
         Project project = require(projectId);
+        // 表名映射落库前统一规范化:目标表名是数据库标识符,空格不可能属于它。表单边输入
+        // 边去掉空格,但直连 POST 也必须被兜住;留空或改成与源表同名都表示"不映射"。
+        config.setTableNameMapping(normalizeTableNameMapping(config.getTableNameMapping()));
         String cron = config.getCronExpression();
         // Blank means "use interval mode", so only a non-blank value can be wrong. Checking
         // here rather than in Quartz keeps one bad field from becoming a 500 that rolls back
@@ -612,8 +624,44 @@ public class ProjectService {
         }
     }
 
+    /**
+     * Removes whitespace from mapped target names and drops entries that mean no rename.
+     *
+     * <p>A target table name is an identifier, so whitespace can never be part of it: it is
+     * stripped rather than rejected, because the form strips it while typing too. A blank
+     * value, or one identical to its source table, says "keep the source name" and is not
+     * stored — the persisted map then contains only real renames. Normalising BEFORE the
+     * duplicate-target check also means {@code " orders "} and {@code "orders"} are seen as
+     * the same target and refused instead of slipping through as distinct spellings.
+     */
+    private static Map<String, String> normalizeTableNameMapping(Map<String, String> raw) {
+        Map<String, String> normalized = new LinkedHashMap<>();
+        if (raw == null) {
+            return normalized;
+        }
+        for (Map.Entry<String, String> entry : raw.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank() || entry.getValue() == null) {
+                continue;
+            }
+            String source = entry.getKey().trim();
+            String target = WHITESPACE.matcher(entry.getValue()).replaceAll("");
+            if (target.isEmpty() || target.equals(source)) {
+                continue;
+            }
+            normalized.put(source, target);
+        }
+        return normalized;
+    }
+
     /** Table selection or name mapping differs from what the row last persisted. */
     private static boolean mappingChanged(SyncConfig previous, SyncConfig next) {
+        // Compare invariants: the persisted map is always normalised, so a legacy entry
+        // such as " A " -> " B " must not look like a topology change when the form
+        // resubmits it (the stored value would otherwise differ from what is saved next).
+        if (previous != null) {
+            previous.setTableNameMapping(
+                    normalizeTableNameMapping(previous.getTableNameMapping()));
+        }
         Set<String> oldTables = previous == null || previous.getTables() == null
                 ? Set.of() : previous.getTables();
         Set<String> newTables = next.getTables() == null ? Set.of() : next.getTables();
