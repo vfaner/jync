@@ -2,7 +2,9 @@ package com.qqmu.jync.service.lob;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -104,7 +106,7 @@ class LobBinderStreamTest {
         assertThat(LobBinder.bind(ps, 1, value, Types.VARCHAR, new PostgresDialect(),
                 LobBinder.NOOP)).isTrue();
 
-        verify(ps).setCharacterStream(eq(1), any(Reader.class), eq(5L));
+        verify(ps).setCharacterStream(eq(1), any(Reader.class), eq(5));
     }
 
     @Test
@@ -119,6 +121,25 @@ class LobBinderStreamTest {
     }
 
     @Test
+    void aKnownLengthUsesTheIntSetterBecausePgJdbcDoesNotImplementTheLongOne() throws Exception {
+        // org.postgresql / org.opengauss 的 PgPreparedStatement 对
+        // setCharacterStream(int, Reader, long) 直接抛 notImplemented，只有 int 重载会真正
+        // 读取 Reader。传 long 会让任何带回放长度的文本（CDC 落盘、SQL Server 源）写不进
+        // PostgreSQL/openGauss 目标。
+        PreparedStatement ps = mock(PreparedStatement.class);
+        doThrow(new java.sql.SQLFeatureNotSupportedException(
+                "setCharacterStream(int, Reader, long) is not implemented"))
+                .when(ps).setCharacterStream(eq(1), any(Reader.class), anyLong());
+
+        LobValue value = LobValues.text("hello");
+
+        assertThat(LobBinder.bind(ps, 1, value, Types.VARCHAR, new PostgresDialect(),
+                LobBinder.NOOP)).isTrue();
+
+        verify(ps).setCharacterStream(eq(1), any(Reader.class), eq(5));
+    }
+
+    @Test
     void aReplayableValueCanBeBoundTwiceWithIdenticalContent() throws Exception {
         PreparedStatement ps = mock(PreparedStatement.class);
         LobValue value = LobValues.text("repeat");
@@ -129,7 +150,7 @@ class LobBinderStreamTest {
                 LobBinder.NOOP)).isTrue();
 
         ArgumentCaptor<Reader> readers = ArgumentCaptor.forClass(Reader.class);
-        verify(ps, times(2)).setCharacterStream(eq(1), readers.capture(), eq(6L));
+        verify(ps, times(2)).setCharacterStream(eq(1), readers.capture(), eq(6));
         for (Reader reader : readers.getAllValues()) {
             try (Reader r = reader) {
                 StringBuilder sb = new StringBuilder();

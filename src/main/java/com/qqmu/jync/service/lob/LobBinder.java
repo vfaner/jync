@@ -156,7 +156,15 @@ public final class LobBinder {
                         tracker.track(clob);
                     }
                 } else if (lob.length() > 0) {
-                    ps.setCharacterStream(index, reader, lob.length());
+                    // The int overload on purpose: pgjdbc and the openGauss fork both throw
+                    // "not implemented" from setCharacterStream(int, Reader, long) — only the
+                    // int one reads the reader. A length above int range goes to the long
+                    // overload because no other driver can take it either way.
+                    if (lob.length() <= Integer.MAX_VALUE) {
+                        ps.setCharacterStream(index, reader, (int) lob.length());
+                    } else {
+                        ps.setCharacterStream(index, reader, lob.length());
+                    }
                 } else {
                     // Length 0 means "unknown" to the driver, which is exactly the case
                     // for a one-shot value read from a result set.
