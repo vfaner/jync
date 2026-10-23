@@ -602,3 +602,5 @@ mvn test
 ## 许可证
 
 [MIT License](LICENSE)，商业与非商业用途均可。内置第三方 JDBC 驱动各自适用原厂许可证，见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)；GBase、神通与华为 GaussDB 驱动不随本项目分发。
+
+项目由沐沐开源工坊（沐编程）维护：GitHub [@vfaner](https://github.com/vfaner)、Gitee [@super_rgh](https://gitee.com/super_rgh)。「Jync / 捷同」名称与 logo 的品牌声明见 [TRADEMARK.md](TRADEMARK.md)——MIT 不授予商标使用权，修改再分发请保留署名与品牌标识。

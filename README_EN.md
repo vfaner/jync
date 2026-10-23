@@ -1232,4 +1232,6 @@ Bug reports, feature requests and pull requests are welcome through any channel 
 
 Released under the [MIT License](LICENSE) — free for commercial and non-commercial use.
 
+Maintained by 沐沐开源工坊 (Mumu Open Source Workshop / 沐编程): GitHub [@vfaner](https://github.com/vfaner), Gitee [@super_rgh](https://gitee.com/super_rgh). The "Jync" name and logo are covered by [TRADEMARK.md](TRADEMARK.md): MIT grants no trademark rights, so modified redistributions should keep the credits and brand marks.
+
 The distribution bundles fourteen third-party JDBC drivers (Oracle, DB2, Dameng, KingBase, OceanBase, HighGo, Vastbase, YashanDB, and others), each under its vendor license — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for versions, links, and the Oracle/IBM redistribution terms. **GBase**, **Oscar**, and **Huawei GaussDB** drivers are not distributed with this project; obtain them from the vendors and confirm your own usage rights.
