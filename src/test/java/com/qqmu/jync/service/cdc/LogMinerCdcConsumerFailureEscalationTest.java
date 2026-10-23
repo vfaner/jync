@@ -27,6 +27,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -157,6 +161,12 @@ class LogMinerCdcConsumerFailureEscalationTest {
 
     private LogMinerCdcConsumer newConsumer(SyncContext ctx,
                                              SyncLockService.LockHandle lock) {
+        return newConsumer(ctx, lock, new CdcRuntimeStats());
+    }
+
+    private LogMinerCdcConsumer newConsumer(SyncContext ctx,
+                                             SyncLockService.LockHandle lock,
+                                             CdcRuntimeStats stats) {
         Project project = new Project();
         project.setId(1L);
         project.setName("lm-1");
@@ -164,7 +174,7 @@ class LogMinerCdcConsumerFailureEscalationTest {
         return new LogMinerCdcConsumer(project, lock, ctx, positionStore,
                 mock(CdcBaselineService.class), taskStore,
                 mock(com.qqmu.jync.service.sync.SyncStateWriter.class), dataSourceManager,
-                new CdcRuntimeStats(), properties, factory);
+                stats, properties, factory);
     }
 
     /**
@@ -287,6 +297,27 @@ class LogMinerCdcConsumerFailureEscalationTest {
         consumer.run();
 
         verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
+    @Test
+    void aHealthyCycleLeavesLastErrorNullInsteadOfReportingDrained() throws Exception {
+        // lastError 是"最近错误"通道:模板在非 null 时渲染成红色错误行。健康周期
+        // (LogMiner 默认 idle-poll 1000ms)旧实现每轮写 "mining cycle drained" ——
+        // 每个正常运行的项目常驻一条红色"最近错误",且每轮 WARN,空闲即刷屏。
+        // 契约:健康周期 lastError 保持 null、日志降到 DEBUG;失败周期才写并 WARN。
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        LogMinerCdcConsumer consumer = newConsumer(
+                stagedTargetContext(true), boundedLock(3), stats);
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(LogMinerCdcConsumer.class);
+        try {
+            consumer.run();
+        } finally {
+            LogCapture.detach(LogMinerCdcConsumer.class, logs);
+        }
+
+        assertThat(stats.getLastError()).isNull();
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .noneMatch(message -> message.contains("cycle for project"));
     }
 
     @Test

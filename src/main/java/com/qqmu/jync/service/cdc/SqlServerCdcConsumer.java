@@ -252,11 +252,20 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 // 繁忙轮(捞到数据)立即开下一轮;只有真正空闲才休眠 idlePollMs,失败走指数退避。
                 long delay = CdcReconnectBackoff.nextCycleDelayMs(
                         failure, rowsDrained > 0, backoff, idlePollMs);
-                stats.setLastError(failure == null ? "drained"
-                        : CdcFailureClassifier.describe(failure));
-                log.info("SQLServer cycle for project {} ended ({}); next cycle in {} ms",
-                        projectId, failure == null ? "no failure recorded"
-                                : CdcFailureClassifier.describe(failure), delay);
+                // lastError feeds the project panel's "last error" row, which the template
+                // renders only when non-null. A healthy cycle must leave it null, and its
+                // completion line belongs at DEBUG: idle polling runs every 1000 ms by
+                // default, so logging it at INFO flooded the log of every healthy project.
+                if (failure == null) {
+                    stats.setLastError(null);
+                    log.debug("SQLServer cycle for project {} drained; next cycle in {} ms",
+                            projectId, delay);
+                } else {
+                    String detail = CdcFailureClassifier.describe(failure);
+                    stats.setLastError(detail);
+                    log.warn("SQLServer cycle for project {} failed ({}); next cycle in {} ms",
+                            projectId, detail, delay);
+                }
                 if (!sleepWhileRunning(delay)) break;
             }
         } catch (RuntimeException | Error e) {

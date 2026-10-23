@@ -27,6 +27,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -146,13 +150,19 @@ class PgLogicalCdcConsumerFailureEscalationTest {
 
     private PgLogicalCdcConsumer newConsumer(SyncContext ctx,
                                              SyncLockService.LockHandle lock) {
+        return newConsumer(ctx, lock, new CdcRuntimeStats());
+    }
+
+    private PgLogicalCdcConsumer newConsumer(SyncContext ctx,
+                                             SyncLockService.LockHandle lock,
+                                             CdcRuntimeStats stats) {
         Project project = new Project();
         project.setId(1L);
         project.setName("pg-1");
         return new PgLogicalCdcConsumer(project, lock, ctx, positionStore,
                 mock(CdcBaselineService.class), taskStore,
                 mock(SyncStateWriter.class), dataSourceManager,
-                new CdcRuntimeStats(), properties);
+                stats, properties);
     }
 
     /**
@@ -249,6 +259,32 @@ class PgLogicalCdcConsumerFailureEscalationTest {
         consumer.run();
 
         verify(taskStore, never()).recordCdcFailure(any(), anyString());
+    }
+
+    @Test
+    void aHealthyCycleLeavesLastErrorNullInsteadOfReportingDrained() throws Exception {
+        // lastError 是"最近错误"通道:模板在非 null 时渲染成红色错误行。健康空闲
+        // 轮询每秒发生 2 次(PG 默认 idle-poll 500ms),旧实现每轮写 "drained" ——
+        // 每个正常运行的项目常驻一条红色"最近错误",且每轮 WARN 一行,空闲即把
+        // 日志刷满(v1.7.7 修过的同一类问题)。契约:健康周期 lastError 保持 null,
+        // 日志降到 DEBUG;只有失败周期才写 lastError 并 WARN。
+        PreparedStatement ps = mock(PreparedStatement.class);
+        when(ps.executeQuery()).thenAnswer(inv -> emptyPeekResultSet());
+        when(source.prepareStatement(anyString())).thenReturn(ps);
+
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        PgLogicalCdcConsumer consumer = newConsumer(
+                stagedTargetContext(true), boundedLock(3), stats);
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(PgLogicalCdcConsumer.class);
+        try {
+            consumer.run();
+        } finally {
+            LogCapture.detach(PgLogicalCdcConsumer.class, logs);
+        }
+
+        assertThat(stats.getLastError()).isNull();
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .noneMatch(message -> message.contains("cycle for project"));
     }
 
     /** 空 peek:slot 里这段时间没有任何变更。 */

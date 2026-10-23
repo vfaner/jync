@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.cdc;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -25,6 +26,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
@@ -209,12 +214,18 @@ class SqlServerCdcConsumerFailureEscalationTest {
 
     private SqlServerCdcConsumer newConsumer(SyncContext ctx,
                                              SyncLockService.LockHandle lock) {
+        return newConsumer(ctx, lock, new CdcRuntimeStats());
+    }
+
+    private SqlServerCdcConsumer newConsumer(SyncContext ctx,
+                                             SyncLockService.LockHandle lock,
+                                             CdcRuntimeStats stats) {
         Project project = new Project();
         project.setId(1L);
         project.setName("mssql-1");
         return new SqlServerCdcConsumer(project, lock, ctx, positionStore,
                 mock(CdcBaselineService.class), taskStore,
-                mock(SyncStateWriter.class), dsm, new CdcRuntimeStats(), properties);
+                mock(SyncStateWriter.class), dsm, stats, properties);
     }
 
     /** Lock renews for {@code grants} cycles, then refuses — bounds the loop in every path. */
@@ -274,6 +285,29 @@ class SqlServerCdcConsumerFailureEscalationTest {
         consumer.run();
 
         verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
+    @Test
+    void aHealthyCycleLeavesLastErrorNullInsteadOfReportingDrained() throws Exception {
+        // lastError 是"最近错误"通道:模板在非 null 时渲染成红色错误行。健康周期
+        // (SQL Server 默认 idle-poll 1000ms)旧实现每轮写 "drained" —— 每个正常
+        // 运行的项目常驻一条红色"最近错误",且每轮打一行(此处 INFO,另两个消费者
+        // 是 WARN),空闲即刷屏。契约:健康周期 lastError 保持 null、日志降到 DEBUG。
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        SqlServerCdcConsumer consumer = newConsumer(
+                contextWithStagedTarget(true), boundedLock(3), stats);
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(SqlServerCdcConsumer.class);
+        try {
+            consumer.run();
+        } finally {
+            LogCapture.detach(SqlServerCdcConsumer.class, logs);
+        }
+
+        assertThat(stats.getLastError()).isNull();
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .noneMatch(message -> message.contains("cycle for project"));
+        assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                .noneMatch(message -> message.contains("cycle for project"));
     }
 
     @Test

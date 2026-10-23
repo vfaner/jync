@@ -250,11 +250,20 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 // 只有真正空闲才休眠 idlePollMs,失败走指数退避。
                 long delay = CdcReconnectBackoff.nextCycleDelayMs(
                         failure, !drained.isEmpty(), backoff, idlePollMs);
-                stats.setLastError(failure == null
-                        ? "mining cycle drained" : CdcFailureClassifier.describe(failure));
-                log.warn("LogMiner cycle for project {} ended ({}); next cycle in {} ms",
-                        projectId, failure == null ? "no failure recorded"
-                                : CdcFailureClassifier.describe(failure), delay);
+                // lastError feeds the project panel's "last error" row, which the template
+                // renders only when non-null. A healthy cycle must leave it null, and its
+                // completion line belongs at DEBUG: idle mining polls every 1000 ms by
+                // default, so logging it at WARN flooded the log of every healthy project.
+                if (failure == null) {
+                    stats.setLastError(null);
+                    log.debug("LogMiner cycle for project {} drained; next cycle in {} ms",
+                            projectId, delay);
+                } else {
+                    String detail = CdcFailureClassifier.describe(failure);
+                    stats.setLastError(detail);
+                    log.warn("LogMiner cycle for project {} failed ({}); next cycle in {} ms",
+                            projectId, detail, delay);
+                }
                 if (!sleepWhileRunning(delay)) {
                     break;
                 }
