@@ -13,8 +13,10 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.OaAuthConfig;
 import com.qqmu.jync.repository.OaAuthConfigRepository;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * The OA sign-in settings are a single row with hand-written validation: nothing on this form
@@ -25,13 +27,18 @@ class OaAuthConfigServiceTest {
 
     private OaAuthConfigRepository repository;
     private OaAuthConfigService service;
+    private CryptoUtil crypto;
 
     @BeforeEach
     void setUp() {
         repository = mock(OaAuthConfigRepository.class);
         when(repository.findById(OaAuthConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
         when(repository.save(any(OaAuthConfig.class))).thenAnswer(inv -> inv.getArgument(0));
-        service = new OaAuthConfigService(repository);
+        SyncProperties properties = new SyncProperties();
+        properties.setCryptoPassword("test-password");
+        properties.setCryptoSalt("0011223344556677");
+        crypto = new CryptoUtil(properties);
+        service = new OaAuthConfigService(repository, crypto);
     }
 
     private OaAuthConfig enabled() {
@@ -174,5 +181,130 @@ class OaAuthConfigServiceTest {
         config.setLoginUrl("not a url");
 
         assertThat(service.save(config).isEnabled()).isFalse();
+    }
+
+    @Test
+    void aRowWrittenBeforeTheModeColumnStillMeansPassword() {
+        OaAuthConfig legacy = new OaAuthConfig();
+        legacy.setMode(null);
+        when(repository.findById(OaAuthConfigService.SINGLETON_ID))
+                .thenReturn(Optional.of(legacy));
+
+        assertThat(service.load().getMode()).isEqualTo(OaAuthConfig.Mode.PASSWORD);
+    }
+
+    @Test
+    void aRowWrittenBeforeTheLocalLoginColumnKeepsLocalLoginAllowed() {
+        OaAuthConfig legacy = new OaAuthConfig();
+        legacy.setLocalLoginEnabled(null);
+        when(repository.findById(OaAuthConfigService.SINGLETON_ID))
+                .thenReturn(Optional.of(legacy));
+
+        assertThat(service.load().isLocalLoginAllowed()).isTrue();
+    }
+
+    @Test
+    void headerModeNeedsTheIdentityHeaderButNoPasswordEndpoint() {
+        OaAuthConfig config = new OaAuthConfig();
+        config.setEnabled(true);
+        config.setMode(OaAuthConfig.Mode.HEADER);
+
+        assertThatThrownBy(() -> service.save(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.oa.userHeader.required");
+
+        config.setUserHeader("X-Auth-User");
+        assertThat(service.save(config).getUserHeader()).isEqualTo("X-Auth-User");
+    }
+
+    @Test
+    void headerNamesMustBeTokensAndMayNotBeCookieOrAuthorization() {
+        OaAuthConfig config = headerConfig();
+        config.setUserHeader("X Auth User");
+        assertThatThrownBy(() -> service.save(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.oa.header.invalid");
+
+        config.setUserHeader("Cookie");
+        assertThatThrownBy(() -> service.save(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.oa.header.invalid");
+    }
+
+    @Test
+    void theSecretHeaderNameAndValueMustComeTogether() {
+        OaAuthConfig config = headerConfig();
+        config.setSecretHeaderName("X-Auth-Secret");
+
+        assertThatThrownBy(() -> service.save(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.oa.secret.incomplete");
+    }
+
+    @Test
+    void aTypedSecretIsEncryptedAndABlankOneKeepsTheStoredCiphertext() {
+        OaAuthConfig config = headerConfig();
+        config.setSecretHeaderName("X-Auth-Secret");
+
+        OaAuthConfig saved = service.save(config, "s3cr3t", false);
+        assertThat(saved.getSecretHeaderValue()).startsWith(CryptoUtil.PREFIX);
+        assertThat(crypto.decrypt(saved.getSecretHeaderValue())).isEqualTo("s3cr3t");
+
+        OaAuthConfig stored = new OaAuthConfig();
+        stored.setSecretHeaderValue(saved.getSecretHeaderValue());
+        when(repository.findById(OaAuthConfigService.SINGLETON_ID))
+                .thenReturn(Optional.of(stored));
+
+        OaAuthConfig again = headerConfig();
+        again.setSecretHeaderName("X-Auth-Secret");
+        assertThat(service.save(again, "  ", false).getSecretHeaderValue())
+                .isEqualTo(saved.getSecretHeaderValue());
+    }
+
+    @Test
+    void clearingTheSecretRemovesIt() {
+        OaAuthConfig config = headerConfig();
+        config.setSecretHeaderName("X-Auth-Secret");
+
+        assertThat(service.save(config, "s3cr3t", true).getSecretHeaderValue()).isNull();
+    }
+
+    @Test
+    void ticketModeNeedsAValidationUrlAndAResponseField() {
+        OaAuthConfig config = new OaAuthConfig();
+        config.setEnabled(true);
+        config.setMode(OaAuthConfig.Mode.TICKET);
+
+        assertThatThrownBy(() -> service.save(config))
+                .hasMessage("error.oa.ticket.urlRequired");
+
+        config.setValidateUrl("http://sso.internal/validate");
+        assertThatThrownBy(() -> service.save(config))
+                .hasMessage("error.oa.url.notHttps");
+
+        config.setAllowInsecureHttp(true);
+        assertThatThrownBy(() -> service.save(config))
+                .hasMessage("error.oa.userField.required");
+
+        config.setUserField("data.username");
+        assertThat(service.save(config).getValidateMethod())
+                .isEqualTo(OaAuthConfig.ValidateMethod.GET);
+    }
+
+    @Test
+    void fieldsThatBelongToAnotherModeAreNotValidated() {
+        OaAuthConfig config = headerConfig();
+        config.setValidateUrl("not a url");
+        config.setSuccessField("code");
+
+        assertThat(service.save(config).getValidateUrl()).isEqualTo("not a url");
+    }
+
+    private OaAuthConfig headerConfig() {
+        OaAuthConfig config = new OaAuthConfig();
+        config.setEnabled(true);
+        config.setMode(OaAuthConfig.Mode.HEADER);
+        config.setUserHeader("X-Auth-User");
+        return config;
     }
 }
