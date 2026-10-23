@@ -76,6 +76,19 @@ public class ChangeDetector {
             }
             String key = table.getName().toUpperCase();
             seen.add(key);
+            // A table the reader filled in with no columns was not really read: JDBC returns
+            // empty result sets and throws nothing for a table that no longer exists (still
+            // named in the saved selection) or whose column dictionary the account cannot see.
+            // Diffing that empty shape against the snapshot reports every stored column and
+            // index as removed, and with allowDrop on the target loses its shape one DDL
+            // statement at a time. Treat it like the unreadable-table contract above: marked
+            // seen (it was requested, so drop detection must not fire), snapshot untouched,
+            // and the diff resumes by itself once columns are readable again.
+            if (table.getColumns() == null || table.getColumns().isEmpty()) {
+                log.debug("Skipping table {}: no columns were reported (the table no longer"
+                        + " exists at the source or is not readable)", table.getName());
+                continue;
+            }
             TableMeta previous = snapshots.get(key);
 
             if (previous == null) {

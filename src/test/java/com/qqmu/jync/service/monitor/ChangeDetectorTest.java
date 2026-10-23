@@ -306,6 +306,37 @@ class ChangeDetectorTest {
     }
 
     @Test
+    void aTableWhoseColumnsCameBackEmptyIsNotDiffedIntoDestructiveDrops() {
+        // A table still named in the saved selection but dropped at the source comes back from
+        // readTable() as an empty TableMeta: JDBC returns no rows and throws nothing. Diffing
+        // that against its snapshot reports every stored column and index as removed, and with
+        // allowDrop on the target loses its shape one DDL statement at a time.
+        TableMeta stored = new TableMeta();
+        stored.setName("ORDERS");
+        stored.getColumns().add(column("ID", null));
+        stored.getColumns().add(column("NAME", null));
+        IndexMeta index = new IndexMeta();
+        index.setName("IDX_NAME");
+        index.setColumns(List.of("NAME"));
+        stored.setIndexes(List.of(index));
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", stored));
+
+        TableMeta live = new TableMeta();
+        live.setName("ORDERS"); // no columns: the table is gone, or the columns are unreadable
+        DatabaseMeta current = new DatabaseMeta();
+        current.getTables().add(live);
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        config.setSyncIndexes(true);
+        config.setTables(new java.util.LinkedHashSet<>(List.of("ORDERS")));
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        assertThat(events).isEmpty();
+    }
+
+    @Test
     void aViewWithAReadableBodyStillDiffsNormally() {
         ViewMeta stored = new ViewMeta();
         stored.setName("V_ORDERS");
