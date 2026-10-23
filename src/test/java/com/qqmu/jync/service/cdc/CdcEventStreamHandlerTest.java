@@ -485,6 +485,24 @@ class CdcEventStreamHandlerTest {
         assertThat(CdcEventStreamHandler.xaBranchId("XA RECOVER CONVERT XID")).isNull();
     }
 
+    @Test
+    void xaBranchIdTreatsSingleAndDoubleQuotesAsTheSameBranch() {
+        // 应用完全可能用双引号写 XA PREPARE、用单引号写 XA COMMIT(不同客户端、不同
+        // 代码路径、连接开了 ANSI_QUOTES 与否)。旧实现把引号字符原样留在 id 里,两个
+        // 拼写永远不相等 —— requirePreparedBranch 于是把同一个分支判成「提交的不是
+        // 已准备的那个」,项目以 XA_ORDERING 永久 park。
+        assertThat(CdcEventStreamHandler.xaBranchId("XA PREPARE \"gtrid1\""))
+                .isEqualTo(CdcEventStreamHandler.xaBranchId("XA COMMIT 'gtrid1'"));
+        assertThat(CdcEventStreamHandler.xaBranchId("XA PREPARE \"g\",\"b\",42"))
+                .isEqualTo(CdcEventStreamHandler.xaBranchId("XA COMMIT 'g','b',42"));
+        // 双引号值里嵌单引号,与单引号写法里的双写转义是同一个值。
+        assertThat(CdcEventStreamHandler.xaBranchId("XA PREPARE \"it's\""))
+                .isEqualTo(CdcEventStreamHandler.xaBranchId("XA COMMIT 'it''s'"));
+        // 汇合后的 id 必须仍然无歧义:一个含 "','" 的 gtrid 不能和两个分量撞车。
+        assertThat(CdcEventStreamHandler.xaBranchId("XA PREPARE 'a'',''b'"))
+                .isNotEqualTo(CdcEventStreamHandler.xaBranchId("XA COMMIT 'a','b'"));
+    }
+
     private void query(String sql) {
         QueryEventData data = new QueryEventData();
         data.setSql(sql);

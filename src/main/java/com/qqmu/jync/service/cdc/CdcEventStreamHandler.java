@@ -542,7 +542,13 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                 if (!empty) {
                     id.append(',');
                 }
-                id.append(quote).append(part).append(quote);
+                // Canonical single quotes: MySQL treats 'g' and "g" as the same branch id,
+                // so leaving the client's quote character in would make a PREPARE in one
+                // spelling and a COMMIT in the other compare unequal — and that verdict
+                // parks the project as XA_ORDERING. Doubling an embedded quote keeps the
+                // joined form unambiguous: a gtrid containing ',' must not collide with a
+                // multi-part xid.
+                id.append('\'').append(part.toString().replace("'", "''")).append('\'');
                 empty = false;
             } else if (Character.isDigit(c)
                     || (c == '-' && i + 1 < n && Character.isDigit(sql.charAt(i + 1)))) {
