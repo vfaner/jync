@@ -78,6 +78,8 @@ class PgLogicalCdcConsumerDrainTest {
     private SyncProperties properties;
     private MetadataReader reader;
     private PgLogicalCdcConsumer consumer;
+    private CdcRuntimeStats stats;
+    private SyncConfig config;
 
     private static ColumnMeta column(String name, int jdbcType, boolean pk) {
         ColumnMeta column = new ColumnMeta();
@@ -141,8 +143,10 @@ class PgLogicalCdcConsumerDrainTest {
         reader = mock(MetadataReader.class);
         when(reader.readTable(any(), anyString(), anyString())).thenReturn(meta);
 
+        config = new SyncConfig();
+        stats = new CdcRuntimeStats();
         SyncContext ctx = SyncContext.builder()
-                .config(new SyncConfig())
+                .config(config)
                 .targetDialect(new GenericSqlDialect())
                 .batchSize(100)
                 .sourceReader(reader)
@@ -167,7 +171,7 @@ class PgLogicalCdcConsumerDrainTest {
                 mock(SyncLockService.LockHandle.class), ctx, positionStore,
                 mock(CdcBaselineService.class), mock(SyncTaskStore.class),
                 mock(SyncStateWriter.class), dataSourceManager,
-                new CdcRuntimeStats(), properties);
+                stats, properties);
     }
 
     @AfterEach
@@ -369,6 +373,130 @@ class PgLogicalCdcConsumerDrainTest {
         assertThat(targetRowCount()).isZero();
         verify(advancePs, times(1)).setString(eq(2), eq("0/1002"));
         verify(advancePs, times(1)).executeQuery();
+    }
+
+    @Test
+    void aColumnAddedOnTheSourceAfterTheBindingWasCachedStillLands() throws Exception {
+        // 逻辑复制槽的流里没有 DDL 事件(test_decoding 只发行变更),消费者构建 binding 时
+        // 读一次源端元数据后永久缓存。源库 ADD COLUMN 之后,新行的 INSERT 带着新列,而
+        // 旧 binding 的列清单里没有它 —— upsert 语句整句都不含该列,值静默丢失,既不报错
+        // 也不计数,永远不会自愈。行形状与缓存元数据不一致是唯一的信号:必须借此重读。
+        try (Connection c = h2conn(); Statement st = c.createStatement()) {
+            st.execute("ALTER TABLE orders ADD COLUMN note VARCHAR(64)");
+        }
+        TableMeta withNote = new TableMeta();
+        withNote.setName("orders");
+        withNote.getColumns().add(column("id", Types.BIGINT, true));
+        withNote.getColumns().add(column("name", Types.VARCHAR, false));
+        withNote.getColumns().add(column("note", Types.VARCHAR, false));
+        withNote.getPrimaryKeys().add("id");
+        // 第一次读(构建缓存)是 DDL 之前的形状,之后是 DDL 之后的形状。
+        when(reader.readTable(any(), anyString(), anyString()))
+                .thenReturn(ordersMeta(), withNote);
+
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", "table public.orders: INSERT: id[bigint]:1"
+                        + " name[text]:'a' note[text]:'hello'"},
+                new String[]{"0/1002", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        try (Connection c = h2conn();
+             Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT note FROM orders WHERE id = 1")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1)).isEqualTo("hello");
+        }
+        verify(reader, times(2)).readTable(any(), anyString(), anyString());
+    }
+
+    @Test
+    void aColumnDroppedOnTheSourceStopsBeingNulledOnTheTarget() throws Exception {
+        // 反方向:源库 DROP COLUMN 之后,行里不再有该列。旧 binding 仍按旧列清单构建
+        // upsert —— 缺失的列被绑成 NULL,目标端已有的值被凭空抹掉。行形状不一致同样是
+        // 唯一信号:刷新后 upsert 只触及仍然存在的列。
+        try (Connection c = h2conn(); Statement st = c.createStatement()) {
+            st.execute("ALTER TABLE orders ADD COLUMN note VARCHAR(64)");
+            st.execute("INSERT INTO orders (id, name, note) VALUES (1, 'a', 'keep me')");
+        }
+        TableMeta withNote = new TableMeta();
+        withNote.setName("orders");
+        withNote.getColumns().add(column("id", Types.BIGINT, true));
+        withNote.getColumns().add(column("name", Types.VARCHAR, false));
+        withNote.getColumns().add(column("note", Types.VARCHAR, false));
+        withNote.getPrimaryKeys().add("id");
+        when(reader.readTable(any(), anyString(), anyString()))
+                .thenReturn(withNote, ordersMeta());
+
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", "table public.orders: UPDATE:"
+                        + " id[bigint]:1 name[text]:'renamed'"},
+                new String[]{"0/1002", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        try (Connection c = h2conn();
+             Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT name, note FROM orders WHERE id = 1")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1)).isEqualTo("renamed");
+            assertThat(rs.getString(2)).isEqualTo("keep me");
+        }
+        verify(reader, times(2)).readTable(any(), anyString(), anyString());
+    }
+
+    /** 未修改的 TOAST 列:test_decoding 打印占位符,真实值不在流里。 */
+    private static String toastUpdate(long id, String name) {
+        return "table public.orders: UPDATE: id[bigint]:" + id
+                + " name[text]:'" + name + "' body[text]:unchanged-toast-datum";
+    }
+
+    @Test
+    void unchangedToastRowsAreCountedPerTableLikeLogMinersMissingLobs() throws Exception {
+        // 值确实不在流里(test_decoding 无法还原未修改的 TOAST 列),跳过是唯一诚实的
+        // 选择 —— 策略不变,仍计入 strike-out。但它们必须和 LogMiner 的行外 LOB 一样
+        // 进入按表的 missing-Lob 计数(CDC 状态面板可见),而不是只落进泛化的
+        // "unsupported skipped";否则运维看不出是哪张表、为什么丢。
+        scriptCall(
+                new String[]{"0/2000", BEGIN},
+                new String[]{"0/2001", toastUpdate(1, "a")},
+                new String[]{"0/2002", toastUpdate(1, "b")},
+                new String[]{"0/2003", toastUpdate(1, "c")},
+                new String[]{"0/2004", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        assertThat(stats.getSkippedMissingLob()).isEqualTo(3);
+        assertThat(stats.missingLobByTable()).containsEntry("public.orders", 3L);
+    }
+
+    @Test
+    void toastRowsOfTablesOutsideTheProjectAreNotCounted() throws Exception {
+        // 槽解码整个数据库:其他表的 TOAST 行与本项目无关,既不是本项目的丢数,
+        // 也不该把通用计数推高(更不该参与 strike-out)。
+        config.getTables().add("orders");
+        scriptCall(
+                new String[]{"0/2000", BEGIN},
+                new String[]{"0/2001", "table public.audit_log: UPDATE: id[bigint]:1"
+                        + " body[text]:unchanged-toast-datum"},
+                new String[]{"0/2002", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        assertThat(stats.getSkippedMissingLob()).isZero();
+        assertThat(stats.snapshot().get("skippedUnsupported")).isEqualTo(0L);
+    }
+
+    /** 目标表 orders 的原始形状:id 主键 + name。 */
+    private static TableMeta ordersMeta() {
+        TableMeta meta = new TableMeta();
+        meta.setName("orders");
+        meta.getColumns().add(column("id", Types.BIGINT, true));
+        meta.getColumns().add(column("name", Types.VARCHAR, false));
+        meta.getPrimaryKeys().add("id");
+        return meta;
     }
 
     @Test

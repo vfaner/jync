@@ -8,8 +8,11 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -53,6 +56,23 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
 
     /** Parse strike-out: same threshold as the LogMiner / binlog consumers. */
     static final int MAX_PARSE_FAILURES = 5;
+
+    /**
+     * How long a table's metadata is trusted after a refresh triggered by a row-shape
+     * mismatch. A binding that keeps disagreeing with the stream (a column the metadata
+     * reader does not report, say) must not turn into one source connection per row; a
+     * real DDL change is picked up by the first row it affects anyway.
+     */
+    private static final long BINDING_REFRESH_COOLDOWN_MS = 10_000L;
+
+    /**
+     * How long a "this table cannot be applied" verdict is trusted. Nothing in the slot
+     * stream announces DDL (logical decoding of test_decoding emits row changes only), so a
+     * table that gains a primary key while the consumer runs would otherwise stay
+     * unsyncable until the process restarts or the baseline is rebuilt. Costs at most one
+     * metadata read per table per interval, and only for tables that keep emitting events.
+     */
+    private static final long BINDING_UNMAPPABLE_RECHECK_MS = 10 * 60_000L;
 
     private final Project project;
     private final SyncLockService.LockHandle lock;
@@ -376,6 +396,38 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                             reason, truncate(data, 120));
                                     continue;
                                 }
+                                if (skipKind == PgTestDecodingParser.Skip.VALUE_UNAVAILABLE) {
+                                    // test_decoding cannot reproduce an unmodified TOASTed
+                                    // column, so the value is genuinely absent from the
+                                    // stream — the same class as LogMiner's out-of-line LOBs
+                                    // and reported the same way: per-table tally on the CDC
+                                    // panel, one throttled warning instead of one per row
+                                    // (a hot table would otherwise flood the log and drown
+                                    // the rest). Rows of tables this project does not mirror
+                                    // are not this project's loss and are not counted at all.
+                                    if (change.qualifiedTable != null
+                                            && !matchesProjectTable(change.qualifiedTable)) {
+                                        continue;
+                                    }
+                                    String tableKey = change.qualifiedTable == null
+                                            ? "(unknown table)" : change.qualifiedTable;
+                                    CdcRuntimeStats.MissingLobHit hit = stats.recordMissingLob(
+                                            tableKey,
+                                            properties.getLob().getMetricsLogIntervalMs());
+                                    if (hit.warnDue()) {
+                                        log.warn("{} change(s) on {} skipped so far: {} — the"
+                                                + " value is not in the logical stream, so the"
+                                                + " target keeps its previous version; run a"
+                                                + " full sync of the table to catch up.",
+                                                hit.count(), tableKey, reason);
+                                    } else {
+                                        log.debug("Skipping PG slot row on {}: {}",
+                                                tableKey, reason);
+                                    }
+                                    stats.addSkippedUnsupported(1);
+                                    parseFailures.incrementAndGet();
+                                    continue;
+                                }
                                 stats.addSkippedUnsupported(1);
                                 if (skipKind == PgTestDecodingParser.Skip.UNSUPPORTED_EVENT) {
                                     // A real change of a kind we do not mirror (TRUNCATE,
@@ -397,7 +449,21 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                             if (!matchesProjectTable(change.qualifiedTable)) {
                                 continue;
                             }
-                            CdcTableBinding binding = supplier.binding(change.qualifiedTable);
+                            Resolution resolved =
+                                    supplier.resolve(change.qualifiedTable);
+                            if (resolved.binding != null && !resolved.describes(change)) {
+                                // The slot stream carries no DDL (test_decoding emits row
+                                // changes only), so the row shape is the only signal that the
+                                // cached metadata went stale — typically a source ADD COLUMN
+                                // after the binding was read. Without this, the upsert is
+                                // built from the old column list and the new column's value
+                                // is dropped silently and permanently.
+                                log.info("PG binding for {} no longer matches the change row"
+                                        + " shape (source DDL?); re-reading metadata",
+                                        change.qualifiedTable);
+                                resolved = supplier.refresh(change.qualifiedTable);
+                            }
+                            CdcTableBinding binding = resolved.binding;
                             if (binding == null || !binding.isApplicable()) {
                                 stats.addUnsupportedTable(change.qualifiedTable);
                                 continue;
@@ -775,39 +841,109 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
      * the already-lower-case "{@code schema.table}" qualified name from the slot stream.
      */
     private final class BindingSupplier {
-        /**
-         * Marker for "this table cannot be applied". Cached like a binding: without it every
-         * row event of a no-PK/hot table re-opens a source connection, re-reads metadata and
-         * logs the same WARN — the exact storm SqlServerCdcConsumer's sentinel prevents.
-         */
-        private final Object unmappable = new Object();
-        private final Map<String, Object> cache =
-                Collections.synchronizedMap(new LinkedHashMap<>());
 
-        CdcTableBinding binding(String qualified) {
-            Object cached = cache.get(qualified);
-            if (cached != null) return cached == unmappable ? null : (CdcTableBinding) cached;
+        /**
+         * Cached resolutions keyed by "{@code schema.table}"; a table that cannot be applied
+         * is cached too (with a null binding): without that, every row event of a no-PK/hot
+         * table re-opens a source connection, re-reads metadata and logs the same WARN — the
+         * exact storm SqlServerCdcConsumer's sentinel prevents.
+         */
+        private final Map<String, Resolution> cache =
+                Collections.synchronizedMap(new LinkedHashMap<>());
+        private final Map<String, Long> refreshedAt = new ConcurrentHashMap<>();
+
+        Resolution resolve(String qualified) {
+            Resolution cached = cache.get(qualified);
+            if (cached != null && !cached.recheckDue(System.currentTimeMillis())) {
+                return cached;
+            }
+            return read(qualified);
+        }
+
+        /** Re-read after the stream contradicted the cached column list (see the caller). */
+        Resolution refresh(String qualified) {
+            long now = System.currentTimeMillis();
+            Long last = refreshedAt.get(qualified);
+            if (last != null && now - last < BINDING_REFRESH_COOLDOWN_MS) {
+                Resolution cached = cache.get(qualified);
+                if (cached != null) {
+                    return cached;
+                }
+            }
+            refreshedAt.put(qualified, now);
+            return read(qualified);
+        }
+
+        private Resolution read(String qualified) {
             int dot = qualified.indexOf('.');
             String schema = dot < 0 ? "public" : qualified.substring(0, dot);
             String table = dot < 0 ? qualified : qualified.substring(dot + 1);
+            Resolution resolution;
             try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                 MetadataReader reader = ctx.getSourceReader();
                 TableMeta meta = reader.readTable(conn, schema, table);
                 if (meta == null || !meta.hasPrimaryKey()) {
                     log.warn("PG cannot map source table {}.{} (missing or no PK);"
                             + " skipping its row events", schema, table);
-                    cache.put(qualified, unmappable);
-                    return null;
+                    resolution = Resolution.unmappable(System.currentTimeMillis());
+                } else {
+                    CdcTableBinding b = CdcTableBinding.of(schema, table, meta,
+                            ctx.getConfig().targetTableName(meta.getName()),
+                            Collections.emptyMap());
+                    resolution = Resolution.of(b);
                 }
-                CdcTableBinding b = CdcTableBinding.of(schema, table, meta,
-                        ctx.getConfig().targetTableName(meta.getName()),
-                        Collections.emptyMap());
-                cache.put(qualified, b);
-                return b;
             } catch (SQLException e) {
                 throw new IllegalStateException(
                         "PG metadata read failed for " + qualified, e);
             }
+            cache.put(qualified, resolution);
+            return resolution;
+        }
+    }
+
+    /**
+     * One table's cached metadata plus the column set it describes. The caller compares that
+     * set against each decoded row: logical replication carries no DDL, so a row whose
+     * columns disagree with the cache is the only evidence that the source schema moved.
+     */
+    static final class Resolution {
+        final CdcTableBinding binding;
+        private final Set<String> columns;
+        /** When an "unmappable" verdict was formed; unused for a real binding. */
+        private final long createdAtMillis;
+
+        private Resolution(CdcTableBinding binding, Set<String> columns, long createdAtMillis) {
+            this.binding = binding;
+            this.columns = columns;
+            this.createdAtMillis = createdAtMillis;
+        }
+
+        static Resolution of(CdcTableBinding binding) {
+            return new Resolution(binding, new LinkedHashSet<>(binding.columnNames()), 0L);
+        }
+
+        static Resolution unmappable(long createdAtMillis) {
+            return new Resolution(null, Collections.emptySet(), createdAtMillis);
+        }
+
+        /** See {@link #BINDING_UNMAPPABLE_RECHECK_MS}. */
+        boolean recheckDue(long nowMillis) {
+            return binding == null && nowMillis - createdAtMillis >= BINDING_UNMAPPABLE_RECHECK_MS;
+        }
+
+        /**
+         * INSERT and UPDATE carry every live column of the table (test_decoding prints the
+         * whole new tuple), so the sets must be equal — that is what catches both an added
+         * and a dropped column. A DELETE under REPLICA IDENTITY DEFAULT carries the key
+         * columns only, so it only has to be a subset.
+         */
+        boolean describes(PgTestDecodingParser.ParsedChange change) {
+            if (binding == null) {
+                return true;
+            }
+            return change.op == PgTestDecodingParser.Op.DELETE
+                    ? columns.containsAll(change.row.keySet())
+                    : columns.equals(change.row.keySet());
         }
     }
 }
