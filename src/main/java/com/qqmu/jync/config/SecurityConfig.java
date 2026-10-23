@@ -50,7 +50,8 @@ public class SecurityConfig {
 
     /** Paths that must work before anyone has signed in. */
     private static final String[] PUBLIC = {
-            "/login", "/css/**", "/js/**", "/vendor/**", "/assets/**", "/favicon.ico"
+            "/login", "/login/local", "/sso/entry",
+            "/css/**", "/js/**", "/vendor/**", "/assets/**", "/favicon.ico"
     };
 
     /**

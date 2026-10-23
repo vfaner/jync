@@ -1,6 +1,5 @@
 package com.qqmu.jync.service.auth.oa;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -35,7 +34,6 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 public class HttpOaAuthClient implements OaAuthClient {
 
-    private static final int MAX_RESPONSE_BYTES = 64 * 1024;
     private static final int MAX_USERNAME_LENGTH = 64;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -90,7 +88,7 @@ public class HttpOaAuthClient implements OaAuthClient {
 
         byte[] body;
         try (InputStream in = response.body()) {
-            body = readCapped(in);
+            body = HttpBodies.readCapped(in);
         } catch (IOException ex) {
             return OaAuthResult.failure("error.oa.unreachable");
         }
@@ -118,14 +116,14 @@ public class HttpOaAuthClient implements OaAuthClient {
         }
 
         if (successField != null) {
-            String actual = textAt(root, successField);
+            String actual = JsonFieldReader.textAt(root, successField);
             String expected = trimToNull(config.getSuccessValue());
             if (actual == null || expected == null || !actual.equals(expected)) {
                 return OaAuthResult.failure("error.oa.rejected");
             }
         }
 
-        String resolvedUsername = textAt(root, config.getUserField());
+        String resolvedUsername = JsonFieldReader.textAt(root, config.getUserField());
         if (resolvedUsername == null) {
             return OaAuthResult.failure("error.oa.user.missing");
         }
@@ -133,7 +131,8 @@ public class HttpOaAuthClient implements OaAuthClient {
             resolvedUsername = resolvedUsername.substring(0, MAX_USERNAME_LENGTH);
         }
 
-        return OaAuthResult.success(resolvedUsername, isAdmin(config, root));
+        return OaAuthResult.success(resolvedUsername,
+                JsonFieldReader.matches(root, config.getAdminField(), config.getAdminValue()));
     }
 
     private static String contentType(OaAuthConfig config) {
@@ -156,63 +155,6 @@ public class HttpOaAuthClient implements OaAuthClient {
                 + URLEncoder.encode(username == null ? "" : username, StandardCharsets.UTF_8) + "&"
                 + URLEncoder.encode(passwordField, StandardCharsets.UTF_8) + "="
                 + URLEncoder.encode(password == null ? "" : password, StandardCharsets.UTF_8);
-    }
-
-    /**
-     * Reads at most {@link #MAX_RESPONSE_BYTES}; returns {@code null} as soon as the body proves
-     * larger, so an endpoint cannot make the login thread buffer an arbitrary amount.
-     */
-    private static byte[] readCapped(InputStream in) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int read;
-        while ((read = in.read(buffer)) != -1) {
-            if (out.size() + read > MAX_RESPONSE_BYTES) {
-                return null;
-            }
-            out.write(buffer, 0, read);
-        }
-        return out.toByteArray();
-    }
-
-    /**
-     * Dot path lookup ({@code data.user}). Missing nodes, nulls and containers all count as
-     * absent — only a scalar can name a user or carry a success marker.
-     */
-    private static String textAt(JsonNode root, String path) {
-        if (root == null || path == null) {
-            return null;
-        }
-        JsonNode node = root;
-        for (String part : path.split("\\.")) {
-            if (node == null || !node.isObject()) {
-                return null;
-            }
-            node = node.get(part);
-        }
-        if (node == null || node.isNull() || node.isContainerNode()) {
-            return null;
-        }
-        String text = node.asText();
-        return text == null || text.isBlank() ? null : text.trim();
-    }
-
-    private static boolean isAdmin(OaAuthConfig config, JsonNode root) {
-        String adminField = trimToNull(config.getAdminField());
-        String adminValue = trimToNull(config.getAdminValue());
-        if (adminField == null || adminValue == null) {
-            return false;
-        }
-        String actual = textAt(root, adminField);
-        if (actual == null) {
-            return false;
-        }
-        for (String accepted : adminValue.split(",")) {
-            if (accepted.trim().equals(actual)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static String orDefault(String value, String fallback) {
