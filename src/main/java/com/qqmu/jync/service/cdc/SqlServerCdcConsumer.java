@@ -192,6 +192,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     ctx.getConfig().getCdcIdlePollMs(),
                     properties.getCdc().getMssql().getIdlePollMs());
             windowLogger.start();
+            // The throughput window covers the whole run, not one poll cycle: the panel
+            // divides the cumulative rows applied by the elapsed window. Stamping it inside
+            // the loop reported 0.0 right after every poll and an ever-growing rate once a
+            // cycle took longer than a second (CdcRuntimeStats.eventsPerSecond's floor).
+            stats.markStarted();
             while (running && !Thread.currentThread().isInterrupted()) {
                 if (!lock.renew()) {
                     log.warn("SQLServer CDC consumer for project {} stopping: lease lost",
@@ -206,7 +211,6 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                     currentSource = conn;
                     stats.setConnected(true);
-                    stats.markStarted();
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
                     DrainResult result = drain(conn, fromLsn);
@@ -220,10 +224,15 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     applyFailures.incrementAndGet(); // F-13: count the failed cycle
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
+                    // The poll loop opens a connection per cycle, so "connected" cannot be
+                    // tied to the connection's lifetime: between cycles there is none, and the
+                    // panel would show 已断开 for almost the whole run of a healthy consumer.
+                    // The status means "the cycle's read path works", so only a failed cycle
+                    // drops it; a healthy cycle leaves the panel green until the next poll.
+                    stats.setConnected(false);
                 } finally {
                     closeQuietly(currentSource);
                     currentSource = null;
-                    stats.setConnected(false);
                 }
                 if (!running) break;
                 Throwable failure = lastFailure.get();

@@ -171,6 +171,11 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     ctx.getConfig().getCdcIdlePollMs(),
                     properties.getCdc().getPg().getIdlePollMs());
             windowLogger.start();
+            // The throughput window covers the whole run, not one poll cycle: the panel divides
+            // the cumulative rows applied by the elapsed window. Stamping it inside the loop
+            // reported 0.0 right after every poll and an ever-growing rate once a cycle took
+            // longer than a second (see CdcRuntimeStats.eventsPerSecond's one-second floor).
+            stats.markStarted();
             while (running && !Thread.currentThread().isInterrupted()) {
                 if (!lock.renew()) {
                     log.warn("PG consumer for project {} stopping: lease lost (another"
@@ -186,7 +191,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     currentSource = conn;
                     ensureSlot(conn, slotName);
                     stats.setConnected(true);
-                    stats.markStarted();
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
                     rowsDrained = drain(conn, slotName);
@@ -194,10 +198,15 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
                     applyFailures.incrementAndGet();
+                    // The poll loop opens a connection per cycle, so "connected" cannot be tied
+                    // to the connection's lifetime: between cycles there is none, and the
+                    // panel would show 已断开 for almost the whole run of a healthy consumer.
+                    // The status means "the cycle's read path works", so only a failed cycle
+                    // drops it; a healthy cycle leaves the panel green until the next poll.
+                    stats.setConnected(false);
                 } finally {
                     closeQuietly(currentSource);
                     currentSource = null;
-                    stats.setConnected(false);
                 }
                 if (!running) {
                     break;

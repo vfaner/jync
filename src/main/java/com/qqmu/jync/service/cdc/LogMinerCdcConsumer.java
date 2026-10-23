@@ -168,6 +168,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     ctx.getConfig().getCdcIdlePollMs(),
                     properties.getCdc().getLogminer().getIdlePollMs());
             windowLogger.start();
+            // The throughput window covers the whole run, not one mining cycle: the panel
+            // divides the cumulative rows applied by the elapsed window. Stamping it inside
+            // the loop reported 0.0 right after every poll and an ever-growing rate once a
+            // cycle took longer than a second (CdcRuntimeStats.eventsPerSecond's floor).
+            stats.markStarted();
             while (running && !Thread.currentThread().isInterrupted()) {
                 if (!lock.renew()) {
                     log.warn("LogMiner consumer for project {} stopping: lease lost (another"
@@ -190,7 +195,6 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     LogMinerSession session = sessionFactory.open(miningConn, lastScn, batchSize);
                     currentSession = session;
                     stats.setConnected(true);
-                    stats.markStarted();
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
                     drained = drain(session);
@@ -209,6 +213,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     applyFailures.incrementAndGet();
                     lastFailure.compareAndSet(null, e);
                     drained = Collections.emptyList();
+                    // The mining loop opens a connection per cycle, so "connected" cannot be
+                    // tied to the connection's lifetime: between cycles there is none, and the
+                    // panel would show 已断开 for almost the whole run of a healthy consumer.
+                    // The status means "the cycle's read path works", so only a failed cycle
+                    // drops it; a healthy cycle leaves the panel green until the next poll.
+                    stats.setConnected(false);
                 } finally {
                     closeQuietly(currentSession);
                     closeQuietly(currentMining);
@@ -216,7 +226,6 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     closeQuietly(currentSource);
                     currentSession = null;
                     currentSource = null;
-                    stats.setConnected(false);
                 }
                 if (!running) {
                     break;

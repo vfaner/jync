@@ -20,6 +20,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -199,6 +201,22 @@ class PgLogicalCdcConsumerFailureEscalationTest {
         return lock;
     }
 
+    /**
+     * Same bound, but samples the status panel at every cycle boundary: renew runs once at
+     * the top of each loop iteration, which is exactly when an operator's browser sees stats.
+     */
+    private static SyncLockService.LockHandle samplingLock(CdcRuntimeStats stats,
+                                                           List<Boolean> panelAtCycleStart,
+                                                           int grants) {
+        AtomicInteger remaining = new AtomicInteger(grants);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenAnswer(inv -> {
+            panelAtCycleStart.add(stats.isConnected());
+            return remaining.decrementAndGet() >= 0;
+        });
+        return lock;
+    }
+
     private int targetRowCount() throws SQLException {
         try (Connection c = h2conn();
              Statement st = c.createStatement();
@@ -324,6 +342,65 @@ class PgLogicalCdcConsumerFailureEscalationTest {
         consumer.run();
 
         verify(taskStore, never()).recordCdcFailure(any(), anyString());
+    }
+
+    // —— 状态面板真实性:轮询式消费者的 connected 必须粘性、吞吐窗口只标一次 ——
+
+    @Test
+    void aHealthyPollKeepsTheStatusPanelConnectedBetweenCycles() throws Exception {
+        // 面板的 connected 圆点表示「这条 CDC 通路是否健康」。PG 消费者每轮 poll 才开
+        // 一次源连接,旧实现每轮 finally 置 false → 面板在健康运行的绝大多数时间都显示
+        // 红色「已断开」(5 秒刷新几乎不可能撞上几毫秒的连接窗口)。契约:上一轮成功后
+        // 保持 connected,只有失败周期才落回 false。
+        //
+        // 采样点取在每轮开头的 lock.renew —— 面板就在这个时刻看 stats。
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        List<Boolean> panelAtCycleStart = new ArrayList<>();
+        PgLogicalCdcConsumer consumer = newConsumer(
+                stagedTargetContext(true), samplingLock(stats, panelAtCycleStart, 3), stats);
+
+        consumer.run();
+
+        // 第 4 个采样是租约失效时的退出判定,仍反映第 3 轮结束后的状态。
+        assertThat(panelAtCycleStart).containsExactly(false, true, true, true);
+    }
+
+    @Test
+    void aFailedPollCycleDropsTheStatusPanelToDisconnected() throws Exception {
+        // 失败周期必须如实反映在面板上:目标拒绝落库的那一轮之后,下一轮开头应看到
+        // connected=false;再成功一轮后又回到 true。
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        List<Boolean> panelAtCycleStart = new ArrayList<>();
+        PgLogicalCdcConsumer consumer = newConsumer(
+                stagedTargetContext(false, true, true), samplingLock(stats, panelAtCycleStart, 3),
+                stats);
+
+        consumer.run();
+
+        assertThat(panelAtCycleStart).containsExactly(false, false, true, true);
+    }
+
+    @Test
+    void theThroughputWindowIsStampedOncePerRunNotPerPollCycle() throws Exception {
+        // C3 吞吐:eventsPerSecond() = 自 markStarted 起的应用行数 ÷ 已过秒数。
+        // 旧实现每轮 poll 都 markStarted,分子却是消费者启动以来的累计行数 —— 采样
+        // 落在一轮开头显示 0.0,落在 1 秒之后则是一个永远在涨的天文数字。
+        // 让首轮建连耗时 1.1 秒:只有「窗口从 run 起点算」才能越过事件的 1 秒地板。
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        stats.addUpserts(10);
+        AtomicInteger connects = new AtomicInteger();
+        when(dataSourceManager.getConnection(any())).thenAnswer(inv -> {
+            if (connects.getAndIncrement() == 0) {
+                Thread.sleep(1_100L);
+            }
+            return source;
+        });
+        PgLogicalCdcConsumer consumer = newConsumer(
+                stagedTargetContext(true), boundedLock(2), stats);
+
+        consumer.run();
+
+        assertThat(stats.eventsPerSecond()).isGreaterThan(0.0);
     }
 
     @Test
