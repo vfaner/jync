@@ -159,8 +159,9 @@ class SettingsVersionCardViewTest {
 
     @Test
     void restartingCopyPromisesTheAutomaticRefresh() throws Exception {
-        // 重启由 app.js 轮询 /login 完成后自动 reload；文案要如实告诉用户，
-        // 不能再让人守着页面手动刷新。
+        // 重启由 app.js 轮询 /login/local 完成后自动 reload；文案要如实告诉用户，
+        // 不能再让人守着页面手动刷新。/login/local 是本地表单页：外部认证模式下
+        // /login 可能 302 到门户，拿它当探测地址会误判重启是否完成。
         String page = render(base()
                 .state(VersionInfo.State.UPDATE_AVAILABLE)
                 .latestVersion("1.2.0").latestTag("v1.2.0")
@@ -168,7 +169,7 @@ class SettingsVersionCardViewTest {
                 .build());
 
         assertThat(page).contains("完成后页面会自动刷新");
-        assertThat(page).contains("data-login-url=\"/login\"");
+        assertThat(page).contains("data-login-url=\"/login/local\"");
         // 轮询有上限：两分钟后停手并提示手动刷新，不能每秒一直打接口。
         // 文案本身会在内联 JS 字典里做 Unicode 转义，这里只钉住键存在；
         // 中英两份 bundle 的键一致性由 I18nBundleParityTest 兜底。
