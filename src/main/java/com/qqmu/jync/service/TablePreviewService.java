@@ -92,8 +92,7 @@ public class TablePreviewService {
             String requested = side == Side.TARGET
                     ? parseConfig(project).targetTableName(table) : table;
             String actualTable = resolveTableName(conn, reader, schema, requested);
-            return read(conn, dialect, schema, actualTable, config.getName(), side,
-                    System.currentTimeMillis() - started);
+            return read(conn, dialect, schema, actualTable, config.getName(), side, started);
         } catch (SQLException e) {
             // Keep driver detail server-side; the browser only resolves the key.
             log.debug("Cannot preview '{}' on the {} side of project '{}': {}",
@@ -103,7 +102,7 @@ public class TablePreviewService {
     }
 
     private TablePreview read(Connection conn, SqlDialect dialect, String schema, String table,
-                              String connectionName, Side side, long elapsedMs)
+                              String connectionName, Side side, long started)
             throws SQLException {
         String sql = "SELECT * FROM " + dialect.qualify(schema, table);
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -126,8 +125,11 @@ public class TablePreviewService {
                     }
                     rows.add(readRow(rs, meta.getColumnCount()));
                 }
+                // Measured here, after the rows are read: the modal shows this as how long
+                // the preview took, and computing it before the SELECT reported ~0 ms.
                 return new TablePreview(side.name().toLowerCase(java.util.Locale.ROOT),
-                        connectionName, schema, table, columns, rows, truncated, elapsedMs);
+                        connectionName, schema, table, columns, rows, truncated,
+                        System.currentTimeMillis() - started);
             }
         }
     }

@@ -11,6 +11,8 @@ import static org.mockito.Mockito.when;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
@@ -221,6 +223,46 @@ class TablePreviewServiceTest {
         assertThat(preview.rows().get(0)).containsExactly("1", null, "<binary 2 bytes>");
         assertThat(preview.rows().get(1).get(1)).hasSize(501).endsWith("…");
         assertThat(preview.rows().get(1).get(2)).isEqualTo("<binary 0 bytes>");
+    }
+
+    @Test
+    void elapsedTimeCoversTheQueryNotOnlyTheLookups() throws Exception {
+        // The modal shows this figure as how long the preview took. Measuring it before the
+        // SELECT runs reports ~0 ms for every table, however slow the read itself is.
+        Connection slow = mock(Connection.class);
+        PreparedStatement ps = mock(PreparedStatement.class);
+        ResultSet rs = mock(ResultSet.class);
+        ResultSetMetaData md = mock(ResultSetMetaData.class);
+        when(slow.prepareStatement(any(String.class))).thenReturn(ps);
+        when(ps.executeQuery()).thenAnswer(inv -> {
+            Thread.sleep(250);
+            return rs;
+        });
+        when(rs.getMetaData()).thenReturn(md);
+        when(md.getColumnCount()).thenReturn(0);
+        when(rs.next()).thenReturn(false);
+        when(dataSourceManager.getConnection(source)).thenReturn(slow);
+
+        source.setType(DatabaseType.CUSTOM);
+        source.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+        source.setCustomUrl("jdbc:h2:mem:table_preview");
+        MetadataReader familyReader = mock(MetadataReader.class);
+        when(familyReader.supports(DatabaseType.ORACLE)).thenReturn(true);
+        when(familyReader.listTableNames(slow, "PUBLIC")).thenReturn(List.of("ORDERS"));
+        when(familyReader.listViewNames(slow, "PUBLIC")).thenReturn(List.of());
+        SqlDialect familyDialect = mock(SqlDialect.class);
+        when(familyDialect.family()).thenReturn(DatabaseType.DialectFamily.ORACLE);
+        when(familyDialect.explicitType()).thenReturn(null);
+        when(familyDialect.withServerMajorVersion(null)).thenReturn(familyDialect);
+        when(familyDialect.qualify("PUBLIC", "ORDERS")).thenReturn("\"PUBLIC\".\"ORDERS\"");
+        service = new TablePreviewService(projectRepository, databaseConfigRepository,
+                dataSourceManager, new MetadataReaderFactory(List.of(familyReader)),
+                new SqlDialectFactory(List.of(familyDialect), new GenericSqlDialect()),
+                new ObjectMapper());
+
+        TablePreview preview = service.preview(1L, "orders", TablePreviewService.Side.SOURCE);
+
+        assertThat(preview.elapsedMs()).isGreaterThanOrEqualTo(250);
     }
 
     @Test
