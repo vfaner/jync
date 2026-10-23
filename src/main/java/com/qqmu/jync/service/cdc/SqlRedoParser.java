@@ -282,16 +282,23 @@ public class SqlRedoParser {
      * UPDATE silently skipped (and after 6 consecutive skips, the project is parked).
      */
     static int indexOfWord(String sql, String word) {
-        String lower = sql.toLowerCase(Locale.ROOT);
-        String w = word.toLowerCase(Locale.ROOT);
+        // Case-insensitive comparison must happen IN PLACE, never through a
+        // lowercased copy: String.toLowerCase applies full Unicode mappings, and
+        // some characters change length (U+0130 "İ" becomes "i" + combining dot).
+        // A copy-driven scan then indexes the ORIGINAL string with the copy's
+        // offsets, which shifts every keyword after such a character — a SET
+        // value holding "İstanbul" made the WHERE keyword start one char late,
+        // gluing the "w" of WHERE onto the literal and refusing the whole change.
+        // regionMatches(true, ...) compares char by char and never shifts.
+        int wlen = word.length();
         int i = 0;
         char quote = 0;
-        while (i <= lower.length() - w.length()) {
-            char c = lower.charAt(i);
+        while (i <= sql.length() - wlen) {
+            char c = sql.charAt(i);
             if (quote != 0) {
                 if (c == quote) {
                     // '' escape inside a single-quoted string stays inside it.
-                    if (quote == '\'' && i + 1 < lower.length() && lower.charAt(i + 1) == '\'') {
+                    if (quote == '\'' && i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
                         i += 2;
                         continue;
                     }
@@ -312,10 +319,10 @@ public class SqlRedoParser {
                 i++;
                 continue;
             }
-            if (lower.startsWith(w, i)) {
-                boolean leftOk = i == 0 || !isWordChar(lower.charAt(i - 1));
-                boolean rightOk = i + w.length() >= lower.length()
-                        || !isWordChar(lower.charAt(i + w.length()));
+            if (sql.regionMatches(true, i, word, 0, wlen)) {
+                boolean leftOk = i == 0 || !isWordChar(sql.charAt(i - 1));
+                boolean rightOk = i + wlen >= sql.length()
+                        || !isWordChar(sql.charAt(i + wlen));
                 if (leftOk && rightOk) {
                     return i;
                 }
@@ -576,13 +583,16 @@ public class SqlRedoParser {
      * {@code "'1' AND \"NAME\"='x'"}. So we accept "AND" as a standalone word token:
      * the char BEFORE it must not be a word char, and the char AFTER must not be a word
      * char either. A closing quote, whitespace, or semicolon all qualify as non-word.
+     *
+     * <p>Like {@link #indexOfWord}, the keyword test compares in place
+     * ({@code regionMatches}) — a lowercased copy can change length on characters such
+     * as U+0130, and its offsets would then no longer line up with the original text.
      */
     static List<String> splitOnAnd(String wherePart) {
         List<String> out = new ArrayList<>();
         StringBuilder cur = new StringBuilder();
         int depth = 0;
         char quote = 0;
-        String lower = wherePart.toLowerCase(Locale.ROOT);
         int i = 0;
         while (i < wherePart.length()) {
             char c = wherePart.charAt(i);
@@ -627,7 +637,7 @@ public class SqlRedoParser {
             }
             // Match "and" as a word token at top level — preceded by a non-word char
             // (start of string, quote, whitespace, semicolon), followed by a non-word char.
-            if (depth == 0 && lower.startsWith("and", i)) {
+            if (depth == 0 && wherePart.regionMatches(true, i, "and", 0, 3)) {
                 char before = i > 0 ? wherePart.charAt(i - 1) : ' ';
                 // "and" occupies i..i+2 — the first char AFTER the token is at i+3.
                 // (Was i+4: an off-by-one that refused to split " and ROWID" — an AND

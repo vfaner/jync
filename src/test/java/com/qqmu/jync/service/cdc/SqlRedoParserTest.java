@@ -341,6 +341,46 @@ class SqlRedoParserTest {
         assertThat(c.row.get("ID")).isEqualTo("1");
     }
 
+    // —— 值/标识符里的 U+0130(İ)不得让关键字扫描错位 ——
+
+    /**
+     * indexOfWord 过去在 {@code sql.toLowerCase(Locale.ROOT)} 的副本上找关键字，却用
+     * 副本里的下标去切原串。U+0130(带点大写 I)在 ROOT 下展开成 "i"+组合点两个字符，
+     * 副本从此比原串长一位：WHERE 关键字的下标整体后移，SET 片段末尾粘上 "w"，
+     * 字面量转换失败，整条 UPDATE 被拒绝（计数，连续 5 次后整任务停机），
+     * 目标行保持旧值。土耳其语数据里 "İstanbul" 这类值并不罕见。
+     */
+    @Test
+    void updateWhoseSetValueContainsADottedCapitalIStillParses() {
+        String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'İstanbul'"
+                + " where \"ID\" = '1' and \"NAME\" = 'Alice'"
+                + " and \"TS\" = TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午')"
+                + " and ROWID = 'AAAR4TAAYAAAAAPAAA';";
+        SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());
+        assertThat(c.unsupportedReason).isNull();
+        assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
+        assertThat(c.row.get("NOTE")).isEqualTo("İstanbul");
+        assertThat(c.row.get("ID")).isEqualTo("1");
+    }
+
+    /**
+     * splitOnAnd 有同样的病灶：它在 wherePart 的小写副本上匹配 "and"，用副本下标推进
+     * 原串的扫描。旧镜像里出现 U+0130 之后，后续的 " and " 全部匹配不上，合取项被粘成
+     * 一段——未变更的列从旧镜像里消失，整条 UPDATE 被拒绝。
+     */
+    @Test
+    void updateWhoseOldImageContainsADottedCapitalIStillSplitsConjuncts() {
+        String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"ID\" = '1'"
+                + " and \"NAME\" = 'İstanbul'"
+                + " and \"TS\" = TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午')"
+                + " and ROWID = 'AAAR4TAAYAAAAAPAAA';";
+        SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());
+        assertThat(c.unsupportedReason).isNull();
+        assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
+        assertThat(c.row.get("NAME")).isEqualTo("İstanbul");
+        assertThat(c.row.get("TS")).isEqualTo("12-10月-26 04.29.23.261316 上午");
+    }
+
     // —— fixture replay ——
 
     /**
