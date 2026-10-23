@@ -51,9 +51,12 @@ public class DatabaseApiController {
     @PostMapping("/test")
     public ResponseEntity<Map<String, Object>> testTransient(
             @ModelAttribute DatabaseConfigForm form,
-            @RequestParam(required = false) String rawPassword) {
+            @RequestParam(required = false) String rawPassword,
+            @RequestParam(required = false) String rawMinerPassword) {
         DatabaseConfig config = form.toEntity();
-        Map<String, Object> body = describe(service.testTransient(config, rawPassword));
+        // The form posts both secrets; a blank one means "keep the stored value".
+        Map<String, Object> body =
+                describe(service.testTransient(config, rawPassword, rawMinerPassword));
         body.put("jdbcUrl", service.previewUrl(config));
         return ResponseEntity.ok(body);
     }

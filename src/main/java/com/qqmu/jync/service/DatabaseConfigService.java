@@ -263,12 +263,28 @@ public class DatabaseConfigService {
      * drivers where the jar path and class name are easy to get wrong.
      */
     public ConnectionTestService.TestResult testTransient(DatabaseConfig config, String rawPassword) {
+        return testTransient(config, rawPassword, null);
+    }
+
+    /**
+     * Both secrets follow save's contract: a blank field on an edit means "keep the stored
+     * one". The mining password is not decoration — the LogMiner readiness probe decides
+     * whether a CDB source has a mining account configured from it, so dropping it made every
+     * test of a saved CDB source report a red "configure the miner" check.
+     */
+    public ConnectionTestService.TestResult testTransient(DatabaseConfig config, String rawPassword,
+                                                         String rawMinerPassword) {
+        DatabaseConfig existing = config.getId() == null ? null
+                : repository.findById(config.getId()).orElse(null);
         if (rawPassword != null && !rawPassword.isEmpty()) {
             config.setPassword(cryptoUtil.encrypt(rawPassword));
-        } else if (config.getId() != null) {
-            // Reuse the stored password when the form left the field blank.
-            repository.findById(config.getId())
-                    .ifPresent(existing -> config.setPassword(existing.getPassword()));
+        } else if (existing != null) {
+            config.setPassword(existing.getPassword());
+        }
+        if (rawMinerPassword != null && !rawMinerPassword.isEmpty()) {
+            config.setMinerPassword(cryptoUtil.encrypt(rawMinerPassword));
+        } else if (existing != null) {
+            config.setMinerPassword(existing.getMinerPassword());
         }
         return connectionTestService.test(config);
     }
