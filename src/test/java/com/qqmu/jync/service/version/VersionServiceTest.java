@@ -3,11 +3,17 @@ package com.qqmu.jync.service.version;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.net.http.HttpTimeoutException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -159,6 +165,49 @@ class VersionServiceTest {
         queued.get(0).run();
         assertThat(versionService.snapshot().getState()).isEqualTo(VersionInfo.State.UP_TO_DATE);
         assertThat(feed.latestCalls).hasValue(1);
+    }
+
+    @Test
+    void aPageRenderNeverWaitsForAnInFlightUpdateCheck() throws Exception {
+        // The boot warm-up holds the service's monitor for the whole network round trip.
+        // The settings page renders the release notes through what used to be the same
+        // monitor, so its first paint blocked until GitHub and Gitee had both timed out —
+        // exactly on the offline-ish hosts this feature is written for.
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        ReleaseFeed blocking = new ReleaseFeed() {
+            @Override
+            public ReleaseFeed.Release latest() throws Exception {
+                entered.countDown();
+                unblock.await(10, TimeUnit.SECONDS);
+                return release("v1.1.1", "https://github.com/o/r", "body");
+            }
+
+            @Override
+            public ReleaseFeed.Release byTag(String tag) {
+                return null;
+            }
+        };
+        VersionService versionService =
+                new VersionService(() -> "1.1.1", blocking, true, Runnable::run);
+        Thread refresher = new Thread(versionService::warmUp, "version-warm-up");
+        refresher.setDaemon(true);
+        refresher.start();
+        assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+
+        ExecutorService page = Executors.newSingleThreadExecutor();
+        try {
+            Future<VersionInfo> render = page.submit(versionService::snapshot);
+            long started = System.nanoTime();
+            VersionInfo info = render.get(2, TimeUnit.SECONDS);
+            assertThat(info.getState()).isEqualTo(VersionInfo.State.CHECKING);
+            assertThat(Duration.ofNanos(System.nanoTime() - started))
+                    .isLessThan(Duration.ofSeconds(2));
+        } finally {
+            unblock.countDown();
+            page.shutdownNow();
+            refresher.join(5_000);
+        }
     }
 
     @Test

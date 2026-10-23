@@ -64,6 +64,12 @@ public class VersionService {
     /** Lazily rendered notes for the running version, memoized (including the null case). */
     private volatile String notesCache;
     private volatile boolean notesLoaded;
+    /**
+     * Separate from {@code this} on purpose: {@link #refresh} holds the service monitor across
+     * the remote check (up to two HTTP timeouts). Rendering notes under that same monitor made
+     * the first settings page view wait out the whole round trip.
+     */
+    private final Object notesLock = new Object();
 
     @Autowired
     public VersionService(ObjectProvider<BuildProperties> buildProperties,
@@ -268,7 +274,7 @@ public class VersionService {
         if (notesLoaded) {
             return notesCache;
         }
-        synchronized (this) {
+        synchronized (notesLock) {
             if (notesLoaded) {
                 return notesCache;
             }
