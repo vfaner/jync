@@ -70,10 +70,11 @@ class NavMenuGroupsViewTest {
         String page = render(UserRole.ADMIN);
 
         assertThat(page).contains("配置管理", "日志管理");
-        assertThat(page).contains("href=\"/databases\"", "href=\"/ai\"", "href=\"/oa/settings\"");
+        assertThat(page).contains("href=\"/databases\"", "href=\"/ai\"",
+                "href=\"/external-auth\"");
         assertThat(page).contains("href=\"/change-logs\"", "href=\"/audits\"",
                 "href=\"/system-logs\"");
-        assertThat(page).contains("审计日志", "系统日志", "OA 配置");
+        assertThat(page).contains("审计日志", "系统日志", "外部认证");
     }
 
     @Test
@@ -83,8 +84,8 @@ class NavMenuGroupsViewTest {
         assertThat(page).contains("配置管理", "日志管理");
         assertThat(page).contains("href=\"/databases\"", "href=\"/ai\"");
         assertThat(page).contains("href=\"/change-logs\"", "href=\"/system-logs\"");
-        assertThat(page).doesNotContain("href=\"/oa/settings\"", "href=\"/audits\"");
-        assertThat(page).doesNotContain("审计日志", "OA 配置");
+        assertThat(page).doesNotContain("href=\"/external-auth\"", "href=\"/audits\"");
+        assertThat(page).doesNotContain("审计日志", "外部认证");
     }
 
     @Test

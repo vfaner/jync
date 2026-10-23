@@ -82,7 +82,7 @@ class EnglishUiLeakTest {
             "/audits",
             "/change-logs",
             "/system-logs",
-            "/oa/settings",
+            "/external-auth",
             "/account/password",
             // A project that does not exist exercises the not-found branch of the page shell.
             "/projects/999999", "/projects/999999/conversions",

@@ -79,9 +79,9 @@
                         <svg class="ico"><use href="#cpu"/></svg>
                         <span th:text="#{nav.ai}">AI</span>
                     </a>
-                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/oa/settings}">
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/external-auth}">
                         <svg class="ico"><use href="#shield-check"/></svg>
-                        <span th:text="#{nav.oa}">OA sign-in</span>
+                        <span th:text="#{nav.oa}">External authentication</span>
                     </a>
                 </div>
             </div>
