@@ -60,6 +60,12 @@ public class OaAuthConfigService {
         if (config.getMode() == OaAuthConfig.Mode.PASSWORD && config.getUserField() == null) {
             config.setUserField(DEFAULT_USER_FIELD);
         }
+        if (config.getLocalLoginEnabled() == null) {
+            // A row written before this column existed. Null means allowed everywhere else, but
+            // the settings page renders it as an unchecked box, so leaving it null would have
+            // the next save turn the local form off without the administrator touching it.
+            config.setLocalLoginEnabled(Boolean.TRUE);
+        }
         return config;
     }
 
