@@ -15,7 +15,8 @@ import com.qqmu.jync.model.UserRole;
 
 /**
  * The forced-change gate: while the signed-in account still uses the seeded password, every
- * request except the change form itself (and the assets that render it) is turned away.
+ * request except the home page — which hosts the forced password modal — and the assets that
+ * render it is turned away.
  */
 class ForcePasswordChangeFilterTest {
 
@@ -27,7 +28,7 @@ class ForcePasswordChangeFilterTest {
     }
 
     @Test
-    void aDefaultPasswordUserIsSentToThePasswordPageFromAnyOtherPage() throws Exception {
+    void aDefaultPasswordUserIsSentHomeFromAnyOtherPage() throws Exception {
         signIn(true);
 
         MockHttpServletRequest request = get("/projects");
@@ -36,8 +37,28 @@ class ForcePasswordChangeFilterTest {
 
         filter.doFilter(request, response, chain);
 
-        assertThat(response.getRedirectedUrl()).isEqualTo("/account/password");
+        assertThat(response.getRedirectedUrl()).isEqualTo("/");
         assertThat(chain.getRequest()).isNull();
+    }
+
+    /**
+     * The home page is where the forced change happens now: the layout opens the password modal
+     * there. Blocking it would leave the redirect target unreachable.
+     */
+    @Test
+    void theHomePageAndDashboardAreAllowedThrough() throws Exception {
+        signIn(true);
+
+        for (String path : new String[] {"/", "/dashboard"}) {
+            MockHttpServletRequest request = get(path);
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            MockFilterChain chain = new MockFilterChain();
+
+            filter.doFilter(request, response, chain);
+
+            assertThat(response.getRedirectedUrl()).as(path).isNull();
+            assertThat(chain.getRequest()).as(path).isSameAs(request);
+        }
     }
 
     @Test

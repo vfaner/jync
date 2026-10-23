@@ -2047,6 +2047,11 @@
   }
 
   function bindGenericModals() {
+    // 强制改密弹窗由服务端直接渲染成打开状态，没走 setModalOpen，
+    // 这里补上背景滚动锁，否则弹窗后面还能滚。
+    document.querySelectorAll('.modal.open[data-forced]').forEach(function () {
+      document.body.style.overflow = 'hidden';
+    });
     document.querySelectorAll('[data-open-modal]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         setModalOpen(btn.getAttribute('data-open-modal'), true);
@@ -2059,7 +2064,8 @@
     });
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
-      document.querySelectorAll('.modal.open').forEach(function (m) {
+      // data-forced 的弹窗不给关：它是唯一的强制改密入口，Esc 也放行就形同虚设。
+      document.querySelectorAll('.modal.open:not([data-forced])').forEach(function (m) {
         setModalOpen(m.id, false);
       });
     });

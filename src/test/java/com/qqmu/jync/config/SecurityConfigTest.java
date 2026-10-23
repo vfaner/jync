@@ -227,10 +227,17 @@ class SecurityConfigTest {
     }
 
     @Test
-    void aDefaultPasswordUserIsSentToThePasswordPage() throws Exception {
+    void aDefaultPasswordUserIsSentHomeFromEveryOtherPage() throws Exception {
         mvc.perform(get("/projects").with(asDefaultPasswordUser()))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/account/password"));
+                .andExpect(redirectedUrl("/"));
+    }
+
+    /** The home page is the modal's host now; a gate that blocked it would loop. */
+    @Test
+    void aDefaultPasswordUserCanOpenTheHomePage() throws Exception {
+        assertThat(statusOf(get("/").with(asDefaultPasswordUser()))).isEqualTo(200);
+        assertThat(statusOf(get("/dashboard").with(asDefaultPasswordUser()))).isEqualTo(200);
     }
 
     /** The gate must not block its own form, or the account can never escape it. */
@@ -258,15 +265,16 @@ class SecurityConfigTest {
 
     /**
      * The seeded accounts are public knowledge, so the whole point of the gate is that the very
-     * first sign-in with the shipped password lands on the change form.
+     * first sign-in with the shipped password lands where the change cannot be postponed: the
+     * home page, whose layout opens the password modal and will not close until it is done.
      */
     @Test
-    void signingInWithTheSeededPasswordGoesStraightToTheChangeForm() throws Exception {
+    void signingInWithTheSeededPasswordGoesStraightHome() throws Exception {
         mvc.perform(post("/login").with(csrf())
                         .param("username", "admin")
                         .param("password", "123456"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/account/password"));
+                .andExpect(redirectedUrl("/"));
     }
 
     // ── Admin audit trail ──────────────────────────────────────────────────────

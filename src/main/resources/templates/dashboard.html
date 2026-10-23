@@ -3,7 +3,9 @@
       th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'dashboard', 'dashboard.title')}">
 <body>
 <th:block th:fragment="content" th:remove="tag">
-<div th:remove="tag">
+<!--/* 默认口令账号只借用这个页面承载强制改密弹窗：控制器不下发 stats，
+       这里就什么都不渲染，弹窗后面不会露出项目统计。 */-->
+<div th:remove="tag" th:if="${stats != null}">
 
     <div class="page-head">
         <div>

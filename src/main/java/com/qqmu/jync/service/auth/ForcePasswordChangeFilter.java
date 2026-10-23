@@ -19,31 +19,36 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *
  * <p>The jar is a public download and both seeded accounts start on {@code 123456}, so a banner
  * that can be dismissed is only advice to whoever got there first. While the signed-in principal
- * carries {@link SyncUserDetails#isUsingDefaultPassword()}, every request except the change form
- * itself — and the assets needed to render it — is answered with a redirect there (or a 403 for
- * {@code /api/}, which {@code fetch()} cannot follow usefully).
+ * carries {@link SyncUserDetails#isUsingDefaultPassword()}, every request except the home page and
+ * the assets needed to render it is answered with a redirect home (or a 403 for {@code /api/},
+ * which {@code fetch()} cannot follow usefully). The home page is where the layout opens the
+ * password modal in its non-dismissible form; it is also the only page a gated account may read,
+ * and the dashboard controller renders it empty.
  *
  * <p>Placed after the authentication filter so the principal is populated. The flag is resolved at
  * sign-in, and the change flow invalidates the session, so no request can observe a stale value.
  */
 public class ForcePasswordChangeFilter extends OncePerRequestFilter {
 
-    /** The one page (and its POST) a gated account may use. */
+    /** The change form's own URL. Still allowed as the error re-render target. */
     public static final String PASSWORD_PATH = "/account/password";
+
+    /** Where a gated request is sent: the home page, whose layout forces the password modal. */
+    public static final String HOME_PATH = "/";
 
     /** Message-bundle key the JSON refusal carries to the browser. */
     static final String MESSAGE_KEY = "account.error.mustChangePassword";
 
     /**
-     * Requests the change form needs in order to render. Without these the redirect target
+     * Requests the home page needs in order to render. Without these the redirect target
      * itself would be unreadable — the browser would bounce on the stylesheet and never show
-     * the form.
+     * the modal.
      */
     private static final List<String> ALLOWED_PREFIXES = List.of(
             "/css/", "/js/", "/vendor/", "/assets/");
 
     private static final List<String> ALLOWED_PATHS = List.of(
-            PASSWORD_PATH, "/login", "/logout", "/favicon.ico");
+            HOME_PATH, "/dashboard", PASSWORD_PATH, "/login", "/logout", "/favicon.ico");
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
@@ -67,7 +72,7 @@ public class ForcePasswordChangeFilter extends OncePerRequestFilter {
             response.getWriter().write(
                     "{\"success\":false,\"message\":\"" + MESSAGE_KEY + "\"}");
         } else {
-            response.sendRedirect(request.getContextPath() + PASSWORD_PATH);
+            response.sendRedirect(request.getContextPath() + HOME_PATH);
         }
     }
 

@@ -212,12 +212,13 @@ public class SecurityConfig {
             auditService.record(AuditAction.LOGIN,
                     "Signed in from " + ClientIpResolver.resolve(request),
                     authentication.getName());
-            // The seeded password is public; land on the change form instead of the saved
-            // request, which the filter below would redirect away from anyway (one hop less).
+            // The seeded password is public; land on the home page, where the layout opens the
+            // change-password modal and refuses to close it, instead of the saved request, which
+            // the filter below would bounce back here anyway (one hop less).
             if (authentication.getPrincipal() instanceof SyncUserDetails
                     && ((SyncUserDetails) authentication.getPrincipal()).isUsingDefaultPassword()) {
                 response.sendRedirect(
-                        request.getContextPath() + ForcePasswordChangeFilter.PASSWORD_PATH);
+                        request.getContextPath() + ForcePasswordChangeFilter.HOME_PATH);
                 return;
             }
             delegate.onAuthenticationSuccess(request, response, authentication);

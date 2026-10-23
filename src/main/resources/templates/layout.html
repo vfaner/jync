@@ -270,17 +270,31 @@
 
 <!--/* 修改密码弹窗：用户名下拉的「修改密码」打开。表单与改密页同一后端：
        成功后会话作废跳登录页（口令已变，必须重新登录），失败则带错误渲染改密页，
-       弹窗只是少跳一页的快捷入口，改密页仍是横幅链接与错误回显的落点。 */-->
-<div class="modal" id="cp-modal" aria-hidden="true" role="dialog" aria-modal="true"
-     th:aria-label="#{account.title}">
-    <div class="modal-mask" data-close-modal="cp-modal"></div>
+       弹窗只是少跳一页的快捷入口，改密页仍是横幅链接与错误回显的落点。
+
+       默认口令账号走的是同一个弹窗，只是换一种形态：服务端直接渲染成打开状态
+       （不多闪一帧未锁定的页面），并且去掉关闭按钮、取消按钮和遮罩点击目标，
+       脚本里 Esc 也跳过 data-forced —— 反正过滤器会把其它页面送回首页，
+       能关掉的「强制」改密只会让人以为可以稍后再说。 */-->
+<div class="modal" id="cp-modal" role="dialog" aria-modal="true"
+     th:aria-label="#{account.title}"
+     th:classappend="${usingDefaultPassword} ? ' open'"
+     th:aria-hidden="${usingDefaultPassword} ? 'false' : 'true'"
+     th:attr="data-forced=${usingDefaultPassword} ? 'true' : null">
+    <div class="modal-mask"
+         th:attr="data-close-modal=${usingDefaultPassword} ? null : 'cp-modal'"></div>
     <div class="modal-dialog">
         <button type="button" class="modal-close" data-close-modal="cp-modal"
+                th:if="${!usingDefaultPassword}"
                 th:title="#{common.close}" th:aria-label="#{common.close}">
             <svg class="ico"><use href="#x-lg"/></svg>
         </button>
         <div class="modal-head">
             <h3 th:text="#{account.title}">Change password</h3>
+            <p th:if="${usingDefaultPassword}" th:text="#{account.forced}">
+                This account still uses the default password. Change it before using the rest of
+                the app.
+            </p>
         </div>
         <form method="post" th:action="@{/account/password}" autocomplete="off">
             <div class="field">
@@ -307,6 +321,7 @@
             </div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-ghost" data-close-modal="cp-modal"
+                        th:if="${!usingDefaultPassword}"
                         th:text="#{common.cancel}">Cancel</button>
                 <button type="submit" class="btn btn-primary">
                     <svg class="ico"><use href="#check-lg"/></svg>
