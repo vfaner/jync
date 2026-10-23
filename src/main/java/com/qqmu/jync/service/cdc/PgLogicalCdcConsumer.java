@@ -377,12 +377,18 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                             }
                             currentTxLsn = lsn;
                             if (change.op == PgTestDecodingParser.Op.DELETE) {
-                                deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(change.row);
+                                appendDelete(upserts, deletes, binding, change.row);
                             } else {
                                 // Only upserts can carry large payloads to the target; a
                                 // delete binds primary keys alone and stays in memory.
-                                upserts.computeIfAbsent(binding, k -> new ArrayList<>())
-                                        .add(spiller().spill(binding, change.row));
+                                appendUpsert(upserts, deletes, binding,
+                                        spiller().spill(binding, change.row));
+                                if (change.oldImage != null
+                                        && CdcPrimaryKey.changed(change.oldImage, change.row, binding)) {
+                                    // The key moved: the new image cannot locate the old row,
+                                    // so delete it explicitly or it stays on the target forever.
+                                    appendDelete(upserts, deletes, binding, change.oldImage);
+                                }
                             }
                             stats.touchEvent(System.currentTimeMillis());
                         }
@@ -533,6 +539,37 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         // F-10:一个事务完整落库即证明毒事务已消失(DBA 补了列/目标恢复),连续失败
         // 计数必须清零 —— 否则偶发几次抖动后长期健康运行也会被老账 park。
         applyFailures.set(0);
+    }
+
+    /**
+     * Same-PK folding inside one transaction, the rule {@code CdcEventStreamHandler}'s
+     * FIX C and {@link SqlServerTxFold} already apply: the flusher runs every upsert
+     * before every delete (that order is what makes PK chains A→B, B→C land correctly),
+     * so a buffer holding an upsert AND a delete for one key applies them in the wrong
+     * order. A DELETE followed by an INSERT of the same key (REPLACE) is the common
+     * shape, and unfolded it leaves the target row deleted while the source has it.
+     * Appending an upsert therefore drops any buffered delete of that key, and vice versa.
+     */
+    private static void appendUpsert(Map<CdcTableBinding, List<Map<String, Object>>> upserts,
+                                     Map<CdcTableBinding, List<Map<String, Object>>> deletes,
+                                     CdcTableBinding binding, Map<String, Object> row) {
+        List<Object> key = CdcPrimaryKey.of(row, binding);
+        List<Map<String, Object>> buffered = deletes.get(binding);
+        if (buffered != null) {
+            buffered.removeIf(bufferedRow -> CdcPrimaryKey.of(bufferedRow, binding).equals(key));
+        }
+        upserts.computeIfAbsent(binding, k -> new ArrayList<>()).add(row);
+    }
+
+    private static void appendDelete(Map<CdcTableBinding, List<Map<String, Object>>> upserts,
+                                     Map<CdcTableBinding, List<Map<String, Object>>> deletes,
+                                     CdcTableBinding binding, Map<String, Object> row) {
+        List<Object> key = CdcPrimaryKey.of(row, binding);
+        List<Map<String, Object>> buffered = upserts.get(binding);
+        if (buffered != null) {
+            buffered.removeIf(bufferedRow -> CdcPrimaryKey.of(bufferedRow, binding).equals(key));
+        }
+        deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(row);
     }
 
     private boolean matchesProjectTable(String qualified) {

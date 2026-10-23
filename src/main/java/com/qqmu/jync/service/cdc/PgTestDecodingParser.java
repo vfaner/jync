@@ -75,23 +75,33 @@ public final class PgTestDecodingParser {
         public final String qualifiedTable;
         /** Column name (case-preserved) → typed Java value. */
         public final Map<String, Object> row;
+        /**
+         * The UPDATE's old image (the {@code old-key:} segment), or null when the stream
+         * carried none. PostgreSQL logs the old tuple exactly when the new one cannot be
+         * located from the new image alone — a key change, or REPLICA IDENTITY FULL — so
+         * the caller needs it to delete the row whose primary key moved; upserting the
+         * new key alone would leave the old row on the target forever.
+         */
+        public final Map<String, Object> oldImage;
         /** Null when the line was cleanly decoded; a human reason when we skipped it. */
         public final String unsupportedReason;
 
         private ParsedChange(Op op, String qualifiedTable, Map<String, Object> row,
-                             String unsupportedReason) {
+                             Map<String, Object> oldImage, String unsupportedReason) {
             this.op = op;
             this.qualifiedTable = qualifiedTable;
             this.row = row;
+            this.oldImage = oldImage;
             this.unsupportedReason = unsupportedReason;
         }
 
-        static ParsedChange ok(Op op, String qt, Map<String, Object> row) {
-            return new ParsedChange(op, qt, row, null);
+        static ParsedChange ok(Op op, String qt, Map<String, Object> row,
+                               Map<String, Object> oldImage) {
+            return new ParsedChange(op, qt, row, oldImage, null);
         }
 
         static ParsedChange skip(String reason) {
-            return new ParsedChange(null, null, null, reason);
+            return new ParsedChange(null, null, null, null, reason);
         }
 
         public boolean isSkipped() { return unsupportedReason != null; }
@@ -158,10 +168,37 @@ public final class PgTestDecodingParser {
             case "DELETE": op = Op.DELETE; break;
             default: return SlotLine.row(ParsedChange.skip("unknown op: " + opToken));
         }
-        // For UPDATE, skip the "old key-..." segment; we only need the NEW image (the applier
-        // locates rows by PK from the binding, so the old-image values are irrelevant for the
-        // upsert semantics. For DELETE, every column pair is the key image — parse as-is.
-        Map<String, Object> row = parseColumns(payload, op == Op.UPDATE);
+        // For UPDATE, the old image is a separate value part, not noise: when the key moved
+        // the caller must delete the OLD key (the new image alone cannot locate it). For
+        // DELETE, every column pair is the key image — parse as-is.
+        Map<String, Object> row;
+        Map<String, Object> oldImage = null;
+        int newIdx = op == Op.UPDATE ? findNewImageStart(payload) : -1;
+        if (newIdx >= 0) {
+            String oldPart = payload.substring(0, newIdx - NEW_TUPLE_MARKER.length()).trim();
+            if (oldPart.startsWith(OLD_KEY_MARKER)) {
+                oldPart = oldPart.substring(OLD_KEY_MARKER.length());
+            }
+            oldImage = parseColumns(oldPart);
+            row = parseColumns(payload.substring(newIdx));
+            if (oldImage == null || row == null) {
+                return SlotLine.row(ParsedChange.skip(
+                        "malformed UPDATE old/new image: " + payload));
+            }
+            if (oldImage.containsValue(UNCHANGED_TOAST_MARKER)) {
+                // The old image cannot be reproduced, so whether the key moved is unknowable
+                // — guessing would either orphan the old row or delete the wrong one.
+                return SlotLine.row(ParsedChange.skip("unchanged-toast-datum in the UPDATE"
+                        + " old image for " + qualified + " — the key change cannot be"
+                        + " determined"));
+            }
+        } else if (payload.startsWith(OLD_KEY_MARKER)) {
+            // Old image without a new image: the segment we would parse as the new one
+            // carries stale values.
+            row = null;
+        } else {
+            row = parseColumns(payload);
+        }
         if (row == null) {
             return SlotLine.row(ParsedChange.skip("malformed column payload: " + payload));
         }
@@ -178,7 +215,7 @@ public final class PgTestDecodingParser {
                         + " cannot reproduce a TOASTed value on " + op + " for " + qualified));
             }
         }
-        return SlotLine.row(ParsedChange.ok(op, unquoteQualified(qualified), row));
+        return SlotLine.row(ParsedChange.ok(op, unquoteQualified(qualified), row, oldImage));
     }
 
     /**
@@ -225,23 +262,12 @@ public final class PgTestDecodingParser {
     }
 
     /**
-     * Parse "col[type]:val col2[type]:'quoted val with '' inside' ...". When
-     * {@code skipOldImage} is true, the leading "old-key:" fragment (only present on an
-     * UPDATE that logged the old tuple) is skipped up to (and including) the
-     * "new-tuple:" marker.
+     * Parse "col[type]:val col2[type]:'quoted val with '' inside' ...". The caller hands
+     * in one image — the whole payload for INSERT/DELETE, and the already-split
+     * {@code old-key:} / {@code new-tuple:} segments for an UPDATE.
      */
-    static Map<String, Object> parseColumns(String payload, boolean skipOldImage) {
+    static Map<String, Object> parseColumns(String payload) {
         String body = payload;
-        if (skipOldImage) {
-            int newIdx = findNewImageStart(body);
-            if (newIdx >= 0) {
-                body = body.substring(newIdx);
-            } else if (body.startsWith(OLD_KEY_MARKER)) {
-                // The old image is present but the new image never followed: parsing the
-                // old image as if it were the new one would apply stale values. Refuse.
-                return null;
-            }
-        }
         Map<String, Object> row = new LinkedHashMap<>();
         int i = 0;
         int n = body.length();

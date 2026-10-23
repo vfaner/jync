@@ -192,6 +192,68 @@ class PgLogicalCdcConsumerDrainTest {
         return "table public.orders: INSERT: id[bigint]:" + id + " name[text]:'" + name + "'";
     }
 
+    private static String delete(long id) {
+        return "table public.orders: DELETE: id[bigint]:" + id;
+    }
+
+    /** 目标端现存主键(升序),用于断言事务净效果。 */
+    private java.util.List<Long> targetIds() throws SQLException {
+        java.util.List<Long> ids = new java.util.ArrayList<>();
+        try (Connection c = h2conn();
+             Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT id FROM orders ORDER BY id")) {
+            while (rs.next()) {
+                ids.add(rs.getLong(1));
+            }
+        }
+        return ids;
+    }
+
+    @Test
+    void deleteThenInsertOfTheSameKeyWithinOneTransactionKeepsTheRow() throws Exception {
+        // REPLACE 语义:同一事务里 DELETE 1 → INSERT 1,源端净效果是行存在。
+        // flush 先应用全部 upsert 再应用全部 delete,不折叠时最后落的 DELETE 把刚写的行删掉。
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", delete(1)},
+                new String[]{"0/1002", insert(1L, "back")},
+                new String[]{"0/1003", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        assertThat(targetIds()).containsExactly(1L);
+    }
+
+    @Test
+    void insertThenDeleteOfTheSameKeyWithinOneTransactionLeavesNoRow() throws Exception {
+        // 反方向:INSERT 1 → DELETE 1,净效果是行不存在(折叠后只剩 delete)。
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", insert(1L, "x")},
+                new String[]{"0/1002", delete(1)},
+                new String[]{"0/1003", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        assertThat(targetIds()).isEmpty();
+    }
+
+    @Test
+    void updateThatMovesThePrimaryKeyRemovesTheOldTargetRow() throws Exception {
+        // 主键 1→2:old-key 镜像必须变成旧主键的 DELETE,否则目标端同时留下 1 和 2。
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", insert(1L, "a")},
+                new String[]{"0/1002", "table public.orders: UPDATE:"
+                        + " old-key: id[bigint]:1 name[text]:'a'"
+                        + " new-tuple: id[bigint]:2 name[text]:'a'"},
+                new String[]{"0/1003", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        assertThat(targetIds()).containsExactly(2L);
+    }
+
     @Test
     void successfulTransactionFlushesTargetThenAdvancesSlotToCommitLsn() throws Exception {
         scriptCall(

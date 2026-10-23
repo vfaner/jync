@@ -60,6 +60,24 @@ class PgTestDecodingParserTest {
     }
 
     @Test
+    void updateExposesTheOldImageSoACrossKeyMoveCanDeleteTheOldRow() {
+        // PostgreSQL 在主键变更时(REPLICA IDENTITY 默认也一样)输出 old-key:
+        // 新镜像定位不到旧行。只留新镜像 → 目标端旧主键的行永远留成幽灵行。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.og_pk: UPDATE: old-key: id[bigint]:1 note[text]:'x'"
+                        + " new-tuple: id[bigint]:2 note[text]:'x'");
+        assertThat(line.change.oldImage).containsEntry("id", 1L);
+        assertThat(line.change.row).containsEntry("id", 2L);
+    }
+
+    @Test
+    void plainUpdateWithoutOldKeyCarriesNoOldImage() {
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.orders: UPDATE: id[integer]:7 status[text]:'changed'");
+        assertThat(line.change.oldImage).isNull();
+    }
+
+    @Test
     void updateWithoutOldKeyParsesTheNewImageDirectly() {
         // 默认 REPLICA IDENTITY 且主键未变:没有 old-key/new-tuple 段,整行即新镜像
         // (docker 实测的 IT 流就是这个形态)。
