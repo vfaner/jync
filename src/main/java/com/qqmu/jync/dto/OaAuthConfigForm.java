@@ -16,6 +16,7 @@ import lombok.Setter;
 public class OaAuthConfigForm {
 
     private boolean enabled;
+    private OaAuthConfig.Mode mode = OaAuthConfig.Mode.PASSWORD;
     private String loginUrl;
     private OaAuthConfig.RequestFormat requestFormat = OaAuthConfig.RequestFormat.FORM;
     private String usernameField;
@@ -25,6 +26,19 @@ public class OaAuthConfigForm {
     private String userField;
     private String adminField;
     private String adminValue;
+    private String adminUsers;
+    private String loginEntryUrl;
+    private String logoutRedirectUrl;
+    private boolean localLoginEnabled = true;
+    private String userHeader;
+    private String adminHeader;
+    private String secretHeaderName;
+    /** Plain text typed into the form; blank means "keep what is stored". */
+    private String secretHeaderValue;
+    private boolean clearSecret;
+    private String validateUrl;
+    private OaAuthConfig.ValidateMethod validateMethod = OaAuthConfig.ValidateMethod.GET;
+    private String ticketParam;
     private Integer timeoutMs;
     private boolean allowInsecureHttp;
 
@@ -32,6 +46,7 @@ public class OaAuthConfigForm {
     public OaAuthConfig toEntity() {
         OaAuthConfig config = new OaAuthConfig();
         config.setEnabled(enabled);
+        config.setMode(mode);
         config.setLoginUrl(loginUrl);
         config.setRequestFormat(requestFormat);
         config.setUsernameField(usernameField);
@@ -41,6 +56,17 @@ public class OaAuthConfigForm {
         config.setUserField(userField);
         config.setAdminField(adminField);
         config.setAdminValue(adminValue);
+        config.setAdminUsers(adminUsers);
+        config.setLoginEntryUrl(loginEntryUrl);
+        config.setLogoutRedirectUrl(logoutRedirectUrl);
+        config.setLocalLoginEnabled(Boolean.valueOf(localLoginEnabled));
+        config.setUserHeader(userHeader);
+        config.setAdminHeader(adminHeader);
+        config.setSecretHeaderName(secretHeaderName);
+        config.setSecretHeaderValue(secretHeaderValue);
+        config.setValidateUrl(validateUrl);
+        config.setValidateMethod(validateMethod);
+        config.setTicketParam(ticketParam);
         config.setTimeoutMs(timeoutMs);
         config.setAllowInsecureHttp(allowInsecureHttp);
         return config;
