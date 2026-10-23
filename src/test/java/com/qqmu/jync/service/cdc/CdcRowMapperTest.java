@@ -423,6 +423,66 @@ class CdcRowMapperTest {
                 .hasMessageContaining("3 columns");
     }
 
+    // —— ENUM / SET:binlog 只有序号/位掩码,标签来自 information_schema ——
+
+    @Test
+    void enumColumnMapsTheOrdinalToItsLabel() throws Exception {
+        // 连接器对 ENUM 列送序号(2),其余路径(rs.getString)送 'green'。不转换时目标
+        // VARCHAR 列会落 "2" —— 与全量/增量路径不一致的静默损坏。
+        java.util.Map<String, CdcEnumDefinition> enums = new java.util.LinkedHashMap<>();
+        enums.put("COLOR", CdcEnumDefinition.parse("enum('red','green')"));
+        CdcTableBinding binding = CdcTableBinding.of("app", "t", tableOf(
+                column("id", Types.BIGINT, "bigint", null),
+                column("color", Types.CHAR, "ENUM", null)), "t", null, enums);
+
+        java.util.Map<String, Object> row = mapper.mapRow(
+                new Serializable[] {1L, 2}, binding, stats);
+
+        assertThat(row).containsEntry("color", "green");
+    }
+
+    @Test
+    void setColumnMapsTheBitmaskToItsLabels() throws Exception {
+        java.util.Map<String, CdcEnumDefinition> enums = new java.util.LinkedHashMap<>();
+        enums.put("PERMS", CdcEnumDefinition.parse("set('read','write','exec')"));
+        CdcTableBinding binding = CdcTableBinding.of("app", "t", tableOf(
+                column("id", Types.BIGINT, "bigint", null),
+                column("perms", Types.CHAR, "SET", null)), "t", null, enums);
+
+        java.util.Map<String, Object> row = mapper.mapRow(
+                new Serializable[] {1L, 5L}, binding, stats);
+
+        assertThat(row).containsEntry("perms", "read,exec");
+    }
+
+    @Test
+    void enumWithoutALabelDefinitionFallsBackToTheOrdinal() throws Exception {
+        // 非 MySQL 家族/旧绑定没有定义时保持原行为,不凭空猜标签。
+        CdcTableBinding binding = CdcTableBinding.of("app", "t", tableOf(
+                column("id", Types.BIGINT, "bigint", null),
+                column("color", Types.CHAR, "ENUM", null)), "t", null);
+
+        java.util.Map<String, Object> row = mapper.mapRow(
+                new Serializable[] {1L, 2}, binding, stats);
+
+        assertThat(row).containsEntry("color", 2);
+    }
+
+    @Test
+    void enumOrdinalOutsideTheLabelListIsUnmappable() {
+        // 元数据与流不一致(标签列表过期):大声跳过并计数,绝不写一个猜出来的标签。
+        java.util.Map<String, CdcEnumDefinition> enums = new java.util.LinkedHashMap<>();
+        enums.put("COLOR", CdcEnumDefinition.parse("enum('red','green')"));
+        CdcTableBinding binding = CdcTableBinding.of("app", "t", tableOf(
+                column("id", Types.BIGINT, "bigint", null),
+                column("color", Types.CHAR, "ENUM", null)), "t", null, enums);
+
+        assertThatThrownBy(() -> mapper.mapRow(
+                new Serializable[] {1L, 9}, binding, stats))
+                .isInstanceOf(CdcUnmappableValueException.class)
+                .hasMessageContaining("color");
+    }
+
     @Test
     void bindingWithoutPkIsNotApplicable() {
         com.qqmu.jync.dto.meta.TableMeta noPk = new com.qqmu.jync.dto.meta.TableMeta();

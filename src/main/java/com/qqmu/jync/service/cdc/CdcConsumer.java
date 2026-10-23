@@ -554,9 +554,10 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 }
                 MetadataReader reader = ctx.getSourceReader();
                 TableMeta meta = reader.readTable(conn, database, actual);
-                Map<String, String> charsets = readColumnCharsets(conn, database, actual);
+                ColumnDetails details = readColumnDetails(conn, database, actual);
                 CdcTableBinding binding = CdcTableBinding.of(database, actual, meta,
-                        ctx.getConfig().targetTableName(actual), charsets);
+                        ctx.getConfig().targetTableName(actual), details.charsets,
+                        details.enums);
                 cache.put(key, binding);
                 return binding;
             } catch (SQLException e) {
@@ -601,26 +602,41 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             }
         }
 
-        /** 每列字符集(binlog 传原始字节,行映射按列字符集解码),大写列名为键。 */
-        private Map<String, String> readColumnCharsets(Connection conn, String database,
-                                                       String table) throws SQLException {
-            Map<String, String> charsets = new LinkedHashMap<>();
+        /**
+         * Per-column details the binlog itself does not carry, keyed by upper-case name:
+         * the charset (binlog ships raw bytes for char columns) and the ENUM/SET label
+         * list (the stream only ships the ordinal / bitmask).
+         */
+        private ColumnDetails readColumnDetails(Connection conn, String database,
+                                                String table) throws SQLException {
+            ColumnDetails details = new ColumnDetails();
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT COLUMN_NAME, CHARACTER_SET_NAME FROM information_schema.COLUMNS"
+                    "SELECT COLUMN_NAME, CHARACTER_SET_NAME, COLUMN_TYPE"
+                            + " FROM information_schema.COLUMNS"
                             + " WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?")) {
                 JdbcUtil.applyQueryTimeout(ps, properties.getMetadataQueryTimeoutSeconds());
                 ps.setString(1, database);
                 ps.setString(2, table);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
+                        String name = rs.getString(1);
                         String charset = rs.getString(2);
                         if (charset != null && !charset.isBlank()) {
-                            charsets.put(rs.getString(1).toUpperCase(Locale.ROOT), charset);
+                            details.charsets.put(name.toUpperCase(Locale.ROOT), charset);
+                        }
+                        CdcEnumDefinition definition = CdcEnumDefinition.parse(rs.getString(3));
+                        if (definition != null) {
+                            details.enums.put(name.toUpperCase(Locale.ROOT), definition);
                         }
                     }
                 }
             }
-            return charsets;
+            return details;
+        }
+
+        private static final class ColumnDetails {
+            private final Map<String, String> charsets = new LinkedHashMap<>();
+            private final Map<String, CdcEnumDefinition> enums = new LinkedHashMap<>();
         }
     }
 }

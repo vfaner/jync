@@ -53,17 +53,36 @@ public final class CdcRowMapper {
             ColumnMeta column = columns.get(i);
             String charset = binding.getCharsetByUpperColumn()
                     .get(column.getName().toUpperCase(Locale.ROOT));
-            row.put(column.getName(), mapValue(binlogRow[i], column, charset, stats));
+            row.put(column.getName(), mapValue(binlogRow[i], column, charset, stats,
+                    binding.enumDefinition(column.getName())));
         }
         return spiller.spill(binding, row);
     }
 
     static Object mapValue(Serializable raw, ColumnMeta column, String charsetName,
                            CdcRuntimeStats stats) throws CdcUnmappableValueException {
+        return mapValue(raw, column, charsetName, stats, null);
+    }
+
+    static Object mapValue(Serializable raw, ColumnMeta column, String charsetName,
+                           CdcRuntimeStats stats, CdcEnumDefinition enumDefinition)
+            throws CdcUnmappableValueException {
         if (raw == null) {
             return null;
         }
         int jdbcType = column.getJdbcType();
+
+        // ENUM arrives as its 1-based ordinal (Integer), SET as its bitmask (Long) — the
+        // label list is not in the binlog. Render the text every other read path yields;
+        // a value outside the (possibly stale) label list is unmappable, never guessed.
+        if (enumDefinition != null && raw instanceof Number) {
+            try {
+                return enumDefinition.render((Number) raw);
+            } catch (IllegalArgumentException e) {
+                throw new CdcUnmappableValueException(column.getName(),
+                        column.getTypeName(), raw);
+            }
+        }
 
         if (raw instanceof Long && isTemporal(jdbcType)) {
             long micros = (Long) raw;

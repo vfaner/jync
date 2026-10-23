@@ -3,6 +3,7 @@ package com.qqmu.jync.service.cdc;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -28,24 +29,43 @@ public final class CdcTableBinding {
     private final String targetTable;
     /** Column name (upper-case) -> MySQL charset name, e.g. "utf8mb4"; absent = binary/unknown. */
     private final Map<String, String> charsetByUpperColumn;
+    /**
+     * Column name (upper-case) -> ENUM/SET label list. The binlog only carries the ordinal
+     * (ENUM) or bitmask (SET); the labels come from information_schema at binding time.
+     */
+    private final Map<String, CdcEnumDefinition> enumByUpperColumn;
     private final boolean applicable;
 
     private CdcTableBinding(String database, String table, TableMeta meta, String targetTable,
-                            Map<String, String> charsetByUpperColumn, boolean applicable) {
+                            Map<String, String> charsetByUpperColumn,
+                            Map<String, CdcEnumDefinition> enumByUpperColumn, boolean applicable) {
         this.database = database;
         this.table = table;
         this.meta = meta;
         this.targetTable = targetTable;
         this.charsetByUpperColumn = charsetByUpperColumn;
+        this.enumByUpperColumn = enumByUpperColumn;
         this.applicable = applicable;
     }
 
     public static CdcTableBinding of(String database, String table, TableMeta meta,
                                      String targetTable, Map<String, String> charsetByUpperColumn) {
+        return of(database, table, meta, targetTable, charsetByUpperColumn, null);
+    }
+
+    public static CdcTableBinding of(String database, String table, TableMeta meta,
+                                     String targetTable, Map<String, String> charsetByUpperColumn,
+                                     Map<String, CdcEnumDefinition> enumByUpperColumn) {
         boolean applicable = meta != null && meta.hasPrimaryKey();
         return new CdcTableBinding(database, table, meta, targetTable,
                 charsetByUpperColumn == null ? new LinkedHashMap<>() : charsetByUpperColumn,
+                enumByUpperColumn == null ? new LinkedHashMap<>() : enumByUpperColumn,
                 applicable);
+    }
+
+    /** Label definition of one ENUM/SET column; null for every other column. */
+    public CdcEnumDefinition enumDefinition(String column) {
+        return column == null ? null : enumByUpperColumn.get(column.toUpperCase(Locale.ROOT));
     }
 
     public List<String> columnNames() {
