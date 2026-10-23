@@ -87,6 +87,33 @@ class VendorTypeMapTest {
                 column(Types.VARCHAR, "VARCHAR")).jdbcType()).isEqualTo(Types.VARCHAR);
     }
 
+    /**
+     * ojdbc8 21.5.0.0 does not report the short names this class was written against:
+     * {@code DatabaseMetaData.getColumns} returns "TIMESTAMP(6) WITH TIME ZONE",
+     * "TIMESTAMP(6) WITH LOCAL TIME ZONE", "INTERVAL YEAR(2) TO MONTH" and
+     * "INTERVAL DAY(2) TO SECOND(6)" (measured on Oracle 23ai Free against a live table).
+     * Exact-name matching left all four unknown, and the source side of the target-shape
+     * check has no product to scope their codes by, so every such column was filed as
+     * incompatible with every target — including the one Jync had just created.
+     */
+    @Test
+    void oraclePrecisionDecoratedNamesKeepTheirFamily() {
+        assertThat(VendorTypeMap.family(null, -101, "TIMESTAMP(6) WITH TIME ZONE"))
+                .isEqualTo(3);
+        assertThat(VendorTypeMap.family(null, -102, "TIMESTAMP(6) WITH LOCAL TIME ZONE"))
+                .isEqualTo(3);
+        assertThat(VendorTypeMap.family(null, -103, "INTERVAL YEAR(2) TO MONTH")).isEqualTo(1);
+        assertThat(VendorTypeMap.family(null, -104, "INTERVAL DAY(2) TO SECOND(6)"))
+                .isEqualTo(1);
+        // Canonicalization must understand the same spellings: it is what maps the DDL.
+        assertThat(VendorTypeMap.canonical(DatabaseType.ORACLE,
+                column(-101, "TIMESTAMP(6) WITH TIME ZONE")).jdbcType())
+                .isEqualTo(Types.TIMESTAMP_WITH_TIMEZONE);
+        assertThat(VendorTypeMap.canonical(DatabaseType.ORACLE,
+                column(-103, "INTERVAL YEAR(2) TO MONTH")).jdbcType())
+                .isEqualTo(Types.VARCHAR);
+    }
+
     @Test
     void familiesCoverVendorCodes() {
         assertThat(VendorTypeMap.family(DatabaseType.ORACLE, 100, "BINARY_FLOAT")).isEqualTo(2);

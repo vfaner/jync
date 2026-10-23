@@ -140,6 +140,32 @@ class TargetTableVerifierVendorTypeTest {
         assertThat(reason).isNull();
     }
 
+    /**
+     * A source Oracle TIMESTAMP WITH TIME ZONE arrives as DATA_TYPE -101 with the
+     * precision-decorated name "TIMESTAMP(6) WITH TIME ZONE" (measured with ojdbc8
+     * 21.5.0.0); the short name "TIMESTAMPTZ" never appears. Because the source family is
+     * computed without a product, the name alone has to carry it — otherwise a table Jync
+     * itself created from this column fails its own shape check on every cycle.
+     */
+    @Test
+    void oracleTimestampWithTimeZoneMatchesItsTarget() throws SQLException {
+        Connection conn = connectionWithColumns(
+                new Target("C", Types.TIMESTAMP_WITH_TIMEZONE, 0, "timestamptz"));
+        String reason = TargetTableVerifier.verify(conn, "app", "t",
+                tableOf(sourceColumn("C", -101, "TIMESTAMP(6) WITH TIME ZONE")),
+                DatabaseType.POSTGRESQL);
+        assertThat(reason).isNull();
+    }
+
+    @Test
+    void oracleIntervalLandsInVarcharTarget() throws SQLException {
+        Connection conn = connectionWithColumns(new Target("C", Types.VARCHAR, 64, "varchar2"));
+        String reason = TargetTableVerifier.verify(conn, "app", "t",
+                tableOf(sourceColumn("C", -104, "INTERVAL DAY(2) TO SECOND(6)")),
+                DatabaseType.ORACLE);
+        assertThat(reason).isNull();
+    }
+
     /** Vendors understood, families still enforced: money is numeric, not text. */
     @Test
     void vendorNumericDoesNotMatchTextTarget() throws SQLException {

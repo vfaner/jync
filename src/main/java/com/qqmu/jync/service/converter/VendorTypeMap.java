@@ -108,8 +108,10 @@ public final class VendorTypeMap {
                 return new Canonical(Types.DOUBLE, null);
             case "TIMESTAMPTZ":
             case "DATETIMEOFFSET":
+            case "TIMESTAMP WITH TIME ZONE":
                 return new Canonical(Types.TIMESTAMP_WITH_TIMEZONE, null);
             case "TIMESTAMPLTZ":
+            case "TIMESTAMP WITH LOCAL TIME ZONE":
                 return new Canonical(Types.TIMESTAMP, null);
             case "INTERVALYM":
             case "INTERVALDS":
@@ -237,6 +239,8 @@ public final class VendorTypeMap {
             case "TIMESTAMPTZ":
             case "TIMESTAMPLTZ":
             case "DATETIMEOFFSET":
+            case "TIMESTAMP WITH TIME ZONE":
+            case "TIMESTAMP WITH LOCAL TIME ZONE":
                 // Oracle's TIMESTAMPLTZ renders as a timestamp; both stay temporal.
                 return 3;
             case "GEOMETRY":
@@ -313,7 +317,30 @@ public final class VendorTypeMap {
         }
     }
 
+    /**
+     * Upper-cases a reported type name and strips precision decoration, because drivers
+     * decorate the same type differently: ojdbc reports {@code TIMESTAMP(6) WITH TIME ZONE}
+     * and {@code INTERVAL DAY(2) TO SECOND(6)} where the type name itself carries neither
+     * group. No two types differ only by a parenthesized part, so dropping it lets one
+     * spelling of a vendor type match every driver variant.
+     */
     private static String normalize(String typeName) {
-        return typeName == null ? null : typeName.trim().toUpperCase(Locale.ROOT);
+        if (typeName == null) {
+            return null;
+        }
+        String name = typeName.trim().toUpperCase(Locale.ROOT);
+        StringBuilder out = new StringBuilder(name.length());
+        int depth = 0;
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')' && depth > 0) {
+                depth--;
+            } else if (depth == 0) {
+                out.append(c);
+            }
+        }
+        return out.toString().trim().replaceAll("\\s+", " ");
     }
 }
