@@ -257,6 +257,17 @@ class PgTestDecodingParserTest {
     }
 
     @Test
+    void unchangedToastDatumIsClassifiedAsAValueWeCannotReproduce() {
+        // 跳过原因要能被消费端区分:它不是"这行解不出来"(真正的解析缺陷),而是
+        // "值确实不在流里"。消费端据此按表计数并限流告警(与 LogMiner 行外 LOB
+        // 同口径),所以还要带上表名 —— 否则运维无从知道是哪张表在丢数据。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: UPDATE: id[bigint]:1 body[text]:unchanged-toast-datum");
+        assertThat(line.change.skip).isEqualTo(PgTestDecodingParser.Skip.VALUE_UNAVAILABLE);
+        assertThat(line.change.qualifiedTable).isEqualTo("public.t");
+    }
+
+    @Test
     void unchangedToastDatumOnInsertSkipsTheRowToo() {
         // INSERT ... SELECT 可以复用另一个元组的磁盘 TOAST 值,同样只输出占位符。
         PgTestDecodingParser.SlotLine line = parser.parse(

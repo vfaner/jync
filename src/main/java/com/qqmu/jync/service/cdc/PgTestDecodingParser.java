@@ -78,10 +78,14 @@ public final class PgTestDecodingParser {
      *       lines into this slot that jync never applies;</li>
      *   <li>{@link #UNSUPPORTED_EVENT} — a real change whose kind jync does not mirror
      *       (e.g. {@code TRUNCATE}); surfaced and counted, but the stream is being
-     *       decoded fine, so it is not a decode failure.</li>
+     *       decoded fine, so it is not a decode failure;</li>
+     *   <li>{@link #VALUE_UNAVAILABLE} — a change whose value {@code test_decoding}
+     *       cannot reproduce (an unmodified TOASTed column). The row cannot be applied,
+     *       but nothing is wrong with the decoder: the consumer reports it per table
+     *       with a throttled warning, the same way LogMiner reports out-of-line LOBs.</li>
      * </ul>
      */
-    public enum Skip { IGNORABLE, UNSUPPORTED_EVENT, DECODE_FAILURE }
+    public enum Skip { IGNORABLE, UNSUPPORTED_EVENT, VALUE_UNAVAILABLE, DECODE_FAILURE }
 
     /** One decoded row event, ready for {@link CdcEventApplier}. */
     public static final class ParsedChange {
@@ -128,6 +132,18 @@ public final class PgTestDecodingParser {
 
         static ParsedChange unsupportedEvent(String reason) {
             return new ParsedChange(null, null, null, null, reason, Skip.UNSUPPORTED_EVENT);
+        }
+
+        /**
+         * The stream decoded fine, but a value it carries cannot be reproduced by
+         * {@code test_decoding} — an unmodified TOASTed column prints as
+         * {@code unchanged-toast-datum}. The row is skipped either way; this kind lets the
+         * consumer count it per table (missing-LOB panel) and throttle the warning instead
+         * of treating it as a decode defect.
+         */
+        static ParsedChange valueUnavailable(String qualifiedTable, String reason) {
+            return new ParsedChange(null, qualifiedTable, null, null, reason,
+                    Skip.VALUE_UNAVAILABLE);
         }
 
         static ParsedChange decodeFailure(String reason) {
@@ -239,10 +255,13 @@ public final class PgTestDecodingParser {
                 row.values().removeIf(value -> value == UNCHANGED_TOAST_MARKER);
             } else {
                 // The real value is not in the stream. Writing the literal would silently
-                // corrupt the target, so skip the row loudly (counted like every other
-                // undecodable line) instead of guessing.
-                return SlotLine.row(ParsedChange.decodeFailure("unchanged-toast-datum: test_decoding"
-                        + " cannot reproduce a TOASTed value on " + op + " for " + qualified));
+                // corrupt the target, so the row is skipped — never guessed. The kind keeps
+                // it apart from a decode defect: this is test_decoding's known ceiling on
+                // unmodified TOASTed columns, so the consumer counts it per table and
+                // throttles the warning the same way LogMiner reports out-of-line LOBs.
+                return SlotLine.row(ParsedChange.valueUnavailable(unquoteQualified(qualified),
+                        "unchanged-toast-datum: test_decoding cannot reproduce a TOASTed value"
+                                + " on " + op + " for " + qualified));
             }
         }
         return SlotLine.row(ParsedChange.ok(op, unquoteQualified(qualified), row, oldImage));
