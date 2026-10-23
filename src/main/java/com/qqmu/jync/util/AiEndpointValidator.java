@@ -36,6 +36,12 @@ public final class AiEndpointValidator {
      * Validates a base URL, throwing {@link IllegalArgumentException} with an i18n message key.
      */
     public static void validateBaseUrl(String baseUrl) {
+        // A blank URL has no scheme either, but URI(null) throws NPE, and both callers treat
+        // IllegalArgumentException as the only failure channel — an NPE would escape the
+        // "never throws" contract of isPermitted and surface as a 500.
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalArgumentException("error.ai.baseUrl.invalid");
+        }
         URI uri;
         try {
             uri = new URI(baseUrl);

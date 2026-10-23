@@ -57,6 +57,21 @@ class AiEndpointValidatorTest {
     }
 
     @Test
+    void rejectsAMissingBaseUrlInsteadOfThrowingAnNpe() {
+        // A partial POST (/api/ai/test without a baseUrl field) hands null straight here, and
+        // isPermitted's contract is "never throws". An NPE would escape both and surface as a
+        // 500 instead of the dialog's own "invalid URL" message.
+        assertThatThrownBy(() -> AiEndpointValidator.validateBaseUrl(null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.ai.baseUrl.invalid");
+        assertThatThrownBy(() -> AiEndpointValidator.validateBaseUrl("   "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.ai.baseUrl.invalid");
+        assertThat(AiEndpointValidator.isPermitted(null)).isFalse();
+        assertThat(AiEndpointValidator.isPermitted("   ")).isFalse();
+    }
+
+    @Test
     void rejectsMalformedUrls() {
         assertThatThrownBy(() -> AiEndpointValidator.validateBaseUrl("https://api.exa mple.com"))
                 .isInstanceOf(IllegalArgumentException.class)
