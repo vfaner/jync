@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'system-logs', 'syslog.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{syslog.title}">System log</h1>
+            <p class="sub" th:text="#{syslog.subtitle}">Inspect this application's own runtime log.</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <form method="get" th:action="@{/system-logs}" class="inline-form">
+                <!--/* 只列出服务端认可的文件名；未知名字会被服务拒掉并回一条错误，
+                       所以这里不需要放「全部文件」之类的自由输入。 */-->
+                <select class="select" name="file" style="min-width:230px"
+                        th:aria-label="#{syslog.file}">
+                    <option th:each="f : ${files}" th:value="${f.name}"
+                            th:selected="${f.name == selectedFile}"
+                            th:text="${f.name}">jync.log</option>
+                </select>
+                <select class="select" name="level" th:aria-label="#{syslog.level}">
+                    <option th:each="lvl : ${levels}" th:value="${lvl}"
+                            th:selected="${lvl == level}"
+                            th:text="#{${'syslog.level.' + lvl}}">All</option>
+                </select>
+                <input type="text" class="input" name="q" style="min-width:220px"
+                       th:value="${keyword}"
+                       th:placeholder="#{syslog.keywordPlaceholder}"
+                       th:aria-label="#{syslog.keyword}">
+                <button type="submit" class="btn btn-primary btn-sm">
+                    <svg class="ico"><use href="#search"/></svg>
+                    <span th:text="#{syslog.search}">Search</span>
+                </button>
+            </form>
+
+            <div class="log-meta" th:if="${result.errorKey == null}">
+                <span th:text="#{syslog.matched(${result.matched})}">0 matching lines</span>
+                <span th:if="${result.truncated}" th:text="#{syslog.truncated}">Truncated.</span>
+            </div>
+
+            <div th:if="${result.errorKey != null}" class="alert alert-danger">
+                <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+                <div class="alert-body" th:text="${#messages.msg(result.errorKey)}">Unavailable</div>
+            </div>
+
+            <div th:if="${result.errorKey == null and result.lines.isEmpty()}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#code-square"/></svg></div>
+                <h3 th:text="#{syslog.empty}">No matching log lines.</h3>
+            </div>
+
+            <!--/* 行内容由服务端逐段转义后再插入关键字 <mark>，所以这里必须用 utext：
+                   用 text 会把标记也转义成可见字符。 */-->
+            <div class="log-panel" th:if="${result.errorKey == null and !result.lines.isEmpty()}">
+                <div class="log-line" th:each="line : ${result.lines}" th:utext="${line}"></div>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

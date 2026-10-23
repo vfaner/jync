@@ -46,7 +46,10 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
         "app.github-url=https://example.com/repo",
         "sync.ai.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:englishui;MODE=MySQL;DB_CLOSE_DELAY=-1",
-        "spring.quartz.job-store-type=memory"
+        "spring.quartz.job-store-type=memory",
+        // The system-log page reads this file. Keep it inside the build so the sweep never
+        // depends on — or scans — whatever the developer's own ./logs happens to hold.
+        "logging.file.name=target/englishui-logs/jync.log"
 })
 class EnglishUiLeakTest {
 
@@ -78,6 +81,8 @@ class EnglishUiLeakTest {
             "/settings",
             "/audits",
             "/change-logs",
+            "/system-logs",
+            "/oa/settings",
             "/account/password",
             // A project that does not exist exercises the not-found branch of the page shell.
             "/projects/999999", "/projects/999999/conversions",

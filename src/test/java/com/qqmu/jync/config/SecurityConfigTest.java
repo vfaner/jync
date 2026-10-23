@@ -59,12 +59,14 @@ class SecurityConfigTest {
     private static final String AN_API_WRITE = "/api/databases/test";
 
     /**
-     * The only POST a viewer is meant to reach: changing their own password.
+     * The POSTs a viewer is meant to reach.
      *
-     * <p>Safe to exempt because the handler takes the account from the authenticated principal and
-     * not from a parameter, so it cannot be aimed at another user.
+     * <p>{@code /account/password} is safe to exempt because the handler takes the account from the
+     * authenticated principal and not from a parameter, so it cannot be aimed at another user.
+     * {@code /login/oa} is how a session is started, not a mutation of application state, and is
+     * {@code permitAll} exactly like {@code POST /login}.
      */
-    private static final Set<String> VIEWER_MAY_POST = Set.of("/account/password");
+    private static final Set<String> VIEWER_MAY_POST = Set.of("/account/password", "/login/oa");
 
     @Autowired
     private MockMvc mvc;
@@ -148,6 +150,33 @@ class SecurityConfigTest {
         mvc.perform(get("/login")).andExpect(status().isOk());
         mvc.perform(get("/css/app.css")).andExpect(status().isOk());
         mvc.perform(get("/js/app.js")).andExpect(status().isOk());
+    }
+
+    /**
+     * OA sign-in is a second login form, so it must be reachable without a session — and its rule
+     * has to sit above the blanket {@code POST /** → ADMIN}, or an anonymous user gets a 302 to
+     * {@code /?denied} before the handler ever runs.
+     *
+     * <p>Allowed through, the handler answers the disabled configuration (no OA row exists in this
+     * in-memory database) with its own redirect, which is the proof the request reached it.
+     */
+    @Test
+    void theOaLoginEndpointIsOpenToAnonymousUsers() throws Exception {
+        mvc.perform(post("/login/oa").with(csrf())
+                        .param("username", "someone")
+                        .param("password", "secret"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login?oaDisabled"));
+    }
+
+    /** Being anonymous is not a reason to skip CSRF: the form still needs the token. */
+    @Test
+    void theOaLoginEndpointStillNeedsTheCsrfToken() throws Exception {
+        mvc.perform(post("/login/oa")
+                        .param("username", "someone")
+                        .param("password", "secret"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/?denied"));
     }
 
     // ── VIEWER ─────────────────────────────────────────────────────────────────
@@ -287,6 +316,18 @@ class SecurityConfigTest {
     void theAuditPageIsAdminOnly() throws Exception {
         assertThat(statusOf(get("/audits").with(asViewer()))).isEqualTo(302);
         assertThat(statusOf(get("/audits").with(asAdmin()))).isEqualTo(200);
+    }
+
+    /**
+     * The two new pages sit on opposite sides of the role line for different reasons: the OA
+     * settings hold an internal endpoint and its field mapping, while the system log is a
+     * diagnostic aid every signed-in user is meant to have.
+     */
+    @Test
+    void oaSettingsAreAdminOnlyButTheSystemLogIsNot() throws Exception {
+        assertThat(statusOf(get("/oa/settings").with(asViewer()))).isEqualTo(302);
+        assertThat(statusOf(get("/oa/settings").with(asAdmin()))).isEqualTo(200);
+        assertThat(statusOf(get("/system-logs").with(asViewer()))).isEqualTo(200);
     }
 
     /**

@@ -217,6 +217,10 @@ logging:
     org.hibernate.SQL: WARN
   file:
     name: ./logs/jync.log
+  # 系统日志页按 UTF-8 读文件。JDK 17 在中文 Windows 上默认字符集是 GBK，
+  # 不固定编码会把中文写进日志再读成乱码；固定后与读取端一致，也不受平台影响。
+  charset:
+    file: UTF-8
   # 日志文件的上限。Spring Boot 默认只按时长保留（7 天）且没有总量上限，长期运行会把
   # ./logs 撑到数十 GB；这里给出明确的单文件大小、保留天数与总量三重限制。
   # 清理在启动时也会执行一次，因此异常退出留下的 .tmp 中转文件与超限历史会被回收。
