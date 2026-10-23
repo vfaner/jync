@@ -2,6 +2,8 @@ package com.qqmu.jync.service.connection;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.Locale;
+
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.config.SyncProperties;
@@ -66,6 +68,26 @@ class DataSourceManagerExtraParamsTest {
 
         assertThat(url).doesNotContain("AutoDeserialize", "ALLOWMULTIQUERIES");
         assertThat(url).contains("useSSL=false");
+    }
+
+    @Test
+    void dangerousKeysAreStrippedEvenUnderATurkishDefaultLocale() {
+        // In tr-TR Java's locale-sensitive uppercase maps 'i' to 'İ' (U+0130), so every
+        // blocklisted key that contains an 'i' would stop matching the blocklist.
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+        try {
+            DatabaseConfig c = config(DatabaseType.MYSQL);
+            c.setExtraParams("allowLoadLocalInfile=true"
+                    + "&queryInterceptors=com.evil.Interceptor&useSSL=false");
+
+            String url = manager.buildJdbcUrl(c);
+
+            assertThat(url).doesNotContain("allowLoadLocalInfile", "queryInterceptors");
+            assertThat(url).contains("useSSL=false");
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 
     @Test

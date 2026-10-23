@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.Locale;
+
 import org.junit.jupiter.api.Test;
 
 /**
@@ -81,5 +83,25 @@ class AiEndpointValidatorTest {
         assertThatThrownBy(() ->
                 AiEndpointValidator.validateBaseUrl("http://metadata.google.internal/compute"))
                 .hasMessage("error.ai.baseUrl.blocked");
+    }
+
+    /**
+     * In tr-TR Java's locale-sensitive uppercase maps 'i' to 'İ' (U+0130), so a hostname
+     * check written with {@code toUpperCase()} stops matching the blocklist. This name
+     * resolves to a PUBLIC address, so only the list can refuse it — a link-local check
+     * cannot step in.
+     */
+    @Test
+    void rejectsMetadataHostnamesEvenUnderATurkishDefaultLocale() {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+        try {
+            assertThatThrownBy(() ->
+                    AiEndpointValidator.validateBaseUrl("https://metadata.googleapis.com/v1"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("error.ai.baseUrl.blocked");
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 }

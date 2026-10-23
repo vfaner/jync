@@ -71,7 +71,11 @@ public final class AiEndpointValidator {
 
     private static boolean isBlockedHost(String host) {
         String trimmed = host.trim();
-        if (BLOCKED_HOSTS.contains(trimmed.toUpperCase()) || ALIYUN_METADATA_IP.equals(trimmed)) {
+        // Locale.ROOT: a default-locale uppercase maps 'i' to 'İ' under tr-TR, so a
+        // metadata hostname would stop matching the blocklist (metadata.googleapis.com
+        // resolves to a public address, leaving the link-local check nothing to catch).
+        if (BLOCKED_HOSTS.contains(trimmed.toUpperCase(java.util.Locale.ROOT))
+                || ALIYUN_METADATA_IP.equals(trimmed)) {
             return true;
         }
         try {

@@ -288,7 +288,10 @@ public class DataSourceManager {
      * smuggle additional properties past the per-key validation.
      */
     private String sanitizeExtraParam(String connectionName, String key, String value) {
-        if (!StringUtils.hasText(key) || BLOCKED_PARAM_KEYS.contains(key.toUpperCase())) {
+        // Locale.ROOT: a default-locale uppercase maps 'i' to 'İ' under tr-TR, which would
+        // make every blocklisted key containing an 'i' slip through.
+        if (!StringUtils.hasText(key)
+                || BLOCKED_PARAM_KEYS.contains(key.toUpperCase(java.util.Locale.ROOT))) {
             log.warn("Refused unsafe JDBC property '{}' on connection '{}'", key, connectionName);
             return null;
         }
