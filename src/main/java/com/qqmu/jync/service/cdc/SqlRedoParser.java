@@ -271,23 +271,56 @@ public class SqlRedoParser {
 
     // —— SQL scanning helpers (single-pass, quote-aware) ——
 
-    /** Find {@code word} as a whole token (bounded by non-alphanumeric), case-insensitive. */
+    /**
+     * Find {@code word} as a whole token (bounded by non-alphanumeric) at top level
+     * (not inside quotes, double-quotes or q-quotes), case-insensitive.
+     *
+     * <p>Quoted regions must be skipped: LogMiner renders every value as a quoted
+     * literal, so a column holding text such as {@code 'go where now'} contains the
+     * keyword's word-shape. Matching it splits an UPDATE mid-value, the SET fragment
+     * ends in an unterminated literal, and the whole change is refused — a legitimate
+     * UPDATE silently skipped (and after 6 consecutive skips, the project is parked).
+     */
     static int indexOfWord(String sql, String word) {
         String lower = sql.toLowerCase(Locale.ROOT);
         String w = word.toLowerCase(Locale.ROOT);
         int i = 0;
+        char quote = 0;
         while (i <= lower.length() - w.length()) {
-            int j = lower.indexOf(w, i);
-            if (j < 0) {
-                return -1;
+            char c = lower.charAt(i);
+            if (quote != 0) {
+                if (c == quote) {
+                    // '' escape inside a single-quoted string stays inside it.
+                    if (quote == '\'' && i + 1 < lower.length() && lower.charAt(i + 1) == '\'') {
+                        i += 2;
+                        continue;
+                    }
+                    quote = 0;
+                }
+                i++;
+                continue;
             }
-            boolean leftOk = j == 0 || !isWordChar(lower.charAt(j - 1));
-            boolean rightOk = j + w.length() >= lower.length()
-                    || !isWordChar(lower.charAt(j + w.length()));
-            if (leftOk && rightOk) {
-                return j;
+            if (c == 'q' || c == 'Q') {
+                int end = qQuoteEnd(sql, i);
+                if (end > 0) {
+                    i = end;
+                    continue;
+                }
             }
-            i = j + 1;
+            if (c == '\'' || c == '"') {
+                quote = c;
+                i++;
+                continue;
+            }
+            if (lower.startsWith(w, i)) {
+                boolean leftOk = i == 0 || !isWordChar(lower.charAt(i - 1));
+                boolean rightOk = i + w.length() >= lower.length()
+                        || !isWordChar(lower.charAt(i + w.length()));
+                if (leftOk && rightOk) {
+                    return i;
+                }
+            }
+            i++;
         }
         return -1;
     }

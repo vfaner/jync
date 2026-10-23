@@ -320,6 +320,27 @@ class SqlRedoParserTest {
         assertThat(c.unsupportedReason).contains("empty");
     }
 
+    // —— 值里出现独立单词 where ——
+
+    /**
+     * SQL_REDO 的值原样带引号渲染,列里存 SQL 文本或说明文字时 SET 值可能含有独立的
+     * "where"。indexOfWord 不做引号感知,会把值里的 where 当成 WHERE 关键字切开,
+     * SET 部分以未闭合的 {@code 'go} 结尾,字面量转换失败,整条 UPDATE 被跳过
+     * (计数,连续 6 次后整任务停机),目标行保持旧值。
+     */
+    @Test
+    void updateWhoseSetValueContainsAStandaloneWhereWordStillParses() {
+        String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'go where now'"
+                + " where \"ID\" = '1' and \"NAME\" = 'Alice'"
+                + " and \"TS\" = TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午')"
+                + " and ROWID = 'AAAR4TAAYAAAAAPAAA';";
+        SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());
+        assertThat(c.unsupportedReason).isNull();
+        assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
+        assertThat(c.row.get("NOTE")).isEqualTo("go where now");
+        assertThat(c.row.get("ID")).isEqualTo("1");
+    }
+
     // —— fixture replay ——
 
     /**
