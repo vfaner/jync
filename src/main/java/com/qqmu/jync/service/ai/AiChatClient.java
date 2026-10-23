@@ -1,12 +1,20 @@
 package com.qqmu.jync.service.ai;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.stereotype.Component;
 
@@ -58,6 +66,29 @@ public class AiChatClient {
             .connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER)
             .build();
+
+    /**
+     * Abandons a stream that goes silent for longer than its budget.
+     *
+     * <p>Its own daemon thread because the read is blocking and the JDK client offers no read
+     * timeout: {@code HttpRequest.timeout} stops at the response headers, so an upstream that
+     * sends one event and then neither data nor a newline pins the calling thread — on the draft
+     * endpoints, one of four pool threads — until the socket dies. Blocked reads are only
+     * interruptible by closing the stream, which is what the watchdog does.
+     */
+    private static final ScheduledExecutorService STALL_WATCHDOG =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "ai-stream-watchdog");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /**
+     * Ceiling on the wait before the first body line arrives. Generous on purpose: a gateway that
+     * buffers the whole generation is legitimately silent for as long as it generates. It matches
+     * the SSE emitter's own ten-minute limit, past which no client is listening anyway.
+     */
+    private static final long FIRST_LINE_CEILING_MS = 10 * 60 * 1000L;
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -189,8 +220,11 @@ public class AiChatClient {
         Duration timeout = Duration.ofSeconds(provider.getTimeoutSeconds() == null
                 || provider.getTimeoutSeconds() <= 0 ? 30 : provider.getTimeoutSeconds());
         // How long the stream may go quiet before it is considered dead. Not an absolute
-        // deadline: see the read loop for why the first-byte wait is deliberately unbounded.
+        // deadline: see the watchdog below for why the first-line wait has its own, larger budget.
         long deadline = timeout.toMillis();
+        // Set by the watchdog when it abandons a silent stream, so the failure reported below
+        // names the real cause instead of the driver's "Stream closed".
+        AtomicReference<String> stalledFor = new AtomicReference<>();
 
         try {
             HttpClient client = HTTP_CLIENT;
@@ -208,10 +242,29 @@ public class AiChatClient {
                         System.currentTimeMillis() - start);
             }
 
+            InputStream body = response.body();
+            // Activity clock for the watchdog: a blocking read cannot notice its own silence.
+            AtomicLong lastActivity = new AtomicLong(System.currentTimeMillis());
+            AtomicBoolean firstLineSeen = new AtomicBoolean(false);
+            long tickMs = Math.max(200L, Math.min(1000L, deadline / 4));
+            ScheduledFuture<?> watchdog = STALL_WATCHDOG.scheduleAtFixedRate(() -> {
+                long budget = firstLineSeen.get() ? deadline : FIRST_LINE_CEILING_MS;
+                if (System.currentTimeMillis() - lastActivity.get() > budget
+                        && stalledFor.compareAndSet(null,
+                                "Stream stalled for over " + (budget / 1000) + "s")) {
+                    // The only way to interrupt a read blocked in the socket.
+                    try {
+                        body.close();
+                    } catch (IOException ignored) {
+                        // Already closed; the read was unblocked by something else.
+                    }
+                }
+            }, tickMs, tickMs, TimeUnit.MILLISECONDS);
+
             StringBuilder text = new StringBuilder();
             String[] served = {""};
             try (java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+                    new java.io.InputStreamReader(body, StandardCharsets.UTF_8))) {
                 String line;
                 String event = null;
                 // Some gateways accept stream:true and answer with one buffered completion
@@ -228,6 +281,8 @@ public class AiChatClient {
                 long lastLine = -1;
                 while ((line = reader.readLine()) != null) {
                     long now = System.currentTimeMillis();
+                    firstLineSeen.set(true);
+                    lastActivity.set(now);
                     if (lastLine >= 0 && now - lastLine > deadline) {
                         return ChatResult.failure("Stream stalled for over "
                                 + timeout.getSeconds() + "s", endpoint, model, now - start);
@@ -320,6 +375,8 @@ public class AiChatClient {
                     return ChatResult.success(whole, servedModel(root), endpoint, model,
                             System.currentTimeMillis() - start);
                 }
+            } finally {
+                watchdog.cancel(false);
             }
             return ChatResult.success(text.toString(), served[0], endpoint, model,
                     System.currentTimeMillis() - start);
@@ -329,6 +386,13 @@ public class AiChatClient {
             return ChatResult.failure("Interrupted", endpoint, model,
                     System.currentTimeMillis() - start);
         } catch (IOException | RuntimeException e) {
+            String stallMessage = stalledFor.get();
+            if (stallMessage != null) {
+                // The watchdog closed the stream; report the cause, not "Stream closed".
+                log.warn("AI stream to '{}' stalled: {}", provider.getName(), stallMessage);
+                return ChatResult.failure(stallMessage, endpoint, model,
+                        System.currentTimeMillis() - start);
+            }
             log.warn("AI stream to '{}' failed: {}", provider.getName(), e.toString());
             return ChatResult.failure(e.getMessage() == null ? e.toString() : e.getMessage(),
                     endpoint, model, System.currentTimeMillis() - start);
