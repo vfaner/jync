@@ -18,6 +18,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -119,6 +120,22 @@ class LogMinerCdcConsumerMissingLobTest {
     }
 
     @Test
+    void skippedLobRowsDoNotCountAsParseFailuresAndCannotParkTheProject() throws Exception {
+        // 行外 LOB 是结构性的:该表的每一条变更都会命中,缺值不是解析缺陷。
+        // skip 策略的契约是「跳过 + 计数 + 限流告警,项目继续跑」;但旧实现仍对这类
+        // 行累加 parseFailures,而计数只在成功 flush 时清零 —— 一个只有这类变更的
+        // 事务里 6 行就足以让整个项目以 PARSE_STRIKE_OUT 停摆,skip 与 fail 只剩
+        // 「6 行后 park」和「首行 park」的区别,策略形同虚设。
+        LogMinerCdcConsumer consumer = newConsumer(sixMissingLobRowsSession(), boundedLock(3));
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+        assertThat(stats.getSkippedMissingLob()).isEqualTo(6);
+        assertThat(stats.missingLobByTable()).containsEntry("SRC.OG_LOB", 6L);
+    }
+
+    @Test
     void theFailPolicyParksTheProjectWithoutAdvancingThePosition() throws Exception {
         properties.getCdc().getLogminer().setMissingLobPolicy("fail");
         LogMinerCdcConsumer consumer = newConsumer(singleMissingLobSession(), boundedLock(20));
@@ -133,6 +150,41 @@ class LogMinerCdcConsumerMissingLobTest {
     }
 
     // --- fixtures -------------------------------------------------------------------
+
+    /**
+     * 一个事务里 6 条都缺行外 LOB 值的 INSERT(同一 CSCN):没有任何可落库的行,
+     * 因此不会有 flush 来清零连续失败计数 —— 正是会暴露错误累计的形状。
+     */
+    private LogMinerSession sixMissingLobRowsSession() {
+        List<LogMinerSession.Row> rows = new ArrayList<>();
+        for (int n = 1; n <= 6; n++) {
+            String redo = "insert into \"SRC\".\"OG_LOB\"(\"ID\") values ('" + n + "');";
+            rows.add(new LogMinerSession.Row("rs", 1_001L, "INSERT", "SRC", "OG_LOB",
+                    redo, new Timestamp(System.currentTimeMillis()), 0));
+        }
+        return new LogMinerSession(null, 1_000L, 1_000L, null, null) {
+            private boolean consumed;
+
+            @Override
+            public List<LogMinerSession.Row> nextBatch() {
+                if (consumed) {
+                    return Collections.emptyList();
+                }
+                consumed = true;
+                return rows;
+            }
+
+            @Override
+            public long highWaterScn() {
+                return 1_001L;
+            }
+
+            @Override
+            public void close() {
+                // END_LOGMNR would run on a null source connection; nothing to do here.
+            }
+        };
+    }
 
     /** One INSERT whose redo text omits the out-of-line CLOB/BLOB column entirely. */
     private LogMinerSession singleMissingLobSession() {

@@ -508,7 +508,16 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                                     + tableKey + " and set the policy back to skip to continue.");
                         }
                     }
-                    parseFailures.incrementAndGet();
+                    if (!missingColumns) {
+                        // A missing-column row is the structural, understood case above
+                        // (policy skip = keep running, warn, tally on the panel). Counting
+                        // it as a parse failure contradicted that policy: the tally only
+                        // clears on a successful flush, so six such rows — one transaction
+                        // on a table whose every change carries an out-of-line LOB — parked
+                        // the whole project as PARSE_STRIKE_OUT, leaving `skip` and `fail`
+                        // distinguishable only by first-row versus sixth-row parking.
+                        parseFailures.incrementAndGet();
+                    }
                     stats.addSkippedUnsupported(1);
                     if (missingColumns) {
                         // The throttled warning above already names the table and the tally.
