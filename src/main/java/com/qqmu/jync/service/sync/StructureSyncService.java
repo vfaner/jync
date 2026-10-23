@@ -21,6 +21,7 @@ import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.util.JdbcUtil;
 import com.qqmu.jync.util.TargetTableVerifier;
 
 import lombok.extern.slf4j.Slf4j;
@@ -511,7 +512,9 @@ public class StructureSyncService {
         String override = ctx.getConfig().ddlOverride("VIEW", view.getName());
         List<String> statements;
         if (override != null && !override.isBlank()) {
-            statements = List.of(override);
+            // A view is a plain SQL statement, so a pasted/model-supplied trailing semicolon is a
+            // terminator, not syntax: Oracle rejects it on DDL submitted through JDBC.
+            statements = List.of(JdbcUtil.stripTrailingSemicolon(override));
         } else {
             // Normalize to a bare SELECT, then translate it into the target's dialect.
             ViewMeta translated = new ViewMeta();

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -113,6 +114,11 @@ public class CandidateValidator {
         }
         String objectKind = matcher.group(2).toUpperCase();
         String renamed = matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + tempName));
+        if ("VIEW".equals(objectKind)) {
+            // A view is one plain statement; a trailing semicolon is a script terminator that
+            // Oracle rejects over JDBC. Routine bodies are left alone: "END;" IS their syntax.
+            renamed = JdbcUtil.stripTrailingSemicolon(renamed);
+        }
 
         List<String> caveats = new ArrayList<>();
         if (referencesItself(candidateSql, originalName, matcher.end())) {

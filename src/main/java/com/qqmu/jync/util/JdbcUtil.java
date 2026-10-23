@@ -27,4 +27,25 @@ public final class JdbcUtil {
             log.debug("Driver does not support setQueryTimeout: {}", e.getMessage());
         }
     }
+
+    /**
+     * Removes a trailing statement terminator from a plain SQL statement.
+     *
+     * <p>Reviewers and models end a statement with {@code ;}, but a JDBC driver is expecting the
+     * statement itself, not a script: Oracle (and the Oracle-compatible products) answer a
+     * trailing semicolon on plain DDL with ORA-00911. Only plain statements may be passed here —
+     * a PL/SQL block's {@code END;} is part of its syntax and must be left alone.
+     *
+     * @return the statement without trailing semicolons or surrounding whitespace; null stays null
+     */
+    public static String stripTrailingSemicolon(String sql) {
+        if (sql == null) {
+            return null;
+        }
+        String s = sql.strip();
+        while (s.endsWith(";")) {
+            s = s.substring(0, s.length() - 1).strip();
+        }
+        return s;
+    }
 }

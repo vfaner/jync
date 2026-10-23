@@ -2,6 +2,7 @@ package com.qqmu.jync.service.ai;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -238,6 +239,52 @@ class CandidateValidatorTest {
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getMessage()).isNotEqualTo("error.validate.noHeader");
         assertThat(manager.handedOut.get()).isPositive();
+    }
+
+    @Test
+    @DisplayName("a view with a trailing semicolon is checked without it")
+    void aViewWithATrailingSemicolonIsCheckedWithoutIt() throws SQLException {
+        // A reviewer pastes, or a model returns, "CREATE VIEW ... AS SELECT 1;". H2 accepts the
+        // terminator, but Oracle rejects it on plain DDL with ORA-00911 -- so the check would
+        // report a good candidate as broken on exactly the targets that need checking.
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        manager.forced = conn;
+
+        validator.validate(target, "CREATE VIEW V_X AS SELECT 1;", "V_X");
+
+        org.mockito.ArgumentCaptor<String> captured =
+                org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(st, atLeastOnce()).execute(captured.capture());
+        String createSql = captured.getAllValues().stream()
+                .filter(sql -> sql.startsWith("CREATE"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no CREATE reached the driver"));
+        assertThat(createSql).doesNotEndWith(";");
+    }
+
+    @Test
+    @DisplayName("a routine body keeps its own terminator")
+    void aRoutineBodyKeepsItsOwnTerminator() throws SQLException {
+        // PL/SQL's block terminator is the semicolon after END -- stripping it would turn a
+        // valid routine into a syntax error. Only plain (view) statements are normalized.
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        manager.forced = conn;
+
+        validator.validate(target,
+                "CREATE PROCEDURE P AS BEGIN NULL; END;", "P");
+
+        org.mockito.ArgumentCaptor<String> captured =
+                org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(st, atLeastOnce()).execute(captured.capture());
+        String createSql = captured.getAllValues().stream()
+                .filter(sql -> sql.startsWith("CREATE"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no CREATE reached the driver"));
+        assertThat(createSql).endsWith("END;");
     }
 
     @Test
