@@ -237,7 +237,40 @@ public class OracleDialect extends AbstractSqlDialect {
             case java.sql.Types.BLOB:
                 return java.sql.Types.BLOB;
             default:
-                return effectiveType;
+                break;
+        }
+        // A source column need not already be a LOB for its TARGET column to be one:
+        // varcharType turns anything wider than VARCHAR2(1000 CHAR) — or with no reported
+        // width at all — into a CLOB, and binaryType anything over RAW(2000) into a BLOB.
+        // The MERGE placeholder type comes from this method, so such a column would keep
+        // binding its ordinary String/byte[]: above 32767 bytes it hits ORA-01461 anyway,
+        // and an empty string misses the ''→empty-CLOB rescue. Follow the type the column
+        // was actually created with (mapByJdbcType is the same input CREATE TABLE uses;
+        // it never logs, so the per-row CDC path stays quiet).
+        if (column != null && isWidthPromotable(effectiveType)) {
+            String mapped = mapByJdbcType(column, sourceType);
+            if (clobType().equals(mapped)) {
+                return java.sql.Types.CLOB;
+            }
+            if (blobType().equals(mapped)) {
+                return java.sql.Types.BLOB;
+            }
+        }
+        return effectiveType;
+    }
+
+    /** The declared-width categories whose target type depends on the width. */
+    private static boolean isWidthPromotable(int jdbcType) {
+        switch (jdbcType) {
+            case java.sql.Types.CHAR:
+            case java.sql.Types.NCHAR:
+            case java.sql.Types.VARCHAR:
+            case java.sql.Types.NVARCHAR:
+            case java.sql.Types.BINARY:
+            case java.sql.Types.VARBINARY:
+                return true;
+            default:
+                return false;
         }
     }
 
