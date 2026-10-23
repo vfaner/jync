@@ -83,8 +83,18 @@ public final class LobBinder {
                 return false;
             }
             Clob clob = ps.getConnection().createClob();
-            clob.setString(1, text.toString());
-            ps.setClob(index, clob);
+            boolean bound = false;
+            try {
+                clob.setString(1, text.toString());
+                ps.setClob(index, clob);
+                bound = true;
+            } finally {
+                // A temporary LOB occupies the target's temp tablespace from the moment it
+                // exists; anything short of handing it to the tracker must free it here.
+                if (!bound) {
+                    freeQuietly(clob);
+                }
+            }
             if (tracker != null) {
                 tracker.track(clob);
             }
@@ -96,8 +106,16 @@ public final class LobBinder {
                 return false;
             }
             Blob blob = ps.getConnection().createBlob();
-            blob.setBytes(1, bytes);
-            ps.setBlob(index, blob);
+            boolean bound = false;
+            try {
+                blob.setBytes(1, bytes);
+                ps.setBlob(index, blob);
+                bound = true;
+            } finally {
+                if (!bound) {
+                    freeQuietly(blob);
+                }
+            }
             if (tracker != null) {
                 tracker.track(blob);
             }
@@ -119,14 +137,21 @@ public final class LobBinder {
                 java.io.Reader reader = lob.openReader();
                 if (dialect.requiresServerSideLob()) {
                     Clob clob = ps.getConnection().createClob();
-                    try (java.io.Writer out = clob.setCharacterStream(1)) {
-                        copy(reader, out);
-                    } catch (java.io.IOException e) {
-                        throw new SQLException("Failed to fill a temporary CLOB", e);
+                    boolean bound = false;
+                    try {
+                        try (java.io.Writer out = clob.setCharacterStream(1)) {
+                            copy(reader, out);
+                        } catch (java.io.IOException e) {
+                            throw new SQLException("Failed to fill a temporary CLOB", e);
+                        }
+                        ps.setClob(index, clob);
+                        bound = true;
                     } finally {
                         closeQuietly(reader);
+                        if (!bound) {
+                            freeQuietly(clob);
+                        }
                     }
-                    ps.setClob(index, clob);
                     if (tracker != null) {
                         tracker.track(clob);
                     }
@@ -142,14 +167,21 @@ public final class LobBinder {
             java.io.InputStream stream = lob.openStream();
             if (dialect.requiresServerSideLob()) {
                 Blob blob = ps.getConnection().createBlob();
-                try (java.io.OutputStream out = blob.setBinaryStream(1)) {
-                    copy(stream, out);
-                } catch (java.io.IOException e) {
-                    throw new SQLException("Failed to fill a temporary BLOB", e);
+                boolean bound = false;
+                try {
+                    try (java.io.OutputStream out = blob.setBinaryStream(1)) {
+                        copy(stream, out);
+                    } catch (java.io.IOException e) {
+                        throw new SQLException("Failed to fill a temporary BLOB", e);
+                    }
+                    ps.setBlob(index, blob);
+                    bound = true;
                 } finally {
                     closeQuietly(stream);
+                    if (!bound) {
+                        freeQuietly(blob);
+                    }
                 }
-                ps.setBlob(index, blob);
                 if (tracker != null) {
                     tracker.track(blob);
                 }
@@ -187,6 +219,22 @@ public final class LobBinder {
             closeable.close();
         } catch (Exception ignored) {
             // The writer releases the value again after the batch executes.
+        }
+    }
+
+    private static void freeQuietly(Clob clob) {
+        try {
+            clob.free();
+        } catch (SQLException e) {
+            log.debug("Freeing an unbound temporary CLOB failed: {}", e.getMessage());
+        }
+    }
+
+    private static void freeQuietly(Blob blob) {
+        try {
+            blob.free();
+        } catch (SQLException e) {
+            log.debug("Freeing an unbound temporary BLOB failed: {}", e.getMessage());
         }
     }
 
