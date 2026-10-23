@@ -58,6 +58,8 @@ class SqlServerCdcLsnRecoveryTest {
     /** Per-test: the discovered CI's start_lsn (canonical) and fn_cdc_get_min_lsn. */
     private final AtomicReference<String> ciStartLsn = new AtomicReference<>();
     private final AtomicReference<String> ciMinLsn = new AtomicReference<>();
+    /** Per-test override for fn_cdc_get_max_lsn (a new CI can sit ABOVE it). */
+    private final AtomicReference<String> maxLsn = new AtomicReference<>(MAX_LSN);
     private SqlServerCdcConsumer consumer;
 
     @BeforeEach
@@ -71,7 +73,7 @@ class SqlServerCdcLsnRecoveryTest {
 
         ResultSet maxRs = mock(ResultSet.class);
         when(maxRs.next()).thenReturn(true);
-        when(maxRs.getString(1)).thenReturn(MAX_LSN);
+        when(maxRs.getString(1)).thenAnswer(inv -> maxLsn.get());
         when(maxPs.executeQuery()).thenReturn(maxRs);
 
         // discovery: one tracked CI dbo.orders / dbo_orders; start_lsn is column 4.
@@ -179,5 +181,29 @@ class SqlServerCdcLsnRecoveryTest {
         assertThat(r.nextLsn).isEqualTo(MAX_LSN);
         verify(minLsnPs).executeQuery();
         verify(clampedChangesPs).executeQuery();
+    }
+
+    @Test
+    void anInstanceStartingPastTheMaxLsnIsSkippedInsteadOfClampingIntoAnInvalidRange()
+            throws Exception {
+        // #2 追加:CI 刚启用、捕获作业尚未处理其 enable 事务时,fn_cdc_get_max_lsn()
+        // 还在它的 start_lsn 之下(min_lsn 为 NULL,变更表为空)。此时 clamp 点是
+        // start_lsn > maxLsn,@from_lsn > @to_lsn 是非法区间,SQL Server 报 313
+        // ("The provided range of change data is not valid")。旧代码让 313 穿出 drain:
+        // 每周期必败,计数满额后项目被 APPLY_STRIKE_OUT 永久 park,且提示与真实原因
+        // 无关。这个 CI 在水位之后本就没有任何捕获数据可读 —— 跳过它,水位照常推进到
+        // maxLsn,等捕获作业追上后下个周期自然开始读。
+        ciStartLsn.set("0x00000000000000000100");
+        maxLsn.set("0x000000000000000000ff");
+        when(normalChangesPs.executeQuery())
+                .thenThrow(new SQLException("An invalid LSN was specified", null, 22054));
+        when(clampedChangesPs.executeQuery())
+                .thenThrow(new SQLException(
+                        "The provided range of change data is not valid.", null, 313));
+
+        SqlServerCdcConsumer.DrainResult r = consumer.drain(conn, FROM_LSN);
+
+        assertThat(r.rows).isZero();
+        assertThat(r.nextLsn).isEqualTo("0x000000000000000000ff");
     }
 }

@@ -415,6 +415,20 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                         // ① new CI. min_lsn is NULL while its change table holds no rows
                         // yet — start_lsn is then the lowest LSN the function accepts.
                         String clampTo = minLsn != null ? minLsn : ci.startLsn;
+                        if (clampTo.compareTo(maxLsn) > 0) {
+                            // The capture job has not yet processed this CI's enable
+                            // transaction, so fn_cdc_get_max_lsn() still sits BELOW its
+                            // first readable LSN (min_lsn is NULL while the change table is
+                            // empty). Binding @from_lsn > @to_lsn is an invalid range —
+                            // SQL Server rejects it with error 313 — and there is nothing
+                            // past the watermark for this CI to read anyway. Skip it this
+                            // cycle; the watermark still advances, and the next cycle picks
+                            // the CI up once the capture job catches up.
+                            log.debug("SQLServer CDC: capture instance {} starts at {} above"
+                                    + " max_lsn {} — nothing captured for it yet; skipping"
+                                    + " it this cycle", ci.captureInstance, clampTo, maxLsn);
+                            continue;
+                        }
                         log.warn("SQLServer CDC: capture instance {} starts at {} above the"
                                 + " stored watermark {} (enabled or re-created mid-flight);"
                                 + " clamping from_lsn to {} and rescanning inclusively — no"
