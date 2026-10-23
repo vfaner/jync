@@ -474,9 +474,6 @@
                                        th:placeholder="${tbl}"
                                        th:attr="data-source=${tbl}">
                             </div>
-                            <div class="help" style="margin:6px 2px 0">
-                                <span th:text="#{project.picker.emptyMeansNone}">Only checked objects are synced; unchecking every table means no table is synced.</span>
-                            </div>
                         </div>
                         <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.tables)}"
                            th:text="#{project.noTables}">No tables.</p>
