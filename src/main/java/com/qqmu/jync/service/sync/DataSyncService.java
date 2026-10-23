@@ -2716,6 +2716,16 @@ public class DataSyncService {
         } catch (SQLException e) {
             targetConn.rollback();
             throw e;
+        } catch (RuntimeException e) {
+            // 与 copyRows 同一条纪律:锁租约丢失、或驱动在 commit 里抛未检查异常时,
+            // finally 恢复自动提交会让驱动提交本应放弃的这批删除。
+            try {
+                targetConn.rollback();
+            } catch (SQLException rollbackError) {
+                log.error("Rollback after an unchecked failure failed for {}: {}",
+                        targetTable, rollbackError.getMessage());
+            }
+            throw e;
         } finally {
             targetConn.setAutoCommit(originalAutoCommit);
         }

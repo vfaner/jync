@@ -1,7 +1,9 @@
 package com.qqmu.jync.service.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -11,6 +13,7 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -98,6 +101,40 @@ class DataSyncServiceDeletionsTest {
 
         assertThat(deleted).isEqualTo(1);
         assertThat(count("ORD")).isEqualTo(2);
+    }
+
+    @Test
+    void anUncheckedCommitFailureRollsBackThePendingDelete() throws SQLException {
+        // 与写入路径同一个坑:删行循环同样关闭自动提交、最后恢复。恢复动作由 JDBC 驱动
+        // 实现成"提交当前事务"——没有显式回滚时,一个未声明的 Runtime 异常(锁租约丢失、
+        // 驱动在 commit 里抛未检查异常)会把已执行的删除悄悄留下。
+        exec(source, "CREATE TABLE ORD (ID BIGINT PRIMARY KEY)");
+        exec(target, "CREATE TABLE ORD (ID BIGINT PRIMARY KEY)");
+        exec(source, "INSERT INTO ORD VALUES (1)");
+        exec(target, "INSERT INTO ORD VALUES (1), (2), (3)");
+
+        AtomicInteger rollbacks = new AtomicInteger();
+        AtomicInteger commits = new AtomicInteger();
+        Connection failingCommit = (Connection) Proxy.newProxyInstance(
+                Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
+                (proxy, method, args) -> {
+                    if ("commit".equals(method.getName()) && commits.getAndIncrement() == 0) {
+                        throw new IllegalStateException("driver blew up mid-delete");
+                    }
+                    if ("rollback".equals(method.getName())) {
+                        rollbacks.incrementAndGet();
+                    }
+                    return method.invoke(target, args);
+                });
+
+        assertThatThrownBy(() -> service.syncDeletions(source, failingCommit,
+                table("ORD", "ID", 3), ctx))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("driver blew up mid-delete");
+
+        assertThat(rollbacks).as("the open transaction must be rolled back").hasValue(1);
+        assertThat(count("ORD")).as("a failed delete batch must leave the rows in place")
+                .isEqualTo(3);
     }
 
     @Test
