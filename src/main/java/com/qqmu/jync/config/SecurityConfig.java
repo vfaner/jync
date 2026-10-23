@@ -24,11 +24,15 @@ import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.auth.ExternalSessionSignIn;
 import com.qqmu.jync.service.auth.ForcePasswordChangeFilter;
 import com.qqmu.jync.service.auth.LoginAttemptService;
 import com.qqmu.jync.service.auth.LoginLockoutFilter;
+import com.qqmu.jync.service.auth.SsoHeaderAuthenticationFilter;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 import com.qqmu.jync.util.ClientIpResolver;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * Login, roles, and CSRF.
@@ -136,14 +140,36 @@ public class SecurityConfig {
         return registration;
     }
 
+    /** Header-based SSO. Declared here so a MVC slice that scans the chain never needs it. */
+    @Bean
+    public SsoHeaderAuthenticationFilter ssoHeaderAuthenticationFilter(
+            OaAuthConfigService configService,
+            ExternalSessionSignIn signIn,
+            CryptoUtil crypto) {
+        return new SsoHeaderAuthenticationFilter(configService, signIn, crypto);
+    }
+
+    /** Same treatment as the lockout filter: in the security chain only, exactly once. */
+    @Bean
+    public FilterRegistrationBean<SsoHeaderAuthenticationFilter> ssoHeaderAuthenticationFilterRegistration(
+            SsoHeaderAuthenticationFilter filter) {
+        FilterRegistrationBean<SsoHeaderAuthenticationFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            LoginAttemptService attemptService,
                                            LoginLockoutFilter loginLockoutFilter,
+                                           SsoHeaderAuthenticationFilter ssoHeaderAuthenticationFilter,
                                            ForcePasswordChangeFilter forcePasswordChangeFilter,
                                            AdminAuditService auditService) throws Exception {
         http
                 .addFilterBefore(loginLockoutFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(ssoHeaderAuthenticationFilter,
+                        UsernamePasswordAuthenticationFilter.class)
                 // After authentication, because it reads the principal. The success handler below
                 // sends the first request of a seeded account straight here as well; this filter
                 // is what covers every request after it.
