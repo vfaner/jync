@@ -293,7 +293,13 @@ public class StructureSyncService {
         // （实测：源库后来加了 gender，目标的 TEACHER 还是老结构）。缺列是纯增量差异，补上
         // 不动任何已存在的数据；不补的话这张表会永远卡住 —— 结构同步只会 CREATE（对已存在的
         // 表不生效），数据侧每轮报一次 missing column，快照又被失败扣住，谁都不会好转。
-        List<String> addedColumns = created ? List.of()
+        //
+        // 但这一条修理只属于结构同步的开关：数据侧在目标表被手工删掉时会发一条 CREATE 兜底，
+        // 而目标表清单读不出来时（降级成逐表 CREATE）它必然打在已存在的表上。结构同步关掉的
+        // 项目里，「Jync 不改目标表结构」是用户明确选过的语义，补列/改注释/补身份序列一个都不
+        // 能做；列真的缺了，让形状预检把错误报出来，由用户决定。
+        boolean mayAlterExisting = ctx.getConfig().isSyncStructure();
+        List<String> addedColumns = created || !mayAlterExisting ? List.of()
                 : addMissingColumns(targetConn, ctx, targetTable, table);
 
         // A comment edited at the source reaches the target only through an explicit ALTER:
@@ -302,16 +308,20 @@ public class StructureSyncService {
         // this makes the event's DDL do something. Cosmetic by nature, so a failure here is
         // reported but must not block data sync (the snapshot would then be withheld and the
         // same failing ALTER retried forever).
-        if (!created) {
+        if (!created && mayAlterExisting) {
             applyTableComment(executor, dialect, ctx, targetTable, table);
         }
 
         // Version-gated companions: sequence + trigger emulating an identity column on
         // pre-12c Oracle. A failure here blocks the table (its autoincrement contract is
         // unfulfilled), so let the SQLException surface to apply()'s failure handling.
-        for (String extra : dialect.getPostCreateTableDdl(table, ctx.getTargetSchema(),
-                targetTable, ctx.effectiveSourceType())) {
-            executor.executeIdempotentCreate(extra);
+        // Same rule as the repairs above: companions for a table this call created always
+        // run; for an existing table they are an alteration, so the switch decides.
+        if (created || mayAlterExisting) {
+            for (String extra : dialect.getPostCreateTableDdl(table, ctx.getTargetSchema(),
+                    targetTable, ctx.effectiveSourceType())) {
+                executor.executeIdempotentCreate(extra);
+            }
         }
 
         int indexCount = 0;

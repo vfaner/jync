@@ -133,6 +133,35 @@ class StructureSyncServiceMissingColumnTest {
         assertThat(outcome.error).contains("CODE");
     }
 
+    /**
+     * 结构同步关掉时，唯一允许对目标库做的表级操作是「建一张不存在的表」——数据侧在目标
+     * 表被手工删掉时仍会发这一条 CREATE 兜底。表本来就在的时候，CREATE 只会返回
+     * "already exists"，绝不能顺势补列、改注释、补身份序列：那个开关的语义就是「Jync 不
+     * 改目标的表结构」。数据侧一旦读不出目标表清单（降级成逐表 CREATE），这条路径就必然会
+     * 撞上已存在的表，所以这里用真实的已存在表把它钉住。
+     */
+    @Test
+    void withStructureSyncOffAnExistingTableIsNeverAltered() throws SQLException {
+        TableMeta table = sourceTable(col("ID", Types.BIGINT), col("NAME", Types.VARCHAR));
+        table.setRemarks("source comment");
+        SyncConfig structureOff = new SyncConfig();
+        structureOff.setSyncStructure(false);
+        SyncContext offCtx = SyncContext.builder()
+                .project(ctx.getProject())
+                .config(structureOff)
+                .targetDialect(new GenericSqlDialect())
+                .batchSize(50)
+                .build();
+
+        StructureSyncService.ApplyOutcome outcome = structure.apply(target,
+                ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE, "T", "auto create", table),
+                offCtx);
+
+        assertThat(outcome.applied).isTrue();
+        assertThat(outcome.detail).doesNotContain("added");
+        assertThat(targetColumns()).containsExactly("ID", "LEGACY");
+    }
+
     private List<String> targetColumns() throws SQLException {
         List<String> names = new ArrayList<>();
         try (ResultSet rs = target.getMetaData().getColumns(null, null, "T", "%")) {
