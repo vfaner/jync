@@ -23,6 +23,9 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -177,6 +180,20 @@ class LogMinerCdcConsumerFailureEscalationTest {
                 mock(CdcBaselineService.class), taskStore,
                 mock(com.qqmu.jync.service.sync.SyncStateWriter.class), dataSourceManager,
                 stats, properties, factory);
+    }
+
+    /** A consumer whose every mining session is the supplied one. */
+    private LogMinerCdcConsumer newConsumer(SyncContext ctx,
+                                             SyncLockService.LockHandle lock,
+                                             LogMinerSession session) {
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("lm-1");
+        LogMinerSessionFactory factory = (c, s, b) -> session;
+        return new LogMinerCdcConsumer(project, lock, ctx, positionStore,
+                mock(CdcBaselineService.class), taskStore,
+                mock(com.qqmu.jync.service.sync.SyncStateWriter.class), dataSourceManager,
+                new CdcRuntimeStats(), properties, factory);
     }
 
     /**
@@ -426,5 +443,67 @@ class LogMinerCdcConsumerFailureEscalationTest {
         verify(stateWriter, never()).recordLog(anyLong(), any(), anyString(),
                 eq(ChangeType.ERROR), anyString(), anyBoolean(), anyLong());
         verify(lock).close();
+    }
+
+    @Test
+    void requestStopDoesNotCloseTheSessionFromTheCallingThread() throws Exception {
+        // 会话的 JDBC 对象(Connection/PreparedStatement/ResultSet)属于消费者线程。
+        // 从 Web 线程的 requestStop 里调用 close() 会在消费者正遍历游标时跨线程执行
+        // END_LOGMNR、关闭游标 —— 同一个 Connection 的并发使用是未定义行为,还会把
+        // 请求线程阻塞在数据库往返上。停止只需翻标志:消费者线程在 finally 里关闭会话,
+        // 与 SqlServerCdcConsumer.requestStop 的既有结论一致。
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger closes = new AtomicInteger();
+        AtomicBoolean closed = new AtomicBoolean();
+        List<String> closeThreads = Collections.synchronizedList(new ArrayList<>());
+        LogMinerSession session = new LogMinerSession(null, 1_000L, 1_000L, null, null) {
+            private boolean first = true;
+
+            @Override
+            public List<LogMinerSession.Row> nextBatch() {
+                if (first) {
+                    first = false;
+                    entered.countDown();
+                    try {
+                        release.await(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return Collections.emptyList();
+            }
+
+            @Override
+            public long highWaterScn() {
+                return 1_000L;
+            }
+
+            @Override
+            public void close() {
+                if (closed.compareAndSet(false, true)) {
+                    closes.incrementAndGet();
+                    closeThreads.add(Thread.currentThread().getName());
+                }
+            }
+        };
+        LogMinerCdcConsumer consumer = newConsumer(stagedTargetContext(true),
+                boundedLock(2), session);
+
+        Thread worker = new Thread(consumer::run, "lm-consumer-under-test");
+        worker.start();
+        try {
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            consumer.requestStop();
+            assertThat(closes.get())
+                    .as("requestStop closed the session from the calling thread")
+                    .isZero();
+        } finally {
+            release.countDown();
+            worker.join(5_000L);
+        }
+        assertThat(worker.isAlive()).isFalse();
+        assertThat(closes.get()).isEqualTo(1);
+        assertThat(closeThreads).containsExactly("lm-consumer-under-test");
     }
 }

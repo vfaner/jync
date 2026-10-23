@@ -342,9 +342,14 @@ public class LogMinerSession implements AutoCloseable {
      * ERROR — the increment stops permanently on the first temporal column. The numeric
      * characters matter for the same reason ({@code 1,5} instead of {@code 1.5}).
      *
-     * <p>These are session settings and the session is ours for the lifetime of the mining
-     * session, so they need no cleanup; the formats are also what a target driver expects
-     * everywhere else in the pipeline.
+     * <p>The connection comes from the shared source pool, so these settings outlive the
+     * mining session on that physical connection until it is borrowed again. They are
+     * deliberately not restored: restoring needs the previous values from
+     * {@code V$NLS_PARAMETERS} (a privilege the mining account may not have) plus a round
+     * trip on the close path of every poll cycle, and nothing else in the pipeline depends
+     * on session NLS — rows are read through typed JDBC getters and written through binds,
+     * never through locale-formatted string literals. Revisit if a source-side query ever
+     * starts comparing dates or numbers as text on the same pool.
      */
     private static void pinLocaleIndependentNls(Connection source) throws SQLException {
         List<String> settings = List.of(

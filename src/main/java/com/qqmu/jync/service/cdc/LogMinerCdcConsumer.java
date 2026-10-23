@@ -757,11 +757,14 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     @Override
     public void requestStop() {
+        // Do NOT close the session here. Its JDBC objects belong to the consumer thread, and
+        // this runs on a web-request thread: closing the cursor and issuing END_LOGMNR while
+        // the drain is iterating them is concurrent use of one Connection (undefined
+        // behaviour), and it parks the caller on a database round trip. Unlike the streaming
+        // consumers, nothing here blocks waiting for new data — the query is bounded by the
+        // session's end SCN — so flipping the flag lets the owner exit within one drain and
+        // close the session in its own finally block.
         running = false;
-        LogMinerSession session = currentSession;
-        if (session != null) {
-            session.close();
-        }
     }
 
     /**
