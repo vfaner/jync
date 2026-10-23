@@ -179,6 +179,29 @@ class SqlRedoParserTest {
     }
 
     @Test
+    void updateOldImageNullColumnIsParsedWithIsNullPredicate() {
+        // LogMiner 重建旧镜像时,值为 NULL 的列渲染成 `"COL" IS NULL`(Oracle 官方
+        // V$LOGMNR_CONTENTS 的 SQL_REDO 样本:… and "COMMISSION_PCT" IS NULL …),
+        // 不会写成 "= NULL"。parseWhereColumns 只认 '=',该列因此从行里消失,
+        // refuseIfColumnsAreMissing 把整条 UPDATE 误判成"缺列"(行外 LOB 那一类):
+        // 变更被静默丢弃、计入 missing-Lob 计数与 parseFailures —— 连续 6 条就把
+        // 健康项目 PARK 成 PARSE_STRIKE_OUT。任何含可空列(且当前为 NULL)的表,
+        // 只要开了 SUPPLEMENTAL LOG DATA (ALL) COLUMNS 就会命中。
+        String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"ID\" = '1'"
+                + " and \"NAME\" IS NULL"
+                + " and \"NOTE\" = 'old'"
+                + " and \"TS\" = TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午')"
+                + " and ROWID = 'AAAR4TAAYAAAAAPAAA';";
+        SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());
+        assertThat(c.unsupportedReason).isNull();
+        assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
+        // 列存在且值为 null —— 不是"缺列",目标端写回 NULL 与旧值一致。
+        assertThat(c.row).containsKey("NAME");
+        assertThat(c.row.get("NAME")).isNull();
+        assertThat(c.row.get("NOTE")).isEqualTo("x");
+    }
+
+    @Test
     void updateMissingPkInWhereIsUnsupported() {
         String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"NAME\" = 'Alice';";
         SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());

@@ -414,6 +414,16 @@ public class SqlRedoParser {
         for (String c : conjuncts) {
             int eq = indexOfTopLevel(c, '=');
             if (eq < 0) {
+                // A NULL old-image value is rebuilt as `"COL" IS NULL`, never `= NULL`
+                // (Oracle's own SQL_REDO samples: … and "COMMISSION_PCT" IS NULL …).
+                // Ignoring it dropped the column from the row map, and
+                // refuseIfColumnsAreMissing then refused the whole UPDATE as an
+                // out-of-line-LOB-style missing column — the change was silently
+                // discarded and counted as a parse failure.
+                String nullColumn = nullPredicateColumn(c);
+                if (nullColumn != null) {
+                    out.put(nullColumn, "NULL");
+                }
                 continue;
             }
             String col = c.substring(0, eq).trim();
@@ -425,6 +435,32 @@ public class SqlRedoParser {
             }
         }
         return out;
+    }
+
+    /**
+     * Recognize {@code "COL" IS NULL} — how LogMiner rebuilds a NULL value in a WHERE
+     * old image (V$LOGMNR_CONTENTS.SQL_REDO samples render
+     * {@code … and "COMMISSION_PCT" IS NULL …}; {@code = NULL} never appears, it would
+     * compare unknown). Returns the upper-case column name, or null for any other
+     * conjunct ({@code IS NOT NULL}, a predicate with an operator, …).
+     */
+    private static String nullPredicateColumn(String conjunct) {
+        String text = conjunct.trim();
+        // The last conjunct carries the statement's trailing semicolon.
+        while (text.endsWith(";")) {
+            text = text.substring(0, text.length() - 1).trim();
+        }
+        String[] parts = text.split("\\s+");
+        if (parts.length != 3
+                || !"IS".equalsIgnoreCase(parts[1])
+                || !"NULL".equalsIgnoreCase(parts[2])) {
+            return null;
+        }
+        String col = parts[0];
+        if (col.length() < 2 || !col.startsWith("\"") || !col.endsWith("\"")) {
+            return null;
+        }
+        return col.substring(1, col.length() - 1).toUpperCase(Locale.ROOT);
     }
 
     // —— splitters that respect quotes, double-quotes and parentheses ——
