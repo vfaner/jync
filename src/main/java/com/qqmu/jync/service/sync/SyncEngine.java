@@ -676,19 +676,22 @@ public class SyncEngine {
 
         // 目标端表清单每周期只读一次：命中的表跳过每轮一次的幂等 CREATE（那是一批注定被
         // 目标库拒绝的 DDL 往返）。清单本身读不出来时置空，退回到逐表 CREATE 的老路。
+        // 读取必须留在下面的 try 之内：它只声明 SQLException，驱动抛出的未检查异常若在
+        // try 之外穿出，恢复约束的 finally 就永远不执行，连接会带着 NOCHECK 回到池里。
         Set<String> knownTargetTables = null;
         try {
-            knownTargetTables = new HashSet<>();
-            for (String name : ctx.getTargetReader().listTableNames(targetConn, ctx.getTargetSchema())) {
-                knownTargetTables.add(name.toUpperCase());
+            try {
+                knownTargetTables = new HashSet<>();
+                for (String name : ctx.getTargetReader()
+                        .listTableNames(targetConn, ctx.getTargetSchema())) {
+                    knownTargetTables.add(name.toUpperCase());
+                }
+            } catch (SQLException e) {
+                log.debug("Could not list target tables for project '{}'; falling back to per-table"
+                        + " idempotent CREATE: {}", ctx.projectName(), e.getMessage());
+                knownTargetTables = null;
             }
-        } catch (SQLException e) {
-            log.debug("Could not list target tables for project '{}'; falling back to per-table"
-                    + " idempotent CREATE: {}", ctx.projectName(), e.getMessage());
-            knownTargetTables = null;
-        }
 
-        try {
             // Parent-first order is derived from the source foreign-key dictionary; a data-only
             // cycle reads that dictionary only when the target loads with its constraints
             // enforced (see readSourceMetadata). Otherwise every table has zero foreign keys

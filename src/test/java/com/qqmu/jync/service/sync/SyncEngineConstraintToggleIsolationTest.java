@@ -148,6 +148,24 @@ class SyncEngineConstraintToggleIsolationTest {
                 .isTrue();
     }
 
+    @Test
+    void anUncheckedListingFailureStillReenablesTheConstraints() throws SQLException {
+        // 目标端表清单的读取夹在"关闭约束"与"恢复约束"之间。它只声明 SQLException,
+        // 但驱动/代理抛出的未检查异常会直接穿出方法——若清单读取在 try 之外,finally
+        // 就永远不执行,连接带着 NOCHECK 回到池里。
+        when(targetReader.listTableNames(any(), any()))
+                .thenThrow(new IllegalStateException("catalog query blew up"));
+
+        engine.runCycle(ctx());
+
+        assertThat(executedDdl)
+                .as("every toggled table must be re-enabled even when the listing threw")
+                .anySatisfy(sql -> assertThat(sql)
+                        .contains("T1").contains("WITH CHECK CHECK CONSTRAINT ALL"))
+                .anySatisfy(sql -> assertThat(sql)
+                        .contains("T2").contains("WITH CHECK CHECK CONSTRAINT ALL"));
+    }
+
     private SyncContext ctx() {
         SyncConfig config = new SyncConfig();
         config.setSyncStructure(false);
