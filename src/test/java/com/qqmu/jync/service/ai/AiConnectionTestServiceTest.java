@@ -21,6 +21,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
+import com.qqmu.jync.model.AiReasoningEffort;
 
 /**
  * Probes a real local HTTP server rather than a mocked client.
@@ -117,6 +118,37 @@ class AiConnectionTestServiceTest {
         assertThat(r.headers().getFirst("anthropic-version")).isNotBlank();
         // The bearer form would be ignored by Anthropic, so it must not be the only auth sent.
         assertThat(r.headers().getFirst("Authorization")).isNull();
+    }
+
+    // --- the probe must not inherit the reasoning setting --------------------------------
+
+    /**
+     * A provider with "deep thinking" enabled: the connection test sends
+     * {@code max_tokens: 1}, and reasoning endpoints reject (or spend the single token
+     * thinking and answer nothing) — so the test would fail while real conversions work.
+     * {@code AiChatClient.probe} exists precisely to opt out of the setting; this test
+     * pins that the test-connection path actually goes through it.
+     */
+    @Test
+    void theConnectionTestDoesNotInheritAnOpenAiReasoningSetting() throws Exception {
+        AiProvider p = provider(AiProtocol.OPENAI, baseUrl());
+        p.setReasoningEffort(AiReasoningEffort.HIGH);
+
+        service.test(p, "k");
+
+        JsonNode body = mapper.readTree(received.get(0).body());
+        assertThat(body.has("reasoning_effort")).isFalse();
+    }
+
+    @Test
+    void theConnectionTestDoesNotTurnOnThinkingForOllamaNative() throws Exception {
+        AiProvider p = provider(AiProtocol.OLLAMA_NATIVE, baseUrl());
+        p.setReasoningEffort(AiReasoningEffort.HIGH);
+
+        service.test(p, "k");
+
+        JsonNode body = mapper.readTree(received.get(0).body());
+        assertThat(body.has("think")).isFalse();
     }
 
     // --- base URL resolution -------------------------------------------------------------

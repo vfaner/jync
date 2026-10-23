@@ -37,7 +37,11 @@ public class AiConnectionTestService {
      *         show the endpoint's own error body, which usually names the problem exactly
      */
     public TestResult test(AiProvider provider, String plainApiKey) {
-        AiChatClient.ChatResult result = client.complete(provider, plainApiKey, null, "ping", 1);
+        // probe(), not complete(): the probe is the entry point that opts out of the provider's
+        // "deep thinking" setting. A one-token request combined with a reasoning effort either
+        // gets rejected by the endpoint or spends the token thinking and answers nothing, so
+        // the test would fail for a provider whose real conversions work fine.
+        AiChatClient.ChatResult result = client.probe(provider, plainApiKey);
 
         if (!result.isSuccess()) {
             return TestResult.failure(result.getMessage(), result.getEndpoint(),
