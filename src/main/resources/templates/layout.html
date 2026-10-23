@@ -265,7 +265,12 @@
         <span th:text="#{app.subtitle}">Real-time database synchronization</span>
         <small class="foot-ver mono" th:if="${appVersion}" th:text="${appVersion}">vX.Y.Z</small>
     </span>
-    <span th:text="#{foot.notice}">© 2026 Ren Guanhua (Mumu Open Source Workshop) · MIT License</span>
+    <span class="foot-notice">
+        <span th:text="#{foot.notice}">© 2026 Ren Guanhua (Mumu Open Source Workshop) · MIT License</span>
+        <span>·</span>
+        <!--/* 官网入口：离线部署不影响渲染；它同时是用户分辨官方版本与修改版的锚点。 */-->
+        <a class="foot-site" href="https://jync.qqmu.com" target="_blank" rel="noopener">jync.qqmu.com</a>
+    </span>
 </footer>
 
 <!--/* 修改密码弹窗：用户名下拉的「修改密码」打开。表单与改密页同一后端：

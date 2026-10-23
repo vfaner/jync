@@ -987,6 +987,10 @@ table.tbl a.truncate { display: block; }
   display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap;
 }
 .foot-ver { display: block; margin-top: 3px; font-size: 11px; color: var(--ink-mute); }
+/* 页脚里的官网入口：跟随页脚的弱化色，悬停才用品牌色，免得抢过左侧产品名。 */
+.foot-notice { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.foot-site { color: inherit; }
+.foot-site:hover { color: var(--brand); text-decoration: underline; }
 
 /* ─── 版本与更新（设置页卡片 + 头部副标题里的版本号） ───────── */
 .logo-ver { font-family: var(--mono); font-size: 10.5px; font-weight: 500; }
