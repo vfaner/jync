@@ -135,6 +135,32 @@ class IdentityReseedTest {
     }
 
     @Test
+    void aCustomOracleTargetStillReseedsItsGenerator() throws SQLException {
+        // A CUSTOM connection that declared Oracle creates an identity sequence just like the
+        // preset. Reading GENERIC off the bare type skipped the reseed, and the next
+        // application insert that omits the id collided on the freshly loaded ids.
+        when(maxRs.next()).thenReturn(true);
+        when(maxRs.getLong(1)).thenReturn(4096L);
+
+        com.qqmu.jync.model.DatabaseConfig target = new com.qqmu.jync.model.DatabaseConfig();
+        target.setType(DatabaseType.CUSTOM);
+        target.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+        SyncContext ctx = SyncContext.builder()
+                .targetType(DatabaseType.CUSTOM)
+                .targetConfig(target)
+                .targetDialect(new OracleDialect(23))
+                .config(new SyncConfig())
+                .build();
+
+        service().reseedIdentityAfterInitialLoad(conn, ordersTable(), ctx);
+
+        assertThat(executedDdl()).singleElement()
+                .satisfies(sql -> assertThat(sql)
+                        .contains("ALTER TABLE \"ORDERS\"")
+                        .contains("AS IDENTITY (START WITH 4097)"));
+    }
+
+    @Test
     void compositeKeyTableHasNoGeneratorToReseed() throws SQLException {
         TableMeta table = ordersTable();
         table.getPrimaryKeys().add("TENANT");

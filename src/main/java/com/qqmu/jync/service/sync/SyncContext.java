@@ -29,6 +29,15 @@ public class SyncContext {
 
     private final DatabaseType targetType;
 
+    /**
+     * The SQL family each endpoint was resolved to by the factory. Only meaningful for a
+     * CUSTOM connection, whose {@link DatabaseType#getFamily()} is GENERIC; null on one side
+     * means "derive it from the config, then the type".
+     */
+    private final DatabaseType.DialectFamily sourceFamily;
+
+    private final DatabaseType.DialectFamily targetFamily;
+
     private final String sourceSchema;
 
     private final String targetSchema;
@@ -94,6 +103,67 @@ public class SyncContext {
      * 阶段,只有基线跑({@code CdcBaselineService.runBaseline})才真正做全量写入。
      */
     private final boolean cdcBaselineRun;
+
+    /** The family the source actually speaks; a custom connection's declared one. */
+    public DatabaseType.DialectFamily resolveSourceFamily() {
+        return resolveFamily(sourceType, sourceConfig, sourceFamily);
+    }
+
+    /** The family the target actually speaks; a custom connection's declared one. */
+    public DatabaseType.DialectFamily resolveTargetFamily() {
+        return resolveFamily(targetType, targetConfig, targetFamily);
+    }
+
+    /**
+     * The source type every family-sensitive decision must use. For a custom connection this
+     * is the preset that speaks its declared family, since the declared {@code CUSTOM} type
+     * would otherwise resolve to GENERIC and skip that product's behavior.
+     */
+    public DatabaseType effectiveSourceType() {
+        return effectiveType(sourceType, sourceConfig, sourceFamily);
+    }
+
+    /** The target counterpart of {@link #effectiveSourceType()}. */
+    public DatabaseType effectiveTargetType() {
+        return effectiveType(targetType, targetConfig, targetFamily);
+    }
+
+    /**
+     * Whether this run's target upserts report insert-vs-update counts. Answered from the
+     * target's own URL for a custom connection: standing in a representative preset would
+     * claim the preset's {@code useAffectedRows} flag that the user's URL may not carry.
+     */
+    public boolean upsertCountsDistinguishInsertFromUpdate() {
+        if (targetConfig != null) {
+            return targetConfig.upsertCountsDistinguishInsertFromUpdate();
+        }
+        return targetType != null && targetType.upsertCountsDistinguishInsertFromUpdate();
+    }
+
+    private static DatabaseType.DialectFamily resolveFamily(DatabaseType type,
+                                                            DatabaseConfig config,
+                                                            DatabaseType.DialectFamily declared) {
+        if (config != null) {
+            return config.resolvedFamily();
+        }
+        if (type != null && type != DatabaseType.CUSTOM) {
+            return type.getFamily();
+        }
+        return declared == null ? DatabaseType.DialectFamily.GENERIC : declared;
+    }
+
+    private static DatabaseType effectiveType(DatabaseType type, DatabaseConfig config,
+                                              DatabaseType.DialectFamily declared) {
+        if (type == null) {
+            return null;
+        }
+        if (type != DatabaseType.CUSTOM) {
+            return type;
+        }
+        DatabaseType representative =
+                DatabaseType.representativeOf(resolveFamily(type, config, declared));
+        return representative == null ? DatabaseType.CUSTOM : representative;
+    }
 
     public Long projectId() {
         return project.getId();

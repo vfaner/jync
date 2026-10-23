@@ -2,7 +2,10 @@ package com.qqmu.jync.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
@@ -26,7 +29,9 @@ import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
+import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
+import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
 
 /**
@@ -153,6 +158,43 @@ class TablePreviewServiceTest {
                 TablePreviewService.Side.TARGET))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.target.required");
+    }
+
+    @Test
+    void aCustomConnectionIsPreviewedThroughItsDeclaredFamilysReaderAndDialect() throws SQLException {
+        // A CUSTOM connection carries GENERIC on its type; the factory and the schema folding
+        // must use the family the user declared, or the preview reads with the generic reader
+        // and an unfolded (lower-case) schema name that does not exist in the dictionary.
+        createOrders(1);
+        source.setType(DatabaseType.CUSTOM);
+        source.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+        source.setSchemaName("public");
+        source.setCustomUrl("jdbc:h2:mem:table_preview");
+
+        MetadataReader familyReader = mock(MetadataReader.class);
+        when(familyReader.supports(DatabaseType.ORACLE)).thenReturn(true);
+        when(familyReader.listTableNames(any(Connection.class), eq("PUBLIC")))
+                .thenReturn(List.of("ORDERS"));
+        when(familyReader.listViewNames(any(Connection.class), eq("PUBLIC")))
+                .thenReturn(List.of());
+        SqlDialect familyDialect = mock(SqlDialect.class);
+        when(familyDialect.family()).thenReturn(DatabaseType.DialectFamily.ORACLE);
+        when(familyDialect.explicitType()).thenReturn(null);
+        when(familyDialect.withServerMajorVersion(null)).thenReturn(familyDialect);
+        when(familyDialect.qualify("PUBLIC", "ORDERS"))
+                .thenReturn("\"PUBLIC\".\"ORDERS\"");
+
+        service = new TablePreviewService(projectRepository, databaseConfigRepository,
+                dataSourceManager, new MetadataReaderFactory(List.of(familyReader)),
+                new SqlDialectFactory(List.of(familyDialect), new GenericSqlDialect()),
+                new ObjectMapper());
+
+        TablePreview preview = service.preview(1L, "orders", TablePreviewService.Side.SOURCE);
+
+        assertThat(preview.schema()).isEqualTo("PUBLIC");
+        assertThat(preview.rows()).containsExactly(List.of("1", "order-1"));
+        verify(familyReader).listTableNames(any(Connection.class), eq("PUBLIC"));
+        verify(familyDialect).qualify("PUBLIC", "ORDERS");
     }
 
     @Test

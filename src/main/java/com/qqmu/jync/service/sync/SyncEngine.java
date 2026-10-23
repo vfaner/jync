@@ -136,7 +136,7 @@ public class SyncEngine {
             // this cycle's metadata, so neither the structure phase nor the data phase touches
             // them.
             List<IdentifierPreflight.Violation> identifierViolations = IdentifierPreflight.check(
-                    ctx.getTargetType(), ctx.getTargetDialect(),
+                    ctx.effectiveTargetType(), ctx.getTargetDialect(),
                     sourceMeta.getTables().stream()
                             .filter(t -> ctx.getConfig().includesTable(t.getName())).toList(),
                     ctx.getConfig()::targetTableName);
@@ -553,7 +553,7 @@ public class SyncEngine {
         String reason;
         try {
             reason = TargetTableVerifier.verify(targetConn, schema, targetTable, table,
-                    ctx.getTargetType());
+                    ctx.effectiveTargetType());
         } catch (SQLException e) {
             log.debug("Could not verify target table {} columns: {}", targetTable, e.getMessage());
             return true;
@@ -616,7 +616,7 @@ public class SyncEngine {
                                         String targetTable, SyncContext ctx) {
         try {
             return TargetTableVerifier.verify(targetConn, schema, targetTable, table,
-                    ctx.getTargetType());
+                    ctx.effectiveTargetType());
         } catch (SQLException e) {
             // 复核不了就以「可用」论处：这是安全网，驱动答不上来不该拦住同步。
             log.debug("Could not re-verify target table {} columns: {}", targetTable,

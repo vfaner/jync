@@ -87,7 +87,7 @@ public class StructureSyncService {
                 PendingIndex failed = pending.next();
                 String indexSql = ctx.getTargetDialect().getCreateIndexSql(failed.index(),
                         ctx.getTargetSchema(), ctx.getConfig().targetTableName(sourceTable),
-                        failed.sourceTable(), ctx.getSourceType());
+                        failed.sourceTable(), ctx.effectiveSourceType());
                 if (indexSql == null) {
                     // Retrying cannot help: the dialect refuses this index by design.
                     pending.remove();
@@ -135,7 +135,7 @@ public class StructureSyncService {
                 continue;
             }
             String indexSql = ctx.getTargetDialect().getCreateIndexSql(index,
-                    ctx.getTargetSchema(), targetTable, sourceTable, ctx.getSourceType());
+                    ctx.getTargetSchema(), targetTable, sourceTable, ctx.effectiveSourceType());
             if (indexSql == null) {
                 continue;
             }
@@ -277,7 +277,7 @@ public class StructureSyncService {
         // Tables have no override: the review/override feature only covers views and routines,
         // and saveOverride rejects every other kind, so a TABLE key can never be created.
         String createSql = dialect.getCreateTableSql(table, ctx.getTargetSchema(), targetTable,
-                ctx.getSourceType());
+                ctx.effectiveSourceType());
 
         // Tolerate "already exists": the target may have been created by a previous run that
         // crashed before its snapshot was written, or pre-created by hand.
@@ -304,7 +304,7 @@ public class StructureSyncService {
         // pre-12c Oracle. A failure here blocks the table (its autoincrement contract is
         // unfulfilled), so let the SQLException surface to apply()'s failure handling.
         for (String extra : dialect.getPostCreateTableDdl(table, ctx.getTargetSchema(),
-                targetTable, ctx.getSourceType())) {
+                targetTable, ctx.effectiveSourceType())) {
             executor.executeIdempotentCreate(extra);
         }
 
@@ -326,7 +326,7 @@ public class StructureSyncService {
                     continue;
                 }
                 String indexSql = dialect.getCreateIndexSql(index, ctx.getTargetSchema(),
-                        targetTable, table, ctx.getSourceType());
+                        targetTable, table, ctx.effectiveSourceType());
                 if (indexSql == null) {
                     // The dialect already explained why; data sync takes priority over it.
                     continue;
@@ -375,7 +375,7 @@ public class StructureSyncService {
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
         List<ColumnMeta> missing = TargetTableVerifier.missingColumns(targetConn,
-                ctx.getTargetSchema(), targetTable, table, ctx.getTargetType());
+                ctx.getTargetSchema(), targetTable, table, ctx.effectiveTargetType());
         if (missing.isEmpty()) {
             return List.of();
         }
@@ -385,7 +385,7 @@ public class StructureSyncService {
             // Idempotent: two cycles can race to add the same column, and "already there" is
             // the desired end state just as it is for a table.
             executor.executeIdempotentCreate(dialect.getAddColumnSql(
-                    ctx.getTargetSchema(), targetTable, column, ctx.getSourceType(), table));
+                    ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType(), table));
             runPostColumnDdl(executor, dialect, targetTable, column, ctx);
             added.add(column.getName());
         }
@@ -415,7 +415,7 @@ public class StructureSyncService {
     private void runPostColumnDdl(DdlExecutor executor, SqlDialect dialect, String targetTable,
                                   ColumnMeta column, SyncContext ctx) throws SQLException {
         for (String extra : dialect.getPostColumnChangeDdl(
-                ctx.getTargetSchema(), targetTable, column, ctx.getSourceType())) {
+                ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType())) {
             executor.executeIdempotentCreate(extra);
         }
     }
@@ -432,7 +432,7 @@ public class StructureSyncService {
                 // constraint (MySQL's row-size budget) keeps the type this table's plan
                 // picked for the column rather than re-mapping it in isolation.
                 executor.executeIdempotentCreate(dialect.getAddColumnSql(
-                        ctx.getTargetSchema(), targetTable, column, ctx.getSourceType(),
+                        ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType(),
                         event.getSourceTable()));
                 runPostColumnDdl(executor, dialect, targetTable, column, ctx);
                 return ApplyOutcome.ok("Added column " + column.getName() + " to " + targetTable);
@@ -443,7 +443,7 @@ public class StructureSyncService {
                 // A comment-only edit reissues the column definition: re-mapping the source
                 // type here would undo the narrowing and blow the row-size budget.
                 executor.execute(dialect.getModifyColumnSql(
-                        ctx.getTargetSchema(), targetTable, column, ctx.getSourceType(),
+                        ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType(),
                         event.getSourceTable()), false);
                 runPostColumnDdl(executor, dialect, targetTable, column, ctx);
                 return ApplyOutcome.ok("Modified column " + column.getName() + " on " + targetTable);
@@ -474,7 +474,7 @@ public class StructureSyncService {
         }
 
         String indexSql = dialect.getCreateIndexSql(index, ctx.getTargetSchema(), targetTable,
-                event.getSourceTable(), ctx.getSourceType());
+                event.getSourceTable(), ctx.effectiveSourceType());
         if (indexSql == null) {
             // Checked before the DROP of an ALTER so an unusable definition is not first
             // dropped and then found impossible to recreate.
@@ -513,10 +513,10 @@ public class StructureSyncService {
             translated.setName(view.getName());
             translated.setSchema(ctx.getTargetSchema());
             String body = bodyConverter.extractViewBody(view.getDefinition());
-            translated.setDefinition(bodyConverter.convert(body, ctx.getSourceType(),
-                    ctx.getTargetType()));
+            translated.setDefinition(bodyConverter.convert(body, ctx.effectiveSourceType(),
+                    ctx.effectiveTargetType()));
             statements = dialect.getCreateViewSql(translated, ctx.getTargetSchema(),
-                    ctx.getSourceType());
+                    ctx.effectiveSourceType());
         }
         if (statements.isEmpty()) {
             return ApplyOutcome.skipped("No view definition available to apply");
@@ -563,9 +563,9 @@ public class StructureSyncService {
             translated.setReturnType(proc.getReturnType());
             translated.setParameters(proc.getParameters());
             translated.setDefinition(bodyConverter.convert(proc.getDefinition(),
-                    ctx.getSourceType(), ctx.getTargetType()));
+                    ctx.effectiveSourceType(), ctx.effectiveTargetType()));
             statements = dialect.getCreateProcedureSql(translated, ctx.getTargetSchema(),
-                    ctx.getSourceType());
+                    ctx.effectiveSourceType());
         }
         if (statements.isEmpty()) {
             return ApplyOutcome.skipped("No routine body available to apply");

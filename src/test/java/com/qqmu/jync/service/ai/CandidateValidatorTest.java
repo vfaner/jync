@@ -1,6 +1,10 @@
 package com.qqmu.jync.service.ai;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -42,6 +46,8 @@ class CandidateValidatorTest {
         private boolean broken;
         /** When set, getConnection throws this instead — models a missing-driver failure. */
         private RuntimeException unchecked;
+        /** When set, handed out instead of a real connection (leaves the driver untouched). */
+        private Connection forced;
 
         LocalH2Manager(String url) {
             super(null, null, new SyncProperties());
@@ -57,6 +63,9 @@ class CandidateValidatorTest {
                 throw new SQLException("simulated: host unreachable");
             }
             handedOut.incrementAndGet();
+            if (forced != null) {
+                return forced;
+            }
             return DriverManager.getConnection(url, "sa", "");
         }
     }
@@ -359,6 +368,29 @@ class CandidateValidatorTest {
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(objectNames("VIEW")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a CUSTOM target that speaks Oracle still gets its compile errors checked")
+    void aCustomOracleTargetIsCompileChecked() throws SQLException {
+        target.setType(DatabaseType.CUSTOM);
+        target.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(conn.prepareStatement(contains("USER_ERRORS")))
+                .thenThrow(new SQLException("H2 has no USER_ERRORS"));
+        manager.forced = conn;
+
+        CandidateValidator.ValidationResult result = validator.validate(target,
+                "CREATE VIEW V_X AS SELECT 1 AS X", "V_X");
+
+        // A CUSTOM connection that declared Oracle compiles bodies into INVALID objects
+        // exactly like the preset, so skipping the dictionary check would report a broken
+        // body as valid. The query itself fails here (H2); reaching it is what is asserted.
+        assertThat(result.isSuccess()).isTrue();
+        verify(conn).prepareStatement(contains("USER_ERRORS"));
     }
 
     @Test

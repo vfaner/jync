@@ -44,6 +44,36 @@ public class DatabaseConfig {
     @Column(name = "dialect_family", length = 16)
     private DatabaseType.DialectFamily dialectFamily;
 
+    /**
+     * The product whose behavior this connection should get. A preset is its own; a CUSTOM
+     * connection becomes the preset that speaks its declared family, because the type alone
+     * carries GENERIC and every product-specific decision (type mapping, schema folding,
+     * identity handling) would then silently take the generic path. A CUSTOM connection with
+     * no declared family keeps {@link DatabaseType#CUSTOM}, whose dialect is the generic one.
+     */
+    public DatabaseType effectiveType() {
+        if (type != DatabaseType.CUSTOM) {
+            return type;
+        }
+        DatabaseType representative = DatabaseType.representativeOf(resolvedFamily());
+        return representative == null ? DatabaseType.CUSTOM : representative;
+    }
+
+    /**
+     * Whether a batched upsert against this connection reports affected rows precisely enough
+     * to tell an inserted row from an updated one. Presets answer from their own URL template;
+     * a CUSTOM connection answers from the URL the user actually supplied — the preset's flag
+     * says nothing about a pasted URL that lacks it.
+     */
+    public boolean upsertCountsDistinguishInsertFromUpdate() {
+        if (type == DatabaseType.CUSTOM) {
+            return customUrl != null
+                    && customUrl.toLowerCase(java.util.Locale.ROOT)
+                            .contains("useaffectedrows=true");
+        }
+        return type != null && type.upsertCountsDistinguishInsertFromUpdate();
+    }
+
     /** The SQL family this connection speaks: the preset's own, or CUSTOM's declared one. */
     public DatabaseType.DialectFamily resolvedFamily() {
         if (type == null) {

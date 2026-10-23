@@ -58,22 +58,6 @@ public class MetadataReaderFactory {
      * whose only reader is the fallback itself.
      */
     private static DatabaseType representative(DatabaseType.DialectFamily family) {
-        if (family == null) {
-            return null;
-        }
-        switch (family) {
-            case ORACLE:
-                return DatabaseType.ORACLE;
-            case MYSQL:
-                return DatabaseType.MYSQL;
-            case POSTGRES:
-                return DatabaseType.POSTGRESQL;
-            case SQLSERVER:
-                return DatabaseType.SQLSERVER;
-            case DB2:
-                return DatabaseType.DB2;
-            default:
-                return null;
-        }
+        return DatabaseType.representativeOf(family);
     }
 }

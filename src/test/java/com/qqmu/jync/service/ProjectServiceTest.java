@@ -372,6 +372,47 @@ class ProjectServiceTest {
         verify(projectRepository).deleteById(1L);
     }
 
+    @Test
+    void sourcePickersUseTheCustomConnectionsDeclaredFamily() throws Exception {
+        // A CUSTOM connection carries GENERIC on its type. The picker must read through the
+        // reader of the family the user declared, or the object list and the column picker
+        // come from the JDBC-only generic reader.
+        Project p = project(1L);
+        p.setSourceDbId(10L);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(p));
+
+        com.qqmu.jync.model.DatabaseConfig source = new com.qqmu.jync.model.DatabaseConfig();
+        source.setId(10L);
+        source.setType(com.qqmu.jync.model.DatabaseType.CUSTOM);
+        source.setDialectFamily(com.qqmu.jync.model.DatabaseType.DialectFamily.POSTGRES);
+        source.setSchemaName("public");
+        when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(source));
+        java.sql.Connection conn = mock(java.sql.Connection.class);
+        when(dataSourceManager.getConnection(source)).thenReturn(conn);
+
+        com.qqmu.jync.service.metadata.MetadataReader familyReader =
+                mock(com.qqmu.jync.service.metadata.MetadataReader.class);
+        when(familyReader.supports(com.qqmu.jync.model.DatabaseType.POSTGRESQL)).thenReturn(true);
+        when(familyReader.listTableNames(conn, "public")).thenReturn(java.util.List.of("pg_orders"));
+        when(familyReader.listViewNames(conn, "public")).thenReturn(java.util.List.of());
+        when(familyReader.listProcedureNames(conn, "public")).thenReturn(java.util.List.of());
+        com.qqmu.jync.dto.meta.TableMeta table = new com.qqmu.jync.dto.meta.TableMeta();
+        table.setName("pg_orders");
+        com.qqmu.jync.dto.meta.ColumnMeta column = new com.qqmu.jync.dto.meta.ColumnMeta();
+        column.setName("total");
+        table.getColumns().add(column);
+        when(familyReader.readTable(conn, "public", "pg_orders")).thenReturn(table);
+
+        service = new ProjectService(projectRepository, databaseConfigRepository,
+                progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
+                new MetadataReaderFactory(java.util.List.of(familyReader)), snapshotService,
+                contextFactory, scheduler, taskRunner, taskStore, syncEngine, lockService,
+                auditService, cdcManager, stateWriter, positionStore, properties);
+
+        assertThat(service.listSourceObjects(1L).getTables()).containsExactly("pg_orders");
+        assertThat(service.listTableColumns(1L, "pg_orders")).containsExactly("total");
+    }
+
     // --- force unlock ------------------------------------------------------------------------
 
     @Test

@@ -90,7 +90,7 @@ public final class CdcEventApplier {
         List<String> pkColumns = binding.pkNames();
         String sql = ctx.getTargetDialect().getDeleteByPkSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), pkColumns);
-        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.getSourceType());
+        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType());
         try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
@@ -130,7 +130,7 @@ public final class CdcEventApplier {
                                     List<Map<String, Object>> rows) throws SQLException {
         List<String> columns = binding.columnNames();
         List<String> pkColumns = binding.pkNames();
-        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.getSourceType());
+        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType());
         String sql = ctx.getTargetDialect().getUpsertSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns, types);
         List<String> bindOrder = ctx.getTargetDialect().upsertBindOrder(columns, pkColumns);
@@ -171,7 +171,7 @@ public final class CdcEventApplier {
                 ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns);
         String insertSql = ctx.getTargetDialect().getUpsertSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), columns, List.of(),
-                binding.typeByColumn(ctx.getTargetDialect(), ctx.getSourceType()));
+                binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType()));
 
         List<String> updateBindOrder = new ArrayList<>();
         if (updateSql != null) {
@@ -184,7 +184,7 @@ public final class CdcEventApplier {
             updateBindOrder.addAll(pkColumns);
         }
 
-        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.getSourceType());
+        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType());
         try (PreparedStatement insert = targetConn.prepareStatement(insertSql);
              PreparedStatement update = updateSql == null ? null
                      : targetConn.prepareStatement(updateSql)) {

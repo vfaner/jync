@@ -101,6 +101,10 @@ public class SyncContextFactory {
                 .targetConfig(target)
                 .sourceType(source.getType())
                 .targetType(target.getType())
+                // The families the readers and dialects were picked by, so the write paths
+                // can make the same decisions instead of reading GENERIC off a CUSTOM type.
+                .sourceFamily(sourceFamily)
+                .targetFamily(targetFamily)
                 .sourceSchema(sourceSchema)
                 .targetSchema(targetSchema)
                 .sourceReader(sourceReader)
@@ -190,7 +194,7 @@ public class SyncContextFactory {
     /** Uses the configured schema, or asks the database what the connection's default is. */
     private String resolveSchema(DatabaseConfig config, MetadataReader reader) {
         if (config.getSchemaName() != null && !config.getSchemaName().isBlank()) {
-            return normalizeConfiguredSchema(config.getType(), config.getSchemaName().trim());
+            return normalizeConfiguredSchema(config, config.getSchemaName().trim());
         }
         try (Connection conn = dataSourceManager.getConnection(config)) {
             String schema = reader.resolveDefaultSchema(conn);
@@ -202,9 +206,12 @@ public class SyncContextFactory {
         }
     }
 
-    /** Oracle-family dictionaries key unquoted identifiers upper case. */
-    private String normalizeConfiguredSchema(DatabaseType type, String schema) {
-        if (type != null && type.getFamily() == DatabaseType.DialectFamily.ORACLE) {
+    /**
+     * Oracle-family dictionaries key unquoted identifiers upper case. Uses the resolved
+     * family, so a CUSTOM connection that declared Oracle folds exactly like the preset.
+     */
+    String normalizeConfiguredSchema(DatabaseConfig config, String schema) {
+        if (config != null && config.resolvedFamily() == DatabaseType.DialectFamily.ORACLE) {
             return schema.toUpperCase(java.util.Locale.ROOT);
         }
         return schema;

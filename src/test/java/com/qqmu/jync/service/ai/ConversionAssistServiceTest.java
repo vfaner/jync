@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
@@ -27,6 +29,7 @@ import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
+import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
@@ -85,6 +88,7 @@ class ConversionAssistServiceTest {
         when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(source));
         when(databaseConfigRepository.findById(20L)).thenReturn(Optional.of(target));
         when(readerFactory.forType(any())).thenReturn(reader);
+        when(readerFactory.forType(any(), any())).thenReturn(reader);
         when(dataSourceManager.getConnection(any())).thenReturn(mock(Connection.class));
         when(reader.listProcedureNames(any(), any())).thenReturn(List.of());
         when(reader.listViewNames(any(), any())).thenReturn(List.of());
@@ -348,6 +352,87 @@ class ConversionAssistServiceTest {
         assertThatThrownBy(() -> service.overview(99L))
                 .isInstanceOf(IllegalArgumentException.class);
         verify(dataSourceManager, never()).getConnection(any());
+    }
+
+    @Test
+    @DisplayName("a CUSTOM connection is reviewed through its declared family")
+    void aCustomConnectionIsReviewedThroughItsDeclaredFamily() throws Exception {
+        // The bare CUSTOM type carries GENERIC: the reader, the dialect and the mechanical
+        // conversion would all take the generic path, and a same-family conversion would be
+        // reported as cross-family (or vice versa).
+        DatabaseConfig source = db(10L, "src", DatabaseType.CUSTOM, "app");
+        source.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+        DatabaseConfig target = db(20L, "dst", DatabaseType.ORACLE, "app");
+        when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(source));
+        when(databaseConfigRepository.findById(20L)).thenReturn(Optional.of(target));
+        when(readerFactory.forType(DatabaseType.CUSTOM, DatabaseType.DialectFamily.ORACLE))
+                .thenReturn(reader);
+
+        ViewMeta view = new ViewMeta();
+        view.setName("V_SALES");
+        view.setDefinition("CREATE VIEW V_SALES AS SELECT 1 FROM DUAL");
+        when(reader.readView(any(), any(), eq("V_SALES"))).thenReturn(view);
+
+        SqlBodyConverter bodyConverter = mock(SqlBodyConverter.class);
+        when(bodyConverter.extractViewBody(any())).thenReturn("SELECT 1 FROM DUAL");
+        when(bodyConverter.convert(any(), any(), any())).thenReturn("SELECT 1");
+        SqlDialect dialect = mock(SqlDialect.class);
+        when(dialect.getCreateViewSql(any(), any(), any()))
+                .thenReturn(List.of("CREATE VIEW V_SALES AS SELECT 1"));
+        SqlDialectFactory dialectFactory = mock(SqlDialectFactory.class);
+        when(dialectFactory.forType(any())).thenReturn(dialect);
+        when(dialectFactory.forType(any(), any())).thenReturn(dialect);
+        when(dialectFactory.forType(any(), any(), any())).thenReturn(dialect);
+        service = new ConversionAssistService(projectRepository, databaseConfigRepository,
+                projectService, dataSourceManager, readerFactory, dialectFactory,
+                bodyConverter, mock(AiSqlAssistant.class), validator, providerService);
+
+        ConversionAssistService.Detail detail = service.load(1L, "VIEW", "V_SALES");
+
+        assertThat(detail.isSameFamily()).isTrue();
+        // Display keeps the declared type; the conversion work gets the effective one.
+        assertThat(detail.getSourceProduct()).isEqualTo(DatabaseType.CUSTOM);
+        verify(readerFactory).forType(DatabaseType.CUSTOM, DatabaseType.DialectFamily.ORACLE);
+        verify(dialectFactory).forType(DatabaseType.ORACLE, null,
+                DatabaseType.DialectFamily.ORACLE);
+        verify(bodyConverter).convert("SELECT 1 FROM DUAL", DatabaseType.ORACLE,
+                DatabaseType.ORACLE);
+    }
+
+    @Test
+    @DisplayName("the assistant is told the effective products, not bare CUSTOM")
+    void theAssistantIsToldTheEffectiveProducts() throws Exception {
+        DatabaseConfig source = db(10L, "src", DatabaseType.CUSTOM, "app");
+        source.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+        DatabaseConfig target = db(20L, "dst", DatabaseType.POSTGRESQL, "app");
+        when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(source));
+        when(databaseConfigRepository.findById(20L)).thenReturn(Optional.of(target));
+        when(readerFactory.forType(DatabaseType.CUSTOM, DatabaseType.DialectFamily.ORACLE))
+                .thenReturn(reader);
+
+        ViewMeta view = new ViewMeta();
+        view.setName("V_SALES");
+        view.setDefinition("CREATE VIEW V_SALES AS SELECT 1 FROM DUAL");
+        when(reader.readView(any(), any(), eq("V_SALES"))).thenReturn(view);
+
+        AiSqlAssistant assistant = mock(AiSqlAssistant.class);
+        AiSqlAssistant.Candidate candidate = mock(AiSqlAssistant.Candidate.class);
+        when(candidate.isSuccess()).thenReturn(false);
+        when(assistant.draft(any(), any(), any(), any(), any(), any())).thenReturn(candidate);
+        when(providerService.activeProvider()).thenReturn(Optional.empty());
+        SqlDialectFactory dialectFactory = mock(SqlDialectFactory.class);
+        SqlDialect dialect = mock(SqlDialect.class);
+        when(dialectFactory.forType(any())).thenReturn(dialect);
+        when(dialectFactory.forType(any(), any())).thenReturn(dialect);
+        when(dialectFactory.forType(any(), any(), any())).thenReturn(dialect);
+        service = new ConversionAssistService(projectRepository, databaseConfigRepository,
+                projectService, dataSourceManager, readerFactory, dialectFactory,
+                mock(SqlBodyConverter.class), assistant, validator, providerService);
+
+        service.draft(1L, "VIEW", "V_SALES");
+
+        verify(assistant).draft(eq("VIEW"), eq("V_SALES"), any(), any(),
+                eq(DatabaseType.ORACLE), eq(DatabaseType.POSTGRESQL));
     }
 
     @Test

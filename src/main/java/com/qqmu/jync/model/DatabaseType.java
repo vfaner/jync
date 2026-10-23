@@ -351,6 +351,32 @@ public enum DatabaseType {
         return CUSTOM;
     }
 
+    /**
+     * A preset that speaks the given family, standing in for it wherever a family-aware
+     * decision is made from a {@link DatabaseType} (type mapping, DDL, schema folding,
+     * identity reseed). Null for {@code GENERIC}, {@code CUSTOM} and null: none of them has
+     * a preset to represent it, so the generic behavior stays in charge.
+     */
+    public static DatabaseType representativeOf(DialectFamily family) {
+        if (family == null) {
+            return null;
+        }
+        switch (family) {
+            case ORACLE:
+                return ORACLE;
+            case MYSQL:
+                return MYSQL;
+            case POSTGRES:
+                return POSTGRESQL;
+            case SQLSERVER:
+                return SQLSERVER;
+            case DB2:
+                return DB2;
+            default:
+                return null;
+        }
+    }
+
     /** SQL dialect groupings. Several products map onto one family. */
     public enum DialectFamily {
         MYSQL, ORACLE, POSTGRES, SQLSERVER, DB2, GENERIC

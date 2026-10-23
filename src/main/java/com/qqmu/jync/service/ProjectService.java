@@ -837,7 +837,10 @@ public class ProjectService {
         DatabaseConfig source = databaseConfigRepository.findById(project.getSourceDbId())
                 .orElseThrow(() -> new IllegalStateException("error.connection.missing"));
 
-        MetadataReader reader = readerFactory.forType(source.getType());
+        // The declared family, not the bare type: a CUSTOM connection carries GENERIC and
+        // would otherwise be read through the JDBC-only generic reader.
+        MetadataReader reader =
+                readerFactory.forType(source.getType(), source.resolvedFamily());
         try (Connection conn = dataSourceManager.getConnection(source)) {
             String schema = source.getSchemaName() != null && !source.getSchemaName().isBlank()
                     ? source.getSchemaName()
@@ -899,7 +902,8 @@ public class ProjectService {
         }
         DatabaseConfig source = databaseConfigRepository.findById(project.getSourceDbId())
                 .orElseThrow(() -> new IllegalStateException("error.connection.missing"));
-        MetadataReader reader = readerFactory.forType(source.getType());
+        MetadataReader reader =
+                readerFactory.forType(source.getType(), source.resolvedFamily());
         try (Connection conn = dataSourceManager.getConnection(source)) {
             String schema = source.getSchemaName() != null && !source.getSchemaName().isBlank()
                     ? source.getSchemaName() : reader.resolveDefaultSchema(conn);

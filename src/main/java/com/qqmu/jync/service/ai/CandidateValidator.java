@@ -133,8 +133,10 @@ public class CandidateValidator {
 
             // Oracle-family targets compile invalid bodies into INVALID objects rather than
             // rejecting the CREATE, so a clean execute() above proves nothing on its own.
+            // The declared family: a CUSTOM connection claiming Oracle compiles INVALID
+            // objects exactly like the preset does.
             if (target.getType() != null
-                    && target.getType().getFamily() == DatabaseType.DialectFamily.ORACLE) {
+                    && target.resolvedFamily() == DatabaseType.DialectFamily.ORACLE) {
                 List<String> compileErrors = readCompileErrors(conn, tempName);
                 if (!compileErrors.isEmpty()) {
                     return ValidationResult.failure(String.join("; ", compileErrors),

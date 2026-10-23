@@ -927,12 +927,12 @@ public class DataSyncService {
                 }
                 Map<String, Integer> typeByColumn = new HashMap<>();
                 for (int i = 0; i < columns.size(); i++) {
-                    int effectiveType = effectiveTargetType(ctx.getSourceType(), jdbcTypes.get(i),
+                    int effectiveType = effectiveTargetType(ctx.effectiveSourceType(), jdbcTypes.get(i),
                             typeNames.get(i), md.getPrecision(i + 1));
                     ColumnMeta columnMeta = metaByColumn.get(
                             columns.get(i).toUpperCase(java.util.Locale.ROOT));
                     typeByColumn.put(columns.get(i), targetDialect.bindJdbcType(
-                            columnMeta, ctx.getSourceType(), effectiveType));
+                            columnMeta, ctx.effectiveSourceType(), effectiveType));
                 }
 
                 // An INSERT has no match clause, so the key columns only decide that shape —
@@ -1076,7 +1076,7 @@ public class DataSyncService {
         }
         try {
             List<String> uncomparable = TargetTableVerifier.uncomparableColumns(targetConn,
-                    ctx.getTargetSchema(), targetTable, ctx.getTargetType(), nonKey);
+                    ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType(), nonKey);
             if (!uncomparable.isEmpty()) {
                 log.debug("Target table {} column(s) {} cannot be compared, so Jync rewrites a"
                         + " replayed row even when nothing changed", targetTable, uncomparable);
@@ -1250,7 +1250,7 @@ public class DataSyncService {
             // One map for every row: a million-row load would otherwise allocate a million.
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                JdbcRowMapper.readRowInto(rs, readPlan, ctx.getSourceType(), row, spillSession);
+                JdbcRowMapper.readRowInto(rs, readPlan, ctx.effectiveSourceType(), row, spillSession);
                 if (sink != null) {
                     // The keyset boundary is bound against the RAW source keys on the next
                     // page, so it must be captured before the cleanser rewrites them.
@@ -1331,8 +1331,7 @@ public class DataSyncService {
         if (count == 0) {
             return;
         }
-        boolean classify = ctx.getTargetType() != null
-                && ctx.getTargetType().upsertCountsDistinguishInsertFromUpdate();
+        boolean classify = ctx.upsertCountsDistinguishInsertFromUpdate();
         if (!classify) {
             stats.unclassified++;
         } else if (count == 1) {
@@ -1388,7 +1387,7 @@ public class DataSyncService {
             // Same reuse as the native writer: one row map for the whole pass.
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                JdbcRowMapper.readRowInto(rs, readPlan, ctx.getSourceType(), row, spillSession);
+                JdbcRowMapper.readRowInto(rs, readPlan, ctx.effectiveSourceType(), row, spillSession);
                 if (sink != null) {
                     // Same rule as the native writer: the boundary must stay a raw source key.
                     sink.values = extractPk(row, pkTrack);
@@ -2468,8 +2467,7 @@ public class DataSyncService {
             // The batch is a commit boundary and hence a safe renewal point: the rows it holds
             // are durable and idempotent. Stop now if the lease was lost, before the next batch.
             ctx.requireLease();
-            boolean classify = ctx.getTargetType() != null
-                    && ctx.getTargetType().upsertCountsDistinguishInsertFromUpdate();
+            boolean classify = ctx.upsertCountsDistinguishInsertFromUpdate();
             if (rewrittenChanged >= 0) {
                 stats.unclassified += rewrittenChanged;
                 return;
@@ -2506,8 +2504,10 @@ public class DataSyncService {
 
     /** True for a MySQL-protocol target, whose rewritten batches hide per-row counts. */
     private static boolean mysqlFamily(SyncContext ctx) {
-        return ctx.getTargetType() != null
-                && ctx.getTargetType().getFamily() == com.qqmu.jync.model.DatabaseType.DialectFamily.MYSQL;
+        // The resolved family, not the bare type: a CUSTOM connection to a MySQL-protocol
+        // product hides per-row counts behind ROW_COUNT() exactly like the preset.
+        return ctx.resolveTargetFamily()
+                == com.qqmu.jync.model.DatabaseType.DialectFamily.MYSQL;
     }
 
     /**
@@ -2806,8 +2806,7 @@ public class DataSyncService {
      */
     public void reseedIdentityAfterInitialLoad(Connection targetConn, TableMeta table,
                                                SyncContext ctx) {
-        if (ctx.getTargetType() == null
-                || ctx.getTargetType().getFamily() != DatabaseType.DialectFamily.ORACLE) {
+        if (ctx.resolveTargetFamily() != DatabaseType.DialectFamily.ORACLE) {
             return;
         }
         ColumnMeta identityColumn = singleAutoIncrementPrimaryKey(table);

@@ -114,7 +114,10 @@ public class ConversionAssistService {
         SyncConfig config = projectService.loadConfig(project);
         DatabaseConfig source = requireSource(project);
 
-        MetadataReader reader = readerFactory.forType(source.getType());
+        // The declared family, not the bare type: a CUSTOM connection carries GENERIC and
+        // would otherwise be listed through the JDBC-only generic reader.
+        MetadataReader reader =
+                readerFactory.forType(source.getType(), source.resolvedFamily());
         Overview overview = new Overview();
         overview.sourceProduct = source.getType();
         overview.targetProduct = requireTarget(project).getType();
@@ -175,8 +178,10 @@ public class ConversionAssistService {
         DatabaseConfig source = requireSource(project);
         DatabaseConfig target = requireTarget(project);
 
-        MetadataReader reader = readerFactory.forType(source.getType());
-        SqlDialect targetDialect = dialectFactory.forType(target.getType());
+        MetadataReader reader =
+                readerFactory.forType(source.getType(), source.resolvedFamily());
+        SqlDialect targetDialect =
+                dialectFactory.forType(target.getType(), null, target.resolvedFamily());
 
         Detail detail = new Detail();
         detail.kind = normalizeKind(kind);
@@ -184,9 +189,13 @@ public class ConversionAssistService {
         detail.overrideKey = detail.kind + ":" + name;
         detail.sourceProduct = source.getType();
         detail.targetProduct = target.getType();
+        detail.effectiveSourceProduct = source.effectiveType();
+        detail.effectiveTargetProduct = target.effectiveType();
         detail.assistAvailable = providerService.isAssistAvailable();
+        // Families, not bare types: a CUSTOM connection's declared family is what decides
+        // whether the mechanical pass was a passthrough.
         detail.sameFamily = source.getType() != null && target.getType() != null
-                && source.getType().getFamily() == target.getType().getFamily();
+                && source.resolvedFamily() == target.resolvedFamily();
 
         String override = config.ddlOverride(detail.kind, name);
         detail.override = override == null ? "" : override;
@@ -200,14 +209,16 @@ public class ConversionAssistService {
                 ViewMeta view = reader.readView(conn, sourceSchema, name);
                 detail.routineType = KIND_VIEW;
                 detail.sourceSql = nullToEmpty(view.getDefinition());
-                detail.mechanicalSql = mechanicalView(view, targetSchema, source.getType(),
-                        target.getType(), targetDialect);
+                detail.mechanicalSql = mechanicalView(view, targetSchema,
+                        detail.effectiveSourceProduct, detail.effectiveTargetProduct,
+                        targetDialect);
             } else {
                 ProcedureMeta proc = reader.readProcedure(conn, sourceSchema, name);
                 detail.routineType = proc.getRoutineType();
                 detail.sourceSql = nullToEmpty(proc.getDefinition());
-                detail.mechanicalSql = mechanicalProcedure(proc, targetSchema, source.getType(),
-                        target.getType(), targetDialect);
+                detail.mechanicalSql = mechanicalProcedure(proc, targetSchema,
+                        detail.effectiveSourceProduct, detail.effectiveTargetProduct,
+                        targetDialect);
             }
         } catch (SQLException e) {
             // The flash handler renders the key; keep the driver's raw detail server-side.
@@ -290,9 +301,10 @@ public class ConversionAssistService {
 
         AiSqlAssistant.Candidate candidate = sink == null
                 ? assistant.draft(detail.routineType, name, detail.sourceSql, detail.mechanicalSql,
-                        detail.sourceProduct, detail.targetProduct)
+                        detail.effectiveSourceProduct, detail.effectiveTargetProduct)
                 : assistant.draftStream(detail.routineType, name, detail.sourceSql,
-                        detail.mechanicalSql, detail.sourceProduct, detail.targetProduct, sink);
+                        detail.mechanicalSql, detail.effectiveSourceProduct,
+                        detail.effectiveTargetProduct, sink);
         if (key != null && candidate.isSuccess()) {
             putDraftCache(key, detail, candidate);
         }
@@ -492,8 +504,12 @@ public class ConversionAssistService {
         private String sourceSql;
         private String mechanicalSql;
         private String override;
+        /** Declared types, for display: a CUSTOM connection must render as "自定义". */
         private DatabaseType sourceProduct;
         private DatabaseType targetProduct;
+        /** The product that actually drives the conversion (a CUSTOM connection's family). */
+        private DatabaseType effectiveSourceProduct;
+        private DatabaseType effectiveTargetProduct;
         private boolean assistAvailable;
         /** Same dialect family: the mechanical pass is a passthrough and needs no review. */
         private boolean sameFamily;

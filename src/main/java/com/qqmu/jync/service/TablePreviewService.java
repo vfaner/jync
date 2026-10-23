@@ -83,8 +83,10 @@ public class TablePreviewService {
         DatabaseConfig config = databaseConfigRepository.findById(databaseId)
                 .orElseThrow(() -> new IllegalStateException("error.connection.missing"));
 
-        MetadataReader reader = readerFactory.forType(config.getType());
-        SqlDialect dialect = dialectFactory.forType(config.getType());
+        // The declared family, not the bare type: a CUSTOM connection carries GENERIC and
+        // would otherwise preview through the generic reader and the generic dialect.
+        MetadataReader reader = readerFactory.forType(config.getType(), config.resolvedFamily());
+        SqlDialect dialect = dialectFactory.forType(config.getType(), null, config.resolvedFamily());
         try (Connection conn = dataSourceManager.getConnection(config)) {
             String schema = resolveSchema(config, reader, conn);
             String requested = side == Side.TARGET
@@ -208,8 +210,7 @@ public class TablePreviewService {
             String schema = config.getSchemaName().trim();
             // Oracle-family dictionaries fold unquoted identifiers to upper case; quoting the
             // user's lower-case spelling would target a case-sensitive twin that does not exist.
-            return config.getType() != null
-                    && config.getType().getFamily() == DatabaseType.DialectFamily.ORACLE
+            return config.resolvedFamily() == DatabaseType.DialectFamily.ORACLE
                     ? schema.toUpperCase(java.util.Locale.ROOT) : schema;
         }
         return reader.resolveDefaultSchema(conn);
