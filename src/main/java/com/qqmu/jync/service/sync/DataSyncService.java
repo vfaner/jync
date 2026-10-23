@@ -1433,19 +1433,29 @@ public class DataSyncService {
                             if (isUniqueViolation(e) && update != null) {
                                 // A concurrent writer may have inserted the same key between
                                 // our UPDATE and INSERT. Retrying the update converges without
-                                // failing.
+                                // failing — but only if it actually reaches a row. Zero
+                                // affected rows means the conflicting row carries a DIFFERENT
+                                // key (another unique index, or a vendor 23000 that was not a
+                                // duplicate at all); swallowing it would drop the row with no
+                                // error and no statistic.
                                 JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn,
                                         ctx.getTargetDialect(), lobTracker);
                                 if (update.executeUpdate() != 0) {
                                     stats.updated++;
+                                } else {
+                                    throw e;
                                 }
                             } else if (isUniqueViolation(e)) {
                                 // Key-only table — update is null exactly when every column
-                                // is part of the key, so there is no UPDATE to retry. None is
-                                // needed: a row already holding this key is identical to the
-                                // one rejected, making re-delivery a no-op. Rethrowing here
-                                // would wedge the table permanently, since every replay hits
-                                // the same conflict.
+                                // is part of the key, so there is no UPDATE whose row count
+                                // could decide. Existence is checked directly: a row already
+                                // holding this key is identical to the one rejected, making
+                                // re-delivery a no-op. An absent key means some other
+                                // constraint rejected the row, and that must surface.
+                                if (generic == null || !rowExists(targetConn, generic,
+                                        targetTable, pkColumns, row, typeByColumn, ctx)) {
+                                    throw e;
+                                }
                                 log.debug("Row already present in key-only table {};"
                                         + " re-delivery is a no-op", targetTable);
                             } else {
@@ -1473,6 +1483,24 @@ public class DataSyncService {
             }
         }
         return stats;
+    }
+
+    /**
+     * Whether the target already holds the row with this primary key. Only reached from the
+     * key-only conflict path of the emulated upsert, so it costs nothing on the normal flow.
+     */
+    private boolean rowExists(Connection conn, GenericSqlDialect generic, String targetTable,
+                              List<String> pkColumns, Map<String, Object> row,
+                              Map<String, Integer> typeByColumn, SyncContext ctx)
+            throws SQLException {
+        String sql = generic.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns);
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
+            JdbcRowMapper.bind(ps, row, pkColumns, typeByColumn, ctx.getTargetDialect());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
     /** Mutable single-slot holder: primary-key values of the last row a copy pass read. */
@@ -2411,10 +2439,12 @@ public class DataSyncService {
     }
 
     /**
-     * Only a unique-key conflict counts: 23505 (SQL standard, DB2, H2, PostgreSQL) and 23000
-     * (MySQL 1062, SQL Server 2627, Oracle ORA-00001). The rest of SQLState class 23 —
-     * 23502 NOT NULL, 23503 foreign key, 23514 CHECK — is a real integrity failure that must
-     * surface: the retried UPDATE would match no row and the row would vanish silently.
+     * Whether the rejected INSERT may have collided with an existing key. 23505 is the
+     * standard unique-violation state (DB2, H2, PostgreSQL); 23000 is what MySQL (1062),
+     * SQL Server (2627/2601) and Oracle (ORA-00001) use — but the same state also carries
+     * their foreign-key, CHECK and NOT NULL failures, so this is only a CANDIDATE test.
+     * The caller decides by evidence: the retried UPDATE's row count, or a primary-key
+     * existence probe for key-only tables. Anything that fails those checks is rethrown.
      */
     private boolean isUniqueViolation(SQLException e) {
         String state = e.getSQLState();

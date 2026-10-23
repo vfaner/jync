@@ -158,6 +158,20 @@ public class GenericSqlDialect extends AbstractSqlDialect {
         return "UPDATE " + qualify(schema, table) + " SET " + sets + " WHERE " + where;
     }
 
+    /**
+     * Existence probe by primary key, used by the update-then-insert fallback when an INSERT
+     * is rejected with an integrity violation: the caller must know whether the key already
+     * holds a row (a genuine re-delivery to absorb) or whether some OTHER constraint rejected
+     * the row (a failure that must surface).
+     */
+    public String getSelectByPkSql(String schema, String table, List<String> pkColumns) {
+        String where = pkColumns.stream()
+                .map(c -> quoteIdentifier(c) + " = ?")
+                .reduce((a, b) -> a + " AND " + b)
+                .orElseThrow();
+        return "SELECT 1 FROM " + qualify(schema, table) + " WHERE " + where;
+    }
+
     /** Signals that the engine must emulate an upsert rather than trust one statement. */
     public boolean supportsNativeUpsert() {
         return false;

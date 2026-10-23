@@ -3,12 +3,17 @@ package com.qqmu.jync.service.sync;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.List;
+import java.util.Locale;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -98,6 +103,99 @@ class DataSyncServiceIntegrityViolationTest {
                 .as("a CHECK violation must not be read as 'row already present'")
                 .isFalse();
         assertThat(count()).isZero();
+    }
+
+    @Test
+    void aUniqueConflictOnAnotherUniqueKeyWithoutThePkRowDoesNotVanish() throws SQLException {
+        // 目标端多出一条源端没有的唯一约束,且占用该值的行主键不同:INSERT 撞重复后
+        // 回退 UPDATE 命中 0 行,原实现把这一行既不写入也不计数地丢掉,整表仍报成功。
+        exec(target, "DROP TABLE ITEMS");
+        exec(target, "CREATE TABLE ITEMS (ID BIGINT PRIMARY KEY, NAME VARCHAR(50), AMOUNT INT,"
+                + " CONSTRAINT UQ_ITEMS_NAME UNIQUE (NAME))");
+        exec(target, "INSERT INTO ITEMS VALUES (7, 'dup', 1)");
+        exec(source, "DELETE FROM ITEMS");
+        exec(source, "INSERT INTO ITEMS VALUES (5, 'dup', 2)");
+
+        DataSyncService.TableSyncResult result = service().syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess())
+                .as("the conflicting row cannot be written and must not disappear silently")
+                .isFalse();
+    }
+
+    @Test
+    void aForeignKeyStyle23000OnAKeyOnlyTargetTableSurfacesWhenTheRowIsAbsent() throws SQLException {
+        // 全主键表:update 为 null,原实现把任何 23000 都当成"行已存在"的重投。
+        // MySQL/Oracle/SQL Server 的外键/CHECK 违约同样是 23000,于是引用尚未同步
+        // 父行的记录会无声消失——这里用 23000 的外键报文模拟该场景。
+        exec(source, "CREATE TABLE LINKS (A BIGINT, B BIGINT, PRIMARY KEY (A, B))");
+        exec(target, "CREATE TABLE LINKS (A BIGINT, B BIGINT, PRIMARY KEY (A, B))");
+        exec(source, "INSERT INTO LINKS VALUES (1, 2)");
+
+        Connection flakyTarget = insertsFailWith23000(target);
+        DataSyncService.TableSyncResult result = service().syncTable(
+                source, flakyTarget, linksMeta(),
+                CursorStrategy.identity("A", Types.BIGINT, "numeric primary key"),
+                new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess())
+                .as("a 23000 that is not a duplicate of the same key must surface")
+                .isFalse();
+        assertThat(result.getError()).containsIgnoringCase("foreign key");
+    }
+
+    /** Target stand-in whose INSERTs raise the MySQL FK violation (SQLState 23000, code 1452). */
+    private static Connection insertsFailWith23000(Connection delegate) {
+        return (Connection) Proxy.newProxyInstance(
+                DataSyncServiceIntegrityViolationTest.class.getClassLoader(),
+                new Class<?>[]{Connection.class},
+                (proxy, method, args) -> {
+                    Object result = invoke(delegate, method, args);
+                    if ("prepareStatement".equals(method.getName()) && args != null
+                            && args.length > 0
+                            && String.valueOf(args[0]).trim().toUpperCase(Locale.ROOT)
+                                    .startsWith("INSERT")) {
+                        return fkFailingStatement((PreparedStatement) result);
+                    }
+                    return result;
+                });
+    }
+
+    private static PreparedStatement fkFailingStatement(PreparedStatement delegate) {
+        return (PreparedStatement) Proxy.newProxyInstance(
+                DataSyncServiceIntegrityViolationTest.class.getClassLoader(),
+                new Class<?>[]{PreparedStatement.class},
+                (proxy, method, args) -> {
+                    if ("executeUpdate".equals(method.getName())
+                            && (args == null || args.length == 0)) {
+                        throw new SQLException("Cannot add or update a child row:"
+                                + " a foreign key constraint fails", "23000", 1452);
+                    }
+                    return invoke(delegate, method, args);
+                });
+    }
+
+    private static Object invoke(Object target, Method method, Object[] args) throws Throwable {
+        try {
+            return method.invoke(target, args);
+        } catch (InvocationTargetException e) {
+            throw e.getCause();
+        }
+    }
+
+    private TableMeta linksMeta() {
+        ColumnMeta a = new ColumnMeta();
+        a.setName("A");
+        a.setJdbcType(Types.BIGINT);
+        ColumnMeta b = new ColumnMeta();
+        b.setName("B");
+        b.setJdbcType(Types.BIGINT);
+        TableMeta table = new TableMeta();
+        table.setName("LINKS");
+        table.setPrimaryKeys(List.of("A", "B"));
+        table.setColumns(List.of(a, b));
+        return table;
     }
 
     private long count() throws SQLException {

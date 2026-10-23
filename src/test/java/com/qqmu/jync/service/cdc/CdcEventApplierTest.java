@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -177,6 +178,81 @@ class CdcEventApplierTest {
         assertThatThrownBy(() -> applier.applyUpserts(target, binding,
                 List.of(row(1L, null, "1.00"))))
                 .isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void aUniqueConflictOnAnotherUniqueKeyWithoutThePkRowSurfaces() throws SQLException {
+        // 目标表的另一条唯一索引已占住这个 name,但 PK=5 的行并不存在(源端与目标端
+        // 的唯一约束不一致)。INSERT 撞重复 → 回退 UPDATE 命中 0 行,这行既写不进去
+        // 也没有任何错误:位点照常前进,数据永久丢失。必须把冲突抛给 consumer。
+        try (Statement st = target.createStatement()) {
+            st.execute("CREATE UNIQUE INDEX uq_orders_name ON orders(name)");
+            st.execute("INSERT INTO orders (id, name, amount) VALUES (7, 'dup', 1.00)");
+        }
+
+        assertThatThrownBy(() -> applier.applyUpserts(target, binding,
+                List.of(row(5L, "dup", "2.00"))))
+                .isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void aForeignKeyStyle23000OnAKeyOnlyTableSurfacesWhenTheRowIsAbsent() throws SQLException {
+        // 全主键表(update 为 null)的 INSERT 报 23000 时,原实现一律当成"行已存在"的
+        // 重投。MySQL/Oracle/SQL Server 的外键、CHECK、NOT NULL 也都是 23000,于是
+        // 一条引用尚未同步父行的记录会被无声吞掉。只有确认该主键确实在目标库存在,
+        // 重投才是 no-op。
+        CdcTableBinding keyOnly = keyOnlyBinding();
+        Map<String, Object> link = new LinkedHashMap<>();
+        link.put("a", 1L);
+        link.put("b", 2L);
+
+        Connection conn = mock(Connection.class);
+        PreparedStatement insert = mock(PreparedStatement.class);
+        PreparedStatement exists = mock(PreparedStatement.class);
+        ResultSet noRows = mock(ResultSet.class);
+        when(conn.prepareStatement(startsWith("INSERT"))).thenReturn(insert);
+        when(conn.prepareStatement(startsWith("SELECT"))).thenReturn(exists);
+        when(insert.executeUpdate()).thenThrow(new SQLException(
+                "Cannot add or update a child row: a foreign key constraint fails",
+                "23000", 1452));
+        when(exists.executeQuery()).thenReturn(noRows);
+        when(noRows.next()).thenReturn(false);
+
+        assertThatThrownBy(() -> applier.applyUpserts(conn, keyOnly, List.of(link)))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("foreign key");
+    }
+
+    @Test
+    void aKeyOnlyTableRedeliveryOfARowThatIsPresentIsStillANoOp() throws SQLException {
+        // 保护修复的另一半:真正已经存在的行重投仍然必须是 no-op,否则 MySQL(重复键
+        // 同样是 23000)上的全主键表会被永久卡死。
+        try (Statement st = target.createStatement()) {
+            st.execute("CREATE TABLE links (a BIGINT, b BIGINT, PRIMARY KEY (a, b))");
+        }
+        CdcTableBinding keyOnly = keyOnlyBinding();
+        Map<String, Object> link = new LinkedHashMap<>();
+        link.put("a", 1L);
+        link.put("b", 2L);
+
+        applier.applyUpserts(target, keyOnly, List.of(link));
+        applier.applyUpserts(target, keyOnly, List.of(new LinkedHashMap<>(link)));
+
+        try (Statement st = target.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM links")) {
+            rs.next();
+            assertThat(rs.getInt(1)).isEqualTo(1);
+        }
+    }
+
+    private static CdcTableBinding keyOnlyBinding() {
+        TableMeta meta = new TableMeta();
+        meta.setName("links");
+        meta.getColumns().add(column("a", Types.BIGINT, true));
+        meta.getColumns().add(column("b", Types.BIGINT, true));
+        meta.getPrimaryKeys().add("a");
+        meta.getPrimaryKeys().add("b");
+        return CdcTableBinding.of("src", "links", meta, "links", null);
     }
 
     // —— 原生 upsert 方言(MySQL 等生产主路径)走批量 executeBatch 分支 ——

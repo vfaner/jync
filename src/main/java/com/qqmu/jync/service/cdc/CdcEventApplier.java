@@ -2,6 +2,7 @@ package com.qqmu.jync.service.cdc;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -210,15 +211,26 @@ public final class CdcEventApplier {
                     } catch (SQLException e) {
                         if (isUniqueViolation(e) && update != null) {
                             // A concurrent writer may have inserted the same key between our
-                            // UPDATE and INSERT. Retrying the update converges without failing.
+                            // UPDATE and INSERT. Retrying the update converges without failing —
+                            // but only if it actually reaches a row. Zero affected rows means
+                            // the conflicting row carries a DIFFERENT key (another unique index,
+                            // or a vendor 23000 that was not a duplicate at all); swallowing it
+                            // would drop the change while the position still advances.
                             JdbcRowMapper.bind(update, row, updateBindOrder, types,
                                     ctx.getTargetDialect(), lobTracker);
-                            update.executeUpdate();
+                            if (update.executeUpdate() == 0) {
+                                throw e;
+                            }
                         } else if (isUniqueViolation(e)) {
                             // Key-only table — update is null exactly when every column is part
-                            // of the key. A row already holding this key is identical to the one
-                            // rejected, so re-delivery is a no-op; rethrowing would wedge the
-                            // pipeline permanently on the same conflict every replay.
+                            // of the key. There is no UPDATE whose row count could decide
+                            // anything, so existence is checked directly: a row already holding
+                            // this key is identical to the one rejected and re-delivery is a
+                            // no-op, while an absent key means some other constraint rejected
+                            // the row and it must surface.
+                            if (!rowExists(targetConn, binding, row, pkColumns, types)) {
+                                throw e;
+                            }
                             log.debug("Row already present in key-only table {}; re-delivery"
                                     + " is a no-op", binding.getTargetTable());
                         } else {
@@ -233,10 +245,31 @@ public final class CdcEventApplier {
     }
 
     /**
-     * Only a unique-key conflict counts: 23505 (SQL standard, DB2, H2, PostgreSQL) and 23000
-     * (MySQL 1062, SQL Server 2627, Oracle ORA-00001). The rest of SQLState class 23 —
-     * 23502 NOT NULL, 23503 foreign key, 23514 CHECK — is a real integrity failure that must
-     * surface: the retried UPDATE would match no row and the row would vanish silently.
+     * Whether the target already holds the row with this primary key. Only reached from the
+     * key-only conflict path, so the extra statement costs nothing on the normal flow.
+     */
+    private boolean rowExists(Connection targetConn, CdcTableBinding binding,
+                              Map<String, Object> row, List<String> pkColumns,
+                              Map<String, Integer> types) throws SQLException {
+        GenericSqlDialect generic = (GenericSqlDialect) ctx.getTargetDialect();
+        String sql = generic.getSelectByPkSql(
+                ctx.getTargetSchema(), binding.getTargetTable(), pkColumns);
+        try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
+            JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
+            JdbcRowMapper.bind(ps, row, pkColumns, types, ctx.getTargetDialect());
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    /**
+     * Whether the rejected INSERT may have collided with an existing key. 23505 is the
+     * standard unique-violation state (DB2, H2, PostgreSQL); 23000 is what MySQL (1062),
+     * SQL Server (2627/2601) and Oracle (ORA-00001) use — but the same state also carries
+     * their foreign-key, CHECK and NOT NULL failures, so this is only a CANDIDATE test.
+     * The callers decide by evidence: the retried UPDATE's row count, or a primary-key
+     * existence probe for key-only tables. Anything that fails those checks is rethrown.
      */
     private static boolean isUniqueViolation(SQLException e) {
         String state = e.getSQLState();
