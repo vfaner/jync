@@ -36,6 +36,17 @@ class CdcFailureClassifierTest {
                 .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
     }
 
+    @Test
+    void xaOrderingViolationIsFatalNotTransient() {
+        // 源端在 XA 分支准备期间提交了别的被跟踪事务/分支交错:重连只会重放同一段流、
+        // 再次命中同一处,退避热重连毫无意义。必须一次性停机等人处置(改用轮询或让
+        // 源端串行提交 XA 分支)。
+        assertThat(CdcFailureClassifier.classify(new IllegalStateException(
+                "Unsupported XA transaction ordering: a transaction committed while branch"
+                        + " 'branchA' was prepared. Jync only supports serial two-phase XA")))
+                .isEqualTo(CdcFailureClassifier.Kind.XA_ORDERING);
+    }
+
     // —— 裁定 R3a:MySQL 8.0 GTID 续传被拒的新措辞必须归入 PURGED(致命,等人重建基线),
     // 否则按 TRANSIENT 无限重连,且撞上 R3b 前的 onConnect 清零就是 1s 热循环。——
 

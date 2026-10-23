@@ -352,6 +352,139 @@ class CdcEventStreamHandlerTest {
         assertThat(sink.marks).hasSize(1);
     }
 
+    // —— XA 只保证「串行分支」:同一时刻只有一个分支在途/已准备,且分支准备期间没有
+    // 别的会话碰被跟踪表。越界时 handler 只有一个按位置累积的 buffer,既无法把行按
+    // 分支归属,也没有「最早未提交分支」的安全位点水位 —— 唯一安全的做法是致命停机
+    // (ERROR 帽子,等人处置),绝不静默写错或丢行。———
+
+    @Test
+    void unrelatedTrackedTransactionWhileABranchIsPreparedIsFatal() {
+        // MySQL 8.0.30+ 在 XA PREPARE 时就把分支写进 binlog,分支可以准备很久才提交,
+        // 期间其它会话的事务照常提交、事件排在它后面。此刻 flush 会把这些未提交的
+        // 分支行一起带进目标库(分支随后回滚 = 幽灵行);不 flush 又没有按分支拆分的
+        // 位点语义(重启后可能丢行)。契约:致命停机。
+        tableMap(11L, "app", "orders");
+        query("XA START 'branchA'");
+        write(11L, row(1L, "a"));
+        query("XA END 'branchA'");
+        query("XA PREPARE 'branchA'");
+
+        write(11L, row(2L, "b"));                    // 无关的普通事务,写的是被跟踪表
+
+        assertThatThrownBy(() -> xid(500L))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining(CdcEventStreamHandler.XA_ORDERING_MARKER);
+        assertThat(sink.changes).isEmpty();          // 分支行绝不提前落库
+        assertThat(handler.takeFailure())
+                .hasMessageContaining(CdcEventStreamHandler.XA_ORDERING_MARKER);
+    }
+
+    @Test
+    void aSecondPreparedBranchWhileOneIsPendingIsFatal() {
+        // 两个分支同时在途时,buffer 里的行无法再按分支归属:先准备的分支回滚时会
+        // 连同另一个分支的行一起清掉(源端已提交、目标端缺失)。契约:致命停机。
+        tableMap(11L, "app", "orders");
+        query("XA START 'branchA'");
+        write(11L, row(1L, "a"));
+        query("XA END 'branchA'");
+        query("XA PREPARE 'branchA'");
+
+        assertThatThrownBy(() -> query("XA START 'branchB'"))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining(CdcEventStreamHandler.XA_ORDERING_MARKER);
+        assertThat(sink.changes).isEmpty();
+    }
+
+    @Test
+    void xaCommitForAnotherBranchWhileOneIsPendingIsFatal() {
+        // 分支身份对不上:这个 COMMIT 属于另一个(可能本连接开始前就准备好的)分支,
+        // 拿它当提交点会把 branchA 的行提前落库。
+        tableMap(11L, "app", "orders");
+        query("XA START 'branchA'");
+        write(11L, row(1L, "a"));
+        query("XA END 'branchA'");
+        query("XA PREPARE 'branchA'");
+
+        assertThatThrownBy(() -> query("XA COMMIT 'branchB'"))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining(CdcEventStreamHandler.XA_ORDERING_MARKER);
+        assertThat(sink.changes).isEmpty();
+    }
+
+    @Test
+    void xaRollbackForAnotherBranchWhileOneIsPendingIsFatal() {
+        // 回滚别的分支时清 buffer 会丢掉 branchA 的行(它若随后提交,目标端就缺数据)。
+        tableMap(11L, "app", "orders");
+        query("XA START 'branchA'");
+        write(11L, row(1L, "a"));
+        query("XA END 'branchA'");
+        query("XA PREPARE 'branchA'");
+
+        assertThatThrownBy(() -> query("XA ROLLBACK 'branchB'"))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining(CdcEventStreamHandler.XA_ORDERING_MARKER);
+    }
+
+    @Test
+    void ddlWhileABranchIsPreparedIsFatal() {
+        // DDL 会 invalidate 缓存并 clearBuffer —— 已准备分支的行就躺在这个 buffer 里,
+        // 清掉之后它提交时无事可 flush(源端已提交、目标端永久缺失)。
+        tableMap(11L, "app", "orders");
+        query("XA START 'branchA'");
+        write(11L, row(1L, "a"));
+        query("XA END 'branchA'");
+        query("XA PREPARE 'branchA'");
+
+        QueryEventData ddl = new QueryEventData();
+        ddl.setSql("ALTER TABLE other_table ADD COLUMN note VARCHAR(64)");
+        ddl.setDatabase("app");
+        assertThatThrownBy(() -> handler.onEvent(event(EventType.QUERY, ddl, 450L)))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining(CdcEventStreamHandler.XA_ORDERING_MARKER);
+        assertThat(sink.changes).isEmpty();
+    }
+
+    @Test
+    void anOrdinaryTransactionWithoutTrackedRowsKeepsTheBranchAlive() {
+        // 分支准备期间提交的普通事务如果没碰被跟踪表,buffer 里只有分支自己的行:
+        // 这个 XID 什么都不做(位点也不能越过分支的行),分支随后正常提交。不能因为
+        // 「有别的会话提交过」就误停一个本来安全的源。
+        tableMap(11L, "app", "orders");
+        query("XA START 'branchA'");
+        write(11L, row(1L, "a"));
+        query("XA END 'branchA'");
+        query("XA PREPARE 'branchA'");
+
+        xid(500L);                                   // 未跟踪表上的空事务
+        assertThat(sink.changes).isEmpty();
+        assertThat(sink.marks).isEmpty();
+
+        query("XA COMMIT 'branchA'");
+        assertThat(sink.changes).hasSize(1);
+        assertThat(sink.changes.get(0).upserts).hasSize(1);
+        assertThat(sink.changes.get(0).upserts.get(0)).containsEntry("id", 1L);
+    }
+
+    @Test
+    void xaBranchIdComparesTheSameIdentifierAcrossQuoteStylesAndOptions() {
+        // 分支身份校验只用来发现「提交/回滚的不是当前已准备的那个分支」,不解析完整
+        // XA 语法:gtrid/bqual/formatID 原样保留,ONE PHASE / JOIN / RESUME 这类尾随
+        // 关键字忽略;单双引号等价;解析不出来就返回 null(调用方跳过校验,不瞎猜)。
+        assertThat(CdcEventStreamHandler.xaBranchId("XA START 'gtrid1'"))
+                .isEqualTo(CdcEventStreamHandler.xaBranchId("XA COMMIT 'gtrid1'"));
+        assertThat(CdcEventStreamHandler.xaBranchId("XA START 'it''s'"))
+                .isEqualTo(CdcEventStreamHandler.xaBranchId("XA COMMIT 'it''s'"))
+                .isNotEqualTo(CdcEventStreamHandler.xaBranchId("XA START 'it'"));
+        assertThat(CdcEventStreamHandler.xaBranchId("XA PREPARE 'g','b',42"))
+                .isEqualTo("'g','b',42");
+        assertThat(CdcEventStreamHandler.xaBranchId("XA COMMIT 'g','b',42 ONE PHASE"))
+                .isEqualTo("'g','b',42");
+        assertThat(CdcEventStreamHandler.xaBranchId("XA START 'g' JOIN"))
+                .isEqualTo("'g'");
+        assertThat(CdcEventStreamHandler.xaBranchId("XA RECOVER")).isNull();
+        assertThat(CdcEventStreamHandler.xaBranchId("XA RECOVER CONVERT XID")).isNull();
+    }
+
     private void query(String sql) {
         QueryEventData data = new QueryEventData();
         data.setSql(sql);

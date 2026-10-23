@@ -65,6 +65,13 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
 
     private static final int DDL_LOG_SQL_CHARS = 200;
 
+    /**
+     * Message fragment of every fatal XA-ordering failure. {@link CdcFailureClassifier}
+     * matches its lower-cased form so the project parks instead of hot-reconnecting: the
+     * same stream determines the same violation, retrying can never succeed.
+     */
+    static final String XA_ORDERING_MARKER = "Unsupported XA transaction ordering";
+
     private final SyncConfig config;
     private final String sourceSchema;
     private final CdcTableMetaSupplier supplier;
@@ -94,6 +101,23 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     private final Map<String, TableChange> buffered = new LinkedHashMap<>();
     private String currentFile;
     private long lastNextPosition;
+
+    /**
+     * Serial-XA state. MySQL 8.0.30+ writes a prepared branch (XA START, its rows, XA END
+     * and XA PREPARE) to the binlog at PREPARE time, and the branch may stay prepared for
+     * a long while — other sessions' transactions commit meanwhile and their events land
+     * AFTER the branch's rows. The single position-bounded buffer above cannot attribute
+     * rows to a branch, and advancing the position past a still-prepared branch would lose
+     * its rows on restart. So the supported contract is one branch at a time with nothing
+     * tracked committing meanwhile; any other shape parks the project (see
+     * {@link #xaOrderingFailure}) rather than writing rows the source never committed.
+     */
+    private boolean xaBranchOpen;
+    private boolean xaPrepared;
+    /** Branch identifier captured at XA PREPARE; {@code null} when the SQL carried none. */
+    private String xaPreparedXid;
+    /** A tracked row was buffered after PREPARE: its branch can no longer be determined. */
+    private boolean trackedRowsWhilePrepared;
 
     /** First failure of this connection's event handling; read by the consumer (ruling R1). */
     private final AtomicReference<Throwable> listenerFailure = new AtomicReference<>();
@@ -242,6 +266,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         for (Serializable[] row : data.getRows()) {
             try {
                 appendUpsert(change, mapper.mapRow(row, binding, stats, spiller()));
+                noteTrackedRowsBuffered();
             } catch (CdcUnmappableValueException e) {
                 countAndLogUnmappable(binding, "INSERT", e);
             }
@@ -266,6 +291,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                 if (CdcPrimaryKey.changed(before, after, binding)) {
                     appendDelete(change, before);
                 }
+                noteTrackedRowsBuffered();
             } catch (CdcUnmappableValueException e) {
                 // Either image unmappable: skip the whole pair — upserting the after-image
                 // without deleting the old key would orphan a row on a PK change.
@@ -286,6 +312,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             try {
                 // A delete binds primary keys only: keep its row image out of the spiller.
                 appendDelete(change, mapper.mapRow(row, binding, stats));
+                noteTrackedRowsBuffered();
             } catch (CdcUnmappableValueException e) {
                 countAndLogUnmappable(binding, "DELETE", e);
             }
@@ -303,6 +330,12 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      * is itself the commit point and must flush here. XA PREPARE alone must not (the
      * branch can still end in XA ROLLBACK). A later XID after the flush is an empty
      * no-op, which also covers binlog shapes that emit one (one-phase XA commit).
+     *
+     * <p>Only SERIAL XA is supported. The branch is written to the binlog at PREPARE, so a
+     * long-prepared branch coexists with other sessions' commits in stream order; one
+     * buffer cannot attribute those rows, and no safe position watermark exists without
+     * per-branch buffering. A second branch, a tracked transaction or a DDL while a branch
+     * is prepared therefore fails fatally ({@code XA_ORDERING}) instead of corrupting.
      */
     private void onQuery(EventHeaderV4 header, QueryEventData data) {
         String sql = data.getSql();
@@ -321,20 +354,26 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             // 事务已被源端回滚:它的行事件在 XA PREPARE 时刻已写入 binlog 并进了
             // buffer,而回滚后永远不会再来该事务的提交事件。不清空的话,这些已回滚的
             // 行会搭上「下一个正常事务」的提交边界泄漏到目标端(源端没有的行凭空出现)。
-            clearBuffer();
+            rollbackXaBranch(normalized);
             return;
         }
         if (upper.startsWith("XA COMMIT")) {
             // 实测 MySQL 8 ROW binlog:两阶段 XA 在 XA COMMIT Query 事件处提交,
             // 其后没有 XID 事件。这就是提交边界,立刻 flush;PREPARE 已落 buffer
             // 的行此刻才在源库可见,此刻才允许进入目标库。
-            long pos = header.getNextPosition() > 0 ? header.getNextPosition() : lastNextPosition;
-            flushTransaction(pos);
+            commitXaBranch(header, normalized);
+            return;
+        }
+        if (upper.startsWith("XA PREPARE")) {
+            prepareXaBranch(normalized);
+            return;
+        }
+        if (upper.startsWith("XA START")) {
+            startXaBranch();
             return;
         }
         if (upper.startsWith("XA ") || upper.startsWith("XASTART") || "XASTATE".equals(upper)) {
-            // XA START / XA END / XA PREPARE — transaction control, not DDL. Rows stay
-            // buffered; XA PREPARE is not a commit (the branch can still be rolled back).
+            // XA END / SUSPEND / RECOVER — branch control, not DDL; rows stay buffered.
             return;
         }
         if (upper.startsWith("SAVEPOINT ") || upper.startsWith("RELEASE SAVEPOINT ")
@@ -350,6 +389,14 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                 || upper.startsWith("DROP TEMPORARY TABLE")) {
             return; // TEMPORARY tables are not tracked by CDC
         }
+        if (xaPrepared) {
+            // clearBuffer() below would drop the prepared branch's rows: its XA COMMIT
+            // would then flush nothing and the source's committed rows would never reach
+            // the target. DDL cannot be attributed to a table from the Query event, so
+            // this is fatal rather than a guess.
+            throw xaOrderingFailure("DDL was executed while branch " + describeBranch()
+                    + " was prepared; clearing the buffer would discard its rows");
+        }
         stats.addSkippedDdl(1);
         log.warn("Skipping DDL in CDC stream (database {}): {}", data.getDatabase(),
                 normalized.length() > DDL_LOG_SQL_CHARS
@@ -361,7 +408,166 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     /** Contract 7: one XID = one sink call = one position mark; empty buffers never flush. */
     private void onXid(EventHeaderV4 header) {
         long pos = header.getNextPosition() > 0 ? header.getNextPosition() : lastNextPosition;
+        if (xaPrepared) {
+            if (trackedRowsWhilePrepared) {
+                throw xaOrderingFailure("a transaction committed on tracked tables while"
+                        + " branch " + describeBranch() + " was prepared; the buffer can no"
+                        + " longer tell its rows from the branch's");
+            }
+            // A transaction that touched nothing we track: nothing to apply, and the
+            // position must NOT advance past the prepared branch's rows — a restart has to
+            // replay them, or the branch's commit would find an empty stream.
+            return;
+        }
         flushTransaction(pos);
+    }
+
+    /**
+     * XA START: a branch may only start when nothing else is in flight. MySQL writes each
+     * branch's XA START when that branch prepares, so a second START while one is open or
+     * prepared proves the source interleaves branches.
+     */
+    private void startXaBranch() {
+        if (xaPrepared || xaBranchOpen) {
+            throw xaOrderingFailure("a new XA branch starts while "
+                    + (xaPrepared ? "branch " + describeBranch() + " is prepared"
+                            : "another branch is still open")
+                    + "; the buffered rows cannot be attributed to one branch");
+        }
+        xaBranchOpen = true;
+    }
+
+    /** XA PREPARE: the branch is now durably in the binlog but not yet committed. */
+    private void prepareXaBranch(String sql) {
+        if (xaPrepared) {
+            throw xaOrderingFailure("a second XA branch is prepared while branch "
+                    + describeBranch() + " is still prepared");
+        }
+        xaPrepared = true;
+        xaPreparedXid = xaBranchId(sql);
+        xaBranchOpen = false;
+        trackedRowsWhilePrepared = false;
+    }
+
+    /** XA COMMIT: the branch's rows become visible now — this is the flush boundary. */
+    private void commitXaBranch(EventHeaderV4 header, String sql) {
+        requirePreparedBranch("XA COMMIT", sql);
+        long pos = header.getNextPosition() > 0 ? header.getNextPosition() : lastNextPosition;
+        // A failing flush throws with the buffer (and the pending state) retained: the
+        // reconnect replays the branch instead of silently dropping it.
+        flushTransaction(pos);
+        clearXaState();
+    }
+
+    /** XA ROLLBACK: discard exactly what this branch buffered; it will never commit. */
+    private void rollbackXaBranch(String sql) {
+        requirePreparedBranch("XA ROLLBACK", sql);
+        clearBuffer();
+        clearXaState();
+    }
+
+    /**
+     * The commit/rollback must name the branch that is prepared, when both identifiers are
+     * parseable. A mismatch means the statement belongs to a different branch — one
+     * prepared before this stream began, say — and treating it as this branch's boundary
+     * would publish (or discard) the wrong rows.
+     */
+    private void requirePreparedBranch(String verb, String sql) {
+        if (!xaPrepared) {
+            return;                       // nothing of ours is pending: no boundary to claim
+        }
+        String xid = xaBranchId(sql);
+        if (xid != null && xaPreparedXid != null && !xid.equals(xaPreparedXid)) {
+            throw xaOrderingFailure(verb + " names branch " + xid + " while branch "
+                    + xaPreparedXid + " is the one prepared");
+        }
+    }
+
+    private void clearXaState() {
+        xaPrepared = false;
+        xaPreparedXid = null;
+        xaBranchOpen = false;
+        trackedRowsWhilePrepared = false;
+    }
+
+    private String describeBranch() {
+        return xaPreparedXid == null ? "(unnamed)" : xaPreparedXid;
+    }
+
+    /**
+     * The branch identifier of an XA statement — the literals after the verb
+     * ({@code gtrid[, bqual[, formatID]]}), reassembled so {@code XA START 'g'} and
+     * {@code XA COMMIT 'g'} compare equal whichever quote character the client used.
+     * Trailing options ({@code ONE PHASE} on COMMIT, {@code JOIN} on START) are ignored.
+     * Returns {@code null} when the statement carries no identifier ({@code XA RECOVER});
+     * callers then skip the identity check instead of guessing.
+     */
+    static String xaBranchId(String sql) {
+        int n = sql.length();
+        int i = 2;                                              // past "XA"
+        while (i < n && Character.isWhitespace(sql.charAt(i))) {
+            i++;
+        }
+        while (i < n && !Character.isWhitespace(sql.charAt(i))) {
+            i++;                                                // past the verb
+        }
+        StringBuilder id = new StringBuilder();
+        boolean empty = true;
+        while (true) {
+            while (i < n && (Character.isWhitespace(sql.charAt(i)) || sql.charAt(i) == ',')) {
+                i++;
+            }
+            if (i >= n) {
+                break;
+            }
+            char c = sql.charAt(i);
+            if (c == '\'' || c == '"') {
+                char quote = c;
+                StringBuilder part = new StringBuilder();
+                i++;
+                while (i < n) {
+                    char ch = sql.charAt(i);
+                    if (ch == quote) {
+                        if (i + 1 < n && sql.charAt(i + 1) == quote) {
+                            part.append(quote);                 // doubled quote = literal
+                            i += 2;
+                            continue;
+                        }
+                        i++;
+                        break;
+                    }
+                    part.append(ch);
+                    i++;
+                }
+                if (!empty) {
+                    id.append(',');
+                }
+                id.append(quote).append(part).append(quote);
+                empty = false;
+            } else if (Character.isDigit(c)
+                    || (c == '-' && i + 1 < n && Character.isDigit(sql.charAt(i + 1)))) {
+                int start = i++;
+                while (i < n && Character.isDigit(sql.charAt(i))) {
+                    i++;
+                }
+                if (!empty) {
+                    id.append(',');
+                }
+                id.append(sql, start, i);
+                empty = false;
+            } else {
+                break;                                          // ONE PHASE / JOIN / RESUME
+            }
+        }
+        return empty ? null : id.toString();
+    }
+
+    /** Fatal, classified {@code XA_ORDERING}: parks the project instead of retrying. */
+    private static IllegalStateException xaOrderingFailure(String detail) {
+        return new IllegalStateException(XA_ORDERING_MARKER + ": " + detail
+                + ". Jync supports serial two-phase XA branches only: one branch in flight,"
+                + " and no other tracked transaction or DDL between XA PREPARE and XA COMMIT."
+                + " Switch this project to polling capture, or commit XA branches serially.");
     }
 
     /**
@@ -410,6 +616,16 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         current = new CdcLobSpiller(spillStore, spillThresholdBytes, config);
         spiller = current;
         return current;
+    }
+
+    /**
+     * Marks that a tracked row entered the buffer after an XA branch was prepared: from
+     * then on the buffer holds two transactions' rows with no way to attribute them.
+     */
+    private void noteTrackedRowsBuffered() {
+        if (xaPrepared) {
+            trackedRowsWhilePrepared = true;
+        }
     }
 
     /** Drops the buffered transaction together with the files it spilled. */

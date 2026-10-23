@@ -11,12 +11,16 @@ import lombok.extern.slf4j.Slf4j;
  * act" (everything else — the consumer parks the project in ERROR): {@code PURGED} =
  * re-baseline from a fresh snapshot, {@code SERVER_ID_CONFLICT} = fix the id offset,
  * {@code AUTH_FAILURE} = fix credentials or grants, {@code SCHEMA_CONFLICT} = settle
- * the in-flight DDL (P2-13: previously mislabeled AUTH_FAILURE).
+ * the in-flight DDL (P2-13: previously mislabeled AUTH_FAILURE), {@code XA_ORDERING} =
+ * the source interleaves XA branches in a way binlog capture cannot replay safely —
+ * switch the project to polling or serialize the source's branches.
  */
 @Slf4j
 public final class CdcFailureClassifier {
 
-    public enum Kind { PURGED, SERVER_ID_CONFLICT, AUTH_FAILURE, SCHEMA_CONFLICT, TRANSIENT }
+    public enum Kind {
+        PURGED, SERVER_ID_CONFLICT, AUTH_FAILURE, SCHEMA_CONFLICT, XA_ORDERING, TRANSIENT
+    }
 
     private CdcFailureClassifier() { }
 
@@ -78,6 +82,14 @@ public final class CdcFailureClassifier {
             // credentials. It gets its own kind.
             if (message.contains("ora-01466")) {
                 return Kind.SCHEMA_CONFLICT;
+            }
+            // Source-side XA ordering Jync cannot replay safely (only serial two-phase
+            // branches are supported): reconnecting replays the same stream and hits the
+            // same condition, so backoff would hot-loop forever. Park it for a human —
+            // the remedy is switching the project to polling or serializing the source's
+            // XA branches, neither of which a retry can do.
+            if (message.contains("unsupported xa transaction ordering")) {
+                return Kind.XA_ORDERING;
             }
             // P2-5: ORA-01555 (snapshot too old — the undo backing the consistent read
             // was overwritten under load; a fresh mining session gets a fresh snapshot)
