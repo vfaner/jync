@@ -294,10 +294,47 @@ public final class KeysetChunker {
 
     public static String encodePk(List<Object> values) {
         try {
-            return JSON.writeValueAsString(values);
+            return JSON.writeValueAsString(values == null ? null : portableValues(values));
         } catch (Exception e) {
             throw new IllegalStateException("Cannot serialize keyset boundary", e);
         }
+    }
+
+    /**
+     * Maps {@code java.time} boundary values onto the {@code java.sql} types this format
+     * already round-trips. {@link JdbcValueNormalizer} reads a PostgreSQL {@code timestamptz}
+     * or SQL Server {@code datetimeoffset} key as an {@link java.time.OffsetDateTime}, and the
+     * mapper deliberately has no JavaTime module — the stored form is epoch millis, which
+     * {@link #decodePk} restores using the key column's JDBC type. Without this conversion
+     * the write failed with Jackson's InvalidDefinitionException, surfaced as "Cannot
+     * serialize keyset boundary", so the chunked full load of any such table failed on every
+     * cycle before its first chunk was checkpointed.
+     */
+    private static List<Object> portableValues(List<Object> values) {
+        List<Object> portable = new ArrayList<>(values.size());
+        for (Object value : values) {
+            portable.add(portableValue(value));
+        }
+        return portable;
+    }
+
+    private static Object portableValue(Object value) {
+        if (value instanceof java.time.OffsetDateTime) {
+            return java.sql.Timestamp.from(((java.time.OffsetDateTime) value).toInstant());
+        }
+        if (value instanceof java.time.ZonedDateTime) {
+            return java.sql.Timestamp.from(((java.time.ZonedDateTime) value).toInstant());
+        }
+        if (value instanceof java.time.Instant) {
+            return java.sql.Timestamp.from((java.time.Instant) value);
+        }
+        if (value instanceof java.time.LocalDateTime) {
+            return java.sql.Timestamp.valueOf((java.time.LocalDateTime) value);
+        }
+        if (value instanceof java.time.LocalDate) {
+            return java.sql.Date.valueOf((java.time.LocalDate) value);
+        }
+        return value;
     }
 
     /** Inverse of {@link #encodePk}; see the note on {@link #JSON} about numeric widths. */

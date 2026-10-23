@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -167,6 +169,22 @@ class KeysetChunkerTest {
         assertThat(KeysetChunker.decodePk(
                 KeysetChunker.encodePk(List.of(date)), List.of(Types.DATE)))
                 .containsExactly(date);
+    }
+
+    @Test
+    void anOffsetDateTimeBoundaryIsEncodedInsteadOfFailingTheWholeLoad() {
+        // JdbcValueNormalizer hands a timestamptz (PostgreSQL) / datetimeoffset (SQL Server)
+        // key back as java.time.OffsetDateTime. The checkpoint mapper has no JavaTime module,
+        // so serializing that value threw InvalidDefinitionException — encodePk wrapped it as
+        // "Cannot serialize keyset boundary" and the chunked full load of every such table
+        // failed on every cycle, before its first chunk was ever checkpointed.
+        OffsetDateTime key = OffsetDateTime.of(2026, 10, 20, 12, 34, 56, 789_000_000,
+                ZoneOffset.ofHours(8));
+
+        String json = KeysetChunker.encodePk(List.of(key));
+
+        assertThat(KeysetChunker.decodePk(json, List.of(Types.TIMESTAMP_WITH_TIMEZONE)))
+                .containsExactly(Timestamp.from(key.toInstant()));
     }
 
     @Test
