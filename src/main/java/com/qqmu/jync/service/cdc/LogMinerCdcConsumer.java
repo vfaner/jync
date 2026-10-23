@@ -520,10 +520,19 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 parseFailures.set(0);
                 if (op == SqlRedoParser.Op.DELETE) {
                     // Deletes bind primary keys only; no reason to write their payload.
-                    deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(parsed.row);
+                    bufferDelete(deletes, upserts, binding, parsed.row);
                 } else {
-                    upserts.computeIfAbsent(binding, k -> new ArrayList<>())
-                            .add(spiller().spill(binding, parsed.row));
+                    // A statement that moved the primary key must also delete the old key:
+                    // the upsert only writes the new one, and the old target row would stay
+                    // behind forever (the source no longer has it, so no DELETE will come).
+                    // Compared BEFORE spilling — PK columns are force-inline, but comparing
+                    // the parsed row keeps the check independent of that policy.
+                    if (parsed.previousKey != null
+                            && CdcPrimaryKey.changed(parsed.previousKey, parsed.row, binding)) {
+                        bufferDelete(deletes, upserts, binding, parsed.previousKey);
+                    }
+                    bufferUpsert(upserts, deletes, binding,
+                            spiller().spill(binding, parsed.row));
                 }
                 if (row.rowTime != null) {
                     stats.touchEvent(row.rowTime.getTime());
@@ -542,6 +551,37 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
      * watermark — data-first at-least-once: a crash between commit and advanceScn replays
      * the same CSCN against idempotent upserts.
      */
+    /**
+     * Same-PK last-op-wins folding within one CSCN — the LogMiner counterpart of
+     * {@code CdcEventStreamHandler}'s FIX C. The flush applies upserts BEFORE deletes (that
+     * order is what makes PK chains A→B, B→C safe), so an unfolded buffer holding both an
+     * upsert and a delete for the SAME key — a source that does DELETE then INSERT, the
+     * usual "replace a row" idiom — would write the row and then delete it: silent row
+     * loss. Appending an upsert drops any buffered delete of that key, and vice versa.
+     */
+    private static void bufferUpsert(Map<CdcTableBinding, List<Map<String, Object>>> upserts,
+                                     Map<CdcTableBinding, List<Map<String, Object>>> deletes,
+                                     CdcTableBinding binding, Map<String, Object> row) {
+        List<Object> key = CdcPrimaryKey.of(row, binding);
+        List<Map<String, Object>> pendingDeletes = deletes.get(binding);
+        if (pendingDeletes != null) {
+            pendingDeletes.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
+        }
+        upserts.computeIfAbsent(binding, k -> new ArrayList<>()).add(row);
+    }
+
+    /** @see #bufferUpsert */
+    private static void bufferDelete(Map<CdcTableBinding, List<Map<String, Object>>> deletes,
+                                     Map<CdcTableBinding, List<Map<String, Object>>> upserts,
+                                     CdcTableBinding binding, Map<String, Object> row) {
+        List<Object> key = CdcPrimaryKey.of(row, binding);
+        List<Map<String, Object>> pendingUpserts = upserts.get(binding);
+        if (pendingUpserts != null) {
+            pendingUpserts.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
+        }
+        deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(row);
+    }
+
     private void flushTransaction(long projectId, long csn,
                                    Map<CdcTableBinding, List<Map<String, Object>>> upserts,
                                    Map<CdcTableBinding, List<Map<String, Object>>> deletes)

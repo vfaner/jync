@@ -51,25 +51,38 @@ public class SqlRedoParser {
          * consumer reports this class separately from ordinary parse failures.
          */
         public final List<String> missingColumns;
+        /**
+         * For an UPDATE, the primary-key values carried by the WHERE old image — captured
+         * <em>before</em> the SET clause overrides them. {@code null} for other operations
+         * and whenever the WHERE did not carry the key. A consumer compares it with
+         * {@link #row}: a difference means the statement moved the key, and the old key must
+         * be deleted on the target or the old row stays behind forever.
+         */
+        public final Map<String, Object> previousKey;
 
         private ParsedChange(Op op, Map<String, Object> row, String unsupportedReason,
-                             List<String> missingColumns) {
+                             List<String> missingColumns, Map<String, Object> previousKey) {
             this.op = op;
             this.row = row;
             this.unsupportedReason = unsupportedReason;
             this.missingColumns = missingColumns == null ? List.of() : List.copyOf(missingColumns);
+            this.previousKey = previousKey;
         }
 
         public static ParsedChange unsupported(String reason) {
-            return new ParsedChange(null, null, reason, List.of());
+            return new ParsedChange(null, null, reason, List.of(), null);
         }
 
         static ParsedChange missingValues(String reason, List<String> missingColumns) {
-            return new ParsedChange(null, null, reason, missingColumns);
+            return new ParsedChange(null, null, reason, missingColumns, null);
         }
 
         static ParsedChange of(Op op, Map<String, Object> row) {
-            return new ParsedChange(op, row, null, List.of());
+            return new ParsedChange(op, row, null, List.of(), null);
+        }
+
+        static ParsedChange of(Op op, Map<String, Object> row, Map<String, Object> previousKey) {
+            return new ParsedChange(op, row, null, List.of(), previousKey);
         }
     }
 
@@ -177,6 +190,15 @@ public class SqlRedoParser {
                 row.put(col, e.getValue());
             }
         }
+        // Capture the WHERE image's PK values BEFORE the SET overrides them: a statement
+        // that moves the primary key must tell the consumer which key to delete.
+        Map<String, Object> previousKey = new LinkedHashMap<>();
+        for (String pk : binding.pkNames()) {
+            String upper = pk.toUpperCase(Locale.ROOT);
+            if (row.containsKey(upper)) {
+                previousKey.put(upper, row.get(upper));
+            }
+        }
         // SET overrides the old image.
         for (Assignment a : parseAssignments(setPart)) {
             Integer sqlType = types.get(a.column);
@@ -193,7 +215,7 @@ public class SqlRedoParser {
             }
         }
         ParsedChange incomplete = refuseIfColumnsAreMissing("update", binding, row);
-        return incomplete != null ? incomplete : ParsedChange.of(Op.UPDATE, row);
+        return incomplete != null ? incomplete : ParsedChange.of(Op.UPDATE, row, previousKey);
     }
 
     /**
