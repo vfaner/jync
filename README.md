@@ -250,6 +250,21 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 3. 停机期间源库发生的变更，重启后由增量/全量机制自动补齐。
 4. 也可使用内置的版本检查与一键升级（管理员），详见[下文](#版本检查与一键升级)。
 
+### 统一认证（External authentication）
+
+「配置管理 → 外部认证」提供三种方式，同一时刻只生效一种：
+
+| 方式 | 适用场景 | 部署要求 |
+|---|---|---|
+| 账号密码 | 门户提供登录 API | Jync 能访问该 API |
+| 网关头 | 网关/反向代理已完成登录并注入身份头 | **Jync 必须在网关之后，不能直连暴露**；网关必须剥离客户端伪造的身份头，并把网关地址写进 `app.security.trusted-proxies` |
+| 票据 | 登录中心签发一次性 ticket | 配置校验地址；只接受 http(s)，不跟随重定向 |
+
+- 网关头只信任**直接 TCP 对端**在 `app.security.trusted-proxies`（默认回环）内的请求；来自其他地址的身份头一律忽略。
+- 建议同时配置共享密钥头，由网关在注入身份头时一并带上。
+- 本地账号登录默认保留为应急入口（`/login/local`）；关闭后 `POST /login` 也会被拒绝。
+- 嵌入 iframe 需要 HTTPS，并同时设置 `JYN_COOKIE_SECURE=true` 与 `JYN_COOKIE_SAME_SITE=None`；否则 `SameSite=Lax` 的会话 Cookie 会让登录后掉线。
+
 ---
 
 ## 登录与权限

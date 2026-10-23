@@ -500,6 +500,21 @@ sudo systemctl start jync
 
 The metadata store uses `ddl-auto: update`, so its schema evolves automatically. **Back up `./data` before upgrading.** Source-side changes that occur while the tool is down are backfilled by the cursor mechanism on restart — nothing is lost.
 
+### 9. External authentication
+
+"Configuration → External authentication" offers three modes; exactly one is active at a time:
+
+| Mode | When to use | Deployment requirement |
+|---|---|---|
+| Password | The portal exposes a login API | Jync can reach that API |
+| Gateway header | A reverse proxy has already signed the user in | **Jync must sit behind the gateway and must not be exposed directly**; the gateway must strip client-supplied identity headers and be listed in `app.security.trusted-proxies` |
+| Ticket | A login centre issues a one-time ticket | Configure the validation URL; http(s) only, redirects are never followed |
+
+- Header mode trusts the **direct TCP peer** only (loopback by default, plus `app.security.trusted-proxies`).
+- Configure the optional shared-secret header so the gateway proves it injected the identity.
+- Local sign-in stays available at `/login/local` unless the administrator turns it off.
+- iframe embedding requires HTTPS plus both `JYN_COOKIE_SECURE=true` and `JYN_COOKIE_SAME_SITE=None`; otherwise the `SameSite=Lax` session cookie drops the login.
+
 ---
 
 ## Login & Roles

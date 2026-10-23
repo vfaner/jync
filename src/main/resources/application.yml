@@ -56,7 +56,8 @@ server:
       cookie:
         http-only: true
         # Lax lets top-level navigations carry the cookie but blocks CSRF-prone cross-site posts.
-        same-site: lax
+        # Embedding Jync in an iframe needs None, together with HTTPS and JYN_COOKIE_SECURE=true.
+        same-site: ${JYN_COOKIE_SAME_SITE:lax}
         # HTTPS deployments should set JYN_COOKIE_SECURE=true; left overridable so a plain
         # http://localhost deployment keeps working out of the box.
         secure: ${JYN_COOKIE_SECURE:false}
@@ -86,6 +87,8 @@ app:
   security:
     # 反向代理地址（逗号分隔，支持 IPv4/IPv6 CIDR），回环地址总是信任。
     # 只有这里列出的机器发来的 X-Forwarded-For / X-Real-IP 才会被采信；留空表示没有代理。
+    # 「外部认证 → 网关头」模式也用它判定可信来源：只有直接 TCP 对端在这个列表（或回环）内，
+    # 请求里的身份头才会生效。Jync 必须部署在网关之后，不能直连暴露。
     # 曾经把"私网直连"当作代理，导致同网段客户端可以每次伪造不同 IP，绕过登录锁定并污染审计。
     trusted-proxies: ${JYN_TRUSTED_PROXIES:}
 

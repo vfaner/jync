@@ -146,8 +146,10 @@ class SecurityConfigTest {
     }
 
     @Test
-    void theLoginPageAndItsAssetsAreReachable() throws Exception {
-        mvc.perform(get("/login")).andExpect(status().isOk());
+    void theLoginPagesAndTheirAssetsAreReachable() throws Exception {
+        // /login itself depends on the stored mode (and may 302 to the portal), so this test
+        // only pins what must always be reachable; LoginPageModeViewTest covers the dispatch.
+        assertThat(statusOf(get("/login/local"))).isEqualTo(200);
         mvc.perform(get("/css/app.css")).andExpect(status().isOk());
         mvc.perform(get("/js/app.js")).andExpect(status().isOk());
     }
@@ -319,15 +321,30 @@ class SecurityConfigTest {
     }
 
     /**
-     * The two new pages sit on opposite sides of the role line for different reasons: the OA
-     * settings hold an internal endpoint and its field mapping, while the system log is a
-     * diagnostic aid every signed-in user is meant to have.
+     * The two pages sit on opposite sides of the role line for different reasons: the external
+     * authentication settings hold the endpoints credentials are sent to, while the system log is
+     * a diagnostic aid every signed-in user is meant to have.
      */
     @Test
-    void oaSettingsAreAdminOnlyButTheSystemLogIsNot() throws Exception {
-        assertThat(statusOf(get("/oa/settings").with(asViewer()))).isEqualTo(302);
-        assertThat(statusOf(get("/oa/settings").with(asAdmin()))).isEqualTo(200);
+    void externalAuthSettingsAreAdminOnlyButTheSystemLogIsNot() throws Exception {
+        assertThat(statusOf(get("/external-auth").with(asViewer()))).isEqualTo(302);
+        assertThat(statusOf(get("/external-auth").with(asAdmin()))).isEqualTo(200);
         assertThat(statusOf(get("/system-logs").with(asViewer()))).isEqualTo(200);
+    }
+
+    @Test
+    void theLegacyOaSettingsPathRedirectsAdminsToTheNewPage() throws Exception {
+        mvc.perform(get("/oa/settings").with(asAdmin()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/external-auth"));
+    }
+
+    @Test
+    void theTicketEntryIsReachableWithoutASession() throws Exception {
+        // The handler's own redirect proves the request got past the security rules.
+        mvc.perform(get("/sso/entry"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login"));
     }
 
     /**
