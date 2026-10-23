@@ -360,13 +360,40 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                             }
                             PgTestDecodingParser.ParsedChange change = line.change;
                             if (change == null || change.isSkipped()) {
-                                parseFailures.incrementAndGet();
+                                PgTestDecodingParser.Skip skipKind =
+                                        change == null ? null : change.skip;
+                                String reason = change == null
+                                        ? "null" : change.unsupportedReason;
+                                if (skipKind == PgTestDecodingParser.Skip.IGNORABLE) {
+                                    // Not a change line at all: logical messages (any
+                                    // client on the source DB can emit them — the slot
+                                    // decodes the whole database), two-phase bookkeeping,
+                                    // noise. Counting them as parse failures used to park
+                                    // a perfectly healthy project after 6 heartbeats while
+                                    // the synced tables were idle (the counter only clears
+                                    // on a successful flush). Ignore them silently.
+                                    log.debug("Ignoring PG slot line: {} (sample: {})",
+                                            reason, truncate(data, 120));
+                                    continue;
+                                }
                                 stats.addSkippedUnsupported(1);
+                                if (skipKind == PgTestDecodingParser.Skip.UNSUPPORTED_EVENT) {
+                                    // A real change of a kind we do not mirror (TRUNCATE,
+                                    // …): surface and count it, but the stream is being
+                                    // decoded — not a strike-out case.
+                                    log.warn("Skipping PG slot row: {} (sample: {})",
+                                            reason, truncate(data, 120));
+                                    continue;
+                                }
+                                parseFailures.incrementAndGet();
                                 log.warn("Skipping PG slot row: {} (sample: {})",
-                                        change == null ? "null" : change.unsupportedReason,
-                                        truncate(data, 120));
+                                        reason, truncate(data, 120));
                                 continue;
                             }
+                            // H3 analog (LogMinerCdcConsumer): a row that decoded proves the
+                            // stream shape is understood, so it breaks the run of consecutive
+                            // poison rows even before the transaction flushes.
+                            parseFailures.set(0);
                             if (!matchesProjectTable(change.qualifiedTable)) {
                                 continue;
                             }

@@ -65,6 +65,24 @@ public final class PgTestDecodingParser {
     /** The kind of event one parsed row represents. */
     public enum Op { INSERT, UPDATE, DELETE }
 
+    /**
+     * Why a line produced no change. The distinction drives the consumer's strike-out:
+     * only {@link #DECODE_FAILURE} means "a change we should have applied could not be
+     * decoded" and counts toward parking the project. The other two are normal stream
+     * content and must never park a healthy consumer:
+     *
+     * <ul>
+     *   <li>{@link #IGNORABLE} — not a change line at all. test_decoding decodes the
+     *       WHOLE database, so any client calling {@code pg_logical_emit_message}
+     *       (Debezium heartbeats, application messages) or a two-phase COMMIT puts
+     *       lines into this slot that jync never applies;</li>
+     *   <li>{@link #UNSUPPORTED_EVENT} — a real change whose kind jync does not mirror
+     *       (e.g. {@code TRUNCATE}); surfaced and counted, but the stream is being
+     *       decoded fine, so it is not a decode failure.</li>
+     * </ul>
+     */
+    public enum Skip { IGNORABLE, UNSUPPORTED_EVENT, DECODE_FAILURE }
+
     /** One decoded row event, ready for {@link CdcEventApplier}. */
     public static final class ParsedChange {
         public final Op op;
@@ -85,23 +103,35 @@ public final class PgTestDecodingParser {
         public final Map<String, Object> oldImage;
         /** Null when the line was cleanly decoded; a human reason when we skipped it. */
         public final String unsupportedReason;
+        /** Why this line was skipped, or null for a decoded change. */
+        public final Skip skip;
 
         private ParsedChange(Op op, String qualifiedTable, Map<String, Object> row,
-                             Map<String, Object> oldImage, String unsupportedReason) {
+                             Map<String, Object> oldImage, String unsupportedReason,
+                             Skip skip) {
             this.op = op;
             this.qualifiedTable = qualifiedTable;
             this.row = row;
             this.oldImage = oldImage;
             this.unsupportedReason = unsupportedReason;
+            this.skip = skip;
         }
 
         static ParsedChange ok(Op op, String qt, Map<String, Object> row,
                                Map<String, Object> oldImage) {
-            return new ParsedChange(op, qt, row, oldImage, null);
+            return new ParsedChange(op, qt, row, oldImage, null, null);
         }
 
-        static ParsedChange skip(String reason) {
-            return new ParsedChange(null, null, null, null, reason);
+        static ParsedChange ignorable(String reason) {
+            return new ParsedChange(null, null, null, null, reason, Skip.IGNORABLE);
+        }
+
+        static ParsedChange unsupportedEvent(String reason) {
+            return new ParsedChange(null, null, null, null, reason, Skip.UNSUPPORTED_EVENT);
+        }
+
+        static ParsedChange decodeFailure(String reason) {
+            return new ParsedChange(null, null, null, null, reason, Skip.DECODE_FAILURE);
         }
 
         public boolean isSkipped() { return unsupportedReason != null; }
@@ -132,12 +162,12 @@ public final class PgTestDecodingParser {
 
     /**
      * Parse one raw {@code data} string from the slot. Never throws — a malformed line
-     * returns a {@link SlotLine} carrying a {@link ParsedChange#skip(String)} so the
+     * returns a {@link SlotLine} carrying a {@link ParsedChange#unsupportedReason} so the
      * consumer counts it as an unsupported row and moves on.
      */
     public SlotLine parse(String line) {
         if (line == null || line.isBlank()) {
-            return SlotLine.row(ParsedChange.skip("blank line"));
+            return SlotLine.row(ParsedChange.ignorable("blank line"));
         }
         String trimmed = line.trim();
         if (trimmed.startsWith("BEGIN ")) {
@@ -147,17 +177,17 @@ public final class PgTestDecodingParser {
             return SlotLine.commit(parseXid(trimmed.substring(7)));
         }
         if (!trimmed.startsWith("table ")) {
-            return SlotLine.row(ParsedChange.skip("not a row event: " + trimmed));
+            return SlotLine.row(ParsedChange.ignorable("not a row event: " + trimmed));
         }
         // Format: "table <schema>.<table>: <OP>: <payload>"
         int colonIdx = trimmed.indexOf(':');
         if (colonIdx < 0) {
-            return SlotLine.row(ParsedChange.skip("missing colon after table ref: " + trimmed));
+            return SlotLine.row(ParsedChange.decodeFailure("missing colon after table ref: " + trimmed));
         }
         String qualified = trimmed.substring(6, colonIdx).trim();
         int opIdx = trimmed.indexOf(':', colonIdx + 1);
         if (opIdx < 0) {
-            return SlotLine.row(ParsedChange.skip("missing colon after op: " + trimmed));
+            return SlotLine.row(ParsedChange.decodeFailure("missing colon after op: " + trimmed));
         }
         String opToken = trimmed.substring(colonIdx + 1, opIdx).trim().toUpperCase(Locale.ROOT);
         String payload = trimmed.substring(opIdx + 1).trim();
@@ -166,7 +196,7 @@ public final class PgTestDecodingParser {
             case "INSERT": op = Op.INSERT; break;
             case "UPDATE": op = Op.UPDATE; break;
             case "DELETE": op = Op.DELETE; break;
-            default: return SlotLine.row(ParsedChange.skip("unknown op: " + opToken));
+            default: return SlotLine.row(ParsedChange.unsupportedEvent("unknown op: " + opToken));
         }
         // For UPDATE, the old image is a separate value part, not noise: when the key moved
         // the caller must delete the OLD key (the new image alone cannot locate it). For
@@ -182,13 +212,13 @@ public final class PgTestDecodingParser {
             oldImage = parseColumns(oldPart);
             row = parseColumns(payload.substring(newIdx));
             if (oldImage == null || row == null) {
-                return SlotLine.row(ParsedChange.skip(
+                return SlotLine.row(ParsedChange.decodeFailure(
                         "malformed UPDATE old/new image: " + payload));
             }
             if (oldImage.containsValue(UNCHANGED_TOAST_MARKER)) {
                 // The old image cannot be reproduced, so whether the key moved is unknowable
                 // — guessing would either orphan the old row or delete the wrong one.
-                return SlotLine.row(ParsedChange.skip("unchanged-toast-datum in the UPDATE"
+                return SlotLine.row(ParsedChange.decodeFailure("unchanged-toast-datum in the UPDATE"
                         + " old image for " + qualified + " — the key change cannot be"
                         + " determined"));
             }
@@ -200,7 +230,7 @@ public final class PgTestDecodingParser {
             row = parseColumns(payload);
         }
         if (row == null) {
-            return SlotLine.row(ParsedChange.skip("malformed column payload: " + payload));
+            return SlotLine.row(ParsedChange.decodeFailure("malformed column payload: " + payload));
         }
         if (row.containsValue(UNCHANGED_TOAST_MARKER)) {
             if (op == Op.DELETE) {
@@ -211,7 +241,7 @@ public final class PgTestDecodingParser {
                 // The real value is not in the stream. Writing the literal would silently
                 // corrupt the target, so skip the row loudly (counted like every other
                 // undecodable line) instead of guessing.
-                return SlotLine.row(ParsedChange.skip("unchanged-toast-datum: test_decoding"
+                return SlotLine.row(ParsedChange.decodeFailure("unchanged-toast-datum: test_decoding"
                         + " cannot reproduce a TOASTed value on " + op + " for " + qualified));
             }
         }

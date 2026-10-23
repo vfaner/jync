@@ -231,6 +231,38 @@ class PgLogicalCdcConsumerFailureEscalationTest {
         assertThat(targetRowCount()).isEqualTo(1);
     }
 
+    /** BEGIN/message/COMMIT:一个只有 test_decoding 消息行的事务,没有任何可应用的行。 */
+    private ResultSet messageOnlyResultSet() throws SQLException {
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.next()).thenReturn(true, true, true, false);
+        when(rs.getString(1)).thenReturn("0/2000", "0/2001", "0/2002");
+        when(rs.getString(2)).thenReturn(
+                "BEGIN 12345",
+                "message: transactional: 1 prefix: hb, sz: 4 content: ping",
+                "COMMIT 12345");
+        return rs;
+    }
+
+    @Test
+    void logicalMessageLinesFromOtherClientsDoNotParkTheProject() throws Exception {
+        // 源库上任何客户端调用 pg_logical_emit_message(Debezium 心跳、应用自带的
+        // 消息等),内容都会进入 jync 的 test_decoding slot —— slot 解码的是整个
+        // 数据库,不是只有被同步的表。"message: ..." 既不是行事件,也永远不会被应用。
+        //
+        // 旧实现把它计进 parseFailures,而 parseFailures 只在成功 flush 一个事务时
+        // 清零;被同步的表恰好空闲时没有任何 flush,6 条心跳就足以把一个完全健康的
+        // 项目 park 成 PARSE_STRIKE_OUT,之后不再同步任何数据。
+        PreparedStatement ps = mock(PreparedStatement.class);
+        when(ps.executeQuery()).thenAnswer(inv -> messageOnlyResultSet());
+        when(source.prepareStatement(anyString())).thenReturn(ps);
+
+        PgLogicalCdcConsumer consumer = newConsumer(stagedTargetContext(true), boundedLock(8));
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(any(), anyString());
+    }
+
     @Test
     void baselineLeaseLossExitsQuietlyWithoutError() throws Exception {
         // 基线全量期间租约被接管:runBaseline 抛 LockLostException。R1 要求安静退出 ——
