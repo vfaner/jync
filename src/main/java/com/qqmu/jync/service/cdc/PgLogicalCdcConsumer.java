@@ -358,7 +358,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         Map<CdcTableBinding, List<Map<String, Object>>> upserts = new LinkedHashMap<>();
         Map<CdcTableBinding, List<Map<String, Object>>> deletes = new LinkedHashMap<>();
         String lastCommitLsn = null;
-        String currentTxLsn = null; // LSN of the latest row in the buffered transaction
         boolean originalAutoCommit = conn.getAutoCommit();
         conn.setAutoCommit(false);
         try {
@@ -384,7 +383,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 upserts.clear();
                                 deletes.clear();
                                 resetSpiller();
-                                currentTxLsn = null;
                                 continue;
                             }
                             if (line.txEnd) {
@@ -402,7 +400,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 resetSpiller();
                                 advanceSlot(conn, slotName, commitLsn);
                                 lastCommitLsn = commitLsn;
-                                currentTxLsn = null;
                                 continue;
                             }
                             PgTestDecodingParser.ParsedChange change = line.change;
@@ -501,7 +498,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 stats.addUnsupportedTable(change.qualifiedTable);
                                 continue;
                             }
-                            currentTxLsn = lsn;
                             if (change.op == PgTestDecodingParser.Op.DELETE) {
                                 appendDelete(upserts, deletes, binding, change.row);
                             } else {

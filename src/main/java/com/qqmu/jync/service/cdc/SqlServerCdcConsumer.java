@@ -315,6 +315,41 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         String nextLsn;
     }
 
+    /** A SQL Server LSN is 10 bytes — 20 hex digits — rendered as "0x" + lowercase hex. */
+    private static final int LSN_HEX_DIGITS = 20;
+
+    /**
+     * Normalises a persisted watermark to the canonical LSN text form used by every
+     * query in this class: {@code 0x} + lowercase hex (what
+     * {@code CONVERT(varchar(32), lsn, 1)} returns). v1.7.0 persisted
+     * {@code __$start_lsn} straight from the raw binary column ({@code hex(bytes)}),
+     * i.e. UPPERCASE with no {@code 0x} prefix. Nothing else normalises it, and the
+     * watermark is rebound with {@code CONVERT(binary(10), ?, 1)} — style 1 requires
+     * exactly the canonical shape, so a legacy row failed with Msg 8114 ("Error
+     * converting data type varchar to varbinary") on every cycle. The classifier sees
+     * that as TRANSIENT, so the consumer retried until APPLY_STRIKE_OUT parked the
+     * project for good.
+     *
+     * <p>Unknown shapes are returned untouched: a watermark this code cannot recognise
+     * must still reach SQL Server and fail visibly instead of being silently rewritten.
+     */
+    static String canonicalLsn(String lsn) {
+        if (lsn == null) {
+            return null;
+        }
+        String s = lsn.trim();
+        int start = s.startsWith("0x") || s.startsWith("0X") ? 2 : 0;
+        if (s.length() - start != LSN_HEX_DIGITS) {
+            return lsn;
+        }
+        for (int i = start; i < s.length(); i++) {
+            if (Character.digit(s.charAt(i), 16) < 0) {
+                return lsn;
+            }
+        }
+        return "0x" + s.substring(start).toLowerCase(Locale.ROOT);
+    }
+
     /**
      * Read the current {@code fn_cdc_get_max_lsn()}, then pull every change between
      * (fromLsn, maxLsn] across all tracked capture instances. Rows are grouped by
@@ -326,7 +361,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      */
     DrainResult drain(Connection conn, String fromLsn) throws Exception {
         try {
-            return drainWindow(conn, fromLsn);
+            return drainWindow(conn, canonicalLsn(fromLsn));
         } finally {
             // Rows a stop left unflushed are re-read from the capture tables next start;
             // their spilled files have no reader left.

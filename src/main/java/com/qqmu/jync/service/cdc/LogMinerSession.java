@@ -100,12 +100,33 @@ public class LogMinerSession implements AutoCloseable {
     }
 
     /**
+     * Hard ceiling on rows materialised by one {@link #nextBatch()} call. A consumer that
+     * was down for hours re-mines a backlog spanning the whole window; draining it into one
+     * list would hold every SQL_REDO string of that window in the heap before a single row
+     * is applied. The cap only bounds the in-memory burst — the cursor stays open, so the
+     * next call continues where this one stopped.
+     */
+    static final int MAX_BATCH_ROWS = 10_000;
+
+    /**
      * Next batch of fully-formed rows, continuation fragments merged. An empty list means
      * the cursor drained: the consumer closes the session and polls before reopening.
+     * Never returns more than {@link #MAX_BATCH_ROWS} rows.
      */
     public List<Row> nextBatch() throws SQLException {
+        return nextBatch(MAX_BATCH_ROWS);
+    }
+
+    /**
+     * Cap-testable seam for {@link #nextBatch()}. Continuation fragments do not count
+     * toward {@code maxRows}: a fragment yields no Row, so the loop keeps reading until it
+     * either completes a statement or the cursor drains — a fragment is never left half-read
+     * across calls. An empty result still means "cursor drained", because the loop only stops
+     * early after emitting a row.
+     */
+    List<Row> nextBatch(int maxRows) throws SQLException {
         List<Row> out = new ArrayList<>();
-        while (rows.next()) {
+        while (out.size() < maxRows && rows.next()) {
             String rsId = rows.getString(1);
             long csn = rows.getLong(2);
             String operation = rows.getString(4);
@@ -126,14 +147,10 @@ public class LogMinerSession implements AutoCloseable {
             out.add(new Row(rsId, csn, operation, segOwner, tableName,
                     accumulated, rowTime, srcConId));
         }
-        // B1: the former batchCap() "safety valve" returned Integer.MAX_VALUE, so the
-        // `if (++read >= batchCap()) break;` guard never fired — dead code whose comment
-        // ("Default 10_000 rows") contradicted the implementation. Removed as dead code;
-        // runtime behavior is unchanged (the cap never bounded anything). nextBatch
-        // drains the whole cursor into `out`, and the consumer (LogMinerCdcConsumer)
-        // loops nextBatch until it returns empty — so adding a real in-memory cap (e.g.
-        // 10_000) later would be transparent and is the recommended follow-up if a large
-        // mining window ever risks OOM.
+        // B1 follow-up landed: the former batchCap() "safety valve" returned
+        // Integer.MAX_VALUE, so its guard never fired. The loop condition above is the real
+        // cap (MAX_BATCH_ROWS). LogMinerCdcConsumer loops nextBatch until it returns empty,
+        // so stopping early is transparent to it and its per-transaction buffers carry over.
         return out;
     }
 

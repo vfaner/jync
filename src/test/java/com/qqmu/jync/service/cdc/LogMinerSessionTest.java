@@ -382,6 +382,43 @@ class LogMinerSessionTest {
     }
 
     @Test
+    void nextBatchStopsAtTheRowCapAndResumesWithoutLosingRows() throws SQLException {
+        // A large mining window (the consumer was down for hours) must not be materialised
+        // in one go: nextBatch stops at the cap and the cursor stays open, so the next call
+        // picks up exactly where the previous one stopped. The consumer loops until the
+        // list is empty, so an early stop is transparent.
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"});
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+
+        when(fx.rows.next()).thenReturn(true, true, true, true, true, false);
+        when(fx.rows.getString(1)).thenReturn("100", "101", "102", "103", "104");
+        when(fx.rows.getLong(2)).thenReturn(501L, 502L, 503L, 504L, 505L);
+        when(fx.rows.getString(3)).thenReturn("tx", "tx", "tx", "tx", "tx");
+        when(fx.rows.getString(4)).thenReturn("INSERT", "INSERT", "INSERT", "INSERT", "INSERT");
+        when(fx.rows.getString(5)).thenReturn("SRC", "SRC", "SRC", "SRC", "SRC");
+        when(fx.rows.getString(6)).thenReturn("T", "T", "T", "T", "T");
+        when(fx.rows.getString(7))
+                .thenReturn("insert into \"SRC\".\"T\"(\"ID\") values ('1');")
+                .thenReturn("insert into \"SRC\".\"T\"(\"ID\") values ('2');")
+                .thenReturn("insert into \"SRC\".\"T\"(\"ID\") values ('3');")
+                .thenReturn("insert into \"SRC\".\"T\"(\"ID\") values ('4');")
+                .thenReturn("insert into \"SRC\".\"T\"(\"ID\") values ('5');");
+        when(fx.rows.getTimestamp(8)).thenReturn(new Timestamp(1_000L));
+
+        assertThat(session.nextBatch(2)).extracting(row -> row.rsId)
+                .containsExactly("100", "101");
+        assertThat(session.nextBatch(2)).extracting(row -> row.rsId)
+                .containsExactly("102", "103");
+        assertThat(session.nextBatch(2)).extracting(row -> row.rsId)
+                .containsExactly("104");
+        // Still a non-empty batch would have meant "more to read"; empty is the drained
+        // signal the consumer terminates on, so the cap must never fake it.
+        assertThat(session.nextBatch(2)).isEmpty();
+        session.close();
+    }
+
+    @Test
     void closeIsQuietWhenEndLogmnrFails() throws SQLException {
         Fixture fx = new Fixture(1000L,
                 new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"});

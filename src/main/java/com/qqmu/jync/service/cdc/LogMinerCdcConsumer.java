@@ -183,7 +183,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 }
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
-                List<LogMinerSession.Row> drained;
+                int drained;
                 try {
                     Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig());
                     currentSource = conn;
@@ -212,7 +212,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     // a failed cycle and escalates after MAX_APPLY_FAILURES in a row.
                     applyFailures.incrementAndGet();
                     lastFailure.compareAndSet(null, e);
-                    drained = Collections.emptyList();
+                    drained = 0;
                     // The mining loop opens a connection per cycle, so "connected" cannot be
                     // tied to the connection's lifetime: between cycles there is none, and the
                     // panel would show 已断开 for almost the whole run of a healthy consumer.
@@ -258,7 +258,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 // 繁忙轮(捞到数据)立即开下一轮,把高峰延迟压到一个挖掘周期;
                 // 只有真正空闲才休眠 idlePollMs,失败走指数退避。
                 long delay = CdcReconnectBackoff.nextCycleDelayMs(
-                        failure, !drained.isEmpty(), backoff, idlePollMs);
+                        failure, drained > 0, backoff, idlePollMs);
                 // lastError feeds the project panel's "last error" row, which the template
                 // renders only when non-null. A healthy cycle must leave it null, and its
                 // completion line belongs at DEBUG: idle mining polls every 1000 ms by
@@ -394,10 +394,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     /**
      * Drain one session: accumulate rows per transaction key (CSCN) and flush on CSCN change
-     * (target commit → lease renew → advanceScn). Empty drain means the session found nothing
-     * past lastScn — the caller idles.
+     * (target commit → lease renew → advanceScn). The return value is the number of rows
+     * applied, not the rows themselves: zero means the session found nothing past lastScn —
+     * the caller idles. Returning the rows kept every SQL_REDO of the window alive until the
+     * cycle ended for the sole benefit of an isEmpty() test.
      */
-    private List<LogMinerSession.Row> drain(LogMinerSession session) throws Exception {
+    private int drain(LogMinerSession session) throws Exception {
         try {
             return drainSession(session);
         } finally {
@@ -407,12 +409,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         }
     }
 
-    private List<LogMinerSession.Row> drainSession(LogMinerSession session) throws Exception {
+    private int drainSession(LogMinerSession session) throws Exception {
         long projectId = project.getId();
         long currentCsn = -1L;
         Map<CdcTableBinding, List<Map<String, Object>>> upserts = new LinkedHashMap<>();
         Map<CdcTableBinding, List<Map<String, Object>>> deletes = new LinkedHashMap<>();
-        List<LogMinerSession.Row> all = new ArrayList<>();
+        int applied = 0;
         while (running && !Thread.currentThread().isInterrupted()) {
             List<LogMinerSession.Row> batch = session.nextBatch();
             if (batch.isEmpty()) {
@@ -555,13 +557,13 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 if (row.rowTime != null) {
                     stats.touchEvent(row.rowTime.getTime());
                 }
-                all.add(row);
+                applied++;
             }
         }
         if (currentCsn >= 0 && (!upserts.isEmpty() || !deletes.isEmpty())) {
             flushTransaction(projectId, currentCsn, upserts, deletes);
         }
-        return all;
+        return applied;
     }
 
     /**

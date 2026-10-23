@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -132,6 +133,40 @@ class SqlServerCdcLsnRecoveryTest {
         when(rs.getMetaData()).thenReturn(md);
         when(rs.next()).thenReturn(false);
         return rs;
+    }
+
+    @Test
+    void aLegacyPersistedLsnIsNormalisedBeforeItIsBoundToTheCaptureCall() throws Exception {
+        // v1.7.0 把 __$start_lsn 直接从原始二进制列取出来持久化(hex(getBytes())),
+        // 存成「大写、无 0x 前缀」。此后所有版本读 LSN 都走
+        // CONVERT(varchar(32), lsn, 1)(规范形:0x + 小写十六进制),回绑时又用
+        // CONVERT(binary(10), ?, 1) —— style 1 只接受规范形。遗留水位因此每周期都
+        // 报 Msg 8114("Error converting data type varchar to varbinary"),分类器判
+        // TRANSIENT,重试到 APPLY_STRIKE_OUT 把项目永久 park。
+        // 契约:进入 drain 的水位先归一化,再参与比较、绑定。
+        ciStartLsn.set("0x00000000000000000001");
+        maxLsn.set("0x0000002857ae02580100");
+        ResultSet normalRs = emptyChangesRs(); // built first: Mockito forbids nested stubbing
+        when(normalChangesPs.executeQuery()).thenReturn(normalRs);
+
+        consumer.drain(conn, "0000002857AE025800A0");
+
+        verify(normalChangesPs).setString(1, "0x0000002857ae025800a0");
+    }
+
+    @Test
+    void aLegacyLsnAtTheWatermarkIsRecognisedAsIdle() throws Exception {
+        // 同一遗留形态,但源库没有新变更:未归一化时 legacy 串与规范形 max_lsn
+        // 形状不同,equalsIgnoreCase 永远不匹配 —— 本该空闲的周期被当成有待扫窗口,
+        // 接着就是上面那条 Msg 8114。归一化后两者相等,必须走空闲早退。
+        maxLsn.set("0x0000002857ae025800a0");
+        ResultSet normalRs = emptyChangesRs();
+        when(normalChangesPs.executeQuery()).thenReturn(normalRs);
+
+        SqlServerCdcConsumer.DrainResult r = consumer.drain(conn, "0000002857AE025800A0");
+
+        assertThat(r.nextLsn).isNull();
+        verify(normalChangesPs, never()).executeQuery();
     }
 
     @Test
