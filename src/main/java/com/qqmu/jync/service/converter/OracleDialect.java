@@ -173,7 +173,12 @@ public class OracleDialect extends AbstractSqlDialect {
     protected String charType(int size) {
         // CHAR likewise defaults to BYTE semantics; declare CHAR semantics so CJK data fits.
         // 500 chars stays within the 2000-byte CHAR ceiling even with 4-byte characters.
-        return "CHAR(" + Math.min(Math.max(size, 1), 500) + " CHAR)";
+        // A wider source cannot be a CHAR here: keep the width as VARCHAR2/CLOB instead of
+        // clamping, which would make the column reject its own data (ORA-12899).
+        if (size > 500) {
+            return varcharType(size);
+        }
+        return "CHAR(" + Math.max(size, 1) + " CHAR)";
     }
 
     @Override

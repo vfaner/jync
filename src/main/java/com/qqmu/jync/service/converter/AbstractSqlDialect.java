@@ -342,7 +342,14 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     protected abstract String clobType();
 
     protected String charType(int size) {
-        return "CHAR(" + Math.min(size, maxCharLength()) + ")";
+        if (size > maxCharLength()) {
+            // A fixed-width source wider than this product's CHAR ceiling cannot keep its
+            // declared width. Narrowing it silently produces a column that rejects the very
+            // rows it was created for, so promote to the width-preserving VARCHAR/LOB form
+            // instead — the padding semantics are lost either way once the ceiling is hit.
+            return varcharType(size);
+        }
+        return "CHAR(" + size + ")";
     }
 
     /**

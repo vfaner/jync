@@ -139,7 +139,12 @@ public class SqlServerDialect extends AbstractSqlDialect {
 
     @Override
     protected String charType(int size) {
-        return "NCHAR(" + Math.min(size, 4000) + ")";
+        // NCHAR stops at 4000; a wider source keeps its width as NVARCHAR(MAX) rather than
+        // being clamped to a column that rejects longer values.
+        if (size > 4000) {
+            return varcharType(size);
+        }
+        return "NCHAR(" + Math.max(size, 1) + ")";
     }
 
     @Override

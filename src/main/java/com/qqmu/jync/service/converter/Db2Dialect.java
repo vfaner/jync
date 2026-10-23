@@ -107,6 +107,12 @@ public class Db2Dialect extends AbstractSqlDialect {
     }
 
     @Override
+    protected int maxCharLength() {
+        // DB2 LUW caps CHAR at 254 characters; the generic 255 produces DDL DB2 rejects.
+        return 254;
+    }
+
+    @Override
     protected String binaryType(int size) {
         if (size <= 0 || size > 32672) {
             return blobType();

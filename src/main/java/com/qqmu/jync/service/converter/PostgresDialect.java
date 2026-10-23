@@ -131,6 +131,13 @@ public class PostgresDialect extends AbstractSqlDialect {
     }
 
     @Override
+    protected int maxCharLength() {
+        // character(n) is bounded only by the 1 GB field limit, so a declared width can be
+        // kept instead of being clamped to MySQL's 255.
+        return 10485760;
+    }
+
+    @Override
     protected int maxIdentifierLength() {
         return 63;
     }
