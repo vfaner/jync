@@ -114,6 +114,13 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     /** P1-6: discovery throttle + the CI names this consumer has already logged. */
     private long lastDiscoveryAtMs;
     private final Set<String> knownCaptureInstances = new HashSet<>();
+    /**
+     * Capture instance → the missing-column description last warned about. A CI whose
+     * change table lacks a binding column is skipped every cycle; without this the same
+     * WARN would repeat on every poll, and without the per-CI key two unhealthy instances
+     * would flap each other's single-throttle slot.
+     */
+    private final Map<String, String> missingColumnWarnings = new java.util.concurrent.ConcurrentHashMap<>();
     /** #4: throttle for the "CDC disabled at DB level" warning (see drain()). */
     private long lastCdcOffWarnMs;
 
@@ -483,10 +490,37 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             ps.setString(1, fromBind);
             ps.setString(2, toLsn);
             try (ResultSet rs = ps.executeQuery()) {
-                // Cache the real column set of the CT row ONCE per ci — readRow
-                // consults this to distinguish "not captured" from genuine errors.
-                Set<String> availableCols = availableColumns(rs);
+                // Cache the real column set of the CT row ONCE per ci, on the first row
+                // (an empty window must not cost a metadata read) — readRow consults it
+                // to distinguish "not captured" from genuine errors.
+                Set<String> availableCols = null;
                 while (running && !Thread.currentThread().isInterrupted() && rs.next()) {
+                    if (availableCols == null) {
+                        availableCols = availableColumns(rs);
+                        List<String> missingCols =
+                                missingBindingColumns(supplier.binding(ci), availableCols);
+                        if (!missingCols.isEmpty()) {
+                            // @captured_column_list captured only a subset of the table (or
+                            // the column was added after the instance was created). The
+                            // applier binds EVERY binding column and JdbcRowMapper turns a
+                            // missing map key into an explicit NULL, so folding these rows
+                            // would overwrite the target's values — silently when the
+                            // column is nullable. Nothing in such a window can be applied
+                            // losslessly, so skip the whole instance, count the dropped
+                            // events, and tell the DBA which columns to re-capture. The
+                            // watermark still advances at the end of the drain (the same
+                            // deliberate-skip semantics as unsupported rows).
+                            long skipped = 1L; // current row
+                            while (running && !Thread.currentThread().isInterrupted()
+                                    && rs.next()) {
+                                skipped++;
+                            }
+                            stats.addSkippedUnsupported(skipped);
+                            warnMissingCapturedColumns(ci, missingCols);
+                            return;
+                        }
+                        missingColumnWarnings.remove(ci.captureInstance);
+                    }
                     // Column 1 is projected as CONVERT(varchar(32), __$start_lsn, 1) by
                     // changesSql/changesSqlInclusive. Do NOT select the raw binary column:
                     // mssql-jdbc renders a binary(10) through getString as UPPERCASE hex
@@ -760,11 +794,52 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
+     * Binding columns the capture instance's change table does not carry, in binding
+     * order. Empty when the binding is absent/unsupported (that case is counted per row
+     * by the scan loop, as before).
+     */
+    static List<String> missingBindingColumns(CdcTableBinding binding, Set<String> availableCols) {
+        if (binding == null || !binding.isApplicable()) {
+            return List.of();
+        }
+        List<String> missing = new ArrayList<>();
+        for (String col : binding.columnNames()) {
+            if (!availableCols.contains(col.toLowerCase(Locale.ROOT))) {
+                missing.add(col);
+            }
+        }
+        return missing;
+    }
+
+    /**
+     * One WARN per (capture instance, missing-column set). The status panel's
+     * {@code unsupportedTables} set is the persistent signal; this line is the actionable
+     * one and must name the remediation, since nothing else tells the DBA why a tracked
+     * table stopped syncing.
+     */
+    private void warnMissingCapturedColumns(CaptureInstance ci, List<String> missingCols) {
+        String description = String.join(", ", missingCols);
+        if (description.equals(missingColumnWarnings.put(ci.captureInstance, description))) {
+            return;
+        }
+        stats.addUnsupportedTable(ci.schema + "." + ci.table);
+        log.warn("SQLServer CDC: capture instance {} of {}.{} does not capture column(s)"
+                        + " [{}] — every change in this table is being SKIPPED (applying the"
+                        + " rows would overwrite the target's values with NULL). Recreate the"
+                        + " instance capturing all columns (sys.sp_cdc_disable_table, then"
+                        + " sys.sp_cdc_enable_table with @captured_column_list = NULL or the"
+                        + " full list), then re-baseline this table",
+                ci.captureInstance, ci.schema, ci.table, description);
+    }
+
+    /**
      * Read the captured columns into a map keyed by column name (case-preserved).
-     * Columns the CT does NOT carry (enable_table @captured_column_list subset) are
-     * omitted from the row map entirely — the applier skips them, so the target keeps
-     * its existing value instead of being overwritten with NULL. Previously every
-     * missing column was bound to NULL, which silently overwrote the target.
+     *
+     * <p>Columns the CT does NOT carry are omitted from the row map, but they are never
+     * applied half-way: {@code scanCi} refuses a capture instance whose CT lacks any
+     * binding column before a single row is folded (the applier binds every binding
+     * column and a missing map key becomes an explicit NULL). The skip here is only a
+     * safety net for a schema that changes between the metadata read and the CT scan.
      *
      * <p>True SQLException (connection drop, type mismatch) propagates — the drain
      * aborts and the watermark does not advance, so the same rows re-read on retry.
