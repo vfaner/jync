@@ -189,6 +189,21 @@ class GenericMetadataReaderTest {
     }
 
     @Test
+    void engineOwnedSchemasStayFilteredUnderATurkishDefaultLocale() {
+        // tr-TR 的默认大写把 'i' 映射为 'İ'，information_schema 就匹配不上常量表，
+        // 引擎自带的系统表会被当成业务表列进同步清单。
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+        try {
+            assertThat(reader.isSystemObject(null, "information_schema", "tables")).isTrue();
+            assertThat(reader.isSystemObject("information_schema", null, "columns")).isTrue();
+            assertThat(reader.isSystemObject("main", "app", "sqlite_sequence")).isTrue();
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
+    @Test
     void recycleBinAndEngineGeneratedNamesAreSystemObjectsWhereverTheyLive() {
         // 这些是引擎在用户 schema 内自己生成的对象，只能按名字识别。
         assertThat(reader.isSystemObject(null, "APP", "BIN$abc==$0")).isTrue();

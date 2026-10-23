@@ -671,17 +671,21 @@ public class GenericMetadataReader implements MetadataReader {
         if (name == null) {
             return true;
         }
-        String upperName = name.toUpperCase();
+        // Locale.ROOT throughout: a default-locale uppercase maps 'i' to 'İ' under tr-TR,
+        // so "information_schema" would stop matching the constants below and the engine's
+        // own tables would be listed — and synced — as business tables.
+        String upperName = name.toUpperCase(java.util.Locale.ROOT);
         if (upperName.startsWith("BIN$")           // Oracle recycle bin
                 || upperName.startsWith("MLOG$")   // Oracle materialized view logs
                 || upperName.startsWith("SQLITE_")) { // SQLite internal tables
             return true;
         }
-        if (catalog != null && SYSTEM_CATALOGS.contains(catalog.toUpperCase())) {
+        if (catalog != null
+                && SYSTEM_CATALOGS.contains(catalog.toUpperCase(java.util.Locale.ROOT))) {
             return true;
         }
         if (schema != null) {
-            String upperSchema = schema.toUpperCase();
+            String upperSchema = schema.toUpperCase(java.util.Locale.ROOT);
             if (SYSTEM_SCHEMAS.contains(upperSchema)) {
                 return true;
             }
