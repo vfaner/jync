@@ -88,6 +88,34 @@ class VendorTypeMapTest {
     }
 
     /**
+     * 绑定路径原先没有归一化：SQL Server 的 geometry(-157)/sql_variant(-156) 列存在 NULL
+     * 时，源端原始 JDBC 码被直接交给 {@code PreparedStatement.setNull}，而 ojdbc 的
+     * {@code OracleStatement.getInternalType} 对表外的码一律抛 ORA-17004（Invalid column
+     * type），整张表每轮都失败。绑定类型必须先归一化成可移植类型。
+     */
+    @Test
+    void bindTypesCanonicalizeVendorCodes() {
+        assertThat(VendorTypeMap.bindType(DatabaseType.SQLSERVER, -157, "geometry"))
+                .isEqualTo(Types.BLOB);
+        assertThat(VendorTypeMap.bindType(DatabaseType.SQLSERVER, -156, "sql_variant"))
+                .isEqualTo(Types.CLOB);
+        assertThat(VendorTypeMap.bindType(DatabaseType.SQLSERVER, -155, "datetimeoffset"))
+                .isEqualTo(Types.TIMESTAMP_WITH_TIMEZONE);
+        assertThat(VendorTypeMap.bindType(DatabaseType.DB2, -100001, "DECFLOAT"))
+                .isEqualTo(Types.DECIMAL);
+        assertThat(VendorTypeMap.bindType(DatabaseType.MYSQL, Types.BINARY, "GEOMETRY"))
+                .isEqualTo(Types.BLOB);
+        // 元数据没带类型名时，产品作用域内的码仍然能定性。
+        assertThat(VendorTypeMap.bindType(DatabaseType.SQLSERVER, -157, null))
+                .isEqualTo(Types.BLOB);
+        // 调用方已经做过的细化必须保留：只改写厂商类型。
+        assertThat(VendorTypeMap.bindType(DatabaseType.MYSQL, Types.SMALLINT, "YEAR"))
+                .isEqualTo(Types.SMALLINT);
+        assertThat(VendorTypeMap.bindType(DatabaseType.MYSQL, Types.VARCHAR, "VARCHAR"))
+                .isEqualTo(Types.VARCHAR);
+    }
+
+    /**
      * ojdbc8 21.5.0.0 does not report the short names this class was written against:
      * {@code DatabaseMetaData.getColumns} returns "TIMESTAMP(6) WITH TIME ZONE",
      * "TIMESTAMP(6) WITH LOCAL TIME ZONE", "INTERVAL YEAR(2) TO MONTH" and

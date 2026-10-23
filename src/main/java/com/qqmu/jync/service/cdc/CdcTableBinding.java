@@ -9,6 +9,7 @@ import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.service.converter.VendorTypeMap;
 
 import lombok.Getter;
 
@@ -69,15 +70,18 @@ public final class CdcTableBinding {
 
     /**
      * Bind types as the target dialect wants them. A source type is not always the target's
-     * bind type: Oracle renders a text LOB placeholder as CLOB so nulls carry a type the
-     * driver accepts and large values leave the LONG path.
+     * bind type: a vendor code (SQL Server -157 {@code geometry}) is not a code every
+     * target driver accepts in {@code setNull}, and Oracle renders a text LOB placeholder
+     * as CLOB so nulls carry a type the driver accepts and large values leave the LONG
+     * path. Canonicalize the vendor type first, then map it for the target.
      */
     public Map<String, Integer> typeByColumn(SqlDialect targetDialect,
                                              DatabaseType sourceType) {
         Map<String, Integer> types = new LinkedHashMap<>();
         for (ColumnMeta column : meta.getColumns()) {
-            types.put(column.getName(),
-                    targetDialect.bindJdbcType(column, sourceType, column.getJdbcType()));
+            types.put(column.getName(), targetDialect.bindJdbcType(column, sourceType,
+                    VendorTypeMap.bindType(sourceType, column.getJdbcType(),
+                            column.getTypeName())));
         }
         return types;
     }

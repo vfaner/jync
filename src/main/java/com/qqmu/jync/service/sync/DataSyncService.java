@@ -33,6 +33,7 @@ import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.service.converter.VendorTypeMap;
 import com.qqmu.jync.service.lob.LobReadPolicy;
 import com.qqmu.jync.service.lob.LobSpillSession;
 import com.qqmu.jync.service.lob.LobSpillStore;
@@ -931,8 +932,8 @@ public class DataSyncService {
                             typeNames.get(i), md.getPrecision(i + 1));
                     ColumnMeta columnMeta = metaByColumn.get(
                             columns.get(i).toUpperCase(java.util.Locale.ROOT));
-                    typeByColumn.put(columns.get(i), targetDialect.bindJdbcType(
-                            columnMeta, ctx.effectiveSourceType(), effectiveType));
+                    typeByColumn.put(columns.get(i), bindTypeFor(targetDialect, columnMeta,
+                            ctx.effectiveSourceType(), effectiveType, typeNames.get(i)));
                 }
 
                 // An INSERT has no match clause, so the key columns only decide that shape —
@@ -1127,6 +1128,20 @@ public class DataSyncService {
             return java.sql.Types.DECIMAL;
         }
         return sourceJdbcType;
+    }
+
+    /**
+     * Bind type for one result column. A source vendor code is not a type every target
+     * driver accepts: SQL Server reports -157 for {@code geometry} and -156 for
+     * {@code sql_variant}, and Oracle's {@code getInternalType} throws ORA-17004 for any
+     * code outside its internal table, so one NULL in such a column failed the table on
+     * every cycle. Canonicalize first, then let the target dialect map it (Oracle turns a
+     * LONGVARCHAR/CLOB bind into a CLOB bind, and so on).
+     */
+    static int bindTypeFor(SqlDialect targetDialect, ColumnMeta columnMeta,
+                           DatabaseType sourceType, int effectiveType, String sourceTypeName) {
+        return targetDialect.bindJdbcType(columnMeta, sourceType,
+                VendorTypeMap.bindType(sourceType, effectiveType, sourceTypeName));
     }
 
     /**

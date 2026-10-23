@@ -35,10 +35,49 @@ public final class VendorTypeMap {
         if (byName != null) {
             return byName;
         }
+        Canonical byCode = byVendorCode(source, column.getJdbcType());
+        if (byCode != null) {
+            return byCode;
+        }
+        if (column.getJdbcType() == Types.ROWID) {
+            return new Canonical(Types.VARCHAR, 40);
+        }
+        return new Canonical(column.getJdbcType(), null);
+    }
+
+    /**
+     * The JDBC code to hand the target driver when binding this source column — what a
+     * null carries and what the value dispatch reads. Same canonicalization as the DDL
+     * path, but starting from the caller's already-refined target type so refinements
+     * such as MySQL YEAR→SMALLINT survive: only vendor types are rewritten.
+     *
+     * <p>Without this a code outside {@link Types} (SQL Server -157 {@code geometry}, -156
+     * {@code sql_variant}, DB2 -100001 {@code DECFLOAT}) reaches
+     * {@code PreparedStatement.setNull}, and Oracle's {@code getInternalType} rejects it
+     * with ORA-17004, failing the table on every cycle.
+     *
+     * @param source        the source product, or null when unknown
+     * @param effectiveType the target type the caller already settled on
+     * @param typeName      the source column's reported type name, or null
+     */
+    public static int bindType(DatabaseType source, int effectiveType, String typeName) {
+        Canonical byName = byTypeName(normalize(typeName));
+        if (byName != null) {
+            return byName.jdbcType();
+        }
+        Canonical byCode = byVendorCode(source, effectiveType);
+        if (byCode != null) {
+            return byCode.jdbcType();
+        }
+        return effectiveType == Types.ROWID ? Types.VARCHAR : effectiveType;
+    }
+
+    /** Product-scoped vendor code; null when the code means nothing special. */
+    private static Canonical byVendorCode(DatabaseType source, int jdbcType) {
         DatabaseType.DialectFamily family =
                 source == null ? null : source.getFamily();
         if (family == DatabaseType.DialectFamily.ORACLE) {
-            switch (column.getJdbcType()) {
+            switch (jdbcType) {
                 case 100:
                     // BINARY_FLOAT is IEEE single precision, i.e. JDBC REAL.
                     return new Canonical(Types.REAL, null);
@@ -57,7 +96,7 @@ public final class VendorTypeMap {
                     break;
             }
         } else if (family == DatabaseType.DialectFamily.SQLSERVER) {
-            switch (column.getJdbcType()) {
+            switch (jdbcType) {
                 case -145:
                     return new Canonical(Types.VARCHAR, 36);
                 case -146:
@@ -78,7 +117,7 @@ public final class VendorTypeMap {
                     break;
             }
         } else if (family == DatabaseType.DialectFamily.DB2) {
-            switch (column.getJdbcType()) {
+            switch (jdbcType) {
                 case -100001:
                     return new Canonical(Types.DECIMAL, null);
                 case 2009:
@@ -89,10 +128,7 @@ public final class VendorTypeMap {
                     break;
             }
         }
-        if (column.getJdbcType() == Types.ROWID) {
-            return new Canonical(Types.VARCHAR, 40);
-        }
-        return new Canonical(column.getJdbcType(), null);
+        return null;
     }
 
     /** Name-driven canonicalization; null when the name is not a recognized vendor type. */
