@@ -94,10 +94,11 @@ class OaLoginControllerTest {
                 .andExpect(redirectedUrlPattern("**/login"));
         String sessionIdBefore = session.getId();
 
+        // The saved target is reduced to a same-origin path (no absolute URL can be replayed).
         mvc.perform(post("/login/oa").session(session).with(csrf())
                         .param("username", "alice").param("password", "pw"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrlPattern("**/projects"));
+                .andExpect(redirectedUrl("/projects"));
 
         // Session fixation protection: the id the browser arrived with is not the id it leaves with.
         assertThat(session.getId()).isNotEqualTo(sessionIdBefore);
@@ -162,6 +163,23 @@ class OaLoginControllerTest {
 
         verify(oaAuthClient, times(5)).authenticate(any(), anyString(), anyString());
         verify(auditService, times(5)).record(eq(AuditAction.LOGIN_FAILED), anyString(), eq("bruteforce"));
+    }
+
+    @Test
+    void theConfiguredAdminListAlsoAppliesToPasswordMode() throws Exception {
+        config.setAdminUsers("root");
+        when(oaAuthClient.authenticate(any(), eq("root"), eq("pw")))
+                .thenReturn(OaAuthResult.success("root", false));
+
+        MockHttpSession session = new MockHttpSession();
+        mvc.perform(post("/login/oa").session(session).with(csrf())
+                        .param("username", "root").param("password", "pw"))
+                .andExpect(redirectedUrl("/"));
+
+        SecurityContext context = (SecurityContext) session.getAttribute(
+                HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
+        SyncUserDetails principal = (SyncUserDetails) context.getAuthentication().getPrincipal();
+        assertThat(principal.isAdmin()).isTrue();
     }
 
     @Test

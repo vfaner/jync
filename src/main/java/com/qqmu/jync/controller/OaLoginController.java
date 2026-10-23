@@ -2,15 +2,7 @@ package com.qqmu.jync.controller;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
 
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
-import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
-import org.springframework.security.web.savedrequest.RequestCache;
-import org.springframework.security.web.savedrequest.SavedRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -19,8 +11,9 @@ import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.OaAuthConfig;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.auth.ExternalIdentity;
+import com.qqmu.jync.service.auth.ExternalSessionSignIn;
 import com.qqmu.jync.service.auth.LoginAttemptService;
-import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.auth.oa.OaAuthClient;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 import com.qqmu.jync.service.auth.oa.OaAuthResult;
@@ -31,11 +24,9 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Signs a user in through the enterprise OA's own login API.
  *
- * <p>This handler builds the authenticated context itself, so two things are load-bearing:
- * the session id is changed before the context is written (a session fixed by an attacker must
- * not end up authenticated), and the context is persisted explicitly with
- * {@link HttpSessionSecurityContextRepository} rather than relying on the filter's save-at-end
- * behaviour.
+ * <p>The session itself is built by {@link ExternalSessionSignIn}, which is shared with the
+ * header and ticket modes; the load-bearing properties (session-id change before the context
+ * is written, explicit persistence) live there.
  *
  * <p>Nothing here writes a local account: an OA user exists only as this session's principal.
  */
@@ -49,17 +40,18 @@ public class OaLoginController {
     private final OaAuthClient oaAuthClient;
     private final LoginAttemptService attemptService;
     private final AdminAuditService auditService;
-
-    private final RequestCache requestCache = new HttpSessionRequestCache();
+    private final ExternalSessionSignIn signIn;
 
     public OaLoginController(OaAuthConfigService configService,
                              OaAuthClient oaAuthClient,
                              LoginAttemptService attemptService,
-                             AdminAuditService auditService) {
+                             AdminAuditService auditService,
+                             ExternalSessionSignIn signIn) {
         this.configService = configService;
         this.oaAuthClient = oaAuthClient;
         this.attemptService = attemptService;
         this.auditService = auditService;
+        this.signIn = signIn;
     }
 
     @PostMapping(LOGIN_PATH)
@@ -87,35 +79,11 @@ public class OaLoginController {
         }
 
         attemptService.recordSuccess(key);
-        auditService.record(AuditAction.LOGIN,
-                "Signed in from " + ClientIpResolver.resolve(request) + " via OA", result.getUsername());
-
-        SyncUserDetails principal = SyncUserDetails.forExternalUser(result.getUsername(),
-                result.isAdmin() ? UserRole.ADMIN : UserRole.VIEWER);
-        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                principal, null, principal.getAuthorities());
-
-        // Session fixation protection. changeSessionId keeps the CSRF token and the saved
-        // request while replacing the id the attacker may have fixed.
-        HttpSession existing = request.getSession(false);
-        if (existing != null) {
-            request.changeSessionId();
-        } else {
-            request.getSession(true);
-        }
-
-        SecurityContext context = SecurityContextHolder.createEmptyContext();
-        context.setAuthentication(authentication);
-        SecurityContextHolder.setContext(context);
-        new HttpSessionSecurityContextRepository().saveContext(context, request, response);
-
+        // The configured admin list applies here too; the OA response marker is the other way in.
+        UserRole role = ExternalIdentity.role(config, result.getUsername(), result.isAdmin());
+        signIn.signIn(request, response, result.getUsername(), role, "OA");
         // Return to whatever the user originally asked for, exactly like the local form's success
         // handler does; the saved request is single-use.
-        SavedRequest saved = requestCache.getRequest(request, response);
-        if (saved != null && saved.getRedirectUrl() != null) {
-            requestCache.removeRequest(request, response);
-            return "redirect:" + saved.getRedirectUrl();
-        }
-        return "redirect:/";
+        return "redirect:" + signIn.savedTarget(request, response);
     }
 }
