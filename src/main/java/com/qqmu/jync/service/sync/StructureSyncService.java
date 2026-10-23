@@ -271,6 +271,11 @@ public class StructureSyncService {
                 return ApplyOutcome.skipped("DROP not permitted by project settings");
             }
             executor.execute(dialect.getDropTableSql(ctx.getTargetSchema(), targetTable), true);
+            // The table is gone, so an index queued for it can never be created: retrying it
+            // every cycle would fail forever, and while the entry sits in the queue the engine
+            // refuses to retire the table's snapshot — the DROP would be re-detected, re-run
+            // and re-logged every cycle without ever converging.
+            pendingIndexes.remove(pendingKey(ctx.projectId(), table.getName()));
             return ApplyOutcome.ok("Dropped table " + targetTable);
         }
 

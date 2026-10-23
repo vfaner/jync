@@ -86,6 +86,28 @@ class StructureSyncServiceIndexRetryTest {
     }
 
     @Test
+    void droppingTheTableClearsItsPendingIndexQueue() throws SQLException {
+        // 前置:索引创建失败,进入重试队列。
+        TableMeta table = tableWithIndex("IDX_DROP");
+        ChangeEvent create = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,
+                "T", "table create", table);
+        structure.apply(flakyTarget, create, ctx);
+        assertThat(structure.hasPendingIndexes(7L, "T")).isTrue();
+
+        // 源端把表删了:目标表 DROP 之后,这张表上不可能再有索引可建。
+        ctx.getConfig().setAllowDrop(true);
+        ChangeEvent drop = ChangeEvent.of(ObjectType.TABLE, ChangeType.DROP,
+                "T", "Table no longer exists in source", table);
+        StructureSyncService.ApplyOutcome outcome = structure.apply(flakyTarget, drop, ctx);
+
+        assertThat(outcome.applied).isTrue();
+        // 队列必须随表一起清掉。留着的话每一轮都会重试一个永远失败的 CREATE INDEX,
+        // 而且引擎按 hasPendingIndexes 扣住这张表的快照 —— DROP 事件每轮被重新检测、
+        // 重新执行、重新记日志,永远收敛不了。
+        assertThat(structure.hasPendingIndexes(7L, "T")).isFalse();
+    }
+
+    @Test
     void evictProjectDropsTheRetryQueue() throws SQLException {
         TableMeta table = tableWithIndex("IDX_OTHER");
         ChangeEvent create = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,
