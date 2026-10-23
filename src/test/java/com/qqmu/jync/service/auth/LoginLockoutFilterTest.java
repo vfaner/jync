@@ -1,12 +1,17 @@
 package com.qqmu.jync.service.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+
+import com.qqmu.jync.model.OaAuthConfig;
+import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 
 /**
  * P1: a locked pair must be stopped before the authentication provider runs; everything else
@@ -15,12 +20,15 @@ import org.springframework.mock.web.MockHttpServletResponse;
 class LoginLockoutFilterTest {
 
     private LoginAttemptService attemptService;
+    private OaAuthConfigService configService;
     private LoginLockoutFilter filter;
 
     @BeforeEach
     void setUp() {
         attemptService = new LoginAttemptService();
-        filter = new LoginLockoutFilter(attemptService);
+        configService = mock(OaAuthConfigService.class);
+        when(configService.load()).thenReturn(new OaAuthConfig());
+        filter = new LoginLockoutFilter(attemptService, configService);
     }
 
     @Test
@@ -80,6 +88,22 @@ class LoginLockoutFilterTest {
 
         assertThat(response.getRedirectedUrl()).isNull();
         assertThat(chain.getRequest()).isSameAs(request);
+    }
+
+    @Test
+    void aDisabledLocalLoginStopsThePostBeforeTheProvider() throws Exception {
+        OaAuthConfig config = new OaAuthConfig();
+        config.setLocalLoginEnabled(Boolean.FALSE);
+        when(configService.load()).thenReturn(config);
+        MockHttpServletRequest request = loginPost("admin");
+        request.setRemoteAddr("10.0.0.9");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getRedirectedUrl()).isEqualTo("/login?localDisabled");
+        assertThat(chain.getRequest()).isNull();
     }
 
     private void lock(String username, String ip) {

@@ -20,6 +20,7 @@ import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.authentication.SavedRequestAwareAuthenticationSuccessHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.authentication.logout.LogoutSuccessHandler;
 import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 
 import com.qqmu.jync.model.AuditAction;
@@ -109,8 +110,9 @@ public class SecurityConfig {
      * default auto-config chain is used — so the filter need not exist there at all.
      */
     @Bean
-    public LoginLockoutFilter loginLockoutFilter(LoginAttemptService attemptService) {
-        return new LoginLockoutFilter(attemptService);
+    public LoginLockoutFilter loginLockoutFilter(LoginAttemptService attemptService,
+                                                 OaAuthConfigService configService) {
+        return new LoginLockoutFilter(attemptService, configService);
     }
 
     /**
@@ -166,7 +168,8 @@ public class SecurityConfig {
                                            LoginLockoutFilter loginLockoutFilter,
                                            SsoHeaderAuthenticationFilter ssoHeaderAuthenticationFilter,
                                            ForcePasswordChangeFilter forcePasswordChangeFilter,
-                                           AdminAuditService auditService) throws Exception {
+                                           AdminAuditService auditService,
+                                           OaAuthConfigService configService) throws Exception {
         http
                 .addFilterBefore(loginLockoutFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(ssoHeaderAuthenticationFilter,
@@ -207,7 +210,7 @@ public class SecurityConfig {
 
                 .logout(out -> out
                         .logoutUrl("/logout")
-                        .logoutSuccessUrl("/login?logout")
+                        .logoutSuccessHandler(logoutSuccessHandler(configService))
                         .invalidateHttpSession(true)
                         .clearAuthentication(true))
 
@@ -276,8 +279,31 @@ public class SecurityConfig {
                     exception.getClass().getSimpleName() + " from "
                             + ClientIpResolver.resolve(request),
                     request.getParameter("username"));
-            String target = attemptService.isBlocked(key) ? "/login?locked" : "/login?error";
+            // The local form's own page, not /login: under external authentication /login may
+            // redirect to the portal, which would swallow the error message entirely.
+            String target = attemptService.isBlocked(key)
+                    ? "/login/local?locked" : "/login/local?error";
             response.sendRedirect(request.getContextPath() + target);
+        };
+    }
+
+    /**
+     * Sign-out target: the administrator may send the browser on to the portal's own logout page.
+     * Anything that is neither a path in this application nor http(s) falls back to /login?logout.
+     */
+    private LogoutSuccessHandler logoutSuccessHandler(OaAuthConfigService configService) {
+        return (request, response, authentication) -> {
+            String target = "/login?logout";
+            String configured = configService.load().getLogoutRedirectUrl();
+            if (configured != null && !configured.isBlank()) {
+                String value = configured.trim();
+                if (value.startsWith("/") && !value.startsWith("//")) {
+                    target = request.getContextPath() + value;
+                } else if (value.startsWith("http://") || value.startsWith("https://")) {
+                    target = value;
+                }
+            }
+            response.sendRedirect(target);
         };
     }
 

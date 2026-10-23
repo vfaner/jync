@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<!--/*
+  统一认证模式的登录页：不再提供账号密码，只告诉用户从哪里进入。
+  与 login.html 一样不套 layout，并保留升级重启探针需要的内联字典。
+*/-->
+<html xmlns:th="http://www.thymeleaf.org"
+      th:lang="${#locale.toString().startsWith('zh')} ? 'zh-CN' : 'en'"
+      data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title th:text="|#{login.external.title} · #{app.title}|">External sign-in · Jync</title>
+
+    <script th:replace="~{fragments/theme-bootstrap :: script}"></script>
+
+    <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body class="login-body">
+
+<th:block th:replace="~{fragments/icons :: sprite}"></th:block>
+
+<div class="login-glow login-glow-a" aria-hidden="true"></div>
+<div class="login-glow login-glow-b" aria-hidden="true"></div>
+
+<div class="login-tools">
+    <a class="icon-btn lang-btn"
+       th:href="${#locale.toString().startsWith('zh')} ? @{/login(lang='en')} : @{/login(lang='zh_CN')}"
+       th:title="#{nav.language}"
+       th:text="${#locale.toString().startsWith('zh')} ? '中' : 'EN'">EN</a>
+    <button type="button" class="icon-btn" data-theme-btn
+            th:attr="data-to-dark=#{nav.theme.dark},data-to-light=#{nav.theme.light}">
+        <svg class="ico"><use href="#moon-stars-fill"/></svg>
+    </button>
+</div>
+
+<main class="login-wrap">
+    <div class="login-brand">
+        <span class="login-mark"><svg class="ico"><use href="#arrow-left-right"/></svg></span>
+        <h1 th:text="#{app.title}">Jync</h1>
+        <p th:text="#{login.tagline}">Sign in to continue · works offline</p>
+    </div>
+
+    <div class="login-card">
+        <div class="alert alert-danger" th:if="${param.ticketMissing}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.ticketMissing}">
+                The portal did not return a ticket. Start again from the portal.
+            </div>
+        </div>
+        <div class="alert alert-danger" th:if="${param.ticketError}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.ticketError}">
+                The ticket was rejected or has expired. Start again from the portal.
+            </div>
+        </div>
+        <div class="alert alert-danger" th:if="${param.localDisabled}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.localDisabled}">
+                Local sign-in is turned off by the administrator. Use your organization's portal.
+            </div>
+        </div>
+
+        <div class="login-external">
+            <h2 th:text="#{login.external.title}">External sign-in</h2>
+            <p th:text="#{login.external.hint}">
+                Enter through your organization's portal; this system recognizes you automatically.
+            </p>
+            <a class="btn btn-primary btn-lg login-submit" href="/login/local"
+               th:if="${localEnabled}" th:href="@{/login/local}">
+                <svg class="ico"><use href="#shield-check"/></svg>
+                <span th:text="#{login.external.localLink}">Sign in with a local administrator account</span>
+            </a>
+        </div>
+    </div>
+
+    <p class="login-foot" th:text="#{login.foot}">Local tool. Nothing leaves this machine unless you point it somewhere.</p>
+</main>
+
+<script th:src="@{/js/theme.js}"></script>
+<script th:inline="javascript">
+    window.JyncMessages = {
+        'msg.upgrade.success': /*[[#{msg.upgrade.success}]]*/ ''
+    };
+</script>
+<script th:src="@{/js/app.js}"></script>
+</body>
+</html>

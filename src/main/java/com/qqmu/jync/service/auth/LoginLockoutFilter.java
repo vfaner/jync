@@ -9,6 +9,7 @@ import javax.servlet.http.HttpServletResponse;
 
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 import com.qqmu.jync.util.ClientIpResolver;
 
 /**
@@ -18,6 +19,10 @@ import com.qqmu.jync.util.ClientIpResolver;
  * <p>Checking here (rather than inside a failure handler) is what makes the lockout mean
  * something: a failure handler only runs after the password has been verified, so without
  * this filter the attacker would keep testing passwords through the "locked" period.
+ *
+ * <p>It also stops the local form when the administrator has turned local sign-in off. That
+ * check has to sit here rather than in the controller: {@code POST /login} is intercepted by
+ * Spring Security's filter before any handler runs.
  */
 public class LoginLockoutFilter extends OncePerRequestFilter {
 
@@ -26,17 +31,25 @@ public class LoginLockoutFilter extends OncePerRequestFilter {
     private static final String OA_LOGIN_PATH = "/login/oa";
 
     private final LoginAttemptService attemptService;
+    private final OaAuthConfigService configService;
 
-    public LoginLockoutFilter(LoginAttemptService attemptService) {
+    public LoginLockoutFilter(LoginAttemptService attemptService,
+                              OaAuthConfigService configService) {
         this.attemptService = attemptService;
+        this.configService = configService;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        String path = request.getServletPath();
+        String path = pathWithinApplication(request);
+        boolean local = LOGIN_PATH.equals(path);
         boolean oa = OA_LOGIN_PATH.equals(path);
-        if ("POST".equalsIgnoreCase(request.getMethod()) && (oa || LOGIN_PATH.equals(path))) {
+        if ("POST".equalsIgnoreCase(request.getMethod()) && (local || oa)) {
+            if (local && !configService.load().isLocalLoginAllowed()) {
+                response.sendRedirect(request.getContextPath() + "/login?localDisabled");
+                return;
+            }
             String username = request.getParameter("username");
             String ip = ClientIpResolver.resolve(request);
             if (username != null && attemptService.isBlocked(
@@ -47,5 +60,19 @@ public class LoginLockoutFilter extends OncePerRequestFilter {
             }
         }
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * The path below the context path, taken from the request URI rather than
+     * {@code getServletPath()}: the mock request used by the view tests leaves the servlet path
+     * empty, so a check keyed on it would silently never run there.
+     */
+    private static String pathWithinApplication(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        String context = request.getContextPath();
+        if (context != null && !context.isEmpty() && uri.startsWith(context)) {
+            return uri.substring(context.length());
+        }
+        return uri;
     }
 }

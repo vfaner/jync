@@ -86,7 +86,15 @@
             </div>
         </div>
 
+        <div class="alert alert-danger" th:if="${param.localDisabled != null or localDisabled}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.localDisabled}">
+                Local sign-in is turned off by the administrator. Use your organization's portal.
+            </div>
+        </div>
+
         <!--/* th:action 让 Thymeleaf 自动注入 CSRF 隐藏域 */-->
+        <th:block th:if="${showLocal}">
         <form method="post" th:action="@{/login}" class="login-form">
             <div class="field">
                 <label for="username" th:text="#{login.username}">Username</label>
@@ -114,11 +122,12 @@
                 <span th:text="#{login.submit}">Sign in</span>
             </button>
         </form>
+        </th:block>
 
         <!--/* 企业 OA 登录：凭据直接交给管理员配置的 OA 接口，Jync 只建会话、不落账号。
                未启用的部署连这一块 DOM 都不会收到。 */-->
-        <th:block th:if="${oaEnabled}">
-            <div class="login-divider"><span th:text="#{login.oa.or}">or</span></div>
+        <th:block th:if="${showOa}">
+            <div class="login-divider" th:if="${showLocal}"><span th:text="#{login.oa.or}">or</span></div>
             <form method="post" th:action="@{/login/oa}" class="login-form">
                 <div class="field">
                     <label for="oa-username" th:text="#{login.username}">Username</label>
