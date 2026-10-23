@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.Locale;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -142,7 +143,7 @@ public class DdlExecutor {
      */
     private boolean isBenign(SQLException e, boolean create) {
         String message = e.getMessage();
-        String lower = message == null ? "" : message.toLowerCase();
+        String lower = message == null ? "" : message.toLowerCase(Locale.ROOT);
         String[] markers = create ? BENIGN_CREATE_MARKERS : BENIGN_DROP_MARKERS;
         for (String marker : markers) {
             if (lower.contains(marker)) {

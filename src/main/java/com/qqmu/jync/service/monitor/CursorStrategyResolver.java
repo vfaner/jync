@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.monitor;
 
+import java.util.Locale;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
@@ -133,7 +134,7 @@ public class CursorStrategyResolver {
         // order in the table.
         for (String hint : hints) {
             for (ColumnMeta c : table.getColumns()) {
-                String upper = c.getName().toUpperCase().replace("-", "_");
+                String upper = c.getName().toUpperCase(Locale.ROOT).replace("-", "_");
                 if (!upper.contains(hint)) {
                     continue;
                 }

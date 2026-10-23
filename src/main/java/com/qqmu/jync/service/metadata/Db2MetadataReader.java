@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Locale;
 
 import org.springframework.stereotype.Component;
 
@@ -31,7 +32,7 @@ public class Db2MetadataReader extends GenericMetadataReader {
     @Override
     protected String schemaPattern(String schema) {
         // DB2 folds unquoted identifiers to upper case.
-        return schema == null || schema.isBlank() ? null : schema.toUpperCase();
+        return schema == null || schema.isBlank() ? null : schema.toUpperCase(Locale.ROOT);
     }
 
     @Override
@@ -63,7 +64,7 @@ public class Db2MetadataReader extends GenericMetadataReader {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
-            ps.setString(2, viewName.toUpperCase());
+            ps.setString(2, viewName.toUpperCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     view.setDefinition(rs.getString(1));
@@ -83,7 +84,7 @@ public class Db2MetadataReader extends GenericMetadataReader {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
-            ps.setString(2, procedureName.toUpperCase());
+            ps.setString(2, procedureName.toUpperCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     proc.setDefinition(rs.getString("TEXT"));
@@ -105,7 +106,7 @@ public class Db2MetadataReader extends GenericMetadataReader {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             MetadataTimeouts.apply(ps);
             ps.setString(1, schemaPattern(schema));
-            ps.setString(2, tableName.toUpperCase());
+            ps.setString(2, tableName.toUpperCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     long rows = rs.getLong(1);

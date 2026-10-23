@@ -126,4 +126,22 @@ class DdlExecutorBenignErrorTest {
         assertThat(exec.executeIdempotentCreate("ALTER TABLE t ADD COLUMN gender VARCHAR(8)"))
                 .isFalse();
     }
+
+    @Test
+    void textMarkersStillMatchUnderATurkishDefaultLocale() throws Exception {
+        // 这条用例只走文本兜底（SQLState HY000、无厂商错误码）。默认 locale 的小写把
+        // "DUPLICATE" 折叠成 "duplıcate"，与标记常量比对失败：一个本来幂等的 CREATE
+        // 会变成每轮都报错的失败。
+        DdlExecutor exec = executorThrowing("ALTER TABLE t ADD COLUMN gender VARCHAR(8)",
+                "DUPLICATE column name 'gender'", "HY000", 0);
+
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+        try {
+            assertThat(exec.executeIdempotentCreate(
+                    "ALTER TABLE t ADD COLUMN gender VARCHAR(8)")).isFalse();
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
 }

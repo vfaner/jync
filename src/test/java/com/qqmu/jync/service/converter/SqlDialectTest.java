@@ -395,6 +395,26 @@ class SqlDialectTest {
     }
 
     @Test
+    void currentTimestampDefaultsSurviveATurkishDefaultLocale() {
+        // 默认 locale 的大写会把 'i' 映射为 'İ'：CURRENT_TIMESTAMP 变成 CURRENT_TİMESTAMP，
+        // 与字面量比对失败，列的当前时间默认值会被静默丢弃（只留一条 debug 日志）。
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+        try {
+            ColumnMeta ts = column("created", "TIMESTAMP", Types.TIMESTAMP, 26);
+            ts.setDefaultValue("current_timestamp");
+            assertThat(oracle.renderDefaultValue(ts)).isEqualTo("SYSTIMESTAMP");
+            assertThat(sqlServer.renderDefaultValue(ts)).isEqualTo("GETDATE()");
+
+            ColumnMeta sys = column("created", "TIMESTAMP", Types.TIMESTAMP, 26);
+            sys.setDefaultValue("systimestamp");
+            assertThat(postgres.renderDefaultValue(sys)).isEqualTo("CURRENT_TIMESTAMP");
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
+    @Test
     void mysqlCurrentTimestampDefaultCarriesTheColumnFractionalPrecision() {
         // MySQL rejects DATETIME(6) DEFAULT CURRENT_TIMESTAMP as a precision mismatch
         // (error 1067, "Invalid default value"); the default must repeat the column's (6).

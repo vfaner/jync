@@ -132,6 +132,23 @@ class ConversionAssistServiceTest {
     }
 
     @Test
+    @DisplayName("a lower-case header is still recognised under a Turkish default locale")
+    void aLowerCaseHeaderIsRecognisedUnderATurkishDefaultLocale() {
+        // tr-TR 的默认大写把 "function" 折叠成 "FUNCTİON"，与 KIND_FUNCTION 常量比对
+        // 失败：小写头的合法覆盖会被当成 "header mismatch" 拒绝，用户存的 SQL 直接丢掉。
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+        try {
+            service.saveOverride(1L, "FUNCTION", "CALC_TAX",
+                    "create or replace function calc_tax() returns int return 1");
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+
+        assertThat(savedConfig().getDdlOverrides()).containsOnlyKeys("PROCEDURE:CALC_TAX");
+    }
+
+    @Test
     @DisplayName("a view's override keeps its own key")
     void aViewKeepsItsOwnKey() {
         service.saveOverride(1L, "VIEW", "V_SALES", "CREATE VIEW V_SALES AS SELECT 1");

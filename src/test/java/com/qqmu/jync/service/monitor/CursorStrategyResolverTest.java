@@ -286,4 +286,23 @@ class CursorStrategyResolverTest {
         // TIMESTAMP-kind must not be flagged as missing updates — rowversion bumps on UPDATE.
         assertThat(strategy.isMissesUpdates()).isFalse();
     }
+
+    @Test
+    void aLastModifiedColumnIsStillAutoDetectedUnderATurkishDefaultLocale() {
+        // 默认 locale 的大写把 "update_time" 变成 "UPDATE_TİME"，与提示词常量比对失败：
+        // 明明有 last-modified 列的表会被降级成整表对比或“无游标列”。
+        TableMeta t = table(List.of(
+                col("id", Types.INTEGER),
+                col("update_time", Types.TIMESTAMP)), List.of("id"), 1000L);
+
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+        try {
+            CursorStrategy strategy = resolver.resolve(t, config);
+            assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.TIMESTAMP);
+            assertThat(strategy.getColumn()).isEqualTo("update_time");
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
 }

@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -2461,14 +2462,15 @@ public class DataSyncService {
      * The caller decides by evidence: the retried UPDATE's row count, or a primary-key
      * existence probe for key-only tables. Anything that fails those checks is rethrown.
      */
-    private boolean isUniqueViolation(SQLException e) {
+    boolean isUniqueViolation(SQLException e) {
         String state = e.getSQLState();
         if (state != null && ("23505".equals(state) || "23000".equals(state))) {
             return true;
         }
         String message = e.getMessage();
-        return message != null && (message.toLowerCase().contains("duplicate")
-                || message.toLowerCase().contains("unique constraint"));
+        return message != null
+                && (message.toLowerCase(Locale.ROOT).contains("duplicate")
+                        || message.toLowerCase(Locale.ROOT).contains("unique constraint"));
     }
 
     /**

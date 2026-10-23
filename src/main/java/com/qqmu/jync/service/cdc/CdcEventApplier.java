@@ -6,6 +6,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import com.qqmu.jync.service.converter.GenericSqlDialect;
@@ -271,13 +272,14 @@ public final class CdcEventApplier {
      * The callers decide by evidence: the retried UPDATE's row count, or a primary-key
      * existence probe for key-only tables. Anything that fails those checks is rethrown.
      */
-    private static boolean isUniqueViolation(SQLException e) {
+    static boolean isUniqueViolation(SQLException e) {
         String state = e.getSQLState();
         if (state != null && ("23505".equals(state) || "23000".equals(state))) {
             return true;
         }
         String message = e.getMessage();
-        return message != null && (message.toLowerCase().contains("duplicate")
-                || message.toLowerCase().contains("unique constraint"));
+        return message != null
+                && (message.toLowerCase(Locale.ROOT).contains("duplicate")
+                        || message.toLowerCase(Locale.ROOT).contains("unique constraint"));
     }
 }

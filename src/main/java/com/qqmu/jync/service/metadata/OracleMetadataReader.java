@@ -48,7 +48,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
     @Override
     protected String schemaPattern(String schema) {
         // Oracle stores unquoted identifiers folded to upper case.
-        return schema == null || schema.isBlank() ? null : schema.toUpperCase();
+        return schema == null || schema.isBlank() ? null : schema.toUpperCase(Locale.ROOT);
     }
 
     @Override
@@ -164,7 +164,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
-            ps.setString(2, tableName.toUpperCase());
+            ps.setString(2, tableName.toUpperCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     return "ENABLED".equalsIgnoreCase(rs.getString(1));
@@ -185,7 +185,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
-            ps.setString(2, viewName.toUpperCase());
+            ps.setString(2, viewName.toUpperCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     // TEXT is LONG; the driver surfaces it as a string here.
@@ -208,7 +208,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
         try (PreparedStatement ps = conn.prepareStatement(typeSql)) {
             MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
-            ps.setString(2, procedureName.toUpperCase());
+            ps.setString(2, procedureName.toUpperCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     proc.setRoutineType(rs.getString(1));
@@ -223,7 +223,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
         try (PreparedStatement ps = conn.prepareStatement(srcSql)) {
             MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
-            ps.setString(2, procedureName.toUpperCase());
+            ps.setString(2, procedureName.toUpperCase(Locale.ROOT));
             ps.setString(3, proc.getRoutineType() == null ? "PROCEDURE" : proc.getRoutineType());
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -248,7 +248,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             MetadataTimeouts.apply(ps);
             ps.setString(1, upperOrNull(schema));
-            ps.setString(2, tableName.toUpperCase());
+            ps.setString(2, tableName.toUpperCase(Locale.ROOT));
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     long rows = rs.getLong(1);
@@ -265,7 +265,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
     }
 
     private String upperOrNull(String s) {
-        return s == null || s.isBlank() ? null : s.toUpperCase();
+        return s == null || s.isBlank() ? null : s.toUpperCase(Locale.ROOT);
     }
 
     /**

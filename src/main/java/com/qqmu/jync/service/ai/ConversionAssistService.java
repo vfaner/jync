@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -404,7 +405,7 @@ public class ConversionAssistService {
     /** The CREATE-header object type (VIEW/PROCEDURE/FUNCTION), or null when none is present. */
     private static String createHeaderType(String sql) {
         Matcher matcher = CREATE_HEADER.matcher(sql);
-        return matcher.find() ? matcher.group("type").toUpperCase() : null;
+        return matcher.find() ? matcher.group("type").toUpperCase(Locale.ROOT) : null;
     }
 
     /** Removes an override, restoring automatic conversion for that object. */

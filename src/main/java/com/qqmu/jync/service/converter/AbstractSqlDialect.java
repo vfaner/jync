@@ -3,6 +3,7 @@ package com.qqmu.jync.service.converter;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -313,7 +314,7 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                 || c.getTypeName() == null) {
             return false;
         }
-        String name = c.getTypeName().trim().toUpperCase();
+        String name = c.getTypeName().trim().toUpperCase(Locale.ROOT);
         return name.startsWith("BIGINT") && name.contains("UNSIGNED");
     }
 
@@ -628,7 +629,7 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         if (column.isAutoIncrement()) {
             return null;
         }
-        String upper = trimmed.toUpperCase();
+        String upper = trimmed.toUpperCase(Locale.ROOT);
         if (upper.equals("NULL")) {
             return "NULL";
         }

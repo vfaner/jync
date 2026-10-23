@@ -454,7 +454,7 @@ public class OracleDialect extends AbstractSqlDialect {
         }
         String trimmed = stripTrailingSlash(body.trim());
         List<String> stmts = new ArrayList<>();
-        String upper = trimmed.toUpperCase();
+        String upper = trimmed.toUpperCase(Locale.ROOT);
         if (upper.startsWith("CREATE OR REPLACE")) {
             stmts.add(trimmed);
         } else if (upper.startsWith("CREATE")) {

@@ -83,6 +83,28 @@ class MySqlUnsignedBigintTypeMappingTest {
     }
 
     @Test
+    void unsignedBigintIsStillRecognisedUnderATurkishDefaultLocale() {
+        // 驱动把类型名报成小写时，tr-TR 的默认大写会把 "bigint" 折叠成 "bİgİnt"，
+        // 字符串比对失败，无符号列被当成有符号 BIGINT，2^63-1 以上的值写不进去。
+        ColumnMeta lower = new ColumnMeta();
+        lower.setName("id");
+        lower.setJdbcType(Types.BIGINT);
+        lower.setTypeName("bigint unsigned");
+        lower.setSize(20);
+
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+        try {
+            assertThat(new PostgresDialect().mapType(lower, DatabaseType.MYSQL))
+                    .isEqualTo("DECIMAL(20,0)");
+            assertThat(new MySqlDialect().mapType(lower, DatabaseType.MYSQL))
+                    .isEqualTo("BIGINT UNSIGNED");
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
+    @Test
     void bigintFromNonMysqlSourcesIsNeverTreatedAsUnsigned() {
         // A hypothetical source whose type name merely mentions UNSIGNED but is not MySQL
         // family must follow the ordinary BIGINT mapping.
