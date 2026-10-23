@@ -231,13 +231,6 @@ public final class PgTestDecodingParser {
                 return SlotLine.row(ParsedChange.decodeFailure(
                         "malformed UPDATE old/new image: " + payload));
             }
-            if (oldImage.containsValue(UNCHANGED_TOAST_MARKER)) {
-                // The old image cannot be reproduced, so whether the key moved is unknowable
-                // — guessing would either orphan the old row or delete the wrong one.
-                return SlotLine.row(ParsedChange.decodeFailure("unchanged-toast-datum in the UPDATE"
-                        + " old image for " + qualified + " — the key change cannot be"
-                        + " determined"));
-            }
         } else if (payload.startsWith(OLD_KEY_MARKER)) {
             // Old image without a new image: the segment we would parse as the new one
             // carries stale values.
@@ -248,6 +241,11 @@ public final class PgTestDecodingParser {
         if (row == null) {
             return SlotLine.row(ParsedChange.decodeFailure("malformed column payload: " + payload));
         }
+        // The old image needs no branch of its own: test_decoding prints the marker for a
+        // column it did not modify, so a marker in the old image means the same column is a
+        // marker in the new one too — this check catches both. Classifying it as a decode
+        // defect instead would let a perfectly healthy project with REPLICA IDENTITY FULL
+        // strike out and park over a value the stream simply does not carry.
         if (row.containsValue(UNCHANGED_TOAST_MARKER)) {
             if (op == Op.DELETE) {
                 // Under REPLICA IDENTITY FULL a DELETE carries the whole old row, but the

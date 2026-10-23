@@ -452,7 +452,13 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                                 tableKey, reason);
                                     }
                                     stats.addSkippedUnsupported(1);
-                                    parseFailures.incrementAndGet();
+                                    // Deliberately NOT a parse failure: nothing failed to
+                                    // decode. Counting it here parked healthy projects — the
+                                    // tally only clears on a successful flush, so six such
+                                    // rows (one hot table's worth) ended the run with
+                                    // PARSE_STRIKE_OUT and stopped every table in the project.
+                                    // A structural, understood skip belongs on the panel as a
+                                    // per-table tally, not on the strike-out path.
                                     continue;
                                 }
                                 stats.addSkippedUnsupported(1);

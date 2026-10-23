@@ -268,6 +268,22 @@ class PgTestDecodingParserTest {
     }
 
     @Test
+    void unchangedToastDatumInTheOldImageIsAValueWeCannotReproduce() {
+        // REPLICA IDENTITY FULL 下旧镜像带整行,未修改的 TOASTed 列同样只输出占位符。
+        // 旧实现见到旧镜像里的占位符就整行判 DECODE_FAILURE —— 消费端把它当"解析缺陷"
+        // 累计,连续 6 行就把一个完全健康的项目 PARSE_STRIKE_OUT 永久 park;而这与
+        // 新镜像的占位符是同一件已知事实(test_decoding 不会把值放进流里),应归
+        // VALUE_UNAVAILABLE 并按表计数、限流告警。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: UPDATE: old-key: id[bigint]:1"
+                        + " body[text]:unchanged-toast-datum"
+                        + " new-tuple: id[bigint]:1 body[text]:unchanged-toast-datum");
+
+        assertThat(line.change.skip).isEqualTo(PgTestDecodingParser.Skip.VALUE_UNAVAILABLE);
+        assertThat(line.change.qualifiedTable).isEqualTo("public.t");
+    }
+
+    @Test
     void unchangedToastDatumOnInsertSkipsTheRowToo() {
         // INSERT ... SELECT 可以复用另一个元组的磁盘 TOAST 值,同样只输出占位符。
         PgTestDecodingParser.SlotLine line = parser.parse(

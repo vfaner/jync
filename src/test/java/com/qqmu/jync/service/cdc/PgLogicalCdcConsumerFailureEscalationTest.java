@@ -344,6 +344,63 @@ class PgLogicalCdcConsumerFailureEscalationTest {
         verify(taskStore, never()).recordCdcFailure(any(), anyString());
     }
 
+    /**
+     * BEGIN + {@code updates} 条带 TOAST 占位符的 UPDATE + COMMIT:整段没有一个可应用的行,
+     * 因此不会有 flush 来清零计数器 —— 正是会暴露错误累计的形状。
+     */
+    private ResultSet toastOnlyResultSet(int updates) throws SQLException {
+        List<Boolean> next = new ArrayList<>();
+        List<String> lsns = new ArrayList<>();
+        List<String> lines = new ArrayList<>();
+        next.add(true);
+        lsns.add("0/3000");
+        lines.add("BEGIN 777");
+        for (int i = 0; i < updates; i++) {
+            next.add(true);
+            lsns.add("0/30" + (10 + i));
+            lines.add("table public.orders: UPDATE: id[bigint]:" + (i + 1)
+                    + " name[text]:unchanged-toast-datum");
+        }
+        next.add(true);
+        lsns.add("0/3999");
+        lines.add("COMMIT 777");
+        next.add(false);
+
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.next()).thenReturn(next.get(0),
+                next.subList(1, next.size()).toArray(new Boolean[0]));
+        when(rs.getString(1)).thenReturn(lsns.get(0),
+                lsns.subList(1, lsns.size()).toArray(new String[0]));
+        when(rs.getString(2)).thenReturn(lines.get(0),
+                lines.subList(1, lines.size()).toArray(new String[0]));
+        return rs;
+    }
+
+    @Test
+    void changesWhoseValueIsNotInTheStreamDoNotParkTheProject() throws Exception {
+        // REPLICA IDENTITY FULL 下未修改的 TOASTed 列在 test_decoding 里只剩一个
+        // 占位符:值确实不在流里,行只能跳过 —— 设计上按表计数 + 限流告警(与
+        // LogMiner 的行外 LOB 同口径),它不是解析缺陷。
+        //
+        // 旧实现仍把它计进 parseFailures,而计数器只在成功 flush 时清零:一张热表
+        // 的 6 条连续更新,或一次没有其它可落行的事务,就足以把一个完全健康的项目
+        // park 成 PARSE_STRIKE_OUT,之后整个项目不再同步 —— 与日志消息行那次事故
+        // 同一条失效路径。
+        PreparedStatement ps = mock(PreparedStatement.class);
+        when(ps.executeQuery()).thenAnswer(inv -> toastOnlyResultSet(6));
+        when(source.prepareStatement(anyString())).thenReturn(ps);
+
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        PgLogicalCdcConsumer consumer = newConsumer(
+                stagedTargetContext(true), boundedLock(3), stats);
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(any(), anyString());
+        // 跳过不是静默的:面板仍按表计数,运维能看到哪张表在丢值。
+        assertThat(stats.missingLobByTable()).containsKey("public.orders");
+    }
+
     // —— 状态面板真实性:轮询式消费者的 connected 必须粘性、吞吐窗口只标一次 ——
 
     @Test
