@@ -67,6 +67,24 @@
                 Password changed. Sign in again.
             </div>
         </div>
+        <div class="alert alert-danger" th:if="${param.oaError}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.oaFailed}">
+                The OA rejected the username or password.
+            </div>
+        </div>
+        <div class="alert alert-danger" th:if="${param.oaLocked}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.oaLocked}">
+                Too many failed attempts. Try again later.
+            </div>
+        </div>
+        <div class="alert alert-danger" th:if="${param.oaDisabled}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.oaDisabled}">
+                OA sign-in is not enabled.
+            </div>
+        </div>
 
         <!--/* th:action 让 Thymeleaf 自动注入 CSRF 隐藏域 */-->
         <form method="post" th:action="@{/login}" class="login-form">
@@ -96,6 +114,42 @@
                 <span th:text="#{login.submit}">Sign in</span>
             </button>
         </form>
+
+        <!--/* 企业 OA 登录：凭据直接交给管理员配置的 OA 接口，Jync 只建会话、不落账号。
+               未启用的部署连这一块 DOM 都不会收到。 */-->
+        <th:block th:if="${oaEnabled}">
+            <div class="login-divider"><span th:text="#{login.oa.or}">or</span></div>
+            <form method="post" th:action="@{/login/oa}" class="login-form">
+                <div class="field">
+                    <label for="oa-username" th:text="#{login.username}">Username</label>
+                    <input type="text" class="input" id="oa-username" name="username"
+                           autocomplete="username" required maxlength="64"
+                           th:placeholder="#{login.usernamePlaceholder}">
+                </div>
+
+                <div class="field">
+                    <label for="oa-password" th:text="#{login.password}">Password</label>
+                    <div class="login-pw">
+                        <input type="password" class="input" id="oa-password" name="password"
+                               autocomplete="current-password" required maxlength="128">
+                        <button type="button" class="icon-btn login-pw-toggle"
+                                data-role="toggle-password" data-target="oa-password"
+                                th:title="#{login.showPassword}"
+                                th:aria-label="#{login.showPassword}">
+                            <svg class="ico"><use href="#eye"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-ghost btn-lg login-submit">
+                    <svg class="ico"><use href="#arrow-left-right"/></svg>
+                    <span th:text="#{login.oa.submit}">Sign in with OA account</span>
+                </button>
+                <p class="login-oa-hint" th:text="#{login.oa.hint}">
+                    You will be signed in through your organization's OA.
+                </p>
+            </form>
+        </th:block>
     </div>
 
     <p class="login-foot" th:text="#{login.foot}">Zero external dependencies · MIT</p>

@@ -61,6 +61,9 @@ public class SecurityConfig {
             "/databases/new", "/databases/*/edit",
             "/projects/new", "/projects/*/edit",
             "/ai/new", "/ai/*/edit",
+            // The OA sign-in page holds the endpoint credentials are sent to; a viewer has no
+            // use for it, and its Save button is admin-only anyway.
+            "/oa/settings",
             "/api/databases/discover-drivers",
             // The audit trail is about what admins did; a viewer has no use for it, and
             // showing one would advertise that their own actions are never in it.
@@ -149,6 +152,11 @@ public class SecurityConfig {
 
                 .authorizeHttpRequests(reg -> reg
                         .antMatchers(PUBLIC).permitAll()
+
+                        // The OA sign-in form posts before anyone is signed in. It must sit
+                        // above the blanket POST rule below, which would otherwise demand an
+                        // admin role from the very person trying to log in.
+                        .antMatchers(HttpMethod.POST, "/login/oa").permitAll()
 
                         // Both roles must be able to POST here. This has to precede the blanket
                         // POST rule below, or a viewer would be shown a password form they are

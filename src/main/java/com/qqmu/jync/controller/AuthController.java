@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import com.qqmu.jync.service.auth.AppUserService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -28,9 +29,11 @@ import lombok.extern.slf4j.Slf4j;
 public class AuthController {
 
     private final AppUserService userService;
+    private final OaAuthConfigService oaConfigService;
 
-    public AuthController(AppUserService userService) {
+    public AuthController(AppUserService userService, OaAuthConfigService oaConfigService) {
         this.userService = userService;
+        this.oaConfigService = oaConfigService;
     }
 
     /**
@@ -45,13 +48,19 @@ public class AuthController {
      * Touching the token here forces the session while nothing has been written yet.
      */
     @GetMapping("/login")
-    public String login(CsrfToken csrfToken) {
+    public String login(CsrfToken csrfToken, Model model) {
         csrfToken.getToken();
+        // Read on the login page only: putting this in GlobalModelAdvice would hit the
+        // settings row on every single page render.
+        model.addAttribute("oaEnabled", oaConfigService.isEnabled());
         return "login";
     }
 
     @GetMapping("/account/password")
-    public String passwordForm(Model model) {
+    public String passwordForm(@AuthenticationPrincipal SyncUserDetails principal) {
+        if (isExternal(principal)) {
+            return "redirect:/?denied";
+        }
         return "account-password";
     }
 
@@ -70,6 +79,9 @@ public class AuthController {
                                  @RequestParam String confirmPassword,
                                  HttpServletRequest request,
                                  Model model) {
+        if (isExternal(principal)) {
+            return "redirect:/?denied";
+        }
         try {
             userService.changeOwnPassword(principal.getUsername(), currentPassword, newPassword,
                     confirmPassword);
@@ -87,5 +99,10 @@ public class AuthController {
         }
         SecurityContextHolder.clearContext();
         return "redirect:/login?changed";
+    }
+
+    /** OA principals have no local password; both handlers refuse them before touching the DB. */
+    private static boolean isExternal(SyncUserDetails principal) {
+        return principal != null && principal.isExternal();
     }
 }

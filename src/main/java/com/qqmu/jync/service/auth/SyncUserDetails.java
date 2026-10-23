@@ -31,12 +31,35 @@ public class SyncUserDetails implements UserDetails {
     private final UserRole role;
     private final boolean usingDefaultPassword;
 
+    /**
+     * True for a principal that came from the OA sign-in endpoint. External principals exist only
+     * for the life of their session: they have no row in {@code app_user}, so they can neither
+     * be edited nor change a password.
+     */
+    private final boolean external;
+
     public SyncUserDetails(AppUser user, boolean usingDefaultPassword) {
         this.id = user.getId();
         this.username = user.getUsername();
         this.password = user.getPasswordHash();
         this.role = user.getRole();
         this.usingDefaultPassword = usingDefaultPassword;
+        this.external = false;
+    }
+
+    private SyncUserDetails(Long id, String username, String password, UserRole role,
+                            boolean usingDefaultPassword, boolean external) {
+        this.id = id;
+        this.username = username;
+        this.password = password;
+        this.role = role;
+        this.usingDefaultPassword = usingDefaultPassword;
+        this.external = external;
+    }
+
+    /** An OA-authenticated user for this session only. */
+    public static SyncUserDetails forExternalUser(String username, UserRole role) {
+        return new SyncUserDetails(null, username, "", role, false, true);
     }
 
     public boolean isAdmin() {

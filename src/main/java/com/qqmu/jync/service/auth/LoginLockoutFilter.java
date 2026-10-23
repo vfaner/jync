@@ -21,6 +21,10 @@ import com.qqmu.jync.util.ClientIpResolver;
  */
 public class LoginLockoutFilter extends OncePerRequestFilter {
 
+    /** The local form and the OA form share one counter, keyed by username + client IP. */
+    private static final String LOGIN_PATH = "/login";
+    private static final String OA_LOGIN_PATH = "/login/oa";
+
     private final LoginAttemptService attemptService;
 
     public LoginLockoutFilter(LoginAttemptService attemptService) {
@@ -30,13 +34,15 @@ public class LoginLockoutFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        if ("POST".equalsIgnoreCase(request.getMethod())
-                && "/login".equals(request.getServletPath())) {
+        String path = request.getServletPath();
+        boolean oa = OA_LOGIN_PATH.equals(path);
+        if ("POST".equalsIgnoreCase(request.getMethod()) && (oa || LOGIN_PATH.equals(path))) {
             String username = request.getParameter("username");
             String ip = ClientIpResolver.resolve(request);
             if (username != null && attemptService.isBlocked(
                     LoginAttemptService.key(username, ip))) {
-                response.sendRedirect(request.getContextPath() + "/login?locked");
+                response.sendRedirect(request.getContextPath()
+                        + (oa ? "/login?oaLocked" : "/login?locked"));
                 return;
             }
         }
