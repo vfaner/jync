@@ -103,6 +103,16 @@ public final class ClientIpResolver {
         trustedProxies = List.copyOf(rules);
     }
 
+    /**
+     * True when the direct TCP peer is loopback or one of the configured proxies.
+     *
+     * <p>The header-auth filter uses this on the <em>socket</em> address, not on any forwarded
+     * header: only a peer we already trust may assert somebody else's identity.
+     */
+    public static boolean isTrustedPeer(String remoteAddr) {
+        return isTrustedProxyPeer(remoteAddr);
+    }
+
     public static String resolve(HttpServletRequest request) {
         String peer = request.getRemoteAddr();
         if (isTrustedProxyPeer(peer)) {
