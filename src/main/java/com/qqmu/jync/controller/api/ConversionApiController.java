@@ -108,9 +108,18 @@ public class ConversionApiController {
                         "elapsedMs", 0,
                         "cached", false);
             } catch (RuntimeException e) {
-                // The sink aborts the model call once the client is gone; there is then nobody
-                // left to deliver a done event to, so nothing is sent.
-                log.debug("Draft stream aborted: {}", e.toString());
+                // Anything else still owes the client an answer. Leaving the emitter untouched
+                // made the page wait for the 10-minute SseEmitter timeout with no way to tell a
+                // failure from a slow model. When the client was the one that vanished, sending
+                // is what fails next, and that failure is already handled below as a debug log.
+                log.warn("Draft stream failed unexpectedly: {}", e.toString());
+                payload = Map.of(
+                        "success", false,
+                        "message", "error.unexpected",
+                        "uncertainties", List.of(),
+                        "model", "",
+                        "elapsedMs", 0,
+                        "cached", false);
             }
             if (payload != null) {
                 try {

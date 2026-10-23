@@ -209,6 +209,18 @@ class ConversionAssistServiceTest {
     }
 
     @Test
+    @DisplayName("Oracle's FORCE VIEW header is accepted as a view")
+    void anOracleForceViewIsAcceptedAsAView() {
+        // SQL Developer exports a view as "CREATE OR REPLACE FORCE VIEW"; rejecting that header
+        // made exactly the Oracle-authored views unsaveable, which is the common case here.
+        service.saveOverride(1L, "VIEW", "V_FORCE",
+                "CREATE OR REPLACE FORCE VIEW V_FORCE AS SELECT 1 FROM DUAL");
+
+        assertThat(savedConfig().ddlOverride("VIEW", "V_FORCE"))
+                .isEqualTo("CREATE OR REPLACE FORCE VIEW V_FORCE AS SELECT 1 FROM DUAL");
+    }
+
+    @Test
     @DisplayName("surrounding whitespace is stripped before saving")
     void whitespaceIsStripped() {
         service.saveOverride(1L, "VIEW", "V", "\n\n  CREATE VIEW V AS SELECT 1  \n\n");

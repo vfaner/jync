@@ -67,7 +67,11 @@ public class ConversionAssistService {
      */
     private static final Pattern CREATE_HEADER = Pattern.compile(
             "\\ACREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:(?:DEFINER\\s*=\\s*\\S+"
-            + "|ALGORITHM\\s*=\\s*\\w+|SQL\\s+SECURITY\\s+\\w+)\\s+)*"
+            + "|ALGORITHM\\s*=\\s*\\w+|SQL\\s+SECURITY\\s+\\w+"
+            // Oracle puts these between OR REPLACE and the object kind; its own DDL export
+            // (SQL Developer) writes "CREATE OR REPLACE FORCE VIEW", so rejecting them blocked
+            // saving exactly the Oracle-authored overrides this feature exists for.
+            + "|FORCE|NOFORCE|EDITIONABLE|NONEDITIONABLE|EDITIONING)\\s+)*"
             + "(?<type>VIEW|PROCEDURE|FUNCTION)\\b",
             Pattern.CASE_INSENSITIVE);
 

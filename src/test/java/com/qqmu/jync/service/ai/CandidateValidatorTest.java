@@ -242,6 +242,18 @@ class CandidateValidatorTest {
     }
 
     @Test
+    @DisplayName("Oracle's FORCE VIEW header is recognized")
+    void aForceViewHeaderIsRecognized() {
+        // SQL Developer's DDL export carries FORCE between OR REPLACE and VIEW. An unrecognized
+        // header means no rename, which means the candidate is refused before it is checked.
+        CandidateValidator.ValidationResult result = validator.validate(target,
+                "CREATE OR REPLACE FORCE VIEW V_X AS SELECT 1", "V_X");
+
+        assertThat(result.getMessage()).isNotEqualTo("error.validate.noHeader");
+        assertThat(manager.handedOut.get()).isPositive();
+    }
+
+    @Test
     @DisplayName("a view with a trailing semicolon is checked without it")
     void aViewWithATrailingSemicolonIsCheckedWithoutIt() throws SQLException {
         // A reviewer pastes, or a model returns, "CREATE VIEW ... AS SELECT 1;". H2 accepts the

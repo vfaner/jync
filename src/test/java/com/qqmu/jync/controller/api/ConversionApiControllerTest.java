@@ -1,5 +1,6 @@
 package com.qqmu.jync.controller.api;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -22,6 +24,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import com.qqmu.jync.service.ai.AiSqlAssistant;
 import com.qqmu.jync.service.ai.CandidateValidator;
@@ -245,6 +248,26 @@ class ConversionApiControllerTest {
 
         // This endpoint writes to the target, so an ambiguous request must stop here.
         verify(assistService, never()).validate(anyLong(), any(), any());
+    }
+
+    @Test
+    @DisplayName("an unexpected failure on the draft stream still ends the response")
+    void anUnexpectedFailureEndsTheDraftStream() throws Exception {
+        when(assistService.draftStream(anyLong(), anyString(), anyString(), any()))
+                .thenThrow(new RuntimeException("boom"));
+
+        MvcResult result = mvc.perform(post("/api/projects/1/conversions/VIEW/V/draft/stream")
+                        .with(csrf()))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        // Before the fix this failure sent nothing and never completed the emitter: the page
+        // waited for the 10-minute SseEmitter timeout and could not tell success from failure.
+        // getAsyncResult throws if the async request never finishes.
+        assertThat(result.getAsyncResult(3000)).isNull();
+        assertThat(result.getResponse().getContentAsString())
+                .contains("event:done")
+                .contains("error.unexpected");
     }
 
     @Test

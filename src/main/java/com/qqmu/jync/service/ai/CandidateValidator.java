@@ -70,7 +70,11 @@ public class CandidateValidator {
                     // that. A fixed sequence of optional groups rejects whichever order
                     // it does not list.
                     + "(?:(?:ALGORITHM\\s*=\\s*\\w+|DEFINER\\s*=\\s*\\S+"
-                    + "|SQL\\s+SECURITY\\s+\\w+)\\s+)*"
+                    + "|SQL\\s+SECURITY\\s+\\w+"
+                    // Oracle's own DDL export writes "CREATE OR REPLACE FORCE VIEW"; without
+                    // these the header is unrecognized, the object is refused, and the most
+                    // Oracle-shaped candidates are the ones that can never be checked.
+                    + "|FORCE|NOFORCE|EDITIONABLE|NONEDITIONABLE|EDITIONING)\\s+)*"
                     + "(PROCEDURE|FUNCTION|VIEW)\\s+)"
                     + "((?:" + IDENTIFIER + ")\\s*\\.\\s*(?:" + IDENTIFIER + ")"
                     + "|" + IDENTIFIER + ")");
