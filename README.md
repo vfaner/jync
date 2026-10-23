@@ -379,6 +379,7 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 - **内存上限是「单值 × 读取批量」而不是整表**：Jync 不再累积结果集、批次或整个事务，但 JDBC 驱动总会物化当前值。PostgreSQL 的 `getCharacterStream` 会在驱动内部把值解码成 `String`（约为 UTF-8 字节数的 2-3 倍），并且带 fetch size 时驱动会持有最多 `full-load-fetch-size` 行的原始字节。因此 PG 源库若有数 MB 的大字段，应同时调低 `full-load-fetch-size`（例如 1-10），并让堆大小至少容纳最大单值的 3 倍。
 - **LogMiner 行外 LOB 无法还原**：LOB 存放在行外时 `SQL_REDO` 没有取值，回查会破坏事务顺序，因此只能跳过或失败。默认 `skip`：计数、按表和间隔告警后继续；`fail` 停在第一条此类变更且不推进位点。两者都在 CDC 状态面板可见，补救方式是重建基线或改用轮询。
 - **SQL Server 源的大字段在读取时即落盘**：mssql-jdbc 在读取同一行的下一列时会关闭上一列已打开的流，所以 SQL Server 源超过 `inline-max-bytes` 的值在读取该列时就直接写入 `spill-dir`，不跨列持有驱动流。落盘分区需要有足够空间，容量同样受 `spill-max-bytes` 约束。
+- **更新前镜像与删除镜像不落盘**：它们只用于主键比较与删除，落盘只会写出没人读取的文件，因此在事务缓冲期间保留在堆内存中。MySQL 默认 `binlog_row_image=FULL`、SQL Server 的 op=3 / op=2 行以及 PostgreSQL `REPLICA IDENTITY FULL` 下这些镜像带整行数据，大字段表上密集的删除或移动主键的更新，峰值按「缓冲事件数 × 单行大小」增长，不受 `cdc-spill-threshold-bytes` 约束；这类表应保持事务短小。
 - **清洗列与主键列必须物化**：超过 `force-inline-max-bytes` 会明确报错并指明表、列与配置键，不会静默截断。
 - 厂商原语会降级：`ENUM` / `SET` → `VARCHAR`、`XMLTYPE` / `XML` → `CLOB`、几何 → `WKB` 二进制、`SQL_VARIANT` 丢失类型信息。
 

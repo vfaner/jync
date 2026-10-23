@@ -39,6 +39,7 @@
 
 - **不是零拷贝**：Oracle `MERGE` 必须使用服务端临时 LOB；模拟 upsert 与 CDC 重放要求同一值可重放；PostgreSQL 逻辑解码与 SQL Server CDC 仍由驱动/函数整行物化；MySQL 单个值受源库 `max_allowed_packet` 限制。v1.7.8 做到的是内存有界并可落盘——上限是「单值 × 读取批量」，不再是整表。
 - **SQL Server 源的大字段需要落盘空间**：读到的超阈值大值会立即写入 `spill-dir`，该分区必须能容纳当前读取窗口内的值（容量受 `spill-max-bytes` 约束）。
+- **更新前镜像与删除镜像不落盘**：它们只用于主键比较与删除，事务缓冲期间保留在堆内存中。MySQL 默认 `binlog_row_image=FULL`、SQL Server 的 op=3 / op=2 行以及 PostgreSQL `REPLICA IDENTITY FULL` 下这些镜像带整行数据，所以大字段表上密集的删除或移动主键的更新仍会占用「缓冲事件数 × 单行大小」的内存，不受 `cdc-spill-threshold-bytes` 约束；这类表应保持事务短小。
 - **PostgreSQL 源库的大字段需要更小的读取批量**：pgjdbc 在 `getCharacterStream` 内部把文本解码为 `String`（约 UTF-8 字节数的 2-3 倍），带 fetch size 时还会持有最多该行数的原始字节。数 MB 单值时请调低 `full-load-fetch-size`（1-10），并保证堆至少能容纳最大单值的 3 倍。
 - **LogMiner 行外 LOB 不可还原**：只能跳过或失败，二者都显式可见。补救方式是重建基线，或该表改用轮询。
 - **Oracle `VARCHAR2` / `CHAR` 的空串仍是 `NULL`**，只有 `CLOB` 目标保留空串。
