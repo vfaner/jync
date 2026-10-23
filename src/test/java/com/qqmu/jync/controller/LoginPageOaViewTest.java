@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.Locale;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -15,6 +16,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.qqmu.jync.model.OaAuthConfig;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 
 /**
@@ -39,6 +41,15 @@ class LoginPageOaViewTest {
     @MockBean
     private OaAuthConfigService configService;
 
+    private OaAuthConfig config;
+
+    @BeforeEach
+    void setUp() {
+        config = new OaAuthConfig();
+        config.setMode(OaAuthConfig.Mode.PASSWORD);
+        when(configService.load()).thenReturn(config);
+    }
+
     private String loginPage(String query) throws Exception {
         return mvc.perform(get("/login" + query).locale(Locale.SIMPLIFIED_CHINESE))
                 .andExpect(status().isOk())
@@ -47,7 +58,7 @@ class LoginPageOaViewTest {
 
     @Test
     void anEnabledOaAddsASecondFormWithoutReplacingTheLocalOne() throws Exception {
-        when(configService.isEnabled()).thenReturn(true);
+        config.setEnabled(true);
 
         String page = loginPage("");
 
@@ -58,9 +69,13 @@ class LoginPageOaViewTest {
 
     @Test
     void aDisabledOaRendersOnlyTheLocalForm() throws Exception {
-        when(configService.isEnabled()).thenReturn(false);
+        config.setEnabled(false);
 
-        String page = loginPage("");
+        // A disabled configuration sends /login itself to the local form; that page is what an
+        // administrator without OA sees, and it must carry no OA markup.
+        String page = mvc.perform(get("/login/local").locale(Locale.SIMPLIFIED_CHINESE))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
 
         assertThat(page).contains("action=\"/login\"");
         assertThat(page).doesNotContain("/login/oa", "id=\"oa-username\"");
@@ -68,7 +83,7 @@ class LoginPageOaViewTest {
 
     @Test
     void theOaOutcomesHaveTheirOwnAlerts() throws Exception {
-        when(configService.isEnabled()).thenReturn(true);
+        config.setEnabled(true);
 
         assertThat(loginPage("?oaError")).contains("OA 账号或密码不正确");
         assertThat(loginPage("?oaLocked")).contains("失败次数过多");

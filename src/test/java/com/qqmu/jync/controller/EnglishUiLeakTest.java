@@ -100,7 +100,7 @@ class EnglishUiLeakTest {
     @Test
     @DisplayName("the login page renders no Chinese in English")
     void theLoginPageRendersNoChinese() throws Exception {
-        String html = mvc.perform(get("/login").param("lang", "en"))
+        String html = mvc.perform(get("/login/local").param("lang", "en"))
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(EnglishRenderingSupport.findChinese(html)).isNull();

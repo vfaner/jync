@@ -19,6 +19,10 @@ import org.springframework.test.web.servlet.MockMvc;
  * from it before showing the dialog — the page the admin is looking at was rendered by the old
  * jar, which may predate the key. The login page is the only template outside the layout, so it
  * has to declare that dictionary itself.
+ *
+ * <p>The probe points at {@code /login/local} rather than {@code /login}: under external
+ * authentication {@code /login} may redirect to the portal, while the local form always answers
+ * 200 and carries the same inline dictionary.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -38,7 +42,7 @@ class LoginPageUpgradeNoticeViewTest {
         // English keeps the assertion readable: Thymeleaf escapes CJK in an inline script as
         // Unicode escapes, so the Chinese value cannot be asserted literally here. Bundle
         // parity is covered by I18nBundleParityTest.
-        String page = mvc.perform(get("/login").locale(Locale.ENGLISH))
+        String page = mvc.perform(get("/login/local").locale(Locale.ENGLISH))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
