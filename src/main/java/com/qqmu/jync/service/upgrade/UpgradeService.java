@@ -219,6 +219,15 @@ public class UpgradeService {
         }
         boolean handedOff = false;
         try {
+            // One upgrade at a time includes the installed-but-not-yet-restarted window: the
+            // JVM is still running the previous jar from memory while jync.jar on disk is the
+            // new one, so a second swap would back up the already installed jar and leave the
+            // restart script rolling back to a version that never ran. RESTARTING is the same
+            // window with the exit already scheduled.
+            Phase phase = status.phase();
+            if (phase == Phase.READY || phase == Phase.RESTARTING) {
+                throw new IllegalStateException(text("error.upgrade.pendingRestart"));
+            }
             Source source;
             try {
                 source = Source.valueOf(sourceName.trim().toUpperCase());
@@ -393,7 +402,20 @@ public class UpgradeService {
                 throw moveBack;
             }
 
-            writeMarker(jar.getParent(), target, source, backup.getFileName().toString());
+            // The marker is bookkeeping on top of an install that has already happened: the new
+            // jar IS jync.jar and the old one IS the backup. Letting an I/O error here fall into
+            // the catch below would report FAILED for a swap that succeeded, and the retry the
+            // user is then offered moves the freshly installed jar over the backup — destroying
+            // the only copy of the version still running. Degrade to a warning instead: the
+            // install stands, and the backup is left for a manual rollback.
+            try {
+                writeMarker(jar.getParent(), target, source, backup.getFileName().toString());
+            } catch (IOException markerFailure) {
+                log.warn("Upgrade: {} installed from {}, but the update marker could not be"
+                        + " written ({}); the backup {} was kept for a manual rollback",
+                        target, source, markerFailure.toString(),
+                        backup.getFileName());
+            }
             status = new Status(Phase.READY,
                     new Localized("upgrade.ready", target), target, source.name(),
                     actual, actual);

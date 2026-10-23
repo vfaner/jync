@@ -405,6 +405,50 @@ class UpgradeServiceTest {
         assertThat(rebuilt.status().targetVersion()).isEqualTo("1.8.0");
     }
 
+    @Test
+    void aMarkerWriteFailureAfterTheSwapStillLeavesTheUpgradeReady() throws Exception {
+        byte[] oldJar = makeFatJar("old-jar-bytes");
+        byte[] nextJar = makeFatJar("new-jar-bytes");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITEE, "v1.8.0", null);
+        // A directory where the marker file belongs makes the marker write fail after the
+        // jar has already been swapped in — the one failure that lands PAST the point of no
+        // return. Reporting it as FAILED offers the user a retry that would move the freshly
+        // installed jar over the backup, destroying the only copy of the version still running.
+        Files.createDirectory(tempDir.resolve("app/.jync-update.properties"));
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITEE");
+        awaitPhase(svc, UpgradeService.Phase.READY);
+
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+        assertThat(Files.readAllBytes(tempDir.resolve("app/jync.jar.bak"))).isEqualTo(oldJar);
+        assertThat(svc.status().targetVersion()).isEqualTo("1.8.0");
+    }
+
+    @Test
+    void startingAnotherUpgradeWhileOneAwaitsRestartIsRejected() throws Exception {
+        byte[] oldJar = makeFatJar("old-jar-bytes");
+        byte[] nextJar = makeFatJar("new-jar-bytes");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITEE, "v1.8.0", null);
+        UpgradeService svc = service("1.7.2", downloader);
+        runToReady(svc);
+
+        // Still running the old jar from memory: a second swap would BACK UP the already
+        // installed jar and leave the restart script rolling back to a version that never ran.
+        downloader.blob = makeFatJar("second-jar-bytes");
+        feed.release = release(Source.GITEE, "v1.9.0", null);
+
+        assertThatThrownBy(() -> svc.start("GITEE"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(Files.readAllBytes(tempDir.resolve("app/jync.jar.bak"))).isEqualTo(oldJar);
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+        assertThat(svc.status().phase()).isEqualTo(UpgradeService.Phase.READY);
+    }
+
     private void runToReady(UpgradeService svc) {
         try {
             svc.start("GITEE");
