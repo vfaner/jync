@@ -233,7 +233,18 @@ public class CdcConsumerManager {
                     strategy, projectId, lock.owner());
         } catch (RuntimeException e) {
             lock.close();                                        // 先放租约:他节点可接管
-            parkQuietly(projectId, project.getName(), e);        // ERROR 帽子,防跨节点重启风暴
+            // Only a failure a human must fix earns the ERROR hat. build() connects to both
+            // endpoints to resolve their default schemas, so the common case here is a
+            // TRANSIENT outage (the database simply is not up yet, or a network blip on a
+            // supervise tick). Parking that would kill CDC on every node until somebody
+            // rebuilds the baseline by hand — the exact failure mode the consumers avoid by
+            // retrying TRANSIENT and parking only after a strike-out.
+            if (CdcFailureClassifier.classify(e) != CdcFailureClassifier.Kind.TRANSIENT) {
+                parkQuietly(projectId, project.getName(), e);    // ERROR 帽子,防跨节点重启风暴
+            } else {
+                log.warn("CDC project {} could not start (transient, the next supervise tick"
+                        + " will retry): {}", projectId, CdcFailureClassifier.describe(e));
+            }
             throw e;
         }
     }

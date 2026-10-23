@@ -1,9 +1,12 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -135,6 +138,63 @@ class CdcConsumerManagerTest {
         manager.ensureStarted(cdcProject(9L, true));
         verify(lockService, org.mockito.Mockito.times(1)).tryAcquireForDaemon(anyLong(), anyLong());
         manager.ensureStopped(9L);
+    }
+
+    @Test
+    void aTransientStartFailureDoesNotParkTheProjectForGood() {
+        // 应用与数据库同时启动、数据库慢半拍(或 supervise 某一拍撞上网络抖动)时,
+        // SyncContextFactory.build 在解析默认 schema 时抛 SQLException → IllegalStateException。
+        // CdcFailureClassifier 判为 TRANSIENT —— 文档明说"退避重试才是补救"。
+        // 旧实现无条件 park:项目被永久戴上 ERROR 帽,supervise 在所有节点都不再启动它,
+        // CDC 静默死亡,只能人工重建基线。契约:TRANSIENT 不 park、释放租约,下一轮重试。
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+        when(contextFactory.build(any(), anyString(), any())).thenThrow(new IllegalStateException(
+                "Cannot connect to 'src' to determine its schema: Connection refused",
+                new java.sql.SQLException("Connection refused")));
+
+        assertThatThrownBy(() -> manager.ensureStarted(cdcProject(9L, true)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Connection refused");
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+        verify(stateWriter, never()).recordLog(anyLong(), any(), anyString(),
+                eq(com.qqmu.jync.model.ChangeType.ERROR), anyString(), anyBoolean(), anyLong());
+        verify(lock).close();                                    // 租约必须放回去,他节点可接管
+    }
+
+    @Test
+    void aFatalStartFailureStillParksTheProject() {
+        // 对照:人必须介入的失败(凭据错误)仍按既有 B7 语义永久 park —— 本轮修复只放过
+        // TRANSIENT,不能把"防跨节点重启风暴"的帽子一起摘掉。
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+        when(contextFactory.build(any(), anyString(), any())).thenThrow(new IllegalStateException(
+                "Cannot connect to 'src': Access denied for user 'jync'",
+                new java.sql.SQLException("Access denied for user 'jync'")));
+
+        assertThatThrownBy(() -> manager.ensureStarted(cdcProject(9L, true)))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(taskStore).recordCdcFailure(eq(9L), anyString());
+        verify(lock).close();
+    }
+
+    @Test
+    void superviseRetriesAProjectAfterATransientStartFailure() {
+        // 不 park 的意义就在这一条:下一轮 supervise 必须再试一次。旧实现第一轮就把项目
+        // 写进 ERROR,第二轮被 hasErrorHat 挡在启动之外,永远不再 build。
+        Project project = cdcProject(9L, true);
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project));
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+        when(contextFactory.build(any(), anyString(), any())).thenThrow(new IllegalStateException(
+                "Cannot connect to 'src' to determine its schema: Connection refused",
+                new java.sql.SQLException("Connection refused")));
+
+        manager.supervise();
+        manager.supervise();
+
+        verify(contextFactory, times(2)).build(any(), anyString(), any());
+        verify(lockService, times(2)).tryAcquireForDaemon(9L, 30_000L);
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
     }
 
     @Test
