@@ -217,6 +217,30 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
   background: color-mix(in srgb, var(--brand) 10%, transparent);
 }
 
+/* 导航里的下拉分组（配置管理 / 日志管理）。触发按钮是 <button>，样式与相邻的
+   <a> 导航项对齐；分组本身激活时按钮同样高亮。 */
+.nav-links .nav-group { flex-shrink: 0; }
+.nav-links .nav-link-trigger {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 13px; border: 0; border-radius: 9px;
+  background: transparent; color: var(--ink-soft);
+  font: inherit; font-size: 14px; font-weight: 500; white-space: nowrap;
+  cursor: pointer;
+}
+.nav-links .nav-link-trigger:hover { color: var(--brand); background: var(--bg-tint); }
+.nav-links .nav-group.is-active .nav-link-trigger,
+.nav-links .nav-group.open .nav-link-trigger {
+  color: var(--brand); font-weight: 600;
+  background: var(--fb-brand-10);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+}
+.nav-links .nav-link-trigger .ico { width: 15px; height: 15px; }
+.nav-links .nav-link-trigger .nav-caret { width: 11px; height: 11px; opacity: .65; }
+.nav-links .nav-group.open .nav-caret { transform: rotate(180deg); }
+/* 导航分组的下拉从触发器左缘展开，不做右对齐 */
+.nav-links .nav-group .nav-menu { left: 0; right: auto; }
+.nav-links .nav-group .nav-menu .menu-item { text-decoration: none; }
+
 .nav-right { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
 
 /* 系统信息导航项右上角的更新圆点：模板里始终 hidden，查到更高版本后由 app.js 揭开。
@@ -1179,6 +1203,17 @@ table.tbl a.truncate { display: block; }
     box-shadow: var(--shadow); display: none;
   }
   .nav-links.open { display: flex; }
+  /* 抽屉里导航分组退化成「一行标题 + 缩进子项」，子项只在点击展开时出现 */
+  .nav-links .nav-group { display: block; width: 100%; }
+  .nav-links .nav-link-trigger { width: 100%; text-align: left; }
+  .nav-links .nav-group .nav-menu {
+    position: static; min-width: 0; padding: 2px 0 6px 22px;
+    background: transparent; border: 0; border-radius: 0; box-shadow: none;
+    opacity: 1; visibility: visible; transform: none;
+    display: none;
+  }
+  .nav-links .nav-group .nav-menu::before { display: none; }
+  .nav-links .nav-group.open .nav-menu { display: flex; }
   .logo-text small { display: none; }
   .shell { padding: 20px 16px 44px; }
   .nav-inner, .foot { padding-left: 16px; padding-right: 16px; }
@@ -1263,6 +1298,19 @@ table.tbl a.truncate { display: block; }
 .login-pw-toggle:hover { color: var(--brand); background: var(--bg-tint); }
 
 .login-submit { width: 100%; justify-content: center; margin-top: 4px; }
+/* OA 表单与本地表单之间的分隔线：文字压在横线上，告诉用户这是另一条登录路径 */
+.login-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 18px 0 14px; color: var(--ink-mute);
+  font-size: 12px; letter-spacing: .4px;
+}
+.login-divider::before, .login-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--line);
+}
+.login-oa-hint {
+  margin: 10px 0 0; font-size: 12px; line-height: 1.5;
+  color: var(--ink-mute); text-align: center;
+}
 
 .login-foot {
   text-align: center; font-size: 11.5px; color: var(--ink-mute);
@@ -1368,9 +1416,11 @@ table.tbl a.truncate { display: block; }
 /* 菜单与触发按钮之间留 8px 桥接区，鼠标斜向移入不会收起 */
 .nav-menu::before { content: ""; position: absolute; top: -8px; left: 0; right: 0; height: 8px; }
 .nav-group.open .nav-menu { opacity: 1; visibility: visible; transform: translateY(0); }
-/* 桌面端鼠标悬停即展开；触屏与键盘仍走点击留下的 .open */
+/* 桌面端鼠标悬停即展开；触屏与键盘仍走点击留下的 .open。
+   只限 .nav-right 里的用户菜单：导航分组在 861-900px 抽屉区间是纵向列表，
+   悬停自动展开会与点击状态打架。 */
 @media (min-width: 861px) {
-  .nav-group:hover .nav-menu { opacity: 1; visibility: visible; transform: translateY(0); }
+  .nav-right .nav-group:hover .nav-menu { opacity: 1; visibility: visible; transform: translateY(0); }
 }
 .nav-menu .menu-item {
   display: flex; align-items: center; gap: 9px; width: 100%;
@@ -1418,3 +1468,26 @@ table.tbl a.truncate { display: block; }
 
 /* 通用隐藏工具：策略卡片切换时由 app.js 加/删（日志 CDC 模式下藏掉轮询专属字段） */
 .is-hidden { display: none !important; }
+
+/* 系统日志：计数行与黑底面板。面板固定深色，不跟随浅色主题 ——
+   日志阅读要的是稳定对比度，关键字用 <mark> 标黄。 */
+.log-meta {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  margin-top: 14px; font-size: 12.5px; color: var(--ink-mute);
+}
+.log-panel {
+  margin-top: 10px;
+  padding: 14px 16px;
+  max-height: 62vh;
+  overflow: auto;
+  background: #0f1115;
+  color: #d6d9e0;
+  border-radius: var(--radius-sm);
+  font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.log-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-line + .log-line { margin-top: 2px; }
+.log-panel mark {
+  background: #ffd60a; color: #111;
+  border-radius: 2px; padding: 0 1px;
+}

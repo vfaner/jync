@@ -59,23 +59,58 @@
             <a th:href="@{/projects}" th:classappend="${activeNav == 'projects'} ? 'active' : ''">
                 <svg class="ico"><use href="#diagram-3"/></svg><span th:text="#{nav.projects}">Projects</span>
             </a>
-            <a th:href="@{/databases}" th:classappend="${activeNav == 'databases'} ? 'active' : ''">
-                <svg class="ico"><use href="#hdd-network"/></svg><span th:text="#{nav.databases}">Connections</span>
-            </a>
-            <!--/* AI 菜单可由 sync.ai.enabled=false 整体隐藏，给锁死的内网部署一个干净的关法 */-->
-            <a th:if="${aiEnabled}" th:href="@{/ai}"
-               th:classappend="${activeNav == 'ai'} ? 'active' : ''">
-                <svg class="ico"><use href="#cpu"/></svg><span th:text="#{nav.ai}">AI</span>
-            </a>
-            <a th:href="@{/change-logs}" th:classappend="${activeNav == 'change-logs'} ? 'active' : ''">
-                <svg class="ico"><use href="#clock-history"/></svg><span th:text="#{nav.changeLogs}">Change Log</span>
-            </a>
-            <!--/* 管理审计只对管理员可见：/audits 在 SecurityConfig 里也是 ADMIN-only，
-                   给访客渲染一个必然 403 的链接没有意义。 */-->
-            <a th:if="${isAdmin}" th:href="@{/audits}"
-               th:classappend="${activeNav == 'audits'} ? 'active' : ''">
-                <svg class="ico"><use href="#shield-check"/></svg><span th:text="#{nav.audits}">Admin audit</span>
-            </a>
+            <!--/* 配置类入口收进一个下拉。OA 配置只对管理员可见：它保存 OA 的登录地址
+                   与字段映射，和 /databases/new、/ai/new 一样属于管理员表单。 */-->
+            <div class="nav-group nav-links-group"
+                 th:classappend="${activeNav == 'databases' or activeNav == 'ai' or activeNav == 'oa'} ? 'is-active' : ''">
+                <button type="button" class="nav-trigger nav-link-trigger"
+                        aria-haspopup="true" aria-expanded="false">
+                    <svg class="ico"><use href="#sliders"/></svg>
+                    <span th:text="#{nav.config}">Configuration</span>
+                    <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
+                </button>
+                <div class="nav-menu">
+                    <a class="menu-item" th:href="@{/databases}">
+                        <svg class="ico"><use href="#hdd-network"/></svg>
+                        <span th:text="#{nav.databases}">Connections</span>
+                    </a>
+                    <!--/* AI 菜单可由 sync.ai.enabled=false 整体隐藏，给锁死的内网部署一个干净的关法 */-->
+                    <a class="menu-item" th:if="${aiEnabled}" th:href="@{/ai}">
+                        <svg class="ico"><use href="#cpu"/></svg>
+                        <span th:text="#{nav.ai}">AI</span>
+                    </a>
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/oa/settings}">
+                        <svg class="ico"><use href="#shield-check"/></svg>
+                        <span th:text="#{nav.oa}">OA sign-in</span>
+                    </a>
+                </div>
+            </div>
+
+            <!--/* 日志类入口同理。审计日志只对管理员可见：/audits 在 SecurityConfig 里
+                   也是 ADMIN-only，给访客渲染一个必然 403 的链接没有意义。 */-->
+            <div class="nav-group nav-links-group"
+                 th:classappend="${activeNav == 'change-logs' or activeNav == 'audits' or activeNav == 'system-logs'} ? 'is-active' : ''">
+                <button type="button" class="nav-trigger nav-link-trigger"
+                        aria-haspopup="true" aria-expanded="false">
+                    <svg class="ico"><use href="#list-ul"/></svg>
+                    <span th:text="#{nav.logs}">Logs</span>
+                    <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
+                </button>
+                <div class="nav-menu">
+                    <a class="menu-item" th:href="@{/change-logs}">
+                        <svg class="ico"><use href="#clock-history"/></svg>
+                        <span th:text="#{nav.changeLogs}">Change Log</span>
+                    </a>
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/audits}">
+                        <svg class="ico"><use href="#shield-check"/></svg>
+                        <span th:text="#{nav.audits}">Audit log</span>
+                    </a>
+                    <a class="menu-item" th:href="@{/system-logs}">
+                        <svg class="ico"><use href="#code-square"/></svg>
+                        <span th:text="#{nav.systemLogs}">System log</span>
+                    </a>
+                </div>
+            </div>
             <a class="nav-settings" th:href="@{/settings}"
                th:classappend="${activeNav == 'settings'} ? 'active' : ''">
                 <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">System info</span>
@@ -128,7 +163,9 @@
                     <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
                 </button>
                 <div class="nav-menu">
+                    <!--/* OA 用户没有本地密码，不给他一个必然被拒的入口 */-->
                     <button type="button" class="menu-item" data-open-modal="cp-modal"
+                            th:if="${externalUser == null or !externalUser}"
                             th:title="#{account.title}">
                         <svg class="ico"><use href="#key"/></svg>
                         <span th:text="#{account.title}">Change password</span>

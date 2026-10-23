@@ -156,6 +156,18 @@ public class GlobalModelAdvice {
                 .anyMatch(a -> UserRole.ADMIN.authority().equals(a.getAuthority()));
     }
 
+    /**
+     * Whether the signed-in principal came from the OA sign-in endpoint. Such users have no
+     * password in this application, so the user menu hides the change-password entry.
+     */
+    @ModelAttribute("externalUser")
+    public boolean externalUser() {
+        Authentication auth = authentication();
+        return auth != null
+                && auth.getPrincipal() instanceof SyncUserDetails
+                && ((SyncUserDetails) auth.getPrincipal()).isExternal();
+    }
+
     /** Drives the banner nagging about the seeded password. */
     @ModelAttribute("usingDefaultPassword")
     public boolean usingDefaultPassword() {

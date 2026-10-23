@@ -19,6 +19,7 @@ import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.auth.AppUserService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 
 /**
  * The change-password page has to say why it is the only page reachable, and the voluntary visit
@@ -34,6 +35,9 @@ class ForcedPasswordChangeViewTest {
 
     @MockBean
     private AppUserService userService;
+    /** AuthController reads this on /login to decide whether to show the OA form. */
+    @MockBean
+    private OaAuthConfigService oaConfigService;
 
     private String render(boolean usingDefaultPassword, String acceptLanguage) throws Exception {
         return mvc.perform(get("/account/password")
