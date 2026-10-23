@@ -177,14 +177,24 @@ public class SqlServerCdcProbe {
             String table = st[1];
             try (java.sql.PreparedStatement ps = conn.prepareStatement(
                     "SELECT capture_instance FROM cdc.change_tables"
-                            + " WHERE source_schema_name = ? AND source_table_name = ?")) {
+                            + " WHERE source_schema_name = ? AND source_table_name = ?"
+                            // A re-captured table keeps its OLD change_tables row: keep the
+                            // newest instance, exactly the one the consumer streams
+                            // (discoverCaptureInstances picks the highest start_lsn too).
+                            // Without the ORDER BY the probe could green-light an instance
+                            // the consumer never reads, whose @role_name grants may differ.
+                            + " ORDER BY start_lsn")) {
                 ps.setString(1, schema);
                 ps.setString(2, table);
                 try (ResultSet rs = ps.executeQuery()) {
-                    if (!rs.next()) {
+                    String newest = null;
+                    while (rs.next()) {
+                        newest = rs.getString(1);
+                    }
+                    if (newest == null) {
                         missing.add(schema + "." + table);
                     } else {
-                        ciNames.add(rs.getString(1));
+                        ciNames.add(newest);
                     }
                 }
             } catch (SQLException e) {

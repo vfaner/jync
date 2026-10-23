@@ -13,10 +13,15 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
@@ -61,6 +66,7 @@ class SqlServerCdcLsnRecoveryTest {
     private final AtomicReference<String> ciMinLsn = new AtomicReference<>();
     /** Per-test override for fn_cdc_get_max_lsn (a new CI can sit ABOVE it). */
     private final AtomicReference<String> maxLsn = new AtomicReference<>(MAX_LSN);
+    private CdcRuntimeStats stats;
     private SqlServerCdcConsumer consumer;
 
     @BeforeEach
@@ -119,11 +125,12 @@ class SqlServerCdcLsnRecoveryTest {
         Project project = new Project();
         project.setId(1L);
         project.setName("mssql-lsn");
+        stats = new CdcRuntimeStats();
         consumer = new SqlServerCdcConsumer(project,
                 mock(SyncLockService.LockHandle.class), ctx,
                 mock(CdcPositionStore.class), mock(CdcBaselineService.class),
                 mock(SyncTaskStore.class), mock(SyncStateWriter.class),
-                mock(DataSourceManager.class), new CdcRuntimeStats(), new SyncProperties());
+                mock(DataSourceManager.class), stats, new SyncProperties());
     }
 
     private static ResultSet emptyChangesRs() throws SQLException {
@@ -216,6 +223,33 @@ class SqlServerCdcLsnRecoveryTest {
         assertThat(r.nextLsn).isEqualTo(MAX_LSN);
         verify(minLsnPs).executeQuery();
         verify(clampedChangesPs).executeQuery();
+    }
+
+    @Test
+    void aClampOverAnUncapturedIntervalIsCountedAndDoesNotClaimNothingWasLost()
+            throws Exception {
+        // CI 的 start_lsn 高于水位有两种可能:① 首次启用(之前本就没捕获数据);
+        // ② 基线之后重建(旧 CI 覆盖过该表,而新 CI 开始之前的变更两份 CI 都没抓到)。
+        // 没有 CI 历史时二者不可区分,而 clamp 自愈是上一轮刻意加的修复,不能改成
+        // 无条件 park。但旧告警断言 "no changes were lost" —— 它只证明「该 CI 之前
+        // 无数据」,没证明「该表之前无变更」。误导性的安心话比不说话更糟:运维会据此
+        // 跳过核对。契约:如实说明该区间从未被捕获、事件可计数(面板可见),让运维
+        // 决定是否重基线。
+        ciStartLsn.set("0x000000000000000000ff");
+        ciMinLsn.set("0x000000000000000000ff");
+        when(normalChangesPs.executeQuery())
+                .thenThrow(new SQLException("An invalid LSN was specified", null, 22054));
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(SqlServerCdcConsumer.class);
+        try {
+            consumer.drain(conn, FROM_LSN);
+        } finally {
+            LogCapture.detach(SqlServerCdcConsumer.class, logs);
+        }
+
+        assertThat(stats.getUncapturedGaps()).isEqualTo(1);
+        List<String> warnings = LogCapture.messagesAt(Level.WARN, logs);
+        assertThat(warnings).anyMatch(m -> m.contains("was never captured"));
+        assertThat(warnings).noneMatch(m -> m.contains("no changes were lost"));
     }
 
     @Test

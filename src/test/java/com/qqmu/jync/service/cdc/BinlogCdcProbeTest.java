@@ -211,6 +211,19 @@ class BinlogCdcProbeTest {
     }
 
     @Test
+    void replicationReplicaNameIsAcceptedOnNewServers() throws SQLException {
+        // MySQL 8.0.22+ / 8.4 把 REPLICATION SLAVE 改名为 REPLICATION REPLICA,8.4 起
+        // 不再输出旧名。只认 SLAVE 的文本匹配会把一个权限完全正确的账户判成「缺权限」,
+        // 用户照着提示去加一个服务器已经不接受的权限名。
+        grants("GRANT REPLICATION REPLICA ON *.* TO 'sync'@'%'",
+                "GRANT REPLICATION CLIENT ON *.* TO 'sync'@'%'");
+
+        CdcProbeResult.Check check = check(probe.probe(conn, 612001L), "REPLICATION_GRANTS");
+
+        assertThat(check.isPassed()).isTrue();
+    }
+
+    @Test
     void shortRetentionFailsWithAdvice() throws SQLException {
         variable("binlog_expire_logs_seconds", "3600"); // 1h,撑不过停机窗口
         CdcProbeResult.Check retention = check(probe.probe(conn, 612001L), "BINLOG_RETENTION");

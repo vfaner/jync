@@ -94,6 +94,32 @@ class SqlServerCdcProbeTest {
     }
 
     @Test
+    void multipleCaptureInstancesProbeTheNewestOneTheConsumerWillStream()
+            throws SQLException {
+        // 一张表在 schema 变更后重建捕获实例时,cdc.change_tables 会同时留下新旧两行。
+        // 消费者按 start_lsn 取最新的一行;探测旧代码却只看结果集第一行(顺序未定义),
+        // 可能为一个 consumer 根本不会读取的旧实例放行 —— 旧实例的 @role_name 授权
+        // 与真正读取的那个可以不同,绿灯就成了假信号。契约:按 start_lsn 排序,探测
+        // 最新实例,与消费者的选择一致。
+        PreparedStatement changeTablesPs = mock(PreparedStatement.class);
+        when(conn.prepareStatement(contains("cdc.change_tables"))).thenReturn(changeTablesPs);
+        ResultSet ciRs = mock(ResultSet.class);
+        when(ciRs.next()).thenReturn(true, true, false);
+        when(ciRs.getString(1)).thenReturn("dbo_orders_old", "dbo_orders_new");
+        when(changeTablesPs.executeQuery()).thenReturn(ciRs);
+
+        CdcProbeResult result = probe.probe(conn,
+                Collections.singletonList(new String[]{"dbo", "orders"}));
+
+        assertThat(check(result).isPassed()).isTrue();
+        verify(conn).prepareStatement(contains("fn_cdc_get_all_changes_dbo_orders_new"));
+        verify(conn, never())
+                .prepareStatement(contains("fn_cdc_get_all_changes_dbo_orders_old"));
+        // 顺序必须由服务端给出(binary start_lsn 可比较),而不是靠结果集偶然顺序。
+        verify(conn).prepareStatement(contains("ORDER BY start_lsn"));
+    }
+
+    @Test
     void safeCaptureInstanceNameProbesTheFnAndPasses() throws SQLException {
         captureInstanceNamed("dbo_orders_CT");
 

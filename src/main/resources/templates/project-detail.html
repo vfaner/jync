@@ -256,6 +256,8 @@
                     <dd th:text="${stats.zeroDateCoerced}">0</dd>
                     <dt th:text="#{cdc.status.skipped.missinglob}">Missing-LOB changes skipped</dt>
                     <dd th:text="${stats.skippedMissingLob}">0</dd>
+                    <dt th:text="#{cdc.status.uncaptured.gaps}">Uncaptured gap warnings</dt>
+                    <dd th:text="${stats.uncapturedGaps}">0</dd>
                 </th:block>
                 <th:block th:if="${lastErrorShort != null}">
                     <dt th:text="#{cdc.status.lastError}">Last error</dt>

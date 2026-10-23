@@ -70,6 +70,14 @@ public final class CdcRuntimeStats {
      * this statement".
      */
     private final AtomicLong skippedMissingLob = new AtomicLong();
+    /**
+     * Times a capture instance's {@code start_lsn} sat ABOVE the stored watermark: the
+     * clamp keeps the stream moving, but the interval in between was never captured (the
+     * instance was enabled — or re-created after a baseline — above the watermark).
+     * Counted rather than only logged so the operator can see it on the panel long after
+     * the warning line scrolled away, and verify or re-baseline the affected table.
+     */
+    private final AtomicLong uncapturedGaps = new AtomicLong();
     /** Per-table tallies of the same, plus each table's last warning time (throttling). */
     private final ConcurrentMap<String, MissingLobTable> missingLobTables =
             new ConcurrentSkipListMap<>(String.CASE_INSENSITIVE_ORDER);
@@ -138,6 +146,16 @@ public final class CdcRuntimeStats {
 
     public void addZeroDateCoerced(long n) {
         zeroDateCoerced.addAndGet(n);
+    }
+
+    // —— uncaptured windows ——
+
+    public void addUncapturedGap() {
+        uncapturedGaps.incrementAndGet();
+    }
+
+    public long getUncapturedGaps() {
+        return uncapturedGaps.get();
     }
 
     // —— missing columns (out-of-line LOBs) ——
@@ -394,6 +412,7 @@ public final class CdcRuntimeStats {
         snapshot.put("unmappable", unmappable.get());
         snapshot.put("zeroDateCoerced", zeroDateCoerced.get());
         snapshot.put("skippedMissingLob", skippedMissingLob.get());
+        snapshot.put("uncapturedGaps", uncapturedGaps.get());
         snapshot.put("missingLobByTable", missingLobByTable());
         snapshot.put("unsupportedTables", new LinkedHashSet<>(unsupportedTables));
         return snapshot;

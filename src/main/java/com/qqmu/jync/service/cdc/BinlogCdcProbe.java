@@ -133,7 +133,11 @@ public class BinlogCdcProbe {
                 String grant = rs.getString(1).toUpperCase(Locale.ROOT);
                 boolean global = grant.contains("ON *.*");
                 boolean all = grant.contains("ALL PRIVILEGES") && global;
-                if (all || grant.contains("REPLICATION SLAVE")) {
+                // MySQL 8.0.22+ renamed REPLICATION SLAVE to REPLICATION REPLICA; 8.4
+                // stopped accepting the old name entirely. Matching only SLAVE told a
+                // correctly privileged account it was missing the grant.
+                if (all || grant.contains("REPLICATION SLAVE")
+                        || grant.contains("REPLICATION REPLICA")) {
                     slave = true;
                 }
                 if (all || grant.contains("REPLICATION CLIENT")) {
@@ -146,11 +150,11 @@ public class BinlogCdcProbe {
         }
         if (slave && client) {
             return CdcProbeResult.Check.of(CdcProbeResult.REPLICATION_GRANTS, true,
-                    "REPLICATION SLAVE + REPLICATION CLIENT");
+                    "REPLICATION REPLICA/SLAVE + REPLICATION CLIENT");
         }
         List<String> missing = new ArrayList<>();
         if (!slave) {
-            missing.add("REPLICATION SLAVE");
+            missing.add("REPLICATION REPLICA (named REPLICATION SLAVE before MySQL 8.0.22)");
         }
         if (!client) {
             missing.add("REPLICATION CLIENT");

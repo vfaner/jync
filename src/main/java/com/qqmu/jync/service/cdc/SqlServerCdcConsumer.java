@@ -459,9 +459,12 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 // the CI (a persistent 22054 skip is a silent stall) or blind-clamping
                 // (which would silently drop purged changes):
                 //   ① the CI was enabled/re-created mid-flight → its start_lsn sits
-                //      ABOVE our watermark; nothing was captured for it before that, so
-                //      clamping @from_lsn to min_lsn and rescanning INCLUSIVE loses
-                //      nothing and self-heals;
+                //      ABOVE our watermark. Clamping @from_lsn to min_lsn and rescanning
+                //      INCLUSIVE drops no captured row and self-heals — but it proves
+                //      only that THIS instance captured nothing earlier, not that the
+                //      table had no changes: if the instance was created after the
+                //      baseline, the interval (watermark, clamp point) was never
+                //      captured at all (counted + warned, operator must verify);
                 //   ② the cleanup job purged an ESTABLISHED CI past our watermark
                 //      (start_lsn ≤ watermark < min_lsn) → the changes in
                 //      [watermark, min_lsn) are physically gone; clamping would skip
@@ -491,11 +494,22 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                                     + " it this cycle", ci.captureInstance, clampTo, maxLsn);
                             continue;
                         }
+                        // The clamp itself loses nothing, but that is NOT the same as "no
+                        // changes were lost": a CI created or re-created AFTER the baseline
+                        // means the interval between the watermark and this point was never
+                        // captured by ANY instance — the old claim was false reassurance.
+                        // Without CI history the two causes are indistinguishable, so keep
+                        // self-healing and say what is actually known.
+                        stats.addUncapturedGap();
                         log.warn("SQLServer CDC: capture instance {} starts at {} above the"
                                 + " stored watermark {} (enabled or re-created mid-flight);"
-                                + " clamping from_lsn to {} and rescanning inclusively — no"
-                                + " changes were lost", ci.captureInstance, ci.startLsn,
-                                fromLsn, clampTo);
+                                + " clamping from_lsn to {} and rescanning inclusively."
+                                + " The interval ({}, {}) was never captured for this"
+                                + " instance — if it was created or re-created after the"
+                                + " baseline, changes in that interval are missing on the"
+                                + " target; verify them against the source and re-baseline"
+                                + " if needed", ci.captureInstance, ci.startLsn, fromLsn,
+                                clampTo, fromLsn, clampTo);
                         scanCi(conn, ci, changesSqlInclusive(ci.captureInstance), clampTo,
                                 maxLsn, fold, out);
                         continue;
