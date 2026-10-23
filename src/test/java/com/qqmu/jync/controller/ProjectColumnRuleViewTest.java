@@ -245,6 +245,48 @@ class ProjectColumnRuleViewTest {
         verify(projectService, never()).saveConfig(anyLong(), any());
     }
 
+    /**
+     * The cleanser applies rules in stored order, so the same rule saved twice runs twice:
+     * a duplicated {@code STRIP_PREFIX} strips two prefixes, a duplicated {@code REGEX_REPLACE}
+     * replaces twice, and the panel shows the identical row twice. Table and column are
+     * database identifiers matched case-insensitively at sync time, so a case difference
+     * names the same rule, not a second one.
+     */
+    @Test
+    void anExactDuplicateRuleIsRefusedWithoutSaving() throws Exception {
+        SyncConfig config = storedConfig(false);
+        config.getColumnRules().add(
+                rule("orders", "customer_name", ColumnRuleType.STRIP_PREFIX, "C-"));
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "ORDERS")
+                        .param("columnName", "CUSTOMER_NAME")
+                        .param("ruleType", "STRIP_PREFIX")
+                        .param("ruleArg", "C-"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(flash().attribute("error", "error.columnrule.duplicate"));
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+        assertThat(config.getColumnRules()).hasSize(1);
+    }
+
+    /** Identity includes the argument: two different prefixes are two different rules. */
+    @Test
+    void theSameColumnWithADifferentArgumentIsNotADuplicate() throws Exception {
+        SyncConfig config = storedConfig(false);
+        config.getColumnRules().add(rule("orders", "code", ColumnRuleType.STRIP_PREFIX, "A-"));
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "code")
+                        .param("ruleType", "STRIP_PREFIX")
+                        .param("ruleArg", "B-"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(projectService).saveConfig(eq(1L), any());
+        assertThat(config.getColumnRules()).hasSize(2);
+    }
+
     @Test
     void aRunningProjectMustBeStoppedFirst() throws Exception {
         storedConfig(true);

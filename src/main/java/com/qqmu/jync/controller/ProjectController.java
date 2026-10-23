@@ -592,6 +592,14 @@ public class ProjectController {
             rule.setType(type);
             rule.setArg(arg);
             rule.setReplacement(replacement);
+            // The cleanser applies rules in stored order, so an identical rule saved twice
+            // runs twice (two prefixes stripped, two regex passes) and the panel lists the
+            // same row twice. Table/column are matched case-insensitively at sync time, so a
+            // case difference is the same rule; the argument and replacement are not.
+            if (hasDuplicate(config.getColumnRules(), rule)) {
+                flash.addFlashAttribute("error", "error.columnrule.duplicate");
+                return "redirect:/projects/" + id;
+            }
             config.getColumnRules().add(rule);
             projectService.saveConfig(id, config);
             flash.addFlashAttribute("message", "msg.columnrule.saved");
@@ -661,6 +669,36 @@ public class ProjectController {
             }
         }
         return null;
+    }
+
+    /**
+     * A rule is identified by table, column, type, argument and replacement. Table and column
+     * are database identifiers, matched case-insensitively by {@code ColumnCleanser}, so a
+     * case difference names the same rule; the argument and replacement are compared as-is
+     * (a prefix or regex is case-sensitive at sync time).
+     */
+    private static boolean hasDuplicate(List<ColumnRule> rules, ColumnRule candidate) {
+        if (rules == null) {
+            return false;
+        }
+        for (ColumnRule existing : rules) {
+            if (existing == null || existing.getType() != candidate.getType()) {
+                continue;
+            }
+            if (existing.getTable() == null || existing.getColumn() == null) {
+                continue;
+            }
+            if (!existing.getTable().equalsIgnoreCase(candidate.getTable())
+                    || !existing.getColumn().equalsIgnoreCase(candidate.getColumn())) {
+                continue;
+            }
+            if (java.util.Objects.equals(existing.getArg(), candidate.getArg())
+                    && java.util.Objects.equals(existing.getReplacement(),
+                            candidate.getReplacement())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
