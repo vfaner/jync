@@ -67,8 +67,11 @@ public class SecurityConfig {
             "/databases/new", "/databases/*/edit",
             "/projects/new", "/projects/*/edit",
             "/ai/new", "/ai/*/edit",
-            // The OA sign-in page holds the endpoint credentials are sent to; a viewer has no
-            // use for it, and its Save button is admin-only anyway.
+            // The external-authentication page holds the endpoints credentials are sent to and
+            // the shared secret's configuration; a viewer has no use for it, and its Save button
+            // is admin-only anyway. The pre-1.8 URL stays listed so its redirect is admin-only
+            // too, rather than advertising the new address to a viewer.
+            "/external-auth",
             "/oa/settings",
             "/api/databases/discover-drivers",
             // The audit trail is about what admins did; a viewer has no use for it, and

@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'oa', 'oa.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{oa.title}">External authentication</h1>
+            <p class="sub" th:text="#{oa.subtitle}">
+                Portal, gateway header or ticket sign-in. Jync keeps only a session.
+            </p>
+        </div>
+    </div>
+
+    <div style="max-width:860px">
+
+        <div class="alert alert-danger" th:if="${formError}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="${#messages.msg(formError)}">Error</div>
+        </div>
+        <div class="alert alert-ok" th:if="${message}">
+            <svg class="ico"><use href="#check-lg"/></svg>
+            <div class="alert-body" th:text="${#messages.msg(message)}">Saved.</div>
+        </div>
+
+        <form method="post" th:action="@{/external-auth}" th:object="${config}">
+
+            <div class="card" data-mode-section="COMMON" data-active="true">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#sliders"/></svg>
+                        <span th:text="#{oa.commonCard}">Common settings</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label class="switch">
+                            <input type="checkbox" id="enabled" th:field="*{enabled}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{oa.enabled}">Enable external authentication</strong>
+                            </span>
+                        </label>
+                        <div class="help" th:text="#{oa.enabledHelp}">
+                            When enabled, the sign-in page follows the mode selected below.
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="mode" th:text="#{oa.mode}">Mode</label>
+                            <select class="select" id="mode" th:field="*{mode}" data-mode-select>
+                                <option th:each="m : ${modes}" th:value="${m.name()}"
+                                        th:text="${#messages.msg('oa.mode.' + m.name())}">Password</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="timeoutMs" th:text="#{oa.timeoutMs}">Timeout (ms)</label>
+                            <input type="number" class="input" id="timeoutMs" th:field="*{timeoutMs}"
+                                   min="500" max="30000" step="100">
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="adminUsers" th:text="#{oa.adminUsers}">Administrator user names</label>
+                        <input type="text" class="input" id="adminUsers" th:field="*{adminUsers}"
+                               maxlength="1024" placeholder="root,ops">
+                        <div class="help" th:text="#{oa.adminUsersHelp}">
+                            Comma-separated; a match grants the administrator role in every mode.
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="loginEntryUrl" th:text="#{oa.loginEntryUrl}">Portal sign-in address</label>
+                        <input type="url" class="input" id="loginEntryUrl"
+                               th:field="*{loginEntryUrl}" maxlength="2048"
+                               placeholder="https://portal.example.com/login">
+                        <div class="help" th:text="#{oa.loginEntryUrlHelp}">
+                            Where an unauthenticated visitor is sent when there is no local form.
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="logoutRedirectUrl" th:text="#{oa.logoutRedirectUrl}">Sign-out address</label>
+                        <input type="text" class="input" id="logoutRedirectUrl"
+                               th:field="*{logoutRedirectUrl}" maxlength="2048"
+                               placeholder="/login?logout">
+                        <div class="help" th:text="#{oa.logoutRedirectUrlHelp}">
+                            A path in this application or an http(s) URL; blank returns to the login page.
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label class="switch">
+                            <input type="checkbox" id="localLoginEnabled"
+                                   th:field="*{localLoginEnabled}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{oa.localLoginEnabled}">Keep local account sign-in</strong>
+                            </span>
+                        </label>
+                        <div class="help" th:text="#{oa.localLoginEnabledHelp}">
+                            When off, /login/local and POST /login are refused; only the portal can sign in.
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label class="switch">
+                            <input type="checkbox" id="allowInsecureHttp"
+                                   th:field="*{allowInsecureHttp}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{oa.allowInsecureHttp}">Allow plain HTTP</strong>
+                            </span>
+                        </label>
+                        <div class="help" th:text="#{oa.allowInsecureHttpHelp}">
+                            Credentials cross the network in clear text; use it only inside a trusted network.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" data-mode-section="PASSWORD"
+                 th:attr="data-active=${config.mode != null and config.mode.name() == 'PASSWORD'}">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#shield-check"/></svg>
+                        <span th:text="#{oa.modeSection.PASSWORD}">Password</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label for="loginUrl">
+                            <span th:text="#{oa.loginUrl}">Login API URL</span><span class="req">*</span>
+                        </label>
+                        <input type="url" class="input" id="loginUrl" th:field="*{loginUrl}"
+                               placeholder="https://oa.example.com/api/login" maxlength="2048">
+                        <div class="help" th:text="#{oa.loginUrlHelp}">
+                            Point this only at a trusted internal endpoint.
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="requestFormat" th:text="#{oa.requestFormat}">Request format</label>
+                            <select class="select" id="requestFormat" th:field="*{requestFormat}">
+                                <option th:each="f : ${requestFormats}" th:value="${f.name()}"
+                                        th:text="${#messages.msg('oa.requestFormat.' + f.name())}">Form</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="usernameField" th:text="#{oa.usernameField}">User name field (request)</label>
+                            <input type="text" class="input" id="usernameField"
+                                   th:field="*{usernameField}" maxlength="128" placeholder="username">
+                        </div>
+                        <div class="field">
+                            <label for="passwordField" th:text="#{oa.passwordField}">Password field (request)</label>
+                            <input type="text" class="input" id="passwordField"
+                                   th:field="*{passwordField}" maxlength="128" placeholder="password">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" data-mode-section="HEADER"
+                 th:attr="data-active=${config.mode != null and config.mode.name() == 'HEADER'}">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#arrow-left-right"/></svg>
+                        <span th:text="#{oa.modeSection.HEADER}">Gateway header</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="userHeader">
+                                <span th:text="#{oa.userHeader}">Identity header</span><span class="req">*</span>
+                            </label>
+                            <input type="text" class="input" id="userHeader" th:field="*{userHeader}"
+                                   maxlength="128" placeholder="X-Auth-User">
+                            <div class="help" th:text="#{oa.userHeaderHelp}">
+                                The header your gateway injects for an already signed-in user.
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="adminHeader" th:text="#{oa.adminHeader}">Administrator header (optional)</label>
+                            <input type="text" class="input" id="adminHeader"
+                                   th:field="*{adminHeader}" maxlength="128" placeholder="X-Auth-Admin">
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="secretHeaderName" th:text="#{oa.secretHeaderName}">Shared-secret header (optional)</label>
+                            <input type="text" class="input" id="secretHeaderName"
+                                   th:field="*{secretHeaderName}" maxlength="128"
+                                   placeholder="X-Auth-Secret">
+                        </div>
+                        <div class="field">
+                            <label for="secretHeaderValue" th:text="#{oa.secretHeaderValue}">Shared-secret value</label>
+                            <input type="password" class="input" id="secretHeaderValue"
+                                   name="secretHeaderValue" maxlength="1024"
+                                   autocomplete="new-password"
+                                   th:placeholder="${secretSet} ? #{oa.secretValueSet} : ''">
+                            <div class="help" th:text="#{oa.secretValueSet}">
+                                Already set; leave blank to keep it.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label class="switch">
+                            <input type="checkbox" id="clearSecret" name="clearSecret" value="true">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{oa.secretClear}">Clear the stored secret</strong>
+                            </span>
+                        </label>
+                    </div>
+
+                    <div class="help" th:text="#{oa.secretHelp}">
+                        The real boundary is the trusted-proxy list: Jync must sit behind the gateway and
+                        must not be reachable directly.
+                    </div>
+
+                    <div class="btn-row">
+                        <button type="button" class="btn btn-ghost" data-test-header>
+                            <svg class="ico"><use href="#shield-check"/></svg>
+                            <span th:text="#{oa.testHeader}">Test this request</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" data-mode-section="TICKET"
+                 th:attr="data-active=${config.mode != null and config.mode.name() == 'TICKET'}">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#tag"/></svg>
+                        <span th:text="#{oa.modeSection.TICKET}">Ticket</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label for="validateUrl">
+                            <span th:text="#{oa.validateUrl}">Ticket validation URL</span><span class="req">*</span>
+                        </label>
+                        <input type="url" class="input" id="validateUrl"
+                               th:field="*{validateUrl}" maxlength="2048"
+                               placeholder="https://sso.example.com/api/validate">
+                        <div class="help" th:text="#{oa.validateUrlHelp}">
+                            Jync calls this endpoint server-side with the ticket.
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="validateMethod" th:text="#{oa.validateMethod}">Method</label>
+                            <select class="select" id="validateMethod" th:field="*{validateMethod}">
+                                <option th:each="m : ${validateMethods}" th:value="${m.name()}"
+                                        th:text="${#messages.msg('oa.validateMethod.' + m.name())}">GET</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="ticketParam" th:text="#{oa.ticketParam}">Ticket parameter</label>
+                            <input type="text" class="input" id="ticketParam"
+                                   th:field="*{ticketParam}" maxlength="64" placeholder="ticket">
+                            <div class="help" th:text="#{oa.ticketParamHelp}">Defaults to ticket.</div>
+                        </div>
+                    </div>
+
+                    <div class="btn-row">
+                        <input type="text" class="input" id="ticket-probe" maxlength="512"
+                               th:placeholder="#{oa.testTicketPlaceholder}">
+                        <button type="button" class="btn btn-ghost" data-test-ticket>
+                            <svg class="ico"><use href="#check-lg"/></svg>
+                            <span th:text="#{oa.testTicket}">Validate a ticket</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" data-mode-any="PASSWORD,TICKET"
+                 th:attr="data-active=${config.mode != null and config.mode.name() != 'HEADER'}">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#list-ul"/></svg>
+                        <span th:text="#{oa.mappingCard}">Response mapping (password / ticket)</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="successField" th:text="#{oa.successField}">Success field (optional)</label>
+                            <input type="text" class="input" id="successField"
+                                   th:field="*{successField}" maxlength="128" placeholder="code">
+                            <div class="help" th:text="#{oa.successFieldHelp}">
+                                Left blank, any HTTP 2xx response counts as success.
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="successValue" th:text="#{oa.successValue}">Success value</label>
+                            <input type="text" class="input" id="successValue"
+                                   th:field="*{successValue}" maxlength="255" placeholder="0">
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="userField">
+                            <span th:text="#{oa.userField}">User name field (response)</span><span class="req">*</span>
+                        </label>
+                        <input type="text" class="input" id="userField" th:field="*{userField}"
+                               maxlength="128" placeholder="data.username">
+                        <div class="help" th:text="#{oa.userFieldHelp}">
+                            Dot paths such as data.username are supported.
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="adminField" th:text="#{oa.adminField}">Administrator field (optional)</label>
+                            <input type="text" class="input" id="adminField"
+                                   th:field="*{adminField}" maxlength="128" placeholder="data.isAdmin">
+                        </div>
+                        <div class="field">
+                            <label for="adminValue" th:text="#{oa.adminValue}">Administrator values</label>
+                            <input type="text" class="input" id="adminValue"
+                                   th:field="*{adminValue}" maxlength="255" placeholder="true,1">
+                            <div class="help" th:text="#{oa.adminValueHelp}">
+                                Comma-separated; a match grants the administrator role.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="help" th:text="#{oa.noStoreNote}">
+                        Passwords are forwarded to the endpoint and never stored by Jync.
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body btn-row">
+                    <button type="submit" class="btn btn-primary">
+                        <svg class="ico"><use href="#check-lg"/></svg>
+                        <span th:text="#{oa.save}">Save</span>
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <div class="card">
+            <div class="card-head">
+                <h2><svg class="ico"><use href="#code-square"/></svg>
+                    <span th:text="#{oa.testCard}">Connectivity test</span></h2>
+            </div>
+            <div class="card-body">
+                <pre id="external-auth-test-result" class="log-panel"
+                     th:text="#{oa.testResult}">Result</pre>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag">
+<script th:inline="javascript">
+(function () {
+  var sections = document.querySelectorAll('[data-mode-section]');
+  var anySections = document.querySelectorAll('[data-mode-any]');
+  var select = document.querySelector('[data-mode-select]');
+
+  function applyMode() {
+    var mode = select ? select.value : 'PASSWORD';
+    sections.forEach(function (el) {
+      el.hidden = el.getAttribute('data-mode-section') !== mode
+          && el.getAttribute('data-mode-section') !== 'COMMON';
+    });
+    anySections.forEach(function (el) {
+      el.hidden = el.getAttribute('data-mode-any').split(',').indexOf(mode) < 0;
+    });
+  }
+
+  if (select) {
+    select.addEventListener('change', applyMode);
+    applyMode();
+  }
+
+  var token = document.querySelector('meta[name="_csrf"]');
+  var tokenHeader = document.querySelector('meta[name="_csrf_header"]');
+  var out = document.getElementById('external-auth-test-result');
+
+  function show(text) { if (out) { out.textContent = text; } }
+
+  function probe(url, body) {
+    var headers = {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'};
+    if (token && tokenHeader) { headers[tokenHeader.content] = token.content; }
+    fetch(url, {method: 'POST', credentials: 'same-origin', headers: headers, body: body})
+      .then(function (res) { return res.json(); })
+      .then(function (json) { show(JSON.stringify(json, null, 2)); })
+      .catch(function () { show('HTTP error'); });
+  }
+
+  var headerBtn = document.querySelector('[data-test-header]');
+  if (headerBtn) {
+    headerBtn.addEventListener('click', function () {
+      probe(/*[[@{/external-auth/test/header}]]*/ '/external-auth/test/header', '');
+    });
+  }
+
+  var ticketBtn = document.querySelector('[data-test-ticket]');
+  if (ticketBtn) {
+    ticketBtn.addEventListener('click', function () {
+      var input = document.getElementById('ticket-probe');
+      var ticket = input ? input.value : '';
+      probe(/*[[@{/external-auth/test/ticket}]]*/ '/external-auth/test/ticket',
+            'ticket=' + encodeURIComponent(ticket));
+    });
+  }
+})();
+</script>
+</th:block>
+</body>
+</html>
