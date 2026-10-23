@@ -1165,6 +1165,9 @@ table.tbl a.truncate { display: block; }
 }
 @media (max-width: 900px) {
   .nav-toggle { display: grid; }
+  /* 折叠后 .nav-links 变成绝对定位脱离流，原本靠它的 flex:1 把按钮组顶到右边；
+     少了它，语言/主题/赞赏/用户/菜单会紧贴 logo 排在左边。这里补回右推。 */
+  .nav-right { margin-left: auto; }
   .nav-links {
     position: absolute; top: var(--nav-h); left: 0; right: 0;
     flex-direction: column; gap: 2px; padding: 10px 14px 14px;
