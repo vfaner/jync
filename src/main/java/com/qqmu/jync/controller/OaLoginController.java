@@ -63,6 +63,10 @@ public class OaLoginController {
         if (!config.isEnabled()) {
             return "redirect:/login?oaDisabled";
         }
+        // mode is the single switch: only PASSWORD mode may use the OA login API.
+        if (config.modeOrDefault() != OaAuthConfig.Mode.PASSWORD) {
+            return "redirect:/login";
+        }
 
         String key = LoginAttemptService.key(username, ClientIpResolver.resolve(request));
         if (attemptService.isBlocked(key)) {

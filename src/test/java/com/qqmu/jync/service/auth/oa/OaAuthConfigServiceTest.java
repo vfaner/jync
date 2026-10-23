@@ -64,6 +64,23 @@ class OaAuthConfigServiceTest {
     }
 
     @Test
+    void aRowStoredBeforeTheLocalSwitchExistedStillShowsLocalSignInAsOn() {
+        // Upgrading adds the column as NULL, and NULL means "allowed". The settings page binds
+        // this value to a checkbox: a null renders unchecked, so pressing save would silently
+        // turn the local form off for an administrator who changed nothing.
+        OaAuthConfig old = new OaAuthConfig();
+        old.setId(OaAuthConfigService.SINGLETON_ID);
+        old.setEnabled(true);
+        old.setLocalLoginEnabled(null);
+        when(repository.findById(OaAuthConfigService.SINGLETON_ID)).thenReturn(Optional.of(old));
+
+        OaAuthConfig loaded = service.load();
+
+        assertThat(loaded.getLocalLoginEnabled()).isEqualTo(Boolean.TRUE);
+        assertThat(loaded.isLocalLoginAllowed()).isTrue();
+    }
+
+    @Test
     void enabledRequiresALoginUrl() {
         OaAuthConfig config = enabled();
         config.setLoginUrl("  ");

@@ -183,6 +183,24 @@ class OaLoginControllerTest {
     }
 
     @Test
+    void inAnotherModeThePasswordEndpointTurnsPeopleAway() throws Exception {
+        // mode is the single switch: in HEADER or TICKET mode the OA login API must not be
+        // reachable, or a leftover loginUrl would let the retired method keep signing people in.
+        config.setMode(OaAuthConfig.Mode.HEADER);
+        when(oaAuthClient.authenticate(any(), anyString(), anyString()))
+                .thenReturn(OaAuthResult.success("alice", false));
+
+        MockHttpSession session = new MockHttpSession();
+        mvc.perform(post("/login/oa").session(session).with(csrf())
+                        .param("username", "alice").param("password", "pw"))
+                .andExpect(redirectedUrl("/login"));
+
+        verify(oaAuthClient, never()).authenticate(any(), anyString(), anyString());
+        assertThat(session.getAttribute(
+                HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY)).isNull();
+    }
+
+    @Test
     void anOaCallThatNeverRanStillNeedsTheCsrfToken() throws Exception {
         // CSRF rejects before the handler; the app's access-denied handler answers HTML with a
         // redirect to /?denied rather than a bare 403.
