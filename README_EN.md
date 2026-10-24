@@ -82,7 +82,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, task cloning |
 | Reliability | Idempotent upsert, checkpoint resume, database leases, at-least-once delivery, automatic catch-up after downtime |
 | Observability | Dashboard, change log, audit log, system log, per-table throughput log and CDC status panel |
-| Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; local accounts plus three SSO modes |
+| Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout usable on phones; local accounts plus three SSO modes |
 
 ---
 
@@ -706,12 +706,14 @@ Procedural control flow in stored procedures cannot be translated reliably by te
 | Full load | **Keyset chunks + in-table parallelism + streaming + checkpoints** | Orchestrate yourself | Sharded jobs | Implement inside the job | One-off wizard |
 | Structure sync | **Tables, indexes, views, procedures created** | Partial; loading is your code | Pre-create tables | Partial | One-off only |
 | Dialect conversion | **Types, functions, quoting, pagination, procedures** | No | Partial | Partial, manual | Partial |
+| Per-task shaping and operations | **Column cleansing, target table renaming, interval / Cron, full-load batch and parallelism, source / target previews — all configured in the UI** | SMT or custom code | JSON jobs | Transform steps | Client-side preview only |
 | Domestic databases | **DM, Kingbase, OceanBase and 10+ first-class presets** | Partial | Partial | Partial | Partial |
 | Source intrusion | **Read-only by default**; CDC needs replication grants but is still read-only | Requires binlog / WAL | Read-only | Read-only | Read-only |
 | Resume / idempotency | **Persisted cursor + primary-key upsert + checkpoint** | Offsets | Not applicable | Partial | Not applicable |
+| Mobile / responsive | **Drawer navigation below 900px, role pickers and field mappings stacked below 640px, horizontally scrolling wide tables; check progress, start or stop tasks and make light edits from a phone browser** | No built-in UI | None (CLI) | Desktop client | Mostly desktop clients |
 | Operations cost | **One process** | Streaming platform + consumers | Job scheduling | Repository + scheduler | Manual |
 
-**Six differences**
+**Eight differences**
 
 1. **One jar versus a streaming stack**: when the scale does not justify the operational cost, the difference is decisive.
 2. **Minutes to first sync**: implementers follow a wizard instead of learning a streaming platform first.
@@ -719,6 +721,8 @@ Procedural control flow in stored procedures cannot be translated reliably by te
 4. **Built for domestic databases and 信创 migrations**: dedicated dialects, not "generic JDBC might connect".
 5. **Read-only polling by default**: one read-only account is enough; switch to log CDC when seconds matter.
 6. **Full load designed for continuous sync too**: chunking, parallelism, streaming and checkpoints make the first load a resumable, observable engineering process.
+7. **It works from a phone browser**: navigation collapses into a drawer, role pickers and field mappings stack on narrow screens, and wide tables scroll horizontally — check progress or start/stop a task without walking back to a desk.
+8. **The migration chores need no code**: column cleansing, target table renaming, custom schedules, full-load batch and parallelism, and source / target previews are all on the task page; the same cleansing rules apply to full load, incremental sync and CDC.
 
 ---
 
@@ -800,4 +804,4 @@ Bug reports, feature requests and pull requests are welcome through any channel 
 
 [MIT License](LICENSE), for commercial and non-commercial use. Bundled third-party JDBC drivers keep their vendors' licenses; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). GBase, ShenTong and Huawei GaussDB drivers are not distributed with this project.
 
-Maintained by 沐沐开源工坊: GitHub [@vfaner](https://github.com/vfaner), Gitee [@super_rgh](https://gitee.com/super_rgh). The "Jync / 捷同" name and logo are covered by [TRADEMARK.md](TRADEMARK.md) — MIT does not grant trademark rights, so keep the attribution and brand marks when redistributing modified versions.
+Maintained by 沐沐开源工坊: GitHub [@vfaner](https://github.com/vfaner), Gitee [@super_rgh](https://gitee.com/super_rgh). The code is free to use, modify and redistribute under MIT; the only request is not to replace the "Jync / 捷同" name, logo or author credit with your own — see [TRADEMARK.md](TRADEMARK.md).
