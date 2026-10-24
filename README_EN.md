@@ -176,7 +176,7 @@ Every table costs exactly one query per cycle:
 SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 ```
 
-- **Cursor selection is automatic**: `TIMESTAMP` catches inserts and updates, `ROW_SCN` catches row-level Oracle changes, `IDENTITY` catches inserts only, and small tables can use `FULL_COMPARE` periodically.
+- **Cursor selection is automatic**: `TIMESTAMP` catches inserts and updates, `ROW_SCN` catches row-level Oracle changes, and `IDENTITY` catches inserts only. Small keyed tables can use `FULL_COMPARE` to re-read the whole table on each interval: automatic selection only covers tables at or below `sync.full-compare-max-rows` (default 20000), while choosing it explicitly at task level bypasses that cap and re-reads the source table every poll interval. Deletes are handled only when row deletion is enabled and the table is within the cap. The task page and the start-up log list tables that are over the cap or too heavy for the current poll interval, with a suggested interval.
 - **Watermark lag**: the high-water mark is pulled back by `safety-lag-ms`, so transactions that commit slightly out of clock order are re-read on the next cycle and absorbed by the idempotent upsert.
 - **The cursor advances only after the target commit**, so the failure semantics are at-least-once: no row is lost.
 - The default polling mode never reads the source's binlog and installs no triggers; one read-only account is enough.
@@ -625,7 +625,7 @@ Main settings in `application.yml` (the `sync.*` prefix):
 | `sync.defer-secondary-indexes` | `true` | Build non-unique secondary indexes after the full load |
 | `sync.max-pool-size` | `5` | Connection pool per database, 5–10 recommended; also caps parallelism |
 | `sync.safety-lag-ms` | `1000` | Timestamp watermark pull-back |
-| `sync.full-compare-max-rows` | `20000` | Row-count ceiling for full-comparison tables |
+| `sync.full-compare-max-rows` | `20000` | Row-count ceiling for *automatic* full-compare selection; an explicit task-level choice bypasses it, and the page plus the start-up warning will say so |
 | `sync.row-count-audit-interval-ms` | `60000` | Row-count audit interval; `0` disables it |
 | `sync.lock-ttl-ms` | `300000` | Sync lock lease duration |
 | `sync.cdc.reconnect-backoff-ms` | `1000` | Initial CDC reconnect backoff |

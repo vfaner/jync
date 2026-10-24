@@ -316,6 +316,19 @@ public class ProjectController {
         // CDC card looks checked.
         model.addAttribute("storedStrategy", current.name());
 
+        // An explicit FULL_COMPARE choice skips the resolver's row cap, and even a table
+        // within the cap can be heavy for a short poll interval. Say so before the first
+        // cycle instead of letting the source load explain it. A snapshot read failure must
+        // not take the page down — the banner is advisory.
+        ProjectService.FullCompareLoadReport fullCompareLoad = null;
+        try {
+            fullCompareLoad = projectService.inspectFullCompareLoad(id, config);
+        } catch (RuntimeException e) {
+            log.debug("Could not estimate FULL_COMPARE load for project {}: {}",
+                    id, e.toString());
+        }
+        model.addAttribute("fullCompareLoad", fullCompareLoad);
+
         // --- CDC status panel (C3) ------------------------------------------------------
         // Keyed off the STORED strategy, not selectedStrategy: a merely-recommended CDC
         // card (probe passed on a pristine POLLING project) has no position and no

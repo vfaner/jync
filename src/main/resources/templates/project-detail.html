@@ -33,6 +33,41 @@
         <div class="alert-body" th:text="${#messages.msgOrNull(sourceWarning) ?: sourceWarning}">warning</div>
     </div>
 
+    <!-- 全量比对每轮整表读写：显式选择会绕过自动解析的行数上限，即使没超上限，短间隔下
+         也可能过重。两类表都先在这里说明代价；无主键表不在列表内（只做一次种子）。 -->
+    <div th:if="${fullCompareLoad != null and !fullCompareLoad.empty}" class="alert alert-warn">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <div class="alert-body">
+            <strong th:text="#{project.fullcompare.load.title}">warning</strong>
+            <div th:text="#{project.fullcompare.load.body(
+                    ${#numbers.formatInteger(fullCompareLoad.intervalMs, 1, 'COMMA')})}">body</div>
+            <ul>
+                <li th:each="l : ${fullCompareLoad.tables}"
+                    th:if="${l.overCap and l.recommendedIntervalMs > fullCompareLoad.intervalMs}"
+                    th:text="#{project.fullcompare.load.overCap(
+                            ${l.table.name},
+                            ${#numbers.formatInteger(l.table.approximateRowCount, 1, 'COMMA')},
+                            ${#numbers.formatInteger(fullCompareLoad.maxRows, 1, 'COMMA')},
+                            ${#numbers.formatInteger(l.recommendedIntervalMs / 1000, 1, 'COMMA')})}">
+                    over cap</li>
+                <li th:each="l : ${fullCompareLoad.tables}"
+                    th:if="${l.overCap and l.recommendedIntervalMs <= fullCompareLoad.intervalMs}"
+                    th:text="#{project.fullcompare.load.overCapNoInterval(
+                            ${l.table.name},
+                            ${#numbers.formatInteger(l.table.approximateRowCount, 1, 'COMMA')},
+                            ${#numbers.formatInteger(fullCompareLoad.maxRows, 1, 'COMMA')})}">
+                    over cap</li>
+                <li th:each="l : ${fullCompareLoad.tables}" th:if="${!l.overCap}"
+                    th:text="#{project.fullcompare.load.heavy(
+                            ${l.table.name},
+                            ${#numbers.formatInteger(l.table.approximateRowCount, 1, 'COMMA')},
+                            ${#numbers.formatInteger(l.recommendedIntervalMs / 1000, 1, 'COMMA')})}">
+                    heavy</li>
+            </ul>
+            <div th:text="#{project.fullcompare.load.hint}">hint</div>
+        </div>
+    </div>
+
     <!-- 运行控制 -->
     <div class="card">
         <div class="card-head">

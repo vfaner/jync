@@ -73,6 +73,16 @@ public class SyncEngine {
      */
     private final Set<String> verifiedTables = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Project/table pairs already warned about exceeding the FULL_COMPARE row cap.
+     *
+     * <p>An explicit FULL_COMPARE choice bypasses the resolver's cap, and the data phase then
+     * re-reads the whole table every poll interval. The first such cycle says so at WARN;
+     * repeating it every poll would bury the log, and staying silent would leave the source
+     * load unexplained. In-memory on purpose: a restart is a fine moment to say it again.
+     */
+    private final Set<String> warnedOversizedFullCompare = ConcurrentHashMap.newKeySet();
+
     public SyncEngine(DataSourceManager dataSourceManager,
                       ChangeDetector changeDetector,
                       CursorStrategyResolver cursorResolver,
@@ -170,6 +180,8 @@ public class SyncEngine {
                     || ctx.getConfig().isSyncProcedures()) {
                 blockedTables = applyStructuralChanges(sourceMeta, targetConn, ctx, result);
             }
+
+            warnOversizedFullCompareTables(sourceMeta, ctx);
 
             if (ctx.getConfig().isSyncData()) {
                 syncData(sourceMeta, sourceConn, targetConn, ctx, result, blockedTables);
@@ -642,6 +654,60 @@ public class SyncEngine {
     private void forgetVerifiedShape(SyncContext ctx, TableMeta table) {
         verifiedTables.remove(verifiedKey(ctx.projectId(),
                 ctx.getConfig().targetTableName(table.getName())));
+    }
+
+    /**
+     * Names, once per process, every selected keyed table whose FULL_COMPARE cycle is too
+     * much: over the row cap, or too heavy for the task's current poll interval.
+     *
+     * <p>Advisory only: scheduling and the data phase are untouched. Keyless tables are
+     * skipped because recurring FULL_COMPARE on them is skipped after the one-time seed.
+     */
+    private void warnOversizedFullCompareTables(DatabaseMeta sourceMeta, SyncContext ctx) {
+        if (!ctx.getConfig().isSyncData()
+                || ctx.getConfig().getCaptureStrategyOrDefault()
+                        != CaptureStrategy.FULL_COMPARE) {
+            return;
+        }
+        long limit = properties.getFullCompareMaxRows();
+        long intervalMs = FullCompareLoadEstimator.effectiveIntervalMs(
+                ctx.getConfig(), properties.getPollInterval());
+        for (TableMeta table : sourceMeta.getTables()) {
+            if (!ctx.getConfig().includesTable(table.getName())
+                    || !table.hasPrimaryKey()
+                    || table.getApproximateRowCount() == null) {
+                continue;
+            }
+            long rows = table.getApproximateRowCount();
+            boolean overCap = rows > limit;
+            if (!overCap && !FullCompareLoadEstimator.isHeavy(rows, intervalMs)) {
+                continue;
+            }
+            // The reason is part of the key: a table first named as merely heavy should be
+            // named again if it later crosses the cap.
+            String key = ctx.projectId() + ":"
+                    + table.getName().toUpperCase(java.util.Locale.ROOT)
+                    + (overCap ? ":over" : ":heavy");
+            if (!warnedOversizedFullCompare.add(key)) {
+                continue;
+            }
+            long recommendedMs = FullCompareLoadEstimator.recommendedIntervalMs(rows);
+            if (overCap) {
+                log.warn("Project '{}' uses FULL_COMPARE and table '{}' has about {} rows,"
+                                + " over the {} row cap; at the current {} ms interval each"
+                                + " cycle reads the whole table. Suggested interval: at least"
+                                + " {} ms. Use incremental polling or log CDC, or raise"
+                                + " sync.full-compare-max-rows if that load is intended.",
+                        ctx.projectName(), table.getName(), rows, limit, intervalMs,
+                        recommendedMs);
+            } else {
+                log.warn("Project '{}' uses FULL_COMPARE and table '{}' has about {} rows;"
+                                + " at the current {} ms interval each cycle reads and writes"
+                                + " the whole table. Suggested interval: at least {} ms."
+                                + " Consider incremental polling or log CDC.",
+                        ctx.projectName(), table.getName(), rows, intervalMs, recommendedMs);
+            }
+        }
     }
 
     /** Synchronizes rows for every selected table, one table at a time. */

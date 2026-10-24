@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +13,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import org.quartz.CronExpression;
 import org.springframework.data.domain.PageRequest;
@@ -954,6 +956,92 @@ public class ProjectService {
                     project.getName(), e.toString());
             throw new IllegalStateException("error.source.objects.read.failed", e);
         }
+    }
+
+    /** One FULL_COMPARE table worth warning about, and why. */
+    public record FullCompareLoad(TableMeta table, boolean overCap, long recommendedIntervalMs) {
+
+        public TableMeta getTable() {
+            return table;
+        }
+
+        public boolean isOverCap() {
+            return overCap;
+        }
+
+        public long getRecommendedIntervalMs() {
+            return recommendedIntervalMs;
+        }
+    }
+
+    /** The FULL_COMPARE load warnings for one task, with the interval the estimate used. */
+    public record FullCompareLoadReport(long intervalMs, long maxRows,
+                                        List<FullCompareLoad> tables) {
+
+        public long getIntervalMs() {
+            return intervalMs;
+        }
+
+        public long getMaxRows() {
+            return maxRows;
+        }
+
+        public List<FullCompareLoad> getTables() {
+            return tables;
+        }
+
+        public boolean isEmpty() {
+            return tables.isEmpty();
+        }
+
+        public boolean isOverCap() {
+            return tables.stream().anyMatch(FullCompareLoad::overCap);
+        }
+    }
+
+    /**
+     * Selected tables whose FULL_COMPARE cycle is worth warning about, largest first.
+     *
+     * <p>Two conditions qualify. A table above {@code full-compare-max-rows} is over the cap
+     * that only gates the <em>automatic</em> strategy choice — an explicit project-level
+     * FULL_COMPARE bypasses it. A table within the cap can still be too heavy for the task's
+     * current poll interval, because every cycle re-reads and re-upserts the whole table;
+     * {@link com.qqmu.jync.service.sync.FullCompareLoadEstimator} supplies that estimate.
+     *
+     * <p>Keyless tables are excluded: recurring FULL_COMPARE on them is skipped after the
+     * one-time seed, so they are not read every cycle. A null approximate count also stays
+     * out — the warning must not guess.
+     */
+    public FullCompareLoadReport inspectFullCompareLoad(Long projectId, SyncConfig config) {
+        long intervalMs = com.qqmu.jync.service.sync.FullCompareLoadEstimator
+                .effectiveIntervalMs(config, properties.getPollInterval());
+        long maxRows = properties.getFullCompareMaxRows();
+        if (config == null
+                || config.getCaptureStrategyOrDefault() != CaptureStrategy.FULL_COMPARE) {
+            return new FullCompareLoadReport(intervalMs, maxRows, List.of());
+        }
+        List<FullCompareLoad> loads = snapshotService
+                .loadAll(projectId, ObjectType.TABLE, TableMeta.class)
+                .values().stream()
+                .filter(table -> table.getName() != null
+                        && config.includesTable(table.getName()))
+                .filter(TableMeta::hasPrimaryKey)
+                .filter(table -> table.getApproximateRowCount() != null)
+                .map(table -> {
+                    long rows = table.getApproximateRowCount();
+                    return new FullCompareLoad(table, rows > maxRows,
+                            com.qqmu.jync.service.sync.FullCompareLoadEstimator
+                                    .recommendedIntervalMs(rows));
+                })
+                .filter(load -> load.overCap()
+                        || com.qqmu.jync.service.sync.FullCompareLoadEstimator.isHeavy(
+                                load.table().getApproximateRowCount(), intervalMs))
+                .sorted(Comparator.comparingLong(
+                                (FullCompareLoad load) -> load.table().getApproximateRowCount())
+                        .reversed()
+                        .thenComparing(load -> load.table().getName()))
+                .collect(Collectors.toList());
+        return new FullCompareLoadReport(intervalMs, maxRows, loads);
     }
 
     /**
