@@ -699,23 +699,23 @@ Procedural control flow in stored procedures cannot be translated reliably by te
 <a name="comparison"></a>
 ## Comparison with existing tools
 
-> Basis: vendor documentation and the default deployment shape of each open-source tool, scoped to "out-of-the-box continuous sync between heterogeneous databases".
+> Basis: as of 2026-10, vendor documentation and the default deployment shape of each open-source tool, scoped to the "out-of-the-box continuous sync between heterogeneous databases" capability that overlaps this tool. Each product is stronger in its own domain; this table is not an overall assessment of any of them, and official documentation prevails where details differ. A fuller dimension-by-dimension comparison and the boundary cases are at <https://jync.qqmu.com/compare.html>.
 
 | Dimension | **Jync** | Debezium + Kafka | DataX | Kettle | Navicat / DBeaver transfer |
 |---|---|---|---|---|---|
 | Deployment | **One jar** | Kafka + Connect + ZK | Client-side jobs | Desktop + repository | Desktop client |
 | Configuration | **Web UI** | YAML / REST + consumer code | JSON jobs | Graphical ETL | Wizards |
 | Time to first sync | **Minutes**: download, start, click | Days: stand up the Kafka stack | Hours: write JSON jobs | Days: learn the transform model | Minutes, one-off only |
-| Continuous incremental | Polling / Cron + log CDC (MySQL binlog, Oracle LogMiner, PostgreSQL, SQL Server) | Log-based | Not applicable | Partial (self-built schedule) | Not applicable |
-| Full load | **Keyset chunks + in-table parallelism + streaming + checkpoints** | Orchestrate yourself | Sharded jobs | Implement inside the job | One-off wizard |
+| Continuous incremental | Polling / Cron + log CDC (MySQL binlog, Oracle LogMiner, PostgreSQL, SQL Server) | Log-based | Not applicable (one-shot) | Partial (self-built schedule) | Partial (scheduled jobs / full-table compare) |
+| Full load | **Keyset chunks + in-table parallelism + streaming + checkpoints** | Initial / incremental snapshots supported; loading into a heterogeneous target is your consumer code | Sharded jobs | Implement inside the job | One-off wizard |
 | Structure sync | **Tables, indexes, views, procedures created** | Partial; loading is your code | Pre-create tables | Partial | One-off only |
 | Dialect conversion | **Types, functions, quoting, pagination, procedures** | No | Partial | Partial, manual | Partial |
 | Per-task shaping and operations | **Column cleansing, target table renaming, interval / Cron, full-load batch and parallelism, source / target previews — all configured in the UI** | SMT or custom code | JSON jobs | Transform steps | Client-side preview only |
 | Domestic databases | **DM, Kingbase, OceanBase and 10+ first-class presets** | Partial | Partial | Partial | Partial |
 | Source intrusion | **Read-only by default**; CDC needs replication grants but is still read-only | Requires binlog / WAL | Read-only | Read-only | Read-only |
 | Resume / idempotency | **Persisted cursor + primary-key upsert + checkpoint** | Offsets | Not applicable | Partial | Not applicable |
-| Mobile / responsive | **Drawer navigation below 900px, role pickers and field mappings stacked below 640px, horizontally scrolling wide tables; check progress, start or stop tasks and make light edits from a phone browser** | No built-in UI | None (CLI) | Desktop client | Mostly desktop clients |
-| Operations cost | **One process** | Streaming platform + consumers | Job scheduling | Repository + scheduler | Manual |
+| Mobile / responsive | **Drawer navigation below 900px, role pickers and field mappings stacked below 640px, horizontally scrolling wide tables; check progress, start or stop tasks and make light edits from a phone browser** | Connector management UI; no mobile-adapted business UI | None (CLI) | Desktop client | Mostly desktop clients |
+| Operations cost | **One process** | Streaming platform + consumers | External scheduler required | Repository + scheduler | Client scheduler / manual |
 
 **Eight differences**
 
