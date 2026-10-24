@@ -41,6 +41,7 @@ import com.github.shyiko.mysql.binlog.event.Event;
 import com.github.shyiko.mysql.binlog.event.EventHeaderV4;
 import com.github.shyiko.mysql.binlog.event.EventType;
 import com.github.shyiko.mysql.binlog.event.TableMapEventData;
+import com.github.shyiko.mysql.binlog.network.ServerException;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -377,7 +378,8 @@ class CdcConsumerTest {
         verify(taskStore).recordCdcFailure(eq(12L), detail.capture());
         assertThat(detail.getValue()).startsWith("DESERIALIZATION_STRIKE_OUT:")
                 .contains("target down");
-        verify(client, times(6)).disconnect();                   // 每次 choke 都当场断连
+        // 每次 choke 都当场断连(6 次),退出时 finally 再无条件断连一次以关掉 keepalive。
+        verify(client, times(7)).disconnect();
     }
 
     @Test
@@ -647,6 +649,73 @@ class CdcConsumerTest {
         verify(lock).close();                                        // finally 照常释放租约
         verify(stateWriter).recordLog(18L, ObjectType.PROJECT, "cdc-18", ChangeType.INFO,
                 "CDC consumer stopped", true, 0L);                   // 普通 INFO 停机行
+    }
+
+    // —— 生产事故(2026-10-24):SERVER_ID_CONFLICT 把项目停成 ERROR 后,消费者线程已退出,
+    // 但 keepalive 线程仍在每 ~2 分钟自动重连(日志可见),已停车的项目继续占着源端
+    // binlog 连接,还会把另一实例的消费者踢掉。根因是 finally/requestStop 只在
+    // isConnected() 为真时才 disconnect();被踢时它恰好是 false,keepalive 线程就留了下来。
+    // disconnect() 会 shutdownNow keepalive 执行器,所以停车/停机必须无条件调用。——
+
+    @Test
+    void fatalParkShutsDownTheClientEvenWhenItReportsDisconnected() throws Exception {
+        Project project = project(19L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(true);
+        BinlogClientFactory factory = mock(BinlogClientFactory.class);
+        BinaryLogClient client = mock(BinaryLogClient.class);
+        when(client.isConnected()).thenReturn(false);            // 已被源端踢掉
+        doThrow(new ServerException(
+                "A replica with the same server_uuid/server_id as this replica has connected"
+                        + " to the source", 1236, "HY000"))
+                .when(client).connect(anyLong());
+        when(factory.createClient(any(), anyLong(), any())).thenReturn(client);
+        SyncTaskStore taskStore = mock(SyncTaskStore.class);
+        CdcConsumer consumer = chokeConsumer(project, lock, factory,
+                mock(CdcPositionStore.class), taskStore, mock(DataSourceManager.class),
+                new SyncProperties());
+
+        Thread thread = new Thread(consumer, "cdc-test-19");
+        thread.start();
+        thread.join(10_000);
+
+        assertThat(thread.isAlive()).isFalse();
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(taskStore).recordCdcFailure(eq(19L), detail.capture());
+        assertThat(detail.getValue()).startsWith("SERVER_ID_CONFLICT:");
+        verify(client).disconnect();                             // keepalive 必须被关掉
+    }
+
+    @Test
+    void stopRequestShutsDownTheClientEvenWhileItIsReconnecting() throws Exception {
+        Project project = project(20L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(true);
+        BinlogClientFactory factory = mock(BinlogClientFactory.class);
+        BinaryLogClient client = mock(BinaryLogClient.class);
+        CountDownLatch enteredConnect = new CountDownLatch(1);
+        CountDownLatch releaseConnect = new CountDownLatch(1);
+        when(client.isConnected()).thenReturn(false);            // 断流期间:keepalive 正重连
+        doAnswer(inv -> {
+            enteredConnect.countDown();
+            releaseConnect.await(5, TimeUnit.SECONDS);
+            return null;
+        }).when(client).connect(anyLong());
+        when(factory.createClient(any(), anyLong(), any())).thenReturn(client);
+        CdcConsumer consumer = chokeConsumer(project, lock, factory,
+                mock(CdcPositionStore.class), mock(SyncTaskStore.class),
+                mock(DataSourceManager.class), new SyncProperties());
+
+        Thread thread = new Thread(consumer, "cdc-test-20");
+        thread.start();
+        assertThat(enteredConnect.await(5, TimeUnit.SECONDS)).isTrue();
+
+        consumer.requestStop();
+        verify(client, atLeastOnce()).disconnect();              // 不能看 isConnected() 才停
+
+        releaseConnect.countDown();
+        thread.join(10_000);
+        assertThat(thread.isAlive()).isFalse();
     }
 
     private static CdcTableBinding pkBinding() {
