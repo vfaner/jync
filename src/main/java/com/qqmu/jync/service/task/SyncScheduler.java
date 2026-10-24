@@ -20,7 +20,6 @@ import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
-import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
 
