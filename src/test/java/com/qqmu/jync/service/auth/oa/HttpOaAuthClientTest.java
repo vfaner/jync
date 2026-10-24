@@ -163,6 +163,35 @@ class HttpOaAuthClientTest {
         assertThat(result.getErrorKey()).isEqualTo("error.oa.user.missing");
     }
 
+    /**
+     * The OA response is remote text, not a trusted identifier: an embedded control character
+     * would travel into the session principal and the nav. Header mode already strips them;
+     * the response-based modes must not be the exception.
+     */
+    @Test
+    void controlCharactersInTheReturnedUserNameAreStripped() {
+        respond("/login", 200, "application/json", "{\"uid\":\"al\\u0001ice\"}");
+        OaAuthConfig config = config("/login");
+        config.setUserField("uid");
+
+        OaAuthResult result = client().authenticate(config, "alice", "pw");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getUsername()).isEqualTo("alice");
+    }
+
+    @Test
+    void aUserNameMadeOnlyOfControlCharactersIsAFailure() {
+        respond("/login", 200, "application/json", "{\"uid\":\"\\u0001\\u0002\"}");
+        OaAuthConfig config = config("/login");
+        config.setUserField("uid");
+
+        OaAuthResult result = client().authenticate(config, "alice", "pw");
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorKey()).isEqualTo("error.oa.user.missing");
+    }
+
     @Test
     void administratorMarkerAcceptsAnyValueInTheCommaList() {
         respond("/login", 200, "application/json", "{\"uid\":\"carol\",\"role\":\"1\"}");
