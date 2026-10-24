@@ -64,11 +64,13 @@ public class AuthController {
             return localForm(model, config, true);
         }
         // A ticket outcome must be readable: bouncing the browser to the portal would hide the
-        // one message that tells the user to start again from there. Presence, not value: these
-        // arrive as bare query flags (/login?ticketError), whose value is empty or null
-        // depending on the container.
+        // one message that tells the user what happened — including the lockout, which would
+        // otherwise send a throttled caller straight back to the portal to retry. Presence, not
+        // value: these arrive as bare query flags (/login?ticketError), whose value is empty or
+        // null depending on the container.
         boolean ticketFeedback = request.getParameterValues("ticketError") != null
-                || request.getParameterValues("ticketMissing") != null;
+                || request.getParameterValues("ticketMissing") != null
+                || request.getParameterValues("ticketLocked") != null;
         if (!ticketFeedback && StringUtils.hasText(config.getLoginEntryUrl())) {
             return "redirect:" + config.getLoginEntryUrl();
         }
