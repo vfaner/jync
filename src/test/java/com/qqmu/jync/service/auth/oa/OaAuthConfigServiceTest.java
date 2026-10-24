@@ -192,6 +192,60 @@ class OaAuthConfigServiceTest {
     }
 
     @Test
+    void turningLocalSignInOffWithoutAWorkingExternalMethodIsRejected() {
+        // Otherwise this one save is a lockout: no local form and no external way in, with no
+        // in-app way to undo it.
+        OaAuthConfig config = new OaAuthConfig();
+        config.setEnabled(false);
+        config.setLocalLoginEnabled(Boolean.FALSE);
+
+        assertThatThrownBy(() -> service.save(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.oa.local.required");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void localSignInMayBeTurnedOffOnceExternalAuthIsEnabled() {
+        OaAuthConfig config = enabled();
+        config.setLocalLoginEnabled(Boolean.FALSE);
+
+        assertThat(service.save(config).isLocalLoginAllowed()).isFalse();
+    }
+
+    @Test
+    void theRescueSwitchPutsLocalSignInBackAndSavesIt() {
+        OaAuthConfig stored = new OaAuthConfig();
+        stored.setId(OaAuthConfigService.SINGLETON_ID);
+        stored.setEnabled(true);
+        stored.setLocalLoginEnabled(Boolean.FALSE);
+        when(repository.findById(OaAuthConfigService.SINGLETON_ID))
+                .thenReturn(Optional.of(stored));
+
+        assertThat(service.resetLocalLogin()).isTrue();
+        assertThat(stored.getLocalLoginEnabled()).isEqualTo(Boolean.TRUE);
+        verify(repository).save(stored);
+    }
+
+    @Test
+    void theRescueSwitchChangesNothingWhenLocalSignInIsAlreadyAllowed() {
+        OaAuthConfig stored = new OaAuthConfig();
+        stored.setId(OaAuthConfigService.SINGLETON_ID);
+        stored.setLocalLoginEnabled(Boolean.TRUE);
+        when(repository.findById(OaAuthConfigService.SINGLETON_ID))
+                .thenReturn(Optional.of(stored));
+
+        assertThat(service.resetLocalLogin()).isFalse();
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void theRescueSwitchCreatesNoRowWhenNothingIsStored() {
+        assertThat(service.resetLocalLogin()).isFalse();
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     void disablingDoesNotRequireAnyOtherField() {
         OaAuthConfig config = new OaAuthConfig();
         config.setEnabled(false);

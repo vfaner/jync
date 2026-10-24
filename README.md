@@ -262,7 +262,8 @@ nohup java -jar jync.jar --spring.config.additional-location=file:./application.
 
 - 网关头只信任**直接 TCP 对端**在 `app.security.trusted-proxies`（默认回环）内的请求；来自其他地址的身份头一律忽略。
 - 建议同时配置共享密钥头，由网关在注入身份头时一并带上。
-- 本地账号登录默认保留为应急入口（`/login/local`）；关闭后 `POST /login` 也会被拒绝。
+- 本地账号登录默认保留为应急入口（`/login/local`）；关闭后 `POST /login` 也会被拒绝。关闭前必须先启用并配置好外部认证（否则保存会被拒绝），页面上还会二次确认。
+- **恢复本地登录**：如果关闭后外部认证不可用、无人能登录，在服务器上以 `JYN_RESET_LOGIN=true` 启动一次——Jync 会把本地登录重新打开并保存，然后照常启动；登录后修好外部配置，去掉该变量并重启即可。
 - 嵌入 iframe 需要 HTTPS，并同时设置 `JYN_COOKIE_SECURE=true` 与 `JYN_COOKIE_SAME_SITE=None`；否则 `SameSite=Lax` 的会话 Cookie 会让登录后掉线。
 
 ---

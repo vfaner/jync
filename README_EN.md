@@ -512,7 +512,8 @@ The metadata store uses `ddl-auto: update`, so its schema evolves automatically.
 
 - Header mode trusts the **direct TCP peer** only (loopback by default, plus `app.security.trusted-proxies`).
 - Configure the optional shared-secret header so the gateway proves it injected the identity.
-- Local sign-in stays available at `/login/local` unless the administrator turns it off.
+- Local sign-in stays available at `/login/local` unless the administrator turns it off. Turning it off requires an enabled, complete external method (the save is refused otherwise) and the page asks for confirmation first.
+- **Recovering local sign-in**: if the external provider stops working after local sign-in was turned off, start Jync once with `JYN_RESET_LOGIN=true` — it re-enables local sign-in, saves the change and boots normally. Fix the external settings, then remove the variable and restart.
 - iframe embedding requires HTTPS plus both `JYN_COOKIE_SECURE=true` and `JYN_COOKIE_SAME_SITE=None`; otherwise the `SameSite=Lax` session cookie drops the login.
 
 ---
