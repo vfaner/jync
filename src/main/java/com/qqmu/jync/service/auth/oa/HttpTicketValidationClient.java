@@ -32,6 +32,16 @@ public class HttpTicketValidationClient implements TicketValidationClient {
 
     private static final String DEFAULT_TICKET_PARAM = "ticket";
 
+    /**
+     * One client for every validation, for the same reason as {@link HttpOaAuthClient}: the
+     * instance owns a selector thread and a connection pool. The per-call deadline stays on
+     * the request; the connect timeout only bounds the TCP handshake.
+     */
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
@@ -76,15 +86,10 @@ public class HttpTicketValidationClient implements TicketValidationClient {
             return OaAuthResult.failure("error.oa.url.invalid");
         }
 
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(timeoutMs))
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
-
         long started = System.nanoTime();
         HttpResponse<InputStream> response;
         try {
-            response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
         } catch (HttpTimeoutException ex) {
             return OaAuthResult.failure("error.oa.unreachable");
         } catch (IOException ex) {
