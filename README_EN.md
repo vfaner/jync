@@ -223,26 +223,30 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 
 | Symptom | Usual cause | What to do first |
 |---|---|---|
-| `commit%` is the largest share | Slow target redo, slow disk, synchronous standby, large transactions | Raise the batch size to commit less often; check storage and standbys; keep deferred indexes enabled |
-| `write%` is largest | Target binding, network round trips, foreign keys and index maintenance, large values | Raise the batch size; suspend target foreign keys; inspect large values and indexes |
-| `read%` is largest | Full or wide scans on the source, an unindexed cursor, a busy source | Confirm the cursor column is indexed; raise the fetch size; add parallelism; run off-peak |
-| `rowsPerBatch` far below the batch size | The driver is not batching, or a large value is forcing single-row commits | Check driver version and LOB settings; confirm the batch byte budget is not filled by one value |
-| No share dominates but `rows/s` is low | High network RTT, tiny batches, a single thread | Raise both batch size and parallelism; check link latency |
+| `commit%` is the largest share | Slow target redo, slow disk, synchronous standby, large transactions | Raise the batch from 2000 to 5000 to commit less often; check storage and standbys; keep deferred indexes enabled |
+| `write%` is largest | Target binding, network round trips, foreign keys and index maintenance, large values | Raise the batch from 2000 to 5000; suspend target foreign keys; inspect large-value binding and indexes |
+| `read%` is largest | Full or wide scans on the source, an unindexed cursor, a busy source | Confirm the cursor column is indexed; raise fetch to 2000–5000 (no effect on a MySQL source); step parallelism 1 → 2 → 4; run off-peak |
+| `rowsPerBatch` stays below half the batch size | The driver is not batching, or a large value is forcing single-row commits | Check driver version and LOB settings; confirm the batch byte budget is not filled by one value |
+| No share dominates but `rows/s` is low | High network RTT, tiny batches, a single thread | Keep batch at 1000 or more; step parallelism 1 → 2 (about +57% in the baseline); check link latency |
 
 ### Tuning the knobs
 
-| Setting | Default | Suggested range | Effect and trade-off |
-|---|---|---|---|
-| `sync.full-load-batch-size` | `2000` | 1000–5000 (max 20000) | Rows per batch. Larger batches commit less often and run faster; past 5000 the gain flattens while rollback and memory costs keep rising |
-| `sync.full-load-fetch-size` | `2000` | 1000–5000 | Source result-set batch. Lower it when the source or the JVM is memory-tight, especially for wide LOB tables |
-| `sync.full-load-parallelism` | `2` | 1–4 (max 8) | Workers per table. 1→2 is the biggest jump; 2→4 adds roughly 15–20%; beyond that it is mostly extra load |
-| `sync.chunk-size` | `100000` | 10000–500000 | Rows per chunk, and the most a crash can re-read. `0` disables chunking |
-| `sync.initial-load-insert-first` | `true` | on / off | Use INSERT instead of upsert into an empty table; a table with rows still uses idempotent upsert |
-| `sync.defer-secondary-indexes` | `true` | on / off | Build non-unique secondary indexes after the load; primary keys and unique indexes are always created up front |
-| `sync.max-pool-size` | `5` | see note | Connection pool per database. Parallelism is capped by the pool (pool minus one for distinct endpoints; tighter when both sides share a config) |
-| Suspend target foreign keys | on | on / off | A task-level option that avoids ordering failures and per-row constraint checks during the write |
+| Setting | Default | Accepted range (hard limit) | Recommended | Effect and trade-off |
+|---|---|---|---|---|
+| `sync.full-load-batch-size` | `2000` | **1–20000**; anything above is clamped to 20000; a task-level value ≤ 0 means unset | **1000–5000**; 500–2000 for wide or LOB-heavy tables | Rows per batch. Larger batches commit less often and run faster; past 5000 the gain flattens while rollback and memory costs keep rising |
+| `sync.full-load-fetch-size` | `2000` | **1–20000**; anything above is clamped to 20000 | **1000–5000**; 100–1000 for LOB-heavy tables; 1–10 when a single value exceeds 1 MB | Source result-set batch, affecting reads only. Lower it when memory is tight; a MySQL source always streams row by row, so the value has no effect there |
+| `sync.full-load-parallelism` | `2` | **1–8**, further capped by the pool (below); a task-level value ≤ 0 means unset | **1–4**; 1 on shared production databases, 2–4 in a dedicated migration window | Workers per table. 1→2 is the biggest jump; 2→4 adds roughly 15–20%; beyond that it is mostly extra load on both databases |
+| `sync.chunk-size` | `100000` | **≥ 1**; `0` or a negative value disables chunking; no upper limit | **50000–200000**; avoid below 10000 or above 500000 | Rows per chunk, and the most a crash can re-read. Too small makes the per-chunk boundary query and checkpoint write more frequent; too large lengthens re-reads and source transactions |
+| `sync.max-pool-size` | `5` | No upper limit; treated as at least 2 internally | **5–10**; derive it from parallelism, below | Connection pool per database. Each worker holds one source and one target connection; a pool that is too small simply queues workers |
+| `sync.initial-load-insert-first` | `true` | on / off | on | Use INSERT instead of upsert into an empty table; a table with rows still uses idempotent upsert |
+| `sync.defer-secondary-indexes` | `true` | on / off | on | Build non-unique secondary indexes after the load; primary keys and unique indexes are always created up front |
+| Suspend target foreign keys | on | on / off | on | A task-level option that avoids ordering failures and per-row constraint checks during the write |
 
-**Scope**: these settings affect only the initial full load and baseline rebuilds; routine polling and CDC replay are unchanged. Global values live in `application.yml`, and the "Full-load performance" card on the task page can override them per task — leave a field empty to inherit the global default.
+**Parallelism versus pool, exactly**: with distinct source and target connection configs, `max-pool-size` must be **≥ parallelism + 1** (the main cycle holds one connection per side). When both sides share one connection config, it must be **≥ 2 × parallelism + 2**. With the default pool of 5 that allows at most 4 workers in the first case and 1 in the second. The effective value is `min(configured, 8, workers the pool can seat)`, and the log says so when it is lowered.
+
+**Out-of-range behavior**: a batch or fetch size above 20000, or parallelism above 8, is not an error — the value is clamped and the log notes it. `chunk-size ≤ 0` disables chunking, so the table falls back to one streamed read (parallelism then does not apply).
+
+**Scope**: these settings affect only the initial full load and baseline rebuilds; routine polling and CDC replay are unchanged. Global values live in `application.yml`. Batch size and parallelism can be overridden per task on the "Full-load performance" card (leave a field empty to inherit the global value); the other settings are global only.
 
 ### Measured baseline
 
@@ -259,10 +263,10 @@ Single container, 500,000-row Oracle table, batch 2000:
 ### Tuning procedure
 
 1. **Establish a one-table baseline**: parallelism 1, batch 2000; record `rows/s` and the `read/write/commit` shares.
-2. **Follow the largest share**: `commit%` → raise the batch (2000 → 5000); `write%` → inspect target constraints, indexes and large values; `read%` → inspect the source cursor and scan width.
-3. **Then add parallelism**: confirm the pool is large enough, step from 2 to 4, change one variable at a time, and re-read the log.
-4. **Confirm batching works**: `rowsPerBatch` should be close to the batch size. If it is much smaller, the driver is not batching or a large value is splitting batches.
-5. **Protect production**: on databases shared with live traffic set parallelism to 1 and keep batches at 1000–2000; raise it only during a dedicated migration window.
+2. **Follow the largest share**: `commit%` → raise the batch from 2000 to 5000; `write%` → inspect target constraints, indexes and large values; `read%` → inspect the source cursor and scan width, then raise fetch to 5000.
+3. **Then add parallelism**: confirm the pool is large enough (distinct configs `max-pool-size ≥ parallelism + 1`; one shared config `≥ 2 × parallelism + 2`), step from 2 to 4, change one variable at a time, and re-read the log; gains fall off clearly past 4.
+4. **Confirm batching works**: `rowsPerBatch` should be close to the batch size. If it stays below half, the driver is not batching or a large value is splitting batches.
+5. **Protect production**: on databases shared with live traffic set parallelism to 1 and keep batches at 1000–2000; in a dedicated migration window raise parallelism to 2–4 and keep chunks at 50k–200k.
 
 ---
 
@@ -416,13 +420,13 @@ sync:
   poll-interval: 2000              # global polling interval (ms)
   batch-size: 500                  # rows per batch for incremental and CDC replay (live traffic: keep small)
   fetch-size: 1000                 # incremental result-set fetch size
-  full-load-batch-size: 2000       # initial full load only: rows per batch
-  full-load-fetch-size: 2000       # initial full load only: result-set fetch size
-  full-load-parallelism: 2         # full-load workers per table (1-4; max 8)
-  chunk-size: 100000               # rows per full-load chunk; each chunk commits and checkpoints
+  full-load-batch-size: 2000       # initial full load only: rows per batch (1-20000; 1000-5000 recommended)
+  full-load-fetch-size: 2000       # initial full load only: source fetch size (1-20000)
+  full-load-parallelism: 2         # full-load workers per table (1-8; 1-4 recommended; pool-capped)
+  chunk-size: 100000               # rows per full-load chunk (50k-200k recommended; 0 disables chunking)
   initial-load-insert-first: true  # INSERT instead of upsert into an empty table
   defer-secondary-indexes: true    # build non-unique secondary indexes after the load
-  max-pool-size: 5                 # per-database pool; parallelism is capped by the pool
+  max-pool-size: 5                 # per-database pool (5-10 recommended; must seat the workers)
   crypto-password: ""              # empty = a fresh store generates one into data/jync.key on first boot
   crypto-salt: ""                  # empty = generated too; set explicitly to manage the key yourself
 
@@ -606,13 +610,13 @@ Main settings in `application.yml` (the `sync.*` prefix):
 | `sync.poll-interval` | `2000` | Global polling interval (ms) |
 | `sync.batch-size` | `500` | JDBC batch rows for incremental polling and CDC replay |
 | `sync.fetch-size` | `1000` | Incremental result-set fetch size |
-| `sync.full-load-batch-size` | `2000` | Initial full load only: rows per batch, max 20000 |
-| `sync.full-load-fetch-size` | `2000` | Initial full load only: result-set fetch size |
-| `sync.full-load-parallelism` | `2` | Full-load workers per table, max 8, further capped by the pool |
-| `sync.chunk-size` | `100000` | Rows per full-load chunk; each chunk commits and checkpoints; `0` disables chunking |
+| `sync.full-load-batch-size` | `2000` | Initial full load only: rows per batch, 1–20000, 1000–5000 recommended |
+| `sync.full-load-fetch-size` | `2000` | Initial full load only: source fetch size, 1–20000 |
+| `sync.full-load-parallelism` | `2` | Full-load workers per table, 1–8, 1–4 recommended, further capped by the pool |
+| `sync.chunk-size` | `100000` | Rows per full-load chunk, 50000–200000 recommended; `0` disables chunking |
 | `sync.initial-load-insert-first` | `true` | Plain INSERT instead of upsert into an empty target |
 | `sync.defer-secondary-indexes` | `true` | Build non-unique secondary indexes after the full load |
-| `sync.max-pool-size` | `5` | Connection pool per database; also caps parallelism |
+| `sync.max-pool-size` | `5` | Connection pool per database, 5–10 recommended; also caps parallelism |
 | `sync.safety-lag-ms` | `1000` | Timestamp watermark pull-back |
 | `sync.full-compare-max-rows` | `20000` | Row-count ceiling for full-comparison tables |
 | `sync.row-count-audit-interval-ms` | `60000` | Row-count audit interval; `0` disables it |
