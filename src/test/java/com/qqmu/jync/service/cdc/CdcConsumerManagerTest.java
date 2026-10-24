@@ -24,6 +24,8 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncTaskRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -32,6 +34,10 @@ import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncContextFactory;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 class CdcConsumerManagerTest {
 
@@ -176,6 +182,62 @@ class CdcConsumerManagerTest {
 
         verify(taskStore).recordCdcFailure(eq(9L), anyString());
         verify(lock).close();
+    }
+
+    @Test
+    void aParkedProjectWarnsOnceAcrossSuperviseTicks() {
+        // supervise 每 10s 重新问一遍同一个被 ERROR 帽挡住的项目。每拍都 WARN,日志就成了
+        // 同一条消息的复读机(现场一天几万行);警告的语义是"状态变成被 park",一段停机
+        // 只该出现一次,真正的复述交给 DEBUG。
+        Project project = cdcProject(9L, true);
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project));
+        when(taskRepository.findByProjectId(9L)).thenReturn(Optional.of(parkedTask(9L)));
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(CdcConsumerManager.class);
+        try {
+            manager.supervise();
+            manager.supervise();
+            manager.supervise();
+            assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                    .as("同一段 ERROR 停机只该警告一次")
+                    .hasSize(1);
+        } finally {
+            LogCapture.detach(CdcConsumerManager.class, logs);
+        }
+        verify(lockService, never()).tryAcquireForDaemon(anyLong(), anyLong());
+    }
+
+    @Test
+    void theParkedWarningRearmsWhenTheErrorHatIsLifted() {
+        // 帽子被摘掉(重建基线把状态写回 RUNNING)后,这个项目若再次被 park,必须重新警告;
+        // 否则"只警告一次"会变成"整个进程只警告一次",下一次故障就没人看得见。
+        Project project = cdcProject(9L, true);
+        when(taskRepository.findByProjectId(9L)).thenReturn(Optional.of(parkedTask(9L)));
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(null); // 他节点持有,不真起线程
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(CdcConsumerManager.class);
+        try {
+            manager.ensureStarted(project);                      // 第 1 段停机:警告
+            SyncTask running = parkedTask(9L);
+            running.setStatus(TaskStatus.RUNNING);
+            when(taskRepository.findByProjectId(9L)).thenReturn(Optional.of(running));
+            manager.ensureStarted(project);                      // 帽子已摘:清掉去重标记
+            when(taskRepository.findByProjectId(9L)).thenReturn(Optional.of(parkedTask(9L)));
+            manager.ensureStarted(project);                      // 第 2 段停机:再警告
+
+            assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                    .as("两段独立的 ERROR 停机各警告一次")
+                    .hasSize(2);
+        } finally {
+            LogCapture.detach(CdcConsumerManager.class, logs);
+        }
+    }
+
+    private static SyncTask parkedTask(long projectId) {
+        SyncTask task = new SyncTask();
+        task.setProjectId(projectId);
+        task.setStatus(TaskStatus.ERROR);
+        return task;
     }
 
     @Test

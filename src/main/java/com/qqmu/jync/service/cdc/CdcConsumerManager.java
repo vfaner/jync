@@ -112,6 +112,16 @@ public class CdcConsumerManager {
     /** projectId -> live consumer of THIS node. Absent = not owned here (other node or stopped). */
     private final Map<Long, Registration> registry = new ConcurrentHashMap<>();
 
+    /**
+     * Projects already warned about while parked in ERROR. {@link #supervise} re-asks every
+     * tick, so without this the same WARN repeats every 10 s for as long as the project stays
+     * parked (thousands of identical lines a day, hiding real ones). The warning marks a
+     * state change, not a heartbeat: emit it once per park episode and drop the marker when
+     * the ERROR hat is lifted, a consumer starts, or the project is stopped — a later park
+     * is a new episode and warns again.
+     */
+    private final Set<Long> parkedWarned = ConcurrentHashMap.newKeySet();
+
     @Autowired
     public CdcConsumerManager(ProjectRepository projectRepository,
                               SyncTaskRepository taskRepository,
@@ -194,10 +204,15 @@ public class CdcConsumerManager {
             return;                                              // 幂等:已在本节点运行
         }
         if (hasErrorHat(projectId)) {
-            log.warn("CDC project {} is parked in ERROR; not starting a consumer"
-                    + " (rebuild the baseline to resume)", projectId);
+            if (parkedWarned.add(projectId)) {
+                log.warn("CDC project {} is parked in ERROR; not starting a consumer"
+                        + " (rebuild the baseline to resume)", projectId);
+            } else {
+                log.debug("CDC project {} is still parked in ERROR", projectId);
+            }
             return;
         }
+        parkedWarned.remove(projectId);                          // 帽子已摘:下一段停机会重新警告
         SyncLockService.LockHandle lock = lockService.tryAcquireForDaemon(
                 projectId, properties.getCdc().getLockTtlMs());
         if (lock == null) {
@@ -264,6 +279,7 @@ public class CdcConsumerManager {
      * make death within the grace window the expected case; the signature is unchanged.
      */
     public synchronized void ensureStopped(Long projectId) {
+        parkedWarned.remove(projectId);                          // 停/启边界:下次启动重新提示
         Registration registration = registry.remove(projectId);
         if (registration == null) {
             return;                                              // 本节点没有该消费者
