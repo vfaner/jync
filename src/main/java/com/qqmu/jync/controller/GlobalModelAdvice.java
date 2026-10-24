@@ -1,10 +1,11 @@
 package com.qqmu.jync.controller;
 
 import java.time.Instant;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.info.BuildProperties;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
@@ -28,21 +29,33 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 public class GlobalModelAdvice {
 
     private static final DateTimeFormatter BUILD_TIME_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'");
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'xxx");
 
     private final String githubUrl;
     private final SyncProperties properties;
     private final ObjectProvider<BuildProperties> buildProperties;
     private final boolean updateCheckEnabled;
+    private final DateTimeFormatter buildTimeFormatter;
 
+    @Autowired
     public GlobalModelAdvice(@Value("${app.github-url}") String githubUrl,
                              SyncProperties properties,
                              ObjectProvider<BuildProperties> buildProperties,
                              @Value("${app.update-check.enabled:true}") boolean updateCheckEnabled) {
+        this(githubUrl, properties, buildProperties, updateCheckEnabled, ZoneId.systemDefault());
+    }
+
+    /** Test seam: the display zone is pinned so the rendered stamp does not depend on the JVM. */
+    GlobalModelAdvice(String githubUrl,
+                      SyncProperties properties,
+                      ObjectProvider<BuildProperties> buildProperties,
+                      boolean updateCheckEnabled,
+                      ZoneId buildTimeZone) {
         this.githubUrl = githubUrl;
         this.properties = properties;
         this.buildProperties = buildProperties;
         this.updateCheckEnabled = updateCheckEnabled;
+        this.buildTimeFormatter = BUILD_TIME_FORMATTER.withZone(buildTimeZone);
     }
 
     /**
@@ -59,13 +72,15 @@ public class GlobalModelAdvice {
     }
 
     /**
-     * Build timestamp of the running artifact as a UTC stamp, or {@code null} when the
-     * artifact carries no build-info.
+     * Build timestamp of the running artifact, or {@code null} when the artifact carries no
+     * build-info.
      *
      * <p>The version string alone is not enough to identify a running build: a repackaged
      * release keeps the same version. Support reads this stamp next to the version to tell
-     * an overwritten same-version jar from the original. UTC (not the server's local zone)
-     * keeps the stamp identical for users in any time zone.
+     * an overwritten same-version jar from the original. The wall clock is the server's zone,
+     * like every other timestamp in the UI, and the explicit {@code UTC±HH:MM} offset keeps
+     * the instant unambiguous no matter which zone rendered it — a bare "03:20 UTC" next to a
+     * user who built at 11:20 reads as a wrong clock, not as a time-zone difference.
      */
     @ModelAttribute("appBuildTime")
     public String buildTime() {
@@ -74,7 +89,7 @@ public class GlobalModelAdvice {
         if (time == null) {
             return null;
         }
-        return BUILD_TIME_FORMATTER.format(time.atOffset(ZoneOffset.UTC));
+        return buildTimeFormatter.format(time);
     }
 
     /**

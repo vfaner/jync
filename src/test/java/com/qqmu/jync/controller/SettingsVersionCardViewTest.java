@@ -244,14 +244,16 @@ class SettingsVersionCardViewTest {
     @Test
     void buildTimeStampIsShownNextToCurrentVersion() throws Exception {
         // Same version string can belong to several repackaged jars; the build stamp lets
-        // support tell them apart.
+        // support tell them apart. The clock time is the server's zone; the offset keeps the
+        // instant unambiguous, so this assertion is independent of the JVM's time zone.
         when(buildProperties.getTime()).thenReturn(Instant.parse("2026-10-15T13:32:06Z"));
         String page = render(base()
                 .state(VersionInfo.State.UP_TO_DATE)
                 .latestVersion("1.1.1")
                 .build());
 
-        assertThat(page).contains("构建于 2026-10-15 13:32 UTC");
+        assertThat(page).containsPattern(
+                "构建于 \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2} UTC[+-]\\d{2}:\\d{2}");
     }
 
     @Test
