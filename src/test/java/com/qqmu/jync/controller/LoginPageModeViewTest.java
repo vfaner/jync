@@ -99,6 +99,17 @@ class LoginPageModeViewTest {
     }
 
     @Test
+    void aTicketLockoutIsShownEvenWhenAnEntryUrlIsConfigured() throws Exception {
+        config.setEnabled(true);
+        config.setMode(OaAuthConfig.Mode.TICKET);
+        config.setLoginEntryUrl("https://portal.example.com/login");
+
+        String html = page("/login?ticketLocked");
+
+        assertThat(html).contains("失败次数过多");
+    }
+
+    @Test
     void theLocalFormStaysAvailableInEveryMode() throws Exception {
         config.setEnabled(true);
         config.setMode(OaAuthConfig.Mode.TICKET);

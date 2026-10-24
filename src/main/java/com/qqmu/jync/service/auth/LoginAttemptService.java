@@ -53,23 +53,40 @@ public class LoginAttemptService {
     private final Map<String, Attempts> attempts = new ConcurrentHashMap<>();
 
     private final LongSupplier clock;
+    private final int maxAttempts;
+    private final long lockMs;
 
     public LoginAttemptService() {
-        this(System::currentTimeMillis);
+        this(MAX_ATTEMPTS, LOCK_MS, System::currentTimeMillis);
+    }
+
+    /**
+     * A separate limiter for a surface with a different tolerance — the ticket entry point, where
+     * several people can legitimately share one address behind NAT and each bad ticket costs an
+     * outbound validation call.
+     */
+    public LoginAttemptService(int maxAttempts, long lockMs) {
+        this(maxAttempts, lockMs, System::currentTimeMillis);
     }
 
     /** Test constructor with an injectable clock. */
     LoginAttemptService(LongSupplier clock) {
+        this(MAX_ATTEMPTS, LOCK_MS, clock);
+    }
+
+    LoginAttemptService(int maxAttempts, long lockMs, LongSupplier clock) {
+        this.maxAttempts = maxAttempts;
+        this.lockMs = lockMs;
         this.clock = clock;
     }
 
     /** True while the pair is inside an active lockout window. Expired windows are cleared. */
     public boolean isBlocked(String key) {
         Attempts a = attempts.get(key);
-        if (a == null || a.count < MAX_ATTEMPTS) {
+        if (a == null || a.count < maxAttempts) {
             return false;
         }
-        if (clock.getAsLong() - a.windowStart >= LOCK_MS) {
+        if (clock.getAsLong() - a.windowStart >= lockMs) {
             attempts.remove(key);
             return false;
         }
@@ -80,7 +97,7 @@ public class LoginAttemptService {
     public void recordFailure(String key) {
         attempts.compute(key, (k, previous) -> {
             long now = clock.getAsLong();
-            if (previous == null || now - previous.windowStart >= LOCK_MS) {
+            if (previous == null || now - previous.windowStart >= lockMs) {
                 return new Attempts(1, now);
             }
             return new Attempts(previous.count + 1, previous.windowStart);
@@ -106,7 +123,7 @@ public class LoginAttemptService {
      */
     private void prune() {
         long now = clock.getAsLong();
-        attempts.entrySet().removeIf(e -> now - e.getValue().windowStart() >= LOCK_MS);
+        attempts.entrySet().removeIf(e -> now - e.getValue().windowStart() >= lockMs);
         var it = attempts.keySet().iterator();
         while (attempts.size() > MAX_TRACKED_KEYS && it.hasNext()) {
             it.next();

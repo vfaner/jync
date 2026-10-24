@@ -3,6 +3,7 @@ package com.qqmu.jync.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -16,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -24,12 +26,14 @@ import com.qqmu.jync.model.OaAuthConfig;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.auth.ExternalSessionSignIn;
+import com.qqmu.jync.service.auth.TicketAttemptLimiter;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 import com.qqmu.jync.service.auth.oa.OaAuthResult;
 import com.qqmu.jync.service.auth.oa.TicketValidationClient;
 
 @WebMvcTest(SsoEntryController.class)
 @AutoConfigureMockMvc(addFilters = false)
+@Import(TicketAttemptLimiter.class)
 class SsoEntryControllerTest {
 
     @Autowired
@@ -58,7 +62,19 @@ class SsoEntryControllerTest {
     }
 
     private MockHttpServletResponse enter(String ticket) throws Exception {
-        return mvc.perform(get("/sso/entry").param("ticket", ticket))
+        return enterFrom("10.1.0.1", ticket);
+    }
+
+    /**
+     * A distinct address per test: the limiter bean is shared by the cached Spring context, so
+     * two tests that flood the same address would leak their lockout into each other.
+     */
+    private MockHttpServletResponse enterFrom(String clientIp, String ticket) throws Exception {
+        return mvc.perform(get("/sso/entry").param("ticket", ticket)
+                        .with(request -> {
+                            request.setRemoteAddr(clientIp);
+                            return request;
+                        }))
                 .andReturn().getResponse();
     }
 
@@ -120,5 +136,63 @@ class SsoEntryControllerTest {
                 .andReturn().getResponse().getRedirectedUrl();
 
         assertThat(target).isEqualTo("/projects");
+    }
+
+    /**
+     * Ticket sign-in is the one unauthenticated path that reaches outside this process: every
+     * attempt costs a validation call and an audit row. Without a throttle, someone with no
+     * account could keep the portal — and the request threads waiting on it — busy forever.
+     */
+    @Test
+    void aFloodOfBadTicketsStopsCallingThePortal() throws Exception {
+        when(ticketClient.validate(any(), any()))
+                .thenReturn(OaAuthResult.failure("error.oa.rejected"));
+
+        for (int i = 0; i < TicketAttemptLimiter.MAX_ATTEMPTS; i++) {
+            assertThat(enterFrom("10.9.9.9", "bad-" + i).getRedirectedUrl())
+                    .isEqualTo("/login?ticketError");
+        }
+
+        assertThat(enterFrom("10.9.9.9", "bad-again").getRedirectedUrl())
+                .isEqualTo("/login?ticketLocked");
+
+        verify(ticketClient, times(TicketAttemptLimiter.MAX_ATTEMPTS)).validate(any(), any());
+        // A blocked caller must not be able to flood the audit table either.
+        verify(auditService, times(TicketAttemptLimiter.MAX_ATTEMPTS))
+                .record(eq(AuditAction.LOGIN_FAILED), any(), eq("sso"));
+    }
+
+    @Test
+    void aValidTicketClearsTheFailuresBeforeIt() throws Exception {
+        when(ticketClient.validate(any(), eq("bad")))
+                .thenReturn(OaAuthResult.failure("error.oa.rejected"));
+        when(ticketClient.validate(any(), eq("good")))
+                .thenReturn(OaAuthResult.success("alice", false));
+
+        for (int i = 0; i < TicketAttemptLimiter.MAX_ATTEMPTS - 1; i++) {
+            enterFrom("10.8.8.8", "bad");
+        }
+        assertThat(enterFrom("10.8.8.8", "good").getRedirectedUrl()).isEqualTo("/projects");
+
+        // A full fresh run of failures is tolerated again; the counter did not carry over.
+        for (int i = 0; i < TicketAttemptLimiter.MAX_ATTEMPTS - 1; i++) {
+            assertThat(enterFrom("10.8.8.8", "bad").getRedirectedUrl())
+                    .isEqualTo("/login?ticketError");
+        }
+    }
+
+    @Test
+    void oneAddressesFloodDoesNotBlockAnother() throws Exception {
+        when(ticketClient.validate(any(), any()))
+                .thenReturn(OaAuthResult.failure("error.oa.rejected"));
+
+        for (int i = 0; i < TicketAttemptLimiter.MAX_ATTEMPTS; i++) {
+            enterFrom("10.7.7.7", "bad-" + i);
+        }
+
+        when(ticketClient.validate(any(), eq("good")))
+                .thenReturn(OaAuthResult.success("alice", false));
+
+        assertThat(enterFrom("10.7.7.8", "good").getRedirectedUrl()).isEqualTo("/projects");
     }
 }

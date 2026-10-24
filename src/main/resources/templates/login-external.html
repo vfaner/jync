@@ -55,6 +55,12 @@
                 The ticket was rejected or has expired. Start again from the portal.
             </div>
         </div>
+        <div class="alert alert-danger" th:if="${param.ticketLocked}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.oaLocked}">
+                Too many failed attempts. Try again later.
+            </div>
+        </div>
         <div class="alert alert-danger" th:if="${param.localDisabled}">
             <svg class="ico"><use href="#x-circle-fill"/></svg>
             <div class="alert-body" th:text="#{login.localDisabled}">
