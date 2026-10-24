@@ -75,6 +75,28 @@ public class OaAuthConfigService {
         return load().isEnabled();
     }
 
+    /**
+     * The rescue path for an administrator who turned local sign-in off and then lost the
+     * external provider: re-enables the local form and saves it.
+     *
+     * <p>Deliberately skips validation: the stored row is what it is, and refusing to repair it
+     * would leave the only account that can fix it locked out. Writes nothing when there is no
+     * row (the defaults already allow local sign-in) or when it is already allowed.
+     *
+     * @return true when a stored row was changed
+     */
+    @Transactional
+    public boolean resetLocalLogin() {
+        OaAuthConfig stored = repository.findById(SINGLETON_ID).orElse(null);
+        if (stored == null || stored.isLocalLoginAllowed()) {
+            return false;
+        }
+        stored.setLocalLoginEnabled(Boolean.TRUE);
+        stored.setUpdatedAt(Instant.now());
+        repository.save(stored);
+        return true;
+    }
+
     @Transactional
     public OaAuthConfig save(OaAuthConfig config) {
         return save(config, null, false);
@@ -122,6 +144,10 @@ public class OaAuthConfigService {
 
         if (config.isEnabled()) {
             validateEnabled(config);
+        } else if (!config.isLocalLoginAllowed()) {
+            // Turning local sign-in off while no external method is enabled would save a row
+            // that lets nobody in and cannot be undone from the UI.
+            throw new IllegalArgumentException("error.oa.local.required");
         }
 
         config.setUpdatedAt(Instant.now());

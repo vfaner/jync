@@ -25,7 +25,7 @@
             <div class="alert-body" th:text="${#messages.msg(message)}">Saved.</div>
         </div>
 
-        <form method="post" th:action="@{/external-auth}" th:object="${config}">
+        <form id="external-auth-form" method="post" th:action="@{/external-auth}" th:object="${config}">
 
             <div class="card" data-mode-section="COMMON" data-active="true">
                 <div class="card-head">
@@ -101,6 +101,9 @@
                         </label>
                         <div class="help" th:text="#{oa.localLoginEnabledHelp}">
                             When off, /login/local and POST /login are refused; only the portal can sign in.
+                        </div>
+                        <div class="help" th:text="#{oa.localLoginOffHelp}">
+                            With local sign-in off, only external authentication can get in.
                         </div>
                     </div>
 
@@ -410,6 +413,20 @@
       var ticket = input ? input.value : '';
       probe(/*[[@{/external-auth/test/ticket}]]*/ '/external-auth/test/ticket',
             'ticket=' + encodeURIComponent(ticket));
+    });
+  }
+
+  // Turning local sign-in off is the one save that can lock everyone out: ask before it goes
+  // through, and name the rescue switch in the question itself.
+  var form = document.getElementById('external-auth-form');
+  var localBox = document.getElementById('localLoginEnabled');
+  if (form && localBox) {
+    var localWasOn = localBox.checked;
+    form.addEventListener('submit', function (event) {
+      if (localWasOn && !localBox.checked
+          && !window.confirm(/*[[#{oa.localOff.confirm}]]*/ 'Turn off local sign-in?')) {
+        event.preventDefault();
+      }
     });
   }
 })();

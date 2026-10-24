@@ -63,6 +63,11 @@ server:
         secure: ${JYN_COOKIE_SECURE:false}
 
 app:
+  login:
+    # 应急开关：关闭本地登录后如果外部认证不可用，以 JYN_RESET_LOGIN=true 启动一次，
+    # 就会把本地登录重新打开并保存；修好外部配置后去掉该变量并重启。
+    # 平时保持 false，它不参与登录方式的分流。
+    reset-on-startup: ${JYN_RESET_LOGIN:false}
   # Repository link behind the nav GitHub icon and the donate dialog buttons.
   github-url: https://github.com/vfaner/jync
   # 设置页「项目与作者」栏：Gitee 镜像地址、官网与作者联系方式，留空则对应行不显示。

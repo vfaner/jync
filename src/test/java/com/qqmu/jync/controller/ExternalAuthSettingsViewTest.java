@@ -100,6 +100,16 @@ class ExternalAuthSettingsViewTest {
     }
 
     @Test
+    void turningLocalSignInOffExplainsTheRescueSwitch() throws Exception {
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andReturn().getResponse().getContentAsString();
+
+        // The one way back in has to be on the page where the lockout can be created.
+        assertThat(page).contains("JYN_RESET_LOGIN");
+        assertThat(page).contains("关闭本地登录后");
+    }
+
+    @Test
     void theStoredSecretIsNeverEchoed() throws Exception {
         String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
                 .andReturn().getResponse().getContentAsString();
