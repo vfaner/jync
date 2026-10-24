@@ -372,7 +372,9 @@ class SecurityConfigTest {
                 "/api/projects/1/cursor-candidates?table=T",
                 // The CDC probe is read-only in the HTTP sense, but it opens a connection to
                 // the configured source and runs capability queries there.
-                "/api/projects/1/cdc-probe"}) {
+                "/api/projects/1/cdc-probe",
+                // Counting rows also opens both configured connections and scans whole tables.
+                "/api/projects/1/row-count?table=T"}) {
             assertThat(statusOf(get(path).with(asViewer()))).as(path).isEqualTo(403);
             assertThat(statusOf(get(path).with(asAdmin()))).as(path).isNotEqualTo(403);
         }

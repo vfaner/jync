@@ -14,6 +14,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.dto.TablePreview;
+import com.qqmu.jync.dto.TableRowCount;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
@@ -281,5 +283,90 @@ class TablePreviewServiceTest {
         assertThat(preview.connection()).isEqualTo("Target DB");
         assertThat(preview.table()).isEqualTo("ORDERS_COPY");
         assertThat(preview.rows()).containsExactly(List.of("900", "on-the-target"));
+    }
+
+    @Test
+    void rowCountComparesBothSidesAndReturnsTheirExactCounts() throws SQLException {
+        createOrders(3);
+        try (Statement st = connection.createStatement()) {
+            st.execute("CREATE SCHEMA IF NOT EXISTS TARGET_SIDE");
+            st.execute("CREATE TABLE TARGET_SIDE.ORDERS (id BIGINT PRIMARY KEY, name VARCHAR(64))");
+            st.execute("INSERT INTO TARGET_SIDE.ORDERS (id, name) VALUES (1, 'order-1')");
+        }
+        target.setSchemaName("TARGET_SIDE");
+
+        TableRowCount counts = service.rowCount(1L, "orders");
+
+        assertThat(counts.source().status()).isEqualTo(TableRowCount.Status.OK);
+        assertThat(counts.source().count()).isEqualTo(3L);
+        assertThat(counts.target().status()).isEqualTo(TableRowCount.Status.OK);
+        assertThat(counts.target().count()).isEqualTo(1L);
+    }
+
+    @Test
+    void rowCountReportsAMissingTargetTableWithoutFailingTheSourceSide() throws SQLException {
+        createOrders(2);
+        try (Statement st = connection.createStatement()) {
+            st.execute("CREATE SCHEMA IF NOT EXISTS EMPTY_TARGET");
+        }
+        target.setSchemaName("EMPTY_TARGET");
+
+        TableRowCount counts = service.rowCount(1L, "orders");
+
+        assertThat(counts.source().status()).isEqualTo(TableRowCount.Status.OK);
+        assertThat(counts.source().count()).isEqualTo(2L);
+        assertThat(counts.target().status()).isEqualTo(TableRowCount.Status.MISSING_TABLE);
+        assertThat(counts.target().count()).isNull();
+    }
+
+    @Test
+    void rowCountCountsTheMappedTargetTableRatherThanTheSourceName() throws SQLException {
+        createOrders(2);
+        try (Statement st = connection.createStatement()) {
+            st.execute("CREATE TABLE orders_copy (id BIGINT PRIMARY KEY, name VARCHAR(64))");
+            st.execute("INSERT INTO orders_copy VALUES (1, 'a'), (2, 'b')");
+        }
+        project.setSyncConfig("{\"tableNameMapping\":{\"orders\":\"orders_copy\"}}");
+
+        TableRowCount counts = service.rowCount(1L, "orders");
+
+        assertThat(counts.source().count()).isEqualTo(2L);
+        assertThat(counts.target().status()).isEqualTo(TableRowCount.Status.OK);
+        assertThat(counts.target().count()).isEqualTo(2L);
+    }
+
+    @Test
+    void rowCountMapsAStatementTimeoutToTheTimeoutStatus() throws SQLException {
+        createOrders(1);
+        Connection slow = mock(Connection.class);
+        PreparedStatement ps = mock(PreparedStatement.class);
+        when(slow.prepareStatement(any(String.class))).thenReturn(ps);
+        when(ps.executeQuery()).thenThrow(new SQLTimeoutException("timed out"));
+        when(dataSourceManager.getConnection(source)).thenReturn(slow);
+
+        source.setType(DatabaseType.CUSTOM);
+        source.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+        source.setCustomUrl("jdbc:h2:mem:table_preview");
+        MetadataReader familyReader = mock(MetadataReader.class);
+        when(familyReader.supports(DatabaseType.ORACLE)).thenReturn(true);
+        when(familyReader.listTableNames(slow, "PUBLIC")).thenReturn(List.of("ORDERS"));
+        when(familyReader.listViewNames(slow, "PUBLIC")).thenReturn(List.of());
+        SqlDialect familyDialect = mock(SqlDialect.class);
+        when(familyDialect.family()).thenReturn(DatabaseType.DialectFamily.ORACLE);
+        when(familyDialect.explicitType()).thenReturn(null);
+        when(familyDialect.withServerMajorVersion(null)).thenReturn(familyDialect);
+        when(familyDialect.qualify("PUBLIC", "ORDERS")).thenReturn("\"PUBLIC\".\"ORDERS\"");
+        service = new TablePreviewService(projectRepository, databaseConfigRepository,
+                dataSourceManager, new MetadataReaderFactory(List.of(familyReader)),
+                new SqlDialectFactory(List.of(familyDialect), new GenericSqlDialect()),
+                new ObjectMapper());
+
+        TableRowCount counts = service.rowCount(1L, "orders");
+
+        assertThat(counts.source().status()).isEqualTo(TableRowCount.Status.TIMEOUT);
+        assertThat(counts.source().count()).isNull();
+        // A slow source must not hide the target count that did succeed.
+        assertThat(counts.target().status()).isEqualTo(TableRowCount.Status.OK);
+        assertThat(counts.target().count()).isEqualTo(1L);
     }
 }
