@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.model.OaAuthConfig;
+import com.qqmu.jync.service.auth.ExternalIdentity;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -29,7 +30,6 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 public class HttpTicketValidationClient implements TicketValidationClient {
 
-    private static final int MAX_USERNAME_LENGTH = 64;
     private static final String DEFAULT_TICKET_PARAM = "ticket";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -127,12 +127,12 @@ public class HttpTicketValidationClient implements TicketValidationClient {
             }
         }
 
-        String username = JsonFieldReader.textAt(root, config.getUserField());
+        // Same normalization as the password client and the header filter: remote text must not
+        // carry a control character into the session principal.
+        String username = ExternalIdentity.sanitize(
+                JsonFieldReader.textAt(root, config.getUserField()));
         if (username == null) {
             return OaAuthResult.failure("error.oa.user.missing");
-        }
-        if (username.length() > MAX_USERNAME_LENGTH) {
-            username = username.substring(0, MAX_USERNAME_LENGTH);
         }
         boolean admin = JsonFieldReader.matches(
                 root, config.getAdminField(), config.getAdminValue());

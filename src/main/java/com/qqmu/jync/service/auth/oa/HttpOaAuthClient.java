@@ -19,6 +19,7 @@ import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.model.OaAuthConfig;
+import com.qqmu.jync.service.auth.ExternalIdentity;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -33,8 +34,6 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @Component
 public class HttpOaAuthClient implements OaAuthClient {
-
-    private static final int MAX_USERNAME_LENGTH = 64;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -123,12 +122,12 @@ public class HttpOaAuthClient implements OaAuthClient {
             }
         }
 
-        String resolvedUsername = JsonFieldReader.textAt(root, config.getUserField());
+        // The response is remote text: normalize it exactly like the header mode does, so a
+        // control character cannot ride into the session principal and the nav.
+        String resolvedUsername = ExternalIdentity.sanitize(
+                JsonFieldReader.textAt(root, config.getUserField()));
         if (resolvedUsername == null) {
             return OaAuthResult.failure("error.oa.user.missing");
-        }
-        if (resolvedUsername.length() > MAX_USERNAME_LENGTH) {
-            resolvedUsername = resolvedUsername.substring(0, MAX_USERNAME_LENGTH);
         }
 
         return OaAuthResult.success(resolvedUsername,

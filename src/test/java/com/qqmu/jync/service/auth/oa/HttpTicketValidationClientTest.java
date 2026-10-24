@@ -149,6 +149,27 @@ class HttpTicketValidationClientTest {
         assertThat(result.getErrorKey()).isEqualTo("error.oa.user.missing");
     }
 
+    /** Same rule as the password client: the portal's response is text, not a trusted name. */
+    @Test
+    void controlCharactersInTheReturnedUserNameAreStripped() {
+        respond("/validate", 200, "{\"data\":{\"username\":\"al\\u0001ice\"}}");
+
+        OaAuthResult result = client().validate(config("/validate"), "t-1");
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getUsername()).isEqualTo("alice");
+    }
+
+    @Test
+    void aUserNameMadeOnlyOfControlCharactersIsAFailure() {
+        respond("/validate", 200, "{\"data\":{\"username\":\"\\u0001\\u0002\"}}");
+
+        OaAuthResult result = client().validate(config("/validate"), "t-1");
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorKey()).isEqualTo("error.oa.user.missing");
+    }
+
     @Test
     void aRedirectIsNotFollowed() {
         respond("/validate", 302, "");
