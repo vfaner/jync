@@ -276,6 +276,15 @@
             <version>1.21.3</version>
             <scope>test</scope>
         </dependency>
+        <!-- Stock PostgreSQL stands in for the PostgreSQL-compatible domestic databases
+             (Kingbase, openGauss, HighGo, Vastbase) in the metadata-store contract IT: the
+             only thing those inherit from Hibernate here is the PostgreSQL dialect. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>1.21.3</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
