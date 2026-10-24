@@ -11,6 +11,13 @@
             <p class="sub" th:text="#{oa.subtitle}">
                 Portal, gateway header or ticket sign-in. Jync keeps only a session.
             </p>
+            <!--/* 当前生效的一行摘要。提交被拒时表单里的值还没保存，这时不显示，
+                   否则页面会声称一个并未生效的方式。 */-->
+            <p class="sub" th:unless="${formError}"
+               th:text="${config.enabled
+                   ? #messages.msg('oa.currentActive',
+                       #messages.msg('oa.mode.' + (config.mode != null ? config.mode.name() : 'PASSWORD')))
+                   : #messages.msg('oa.currentDisabled')}">Active now</p>
         </div>
     </div>
 
@@ -54,7 +61,7 @@
                                         th:text="${#messages.msg('oa.mode.' + m.name())}">Password</option>
                             </select>
                         </div>
-                        <div class="field">
+                        <div class="field" data-mode-any="PASSWORD,TICKET">
                             <label for="timeoutMs" th:text="#{oa.timeoutMs}">Timeout (ms)</label>
                             <input type="number" class="input" id="timeoutMs" th:field="*{timeoutMs}"
                                    min="500" max="30000" step="100">
@@ -67,16 +74,6 @@
                                maxlength="1024" placeholder="root,ops">
                         <div class="help" th:text="#{oa.adminUsersHelp}">
                             Comma-separated; a match grants the administrator role in every mode.
-                        </div>
-                    </div>
-
-                    <div class="field">
-                        <label for="loginEntryUrl" th:text="#{oa.loginEntryUrl}">Portal sign-in address</label>
-                        <input type="url" class="input" id="loginEntryUrl"
-                               th:field="*{loginEntryUrl}" maxlength="2048"
-                               placeholder="https://portal.example.com/login">
-                        <div class="help" th:text="#{oa.loginEntryUrlHelp}">
-                            Where an unauthenticated visitor is sent when there is no local form.
                         </div>
                     </div>
 
@@ -107,7 +104,7 @@
                         </div>
                     </div>
 
-                    <div class="field">
+                    <div class="field" data-mode-any="PASSWORD,TICKET">
                         <label class="switch">
                             <input type="checkbox" id="allowInsecureHttp"
                                    th:field="*{allowInsecureHttp}">
@@ -276,6 +273,25 @@
                             <svg class="ico"><use href="#check-lg"/></svg>
                             <span th:text="#{oa.testTicket}">Validate a ticket</span>
                         </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" data-mode-any="HEADER,TICKET"
+                 th:attr="data-active=${config.mode != null and config.mode.name() != 'PASSWORD'}">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#arrow-left-right"/></svg>
+                        <span th:text="#{oa.portalCard}">Portal</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label for="loginEntryUrl" th:text="#{oa.loginEntryUrl}">Portal entry</label>
+                        <input type="url" class="input" id="loginEntryUrl"
+                               th:field="*{loginEntryUrl}" maxlength="2048"
+                               placeholder="https://portal.example.com/login">
+                        <div class="help" th:text="#{oa.loginEntryUrlHelp}">
+                            An unauthenticated browser is sent here.
+                        </div>
                     </div>
                 </div>
             </div>
