@@ -616,32 +616,41 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .input-group .input { flex: 1; }
 
 /* 开关 */
-.switch { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 15px; }
+.switch {
+  display: flex; align-items: flex-start; gap: 11px; margin-bottom: 15px;
+  cursor: pointer; user-select: none;
+}
 .switch:last-child { margin-bottom: 0; }
+/* .field label 的 display:block 与 .switch 同权重且写在后头，会把开关压成 0 宽的行内
+   元素：轨道看不见、也没有可点的热区。这里用更高的权重把 flex 行抢回来。 */
+.field label.switch {
+  display: flex; align-items: flex-start; gap: 11px;
+  font-size: inherit; font-weight: inherit; color: inherit; cursor: pointer;
+}
 .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
 .switch .track {
-  width: 38px; height: 22px; border-radius: 999px; background: var(--bg-tint);
-  border: 1px solid var(--line); position: relative; cursor: pointer;
-  transition: background .2s, border-color .2s; flex-shrink: 0; margin-top: 1px;
+  width: 44px; height: 24px; border-radius: 999px; background: var(--danger);
+  border: none; position: relative; cursor: pointer;
+  transition: background .2s; flex-shrink: 0; margin-top: 1px;
 }
 .switch .track::after {
-  content: ""; position: absolute; top: 2px; left: 2px;
-  width: 16px; height: 16px; border-radius: 50%; background: var(--bg);
-  box-shadow: var(--shadow-sm); transition: transform .2s;
+  content: ""; position: absolute; top: 3px; left: 3px;
+  width: 18px; height: 18px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .3); transition: transform .2s;
 }
-.switch input:checked + .track {
-  background: linear-gradient(135deg, var(--brand), var(--brand-light));
-  border-color: transparent;
-}
-.switch input:checked + .track::after { transform: translateX(16px); background: #fff; }
-.switch input:focus-visible + .track { box-shadow: 0 0 0 3px var(--fb-brand-20); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent); }
+/* 开=绿、关=红：两态在一眼之内分得清，不靠细边框和浅色底去猜。
+   这里必须用 ~ 而不是 +：th:field 会在复选框后插入一个隐藏的 _字段 标记
+   (name="_xxx")，轨道并非紧邻兄弟，用 + 时 :checked 永远不生效。 */
+.switch input:checked ~ .track { background: var(--ok); }
+.switch input:checked ~ .track::after { transform: translateX(20px); }
+.switch input:focus-visible ~ .track { box-shadow: 0 0 0 3px var(--fb-brand-20); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent); }
 .switch .switch-text { min-width: 0; }
 .switch .switch-text strong { display: block; font-size: 13.5px; font-weight: 600; }
 .switch .switch-text .help { font-size: 12px; color: var(--ink-mute); margin-top: 2px; line-height: 1.5; }
-.switch.is-warn input:checked + .track { background: linear-gradient(135deg, var(--warn), #fbbf24); }
+.switch.is-warn input:checked ~ .track { background: var(--warn); }
 /* 该类源对象为空(0 表/0 视图/0 存过)时开关被服务端置灰:原生 disabled 在自定义
    开关上不可见,这里让轨道与文案一起变淡、禁用光标。 */
-.switch input:disabled + .track { cursor: not-allowed; opacity: .5; }
+.switch input:disabled ~ .track { cursor: not-allowed; opacity: .5; }
 .switch input:disabled ~ .switch-text { opacity: .5; }
 
 /* ─── 源/目标用途选择 ──────────────────────────────────── */
