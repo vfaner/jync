@@ -165,6 +165,11 @@ public class DataSyncService {
         private int inserted;
         private int updated;
         private int unclassified;
+
+        /** Rows the target actually inserted or updated; zero for an unchanged full-compare pass. */
+        int changedRows() {
+            return inserted + updated + unclassified;
+        }
     }
 
     private static void applyStats(TableSyncResult result, WriteStats stats) {
@@ -988,7 +993,7 @@ public class DataSyncService {
                         spillSession.close();
                     }
                 }
-                throughput.logSummary();
+                throughput.logSummary(total.changedRows());
             }
             // The read is over before the target commits: the source transaction holds no
             // locks the target needs, and ending it here keeps it as short as the copy.

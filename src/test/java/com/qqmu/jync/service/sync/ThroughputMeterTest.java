@@ -5,6 +5,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+
+import com.qqmu.jync.service.cdc.LogCapture;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 /**
  * The per-chunk throughput line is the only evidence of where a full load spends its time.
@@ -40,7 +48,7 @@ class ThroughputMeterTest {
 
         assertThat(meter.elapsedNanos()).isZero();
         assertThat(meter.rowsPerSecond()).isZero();
-        assertThat(meter.describe()).contains("rows/s=0.0");
+        assertThat(meter.describe(0)).contains("rows/s=0.0");
     }
 
     @Test
@@ -57,7 +65,7 @@ class ThroughputMeterTest {
         assertThat(meter.elapsedNanos()).isEqualTo(1_999_000_000L);
         assertThat(meter.rowsPerSecond()).isCloseTo(1000.0 / 1.999,
                 org.assertj.core.data.Offset.offset(0.5));
-        assertThat(meter.describe())
+        assertThat(meter.describe(0))
                 .contains("table=ORDERS")
                 .contains("rows=1000")
                 .contains("read=20%")
@@ -86,9 +94,90 @@ class ThroughputMeterTest {
         assertThat(meter.commitNanos()).isEqualTo(100_000_000L);
         // writeNanos keeps the total window; describe() reports the row work net of commit.
         assertThat(meter.writeNanos()).isEqualTo(300_000_000L);
-        assertThat(meter.describe())
+        assertThat(meter.describe(0))
                 .contains("read=25%")
                 .contains("write=50%")
                 .contains("commit=25%");
+    }
+
+    /**
+     * A full-compare table is re-read every poll interval, so an idle project produces a "big"
+     * pass that changed nothing every couple of seconds. At INFO those lines read as data
+     * moving when the target is untouched — they belong on DEBUG, with the change count in the
+     * line so the two cases can be told apart even there.
+     */
+    @Test
+    void aBigPassThatChangedNothingIsOnlyADebugLine() {
+        ListAppender<ILoggingEvent> logs = attachAtDebug();
+
+        try {
+            ThroughputMeter meter = new ThroughputMeter("ORDERS", clock::get);
+            streamRows(meter, 1185);
+            meter.logSummary(0);
+
+            assertThat(LogCapture.messagesAt(Level.INFO, logs)).isEmpty();
+            assertThat(LogCapture.messagesAt(Level.DEBUG, logs))
+                    .singleElement()
+                    .asString()
+                    .contains("rows=1185", "changed=0");
+        } finally {
+            detach(logs);
+        }
+    }
+
+    @Test
+    void aBigPassThatChangedRowsStaysOnInfo() {
+        ListAppender<ILoggingEvent> logs = attachAtDebug();
+
+        try {
+            ThroughputMeter meter = new ThroughputMeter("ORDERS", clock::get);
+            streamRows(meter, 1185);
+            meter.logSummary(7);
+
+            assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                    .singleElement()
+                    .asString()
+                    .contains("rows=1185", "changed=7");
+            assertThat(LogCapture.messagesAt(Level.DEBUG, logs)).isEmpty();
+        } finally {
+            detach(logs);
+        }
+    }
+
+    @Test
+    void aSmallPassStaysOnDebugEvenWhenItChangedRows() {
+        ListAppender<ILoggingEvent> logs = attachAtDebug();
+
+        try {
+            ThroughputMeter meter = new ThroughputMeter("ORDERS", clock::get);
+            streamRows(meter, 3);
+            meter.logSummary(3);
+
+            assertThat(LogCapture.messagesAt(Level.INFO, logs)).isEmpty();
+            assertThat(LogCapture.messagesAt(Level.DEBUG, logs))
+                    .singleElement()
+                    .asString()
+                    .contains("rows=3", "changed=3");
+        } finally {
+            detach(logs);
+        }
+    }
+
+    private static void streamRows(ThroughputMeter meter, int count) {
+        for (int i = 0; i < count; i++) {
+            meter.recordRead(1_000L);
+            meter.recordWrite(1_000L);
+        }
+    }
+
+    private static ListAppender<ILoggingEvent> attachAtDebug() {
+        // The default test level is INFO; DEBUG lines must be captured to prove they exist.
+        ((Logger) LoggerFactory.getLogger(ThroughputMeter.class)).setLevel(Level.DEBUG);
+        return LogCapture.attach(ThroughputMeter.class);
+    }
+
+    private static void detach(ListAppender<ILoggingEvent> logs) {
+        LogCapture.detach(ThroughputMeter.class, logs);
+        ((Logger) LoggerFactory.getLogger(ThroughputMeter.class)).setLevel(null);
     }
 }
