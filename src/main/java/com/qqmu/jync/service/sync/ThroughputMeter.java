@@ -109,9 +109,10 @@ final class ThroughputMeter {
 
     /**
      * One line naming the thread (parallel workers share a table but not a line), so a pass can
-     * be attributed to the code path that ran it.
+     * be attributed to the code path that ran it. {@code changedRows} is next to {@code rows}
+     * because the two differ exactly when the pass re-read an unchanged table.
      */
-    String describe() {
+    String describe(int changedRows) {
         long measured = readNanos + writeNanos;
         int readPct = measured == 0 ? 0 : (int) Math.round(readNanos * 100.0 / measured);
         // Write windows include the commit that closed a batch; report row work net of it.
@@ -121,22 +122,24 @@ final class ThroughputMeter {
         int commitPct = measured == 0 ? 0 : Math.max(0, 100 - readPct - writePct);
         double rowsPerBatch = batches == 0 ? 0 : (double) rows / batches;
         return String.format(Locale.ROOT,
-                "table=%s thread=%s rows=%d elapsed=%.1fs rows/s=%.1f"
+                "table=%s thread=%s rows=%d changed=%d elapsed=%.1fs rows/s=%.1f"
                         + " read=%d%% write=%d%% commit=%d%%"
                         + " batches=%d rowsPerBatch=%.0f",
-                table, Thread.currentThread().getName(), rows, elapsedNanos() / 1e9,
-                rowsPerSecond(), readPct, writePct, commitPct, batches, rowsPerBatch);
+                table, Thread.currentThread().getName(), rows, changedRows,
+                elapsedNanos() / 1e9, rowsPerSecond(), readPct, writePct, commitPct,
+                batches, rowsPerBatch);
     }
 
     /**
-     * Ends the pass. INFO for a real load, DEBUG for the small windows and tails of polling
-     * projects, whose per-cycle lines would otherwise bury the ones that matter.
+     * Ends the pass. INFO only when the target actually moved: a full-compare project re-reads
+     * its whole table every poll interval, so keying INFO on the row count alone made an idle
+     * target look busy. Unchanged passes and small windows/tails go to DEBUG.
      */
-    void logSummary() {
-        if (rows >= SMALL_PASS_ROWS) {
-            log.info("{}", describe());
+    void logSummary(int changedRows) {
+        if (rows >= SMALL_PASS_ROWS && changedRows > 0) {
+            log.info("{}", describe(changedRows));
         } else {
-            log.debug("{}", describe());
+            log.debug("{}", describe(changedRows));
         }
     }
 }

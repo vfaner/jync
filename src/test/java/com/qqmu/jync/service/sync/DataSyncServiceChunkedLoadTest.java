@@ -149,6 +149,52 @@ class DataSyncServiceChunkedLoadTest {
         assertThat(result.getRowsWritten()).isEqualTo(3);
     }
 
+    /**
+     * A full-compare table is re-read in full on every poll interval. When every row is
+     * absorbed by an upsert that changed nothing, the throughput line must stay off INFO: at
+     * that level an idle pass reads as data still moving, which is exactly what an operator
+     * watching the log concludes.
+     *
+     * <p>A key-only table is the H2 case where an absorbed write really reports zero changes;
+     * with a non-key column H2 counts the no-op MERGE/UPDATE as a write.
+     */
+    @Test
+    void anUnchangedFullComparePassKeepsThroughputOffInfo() throws SQLException {
+        exec(source, "CREATE TABLE KEYONLY (ID BIGINT PRIMARY KEY)");
+        exec(target, "CREATE TABLE KEYONLY (ID BIGINT PRIMARY KEY)");
+        StringBuilder values = new StringBuilder();
+        for (int i = 1; i <= 1200; i++) {
+            values.append(i == 1 ? "" : ", ").append('(').append(i).append(')');
+        }
+        exec(source, "INSERT INTO KEYONLY VALUES " + values);
+
+        TableMeta table = new TableMeta();
+        table.setName("KEYONLY");
+        table.setPrimaryKeys(List.of("ID"));
+        DataSyncService service = service(2000);
+        CursorStrategy fullCompare = CursorStrategy.fullCompare("no usable cursor");
+
+        DataSyncService.TableSyncResult seed = service.syncTable(
+                source, target, table, fullCompare, new SyncProgress(), ctx);
+        assertThat(seed.getRowsChanged()).isEqualTo(1200);
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(ThroughputMeter.class);
+        try {
+            DataSyncService.TableSyncResult idle = service.syncTable(
+                    source, target, table, fullCompare, new SyncProgress(), ctx);
+
+            assertThat(idle.isSuccess()).as(idle.getError()).isTrue();
+            assertThat(idle.getRowsWritten()).as("整表又被读了一遍").isEqualTo(1200);
+            assertThat(idle.getRowsChanged()).as("目标一行都没动").isZero();
+        } finally {
+            LogCapture.detach(ThroughputMeter.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                .as("an idle re-read must not look like data movement")
+                .isEmpty();
+    }
+
     @Test
     void aKeyedFullCompareSeedStoresTheRowCountFingerprintThroughTheChunkedPath()
             throws SQLException {
