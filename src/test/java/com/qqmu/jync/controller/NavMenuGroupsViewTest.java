@@ -89,6 +89,28 @@ class NavMenuGroupsViewTest {
     }
 
     @Test
+    void theSyncEntryIsCalledASyncTask() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        // "Project" says nothing about what the entry holds; it is one long-running sync job.
+        assertThat(page).containsPattern("href=\"/projects\"[\\s\\S]{0,200}>同步任务<");
+        assertThat(page).doesNotContainPattern("href=\"/projects\"[\\s\\S]{0,200}>项目<");
+    }
+
+    @Test
+    void theSyncEntryIsCalledASyncTaskInEnglishToo() throws Exception {
+        when(databaseConfigService.findPageByRole(any(), anyInt(), anyInt()))
+                .thenReturn(Page.empty());
+        String page = mvc.perform(get("/databases")
+                        .locale(Locale.ENGLISH)
+                        .with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).containsPattern("href=\"/projects\"[\\s\\S]{0,200}>Sync tasks<");
+    }
+
+    @Test
     void theConfigurationGroupIsMarkedActiveOnAConfigurationPage() throws Exception {
         String page = render(UserRole.ADMIN);
 

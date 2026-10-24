@@ -110,6 +110,58 @@ class ExternalAuthSettingsViewTest {
     }
 
     @Test
+    void thePortalEntryIsOnlyOfferedForThePortalModes() throws Exception {
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andReturn().getResponse().getContentAsString();
+
+        int common = page.indexOf("data-mode-section=\"COMMON\"");
+        int password = page.indexOf("data-mode-section=\"PASSWORD\"");
+        assertThat(common).isGreaterThan(-1);
+        assertThat(password).isGreaterThan(common);
+        // Password mode posts to the OA API; the browser is never sent to a portal from here,
+        // so offering this field next to the login URL is what made the two look duplicated.
+        assertThat(page.substring(common, password)).doesNotContain("loginEntryUrl");
+
+        int portal = page.indexOf("data-mode-any=\"HEADER,TICKET\"");
+        assertThat(portal).isGreaterThan(-1);
+        int nextCard = page.indexOf("<div class=\"card\"", portal);
+        String portalCard = page.substring(portal, nextCard < 0 ? page.length() : nextCard);
+        assertThat(portalCard).contains("loginEntryUrl", "门户登录入口");
+    }
+
+    @Test
+    void theTimeoutAndPlainHttpSwitchFollowTheMode() throws Exception {
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andReturn().getResponse().getContentAsString();
+
+        // Gateway-header mode makes no outbound request and never judges an http endpoint, so
+        // both controls are meaningless there.
+        assertThat(page).containsPattern(
+                "class=\"field\" data-mode-any=\"PASSWORD,TICKET\"[\\s\\S]{0,300}id=\"timeoutMs\"");
+        assertThat(page).containsPattern(
+                "class=\"field\" data-mode-any=\"PASSWORD,TICKET\"[\\s\\S]{0,300}"
+                        + "id=\"allowInsecureHttp\"");
+    }
+
+    @Test
+    void theHeadlineNamesTheModeThatIsLive() throws Exception {
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("当前生效：账号密码（OA 接口校验）");
+    }
+
+    @Test
+    void theHeadlineSaysWhenExternalAuthenticationIsOff() throws Exception {
+        stored.setEnabled(false);
+
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("外部认证未启用");
+    }
+
+    @Test
     void theStoredSecretIsNeverEchoed() throws Exception {
         String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
                 .andReturn().getResponse().getContentAsString();
