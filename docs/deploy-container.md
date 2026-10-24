@@ -10,7 +10,7 @@
 - **运行阶段**：`eclipse-temurin:17-jre-jammy`，只带 JRE；`curl` 仅用于 HEALTHCHECK；以非 root 用户 `jync`（uid 10001）运行。
 
 ```bash
-docker build -t jync:1.7.8 .
+docker build -t jync:1.8.0 .
 ```
 
 构建时跳过测试（`-DskipTests`），测试请在 CI 或本地 `mvn clean test` 跑。
@@ -34,7 +34,7 @@ docker run -d --name jync \
   -v jync-logs:/app/logs \
   -e TZ=Asia/Shanghai \
   --restart unless-stopped \
-  jync:1.7.8
+  jync:1.8.0
 ```
 
 打开 <http://localhost:8080>，默认账号 `admin` / `view`，密码 `123456`，**首次登录必须先修改密码**（未修改前只能停留在改密页）。
@@ -55,8 +55,8 @@ Compose 文件里已写好常用环境变量的注释示例（HTTPS Cookie、外
 
 ```bash
 # 1) 构建并推送镜像到你的仓库
-docker build -t registry.example.com/qqmu/jync:1.7.8 .
-docker push registry.example.com/qqmu/jync:1.7.8
+docker build -t registry.example.com/qqmu/jync:1.8.0 .
+docker push registry.example.com/qqmu/jync:1.8.0
 
 # 2) 改 deploy/k8s/kustomization.yaml 里的 images 变换指向你的仓库
 
@@ -83,8 +83,10 @@ Spring 的 relaxed binding 让所有配置项都能用环境变量覆盖，无�
 | `JAVA_OPTS` | — | JVM 参数，镜像默认 `-XX:MaxRAMPercentage=75`（按容器内存限额取堆） |
 | `SERVER_PORT` | `server.port` | 容器内端口，默认 8080 |
 | `JYN_COOKIE_SECURE` | `server.servlet.session.cookie.secure` | HTTPS 部署设 `true`，会话 Cookie 带 Secure 标记 |
-| `SPRING_DATASOURCE_URL` | `spring.datasource.url` | 换外部元数据库（多实例的前提） |
+| `SPRING_DATASOURCE_URL` | `spring.datasource.url` | 换外部元数据库（多实例的前提；已验证 MySQL 8 / PostgreSQL 16 / Oracle 23） |
 | `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | 同上 | 元数据库账号 |
+| `SPRING_DATASOURCE_DRIVER_CLASS_NAME` | `spring.datasource.driver-class-name` | 驱动类；能按 URL 推断时可省略 |
+| `JYN_RESET_LOGIN` | `app.login.reset-on-startup` | 应急开关：关闭本地登录后外部认证不可用时，设为 `true` 启动一次即恢复本地登录并保存；修好后去掉 |
 | `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT` | `sync.crypto-password` / `sync.crypto-salt` | 可选：连接密码的加密密钥。不设则首次启动生成并写入数据卷里的 `<库名>.key`（备份数据卷即已包含）；从旧版本升级上来的部署**不要改** |
 | `SYNC_POLL_INTERVAL` | `sync.poll-interval` | 默认轮询间隔（毫秒） |
 | `SYNC_AI_ENABLED` | `sync.ai.enabled` | `false` 可整体移除 AI 功能（纯内网合规场景） |
@@ -96,7 +98,7 @@ Spring 的 relaxed binding 让所有配置项都能用环境变量覆盖，无�
 
 Jync 的同步正确性不依赖单实例，依赖的是**共享元数据库**：
 
-1. **换外部元数据库**：H2 文件库的 `AUTO_SERVER=TRUE` 只支持同一台主机上的多进程共享；跨主机多副本必须把 `SPRING_DATASOURCE_URL` 指到外部 MySQL（建库 `CREATE DATABASE jync DEFAULT CHARACTER SET utf8mb4;`，首启自动建表）。
+1. **换外部元数据库**：H2 文件库的 `AUTO_SERVER=TRUE` 只支持同一台主机上的多进程共享；跨主机多副本必须把 `SPRING_DATASOURCE_URL` 指到外部数据库。已验证组合为 MySQL 8、PostgreSQL 16、Oracle 23（MySQL 建库用 `CREATE DATABASE jync DEFAULT CHARACTER SET utf8mb4;`），首启由 `ddl-auto: update` 自动建表。
 2. **调度对账**：Quartz 用的是每节点内存调度（RAMJobStore）。在任意节点上启动/停用项目后，其余节点的 `ScheduleReconciler` 会在 `sync.reconcile-interval-ms`（默认 30 秒）内把本地调度对齐到数据库里的 `enabled` 标志；调度触发时 `SyncJob` 还会再查一次开关，停用项目不会在任何节点偷跑。
 3. **执行互斥**：同一项目同一时刻只会在一个节点执行——每轮同步前抢数据库里的分布式锁（`sync_task` 表的 `lock_owner` / `lock_expires_at` 字段，带 TTL，节点崩溃后锁自动过期，也可在界面上强制解锁），抢不到的节点跳过本轮。
 4. 把 `deployment.yaml` 的 `replicas` 调大即可（此时 PVC 仅剩日志用途，可换 emptyDir）。
@@ -109,7 +111,7 @@ Jync 的同步正确性不依赖单实例，依赖的是**共享元数据库**�
 
 ```bash
 # Docker：换镜像标签重建容器，数据卷不动
-docker pull registry.example.com/qqmu/jync:1.7.8
+docker pull registry.example.com/qqmu/jync:1.8.0
 docker compose up -d
 
 # K8s：改 kustomization.yaml 的 newTag 后

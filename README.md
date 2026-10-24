@@ -1,7 +1,7 @@
 # Jync 捷同 · 异构数据库实时同步工具
 
 > **Jync**，读作 "sync" —— **J** 代表 Java；**捷同**：敏捷同步，两库皆同。
-> 单 JAR 开箱即用 —— 不要 Kafka，不要 ZooKeeper，不要一行代码。
+> 单 JAR 交付的异构数据库实时同步引擎：**分块并行的全量、只读零侵入的增量、秒级的日志 CDC**。
 
 **简体中文** | [English](README_EN.md)
 
@@ -11,612 +11,792 @@
 
 ![Jync 捷同 · 异构数据库实时同步工具](docs/images/jync.png)
 
-在**异构数据库**之间实时同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点几下即可在**内置 26 种数据库（另支持自定义类型）之间任意两种**建立持续同步链路。
+在**异构数据库**之间持续同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点选即可在内置的 **26 种数据库（另支持自定义类型）之间任意两种**建立同步链路。不需要 Kafka、Flink、ZooKeeper，也不需要编写一行作业代码。
 
 - **零外部依赖**：Spring Boot 单体 + Thymeleaf 服务端渲染 + Quartz + H2 内嵌元数据库，内网离线可用。
-- **零侵入增量**：默认轮询检测，只需一个只读账号；MySQL / Oracle / PostgreSQL / SQL Server 源库可切换**日志 CDC**，做到秒级延迟。
-- **结构与数据一起同步**：目标库缺失时自动建表 / 索引 / 视图 / 存储过程，内置各方言类型映射与函数转换。
-- **可靠续传**：有主键的表按主键 keyset 分块、无主键的表在空目标上按 OFFSET 分页，均带检查点续传；写入全部幂等，停机期间源库变更重启后自动补齐。
+- **全量不是批量查询导入**：主键 keyset 分块、单表内并行、结果集流式读取、逐块提交与检查点，单表吞吐可达 **20 万行/秒量级**。
+- **增量只有一条索引查询**：默认轮询模式只读游标之后的变化，一个只读账号即可；四类源库可切换日志 CDC，做到秒级延迟。
+- **结构与数据一起走**：目标库缺失时自动建表 / 索引 / 视图 / 存储过程，内置各方言类型映射与函数转换。
+- **可靠续传**：停机、断网、进程被杀都能从检查点继续，写入全部幂等，停机期间源库的变更重启后自动补齐。
 
-- **下载与发版**：GitHub <https://github.com/vfaner/jync/releases/latest>　Gitee <https://gitee.com/super_rgh/jync/releases/latest>
-- **官网**：<https://jync.qqmu.com>
-- **视频演示**：<https://www.bilibili.com/video/BV1iHYJ6vEEd>（19 分钟，从建连接到实时同步）
+| 资源 | 地址 |
+|---|---|
+| **下载（GitHub）** | [github.com/vfaner/jync/releases/latest](https://github.com/vfaner/jync/releases/latest) |
+| **下载（Gitee）** | [gitee.com/super_rgh/jync/releases/latest](https://gitee.com/super_rgh/jync/releases/latest) |
+| **官网** | [jync.qqmu.com](https://jync.qqmu.com) |
+| **视频演示** | [Bilibili · 19 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
 
 ---
 
+## 目录
+
+- [项目背景](#background)
+- [核心能力](#features)
+- [界面速览](#screenshots)
+- [同步引擎：全量、增量与日志 CDC](#engine)
+- [全量加载性能与调优](#performance)
+- [调度设置](#schedule)
+- [列清洗](#cleansing)
+- [支持的数据库](#databases)
+- [部署](#deploy)
+- [配置项](#config)
+- [登录、权限与统一认证](#auth)
+- [使用流程](#workflow)
+- [AI 辅助转换（可选）](#ai)
+- [与市面工具的对比](#comparison)
+- [架构与技术栈](#architecture)
+- [文档与测试](#docs)
+- [参与贡献](#contributing)
+- [许可证](#license)
+
+---
+
+<a name="background"></a>
 ## 项目背景
 
-- **从真实迁移项目里长出来**：政企信创改造中，MySQL / Oracle / SQL Server 等存量库既要迁移到国产数据库，又要长期保持一致。商业同步工具按节点授权、成本高；Debezium 一类开源方案则要先搭 Kafka 全家桶，实施和运维门槛都不低。
-- **把同步做成一个可交付的软件**：我们把内部反复使用的同步逻辑沉淀为单体 Web 应用 —— 一个 jar 交付，实施人员用浏览器点选即可完成建连接、选表、启动同步，不必编写作业脚本或维护消息队列。
-- **国产数据库一等公民**：达梦、人大金仓、OceanBase、TiDB、GoldenDB、TDSQL、PolarDB、万里 GreatDB、银联 UPDRDB、星环 KunDB、平安 RASESQL、东方金信 SeaboxSQL、瀚高、海量、崖山、GBase、神通、华为 GaussDB 等均有内置方言适配，中文界面与中文文档优先。
-- **国产开源、可私有化部署**：项目以 MIT 协议开源，代码可审计，不依赖任何云服务，适合内网与信创环境；由**沐沐开源工坊**维护，官网 <https://jync.qqmu.com>。
+**从真实的信创迁移现场长出来。** 政企系统从 MySQL、Oracle、SQL Server 迁移到达梦、人大金仓、OceanBase 等国产数据库时，迁移往往不是"一次性搬完就结束"：新旧系统双轨运行、分批割接、历史库只读共存，都要求两个库在数周甚至数月里**持续保持一致**。
+
+**现成方案总有一步对不上。** 商业同步工具按节点或按库授权，采购周期长、成本高；Debezium、Flink CDC 这类日志级方案能力强，但要先搭 Kafka、Flink 与作业编排，实施和运维门槛不低；DataX、Kettle 擅长一次性搬运与 ETL，却不负责长期增量、结构同步和断点续传。
+
+**于是把同步做成一个可交付的软件。** Jync 把迁移现场反复使用的同步逻辑沉淀为单体 Web 应用：一个 jar 交付，实施人员用浏览器完成建连接、选表、配置调度、启动同步，不必写作业脚本，也不必维护消息队列。项目以 MIT 协议开源，代码可审计，可完全私有化部署。
+
+**设计目标**
+
+- **一个 jar**：元数据库、调度器、Web 界面全部内置，内网与离线环境直接运行。
+- **分钟级上手**：连接可测通再保存，对象可勾选，配置项都有默认值。
+- **结构是一等公民**：建表、索引、视图、存储过程与类型映射由工具负责，而不是留给使用者的作业脚本。
+- **国产数据库优先**：达梦、金仓、OceanBase、TiDB、GaussDB 等均有内置方言，而不是"通用 JDBC 也许能连"。
+- **可观测**：每轮同步的行数、耗时、吞吐与瓶颈占比都写进日志与页面。
 
 ---
 
+<a name="features"></a>
+## 核心能力
+
+| 分类 | 能力 |
+|---|---|
+| 全量加载 | 主键 keyset 分块 + 单表内并行 + 结果集流式读取 + 逐块检查点；空表 INSERT-first、延迟二级索引；单表 20 万行/秒量级 |
+| 增量同步 | 时间戳 / 行级 SCN / 自增列 / 全表比对自动选策略；一条游标区间查询；水位线安全回退；游标提交后推进 |
+| 日志 CDC | MySQL binlog、Oracle LogMiner、PostgreSQL 逻辑解码、SQL Server CDC；长驻线程流式回放，秒级延迟 |
+| 结构同步 | 表、索引、视图、存储过程/函数；类型映射、函数转换、标识符引号、分页语法、DDL 覆盖 |
+| 数据加工 | 列清洗（7 种规则）、表名映射、只读数据预览、任务克隆 |
+| 可靠性 | 幂等 upsert、检查点续传、数据库租约锁、at-least-once、停机变更自动补齐 |
+| 可观测 | 看板、变更日志、审计日志、系统日志、每表吞吐日志与 CDC 状态面板 |
+| 交付形态 | jar / Docker / Kubernetes；中英双语、昼夜主题；本地账号与三种统一认证 |
+
+---
+
+<a name="screenshots"></a>
 ## 界面速览
 
 <table>
   <tr>
-    <td align="center" width="50%"><img src="docs/images/jync_login.png" alt="登录" width="100%"><br><sub><b>登录</b> · 口令门禁，初始密码未改时全页挂警告</sub></td>
-    <td align="center" width="50%"><img src="docs/images/jync_kanban.png" alt="看板" width="100%"><br><sub><b>看板</b> · 项目/连接/表数、24h 变更量与最近活动</sub></td>
+    <td align="center" width="33%"><a href="docs/images/jync_kanban.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban.png" alt="看板" width="100%"></a><br><sub><b>看板</b> · 连接 / 任务 / 表数与 24h 变更</sub></td>
+    <td align="center" width="33%"><a href="docs/images/jync_xiangmu.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu.png" alt="同步任务" width="100%"></a><br><sub><b>同步任务</b> · 多任务并行启停</sub></td>
+    <td align="center" width="33%"><a href="docs/images/jync_db.png" target="_blank" rel="noopener"><img src="docs/images/jync_db.png" alt="连接管理" width="100%"></a><br><sub><b>连接管理</b> · 源 / 目标分栏</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/jync_kanban_anye.png" alt="暗色主题" width="100%"><br><sub><b>暗色主题</b> · 整套配色随 <code>data-theme</code> 一起换</sub></td>
-    <td align="center"><img src="docs/images/jync_kanban_en.png" alt="英文界面" width="100%"><br><sub><b>英文界面</b> · 中 / EN 一键切换，默认按时区推断</sub></td>
+    <td align="center"><a href="docs/images/jync_db_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_add.png" alt="新增连接" width="100%"></a><br><sub><b>新增连接</b> · 26 种预置类型，测通再保存</sub></td>
+    <td align="center"><a href="docs/images/jync_celue.png" target="_blank" rel="noopener"><img src="docs/images/jync_celue.png" alt="捕获策略" width="100%"></a><br><sub><b>捕获策略</b> · 轮询 / 全量比对 / 日志 CDC</sub></td>
+    <td align="center"><a href="docs/images/jync_lx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lx.png" alt="任务详情" width="100%"></a><br><sub><b>任务详情</b> · 对象、调度、性能、列清洗</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/jync_db.png" alt="数据库连接" width="100%"><br><sub><b>连接管理</b> · 源 / 目标分栏，各自独立分页</sub></td>
-    <td align="center"><img src="docs/images/jync_db_add.png" alt="新增连接" width="100%"><br><sub><b>新增连接</b> · 26 种预置类型（含国产库），选好即自动拼装 JDBC URL，先测通再保存</sub></td>
+    <td align="center"><a href="docs/images/jync_cdc.png" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.png" alt="日志 CDC" width="100%"></a><br><sub><b>日志 CDC</b> · 位点 / 落后秒数 / 吞吐 / 跳过计数</sub></td>
+    <td align="center"><a href="docs/images/jync_diaodu.png" target="_blank" rel="noopener"><img src="docs/images/jync_diaodu.png" alt="调度设置" width="100%"></a><br><sub><b>调度设置</b> · 轮询间隔或 Cron</sub></td>
+    <td align="center"><a href="docs/images/jync_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xn.png" alt="全量加载性能" width="100%"></a><br><sub><b>全量加载性能</b> · 批量大小与并行度</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/jync_lx.jpg" alt="项目详情 · 轮询" width="100%"><br><sub><b>项目详情 · 轮询</b> · 逐表勾选、游标策略标注，调度 / 性能 / 列清洗集中配置</sub></td>
-    <td align="center"><img src="docs/images/jync_cdc.jpg" alt="项目详情 · 日志 CDC" width="100%"><br><sub><b>项目详情 · 日志 CDC</b> · 位点 / 落后秒数 / 吞吐 / 跳过计数面板</sub></td>
+    <td align="center"><a href="docs/images/jync_lqx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lqx.png" alt="列清洗" width="100%"></a><br><sub><b>列清洗</b> · 按表按列配置，写入前生效</sub></td>
+    <td align="center"><a href="docs/images/jync_data_yulan.png" target="_blank" rel="noopener"><img src="docs/images/jync_data_yulan.png" alt="数据预览" width="100%"></a><br><sub><b>数据预览</b> · 源 / 目标前 100 行</sub></td>
+    <td align="center"><a href="docs/images/jync_log.png" target="_blank" rel="noopener"><img src="docs/images/jync_log.png" alt="变更日志" width="100%"></a><br><sub><b>变更日志</b> · 对象 / 类型 / 行数 / 耗时</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/jync_diaodu.png" alt="调度设置" width="100%"><br><sub><b>调度设置</b> · 自定义轮询间隔（毫秒）或 Cron；CDC 模式下自动隐藏</sub></td>
-    <td align="center"><img src="docs/images/jync_xn.png" alt="全量加载性能" width="100%"><br><sub><b>全量加载性能</b> · 批量大小（默认 2000）与并行度（默认 2，上限 8）</sub></td>
+    <td align="center"><a href="docs/images/jync_shenji.png" target="_blank" rel="noopener"><img src="docs/images/jync_shenji.png" alt="审计日志" width="100%"></a><br><sub><b>审计日志</b> · 登录与操作留痕</sub></td>
+    <td align="center"><a href="docs/images/jync_sys_log.png" target="_blank" rel="noopener"><img src="docs/images/jync_sys_log.png" alt="系统日志" width="100%"></a><br><sub><b>系统日志</b> · 文件 / 级别 / 关键字检索</sub></td>
+    <td align="center"><a href="docs/images/jync_renzheng.png" target="_blank" rel="noopener"><img src="docs/images/jync_renzheng.png" alt="外部认证" width="100%"></a><br><sub><b>外部认证</b> · 账号密码 / 网关头 / 票据</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/jync_lqx.png" alt="列清洗" width="100%"><br><sub><b>列清洗</b> · 按表 / 列配置规则，写入前生效，不改源数据</sub></td>
-    <td align="center"><img src="docs/images/jync_log.png" alt="变更日志" width="100%"><br><sub><b>变更日志</b> · 对象、类型、行数、耗时与错误详情</sub></td>
+    <td align="center"><a href="docs/images/jync_ai.png" target="_blank" rel="noopener"><img src="docs/images/jync_ai.png" alt="AI 配置" width="100%"></a><br><sub><b>AI 配置</b> · 多供应商，同时只启用一个</sub></td>
+    <td align="center"><a href="docs/images/jync_xiangmu_suoyin_ai.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_suoyin_ai.png" alt="AI 起草" width="100%"></a><br><sub><b>AI 起草</b> · 候选 SQL 流式进编辑器</sub></td>
+    <td align="center"><a href="docs/images/jync_system.png" target="_blank" rel="noopener"><img src="docs/images/jync_system.png" alt="系统信息" width="100%"></a><br><sub><b>系统信息</b> · 运行参数与版本</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/jync_xiangmu.png" alt="项目列表" width="100%"><br><sub><b>项目列表</b> · 多任务并行启停，分页可跳页</sub></td>
-    <td align="center"><img src="docs/images/jync_xiangmu_add.png" alt="新建项目" width="100%"><br><sub><b>新建项目</b> · 源与目标各选一条已测通的连接</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="docs/images/jync_ai.png" alt="AI 配置" width="100%"><br><sub><b>AI 配置</b> · 多供应商共存，同一时刻只启用一个</sub></td>
-    <td align="center"><img src="docs/images/jync_ai_add.png" alt="新增供应商" width="100%"><br><sub><b>新增供应商</b> · 保存前发真实请求探测端点</sub></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><img src="docs/images/jync_xiangmu_suoyin_ai.png" alt="AI 起草" width="60%"><br><sub><b>AI 起草</b> · 候选 SQL 流式进编辑器，保存前人工审阅</sub></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><img src="docs/images/jync_system.png" alt="系统信息" width="60%"><br><sub><b>系统信息</b> · 运行参数、版本与更新内容只读集中展示</sub></td>
+    <td align="center"><a href="docs/images/jync_kanban_anye.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_anye.png" alt="暗色主题" width="100%"></a><br><sub><b>暗色主题</b> · 整套配色一起切换</sub></td>
+    <td align="center"><a href="docs/images/jync_kanban_en.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_en.png" alt="英文界面" width="100%"></a><br><sub><b>英文界面</b> · 中 / EN 一键切换</sub></td>
+    <td align="center"><a href="docs/images/jync_xiangmu_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_add.png" alt="新建任务" width="100%"></a><br><sub><b>新建任务</b> · 源与目标各选一条已测通连接</sub></td>
   </tr>
 </table>
 
----
-
-## 核心功能
-
-| 分类 | 能力 |
-|---|---|
-| 项目 / 连接 | 多项目并行互不干扰；连接按源 / 目标分栏独立分页；保存前可测连通并预览自动拼装的 JDBC URL |
-| 对象与结构 | 表 / 视图 / 存储过程分组勾选（搜索 + 批量）；目标库缺失时按目标方言自动建表 / 索引 / 视图 / 过程 |
-| 方言适配 | 类型映射、函数名转换、标识符引号、分页语法、存储过程包装 |
-| 实时同步 | 轮询（全局默认 2s）或 Cron 编排，项目可单独覆盖；四种日志 CDC（MySQL binlog / Oracle LogMiner / PG 逻辑解码 / SQL Server CDC），秒级延迟 |
-| 可靠性 | 全量按主键 keyset 分块（无主键空目标表按 OFFSET 分页）+ 检查点续传；有主键的表内并行（整数前导键算术分片、其他键形态采样分片，上限 8）；重启从游标继续并补齐停机变更；写入全部幂等 |
-| 全量性能 | 项目级「全量加载性能」：批量大小默认 2000（1–20000），并行度默认 2（1–8，受连接池约束）；只影响首次全量与重建基线，不改变增量 / CDC 回放 |
-| 数据加工 | 项目克隆、只读数据预览；列清洗按表 / 列配置，支持去首尾空白、转大写 / 小写、空串转 NULL、去前缀 / 后缀、正则替换，写入目标库前在内存中生效 |
-| 控制与观测 | 启停 / 立即同步（运行中点击合并为一轮补跑）；看板 + 变更日志 + 行数审计 |
-| 前端 | 中 / 英切换（默认按时区推断）、昼夜主题（跟随系统）、无 CDN 无 webfont，静态资源约 440KB 全本地化 |
-
-### 项目详情里的三块配置
-
-- **调度设置**：轮询 / 全量比对项目可开启「自定义调度」，单独填写轮询间隔（毫秒）或 Quartz Cron（6 / 7 段，秒在最前）。Cron 优先于轮询间隔；留空使用全局默认值。日志 CDC 项目由长驻消费线程流式回放，该卡片会自动隐藏。
-- **全量加载性能**：批量大小决定每个 JDBC 批次的行数（默认 2000），并行度决定大表的分片 worker 数（默认 2，上限 8；整数前导主键按 MIN/MAX 算术切分，字符串/UUID/复合键按源端采样边界切分，无窗口函数的库自动回退顺序分块）。两者只作用于首次全量与重建基线；并行度还会被连接池上限二次收敛，数据库敏感时设为 1。
-- **列清洗**：按「表 + 列」添加规则，写入目标库前在内存中依次执行，源库数据不受影响。支持去首尾空白、转大写、转小写、空串转 NULL、去前缀、去后缀与正则替换；只处理字符串列，非字符串值原样通过。
+> 截图为高分辨率原图，点击会在新标签页打开原图；Gitee 上还会叠加内置的图片放大预览。
 
 ---
 
+<a name="engine"></a>
+## 同步引擎：全量、增量与日志 CDC
+
+Jync 有三条数据通路，分别解决"第一次怎么搬""之后怎么追""如何做到秒级"。
+
+```
+首次全量：  keyset 分块 → N 个 worker 并行 → 流式读取 → 逐批提交 → 检查点
+增量轮询：  cursor > 上次值 AND cursor <= 水位线 → 批量 upsert → 推进游标
+日志 CDC：  记录位点 → 分块基线 → 长驻线程连续回放 → 提交后推进位点
+```
+
+### 首次全量：分块、并行、流式
+
+全量不是把整表 `SELECT` 出来再批量 `INSERT`，而是一条有界、可中断、可续传的流水线：
+
+```
+源库游标（fetch-size 流式取数）
+  → 行映射 / 列清洗（内存中逐行）
+  → JDBC batch（按行数与字节预算）
+  → 目标库提交（每批）
+  → 检查点（每块）
+```
+
+- **流式读取**：结果集按 `full-load-fetch-size` 增量获取，逐行映射、清洗、绑定，堆内存只占当前批次与当前大字段，不随表大小增长。
+- **keyset 分块**：有主键的表按主键游标分页，`chunk-size` 默认 10 万行一块；每块单独提交并写检查点，崩溃最多重读一块，而不是整表重来。
+- **表内并行**：单列整数主键按 `[MIN, MAX]` 算术切成互不相交的区间；文本、UUID、复合主键按源库键序采样边界；每个 worker 使用独立连接，上限 8。区间不相交，加上写入幂等，完成顺序不影响正确性。
+- **无主键表**：目标为空且存在可排序列时，按 OFFSET 分页并以目标行数续传；否则保持单次流式读取。
+- **写侧优化**：目标为空时用普通 `INSERT` 代替 upsert；非唯一二级索引延到全量完成后再建；写入期间可临时关闭目标外键。
+- **发生时机**：仅首次启动、手动"重置进度"或 CDC"重建基线"时执行；日常轮询只同步增量。
+
+### 增量轮询：只读变化
+
+每张表每轮只有一条查询：
+
+```sql
+SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
+```
+
+- 游标列自动识别：`TIMESTAMP` 识别新增与更新，`ROW_SCN` 识别 Oracle 行级变更，`IDENTITY` 只识别新增，小表可用 `FULL_COMPARE` 周期性全表比对。
+- 水位线回退 `safety-lag-ms`：晚提交的事务会在下一轮被重新读到，幂等 upsert 吸收重叠。
+- **游标在目标库提交之后才推进**，因此故障恢复语义是 at-least-once，不会丢行。
+- 默认的轮询模式不碰源库 binlog，也不建触发器，只需一个只读账号。
+
+### 日志 CDC：秒级流式回放
+
+四种源库可按任务切换日志 CDC，直接解析源库日志，看到 `INSERT / UPDATE / DELETE`：
+
+| 引擎 | 源库前提（探测逐项检查） | 位点 |
+|---|---|---|
+| MySQL binlog | 5.7+；`log_bin=ON`、`binlog_format=ROW`、`binlog_row_image=FULL`；账号具备 `REPLICATION SLAVE` 与 `REPLICATION CLIENT`；binlog 保留 ≥ 24h | binlog 文件 + 偏移（含 GTID） |
+| Oracle LogMiner | 11g+；`ARCHIVELOG` 模式；库级 `SUPPLEMENTAL LOG DATA`；表级 `SUPPLEMENTAL LOG DATA (ALL) COLUMNS`；挖掘权限；归档保留 ≥ 24h | SCN |
+| PostgreSQL 逻辑解码 | 9.4+；`wal_level=logical`；账号具备 `REPLICATION`；表 `REPLICA IDENTITY` 非 `NOTHING` | LSN |
+| SQL Server CDC | 2012+；库级 `sp_cdc_enable_db`；SQL Server Agent 运行中；账号在 `cdc_Admin` / `cdc_reader` | LSN |
+
+- **统一流程**：先记位点 → 分块全量基线 → 长驻线程连续回放。位点在基线之前写入，所以基线期间的变更不会漏。
+- **低空闲延迟**：有数据时本轮捞完立即开下一轮，0 额外等待；只有真空闲才休眠（LogMiner / SQL Server 默认 1s、PostgreSQL 500ms，最低 50ms）。MySQL binlog 是服务端推送，不做轮询。
+- **多实例接管**：同一任务的 CDC 流用数据库租约互斥，持锁节点宕机后 ≤ 60s 由其他节点接管续传。
+- **一致性契约**：先提交目标库、再复检租约、最后推进位点；崩溃后从上一位点重放，重叠窗口由幂等 upsert 吸收。
+
+### 速度与规模
+
+在容器单机基准（50 万行 Oracle 表）中，全量加载的实测吞吐为 **21.6 万行/秒**；开启 INSERT-first 后，空表全量从 MERGE 的 8.4 万行/秒提升到 21.1 万行/秒。日志 CDC 端到端延迟为**秒级**，有数据时连续回放、不等待。对于几十张表、百万到千万行的常见信创迁移规模，Jync 的延迟与吞吐处于与 Flink CDC 同一量级；区别在于部署面只有一个 jar，不需要 Kafka、Flink 集群与作业编排。
+
+---
+
+<a name="performance"></a>
+## 全量加载性能与调优
+
+全量只发生一次，但往往决定整个迁移窗口的长度。Jync 为每张表、每个并行 worker 打印一行吞吐日志，把"慢"拆成可操作的三个占比。
+
+### 吞吐日志怎么看
+
+```text
+table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s rows/s=216000.0 read=38% write=52% commit=10% batches=250 rowsPerBatch=2000
+```
+
+| 字段 | 含义 | 怎么读 |
+|---|---|---|
+| `table` / `thread` | 表名与执行线程 | 并行时每个 worker 各打一行，线程名形如 `full-load-orders` |
+| `rows` / `changed` | 读取行数 / 实际写入行数 | 两者不同说明本轮是重读比对；`changed=0` 的轮次不会打 INFO |
+| `elapsed` / `rows/s` | 耗时与吞吐 | 跨轮次、跨调参对比的主指标 |
+| `read%` | 源库取数 + 行映射占比 | 偏高说明源库游标、网络或映射是瓶颈 |
+| `write%` | 清洗 + 绑定 + `addBatch` + `executeBatch` 占比（不含提交） | 偏高说明目标库写入、约束或大字段绑定是瓶颈 |
+| `commit%` | 目标库 `COMMIT` 等待占比 | 偏高说明 redo、备库同步或磁盘延迟是瓶颈 |
+| `batches` / `rowsPerBatch` | 批次数 / 每批实际行数 | `rowsPerBatch` 接近批量大小才说明驱动真的在批处理 |
+
+`read% + write% + commit%` 合计 100%。只有 `rows >= 1000` 且 `changed > 0` 的轮次打 INFO，小窗口与无变化的轮次降到 DEBUG，避免刷屏。
+
+### 先判断瓶颈，再调参数
+
+| 现象 | 通常原因 | 优先处理 |
+|---|---|---|
+| `commit%` 是三者中最大 | 目标库 redo 慢、磁盘慢、Data Guard 同步传输、事务过大 | 调大批次减少提交次数；确认存储与备库；保持延迟建索引 |
+| `write%` 最大 | 目标库绑定 / 网络往返 / 外键与索引维护 / 大字段 | 调大批次；写入期间关闭目标外键；检查大字段与索引 |
+| `read%` 最大 | 源库全表或大范围扫描、游标无索引、源库繁忙 | 确认游标列有索引；提高读取批量；增加并行度；错峰执行 |
+| `rowsPerBatch` 远小于批量大小 | 驱动没有真正批处理，或大字段被单行提交 | 检查驱动版本与 LOB 配置；确认批次预算未被单值占满 |
+| 三项都不高但 `rows/s` 低 | 网络 RTT 高、批次太小、单线程 | 同时提高批量与并行度，检查链路延迟 |
+
+### 参数怎么调
+
+| 参数 | 默认 | 建议范围 | 作用与取舍 |
+|---|---|---|---|
+| `sync.full-load-batch-size` | `2000` | 1000–5000（上限 20000） | 每批行数。批次越大提交越少、越快；超过 5000 后提速趋缓，回滚与内存成本继续上升 |
+| `sync.full-load-fetch-size` | `2000` | 1000–5000 | 源库结果集批量。源库或 JVM 内存紧张时调小；大字段表尤其要小 |
+| `sync.full-load-parallelism` | `2` | 1–4（上限 8） | 单表并行 worker 数。1→2 提升最明显，2→4 约再快 15–20%，再往上主要是加压 |
+| `sync.chunk-size` | `100000` | 10000–500000 | 每块行数，也是崩溃后最多重读的行数；`0` 关闭分块 |
+| `sync.initial-load-insert-first` | `true` | 开 / 关 | 空表用 INSERT 代替 upsert；已有数据的表仍走幂等 upsert |
+| `sync.defer-secondary-indexes` | `true` | 开 / 关 | 非唯一二级索引延到全量完成后建；主键与唯一索引始终立即创建 |
+| `sync.max-pool-size` | `5` | ≥ 并行度 + 1 | 每个 worker 各占源、目标一条连接；连接池小于并行度时 worker 只会排队 |
+| `写入期间暂停目标外键` | 开 | 开 / 关 | 任务级选项，避免写入顺序导致的约束失败，也减少逐行约束检查 |
+
+**作用范围**：以上参数只影响首次全量与重建基线，不改变增量轮询与 CDC 回放。全局值写在 `application.yml`，任务详情页的"全量加载性能"卡片可按任务覆盖，留空即用全局默认。
+
+### 实测基准
+
+容器单机、50 万行 Oracle 表，批量 2000：
+
+| 场景 | 配置 | 结果 |
+|---|---|---|
+| 空表全量写入方式 | `MERGE` vs `INSERT` | 约 8.4 万行/秒 vs **21.1 万行/秒** |
+| 单表并行度 | 1 / 2 / 4 worker | 11.7 万 / 18.4 万 / **21.6 万行/秒** |
+| 二级索引 | 边写边维护 vs 全量后创建 | 11.1s vs **5.9s + 0.5s**（约快 47%） |
+
+> 基准用于说明参数方向，不是承诺值。实际吞吐取决于源库与目标库的磁盘、网络、驱动版本、表宽与并发负载。
+
+### 调优步骤
+
+1. **先跑单表基线**：并行度 1、批量 2000，记下 `rows/s` 与 `read/write/commit` 占比。
+2. **看最大占比**：`commit%` 最大先加批量（2000 → 5000）；`write%` 最大先查目标库约束、索引与大字段；`read%` 最大先查源库游标与扫描范围。
+3. **再加并行度**：确认连接池足够（`max-pool-size ≥ 并行度 + 1`）后，从 2 加到 4，每次只改一个变量并重新看日志。
+4. **确认批处理生效**：`rowsPerBatch` 应接近批量大小；明显偏小说明驱动没有批处理或大字段在拆批。
+5. **生产库错峰**：与业务共享的库把并行度设为 1，批量保持 1000–2000；专用迁移窗口再逐步加并行。
+
+---
+
+<a name="schedule"></a>
+## 调度设置
+
+调度决定"增量多久追一次"。Jync 的调度分三层：全局默认、任务级覆盖、日志 CDC 的常驻消费。
+
+### 全局默认与任务覆盖
+
+- **全局默认**：`sync.poll-interval`，默认 2000 毫秒，写在 `application.yml`。
+- **任务级覆盖**：任务详情页打开"自定义调度"，可单独填写轮询间隔或 Cron；留空即继承全局默认。
+- 调度在**任务启动后**才注册；运行中的任务需要先停止才能修改调度与同步对象。
+
+### 轮询间隔
+
+- 单位毫秒，实际生效范围被收敛到 **200ms – 24h**；低于 200ms 视为病态轮询，高于一天请改用 Cron。
+- 间隔模式的错过的触发会被丢弃：积压的十次 2 秒轮询没有意义，下一轮本来就会看到全部变化。
+
+### Cron
+
+- 使用 Quartz 语法，**6 段或 7 段，秒在最前**。
+- 填写后**优先于轮询间隔**；表达式在保存与启动时都会校验，非法值直接拒绝。
+- **按服务器时区求值**。服务器跑在 UTC 时，`0 0 2 * * ?` 会在本地时间上午 10 点触发；部署时请固定 `-Duser.timezone` 或容器 `TZ`。任务详情页会显示"下次自动运行"及其实时区。
+- Cron 的错过的触发会在有空闲线程时**补跑一次**，而不是静默跳过一整天。
+
+```text
+0/2 * * * * ?        每 2 秒
+0 0/5 * * * ?        每 5 分钟
+0 30 2 * * ?         每天 02:30
+0 0 8 ? * MON-FRI    工作日 08:00
+```
+
+### 启动、补跑与多实例
+
+- **启动即跑一轮**：任务启动后会立即执行一次，然后按调度运行，不必等第一个间隔。
+- **立即同步**：不改变启用状态，从上次成功位置补跑一轮；运行中点击会合并为一轮补跑，不会丢弃。
+- **CDC 任务没有 Quartz 调度**：长驻消费者持续回放，轮询间隔、Cron 与游标列都不生效，页面会隐藏调度卡片；空闲挖掘间隔按引擎单独配置（最低 50ms）。
+- **多实例**：Quartz 使用内存存储，节点启动时按数据库里的启用标志重建调度；对账线程每 30 秒把本地调度与共享库对齐。同一任务的实际执行由数据库租约锁互斥。
+
+---
+
+<a name="cleansing"></a>
+## 列清洗
+
+列清洗在**写入目标库之前**对字符串列做固定规则处理，源库数据不受影响。它适合处理历史数据里的空格、大小写、前后缀与格式噪声，而不把 Jync 变成脚本引擎。
+
+### 规则
+
+| 规则 | 作用 | 示例 |
+|---|---|---|
+| `TRIM` | 去首尾空白（Unicode 空白） | `"  张三 "` → `"张三"` |
+| `UPPER` | 转大写 | `"ab-01"` → `"AB-01"` |
+| `LOWER` | 转小写 | `"AB-01"` → `"ab-01"` |
+| `BLANK_TO_NULL` | 空串或纯空白转 `NULL` | `"   "` → `NULL` |
+| `STRIP_PREFIX` | 去掉一个固定前缀 | 前缀 `CN-`：`"CN-001"` → `"001"` |
+| `STRIP_SUFFIX` | 去掉一个固定后缀 | 后缀 `.csv`：`"a.csv"` → `"a"` |
+| `REGEX_REPLACE` | 用正则替换全部匹配 | `\s+` → 空格；`^(\d{4})-` → `$1` |
+
+### 执行顺序与范围
+
+- 规则按"表 + 列"配置，表名与列名**大小写不敏感**。
+- 同一张表内的规则按**保存顺序依次执行**：先 `TRIM` 再 `BLANK_TO_NULL`，纯空白值才会变成 `NULL`。
+- **只处理字符串值**，数字与日期原样通过，不做隐式类型转换。
+- 全量、增量轮询与 CDC 回放走同一套规则；并行全量的每个 worker 各自执行。
+- 被清洗的列会被强制整列物化读取，不受流式大字段策略影响；单值超过 `sync.lob.force-inline-max-bytes`（默认 1MB）会明确报错并指出表、列与配置键。
+- 运行中的任务需先停止同步，才能修改列清洗规则。
+
+### 校验
+
+- `STRIP_PREFIX` / `STRIP_SUFFIX` / `REGEX_REPLACE` 必须填写参数。
+- 正则按 Java 语义在保存时校验，`$1` 分组引用、`${name}` 命名分组、反斜杠转义都支持；非法表达式与非法替换串直接拒绝，不会等到同步周期才失败。
+- 同一列完全相同的规则不允许重复保存，避免被执行两次。
+
+---
+
+<a name="databases"></a>
 ## 支持的数据库
 
-内置 **26 种**：MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、OpenGauss、**华为 GaussDB**、**达梦**、**人大金仓**、**OceanBase**、**TiDB**、**中兴 GoldenDB**、**腾讯 TDSQL（MySQL 版）**、**阿里 PolarDB（MySQL 版）**、**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB**、**平安 RASESQL**、**东方金信 SeaboxSQL**、**瀚高**、**海量**、**崖山**、**南大通用 (GBase)**、**神通 (Oscar)**、H2。
+内置 **26 种**：MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、openGauss、**华为 GaussDB**、**达梦**、**人大金仓**、**OceanBase**、**TiDB**、**中兴 GoldenDB**、**腾讯 TDSQL（MySQL 版）**、**阿里 PolarDB（MySQL 版）**、**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB**、**平安 RASESQL**、**东方金信 SeaboxSQL**、**瀚高**、**海量 Vastbase**、**崖山**、**南大通用 GBase**、**神通 Oscar**、H2。
 
-- **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时动态加载；可指定 SQL 方言家族（通用 / Oracle / MySQL / PostgreSQL / SQL Server / DB2），决定建表、upsert 与元数据读取的方式，不指定时按通用 ANSI 处理。
-- **驱动内置**：除 **GBase**、**神通** 与 **华为 GaussDB** 外均随包内置；这三家未在 Maven Central 发布官方构件，需自备 jar 并填写路径（独立 `URLClassLoader` 加载，不污染主程序）。厂商 jar 里的驱动类名与预设不同时，可在同一张卡片里覆盖驱动类（留空即用预设），例如 GaussDB 的 `gsjdbc200.jar` 使用 `com.huawei.gauss200.jdbc.Driver`。
-- **华为 GaussDB**：与 openGauss 是两个产品（驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`），方言归入 PostgreSQL 系；使用随库提供的 `gaussdbjdbc.jar` 即可，不要按 openGauss 的方式连接。
-- **PolarDB / TDSQL 分版本**：MySQL 版有独立预置（内置 MySQL 驱动，端口按控制台改）；PostgreSQL 版选 PostgreSQL 预置；PolarDB Oracle 兼容版协议是 PostgreSQL、驱动为 `com.aliyun.polardb2.Driver`，请用自定义类型并自备 jar。
-- **协议兼容预设**：**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB** 兼容 MySQL 协议，**平安 RASESQL**、**东方金信 SeaboxSQL** 兼容 PostgreSQL 协议，均复用内置驱动与对应方言族——表结构、索引、视图、函数/存储过程、数据 upsert 走的是 MySQL/PostgreSQL 同一条已验证链路。KunDB 预设只覆盖 MySQL 模式；TeleDB 的 MySQL/PostgreSQL 版分别选 MySQL/PostgreSQL 预置；中移磐维为 openGauss 内核，选 openGauss 预置；虚谷、优炫的原生驱动需自备，请用自定义类型。
+- **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时独立 `URLClassLoader` 加载；可指定方言家族（通用 / Oracle / MySQL / PostgreSQL / SQL Server / DB2），决定建表、upsert 与元数据读取方式。
+- **驱动内置**：除 **GBase**、**神通** 与 **华为 GaussDB** 外均随包内置。这三家未在 Maven Central 发布官方构件，需自备 jar 并填写路径；厂商 jar 的驱动类名与预设不同时可在同一张卡片覆盖。
+- **华为 GaussDB**：与 openGauss 是两个产品，驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`，方言归入 PostgreSQL 系。
+- **协议兼容预设**：万里 GreatDB、银联 UPDRDB、星环 KunDB 兼容 MySQL 协议；平安 RASESQL、东方金信 SeaboxSQL 兼容 PostgreSQL 协议。它们复用内置驱动与对应方言族，表结构、索引、视图、过程与 upsert 走同一条已验证链路。
+- **PolarDB / TDSQL 分版本**：MySQL 版有独立预置；PostgreSQL 版选 PostgreSQL 预置；PolarDB Oracle 兼容版协议是 PostgreSQL、驱动为 `com.aliyun.polardb2.Driver`，请用自定义类型。
 - **许可证**：驱动版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 
 ---
 
-## 快速开始
+<a name="deploy"></a>
+## 部署
 
 ### 环境要求
 
 | 项 | 要求 |
 |---|---|
 | JDK | **17+** |
-| Maven | 3.6+（仅源码编译时需要） |
-| 端口 / 内存 / 磁盘 | 默认 `8080`；建议 ≥ 512MB 堆；预留 1GB |
+| Maven | 3.6+（仅源码编译需要） |
+| 端口 | 默认 `8080` |
+| 内存 / 磁盘 | 建议堆 ≥ 512MB，预留 1GB；大字段同步按最大单值放大堆 |
+| 工作目录 | 必须固定：`./data`（元数据库与密钥）与 `./logs` 相对进程工作目录生成 |
 
-首次启动会在**当前工作目录**创建 `./data`（H2 元数据库）与 `./logs`；请固定目录启动，或用绝对路径覆盖配置。
+首次启动会在工作目录创建 `./data` 与 `./logs`。**不要在不同目录反复启动**，否则会看到"配置都不见了"——实际是连到了另一个空的元数据库。
 
-### 方式一：下载 jar（推荐）
+### 1. 准备目录
 
-从发布页下载最新 `jync.jar`：
+```bash
+sudo mkdir -p /opt/jync
+sudo chown -R jync:jync /opt/jync
+cd /opt/jync
+```
+
+建议的目录结构：
+
+```text
+/opt/jync/
+├── jync.jar
+├── application.yml
+├── data/          # H2 元数据库与 <库名>.key，必须备份
+└── logs/
+```
+
+### 2. 获取 jar
+
+从发布页下载 `jync.jar`：
 
 - GitHub：<https://github.com/vfaner/jync/releases/latest>
 - Gitee：<https://gitee.com/super_rgh/jync/releases/latest>
 
-```bash
-java -jar jync.jar        # 访问 http://localhost:8080
-```
-
-默认账号 `admin` / `view`，初始密码均为 `123456`，**首次登录后必须先修改密码**（未修改前只能停留在改密页，其他页面与 API 均不可用）。
-
-### 方式二：源码编译
+源码编译：
 
 ```bash
 git clone https://github.com/vfaner/jync.git
 cd jync
 mvn clean package -DskipTests
-java -jar target/jync.jar
+cp target/jync.jar /opt/jync/
 ```
 
-- 国内访问可用 Gitee 仓库：`git clone https://gitee.com/super_rgh/jync.git`
-- 不跳过测试可执行 `mvn clean package`（约 10 分钟）。
+国内可用 Gitee：`git clone https://gitee.com/super_rgh/jync.git`。不跳过测试会执行约 2400 个用例。
 
-### 方式三：Docker
+### 3. 生产配置
 
-```bash
-docker build -t jync:1.7.8 .
-docker run -d --name jync -p 8080:8080 \
-  -v "$PWD/data:/app/data" \
-  -v "$PWD/logs:/app/logs" \
-  --restart unless-stopped jync:1.7.8
-```
-
-或用 Compose 一键构建启动：
-
-```bash
-docker compose up -d --build
-```
-
-- 运行镜像仅含 JRE、非 root 运行、内置 HEALTHCHECK。
-- 元数据与日志分别落在宿主机 `./data`、`./logs`，重建镜像不丢数据。
-- 环境变量覆盖、TLS、多实例扩容、镜像升级与排障见 [docs/deploy-container.md](docs/deploy-container.md)。
-
-### 方式四：Kubernetes
-
-```bash
-# 1) 构建并推送镜像（kind / minikube 可直接本地加载）
-docker build -t registry.example.com/qqmu/jync:1.7.8 .
-docker push registry.example.com/qqmu/jync:1.7.8
-
-# 2) 指定镜像（部署清单默认 jync:1.7.8，可改 deployment.yaml
-#    或使用 kustomize 的 images 变换）
-# images:
-#   - name: jync
-#     newName: registry.example.com/qqmu/jync
-#     newTag: "1.7.8"
-
-# 3) 部署 Namespace / PVC / Deployment / Service / Ingress
-kubectl apply -k deploy/k8s/
-kubectl -n jync get pods
-```
-
-- 清单位于 [deploy/k8s/](deploy/k8s/)，默认镜像 `jync:1.7.8`，需访问集群外数据库时按实际网络调整。
-- `ingress.yaml` 为可选文件；不用 Ingress 就从 `kustomization.yaml` 移除，或改域名 / TLS。
-- Service 类型为 `ClusterIP`，集群外访问用 `kubectl -n jync port-forward svc/jync 8080:80` 或配置 Ingress。
-- H2 元数据库使用 `ReadWriteOnce` PVC，**副本数必须为 1**；需要多副本时先把元数据库换成外部 MySQL / PostgreSQL（`SPRING_DATASOURCE_*` 环境变量），再调大 `replicas`。
-
-### 生产环境配置
-
-jar 同级目录建 `application.yml`：
+在 jar 同级目录创建 `application.yml`：
 
 ```yaml
 server:
   port: 8080
 
 sync:
-  poll-interval: 2000              # 轮询间隔（毫秒）
-  batch-size: 500                  # 增量轮询 / CDC 回放每批行数（在线流量，保持小）
-  fetch-size: 1000                 # 增量读取的结果集批量
-  full-load-batch-size: 2000       # 仅首次全量：每批行数（建议 1000-5000）
+  poll-interval: 2000              # 全局轮询间隔（毫秒）
+  batch-size: 500                  # 增量 / CDC 回放每批行数（在线流量，保持小）
+  fetch-size: 1000                 # 增量读取结果集批量
+  full-load-batch-size: 2000       # 仅首次全量：每批行数
   full-load-fetch-size: 2000       # 仅首次全量：结果集批量
-  full-load-parallelism: 2         # 全量并行 worker 数（建议 1-4，受连接池约束，上限 8）
-  chunk-size: 100000               # 全量每块行数，每块提交 + 写检查点；0 = 不分块
-  initial-load-insert-first: true  # 目标为空的 Oracle/MySQL/PG 表用 INSERT 代替 upsert
-  defer-secondary-indexes: true    # 新建表先灌数据、全量完成后再建非唯一二级索引（实测快约 40%）
-  safety-lag-ms: 1000
-  lock-ttl-ms: 300000
-  crypto-password: ""              # 留空 = 首次启动自动生成，保存到 data/jync.key
-  crypto-salt: ""                  # 留空 = 同上；如需自管密钥再显式填写
+  full-load-parallelism: 2         # 全量并行 worker 数（1-4，上限 8）
+  chunk-size: 100000               # 全量每块行数，每块提交并写检查点
+  initial-load-insert-first: true  # 空表用 INSERT 代替 upsert
+  defer-secondary-indexes: true    # 全量完成后再建非唯一二级索引
+  max-pool-size: 5                 # 每库连接池上限，应 >= 并行度 + 1
+  crypto-password: ""              # 留空 = 全新库首启自动生成，保存到 data/jync.key
+  crypto-salt: ""                  # 留空 = 同上；需要自管密钥再显式填写
+
   # ai:
-  #   enabled: false                 # 内网/离线环境取消注释：关闭 AI 辅助（隐藏菜单，不调用大模型）
+  #   enabled: false               # 内网 / 离线：关闭 AI 辅助
 
-# 内网/离线环境取消注释：关闭版本更新检查（不再访问 GitHub/Gitee，一键升级入口同步隐藏）
-# app:
-#   update-check:
-#     enabled: false
+app:
+  login:
+    # 应急通道：关闭本地登录后若外部认证不可用，设为 true（或启动时加
+    # JYN_RESET_LOGIN=true）启动一次，会重新开启本地登录并保存；修好后改回 false。
+    reset-on-startup: false
+  # 内网 / 离线：关闭版本检查
+  # update-check:
+  #   enabled: false
 ```
 
-```bash
-java -jar jync.jar --spring.config.additional-location=file:./application.yml
+**外部元数据库（可选）**
+
+不想要 H2 文件库时，启动前把 `spring.datasource.*` 指向已有数据库即可，表结构由 `ddl-auto: update` 在首启自动创建：
+
+| 元数据库 | 驱动类 | URL 示例 | 验证状态 |
+|---|---|---|---|
+| H2（默认） | `org.h2.Driver` | `jdbc:h2:file:./data/jync;MODE=MySQL;AUTO_SERVER=TRUE` | 默认路径 |
+| MySQL 8 | `com.mysql.cj.jdbc.Driver` | `jdbc:mysql://db:3306/jync?useUnicode=true&characterEncoding=utf8` | 有容器契约测试 |
+| PostgreSQL 16 | `org.postgresql.Driver` | `jdbc:postgresql://db:5432/jync` | 有容器契约测试 |
+| Oracle 23 | `oracle.jdbc.OracleDriver` | `jdbc:oracle:thin:@//db:1521/FREEPDB1` | 有容器契约测试 |
+
+```yaml
+spring:
+  datasource:
+    url: "jdbc:mysql://db:3306/jync?useUnicode=true&characterEncoding=utf8"
+    username: jync
+    password: change-me
+    driver-class-name: com.mysql.cj.jdbc.Driver   # 能按 URL 推断时可省略
 ```
 
-> ⚠️ 必须用 `additional-location`（叠加覆盖），不要用替换式的 `spring.config.location`：后者会丢掉 jar 内置配置（i18n basename、`ddl-auto`、`app.github-url`），症状是登录页 `??login.title_zh_CN??`、全新部署不建表甚至启动失败。
+也可用 `SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` / `SPRING_DATASOURCE_DRIVER_CLASS_NAME` 环境变量覆盖。要点：
 
-> 🔐 **安全提示**：`crypto-password` 与 `crypto-salt` 用于加密存储的数据库连接密码。**v1.7.5 起全新部署留空即可**——首次启动会自动生成强密钥并保存到数据库同目录的 `<库名>.key`（如 `data/jync.key`），无需手工修改默认值；**备份数据库时必须连同该 key 一起备份**（key 丢了，已保存的连接密码就要在界面上重填）。从旧版本升级请保持默认值不动，v1.7.8 首次启动会用它读出历史密文，随即生成新密钥、重加密全部已存密码并写入 `<库名>.key`，之后不再使用公开默认值；想自己管理密钥（环境变量 / K8s Secret）再显式填写，填了完全以你为准，不会自动轮换。
+- **先建库**：MySQL 用 `CREATE DATABASE jync DEFAULT CHARACTER SET utf8mb4;`；其余类型建空库即可。所需 JDBC 驱动已随包内置，不用另外放 jar。
+- **必须显式设置 `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT`**：自动生成的密钥依附于本地 `<库名>.key`，外部元数据库场景没有这个文件，否则会退回发行包里的公开默认密钥。
+- **已验证范围**：MySQL 8、PostgreSQL 16、Oracle 23 有真实数据库契约测试（建表、自增主键、`@Lob` 往返、批量更新/删除、聚合查询）。SQL Server 与国产库未逐一实测为元数据库；PostgreSQL / Oracle 兼容族的国产库（金仓、openGauss、瀚高、Vastbase、达梦、崖山等）理论上同族可用，但 Hibernate 方言识别因驱动而异，**上生产前请先在测试环境用同一驱动启动验证**。
+- **换库不是迁移**：改用外部元数据库等于从一份空元数据开始，原 H2 里的连接、任务、游标与检查点不会自动带过去；新部署可以直接用，已有部署请保留原 H2，或自行迁移这些数据。
+- **多副本的前提**：H2 的 `AUTO_SERVER=TRUE` 只能同机多进程共享；跨主机多实例必须使用上表中的外部元数据库。
 
-> 🔇 **内网/离线环境**：取消上面 `sync.ai.enabled` 与 `app.update-check.enabled` 两组开关的注释并重启，应用将不再发起任何外网请求——AI 菜单整体隐藏、AI 起草在发请求前直接拦截；开机版本预热检查关闭，设置页显示「已关闭更新检查」。默认均为开启，联网部署无需修改。
-
-**后台常驻**：systemd 单元把 `ExecStart` 指向启动命令（`WorkingDirectory=/opt/jync`，`Restart=always`）；快速验证可用 nohup：
+启动命令：
 
 ```bash
 cd /opt/jync
-nohup java -jar jync.jar --spring.config.additional-location=file:./application.yml \
-  > /dev/null 2>&1 &
+java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
+  -jar jync.jar --spring.config.additional-location=file:./application.yml
 ```
 
-**升级**
+> ⚠️ 必须使用 `--spring.config.additional-location`（叠加覆盖）。替换式的 `spring.config.location` 会丢掉 jar 内置配置，症状是登录页显示 `??login.title_zh_CN??`、全新部署不建表。
+>
+> 🕐 `-Duser.timezone` 同时决定 Cron 的求值时区。服务器默认是 UTC 时，务必显式指定。
 
-1. 停止服务，备份 `./data`（连同 `<库名>.key`）与当前 jar。
-2. 用新版 `jync.jar` 替换旧文件，重新启动；表结构随 `ddl-auto: update` 自动演进。
-3. 停机期间源库发生的变更，重启后由增量/全量机制自动补齐。
-4. 也可使用内置的版本检查与一键升级（管理员），详见[下文](#版本检查与一键升级)。
+### 4. 首次登录
 
-### 统一认证（External authentication）
+访问 `http://<服务器>:8080`：
 
-「配置管理 → 外部认证」提供三种方式，同一时刻只生效一种：
-
-| 方式 | 适用场景 | 部署要求 |
+| 用户名 | 角色 | 初始密码 |
 |---|---|---|
-| 账号密码 | 门户提供登录 API | Jync 能访问该 API |
-| 网关头 | 网关/反向代理已完成登录并注入身份头 | **Jync 必须在网关之后，不能直连暴露**；网关必须剥离客户端伪造的身份头，并把网关地址写进 `app.security.trusted-proxies` |
-| 票据 | 登录中心签发一次性 ticket | 配置校验地址；只接受 http(s)，不跟随重定向 |
+| `admin` | 管理员 | `123456` |
+| `view` | 访客 | `123456` |
 
-- 网关头只信任**直接 TCP 对端**在 `app.security.trusted-proxies`（默认回环）内的请求；来自其他地址的身份头一律忽略。
-- 建议同时配置共享密钥头，由网关在注入身份头时一并带上。
-- 本地账号登录默认保留为应急入口（`/login/local`）；关闭后 `POST /login` 也会被拒绝。关闭前必须先启用并配置好外部认证（否则保存会被拒绝），页面上还会二次确认。
-- **恢复本地登录**：如果关闭后外部认证不可用、无人能登录，在服务器上以 `JYN_RESET_LOGIN=true` 启动一次——Jync 会把本地登录重新打开并保存，然后照常启动；登录后修好外部配置，去掉该变量并重启即可。
-- 嵌入 iframe 需要 HTTPS，并同时设置 `JYN_COOKIE_SECURE=true` 与 `JYN_COOKIE_SAME_SITE=None`；否则 `SameSite=Lax` 的会话 Cookie 会让登录后掉线。
+**首次登录后必须修改密码**：未修改前只能停留在改密页，其他页面与 API 一律不可用。密码使用 BCrypt 存储。
+
+### 5. 注册为系统服务
+
+`/etc/systemd/system/jync.service`：
+
+```ini
+[Unit]
+Description=Jync heterogeneous database sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jync
+Group=jync
+WorkingDirectory=/opt/jync
+ExecStart=/usr/bin/java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
+  -jar /opt/jync/jync.jar --spring.config.additional-location=file:/opt/jync/application.yml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now jync
+sudo systemctl status jync
+```
+
+### 6. Docker 与 Compose
+
+```bash
+docker build -t jync:1.8.0 .
+docker run -d --name jync -p 8080:8080 \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  -e TZ=Asia/Shanghai \
+  --restart unless-stopped jync:1.8.0
+```
+
+或使用 Compose：
+
+```bash
+docker compose up -d --build
+```
+
+- 运行镜像仅含 JRE，非 root 运行，内置 `HEALTHCHECK`（探测 `/login`）。
+- 元数据与日志分别落在宿主机 `./data`、`./logs`，重建镜像不丢数据。
+- 环境变量、TLS、多实例与排障见 [docs/deploy-container.md](docs/deploy-container.md)。
+
+### 7. Kubernetes
+
+```bash
+docker build -t registry.example.com/qqmu/jync:1.8.0 .
+docker push registry.example.com/qqmu/jync:1.8.0
+kubectl apply -k deploy/k8s/
+kubectl -n jync get pods
+```
+
+- 清单默认镜像 `jync:1.8.0`，可用 `kustomization.yaml` 的 `images` 变换改成自己的仓库与新 tag。
+- Service 为 `ClusterIP`，集群外访问用 `kubectl -n jync port-forward svc/jync 8080:80` 或配置 Ingress。
+- H2 元数据库是 `ReadWriteOnce` PVC，**副本数必须为 1**。需要多副本时先把元数据库换成外部 MySQL / PostgreSQL（`SPRING_DATASOURCE_*` 环境变量），再调大 `replicas`。
+
+### 8. 反向代理与 HTTPS
+
+Nginx 示例：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name jync.example.com;
+
+    ssl_certificate     /etc/nginx/certs/jync.crt;
+    ssl_certificate_key /etc/nginx/certs/jync.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时，还必须把网关地址加入 `app.security.trusted-proxies`，并确保网关剥离客户端伪造的身份头。
+
+### 9. 升级与备份
+
+1. 停止服务，备份 `./data`（连同 `<库名>.key`）、`./logs` 与 `application.yml`。
+2. 用新版 `jync.jar` 替换旧文件，重新启动；表结构随 `ddl-auto: update` 自动演进。
+3. 停机期间源库发生的变更，重启后由增量或 CDC 自动补齐。
+4. 管理员也可在"系统信息"页使用内置版本检查与一键升级，旧 jar 会保留为 `jync.jar.bak`。
+
+> 🔐 `<库名>.key` 与元数据库必须成对备份。密钥丢失后，已保存的连接密码与 AI 密钥将无法解密，只能重新填写。
+
+### 10. 内网与离线
+
+- `sync.ai.enabled=false`：隐藏 AI 菜单，AI 起草在发请求前直接拦截。
+- `app.update-check.enabled=false`：不再访问 GitHub / Gitee，升级入口同步隐藏。
+- 所有静态资源本地化，不使用 CDN 与 webfont。
 
 ---
 
-## 登录与权限
+<a name="config"></a>
+## 配置项
+
+`application.yml` 的主要配置（`sync.*` 前缀）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `sync.poll-interval` | `2000` | 全局轮询间隔（毫秒） |
+| `sync.batch-size` | `500` | 增量轮询与 CDC 回放的 JDBC 批次行数 |
+| `sync.fetch-size` | `1000` | 增量读取的结果集批量 |
+| `sync.full-load-batch-size` | `2000` | 仅首次全量：每批行数，上限 20000 |
+| `sync.full-load-fetch-size` | `2000` | 仅首次全量：结果集批量 |
+| `sync.full-load-parallelism` | `2` | 单表全量并行 worker 数，上限 8，受连接池约束 |
+| `sync.chunk-size` | `100000` | 全量每块行数，每块提交并写检查点；`0` 关闭分块 |
+| `sync.initial-load-insert-first` | `true` | 空目标表用 INSERT 代替 upsert |
+| `sync.defer-secondary-indexes` | `true` | 非唯一二级索引延到全量完成后创建 |
+| `sync.max-pool-size` | `5` | 每个数据库连接池上限；并行度还会被池上限反过来限制 |
+| `sync.safety-lag-ms` | `1000` | 时间戳水位线回退量 |
+| `sync.full-compare-max-rows` | `20000` | 全表比对的表行数上限 |
+| `sync.row-count-audit-interval-ms` | `60000` | 行数审计间隔；`0` 关闭 |
+| `sync.lock-ttl-ms` | `300000` | 同步锁租约时长 |
+| `sync.cdc.reconnect-backoff-ms` | `1000` | CDC 断线重连初始退避 |
+| `sync.cdc.reconnect-backoff-max-ms` | `60000` | 重连退避上限 |
+| `sync.cdc.server-id-offset` | `612000` | MySQL 假 replica server id 基数，实际 id = 偏移 + 任务 ID |
+| `sync.cdc.lock-ttl-ms` | `30000` | CDC 消费者租约时长 |
+| `sync.cdc.supervise-interval-ms` | `10000` | 各节点巡检并抢占 CDC 租约的周期 |
+| `sync.cdc.connect-timeout-ms` | `10000` | BinaryLogClient 握手超时 |
+| `sync.cdc.logminer.batch-size` | `10000` | LogMiner 单批读取行数 |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 真空闲时的休眠间隔 |
+| `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL 逻辑解码真空闲时的休眠间隔 |
+| `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲时的休眠间隔 |
+| `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口；`0` 关闭聚合 |
+| `sync.lob.streaming-enabled` | `true` | 大字段流式读写总开关 |
+| `sync.lob.inline-max-bytes` | `65536` | 不超过该字节数的大字段值留在堆内存 |
+| `sync.crypto-password` / `sync.crypto-salt` | *(留空自动生成)* | 连接密码加密密钥；全新库首启生成并写入 `<库名>.key`，旧库先用默认密钥启动再自动迁移 |
+| `sync.ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
+| `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求 |
+
+> 连接密码以 AES-256 加密存储，`enc:` 前缀防止重复加密。密钥留空时首启自动生成；一旦显式填写，就不会再生成 `<库名>.key`。
+
+---
+
+<a name="auth"></a>
+## 登录、权限与统一认证
 
 | 用户名 | 角色 | 初始密码 | 权限 |
 |---|---|---|---|
 | `admin` | 管理员 | `123456` | 全部操作 |
 | `view` | 访客 | `123456` | 只读 |
 
-- **账号种入**：首次启动写入初始账号；用户表非空则跳过，**不会重置任何人的密码**。
-- **权限规则**：只有一条 —— **POST 一律要求管理员**。访客可查看全部页面与数据、可复制 SQL，但界面上没有写按钮，构造请求也会被拒。
-- **修改密码**：右上角用户名 → 修改密码（`/account/password`）；密码 BCrypt 存储。**仍在使用初始口令的账号登录后被强制跳到改密页**，改完之前其他页面与 API 一律拒绝（`/api/` 返回 403，HTML 重定向）。
-- **忘记密码**：无法找回，删除 `app_user` 对应行后重启会重新种入。
+- **权限规则只有一条**：POST 一律要求管理员。访客可查看全部页面与数据，但没有写按钮，构造请求也会被拒。
+- **初始账号**：首次启动写入；用户表非空则跳过，不会重置任何人的密码。
+- **忘记密码**：无法找回；删除 `app_user` 对应行后重启会重新种入。
+
+**统一认证**（管理员 → 配置管理 → 外部认证）支持三种方式，同一时刻只生效一种：
+
+| 方式 | 适用场景 | 部署要求 |
+|---|---|---|
+| 账号密码 | 门户提供登录 API | Jync 能访问该 API；支持表单或 JSON 请求与字段映射 |
+| 网关头 | 网关 / 反向代理已完成登录并注入身份头 | Jync 必须在网关之后；只信任 `app.security.trusted-proxies` 内的直接对端 |
+| 票据 | 登录中心签发一次性 ticket | 配置校验地址；只接受 http(s)，不跟随重定向 |
+
+- 外部用户只保留会话，不写入 `app_user`，没有本地密码，也没有改密入口。
+- 本地账号默认保留为应急入口 `/login/local`。关闭前必须先启用并配置好外部认证；关闭后 `POST /login` 也会被拒绝。
+- **恢复本地登录**：以 `JYN_RESET_LOGIN=true` 启动一次（等价于在 `application.yml` 里设 `app.login.reset-on-startup: true`），Jync 会重新打开本地登录并保存；登录后修好外部配置，去掉变量并改回 `false` 重启。
+- 嵌入 iframe 需要 HTTPS，并同时设置 `JYN_COOKIE_SECURE=true` 与 `JYN_COOKIE_SAME_SITE=None`。
 
 ---
 
+<a name="workflow"></a>
 ## 使用流程
 
-1. **数据库连接** → 新建源 / 目标连接 → 「测试连接」确认可用。
-2. **项目** → 新建项目，选定源库与目标库。
-3. **项目详情** → 勾选表 / 视图 / 存储过程，配置同步选项后保存。需要让目标表改个名字时，直接在表右侧一栏填目标表名（留空即与源表同名，输入中的空格会自动去掉）。
-4. 「**立即同步**」验证一次，或「**启动同步**」开始持续增量。
-5. 「**变更日志**」查看每次同步明细。
+1. **数据库连接** → 新建源 / 目标连接 → "测试连接"确认可用。
+2. **同步任务** → 新建任务，选定源库与目标库。
+3. **任务详情** → 勾选表 / 视图 / 存储过程；需要改目标表名时直接在右侧填写（留空即同名）。
+4. 按需配置**捕获策略、调度、全量加载性能与列清洗**。
+5. "**立即同步**"验证一次，或"**开启自动同步**"进入持续增量。
+6. 在"**变更日志**"查看每轮明细，在"**看板**"查看整体状态。
 
 ---
 
-## 数据预览、项目克隆与列清洗
-
-- **只读数据预览**：在项目详情页直接查看源表 / 目标表当前数据，并列出列结构与候选游标列；仅管理员可用，访客页面不渲染入口。
-- **项目克隆**：从一个已有项目复制全部同步设置创建新项目（目标连接可另选）；「首次全量前清空目标表」在克隆时强制关闭，不会因复制配置而误清目标数据。
-- **列清洗规则**：按表按列配置 `TRIM` / `UPPER` / `LOWER` / 空串转 `NULL` / 去前缀 / 去后缀 / 正则替换，写入目标库前生效；**只作用于字符串列**，数值与日期列原样写入。
-- **规则校验**：正则替换的替换串在保存时即按 Java 语义校验（`$n` 分组引用、`${name}` 命名分组、反斜杠转义），非法值直接拒绝，不会等到同步周期才失败。
-- **修改时机**：运行中的项目需先停止同步才能修改列清洗规则。
-
----
-
-## 版本检查与一键升级
-
-- **检查顺序**：系统信息页先查 GitHub API（默认 5 秒超时），失败或超时自动改查 Gitee；两边都不可达才提示稍后重试。
-- **缓存策略**：失败结果缓存 1 分钟并在后台重试，成功结果缓存 10 分钟；检查始终跑在后台线程，不阻塞页面。
-- **纯内网**：可设 `app.update-check.enabled=false` 关闭检查。
-- **一键升级**（管理员）：
-  - 弹窗选择下载源（默认 Gitee），下载新版 `jync.jar`；
-  - 下载后校验文件大小（接口提供时）与 zip 完整性，校验失败不触碰当前运行文件；
-  - 替换成功后旧文件保留为 `jync.jar.bak`，可随时手动回退；
-  - 「立即重启」由辅助脚本等旧进程退出后拉起新进程，新进程异常退出或端口未就绪时自动用 `.bak` 回滚；也可选择稍后手动重启。
-  - 新版本真正启动后，下次开机会自动清理备份与标记文件。
-
----
-
-## 增量检测策略
-
-增量只有一条查询：`WHERE 游标列 > 上次游标 AND 游标列 <= 本次水位`。
-
-- **核心约束**：一行能否同步，只取决于游标列值有没有增长，所以游标列必须是「改一行它就会变大」的列（如 `update_time`）。
-- **不能拿 `id` / `create_time` 当游标**：UPDATE 永远同步不到。
-- **零侵入**：默认轮询模式不碰源库 binlog，也不建触发器，只需一个只读账号；切换[日志 CDC](#日志-cdc) 后 UPDATE / DELETE 直接可见，上述限制不再存在。
-
-| 策略 | 触发条件 | 新增 | 更新 |
-|---|---|:---:|---|
-| `TIMESTAMP` | 存在符合「最后修改时间」命名约定的时间类型列 | ✅ | ✅ 前提是该列真被更新 |
-| `ROW_SCN` | Oracle 且建表带 `ROWDEPENDENCIES`（行级 `ORA_ROWSCN`） | ✅ | ✅ 检测不到删除 |
-| `IDENTITY` | 存在「创建时间」约定列或单列数字主键 | ✅ | ❌ |
-| `FULL_COMPARE` | 无可用游标列且行数 ≤ `full-compare-max-rows` | ✅ | ✅ 每周期全表 upsert |
-| `NONE` | 无可用游标列且表过大 | ❌ | ❌ 仅首次全量 |
-
-- **命名约定**：按包含匹配、大小写不敏感（`UPDATE_TIME` / `UPDATED_AT` / `LAST_MODIFIED` 等判 `TIMESTAMP`；`CREATE_TIME` / `CREATED_AT` 等判 `IDENTITY`），列类型必须确为时间类型。
-- **手动指定**：项目详情页可为每张表指定游标列（优先级高于自动识别）；指定数字列仍得 `IDENTITY`，检测不到更新。`IDENTITY` / `NONE` 会显著标注原因。
-- **长期解**：给源表加一个真会变的列（MySQL：`ALTER TABLE t ADD COLUMN update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`）。
-- **补漏**：停止同步后点「重置进度」，下一轮全量重读 upsert 把漏掉的修改带过去；游标列问题不解决，下一条 UPDATE 仍会漏。
-
----
-
-## 日志 CDC
-
-轮询的延迟下限是轮询间隔，且看不到 DELETE。四种源库可按项目切换到日志 CDC。
-
-- **切换前探测**：工具逐项检查源库前提并列出不满足项，不满足不会启用。
-- **状态面板**：详情页展示位点、落后秒数、吞吐、跳过计数与最近错误。
-- **低空闲延迟**：LogMiner / PG / SQL Server 有数据时本轮捞完立即开下一轮（0 额外等待），只有真空闲才休眠（默认 LogMiner / SQL Server 1s、PG 500ms，可按项目覆盖，下限 50ms）；MySQL binlog 为推送协议，无轮询等待；失败走指数退避。
-- **变更日志聚合**：CDC 期间按表聚合，每张表每 10s 最多一条 `N upserts / M deletes（截至 SCN/LSN/binlog 位点）`，停止同步时补刷最后一个窗口（`sync.cdc.change-window-ms=0` 可关闭）。
-
-**统一工作流**
-
-1. 记位点（全量装载**之前**写入，基线期变更不漏）。
-2. 分块全量基线（复用轮询的分块 / 检查点机制）。
-3. 流式回放。
-
-一致性契约 **at-least-once**：先提交目标库、再复检租约、最后推进位点；崩溃后从上一位点重放，重叠窗口由幂等 upsert 吸收。
-
-| 引擎 | 源库前提（探测逐项检查） | 位点 |
-|---|---|---|
-| MySQL binlog | ≥ 5.7（MariaDB 不支持）；`log_bin=ON`、`binlog_format=ROW`、`binlog_row_image=FULL`；`server_id` 不与 Jync 假 id（`server-id-offset` + 项目ID）冲突；账号具备 `REPLICATION SLAVE` + `REPLICATION CLIENT`；binlog 保留 ≥ 24h | binlog 文件 + 偏移（含 GTID 集） |
-| Oracle LogMiner | ≥ 11g；`ARCHIVELOG` 模式；库级 `ALTER DATABASE ADD SUPPLEMENTAL LOG DATA`；表级 `ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS`；挖掘权限（`SELECT ANY TRANSACTION` 等）；无 LONG 列；归档保留 ≥ 24h。CDB 下须以公共用户（`C##`）在 CDB$ROOT 挖掘 | SCN |
-| PostgreSQL 逻辑解码 | ≥ 9.4；`wal_level=logical`；账号具备 `REPLICATION`；表 `REPLICA IDENTITY` 非 `NOTHING` | LSN |
-| SQL Server CDC | ≥ 2012；库级 `sp_cdc_enable_db`；SQL Server Agent 运行中；账号在 `cdc_Admin` / `cdc_reader`；每表已建 capture instance | LSN（20 位 hex） |
-
-**共同边界**
-
-- 不捕获 DDL：记 WARN 并失效结构缓存，差异大时用「重建基线」。
-- 无主键表仅基线播种，流式阶段跳过（回放按主键定位目标行）。
-- PG 逻辑解码：UPDATE 未改动的 TOAST 大字段、以及复用其他元组磁盘值的 INSERT，`test_decoding` 只输出占位符 `unchanged-toast-datum`（真实值不在流里）——这类行按不支持计数并跳过，绝不把占位符写进目标。
-- CDC 会复制 DELETE。
-- 切换 CDC 即重新全量；切回轮询保留位点，但游标清零先全量对齐。
-
-**故障处置与多实例**
-
-- 位点失效（binlog / 归档 / WAL 被清）项目立即置 **ERROR** 等人处置，一键「重建基线」恢复。
-- 断线指数退避自动重连（1s 起步翻倍，上限 60s）。
-- 同一项目的 CDC 流靠租约互斥，持锁节点宕机后 ≤ 60s 由其他节点接管续传。
-
----
-
-## 大字段与流式（v1.7.8）
-
-大文本（`LONGTEXT` / `CLOB` / `TEXT` / `NVARCHAR(MAX)`）与大二进制（`LONGBLOB` / `BLOB` / `BYTEA` / `VARBINARY(MAX)`）的值可能远大于普通列。1.7.7 之前每个值都整块读入堆内存并整块绑定，既会撞上 Oracle 的绑定上限，也会让大表全量耗尽内存。1.7.8 把读取、绑定和 CDC 缓冲分开处理：
-
-- **读**：声明为大字段的列走 `getCharacterStream` / `getBinaryStream`。不超过 `inline-max-bytes`（默认 64 KB）的值仍在内存中，超过的部分按块消费。
-- **写**：Oracle 目标用临时 `CLOB` / `BLOB` 绑定（`MERGE` 的 `USING` 投影对 `String` 的绑定上限是 32767 字节，超过即 `ORA-01461`，临时 LOB 是唯一可行写法；普通 `INSERT` 同样适用）；其他方言走流式绑定。空串写入 Oracle `CLOB` 目标时绑定为空 `CLOB` 而非 `NULL`（`VARCHAR2` / `CHAR` 目标仍按 Oracle 语义存 `NULL`）。
-- **批**：按 `batch-max-bytes` 而非仅按行数提交；单个值超过预算时独占一批。一次性流不会进入 JDBC batch，会先提交再单行执行。
-- **CDC**：事务缓冲中超过 `cdc-spill-threshold-bytes`（默认 1 MB）的值先落到 `spill-dir`，提交、回滚、DDL、断流与停止时删除；落盘总量受 `spill-max-bytes` 约束。异常退出留下的文件在下次启动时按 `spill-retention-hours` 清理，只删除 `jync-lob-*` 前缀。
-- **源端事务**：PostgreSQL / openGauss 源库在流式读取期间保持一个只读事务——JDBC 驱动在 autocommit 下会忽略 fetch size 并缓冲整个结果集。代价是读取期间源库的 vacuum 被推迟；`enable-source-streaming=false` 可关闭。
-
-**边界（必须知道）**
-
-- **不是零拷贝**：Oracle `MERGE` 必须使用服务端临时 LOB；模拟 upsert（非原生 upsert 的方言）与 CDC 重放要求同一个值绑定多次，因此这些值必须可重放（内存或落盘）。MySQL 单个值仍受 `max_allowed_packet` 限制，源库该参数须大于最大的单行。
-- **内存上限是「单值 × 读取批量」而不是整表**：Jync 不再累积结果集、批次或整个事务，但 JDBC 驱动总会物化当前值。PostgreSQL 的 `getCharacterStream` 会在驱动内部把值解码成 `String`（约为 UTF-8 字节数的 2-3 倍），并且带 fetch size 时驱动会持有最多 `full-load-fetch-size` 行的原始字节。因此 PG 源库若有数 MB 的大字段，应同时调低 `full-load-fetch-size`（例如 1-10），并让堆大小至少容纳最大单值的 3 倍。
-- **LogMiner 行外 LOB 无法还原**：LOB 存放在行外时 `SQL_REDO` 没有取值，回查会破坏事务顺序，因此只能跳过或失败。默认 `skip`：计数、按表和间隔告警后继续；`fail` 停在第一条此类变更且不推进位点。两者都在 CDC 状态面板可见，补救方式是重建基线或改用轮询。
-- **SQL Server 源的大字段在读取时即落盘**：mssql-jdbc 在读取同一行的下一列时会关闭上一列已打开的流，所以 SQL Server 源超过 `inline-max-bytes` 的值在读取该列时就直接写入 `spill-dir`，不跨列持有驱动流。落盘分区需要有足够空间，容量同样受 `spill-max-bytes` 约束。
-- **更新前镜像与删除镜像不落盘**：它们只用于主键比较与删除，落盘只会写出没人读取的文件，因此在事务缓冲期间保留在堆内存中。MySQL 默认 `binlog_row_image=FULL`、SQL Server 的 op=3 / op=2 行以及 PostgreSQL `REPLICA IDENTITY FULL` 下这些镜像带整行数据，大字段表上密集的删除或移动主键的更新，峰值按「缓冲事件数 × 单行大小」增长，不受 `cdc-spill-threshold-bytes` 约束；这类表应保持事务短小。
-- **清洗列与主键列必须物化**：超过 `force-inline-max-bytes` 会明确报错并指明表、列与配置键，不会静默截断。
-- 厂商原语会降级：`ENUM` / `SET` → `VARCHAR`、`XMLTYPE` / `XML` → `CLOB`、几何 → `WKB` 二进制、`SQL_VARIANT` 丢失类型信息。
-
----
-
-## 配置项
-
-`application.yml` 的 `sync.*`：
-
-| 键 | 默认 | 说明 |
-|---|---|---|
-| `poll-interval` | `2000` | 轮询间隔（毫秒） |
-| `batch-size` / `fetch-size` | `500` / `1000` | 增量轮询与 CDC 回放的 JDBC 批次行数 / 源库读取批量 |
-| `full-load-batch-size` | `2000` | 仅首次全量：每批行数，建议 1000-5000，上限 20000。吞吐日志里 `commit%` 偏高（目标库提交慢，如 redo 慢盘、Data Guard 同步传输）时加大此值，提交次数随之减少 |
-| `full-load-fetch-size` | `2000` | 仅首次全量：源库结果集批量 |
-| `chunk-size` | `100000` | 全量每块行数，每块提交 + 写检查点（无主键表也按此大小做 OFFSET 分页续传）；`0` 关闭分块 |
-| `full-load-parallelism` | `2` | 单表全量并行 worker 数（整数前导主键按区间算术切分，其他键形态按采样边界切分；上限 8，受连接池约束） |
-| `initial-load-insert-first` | `true` | 目标为空的 Oracle/MySQL/PostgreSQL 表时用 INSERT 代替 upsert（Oracle MERGE 实测约 2.5 倍）；非空表仍走幂等 upsert。旧键 `oracle-initial-load-insert-first` 仍可绑定 |
-| `defer-secondary-indexes` | `true` | 新建表的非唯一二级索引延到首次全量完成后再建（实测整体快约 40%）；主键与唯一索引仍立即创建 |
-| `max-pool-size` / `max-retries` | `5` / `3` | 每库连接池上限 / 连续失败置 ERROR 的次数 |
-| `safety-lag-ms` | `1000` | 时间戳水位线回退量，防晚提交事务被跳过 |
-| `row-count-audit-interval-ms` | `60000` | 行数审计间隔（毫秒） |
-| `full-compare-max-rows` | `20000` | 全表比对的行数上限 |
-| `lock-ttl-ms` | `300000` | 同步锁租约时长（毫秒） |
-| `sync.cdc.reconnect-backoff-ms` | `1000` | 日志 CDC 断线重连初始退避（毫秒），逐次翻倍 |
-| `sync.cdc.reconnect-backoff-max-ms` | `60000` | 重连退避上限（毫秒） |
-| `sync.cdc.server-id-offset` | `612000` | 假 replica server id 基数：实际 id = 偏移 + 项目ID |
-| `sync.cdc.lock-ttl-ms` | `30000` | CDC 消费者租约时长（毫秒） |
-| `sync.cdc.supervise-interval-ms` | `10000` | 各节点巡检抢占 CDC 租约的周期（毫秒） |
-| `sync.cdc.connect-timeout-ms` | `10000` | BinaryLogClient 握手超时（毫秒） |
-| `sync.cdc.logminer.batch-size` | `10000` | LogMiner `V$LOGMNR_CONTENTS` 单批读取行数 |
-| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 真空闲时的休眠间隔（毫秒）；有数据 0 等待立刻续采 |
-| `sync.cdc.pg.idle-poll-ms` | `500` | PG 逻辑解码真空闲时的休眠间隔（毫秒） |
-| `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲时的休眠间隔（毫秒） |
-| `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口（毫秒）；`0` 关闭聚合落点 |
-| `sync.cdc.logminer.missing-lob-policy` | `skip` | 行外 LOB 无法从 redo 还原时：`skip` 计数 + 限流告警后继续，`fail` 停在第一条此类变更且不推进位点 |
-| `sync.lob.streaming-enabled` | `true` | 大字段流式总开关；`false` 回到 1.7.7 的整块读取 |
-| `sync.lob.inline-max-bytes` | `65536` | 不超过该字节数的值留在堆内存 |
-| `sync.lob.cdc-spill-threshold-bytes` | `1048576` | CDC 事务缓冲中单个值超过该字节数先落盘 |
-| `sync.lob.batch-max-bytes` | `16777216` | 单批累计字节预算，达到即提交；`0` 不检查 |
-| `sync.lob.force-inline-max-bytes` | `1048576` | 主键/游标/清洗列的物化上限，超出报错并指明表与列 |
-| `sync.lob.spill-dir` | `${java.io.tmpdir}/jync-lob` | 落盘目录，按需创建；只清理本工具前缀的文件 |
-| `sync.lob.spill-max-bytes` | `1073741824` | 单个 CDC 会话的磁盘上限；`0` 不限制 |
-| `sync.lob.spill-retention-hours` | `24` | 启动时清理超过该时长的遗留临时文件 |
-| `sync.lob.enable-source-streaming` | `true` | PG/openGauss 源端读取期间保持只读事务（否则 fetch size 不生效） |
-| `sync.lob.oracle-empty-string-as-empty-clob` | `true` | 空串写入 Oracle CLOB 目标时保留为空 CLOB 而非 NULL |
-| `sync.lob.metrics-log-interval-ms` | `60000` | LOB 统计日志与限流告警的间隔（毫秒） |
-| `crypto-password` / `crypto-salt` | *(留空即首启自动生成)* | 连接密码的加密密钥与盐（十六进制）。留空则首次启动生成并保存到 `<库名>.key`（与数据库同目录，须随数据库一起备份）；显式配置则以配置为准 |
-| `ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
-| `app.update-check.enabled` | `true` | 新版本检查（GitHub 优先、Gitee 兜底）；关闭后系统信息页不再出现升级入口 |
-| `app.update-check.timeout-ms` | `5000` | 更新检查单次请求超时（毫秒），超时即切换备用平台 |
-
-连接密码以 AES-256 加密存储（`enc:` 前缀防重复加密，兼容历史明文）。
-
----
-
+<a name="ai"></a>
 ## AI 辅助转换（可选）
 
-存储过程的过程化控制流无法靠文本替换可靠翻译，`AI 配置` 提供另一条路：模型**起草候选**，人工审阅后落库。
+存储过程的过程化控制流无法靠文本替换可靠翻译。`AI 配置` 提供另一条路：模型**起草候选**，人工审阅后落库。
 
-**硬边界**
+- **四种协议**：OpenAI 兼容、Anthropic、Ollama（OpenAI 兼容端点）、Ollama（原生 `/api/chat`）。
+- **硬边界**：AI 只产候选，**永不参与同步**；候选经人工确认后才写入 DDL 覆盖；未启用供应商时不产生任何外部请求。
+- **真实探测**：保存前发送一次 `max_tokens: 1` 的真实请求，而不是只探 TCP。
+- **审阅页**：左右对照源定义与机械转换结果；模型自述的"不确定项"比 SQL 本身更值得先读。
+- **深度思考档位**：可跟随模型、关闭、低、高；Anthropic 的思考预算按协议发 `thinking.budget_tokens`，OpenAI 形状发 `reasoning_effort`。
 
-- AI 只产候选、**永不参与同步**（`StructureSyncService` 不调用任何 AI 代码）。
-- 候选经人工确认后才写入 `ddlOverrides`。
-- 未启用供应商时不产生任何外部请求。
-- `sync.ai.enabled=false` 可整体下线。
-
-**四种协议**
-
-- **OpenAI 兼容**：标准 `/v1/chat/completions`。
-- **Anthropic**：`x-api-key` 鉴权，思考预算走 `thinking.budget_tokens`。
-- **Ollama（本地）**：走 OpenAI 兼容端点 `http://localhost:11434/v1`。
-- **Ollama（原生接口）**：走 `/api/chat`，无 `max_tokens` 而是 `options.num_predict`，流式为逐行 NDJSON；代理只放行 `/api` 或兼容层版本较老时使用。
-
-前两个 Ollama 入口都会自动填好地址、收起 API 密钥栏（本地模型无需密钥），超时放宽到 300 秒。
-
-**探测与审阅**
-
-- 密钥与库密码同样加密存储。
-- 探测发送一次 `max_tokens: 1` 的**真实请求**（TCP 探活会把密钥错、模型名错、路径错误全部误报为成功）；失败不阻止启用，但列表红标。
-- 审阅页左右对照源定义与机械转换结果（即不干预时同步真正执行的语句）；模型自述的「不确定项」列在 SQL 之上，比 SQL 本身更值得先读。
-- 「语法检查」会在**目标库**以 `JYNC_AI_CHECK_<时间戳>` 真建一次对象再删除，仅手动触发并二次确认；通过只证明目标库接受这段 DDL，不证明语义等价。
-
-**深度思考档位**
-
-- 每个供应商可选 `跟随模型默认` / `关闭` / `低` / `高`。
-- **关闭思考对本地推理模型不只是省时间**：思考 token 计入输出预算，`max_tokens` 偏小时正文会被思考挤空，界面上表现为一直转圈然后报「模型返回了空内容」；本机 Ollama + `qwen3:8b` 实测同一请求关闭后快约 14 倍。
-- **落参按协议分流**：OpenAI 形状发 `reasoning_effort`，Anthropic 发 `thinking.budget_tokens`（它不认 `reasoning_effort`，发过去就是 400）。
-- **预算约束**：Anthropic 的思考预算必须**严格小于** `max_tokens`，选低 / 高档后要把最大 token 数一并调大，保存时会校验并提示。
-- **升级零影响**：`跟随模型默认` 是默认值且**一个字段都不发**，因此升级不改变任何已有供应商的请求。
-- **探测不带推理参数**：探测是 `max_tokens: 1` 的最小请求，带上必被端点拒。
-
-> ⚠️ 转换会把存储过程源码发往你配置的端点，内网 / 合规部署请接本地推理端点（本机装了 Ollama 就直接选「Ollama（本地）」预设，不出内网）并自行确认代码可外发。
+> ⚠️ 转换会把存储过程源码发往你配置的端点。内网或合规部署请接本地推理端点（本机装了 Ollama 可直接选本地预设）。
 
 ---
 
-## 与市面已有工具的对比
+<a name="comparison"></a>
+## 与市面工具的对比
 
-> 口径：各工具官方文档 / 开源版默认部署形态（截至 2026-09），仅针对「开箱即用的异构库持续同步」。
+> 口径：各工具官方文档与开源版默认部署形态，仅针对"开箱即用的异构库持续同步"。
 
 | 维度 | **Jync** | Debezium + Kafka | DataX | Kettle | Navicat / DBeaver 传输 |
 |---|---|---|---|---|---|
 | 部署形态 | **单个 jar** | Kafka + Connect + ZK | 客户端脚本 | 桌面 + 资源库 | 桌面客户端 |
-| 配置方式 | **Web 点选** | YAML/REST + 消费端代码 | JSON 作业 | 图形 ETL | 向导 |
-| 上手速度 | **分钟级**：下载 jar、启动、浏览器点选 | 天级：先搭 Kafka 全家桶，再写消费端 | 小时级：手写 JSON 作业与调度 | 天级：需理解转换 / 作业模型 | 分钟级：向导式，但仅一次性迁移 |
-| 持续增量 | 轮询 / Cron + 日志 CDC（MySQL binlog、Oracle LogMiner、PG、SQL Server） | 日志级 | 不适用 | 部分（自建定时） | 不适用 |
-| 结构同步 | **自动建表/索引/视图/过程** | 部分（落库自写） | 需预建表 | 部分 | 仅一次性 |
-| 异构方言转换 | 类型/函数/引号/分页/过程 | 不支持 | 部分 | 部分（手工） | 部分 |
-| 国产数据库 | **达梦/金仓/OceanBase 等 10 种一等公民** | 部分 | 部分 | 部分 | 部分 |
-| 源库侵入 | **默认只读零侵入**；CDC 需复制权限仍只读 | 需开 binlog/wal | 只读 | 只读 | 只读 |
-| 断点续传 / 幂等 | 游标持久化 + 主键 upsert | offset | 不适用 | 部分 | 不适用 |
+| 配置方式 | **Web 点选** | YAML / REST + 消费端代码 | JSON 作业 | 图形 ETL | 向导 |
+| 上手速度 | **分钟级**：下载 jar、启动、点选 | 天级：先搭 Kafka 全家桶 | 小时级：手写 JSON 作业 | 天级：理解转换与作业模型 | 分钟级，但仅一次性迁移 |
+| 持续增量 | 轮询 / Cron + 日志 CDC（MySQL binlog、Oracle LogMiner、PostgreSQL、SQL Server） | 日志级 | 不适用 | 部分（自建定时） | 不适用 |
+| 全量加载 | **keyset 分块 + 表内并行 + 流式读取 + 检查点** | 需自行编排 | 分片作业 | 作业内实现 | 一次性向导 |
+| 结构同步 | **自动建表 / 索引 / 视图 / 过程** | 部分，落库需自写 | 需预建表 | 部分 | 仅一次性 |
+| 异构方言转换 | **类型 / 函数 / 引号 / 分页 / 过程** | 不支持 | 部分 | 部分，需手工 | 部分 |
+| 国产数据库 | **达梦 / 金仓 / OceanBase 等 10 种以上一等公民** | 部分 | 部分 | 部分 | 部分 |
+| 源库侵入 | **默认只读零侵入**；CDC 需复制权限但仍只读 | 需开 binlog / WAL | 只读 | 只读 | 只读 |
+| 断点续传 / 幂等 | **游标持久化 + 主键 upsert + 检查点** | offset | 不适用 | 部分 | 不适用 |
+| 运维成本 | **一个进程** | 流式平台 + 消费端 | 作业调度 | 资源库与调度 | 人工 |
 
 **六个差异点**
 
-1. 一个 jar 对一套流式基础设施 —— 规模配不上运维成本时差距是决定性的。
-2. 上手快：下载 jar 后分钟级完成首条同步，实施人员按向导配置即可，不需要团队先掌握流式平台。
-3. 结构同步是一等公民，建表与类型映射不再是你自己的作业。
-4. 为国产库与信创迁移而生，各方言有专门实现而非「通用 JDBC 也许能连」。
-5. 默认轮询零侵入，一个只读账号即可。
-6. 解决「持续保持一致」而非「搬一次数」。
-
-**什么时候不该用 Jync**
-
-- 毫秒级延迟 → Debezium / Flink CDC。
-- 单表数亿行一次性初始化 → DataX。
-- 复杂 ETL（清洗、聚合、多流 join）→ Kettle / Flink。
-- 多主双向复制 → SymmetricDS。
+1. **一个 jar 对一套流式基础设施**：规模配不上运维成本时，差距是决定性的。
+2. **分钟级上手**：实施人员按向导配置即可，不需要团队先掌握流式平台。
+3. **结构与数据一起同步**：建表、类型映射、索引与过程转换不再是你自己的作业。
+4. **为国产库与信创迁移而生**：方言有专门实现，而不是"通用 JDBC 也许能连"。
+5. **默认轮询零侵入**：一个只读账号即可；需要秒级时再切换日志 CDC。
+6. **全量也为持续同步设计**：分块、并行、流式与检查点，让第一次装载同样是可恢复、可观测的工程流程。
 
 ---
 
-## 架构
+<a name="architecture"></a>
+## 架构与技术栈
 
-```
+**技术栈**：Java 17 · Spring Boot 2.7 · Spring Data JPA / Hibernate · Quartz · H2 / MySQL / PostgreSQL 元数据库 · Thymeleaf 服务端渲染 · 原生 JavaScript（无 CDN、无前端构建）。
+
+```text
 com.qqmu.jync
 ├── config           i18n、Quartz、Jackson、SecurityConfig、SyncProperties
 ├── controller       MVC；controller/api 为 REST 端点
 ├── service
-│   ├── connection   DataSourceManager、DriverLoader、DriverShim、连接测试
-│   ├── metadata     MetadataReader 各方言实现 + 快照服务
-│   ├── monitor      ChangeDetector（结构差异）、CursorStrategyResolver
-│   ├── converter    SqlDialect 各实现、类型映射、SQL 体转换
+│   ├── connection   DataSourceManager、DriverLoader、连接测试
+│   ├── metadata     各方言元数据读取 + 快照
+│   ├── monitor      ChangeDetector、CursorStrategyResolver
+│   ├── converter    SqlDialect、类型映射、SQL 体转换
 │   ├── sync         SyncEngine、DataSyncService、StructureSyncService、DdlExecutor
-│   ├── ai           供应商配置、共享 HTTP 层、候选起草/校验、审阅编排
+│   ├── cdc          binlog / LogMiner / PG / SQL Server 消费者
 │   ├── task         Quartz 调度、三层锁、上下文装配、启动恢复
-│   └── auth         账号种入、BCrypt 改密、UserDetailsService
+│   ├── lob          大字段流式读取、绑定与落盘
+│   └── ai           供应商配置、共享 HTTP 层、候选起草与审阅
 ├── model / repository / dto / util
 ```
 
-- **事务语义**：游标推进与锁获取依赖 `REQUIRES_NEW`，因此 `SyncStateWriter` / `SyncLockStore` / `SyncTaskStore` 拆为独立 Bean（同类自调用会绕过 Spring 代理使注解失效）。
-- **三层锁**：Quartz `@DisallowConcurrentExecution` → JVM 按项目 `ReentrantLock` → 带租约的数据库锁行（跨重启的那一层）。
+- **三层锁**：Quartz `@DisallowConcurrentExecution` → JVM 内按任务 `ReentrantLock` → 数据库租约锁（跨重启与跨实例）。
+- **事务语义**：游标推进与锁获取使用 `REQUIRES_NEW`，避免与数据写入同事务回滚。
+- **调度对账**：多实例部署时，每个节点把本地 Quartz 调度与共享库中的启用标志对齐。
 
 ---
 
-## 文档
+<a name="docs"></a>
+## 文档与测试
 
 - **容器部署与运维**：[docs/deploy-container.md](docs/deploy-container.md)（环境变量、TLS、多实例、升级与排障）
+- **已知限制与边界**：[docs/known-limitations.md](docs/known-limitations.md)（CDC 边界、无主键表、大字段、过程转换）
 - **Oracle → 达梦迁移实战**：[docs/migration-harness-oracle-to-dm.md](docs/migration-harness-oracle-to-dm.md)
 - **项目介绍文章**：[docs/jync-article.md](docs/jync-article.md)
 - **版本记录**：[GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases)
 - **第三方驱动许可证**：[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
 
----
-
-## 测试
-
 ```bash
 mvn test
 ```
 
-**1643 个单元测试：1642 通过，1 个按环境条件跳过。** 重点覆盖：
+**2368 个测试：2367 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
 
-- **方言与 SQL**：各方言幂等 upsert、类型上限不变量、SQL 正文改写不碰字面量 / 注释。
-- **游标**：策略解析与降级、Oracle 行级 SCN 探测、游标序列化往返。
-- **安全**：密码与 AI 密钥加密、访客 POST 全拒、CSRF 缺失即拒。
-- **AI**：供应商启用互斥、应答解析（截断围栏 / 拒答 / 空应答）、推理档位按协议分流、Ollama 原生 `/api/chat` 的请求体与 NDJSON 流式。
-- **页面与国际化**：全条件分支渲染无 `??`、英文界面全页扫描无中文、中英 bundle 键集一致。
-- **同步链路**：分块 keyset 与检查点、无主键 OFFSET 分页续传（目标空表、按目标行数定位）、并行分段、列清洗命中字符串主键时的边界、克隆单事务与首次截断关闭、空保存不写库、运行中编辑守卫。
-- **日志 CDC**：探测七项、位点纪律（先数据后位点）、租约互斥与切换序列、故障摘要清理。
-- **升级**：GitHub→Gitee 双通道兜底、下载大小与 zip 校验、改名替换与备份、重启 / 回滚脚本生成。
-- **其他**：分页窗口、立即同步补跑合并、hidden 属性显示契约、README 文档守卫。
+重点覆盖：
 
-**真实库集成测试**（`*IT`，默认不进套件，需 Docker）：
+- **方言与 SQL**：各方言幂等 upsert、类型上限、SQL 正文改写不碰字面量与注释。
+- **全量与续传**：keyset 分块、并行区间不相交、无主键 OFFSET 续传、检查点、列清洗与主键边界。
+- **安全**：密码与 AI 密钥加密、访客 POST 全拒、CSRF 缺失即拒、外部认证模式隔离。
+- **CDC**：四类引擎的前提探测、位点纪律、租约互斥、故障摘要。
+- **页面与国际化**：全条件分支渲染无 `??`、英文界面无中文泄漏、中英 bundle 键集一致。
+- **升级**：GitHub → Gitee 双通道兜底、下载校验、替换备份与回滚。
 
-- `OracleMigrationHarnessIT`：Oracle 23ai —— 并行分段全量、中断续传、`ROWDEPENDENCIES` 全链路。
-- `CdcBaselineStreamingIT` / `CdcVolumeAndTypesIT` / `CdcResilienceIT`：MySQL 8 binlog —— 基线→流式、崩溃重跑、十万行一致、purge 与断线故障。
-
-显式运行加 `-Dapi.version=1.44`（Docker Engine ≥ 29）。
-
-**端到端脚本**：H2 源 / 目标，20 项断言，覆盖全量、增量、幂等、DDL 传播、并发写入一致与停机补齐。
+真实库集成测试（`*IT`，默认不进套件，需 Docker）：Oracle 23ai 并行全量与 `ROWDEPENDENCIES`；MySQL 8 binlog 的基线 → 流式、崩溃重跑、十万行一致、purge 与断线故障。运行加 `-Dapi.version=1.44`（Docker Engine ≥ 29）。
 
 ---
 
-## 已知限制
-
-- **存储过程转换**：机械差异可自动转换；PL/SQL / T-SQL / PL/pgSQL 的控制流无法可靠自动翻译，失败时给具体错误，可在转换审阅页保存手工覆盖（AI 候选仍需人工确认）。
-- **语义等价无保证**：游标行为、隐式事务边界、异常控制流、`NULL` 拼接语义不体现在语法上，关键过程务必在目标库实测。
-- **语法检查残留**：进程在建 / 删临时对象之间被强杀会残留 `JYNC_AI_CHECK_*`（v1.3.0 之前为 `SYNCTOOL_AI_CHECK_*`），列表页不会自动发现。
-- **行删除检测**：无源库审计表时仅对行数低于 `full-compare-max-rows` 的表启用。
-- **无主键表**：无法保证幂等，重放可能重复，工具会告警。目标表为空且存在可排序列时全量会按 OFFSET 分页续传，重启从目标表行数续读；但 OFFSET 按位置定位行，装载期间源库的并发插入/删除可能使窗口偏移而漏读或重复（有主键的表按主键值定位，不受影响）。
-- **目标库写入方**：假定目标库仅由本工具写入。
-- **延迟**：轮询下限即轮询间隔；切换日志 CDC 后可做到秒级延迟。
-
----
-
+<a name="contributing"></a>
 ## 参与贡献
 
 | 渠道 | 账号 |
 |------|------|
-| QQ | [817094](https://wpa.qq.com/msgrd?v=3&uin=817094&site=qq&menu=yes)（点击打开临时会话） |
-| QQ | [2912167928](https://wpa.qq.com/msgrd?v=3&uin=2912167928&site=qq&menu=yes)（点击打开临时会话） |
-| QQ 群 | [426669837 · 沐沐开源工坊](https://qun.qq.com/universal-share/share?ac=1&authKey=xm%2BfgdraFGDpH8GHkV4DbuMjArg6BsPdNnXKUqcWvFXI1ocS56TcioSRYOVBvn5Q&busi_data=eyJncm91cENvZGUiOiI0MjY2Njk4MzciLCJ0b2tlbiI6Ind0V1pMYlVieXJkQmtnMVgveUFsOHFnbFhTd28wUE03dy9uVUErVExBdnlkMENnMis0UmhqWlJjcURzRHFnUEMiLCJ1aW4iOiI4MTcwOTQifQ%3D%3D&data=tZVIfZoO6N9QWSJE6ZbdZR15OmuLpSVucid5TicWYaMgb9Go1B975NZk0iZOo69AEzXQ4XucFtenImLltzFI5w&svctype=4&tempid=h5_group_info)（点击加入群聊） |
+| QQ | [817094](https://wpa.qq.com/msgrd?v=3&uin=817094&site=qq&menu=yes) |
+| QQ | [2912167928](https://wpa.qq.com/msgrd?v=3&uin=2912167928&site=qq&menu=yes) |
+| QQ 群 | [426669837 · 沐沐开源工坊](https://qun.qq.com/universal-share/share?ac=1&authKey=xm%2BfgdraFGDpH8GHkV4DbuMjArg6BsPdNnXKUqcWvFXI1ocS56TcioSRYOVBvn5Q&busi_data=eyJncm91cENvZGUiOiI0MjY2Njk4MzciLCJ0b2tlbiI6Ind0V1pMYlVieXJkQmtnMVgveUFsOHFnbFhTd28wUE03dy9uVUErVExBdnlkMENnMis0UmhqWlJjcURzRHFnUEMiLCJ1aW4iOiI4MTcwOTQifQ%3D%3D&data=tZVIfZoO6N9QWSJE6ZbdZR15OmuLpSVucid5TicWYaMgb9Go1B975NZk0iZOo69AEzXQ4XucFtenImLltzFI5w&svctype=4&tempid=h5_group_info) |
 | 微信 | qqmu66 |
 | 邮箱 | [vfaner@88.com](mailto:vfaner@88.com) |
 | 官网 | <https://jync.qqmu.com> |
 
-点击 QQ 号会唤起 QQ 并打开临时会话，点击群号会打开「沐沐开源工坊」的加群页面。应用内「设置 → 项目与作者」中的联系方式同样可点击。
+问题反馈、功能建议与 PR 欢迎通过以上任一渠道联系。如果 Jync 对你有帮助，欢迎点一个 **Star** ⭐。
 
-问题反馈、功能建议与 PR 欢迎通过以上任一渠道联系；觉得有用请点个 Star ⭐
+---
 
+<a name="license"></a>
 ## 许可证
 
 [MIT License](LICENSE)，商业与非商业用途均可。内置第三方 JDBC 驱动各自适用原厂许可证，见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)；GBase、神通与华为 GaussDB 驱动不随本项目分发。
 
-项目由沐沐开源工坊（沐编程）维护：GitHub [@vfaner](https://github.com/vfaner)、Gitee [@super_rgh](https://gitee.com/super_rgh)。「Jync / 捷同」名称与 logo 的品牌声明见 [TRADEMARK.md](TRADEMARK.md)——MIT 不授予商标使用权，修改再分发请保留署名与品牌标识。
+项目由沐沐开源工坊维护：GitHub [@vfaner](https://github.com/vfaner)、Gitee [@super_rgh](https://gitee.com/super_rgh)。「Jync / 捷同」名称与 logo 的品牌声明见 [TRADEMARK.md](TRADEMARK.md)——MIT 不授予商标使用权，修改再分发请保留署名与品牌标识。

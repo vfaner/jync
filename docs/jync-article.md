@@ -62,7 +62,7 @@ java -jar target/jync.jar
 ![看板](images/jync_kanban.png)
 看板：项目数、连接数、同步表数、24 小时变更量与最近活动一屏掌握
 
-![项目详情](images/jync_lx.jpg)
+![项目详情](images/jync_lx.png)
 项目详情：表/视图/存储过程逐表勾选，每张表的增量检测策略直接标注；调度、全量加载性能与列清洗集中配置
 
 ![新增连接](images/jync_db_add.png)

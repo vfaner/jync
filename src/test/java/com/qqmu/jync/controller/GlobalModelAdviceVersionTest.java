@@ -2,6 +2,8 @@ package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Properties;
@@ -19,8 +21,13 @@ import com.qqmu.jync.config.SyncProperties;
 class GlobalModelAdviceVersionTest {
 
     private GlobalModelAdvice adviceWith(BuildProperties props) {
+        return adviceWith(props, ZoneId.systemDefault());
+    }
+
+    private GlobalModelAdvice adviceWith(BuildProperties props, ZoneId zone) {
         return new GlobalModelAdvice(
-                "https://github.com/vfaner/jync", new SyncProperties(), providerOf(props), true);
+                "https://github.com/vfaner/jync", new SyncProperties(), providerOf(props), true,
+                zone);
     }
 
     /** Minimal ObjectProvider view: fixed instance or nothing, no bean factory involved. */
@@ -73,11 +80,19 @@ class GlobalModelAdviceVersionTest {
     }
 
     @Test
-    void formatsBuildTimeAsUtcStamp() {
+    void formatsBuildTimeInTheServerZoneWithItsOffset() {
         Properties p = new Properties();
         p.setProperty("time", "2026-10-15T13:32:06Z");
-        assertThat(adviceWith(new BuildProperties(p)).buildTime())
-                .isEqualTo("2026-10-15 13:32 UTC");
+        assertThat(adviceWith(new BuildProperties(p), ZoneId.of("Asia/Shanghai")).buildTime())
+                .isEqualTo("2026-10-15 21:32 UTC+08:00");
+    }
+
+    @Test
+    void formatsBuildTimeWithAZeroOffsetWhenTheServerRunsInUtc() {
+        Properties p = new Properties();
+        p.setProperty("time", "2026-10-15T13:32:06Z");
+        assertThat(adviceWith(new BuildProperties(p), ZoneOffset.UTC).buildTime())
+                .isEqualTo("2026-10-15 13:32 UTC+00:00");
     }
 
     @Test
