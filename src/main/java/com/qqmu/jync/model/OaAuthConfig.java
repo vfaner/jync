@@ -56,8 +56,14 @@ public class OaAuthConfig {
     @Column(nullable = false)
     private boolean enabled;
 
+    /**
+     * The column is {@code auth_mode}, not {@code mode}: MODE is a reserved word in Oracle and
+     * its compatible databases (DM, YashanDB, Oscar), where Hibernate's unquoted DDL fails with
+     * ORA-03050 before the table is even created. The property keeps its natural name; only the
+     * storage name differs.
+     */
     @Enumerated(EnumType.STRING)
-    @Column(name = "mode", length = 16)
+    @Column(name = "auth_mode", length = 16)
     private Mode mode = Mode.PASSWORD;
 
     /** Comma-separated usernames that are administrators in every mode. */
