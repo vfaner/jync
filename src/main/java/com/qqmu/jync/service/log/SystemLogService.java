@@ -147,8 +147,7 @@ public class SystemLogService {
                     if (!matchesLevel(line, normalizedLevel)) {
                         continue;
                     }
-                    if (needle != null && !line.toLowerCase(Locale.ROOT)
-                            .contains(needle.toLowerCase(Locale.ROOT))) {
+                    if (needle != null && !containsIgnoreCase(line, needle)) {
                         continue;
                     }
                     matched++;
@@ -242,20 +241,42 @@ public class SystemLogService {
         if (keyword == null) {
             return HtmlUtils.htmlEscape(line);
         }
-        String lowerLine = line.toLowerCase(Locale.ROOT);
-        String lowerKeyword = keyword.toLowerCase(Locale.ROOT);
         StringBuilder out = new StringBuilder(line.length() + 32);
         int from = 0;
-        int hit;
-        while ((hit = lowerLine.indexOf(lowerKeyword, from)) >= 0) {
+        int hit = indexOfIgnoreCase(line, keyword, 0);
+        while (hit >= 0) {
             out.append(HtmlUtils.htmlEscape(line.substring(from, hit)));
             out.append("<mark>")
                     .append(HtmlUtils.htmlEscape(line.substring(hit, hit + keyword.length())))
                     .append("</mark>");
             from = hit + keyword.length();
+            hit = indexOfIgnoreCase(line, keyword, from);
         }
         out.append(HtmlUtils.htmlEscape(line.substring(from)));
         return out.toString();
+    }
+
+    private static boolean containsIgnoreCase(String line, String keyword) {
+        return indexOfIgnoreCase(line, keyword, 0) >= 0;
+    }
+
+    /**
+     * Case-insensitive search over the <em>original</em> string.
+     *
+     * <p>Searching a lower-cased copy is wrong here: a few characters change length under
+     * case mapping ({@code İ} U+0130 becomes two chars), so an index from the copy addresses
+     * the wrong position in the original — the highlight lands one char late, and a match at
+     * the end of the line indexes past the string entirely. {@link String#regionMatches}
+     * compares character by character and keeps original indices.
+     */
+    private static int indexOfIgnoreCase(String line, String keyword, int from) {
+        int last = line.length() - keyword.length();
+        for (int i = Math.max(0, from); i <= last; i++) {
+            if (line.regionMatches(true, i, keyword, 0, keyword.length())) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static LogFile toLogFile(Path path) {

@@ -11,7 +11,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.dto.ChangeEvent;
-import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.IndexMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;

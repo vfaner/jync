@@ -7,7 +7,6 @@ import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;

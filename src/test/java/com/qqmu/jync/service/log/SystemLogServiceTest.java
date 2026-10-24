@@ -190,6 +190,28 @@ class SystemLogServiceTest {
     }
 
     @Test
+    void aKeywordAtTheEndOfALineContainingAnExpandingUppercaseDoesNotThrow() throws IOException {
+        // 'İ' (U+0130) lower-cases to two chars ("i̇"); indices taken from a lowered copy no
+        // longer address the original line, and the old renderer walked off the end of it.
+        write(line("INFO", "user İdef"));
+
+        SystemLogService.LogQueryResult result = service().query("jync.log", "ALL", "def");
+
+        assertThat(result.getErrorKey()).isNull();
+        assertThat(result.getLines().get(0)).endsWith("<mark>def</mark>");
+    }
+
+    @Test
+    void aKeywordAfterAnExpandingUppercaseIsMarkedAtItsRealPosition() throws IOException {
+        write(line("INFO", "user İlker needle end"));
+
+        String rendered = service().query("jync.log", "ALL", "needle").getLines().get(0);
+
+        assertThat(rendered).contains("<mark>needle</mark>");
+        assertThat(rendered).contains("İlker");
+    }
+
+    @Test
     void noMatchIsAnEmptySuccessfulResult() throws IOException {
         write(line("INFO", "hello"));
 
