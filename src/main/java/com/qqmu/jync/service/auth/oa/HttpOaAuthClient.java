@@ -35,6 +35,16 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 public class HttpOaAuthClient implements OaAuthClient {
 
+    /**
+     * One client for every sign-in: it owns a selector thread and a connection pool, and the
+     * JDK expects instances to be reused. The per-attempt deadline stays on the request
+     * ({@code config.timeoutMs}); this connect timeout only bounds the TCP handshake.
+     */
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
@@ -67,15 +77,10 @@ public class HttpOaAuthClient implements OaAuthClient {
             return OaAuthResult.failure("error.oa.badResponse");
         }
 
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(timeoutMs))
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .build();
-
         long startedNanos = System.nanoTime();
         HttpResponse<InputStream> response;
         try {
-            response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
         } catch (HttpTimeoutException ex) {
             return OaAuthResult.failure("error.oa.unreachable");
         } catch (IOException ex) {
