@@ -314,10 +314,12 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     public void requestStop() {
         running = false;
         BinaryLogClient current = this.client;
-        if (current != null && current.isConnected()) {
+        if (current != null) {
             try {
+                // 无条件:断流期间 isConnected() 是 false,但 keepalive 线程还活着,
+                // 只在该分支断开会把重连留给 keepalive —— 停机后仍在拉流(见 disconnectQuietly)。
                 current.disconnect();
-            } catch (IOException e) {
+            } catch (IOException | RuntimeException e) {
                 log.warn("Disconnecting the CDC stream for project {} failed: {}",
                         project.getId(), e.getMessage());
             }
@@ -399,13 +401,18 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     }
 
     private void disconnectQuietly(BinaryLogClient client) {
-        if (client != null && client.isConnected()) {
-            try {
-                client.disconnect();
-            } catch (IOException e) {
-                log.debug("Disconnecting the CDC client for project {} failed: {}",
-                        project.getId(), e.getMessage());
-            }
+        if (client == null) {
+            return;
+        }
+        try {
+            // 无条件 disconnect():keepalive 线程只在 disconnect() 里被 shutdownNow。
+            // 被源端踢掉(fatal park)或断流重连期间 isConnected() 恰好是 false,旧代码
+            // 因此跳过 disconnect,已停车的消费者仍每 ~2 分钟自动重连 —— 日志里能看到,
+            // 而且它会继续占着同一个 server_id 把别的实例踢下线。未连接时该调用是空操作。
+            client.disconnect();
+        } catch (IOException | RuntimeException e) {
+            log.debug("Disconnecting the CDC client for project {} failed: {}",
+                    project.getId(), e.getMessage());
         }
     }
 
