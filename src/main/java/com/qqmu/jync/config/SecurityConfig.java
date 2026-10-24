@@ -83,12 +83,14 @@ public class SecurityConfig {
             // Preview returns row data straight out of the configured databases, and the two
             // lookups expose an arbitrary table's schema. The CDC probe is read-only in the
             // HTTP sense but opens a connection to the configured source and runs capability
-            // queries there. All four back admin-only controls on the project detail page; a
-            // viewer must not call them directly.
+            // queries there. Row-count opens both connections and scans whole tables. All five
+            // back admin-only controls on the project detail page; a viewer must not call them
+            // directly.
             "/api/projects/*/preview",
             "/api/projects/*/columns",
             "/api/projects/*/cursor-candidates",
-            "/api/projects/*/cdc-probe"
+            "/api/projects/*/cdc-probe",
+            "/api/projects/*/row-count"
     };
 
     @Bean

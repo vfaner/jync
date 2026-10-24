@@ -889,7 +889,20 @@
     <div class="card">
         <div class="card-head">
             <h2><svg class="ico"><use href="#graph-up"/></svg> <span th:text="#{project.progress}">Progress</span></h2>
-            <span class="hint" th:text="#{cursor.help}">help</span>
+            <div class="card-head-tools">
+                <span class="hint" th:text="#{cursor.help}">help</span>
+                <span id="row-count-badge" class="badge is-hidden"></span>
+                <!-- 行数核对是显式动作：页面打开不查库，点击后才逐表 COUNT(*)。 -->
+                <button type="button" class="btn btn-ghost btn-sm"
+                        data-role="row-count-open"
+                        th:if="${isAdmin and !#lists.isEmpty(progressList)}"
+                        th:attr="data-action=@{/api/projects/{id}/row-count(id=${project.id})},
+                                 data-running=${project.enabled},
+                                 title=#{rowcount.hint}">
+                    <svg class="ico"><use href="#check-lg"/></svg>
+                    <span th:text="#{rowcount.open}">Check row counts</span>
+                </button>
+            </div>
         </div>
         <div class="card-body tight">
             <div th:if="${#lists.isEmpty(progressList)}" class="empty">
@@ -903,8 +916,6 @@
                         <th th:text="#{log.objectName}">Table</th>
                         <th th:text="#{cursor.strategy}">Strategy</th>
                         <th th:text="#{cursor.column}">Column</th>
-                        <th th:text="#{cursor.lastValue}">Last value</th>
-                        <th class="num" th:text="#{cursor.rowsTotal}">Rows</th>
                         <th th:text="#{dashboard.lastSync}">Last sync</th>
                         <!-- 「设置游标」列：仅轮询/全量比对模式可用。日志 CDC 下游标列是死配置，
                              同调度卡片一并隐藏（data-role="polling-only" 由 app.js 联动）。 -->
@@ -953,9 +964,9 @@
                                th:title="#{project.strategyWarn}"><use href="#exclamation-triangle-fill"/></svg>
                         </td>
                         <td class="mono small" th:text="${p.cursorColumn ?: '—'}">col</td>
-                        <td><span class="chip" th:text="${p.lastSyncValue ?: '—'}">value</span></td>
-                        <td class="num" th:text="${p.rowsSyncedTotal}">0</td>
                         <td class="small muted"
+                            th:attr="title=${p.lastSyncValue != null
+                                     ? #messages.msg('cursor.lastValue') + ': ' + p.lastSyncValue : null}"
                             th:text="${p.lastSyncTime != null}
                                      ? ${#temporals.format(p.lastSyncTime, 'MM-dd HH:mm:ss')}
                                      : #{common.never}">never</td>
@@ -1036,6 +1047,77 @@
             </div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-ghost btn-sm" data-close-modal="preview-modal"
+                        th:text="#{common.close}">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 行数核对弹窗：行由服务端按进度列表渲染，app.js 只负责逐表填数。
+         带 {0} 的文案放在 data-* 上，由 JS 替换（同 preview.truncated）。 -->
+    <div class="modal" id="row-count-modal" aria-hidden="true" role="dialog" aria-modal="true"
+         th:if="${isAdmin and !#lists.isEmpty(progressList)}"
+         th:attr="aria-label=#{rowcount.title},
+                  data-confirm=#{rowcount.confirm},
+                  data-confirm-running=#{rowcount.confirmRunning},
+                  data-summary=#{rowcount.summary},
+                  data-badge-mismatch=#{rowcount.badgeMismatch},
+                  data-badge-failed=#{rowcount.badgeFailed},
+                  data-stopped=#{rowcount.stopped}">
+        <div class="modal-mask" data-close-modal="row-count-modal"></div>
+        <div class="modal-dialog preview-dialog">
+            <button type="button" class="modal-close" data-close-modal="row-count-modal"
+                    th:attr="aria-label=#{common.close}">
+                <svg class="ico"><use href="#x-lg"/></svg>
+            </button>
+            <div class="modal-head">
+                <h3 th:text="#{rowcount.title}">Row counts</h3>
+                <p id="row-count-summary" class="small muted"
+                   th:text="#{rowcount.notChecked}">Not checked</p>
+            </div>
+            <div id="row-count-body" class="preview-body">
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{log.objectName}">Table</th>
+                        <th class="num" th:text="#{rowcount.sourceRows}">Source rows</th>
+                        <th class="num" th:text="#{rowcount.targetRows}">Target rows</th>
+                        <th class="num" th:text="#{rowcount.diff}">Difference</th>
+                        <th class="num" th:text="#{rowcount.syncedTotal}">Rows synced</th>
+                        <th th:text="#{rowcount.status}">Status</th>
+                        <th class="num" th:text="#{rowcount.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="p : ${progressList}"
+                        data-role="row-count-row"
+                        th:attr="data-object=${p.objectName}">
+                        <td class="mono" th:text="${p.objectName}">table</td>
+                        <td class="num" data-role="source-count">—</td>
+                        <td class="num" data-role="target-count">—</td>
+                        <td class="num" data-role="diff" th:title="#{rowcount.diffHint}">—</td>
+                        <td class="num" th:text="${p.rowsSyncedTotal ?: 0}">0</td>
+                        <td data-role="status">
+                            <span class="badge" th:text="#{rowcount.notChecked}">Not checked</span>
+                        </td>
+                        <td class="num">
+                            <button type="button" class="btn btn-ghost btn-xs"
+                                    data-role="row-count-one"
+                                    th:attr="title=#{rowcount.recheck}">
+                                <svg class="ico"><use href="#arrow-repeat"/></svg>
+                                <span th:text="#{rowcount.recheck}">Re-check</span>
+                            </button>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-primary btn-sm"
+                        id="row-count-start" th:text="#{rowcount.start}">Start</button>
+                <button type="button" class="btn btn-ghost btn-sm is-hidden"
+                        id="row-count-stop" th:text="#{rowcount.stop}">Stop</button>
+                <button type="button" class="btn btn-ghost btn-sm"
+                        data-close-modal="row-count-modal"
                         th:text="#{common.close}">Close</button>
             </div>
         </div>

@@ -1142,6 +1142,233 @@
    * 纯 GET，不改变任何同步状态。数据库里的内容一律经 textContent 写入：
    * 单元格里出现 "<script>" 也只是文本，不会变成标记；列名同理。
    */
+  /* ─── 行数核对 ──────────────────────────────────────────── */
+
+  /**
+   * 「核对行数」：逐表串行请求源/目标 COUNT(*)，结果填进弹窗。
+   *
+   * 串行的原因：COUNT(*) 在 InnoDB / PostgreSQL 是整表扫描，几十张表并发会把源库按住。
+   * 关闭弹窗或点停止都会让队列在下一张表前退出，最多放行一个在途查询。
+   */
+  function bindRowCount(btn) {
+    var modal = document.getElementById('row-count-modal');
+    var body = document.getElementById('row-count-body');
+    if (!modal || !body || !btn.dataset.action) { return; }
+    var startBtn = document.getElementById('row-count-start');
+    var stopBtn = document.getElementById('row-count-stop');
+    var summary = document.getElementById('row-count-summary');
+    var badge = document.getElementById('row-count-badge');
+    var runId = 0;
+    var batchRunning = false;
+    var perRowBusy = false;
+
+    function rows() {
+      return Array.prototype.slice.call(body.querySelectorAll('tr[data-object]'));
+    }
+
+    function oneButtons() {
+      return body.querySelectorAll('[data-role="row-count-one"]');
+    }
+
+    function setRunning(running) {
+      batchRunning = running;
+      if (startBtn) {
+        startBtn.disabled = running;
+        startBtn.classList.toggle('is-hidden', running);
+      }
+      if (stopBtn) { stopBtn.classList.toggle('is-hidden', !running); }
+      oneButtons().forEach(function (one) { one.disabled = running; });
+    }
+
+    function setStatus(row, key, cls) {
+      var cell = row.querySelector('[data-role="status"]');
+      if (!cell) { return; }
+      cell.textContent = '';
+      var span = document.createElement('span');
+      span.className = ('badge ' + cls).trim();
+      span.textContent = t(key);
+      cell.appendChild(span);
+    }
+
+    function setCount(row, role, value) {
+      var cell = row.querySelector('[data-role="' + role + '"]');
+      if (!cell) { return; }
+      cell.textContent = value == null ? '—' : Number(value).toLocaleString();
+    }
+
+    function fail(row, message) {
+      row.dataset.result = 'failed';
+      setStatus(row, 'rowcount.error', 'badge-danger');
+      setCount(row, 'source-count', null);
+      setCount(row, 'target-count', null);
+      setCount(row, 'diff', null);
+      var status = row.querySelector('[data-role="status"]');
+      if (status && message) { status.title = t(message); }
+    }
+
+    function apply(row, result) {
+      var source = result.source || {};
+      var target = result.target || {};
+      setCount(row, 'source-count', source.status === 'OK' ? source.count : null);
+      setCount(row, 'target-count', target.status === 'OK' ? target.count : null);
+
+      if (source.status === 'OK' && target.status === 'OK') {
+        var diff = source.count - target.count;
+        var diffCell = row.querySelector('[data-role="diff"]');
+        if (diffCell) {
+          diffCell.textContent = diff === 0 ? '0'
+              : (diff > 0 ? '+' : '') + Number(diff).toLocaleString();
+        }
+        if (diff === 0) {
+          row.dataset.result = 'ok';
+          setStatus(row, 'rowcount.consistent', 'badge-ok');
+        } else {
+          row.dataset.result = 'mismatch';
+          setStatus(row, 'rowcount.mismatch', 'badge-warn');
+        }
+        return;
+      }
+
+      row.dataset.result = 'failed';
+      setCount(row, 'diff', null);
+      if (target.status === 'MISSING_TABLE') {
+        setStatus(row, 'rowcount.missingTarget', 'badge-warn');
+      } else if (source.status === 'MISSING_TABLE') {
+        setStatus(row, 'rowcount.missingSource', 'badge-warn');
+      } else if (source.status === 'TIMEOUT' || target.status === 'TIMEOUT') {
+        setStatus(row, 'rowcount.timeout', 'badge-warn');
+      } else {
+        setStatus(row, 'rowcount.error', 'badge-danger');
+      }
+    }
+
+    function checkOne(row) {
+      setStatus(row, 'rowcount.checking', 'badge-info');
+      var url = btn.dataset.action + '?table=' + encodeURIComponent(row.dataset.object || '');
+      return getJson(url).then(function (payload) {
+        if (!payload.success) {
+          fail(row, payload.message || '');
+          return;
+        }
+        apply(row, payload.rowCount || {});
+      }).catch(function () {
+        fail(row, 'error.unexpected');
+      });
+    }
+
+    function summarize() {
+      var all = rows();
+      var consistent = 0;
+      var mismatch = 0;
+      var failed = 0;
+      all.forEach(function (row) {
+        if (row.dataset.result === 'ok') { consistent++; }
+        else if (row.dataset.result === 'mismatch') { mismatch++; }
+        else if (row.dataset.result === 'failed') { failed++; }
+      });
+      if (summary) {
+        summary.textContent = (modal.dataset.summary || '')
+            .replace('{0}', all.length)
+            .replace('{1}', consistent)
+            .replace('{2}', mismatch)
+            .replace('{3}', failed);
+      }
+      if (!badge) { return; }
+      if (mismatch > 0) {
+        badge.textContent = (modal.dataset.badgeMismatch || '').replace('{0}', mismatch);
+        badge.className = 'badge badge-warn';
+      } else if (failed > 0) {
+        badge.textContent = (modal.dataset.badgeFailed || '').replace('{0}', failed);
+        badge.className = 'badge badge-danger';
+      } else if (consistent > 0) {
+        badge.textContent = t('rowcount.badgeClean');
+        badge.className = 'badge badge-ok';
+      } else {
+        badge.className = 'badge is-hidden';
+      }
+    }
+
+    function stop() {
+      // 没在跑时关弹窗不该把摘要改成「已停止」。
+      if (stopBtn && stopBtn.classList.contains('is-hidden')) { return; }
+      runId++;
+      setRunning(false);
+      if (summary) { summary.textContent = modal.dataset.stopped || ''; }
+    }
+
+    function runQueue(list, index, id) {
+      if (id !== runId) { return; }
+      // 关掉弹窗等同停止：不再发起下一张表，最多放行当前这一个查询。
+      if (modal.getAttribute('aria-hidden') === 'true') {
+        stop();
+        return;
+      }
+      if (index >= list.length) {
+        setRunning(false);
+        summarize();
+        return;
+      }
+      checkOne(list[index]).then(function () {
+        runQueue(list, index + 1, id);
+      });
+    }
+
+    function reset(row) {
+      delete row.dataset.result;
+      setStatus(row, 'rowcount.notChecked', '');
+      setCount(row, 'source-count', null);
+      setCount(row, 'target-count', null);
+      setCount(row, 'diff', null);
+      var status = row.querySelector('[data-role="status"]');
+      if (status) { status.removeAttribute('title'); }
+    }
+
+    btn.addEventListener('click', function () {
+      setModalOpen('row-count-modal', true);
+    });
+
+    modal.querySelectorAll('[data-close-modal="row-count-modal"]').forEach(function (el) {
+      el.addEventListener('click', stop);
+    });
+
+    if (startBtn) {
+      startBtn.addEventListener('click', function () {
+        var all = rows();
+        if (!all.length) { return; }
+        var template = btn.dataset.running === 'true'
+            ? (modal.dataset.confirmRunning || '') : (modal.dataset.confirm || '');
+        JyncDialog.confirm(template.replace('{0}', all.length), function () {
+          all.forEach(reset);
+          if (badge) { badge.className = 'badge is-hidden'; }
+          if (summary) { summary.textContent = t('rowcount.notChecked'); }
+          setRunning(true);
+          runQueue(all, 0, ++runId);
+        });
+      });
+    }
+
+    if (stopBtn) {
+      stopBtn.addEventListener('click', stop);
+    }
+
+    oneButtons().forEach(function (one) {
+      one.addEventListener('click', function () {
+        // 单表重查也必须排队：否则连点两行就是两个整表扫描并发。
+        if (perRowBusy || batchRunning) { return; }
+        var row = one.closest('tr[data-object]');
+        if (!row) { return; }
+        perRowBusy = true;
+        if (startBtn) { startBtn.disabled = true; }
+        oneButtons().forEach(function (b) { b.disabled = true; });
+        checkOne(row).then(function () {
+          perRowBusy = false;
+          if (startBtn) { startBtn.disabled = false; }
+          oneButtons().forEach(function (b) { b.disabled = false; });
+        });
+      });
+    });
+  }
+
   function bindTablePreview(btn) {
     btn.addEventListener('click', function () {
       var side = btn.dataset.side === 'target' ? 'target' : 'source';
@@ -2183,6 +2410,7 @@
     document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
       .forEach(bindCursorInput);
     document.querySelectorAll('[data-role="column-rule-form"]').forEach(bindColumnRuleForm);
+    document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
     document.querySelectorAll('[data-role="preview"]').forEach(bindTablePreview);
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);

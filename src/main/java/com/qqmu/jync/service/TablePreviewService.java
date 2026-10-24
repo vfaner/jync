@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.TablePreview;
+import com.qqmu.jync.dto.TableRowCount;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
@@ -44,6 +46,9 @@ public class TablePreviewService {
 
     /** Keeps a runaway preview from occupying a request thread for the sync-wide timeout. */
     private static final int PREVIEW_TIMEOUT_SECONDS = 30;
+
+    /** A row-count probe is user-triggered and scans the whole table; bound it. */
+    private static final int ROW_COUNT_TIMEOUT_SECONDS = 15;
 
     /** Long text and binary cells are cut for transport; the modal is a glance, not an export. */
     private static final int CELL_MAX_LENGTH = 500;
@@ -99,6 +104,80 @@ public class TablePreviewService {
                     table, side, project.getName(), e.toString());
             throw new IllegalStateException("error.preview.read.failed", e);
         }
+    }
+
+    /**
+     * Exact row counts for one table, one COUNT(*) per side.
+     *
+     * <p>Deliberately not batched: the caller runs tables sequentially so a large schema
+     * cannot turn one click into dozens of concurrent full scans. A failing side is
+     * reported in place instead of failing the whole comparison.
+     */
+    public TableRowCount rowCount(Long projectId, String table) {
+        long started = System.currentTimeMillis();
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        return new TableRowCount(table,
+                countSide(project, table, Side.SOURCE),
+                countSide(project, table, Side.TARGET),
+                System.currentTimeMillis() - started);
+    }
+
+    private TableRowCount.SideCount countSide(Project project, String table, Side side) {
+        long started = System.currentTimeMillis();
+        Long databaseId = side == Side.SOURCE ? project.getSourceDbId() : project.getTargetDbId();
+        if (databaseId == null) {
+            return failed(TableRowCount.Status.ERROR, started);
+        }
+        DatabaseConfig config = databaseConfigRepository.findById(databaseId).orElse(null);
+        if (config == null) {
+            return failed(TableRowCount.Status.ERROR, started);
+        }
+        MetadataReader reader = readerFactory.forType(config.getType(), config.resolvedFamily());
+        SqlDialect dialect = dialectFactory.forType(config.getType(), null, config.resolvedFamily());
+        try (Connection conn = dataSourceManager.getConnection(config)) {
+            String schema = resolveSchema(config, reader, conn);
+            String requested = side == Side.TARGET
+                    ? parseConfig(project).targetTableName(table) : table;
+            String actualTable = resolveTableName(conn, reader, schema, requested);
+            String sql = "SELECT COUNT(*) FROM " + dialect.qualify(schema, actualTable);
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                JdbcUtil.applyQueryTimeout(ps, ROW_COUNT_TIMEOUT_SECONDS);
+                try (ResultSet rs = ps.executeQuery()) {
+                    long count = rs.next() ? rs.getLong(1) : 0L;
+                    return new TableRowCount.SideCount(TableRowCount.Status.OK, count,
+                            System.currentTimeMillis() - started);
+                }
+            }
+        } catch (SQLException e) {
+            if (isTimeout(e)) {
+                return failed(TableRowCount.Status.TIMEOUT, started);
+            }
+            // Driver detail stays server-side; the browser only needs the status.
+            log.debug("Cannot count '{}' on the {} side of project '{}': {}",
+                    table, side, project.getName(), e.toString());
+            return failed(TableRowCount.Status.ERROR, started);
+        } catch (IllegalStateException e) {
+            TableRowCount.Status status = "error.preview.table.unknown".equals(e.getMessage())
+                    ? TableRowCount.Status.MISSING_TABLE : TableRowCount.Status.ERROR;
+            return failed(status, started);
+        }
+    }
+
+    private TableRowCount.SideCount failed(TableRowCount.Status status, long started) {
+        return new TableRowCount.SideCount(status, null, System.currentTimeMillis() - started);
+    }
+
+    /**
+     * Drivers do not agree on the exception type for a cancelled statement: JDBC defines
+     * {@link SQLTimeoutException}, PostgreSQL reports SQLState 57014, and MySQL/H2 use HYT00.
+     */
+    private boolean isTimeout(SQLException e) {
+        if (e instanceof SQLTimeoutException) {
+            return true;
+        }
+        String state = e.getSQLState();
+        return "HYT00".equals(state) || "57014".equals(state);
     }
 
     private TablePreview read(Connection conn, SqlDialect dialect, String schema, String table,

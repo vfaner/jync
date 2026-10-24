@@ -79,9 +79,9 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | Incremental sync | Timestamp, row SCN, identity column or full comparison, selected automatically; one cursor-range query; safety-lagged watermark; cursor advances only after commit |
 | Log CDC | MySQL binlog, Oracle LogMiner, PostgreSQL logical decoding, SQL Server CDC; long-lived streaming replay with second-level latency |
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
-| Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, task cloning |
+| Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, on-demand row-count audit, task cloning |
 | Reliability | Idempotent upsert, checkpoint resume, database leases, at-least-once delivery, automatic catch-up after downtime |
-| Observability | Dashboard, change log, audit log, system log, per-table throughput log and CDC status panel |
+| Observability | Dashboard, change log, audit log, system log, per-table throughput log and CDC status panel, on-demand row-count audit |
 | Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout usable on phones; local accounts plus three SSO modes |
 
 ---
@@ -125,9 +125,16 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
     <td align="center"><a href="docs/images/jync_kanban_en.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_en.png" alt="English UI" width="100%"></a><br><sub><b>English UI</b> · one toggle, ZH / EN</sub></td>
     <td align="center"><a href="docs/images/jync_xiangmu_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_add.png" alt="New task" width="100%"></a><br><sub><b>New task</b> · pick a tested connection on each side</sub></td>
   </tr>
+  <tr>
+    <td></td>
+    <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="Row-count audit" width="100%"></a><br><sub><b>Row-count audit</b> · source vs target COUNT with differences flagged</sub></td>
+    <td></td>
+  </tr>
 </table>
 
 > The screenshots are high-resolution originals; clicking one opens the original in a new tab, and Gitee adds its built-in zoom preview on top.
+>
+> **Row-count audit runs on demand.** After you confirm, tables are counted serially with `COUNT(*)`; each side has a 15-second query timeout, and a missing table, timeout or other error is flagged on that side without hiding the other side's count.
 
 ---
 
@@ -678,6 +685,7 @@ Main settings in `application.yml` (the `sync.*` prefix):
 4. Configure **capture strategy, schedule, full-load performance and column cleansing** as needed.
 5. Use **Sync now** for a trial cycle, or **Enable automatic sync** for continuous incremental sync.
 6. Watch per-cycle detail in the **Change log** and overall state on the **Dashboard**.
+7. To confirm both sides hold the same data, open **Check row counts** in the task's per-table progress card: the audit runs only after you confirm, and marks each table consistent, mismatched, missing or timed out.
 
 ---
 
@@ -710,7 +718,7 @@ Procedural control flow in stored procedures cannot be translated reliably by te
 | Full load | **Keyset chunks + in-table parallelism + streaming + checkpoints** | Initial / incremental snapshots supported; loading into a heterogeneous target is your consumer code | Sharded jobs | Implement inside the job | One-off wizard |
 | Structure sync | **Tables, indexes, views, procedures created** | Partial; loading is your code | Pre-create tables | Partial | One-off only |
 | Dialect conversion | **Types, functions, quoting, pagination, procedures** | No | Partial | Partial, manual | Partial |
-| Per-task shaping and operations | **Column cleansing, target table renaming, interval / Cron, full-load batch and parallelism, source / target previews — all configured in the UI** | SMT or custom code | JSON jobs | Transform steps | Client-side preview only |
+| Per-task shaping and operations | **Column cleansing, target table renaming, interval / Cron, full-load batch and parallelism, source / target previews and on-demand row-count audit — all configured in the UI** | SMT or custom code | JSON jobs | Transform steps | Client-side preview only |
 | Domestic databases | **DM, Kingbase, OceanBase and 10+ first-class presets** | Partial | Partial | Partial | Partial |
 | Source intrusion | **Read-only by default**; CDC needs replication grants but is still read-only | Requires binlog / WAL | Read-only | Read-only | Read-only |
 | Resume / idempotency | **Persisted cursor + primary-key upsert + checkpoint** | Offsets | Not applicable | Partial | Not applicable |
@@ -726,7 +734,7 @@ Procedural control flow in stored procedures cannot be translated reliably by te
 5. **Read-only polling by default**: one read-only account is enough; switch to log CDC when seconds matter.
 6. **Full load designed for continuous sync too**: chunking, parallelism, streaming and checkpoints make the first load a resumable, observable engineering process.
 7. **It works from a phone browser**: navigation collapses into a drawer, role pickers and field mappings stack on narrow screens, and wide tables scroll horizontally — check progress or start/stop a task without walking back to a desk.
-8. **The migration chores need no code**: column cleansing, target table renaming, custom schedules, full-load batch and parallelism, and source / target previews are all on the task page; the same cleansing rules apply to full load, incremental sync and CDC.
+8. **The migration chores need no code**: column cleansing, target table renaming, custom schedules, full-load batch and parallelism, source / target previews and on-demand row-count audit are all on the task page; the same cleansing rules apply to full load, incremental sync and CDC.
 
 ---
 
@@ -772,7 +780,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**2368 tests: 2367 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
+**2379 tests: 2378 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
 
 Coverage highlights:
 

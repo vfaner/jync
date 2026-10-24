@@ -144,4 +144,63 @@ class TablePreviewViewTest {
         assertThat(html).contains("'preview.source': \"Source\"");
         assertThat(html).contains("'preview.target': \"Target\"");
     }
+
+    @Test
+    void theProgressTableDropsTheCursorWatermarkAndLifetimeRowCounter() throws Exception {
+        String html = render();
+
+        assertThat(html).doesNotContain("<th>Last synced value</th>");
+        // 「Rows synced」 now legitimately labels the modal's cumulative column, so it must
+        // appear exactly once — in the modal, not in the progress table as well.
+        assertThat(countOccurrences(html, "<th class=\"num\">Rows synced</th>")).isEqualTo(1);
+    }
+
+    private static int countOccurrences(String text, String needle) {
+        int count = 0;
+        for (int at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length())) {
+            count++;
+        }
+        return count;
+    }
+
+    @Test
+    void anAdminSeesTheRowCountEntryAndItsModal() throws Exception {
+        String html = render();
+
+        assertThat(html).contains("data-role=\"row-count-open\"");
+        assertThat(html).contains("id=\"row-count-modal\"");
+        assertThat(html).contains("data-role=\"row-count-row\"");
+        assertThat(html).contains("data-object=\"ITEMS\"");
+        assertThat(html).contains("data-role=\"status\"");
+        assertThat(html).contains(">Check row counts</span>");
+        assertThat(html).contains(">Source rows</th>");
+        // Parameterized text must reach app.js as a literal {0}, not be consumed by
+        // MessageFormat at render time — app.js does the substitution.
+        assertThat(html).contains("for {0} table(s)");
+        assertThat(html).contains("{0} table(s): {1} consistent");
+        assertThat(html).doesNotContain("??rowcount");
+    }
+
+    @Test
+    void aViewerGetsNeitherTheRowCountButtonNorTheModal() throws Exception {
+        String html = render(asViewer());
+
+        assertThat(html).doesNotContain("data-role=\"row-count-open\"");
+        assertThat(html).doesNotContain("id=\"row-count-modal\"");
+    }
+
+    /**
+     * app.js writes the per-row status through {@code t()}; a key missing from the
+     * dictionary silently shows the raw key instead of the label.
+     */
+    @Test
+    void theRowCountStatusLabelsAreInTheJsDictionary() throws Exception {
+        String html = render();
+
+        assertThat(html).contains("'rowcount.checking': \"Counting...\"");
+        assertThat(html).contains("'rowcount.consistent': \"Consistent\"");
+        assertThat(html).contains("'rowcount.mismatch': \"Mismatch\"");
+        assertThat(html).contains("'rowcount.timeout': \"Timed out\"");
+        assertThat(html).contains("'rowcount.badgeClean': \"All consistent\"");
+    }
 }
