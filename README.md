@@ -24,7 +24,7 @@
 | **下载（GitHub）** | [github.com/vfaner/jync/releases/latest](https://github.com/vfaner/jync/releases/latest) |
 | **下载（Gitee）** | [gitee.com/super_rgh/jync/releases/latest](https://gitee.com/super_rgh/jync/releases/latest) |
 | **官网** | [jync.qqmu.com](https://jync.qqmu.com) |
-| **视频演示** | [Bilibili · 19 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+| **视频演示** | [Bilibili · 26 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
 
 ---
 

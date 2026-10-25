@@ -24,7 +24,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | **Download (GitHub)** | [github.com/vfaner/jync/releases/latest](https://github.com/vfaner/jync/releases/latest) |
 | **Download (Gitee)** | [gitee.com/super_rgh/jync/releases/latest](https://gitee.com/super_rgh/jync/releases/latest) |
 | **Website** | [jync.qqmu.com](https://jync.qqmu.com) |
-| **Video walkthrough** | [Bilibili · 19 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+| **Video walkthrough** | [Bilibili · 26 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
 
 ---
 
