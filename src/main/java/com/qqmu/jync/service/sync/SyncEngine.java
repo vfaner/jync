@@ -1081,8 +1081,8 @@ public class SyncEngine {
     private void recordDataLog(SyncContext ctx, TableMeta table, CursorStrategy strategy,
                                DataSyncService.TableSyncResult tableResult, ChangeType changeType,
                                int rows, long durationMs) {
-        String scanned = tableResult.getRowsWritten() > rows
-                ? " (" + tableResult.getRowsWritten() + " scanned)" : "";
+        String scanned = scanDetail(rows, tableResult.getRowsChanged(),
+                tableResult.getRowsWritten(), tableResult.isInitialLoad());
         String phase = tableResult.isInitialLoad() ? "Initial load: " : "Incremental sync: ";
         String verb = changeType == ChangeType.INSERT ? " inserted" : " updated";
         stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(), changeType,
@@ -1090,6 +1090,29 @@ public class SyncEngine {
                         + strategy.getKind().name().toLowerCase() + " strategy"
                         + (strategy.getColumn() != null ? " on " + strategy.getColumn() : ""),
                 true, durationMs, rows);
+    }
+
+    /**
+     * The " (N scanned[, K already up to date])" detail, or empty when the scan changed as
+     * many rows as it read.
+     *
+     * <p>An initial load can re-read rows the target already holds: a table recreated or
+     * partly seeded in an earlier pass leaves rows whose values are identical, and the upsert
+     * changes nothing for them (MySQL reports zero affected rows). Saying so keeps
+     * "50 row(s) inserted (53 scanned)" from looking like a miscount next to a 53-row target.
+     * Incremental windows and full-compare cycles rescan a margin or a whole table by design,
+     * so the clause is initial-load only — there it would be per-cycle noise.
+     */
+    static String scanDetail(int rows, int changedRows, int scannedRows, boolean initialLoad) {
+        if (scannedRows <= rows) {
+            return "";
+        }
+        String detail = scannedRows + " scanned";
+        int upToDate = scannedRows - changedRows;
+        if (initialLoad && upToDate > 0) {
+            detail += ", " + upToDate + " already up to date";
+        }
+        return " (" + detail + ")";
     }
 
     /** Clears all progress and snapshots, forcing the next run to do a full reload. */

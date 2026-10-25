@@ -684,7 +684,7 @@ Main settings in `application.yml` (the `sync.*` prefix):
 3. **Task detail** → select tables, views and procedures; enter a target table name on the right when it differs (empty means the same name).
 4. Configure **capture strategy, schedule, full-load performance and column cleansing** as needed.
 5. Use **Sync now** for a trial cycle, or **Enable automatic sync** for continuous incremental sync.
-6. Watch per-cycle detail in the **Change log** and overall state on the **Dashboard**.
+6. Watch per-cycle detail in the **Change log** and overall state on the **Dashboard**. When an initial load finds rows the target already holds, the entry reads `50 row(s) inserted (53 scanned, 3 already up to date)` — scanned, written and already-current counts side by side, so it reconciles directly with the target's row count.
 7. To confirm both sides hold the same data, open **Check row counts** in the task's per-table progress card: the audit runs only after you confirm, and marks each table consistent, mismatched, missing or timed out.
 
 ---
@@ -780,7 +780,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**2379 tests: 2378 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
+**2410 tests: 2409 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
 
 Coverage highlights:
 
