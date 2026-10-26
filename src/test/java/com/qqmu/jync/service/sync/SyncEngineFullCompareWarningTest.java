@@ -182,6 +182,31 @@ class SyncEngineFullCompareWarningTest {
                         && message.contains("reads and writes"));
     }
 
+    /**
+     * The once-per-process throttle is per project: resetting or deleting a project drops its
+     * entries, so the next run warns afresh instead of staying silent on a stale memory.
+     */
+    @Test
+    void evictingTheProjectLetsTheWarningBeIssuedAgain() throws SQLException {
+        properties.setFullCompareMaxRows(0L);
+        engine.runCycle(ctx());
+        engine.runCycle(ctx());
+        engine.evictProjectCaches(11L);
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(SyncEngine.class);
+        try {
+            engine.runCycle(ctx());
+        } finally {
+            LogCapture.detach(SyncEngine.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .as("an evicted project must not keep a stale throttle entry")
+                .anyMatch(message -> message.contains("BIG")
+                        && (message.contains("FULL_COMPARE")
+                                || message.contains("full compare")));
+    }
+
     @Test
     void aPollingProjectDoesNotProduceTheWarning() {
         SyncConfig polling = new SyncConfig();

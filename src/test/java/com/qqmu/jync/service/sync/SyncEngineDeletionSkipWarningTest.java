@@ -151,6 +151,30 @@ class SyncEngineDeletionSkipWarningTest {
         }
     }
 
+    /**
+     * The one-warning rule is per project, not per process. Resetting or deleting a project
+     * drops its cached entries so the next run starts clean; a leftover "already warned" entry
+     * would silence the note for a table nobody has been told about since the reset.
+     */
+    @Test
+    void evictingTheProjectLetsTheSkipBeReportedAgain() throws SQLException {
+        engine.runCycle(ctx());
+        engine.runCycle(ctx());
+        engine.evictProjectCaches(11L);
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(SyncEngine.class);
+        try {
+            engine.runCycle(ctx());
+        } finally {
+            LogCapture.detach(SyncEngine.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .as("an evicted project must not keep a stale throttle entry")
+                .anyMatch(message -> message.contains("BIG")
+                        && message.contains("Deletion sync"));
+    }
+
     private SyncContext ctx() {
         SyncConfig config = new SyncConfig();
         config.getTables().add("BIG");

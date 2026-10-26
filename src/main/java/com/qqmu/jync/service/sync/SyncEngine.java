@@ -1246,14 +1246,18 @@ public class SyncEngine {
     }
 
     /**
-     * Drops this project's in-memory throttle entries. The audit map is keyed
-     * {@code projectId:tableName} and only ever grows otherwise — project deletion and table
-     * renames would strand their entries for the life of the process.
+     * Drops this project's in-memory throttle entries. They are all keyed
+     * {@code projectId:...} and only ever grow otherwise — project deletion and table renames
+     * would strand their entries for the life of the process. The two "already warned" sets
+     * belong here for the same reason: a reset or a delete must not leave the project silent
+     * on a note nobody has seen since.
      */
     public void evictProjectCaches(Long projectId) {
         String prefix = projectId + ":";
         lastRowCountAudit.keySet().removeIf(key -> key.startsWith(prefix));
         verifiedTables.removeIf(key -> key.startsWith(prefix));
+        warnedOversizedFullCompare.removeIf(key -> key.startsWith(prefix));
+        warnedDeletionSkips.removeIf(key -> key.startsWith(prefix));
         structureSync.evictProject(projectId);
     }
 }
