@@ -1540,7 +1540,10 @@
       badge.hidden = true;
       return;
     }
-    var text = badge.dataset.label || '';
+    // 同一版本号、只有安装包被重新发布时，不能用「发现新版本」的措辞
+    var text = (payload.artifactUpdated
+      ? (badge.dataset.labelArtifact || badge.dataset.label)
+      : badge.dataset.label) || '';
     if (payload.latestVersion) {
       text += ' v' + payload.latestVersion;
     }
@@ -1566,6 +1569,7 @@
       try {
         window.sessionStorage.setItem(NAV_UPDATE_CACHE_KEY, JSON.stringify({
           updateAvailable: !!payload.updateAvailable,
+          artifactUpdated: !!payload.artifactUpdated,
           latestVersion: payload.latestVersion || null
         }));
       } catch (e) {
@@ -1574,6 +1578,27 @@
       showNavUpdateBadge(badge, payload);
     }).catch(function () {
       // 离线或请求超时：有缓存就保留，没有就保持安静
+    });
+  }
+
+  /* ─── 忽略「同一版本号的安装包已重新发布」提示（settings 页，仅管理员） ──
+     自建 jar 或镜像还没同步时这条提示不会自己消失，永远亮着等于没有提示。
+     服务端记住的是当前发布的那个安装包（sha256 或大小），发布方再传新文件就会重新提醒。
+     记下之后整页刷新：卡片和导航圆点都由服务端渲染，只有重新要一次才能保持一致。 */
+  function bindArtifactDismiss() {
+    var btn = document.getElementById('artifact-dismiss-btn');
+    if (!btn || !btn.dataset.url) { return; }
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      postJson(btn.dataset.url).then(function (payload) {
+        if (payload && payload.success) {
+          window.location.reload();
+        } else {
+          btn.disabled = false;
+        }
+      }).catch(function () {
+        btn.disabled = false;
+      });
     });
   }
 
@@ -2419,6 +2444,7 @@
     bindDonate();
     bindGenericModals();
     bindNavUpdateBadge();
+    bindArtifactDismiss();
     bindUpgrade();
     bindUserMenu();
     initConfigDirtyTracking();

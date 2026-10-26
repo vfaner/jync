@@ -432,9 +432,12 @@
                     <svg class="ico"><use href="#check-lg"/></svg>
                     <span th:text="#{settings.upToDate}">Up to date</span>
                 </span>
-                <th:block th:if="${versionInfo.state.name() == 'UPDATE_AVAILABLE'}">
+                <th:block th:if="${(versionInfo.state.name() == 'UPDATE_AVAILABLE')
+                                    or (versionInfo.state.name() == 'ARTIFACT_UPDATED')}">
                     <!--/* 管理员：升级弹窗（下载→校验→替换 jar→提示重启）；
-                         发布页链接降级为幽灵按钮，保留手动兜底 */-->
+                         发布页链接降级为幽灵按钮，保留手动兜底。
+                         同一版本号但制品被重新发布（SHA/大小与本地不同）也走这条链路：
+                         版本号没变，可字节变了，能装的只有这一条路。 */-->
                     <button type="button" class="btn btn-warn btn-sm" th:if="${isAdmin}"
                             id="upgrade-open-btn" data-open-modal="upgrade-modal">
                         <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
@@ -446,6 +449,15 @@
                         <svg class="ico"><use href="#box-arrow-up-right"/></svg>
                         <span th:text="#{settings.releasePage}">Release page</span>
                     </a>
+                    <!--/* 同一版本号的重发提示可以忽略：自建 jar、镜像还没同步时它不会自己消失，
+                         而永远不会消失的提示等于没有提示。记住的是这个安装包本身，
+                         发布方再传新文件时会重新提醒。 */-->
+                    <button type="button" class="btn btn-ghost btn-sm"
+                            th:if="${isAdmin and versionInfo.state.name() == 'ARTIFACT_UPDATED'}"
+                            id="artifact-dismiss-btn"
+                            th:data-url="@{/api/version/artifact/dismiss}"
+                            th:title="#{settings.artifactDismissHelp}"
+                            th:text="#{settings.artifactDismiss}">Dismiss</button>
                     <!-- 只读用户：维持原样，新开标签页去发布页手动升级 -->
                     <a class="btn btn-warn btn-sm" target="_blank" rel="noopener noreferrer"
                        th:if="${!isAdmin and versionInfo.releaseUrl != null}"
@@ -454,9 +466,17 @@
                         <span th:text="#{settings.updateNow}">Update now</span>
                     </a>
                     <span class="small soft">
-                        <span th:text="#{settings.updateAvailable}">New version available</span>
+                        <span th:if="${versionInfo.state.name() == 'UPDATE_AVAILABLE'}"
+                              th:text="#{settings.updateAvailable}">New version available</span>
+                        <span th:if="${versionInfo.state.name() == 'ARTIFACT_UPDATED'}"
+                              th:text="#{settings.artifactUpdated}">Package re-published under the same version</span>
                         <span class="mono" th:text="'v' + ${versionInfo.latestVersion}">vX.Y.Z</span>
-                        <span th:if="${versionInfo.latestPublishedDate}"
+                        <!--/* 版本号没变时，发布页日期不会动；真正变了的是安装包自身的上传日期 */-->
+                        <span th:if="${(versionInfo.state.name() == 'ARTIFACT_UPDATED')
+                                      and versionInfo.latestArtifactDate != null}"
+                              th:text="'(' + ${versionInfo.latestArtifactDate} + ')'">(YYYY-MM-DD)</span>
+                        <span th:if="${(versionInfo.state.name() != 'ARTIFACT_UPDATED')
+                                      and versionInfo.latestPublishedDate != null}"
                               th:text="'(' + ${versionInfo.latestPublishedDate} + ')'">(YYYY-MM-DD)</span>
                     </span>
                 </th:block>
@@ -495,7 +515,15 @@
                 <dd>
                     <th:block th:if="${versionInfo.latestVersion}">
                         <span class="chip mono" th:text="'v' + ${versionInfo.latestVersion}">vX.Y.Z</span>
-                        <span class="small soft" th:if="${versionInfo.latestPublishedDate}"
+                        <!--/* 版本号相同、只是安装包被重新发布时，发布页日期不会变；这里要显示的是
+                             真正变化的那一天：安装包自身的上传日期。 */-->
+                        <span class="small soft"
+                              th:if="${(versionInfo.state.name() == 'ARTIFACT_UPDATED')
+                                      and versionInfo.latestArtifactDate != null}"
+                              th:text="${versionInfo.latestArtifactDate}">YYYY-MM-DD</span>
+                        <span class="small soft"
+                              th:if="${(versionInfo.state.name() != 'ARTIFACT_UPDATED')
+                                      and versionInfo.latestPublishedDate != null}"
                               th:text="${versionInfo.latestPublishedDate}">YYYY-MM-DD</span>
                     </th:block>
                     <span class="muted" th:unless="${versionInfo.latestVersion}">—</span>

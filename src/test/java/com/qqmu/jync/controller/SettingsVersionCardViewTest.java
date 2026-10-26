@@ -157,6 +157,91 @@ class SettingsVersionCardViewTest {
         assertThat(page).contains("upgrade-ready-badge");
     }
 
+    /**
+     * Same version number, different bytes: the in-app upgrade is still offered, but the words
+     * must not announce a "new version" the user is already running — only the package moved.
+     */
+    @Test
+    void aRePublishedArtifactUnderTheSameVersionOffersTheUpgradeAndSaysWhatChanged() throws Exception {
+        String page = render(base()
+                .currentVersion("1.8.0")
+                .state(VersionInfo.State.ARTIFACT_UPDATED)
+                .latestVersion("1.8.0").latestTag("v1.8.0")
+                .releaseUrl(RELEASE_URL)
+                .latestPublishedDate("2026-10-24")
+                .latestArtifactDate("2026-10-25")
+                .build());
+
+        assertThat(page).contains("一键升级");
+        assertThat(page).containsPattern(
+                "class=\"btn btn-warn btn-sm\"[^>]*data-open-modal=\"upgrade-modal\"");
+        assertThat(page).contains("同一版本号的安装包已重新发布");
+        // The date that actually moved is the asset's own upload date, not the release date.
+        assertThat(page).contains("2026-10-25");
+        assertThat(page).doesNotContain("2026-10-24");
+        assertThat(page).doesNotContain("发现新版本：</span>");
+        assertThat(page).doesNotContain("badge-ok");
+    }
+
+    /**
+     * The notice is dismissible by an admin — a self-built jar or a lagging mirror would
+     * otherwise keep it lit forever, and a badge that never goes away stops being read.
+     * A viewer has no way to act on it and never sees the button.
+     */
+    @Test
+    void onlyAnAdminCanDismissTheArtifactNotice() throws Exception {
+        VersionInfo info = base()
+                .currentVersion("1.8.0")
+                .state(VersionInfo.State.ARTIFACT_UPDATED)
+                .latestVersion("1.8.0").latestTag("v1.8.0")
+                .latestArtifactDate("2026-10-25")
+                .build();
+
+        String admin = render(info);
+        assertThat(admin).contains("id=\"artifact-dismiss-btn\"");
+        assertThat(admin).contains("data-url=\"/api/version/artifact/dismiss\"");
+        assertThat(admin).contains("忽略此提示");
+
+        String viewer = renderAs(UserRole.VIEWER, info);
+        assertThat(viewer).doesNotContain("artifact-dismiss-btn");
+    }
+
+    /** A genuinely newer release is not a matter of taste, so no dismiss button there. */
+    @Test
+    void aRealNewVersionOffersNoDismissButton() throws Exception {
+        String page = render(base()
+                .state(VersionInfo.State.UPDATE_AVAILABLE)
+                .latestVersion("1.2.0").latestTag("v1.2.0")
+                .releaseUrl(RELEASE_URL)
+                .build());
+
+        assertThat(page).doesNotContain("artifact-dismiss-btn");
+    }
+
+    /** Same version or not, the pending-restart badge must not claim a "new version". */
+    @Test
+    void restartPendingBadgeSpeaksOfThePackageNotANewVersion() throws Exception {
+        String page = render(base()
+                .state(VersionInfo.State.UP_TO_DATE)
+                .latestVersion("1.1.1")
+                .build());
+
+        assertThat(page).contains("安装包已下载");
+        assertThat(page).doesNotContain("新版本已下载");
+    }
+
+    /** The nav dot is worded from its own label so it cannot claim a newer version. */
+    @Test
+    void theNavBadgeCarriesWordingForARePublishedArtifact() throws Exception {
+        String page = render(base()
+                .state(VersionInfo.State.UP_TO_DATE)
+                .latestVersion("1.8.0")
+                .build());
+
+        assertThat(page).contains("data-label=\"发现新版本：\"");
+        assertThat(page).contains("data-label-artifact=\"安装包已更新\"");
+    }
+
     @Test
     void restartingCopyPromisesTheAutomaticRefresh() throws Exception {
         // 重启由 app.js 轮询 /login/local 完成后自动 reload；文案要如实告诉用户，

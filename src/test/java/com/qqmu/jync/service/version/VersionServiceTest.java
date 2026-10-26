@@ -93,12 +93,69 @@ class VersionServiceTest {
         }
     }
 
+    /** Answers "same bytes / different bytes / cannot tell" and records what it was asked. */
+    private static final class FakeArtifactComparison implements ArtifactComparison {
+        private ArtifactComparison.Result result = ArtifactComparison.Result.UNKNOWN;
+        private final AtomicInteger calls = new AtomicInteger();
+        private ReleaseFeed.Release asked;
+
+        FakeArtifactComparison answer(ArtifactComparison.Result answered) {
+            this.result = answered;
+            return this;
+        }
+
+        @Override
+        public ArtifactComparison.Result compare(ReleaseFeed.Release release) {
+            calls.incrementAndGet();
+            asked = release;
+            return result;
+        }
+    }
+
+    /** Records what an admin dismissed, in memory; the JPA-backed one is tested separately. */
+    private static final class FakeDismissal implements ArtifactDismissal {
+        private String key;
+        private final AtomicInteger dismissals = new AtomicInteger();
+
+        @Override
+        public String dismissedKey() {
+            return key;
+        }
+
+        @Override
+        public void dismiss(String newKey) {
+            key = newKey;
+            dismissals.incrementAndGet();
+        }
+    }
+
     private static ReleaseFeed.Release release(String tag, String url, String body) {
         return new ReleaseFeed.Release(tag, url, PUBLISHED, body);
     }
 
+    /** A release carrying the fixed-name jar asset, as both real feeds deliver it. */
+    private static ReleaseFeed.Release releaseWithJar(String tag, String sha256, Instant uploaded) {
+        return new ReleaseFeed.Release(tag, "https://github.com/o/r/releases/tag/" + tag,
+                PUBLISHED, "body",
+                List.of(new ReleaseFeed.Asset(ReleaseFeed.JAR_ASSET_NAME,
+                        "https://github.com/o/r/releases/download/" + tag + "/jync.jar",
+                        83_502_549L, sha256, uploaded)),
+                ReleaseFeed.Source.GITHUB);
+    }
+
     private static VersionService service(String current, ReleaseFeed feed, boolean enabled) {
         return new VersionService(() -> current, feed, enabled);
+    }
+
+    private static VersionService serviceWithComparison(String current, ReleaseFeed feed,
+                                                        ArtifactComparison comparison) {
+        return new VersionService(() -> current, feed, comparison, true);
+    }
+
+    private static VersionService serviceWithComparison(String current, ReleaseFeed feed,
+                                                        ArtifactComparison comparison,
+                                                        ArtifactDismissal dismissal) {
+        return new VersionService(() -> current, feed, comparison, dismissal, true);
     }
 
     @Test
@@ -124,6 +181,168 @@ class VersionServiceTest {
         assertThat(info.getState()).isEqualTo(VersionInfo.State.UPDATE_AVAILABLE);
         assertThat(info.getLatestVersion()).isEqualTo("1.2.0");
         assertThat(info.getReleaseUrl()).endsWith("/v1.2.0");
+    }
+
+    /**
+     * v1.8.0 was re-uploaded three times under the same tag while the number stayed put, so
+     * "same version" is not "same bytes". When the artifact provably changed, the card must say
+     * so and offer the upgrade — otherwise hosts on the older upload never learn about it.
+     */
+    @Test
+    void aRePublishedArtifactUnderTheSameVersionIsReportedAsArtifactUpdated() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.8.0", "ab".repeat(32),
+                Instant.parse("2026-10-25T01:07:45Z"));
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT);
+
+        VersionInfo info = serviceWithComparison("1.8.0", feed, comparison).snapshot();
+
+        assertThat(info.getState()).isEqualTo(VersionInfo.State.ARTIFACT_UPDATED);
+        assertThat(info.getLatestVersion()).isEqualTo("1.8.0");
+        // The asset's own upload time, not the release's publish date: only the former moves
+        // when a jar is replaced under an existing tag.
+        assertThat(info.getLatestArtifactDate()).isEqualTo("2026-10-25");
+        assertThat(comparison.calls).hasValue(1);
+        assertThat(comparison.asked).isSameAs(feed.latest);
+    }
+
+    @Test
+    void theSameBytesUnderTheSameVersionStayUpToDate() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.8.0", "ab".repeat(32), PUBLISHED);
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.SAME);
+
+        VersionInfo info = serviceWithComparison("1.8.0", feed, comparison).snapshot();
+
+        assertThat(info.getState()).isEqualTo(VersionInfo.State.UP_TO_DATE);
+    }
+
+    @Test
+    void anUnanswerableArtifactComparisonStaysUpToDate() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.8.0", null, null);
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.UNKNOWN);
+
+        VersionInfo info = serviceWithComparison("1.8.0", feed, comparison).snapshot();
+
+        assertThat(info.getState()).isEqualTo(VersionInfo.State.UP_TO_DATE);
+    }
+
+    @Test
+    void aNewerVersionNeverSpendsAProbeOnTheArtifact() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.2.0", "ab".repeat(32), PUBLISHED);
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT);
+
+        VersionInfo info = serviceWithComparison("1.1.1", feed, comparison).snapshot();
+
+        assertThat(info.getState()).isEqualTo(VersionInfo.State.UPDATE_AVAILABLE);
+        assertThat(comparison.calls).hasValue(0);
+    }
+
+    /**
+     * A jar the admin already dismissed (local rebuild, mirror lag) must not keep nagging —
+     * otherwise the badge is a permanent decoration and stops meaning anything.
+     */
+    @Test
+    void aDismissedArtifactIsNotReportedAgain() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.8.0", "ab".repeat(32), PUBLISHED);
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT);
+        FakeDismissal dismissal = new FakeDismissal();
+        dismissal.dismiss("sha256:" + "ab".repeat(32));
+
+        VersionInfo info = serviceWithComparison("1.8.0", feed, comparison, dismissal).snapshot();
+
+        assertThat(info.getState()).isEqualTo(VersionInfo.State.UP_TO_DATE);
+    }
+
+    /** The next upload changes the digest, so the old dismissal must not keep it quiet. */
+    @Test
+    void aNewUploadIsReportedAgainEvenAfterADismissal() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.8.0", "cd".repeat(32), PUBLISHED);
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT);
+        FakeDismissal dismissal = new FakeDismissal();
+        dismissal.dismiss("sha256:" + "ab".repeat(32));
+
+        VersionInfo info = serviceWithComparison("1.8.0", feed, comparison, dismissal).snapshot();
+
+        assertThat(info.getState()).isEqualTo(VersionInfo.State.ARTIFACT_UPDATED);
+    }
+
+    /** Dismissing stores the published bytes' identity, not the running jar's. */
+    @Test
+    void dismissArtifactRecordsThePublishedIdentity() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.8.0", "ab".repeat(32), PUBLISHED);
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT);
+        FakeDismissal dismissal = new FakeDismissal();
+        VersionService versionService =
+                serviceWithComparison("1.8.0", feed, comparison, dismissal);
+        assertThat(versionService.snapshot().getState())
+                .isEqualTo(VersionInfo.State.ARTIFACT_UPDATED);
+
+        assertThat(versionService.dismissArtifact()).isTrue();
+
+        assertThat(dismissal.dismissals).hasValue(1);
+        assertThat(dismissal.key).isEqualTo("sha256:" + "ab".repeat(32));
+        // The page reloads right after dismissing: the cache must already answer quietly.
+        assertThat(versionService.snapshot().getState()).isEqualTo(VersionInfo.State.UP_TO_DATE);
+    }
+
+    /** A feed without a digest still yields a stable identity, so Gitee can be dismissed too. */
+    @Test
+    void withoutADigestTheDismissalIdentityIsTheFileSize() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.8.0", null, PUBLISHED);
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT);
+        FakeDismissal dismissal = new FakeDismissal();
+        VersionService versionService =
+                serviceWithComparison("1.8.0", feed, comparison, dismissal);
+        versionService.snapshot();
+
+        versionService.dismissArtifact();
+
+        assertThat(dismissal.key).isEqualTo("size:83502549");
+    }
+
+    @Test
+    void dismissArtifactWithoutAPublishedJarReportsNothingToDismiss() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = release("v1.1.1", "u", "b");
+        FakeDismissal dismissal = new FakeDismissal();
+        VersionService versionService =
+                serviceWithComparison("1.1.1", feed, new FakeArtifactComparison(), dismissal);
+        versionService.snapshot();
+
+        assertThat(versionService.dismissArtifact()).isFalse();
+        assertThat(dismissal.dismissals).hasValue(0);
+    }
+
+    /** The nav dot asks the same question; a dismissal must silence it as well. */
+    @Test
+    void clickCheckStaysQuietAfterADismissal() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v1.8.0", "ab".repeat(32), PUBLISHED);
+        FakeDismissal dismissal = new FakeDismissal();
+        dismissal.dismiss("sha256:" + "ab".repeat(32));
+        VersionService versionService = serviceWithComparison("1.8.0", feed,
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT),
+                dismissal);
+
+        var check = versionService.checkNow();
+
+        assertThat(check.updateAvailable()).isFalse();
+        assertThat(check.artifactUpdated()).isFalse();
     }
 
     @Test
@@ -310,6 +529,42 @@ class VersionServiceTest {
         assertThat(check.releaseUrl())
                 .isEqualTo("https://github.com/vfaner/jync/releases/tag/v1.7.10");
         assertThat(feed.calls).containsExactly(Source.GITHUB);
+    }
+
+    /**
+     * The nav badge is driven by the click-triggered check, so it has to light up for a
+     * re-published artifact too — that is the only signal a host on the older v1.8.0 upload
+     * will ever get. {@code artifactUpdated} tells the badge to word it differently instead
+     * of announcing "new version v1.8.0" to someone already on v1.8.0.
+     */
+    @Test
+    void clickCheckReportsARePublishedArtifactAsAnUpdate() {
+        SourceAwareFakeFeed feed = new SourceAwareFakeFeed().answer(Source.GITHUB,
+                releaseWithJar("v1.8.0", "ab".repeat(32), Instant.parse("2026-10-25T01:07:45Z")));
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT);
+
+        VersionService.UpdateCheck check =
+                new VersionService(() -> "1.8.0", feed, feed, comparison, true).checkNow();
+
+        assertThat(check.checked()).isTrue();
+        assertThat(check.updateAvailable()).isTrue();
+        assertThat(check.artifactUpdated()).isTrue();
+        assertThat(check.latestVersion()).isEqualTo("1.8.0");
+    }
+
+    @Test
+    void clickCheckStaysQuietWhenTheSameVersionStillHasTheSameBytes() {
+        SourceAwareFakeFeed feed = new SourceAwareFakeFeed().answer(Source.GITHUB,
+                releaseWithJar("v1.8.0", "ab".repeat(32), PUBLISHED));
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.SAME);
+
+        VersionService.UpdateCheck check =
+                new VersionService(() -> "1.8.0", feed, feed, comparison, true).checkNow();
+
+        assertThat(check.updateAvailable()).isFalse();
+        assertThat(check.artifactUpdated()).isFalse();
     }
 
     @Test

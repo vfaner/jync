@@ -17,6 +17,11 @@ public class VersionInfo {
         UP_TO_DATE,
         /** A newer release exists on the remote. */
         UPDATE_AVAILABLE,
+        /**
+         * The newest tag equals the running version, but the jar published under it is not the
+         * bytes this JVM runs — the release was re-uploaded under an unchanged tag.
+         */
+        ARTIFACT_UPDATED,
         /** First check after boot has not completed yet; nothing is being blocked on it. */
         CHECKING,
         /** Remote could not be reached or parsed (offline intranet, rate limit, bad URL). */
@@ -35,6 +40,11 @@ public class VersionInfo {
     private final String releaseUrl;
     /** Publish date of the newest release, {@code yyyy-MM-dd}; may be null. */
     private final String latestPublishedDate;
+    /**
+     * Upload date of the newest release's jar, {@code yyyy-MM-dd}; may be null. Differs from
+     * {@code latestPublishedDate} exactly when the asset was replaced under the same tag.
+     */
+    private final String latestArtifactDate;
     /** Which feed answered (GitHub directly or the Gitee fallback); may be null. */
     private final ReleaseFeed.Source latestSource;
     private final State state;

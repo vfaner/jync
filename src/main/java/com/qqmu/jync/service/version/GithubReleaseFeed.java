@@ -152,7 +152,11 @@ public class GithubReleaseFeed implements ReleaseFeed {
             }
             long size = asset.path("size").asLong(0L);
             assets.add(new Asset(name, downloadUrl, size > 0 ? size : null,
-                    parseSha256(asset.path("digest").asText(null))));
+                    parseSha256(asset.path("digest").asText(null)),
+                    // An asset re-uploaded under the same tag keeps the release's published_at
+                    // but moves updated_at; the latter is what dates the bytes.
+                    parseInstant(asset.path("updated_at").asText(null),
+                            asset.path("created_at").asText(null))));
         }
         Instant publishedAt = null;
         if (published != null && !published.isBlank()) {
@@ -160,6 +164,20 @@ public class GithubReleaseFeed implements ReleaseFeed {
         }
         return new Release(tag, htmlUrl, publishedAt, releaseBody,
                 List.copyOf(assets), Source.GITHUB);
+    }
+
+    /** First parseable of the two ISO instants; null when neither is present or valid. */
+    private static Instant parseInstant(String primary, String fallback) {
+        for (String value : new String[]{primary, fallback}) {
+            if (value != null && !value.isBlank()) {
+                try {
+                    return Instant.parse(value.trim());
+                } catch (RuntimeException ignored) {
+                    // Fall through to the next candidate.
+                }
+            }
+        }
+        return null;
     }
 
     /**

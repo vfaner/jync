@@ -46,6 +46,10 @@ public class VersionService {
     private final ReleaseFeed feed;
     /** Per-mirror access for the click-triggered check; null in tests that only stub one feed. */
     private final SourceAwareFeed sourceAwareFeed;
+    /** Whether the published jar is the running one; null when the caller wires no comparison. */
+    private final ArtifactComparison artifactComparison;
+    /** What an admin already acknowledged; null in tests that do not exercise dismissal. */
+    private final ArtifactDismissal dismissal;
     private final boolean enabled;
     /** Runs the network call off the request thread; a fresh daemon thread per refresh. */
     private final Executor refreshExecutor;
@@ -75,6 +79,8 @@ public class VersionService {
     public VersionService(ObjectProvider<BuildProperties> buildProperties,
                           ReleaseFeed feed,
                           SourceAwareFeed sourceAwareFeed,
+                          ArtifactComparison artifactComparison,
+                          ArtifactDismissal dismissal,
                           @Value("${app.update-check.enabled:true}") boolean enabled) {
         this(() -> {
             BuildProperties props = buildProperties.getIfAvailable();
@@ -83,24 +89,49 @@ public class VersionService {
             }
             String version = props.getVersion();
             return StringUtils.hasText(version) ? version.trim() : null;
-        }, feed, sourceAwareFeed, enabled, daemonExecutor());
+        }, feed, sourceAwareFeed, artifactComparison, dismissal, enabled, daemonExecutor());
     }
 
     /** Test seam: inject the "current" version and a fake feed; checks run inline. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed, boolean enabled) {
-        this(currentVersionSupplier, feed, asSourceAware(feed), enabled, Runnable::run);
+        this(currentVersionSupplier, feed, asSourceAware(feed), null, null, enabled,
+                Runnable::run);
     }
 
     /** Test seam with a controllable executor so the non-blocking behavior is observable. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed, boolean enabled,
                    Executor refreshExecutor) {
-        this(currentVersionSupplier, feed, asSourceAware(feed), enabled, refreshExecutor);
+        this(currentVersionSupplier, feed, asSourceAware(feed), null, null, enabled,
+                refreshExecutor);
     }
 
     /** Test seam for the click-triggered check, which needs to see each mirror's answer. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
                    SourceAwareFeed sourceAwareFeed, boolean enabled) {
-        this(currentVersionSupplier, feed, sourceAwareFeed, enabled, Runnable::run);
+        this(currentVersionSupplier, feed, sourceAwareFeed, null, null, enabled, Runnable::run);
+    }
+
+    /** Test seam for the artifact comparison (same-version, re-published jar). */
+    VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
+                   ArtifactComparison artifactComparison, boolean enabled) {
+        this(currentVersionSupplier, feed, asSourceAware(feed), artifactComparison, null, enabled,
+                Runnable::run);
+    }
+
+    /** Test seam for the dismissal of a re-published artifact. */
+    VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
+                   ArtifactComparison artifactComparison, ArtifactDismissal dismissal,
+                   boolean enabled) {
+        this(currentVersionSupplier, feed, asSourceAware(feed), artifactComparison, dismissal,
+                enabled, Runnable::run);
+    }
+
+    /** Test seam for both seams at once: per-mirror answers plus an artifact comparison. */
+    VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
+                   SourceAwareFeed sourceAwareFeed, ArtifactComparison artifactComparison,
+                   boolean enabled) {
+        this(currentVersionSupplier, feed, sourceAwareFeed, artifactComparison, null, enabled,
+                Runnable::run);
     }
 
     private static SourceAwareFeed asSourceAware(ReleaseFeed feed) {
@@ -108,11 +139,14 @@ public class VersionService {
     }
 
     private VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
-                           SourceAwareFeed sourceAwareFeed, boolean enabled,
-                           Executor refreshExecutor) {
+                           SourceAwareFeed sourceAwareFeed,
+                           ArtifactComparison artifactComparison, ArtifactDismissal dismissal,
+                           boolean enabled, Executor refreshExecutor) {
         this.currentVersionSupplier = currentVersionSupplier;
         this.feed = feed;
         this.sourceAwareFeed = sourceAwareFeed;
+        this.artifactComparison = artifactComparison;
+        this.dismissal = dismissal;
         this.enabled = enabled;
         this.refreshExecutor = refreshExecutor;
     }
@@ -165,6 +199,7 @@ public class VersionService {
                 .latestVersion(c.latestVersion)
                 .releaseUrl(c.releaseUrl)
                 .latestPublishedDate(c.latestPublishedDate)
+                .latestArtifactDate(c.latestArtifactDate)
                 .latestSource(c.latestSource)
                 .build();
     }
@@ -180,19 +215,24 @@ public class VersionService {
     public UpdateCheck checkNow() {
         String current = currentVersionSupplier.get();
         if (!enabled) {
-            return new UpdateCheck(false, false, current, null, null, null);
+            return new UpdateCheck(false, false, current, null, null, null, false);
         }
         ReleaseFeed.Release latest;
         try {
             latest = latestGithubFirst();
         } catch (Exception bothFailed) {
             log.debug("Click-triggered update check failed: {}", bothFailed.toString());
-            return new UpdateCheck(false, false, current, null, null, null);
+            return new UpdateCheck(false, false, current, null, null, null, false);
         }
         String latestVersion = stripV(latest.tag());
-        boolean newer = current != null && compareVersions(latestVersion, current) > 0;
-        return new UpdateCheck(true, newer, current, latestVersion, latest.tag(),
-                trustedReleaseUrl(latest.htmlUrl()));
+        int cmp = current == null ? 1 : compareVersions(latestVersion, current);
+        boolean newer = current != null && cmp > 0;
+        // Same version, different bytes: the release was re-uploaded under an unchanged tag.
+        // A version-number-only answer would call that "up to date" forever.
+        boolean artifactUpdated = current != null && cmp == 0
+                && artifactDiffers(latest) && !isDismissed(artifactKey(latest));
+        return new UpdateCheck(true, newer || artifactUpdated, current, latestVersion,
+                latest.tag(), trustedReleaseUrl(latest.htmlUrl()), artifactUpdated);
     }
 
     /**
@@ -216,7 +256,8 @@ public class VersionService {
      * (or the feature is off); the page then shows no badge at all.
      */
     public record UpdateCheck(boolean checked, boolean updateAvailable, String currentVersion,
-                              String latestVersion, String latestTag, String releaseUrl) {
+                              String latestVersion, String latestTag, String releaseUrl,
+                              boolean artifactUpdated) {
     }
 
     /** Submits a refresh unless one is already running; never throws into the request thread. */
@@ -246,21 +287,97 @@ public class VersionService {
             if (current == null) {
                 state = VersionInfo.State.UNKNOWN;
             } else {
-                state = compareVersions(latestVersion, current) > 0
-                        ? VersionInfo.State.UPDATE_AVAILABLE
-                        : VersionInfo.State.UP_TO_DATE;
+                int cmp = compareVersions(latestVersion, current);
+                if (cmp > 0) {
+                    state = VersionInfo.State.UPDATE_AVAILABLE;
+                } else if (cmp == 0 && artifactDiffers(latest)
+                        && !isDismissed(artifactKey(latest))) {
+                    state = VersionInfo.State.ARTIFACT_UPDATED;
+                } else {
+                    state = VersionInfo.State.UP_TO_DATE;
+                }
             }
             cached = new Cached(state, latest.tag(), latestVersion,
                     trustedReleaseUrl(latest.htmlUrl()),
                     latest.publishedAt() == null ? null : DATE.format(latest.publishedAt()),
+                    artifactDate(latest),
+                    artifactKey(latest),
                     latest.source(),
                     now.plus(POSITIVE_TTL));
         } catch (Exception e) {
             log.debug("Update check failed: {}", e.toString());
-            cached = new Cached(VersionInfo.State.UNKNOWN, null, null, null, null, null,
-                    now.plus(NEGATIVE_TTL));
+            cached = new Cached(VersionInfo.State.UNKNOWN, null, null, null, null, null, null,
+                    null, now.plus(NEGATIVE_TTL));
         }
         return cached;
+    }
+
+    /** True only when the feed says the published jar is provably not the running one. */
+    private boolean artifactDiffers(ReleaseFeed.Release release) {
+        if (artifactComparison == null) {
+            return false;
+        }
+        try {
+            return artifactComparison.compare(release) == ArtifactComparison.Result.DIFFERENT;
+        } catch (RuntimeException e) {
+            // The comparison is an optimization over the version check, never a failure path:
+            // a probe that blows up just leaves the answer at "same version".
+            log.debug("Artifact comparison failed: {}", e.toString());
+            return false;
+        }
+    }
+
+    /**
+     * Remembers that the published package may be kept, silencing the same-version notice until
+     * the publisher uploads different bytes. Returns false when nothing has been published yet
+     * (no successful check), which the caller surfaces as "nothing to dismiss".
+     */
+    public boolean dismissArtifact() {
+        Cached c = cached;
+        if (dismissal == null || c == null || c.artifactKey == null) {
+            return false;
+        }
+        try {
+            dismissal.dismiss(c.artifactKey);
+        } catch (RuntimeException e) {
+            // A metadata-store hiccup must not answer the page with a 500; the reload that
+            // follows simply shows the notice again.
+            log.debug("Could not record the artifact dismissal: {}", e.toString());
+            return false;
+        }
+        if (c.state == VersionInfo.State.ARTIFACT_UPDATED) {
+            // The page reloads immediately after dismissing; serving the stale ARTIFACT_UPDATED
+            // entry would light the notice right back up.
+            cached = new Cached(VersionInfo.State.UP_TO_DATE, c.latestTag, c.latestVersion,
+                    c.releaseUrl, c.latestPublishedDate, c.latestArtifactDate, c.artifactKey,
+                    c.latestSource, c.validUntil);
+        }
+        return true;
+    }
+
+    /** True when this exact published artifact was already acknowledged. */
+    private boolean isDismissed(String artifactKey) {
+        if (dismissal == null || artifactKey == null) {
+            return false;
+        }
+        try {
+            return artifactKey.equals(dismissal.dismissedKey());
+        } catch (RuntimeException e) {
+            log.debug("Could not read the artifact dismissal: {}", e.toString());
+            return false;
+        }
+    }
+
+    /** Identity of the published jar, or null when the release carries no such asset. */
+    private static String artifactKey(ReleaseFeed.Release release) {
+        ReleaseFeed.Asset jar = release.jarAsset(ReleaseFeed.JAR_ASSET_NAME);
+        return jar == null ? null : jar.identity();
+    }
+
+    /** Upload date of the published jar, or null when the feed does not report one. */
+    private static String artifactDate(ReleaseFeed.Release release) {
+        ReleaseFeed.Asset jar = release.jarAsset(ReleaseFeed.JAR_ASSET_NAME);
+        return jar == null || jar.updatedAt() == null ? null : DATE.format(jar.updatedAt());
     }
 
     /**
@@ -370,6 +487,7 @@ public class VersionService {
 
     private record Cached(VersionInfo.State state, String latestTag, String latestVersion,
                           String releaseUrl, String latestPublishedDate,
+                          String latestArtifactDate, String artifactKey,
                           ReleaseFeed.Source latestSource, Instant validUntil) {
     }
 }

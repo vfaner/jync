@@ -643,6 +643,7 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 | `sync.crypto-password` / `sync.crypto-salt` | *(留空自动生成)* | 连接密码加密密钥；全新库首启生成并写入 `<库名>.key`，旧库先用默认密钥启动再自动迁移 |
 | `sync.ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
 | `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求 |
+| `app.update-check.match-artifact` | `true` | 版本号相同时再比对安装包（GitHub 摘要 / Gitee 大小），仅「证明不同」才提示 |
 
 > 连接密码以 AES-256 加密存储，`enc:` 前缀防止重复加密。密钥留空时首启自动生成；一旦显式填写，就不会再生成 `<库名>.key`。
 

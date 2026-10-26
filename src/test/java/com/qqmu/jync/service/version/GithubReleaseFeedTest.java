@@ -78,6 +78,37 @@ class GithubReleaseFeedTest {
     }
 
     @Test
+    void assetUploadTimeComesFromUpdatedAtAndFallsBackToCreatedAt() throws Exception {
+        // v1.8.0 was re-uploaded under its own tag three times: the release kept its
+        // published_at while the jar's updated_at moved to the day of the last upload. That
+        // upload date is what the settings card shows when only the bytes changed.
+        String body = """
+                {
+                  "tag_name": "v1.8.0",
+                  "html_url": "https://github.com/vfaner/jync/releases/tag/v1.8.0",
+                  "published_at": "2026-10-24T06:19:53Z",
+                  "assets": [
+                    {"name": "jync.jar", "browser_download_url": "https://x/jync.jar",
+                     "size": 83502549, "created_at": "2026-10-25T01:07:45Z",
+                     "updated_at": "2026-10-25T01:07:54Z"},
+                    {"name": "only-created.jar", "browser_download_url": "https://x/oc.jar",
+                     "size": 1, "created_at": "2026-10-20T00:00:00Z"},
+                    {"name": "no-time.jar", "browser_download_url": "https://x/nt.jar",
+                     "size": 2, "created_at": "not-a-time", "updated_at": ""}
+                  ]
+                }
+                """;
+
+        var release = GithubReleaseFeed.parse(body);
+
+        assertThat(release.jarAsset("jync.jar").updatedAt())
+                .isEqualTo(java.time.Instant.parse("2026-10-25T01:07:54Z"));
+        assertThat(release.jarAsset("only-created.jar").updatedAt())
+                .isEqualTo(java.time.Instant.parse("2026-10-20T00:00:00Z"));
+        assertThat(release.jarAsset("no-time.jar").updatedAt()).isNull();
+    }
+
+    @Test
     void aMalformedDigestIsIgnoredRatherThanTrusted() throws Exception {
         String body = """
                 {

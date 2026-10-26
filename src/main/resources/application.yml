@@ -89,6 +89,10 @@ app:
     enabled: true
     # 单次请求超时（毫秒）：任一平台超过这个时长仍无结果即改查另一平台
     timeout-ms: 5000
+    # 版本号相同也要比对安装包：GitHub 用制品 digest，Gitee 退化为 HEAD 取 Content-Length。
+    # 只有「证明不同」才提示；证明不了（Gitee 无摘要、HEAD 失败、IDE 里跑 class 目录）
+    # 一律当作已是最新，不会误报。发布方重新上传同名 tag 的 jar 时靠它提醒升级。
+    match-artifact: true
   security:
     # 反向代理地址（逗号分隔，支持 IPv4/IPv6 CIDR），回环地址总是信任。
     # 只有这里列出的机器发来的 X-Forwarded-For / X-Real-IP 才会被采信；留空表示没有代理。

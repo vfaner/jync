@@ -36,9 +36,12 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import com.qqmu.jync.config.I18nConfig;
+import com.qqmu.jync.service.version.ArtifactComparison;
+import com.qqmu.jync.service.version.ReleaseFeed;
 import com.qqmu.jync.service.version.ReleaseFeed.Asset;
 import com.qqmu.jync.service.version.ReleaseFeed.Release;
 import com.qqmu.jync.service.version.ReleaseFeed.Source;
+import com.qqmu.jync.service.version.RunningJar;
 import com.qqmu.jync.service.version.SourceAwareFeed;
 import com.qqmu.jync.service.version.VersionService;
 
@@ -72,7 +75,7 @@ import lombok.extern.slf4j.Slf4j;
 public class UpgradeService {
 
     /** Fixed release asset name; the version lives in the tag, never in the file name. */
-    public static final String JAR_NAME = "jync.jar";
+    public static final String JAR_NAME = ReleaseFeed.JAR_ASSET_NAME;
     static final String BACKUP_SUFFIX = ".bak";
     static final String PART_SUFFIX = ".part";
     static final String MARKER_NAME = ".jync-update.properties";
@@ -171,6 +174,8 @@ public class UpgradeService {
     private final Supplier<Path> jarLocation;
     private final Supplier<Path> workDir;
     private final String port;
+    /** Whether the published jar is the running one; null when nothing was wired. */
+    private final ArtifactComparison artifactComparison;
     private final I18nConfig.MessageSourceAccessorHolder messages;
 
     /** Single in-flight upgrade: start() flips it, the terminal phase clears it. */
@@ -180,7 +185,8 @@ public class UpgradeService {
     public UpgradeService(Supplier<String> currentVersion, SourceAwareFeed feed,
                           JarDownloader downloader, RestartLauncher launcher, Shutdown shutdown,
                           Supplier<Path> jarLocation, Supplier<Path> workDir, String port,
-                          I18nConfig.MessageSourceAccessorHolder messages) {
+                          I18nConfig.MessageSourceAccessorHolder messages,
+                          ArtifactComparison artifactComparison) {
         this.currentVersion = currentVersion;
         this.feed = feed;
         this.downloader = downloader;
@@ -190,6 +196,7 @@ public class UpgradeService {
         this.workDir = workDir;
         this.port = port;
         this.messages = messages;
+        this.artifactComparison = artifactComparison;
         restoreReadyFromMarker();
     }
 
@@ -250,8 +257,15 @@ public class UpgradeService {
 
             String target = VersionService.stripV(release.tag());
             String current = currentVersion.get();
-            if (current != null && VersionService.compareVersions(target, current) <= 0) {
-                throw new IllegalStateException(text("error.upgrade.alreadyLatest", current));
+            if (current != null) {
+                int cmp = VersionService.compareVersions(target, current);
+                // Same version is no longer a blanket "nothing to do": a release re-uploaded
+                // under its own tag (v1.8.0 was, three times) ships different bytes, and only
+                // the artifact comparison can see that. It must be a proven difference —
+                // identical or unanswerable still means "already latest".
+                if (cmp < 0 || (cmp == 0 && !artifactProvablyDiffers(release))) {
+                    throw new IllegalStateException(text("error.upgrade.alreadyLatest", current));
+                }
             }
             Asset asset = release.jarAsset(JAR_NAME);
             if (asset == null || !StringUtils.hasText(asset.url())) {
@@ -465,6 +479,19 @@ public class UpgradeService {
         if (!expected.equalsIgnoreCase(computed)) {
             throw new LocalizedFailure(
                     new Localized("upgrade.failed.checksumMismatch", expected, computed), null);
+        }
+    }
+
+    /** True only when the published jar is provably not the running one. */
+    private boolean artifactProvablyDiffers(Release release) {
+        if (artifactComparison == null) {
+            return false;
+        }
+        try {
+            return artifactComparison.compare(release) == ArtifactComparison.Result.DIFFERENT;
+        } catch (RuntimeException e) {
+            log.debug("Upgrade: artifact comparison failed: {}", e.toString());
+            return false;
         }
     }
 
@@ -849,13 +876,7 @@ public class UpgradeService {
 
     /** Running jar (or classes dir when exploded); null when the location is unknowable. */
     static Path currentJarLocation() {
-        try {
-            var codeSource = UpgradeService.class.getProtectionDomain().getCodeSource();
-            return codeSource == null ? null : jarPathFromLocation(codeSource.getLocation());
-        } catch (Exception e) {
-            log.debug("Cannot resolve jar location: {}", e.toString());
-            return null;
-        }
+        return RunningJar.locate(UpgradeService.class);
     }
 
     /**
@@ -867,18 +888,7 @@ public class UpgradeService {
      * rejects it: there is no jar to replace.
      */
     static Path jarPathFromLocation(URL location) throws URISyntaxException {
-        if (location == null) {
-            return null;
-        }
-        if (!"jar".equalsIgnoreCase(location.getProtocol())) {
-            return Path.of(location.toURI());
-        }
-        String spec = location.toString();
-        int separator = spec.indexOf("!/");
-        if (separator < 0) {
-            return null;
-        }
-        return Path.of(URI.create(spec.substring("jar:".length(), separator)));
+        return RunningJar.fromLocation(location);
     }
 
     /**
@@ -891,7 +901,8 @@ public class UpgradeService {
         @Autowired
         public Bean(ObjectProvider<BuildProperties> buildProperties, SourceAwareFeed feed,
                     @Value("${server.port:8080}") String port,
-                    I18nConfig.MessageSourceAccessorHolder messages) {
+                    I18nConfig.MessageSourceAccessorHolder messages,
+                    ArtifactComparison artifactComparison) {
             super(() -> {
                         BuildProperties props = buildProperties.getIfAvailable();
                         String version = props == null ? null : props.getVersion();
@@ -904,7 +915,8 @@ public class UpgradeService {
                     UpgradeService::currentJarLocation,
                     () -> Path.of(System.getProperty("user.dir")),
                     port,
-                    messages);
+                    messages,
+                    artifactComparison);
         }
 
         @EventListener(ApplicationReadyEvent.class)

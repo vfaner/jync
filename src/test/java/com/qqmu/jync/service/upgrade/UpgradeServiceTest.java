@@ -31,6 +31,7 @@ import org.springframework.context.support.ResourceBundleMessageSource;
 import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.service.upgrade.UpgradeService.Localized;
 import com.qqmu.jync.service.upgrade.UpgradeService.Status;
+import com.qqmu.jync.service.version.ArtifactComparison;
 import com.qqmu.jync.service.version.ReleaseFeed.Asset;
 import com.qqmu.jync.service.version.ReleaseFeed.Release;
 import com.qqmu.jync.service.version.ReleaseFeed.Source;
@@ -120,6 +121,11 @@ class UpgradeServiceTest {
 
     private UpgradeService service(String currentVersion, ScriptedDownloader downloader,
                                    String port) {
+        return service(currentVersion, downloader, port, null);
+    }
+
+    private UpgradeService service(String currentVersion, ScriptedDownloader downloader,
+                                   String port, ArtifactComparison comparison) {
         return new UpgradeService(
                 () -> currentVersion,
                 feed,
@@ -129,7 +135,8 @@ class UpgradeServiceTest {
                 () -> jarFile,
                 () -> workDir,
                 port,
-                messages());
+                messages(),
+                comparison);
     }
 
     /**
@@ -322,11 +329,55 @@ class UpgradeServiceTest {
         feed.release = release(Source.GITEE, "v1.8.0", null);
         UpgradeService svc = new UpgradeService(
                 () -> "1.7.2", feed, downloader, launcher, shutdown,
-                () -> tempDir.resolve("classes"), () -> workDir, "8081", messages());
+                () -> tempDir.resolve("classes"), () -> workDir, "8081", messages(), null);
 
         assertThatThrownBy(() -> svc.start("GITEE"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("jar");
+    }
+
+    /**
+     * The reason the artifact comparison exists: v1.8.0 was re-uploaded under its own tag, so
+     * "already on 1.8.0" is not "nothing to install". Provable difference -> the upgrade runs;
+     * unprovable -> the old refusal stands, because reinstalling identical bytes is noise.
+     */
+    @Test
+    void sameVersionWithARePublishedArtifactCanBeInstalled() throws Exception {
+        byte[] nextJar = makeFatJar("re-published-bytes");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITHUB, "v1.8.0", (long) nextJar.length, sha256Of(nextJar));
+        UpgradeService svc = service("1.8.0", downloader, "8081",
+                release -> ArtifactComparison.Result.DIFFERENT);
+
+        svc.start("GITHUB");
+        awaitPhase(svc, UpgradeService.Phase.READY);
+
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+    }
+
+    @Test
+    void sameVersionIsRefusedWhenTheArtifactComparisonSaysSame() {
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        feed.release = release(Source.GITHUB, "v1.8.0", null);
+        UpgradeService svc = service("1.8.0", downloader, "8081",
+                release -> ArtifactComparison.Result.SAME);
+
+        assertThatThrownBy(() -> svc.start("GITHUB"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(downloader.blob).isNull();
+    }
+
+    @Test
+    void sameVersionIsRefusedWhenTheArtifactComparisonCannotTell() {
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        feed.release = release(Source.GITHUB, "v1.8.0", null);
+        UpgradeService svc = service("1.8.0", downloader, "8081",
+                release -> ArtifactComparison.Result.UNKNOWN);
+
+        assertThatThrownBy(() -> svc.start("GITHUB"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(downloader.blob).isNull();
     }
 
     @Test

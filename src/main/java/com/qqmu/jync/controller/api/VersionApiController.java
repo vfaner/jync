@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -35,10 +36,29 @@ public class VersionApiController {
         body.put("success", true);
         body.put("checked", check.checked());
         body.put("updateAvailable", check.updateAvailable());
+        // Same version, different published bytes: the badge words it differently.
+        body.put("artifactUpdated", check.artifactUpdated());
         body.put("currentVersion", check.currentVersion());
         body.put("latestVersion", check.latestVersion());
         body.put("latestTag", check.latestTag());
         body.put("releaseUrl", check.releaseUrl());
+        return body;
+    }
+
+    /**
+     * "Ignore this notice" for a package re-published under the running version. Every POST in
+     * this app is admin-only (see SecurityConfig), which is the right audience: the button is
+     * only rendered for admins.
+     *
+     * <p>Always answers {@code success=true}; {@code dismissed} says whether anything was
+     * recorded. Nothing to dismiss is not an error — the page reload that follows shows the
+     * real state either way.
+     */
+    @PostMapping("/artifact/dismiss")
+    public Map<String, Object> dismissArtifact() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("dismissed", versionService.dismissArtifact());
         return body;
     }
 }

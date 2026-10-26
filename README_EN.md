@@ -644,6 +644,7 @@ Main settings in `application.yml` (the `sync.*` prefix):
 | `sync.crypto-password` / `sync.crypto-salt` | *(generated when empty)* | Connection-password encryption key; a fresh store generates one into `<name>.key` on first boot, while older stores start on the default key and migrate automatically |
 | `sync.ai.enabled` | `true` | `false` removes the AI menu and endpoints |
 | `app.update-check.enabled` | `true` | Version check; `false` makes no outbound request |
+| `app.update-check.match-artifact` | `true` | When the version matches, compare the package too (GitHub digest / Gitee size); only a proven difference is reported |
 
 > Connection passwords are encrypted with AES-256 and carry an `enc:` prefix so they cannot be double-encrypted. If the key is left empty it is generated on first boot; once set explicitly, no `<name>.key` is written.
 
