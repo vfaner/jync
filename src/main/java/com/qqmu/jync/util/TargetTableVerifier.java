@@ -5,10 +5,12 @@ import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -236,9 +238,14 @@ public final class TargetTableVerifier {
                 if (reportedTable == null || !reportedTable.equalsIgnoreCase(tableName)) {
                     continue;
                 }
-                columns.put(rs.getString("COLUMN_NAME").toUpperCase(Locale.ROOT),
-                        new TargetColumn(rs.getInt("DATA_TYPE"), rs.getInt("COLUMN_SIZE"),
-                                rs.getString("TYPE_NAME")));
+                String columnName = rs.getString("COLUMN_NAME");
+                columns.put(columnName.toUpperCase(Locale.ROOT),
+                        new TargetColumn(columnName, rs.getInt("DATA_TYPE"),
+                                rs.getInt("COLUMN_SIZE"), rs.getString("TYPE_NAME"),
+                                optionalString(rs, "IS_NULLABLE"),
+                                optionalString(rs, "COLUMN_DEF"),
+                                optionalString(rs, "IS_AUTOINCREMENT"),
+                                optionalString(rs, "IS_GENERATEDCOLUMN")));
             }
         }
         return columns;
@@ -246,6 +253,116 @@ public final class TargetTableVerifier {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    /**
+     * A metadata column the driver may not expose (old drivers lack the JDBC 4 columns).
+     * Unreadable means "unknown", and unknown must never block a sync: the check is a safety
+     * net, so it only reports what it can positively confirm.
+     */
+    private static String optionalString(ResultSet rs, String column) {
+        try {
+            return rs.getString(column);
+        } catch (SQLException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Target columns absent from the source that an insert cannot satisfy: declared NOT NULL,
+     * no default, not auto-increment and not generated. Jync's INSERT names only the source
+     * columns, so such a column would receive NULL on every row and the target would reject
+     * the whole batch with a driver error naming neither the column nor the reason.
+     *
+     * <p>This is a diagnosis, not a verdict — the caller warns rather than blocks. A
+     * {@code BEFORE INSERT} trigger can fill such a column (an audit column maintained by the
+     * DBA), and that deployment syncs fine today; refusing the table would stop working syncs
+     * to catch a broken one. The list gives the warning its column name and remedies.
+     *
+     * <p>Unknown metadata never qualifies: {@code IS_NULLABLE} other than an explicit "NO",
+     * or an unreadable auto-increment/generated flag, is treated as usable.
+     */
+    public static List<String> extraNotNullColumnsWithoutDefault(Connection conn, String schema,
+                                                                 String tableName,
+                                                                 TableMeta sourceTable,
+                                                                 DatabaseType targetType)
+            throws SQLException {
+        boolean oracleFamily = isOracleFamily(targetType);
+        String lookupSchema = foldIfOracle(oracleFamily, normalizeSchema(schema));
+        String lookupTable = foldIfOracle(oracleFamily, tableName);
+        Map<String, TargetColumn> targetColumns = readTargetColumns(conn, lookupSchema, lookupTable,
+                targetType);
+
+        Set<String> sourceNames = new HashSet<>();
+        for (ColumnMeta sourceColumn : sourceTable.getColumns()) {
+            if (sourceColumn.getName() != null) {
+                sourceNames.add(sourceColumn.getName().toUpperCase(Locale.ROOT));
+            }
+        }
+        boolean sqlServer = targetType != null
+                && targetType.getFamily() == DatabaseType.DialectFamily.SQLSERVER;
+        List<String> extras = new ArrayList<>();
+        for (TargetColumn column : targetColumns.values()) {
+            if (sourceNames.contains(column.name().toUpperCase(Locale.ROOT))) {
+                continue;
+            }
+            boolean hasDefault = column.columnDef() != null && !column.columnDef().isBlank();
+            if (!"NO".equalsIgnoreCase(column.nullable())
+                    || hasDefault
+                    || "YES".equalsIgnoreCase(column.autoIncrement())
+                    || "YES".equalsIgnoreCase(column.generated())) {
+                continue;
+            }
+            // The engine fills these itself, so an insert that omits them is still valid.
+            if (sqlServer && isRowVersion(column)) {
+                continue;
+            }
+            if (oracleFamily && isVirtualOrIdentityColumn(conn, lookupSchema, lookupTable,
+                    column.name())) {
+                continue;
+            }
+            extras.add(column.name());
+        }
+        return extras;
+    }
+
+    /** SQL Server's {@code timestamp} is a synonym for {@code rowversion}, not a date. */
+    private static boolean isRowVersion(TargetColumn column) {
+        if (column.typeName() == null) {
+            return false;
+        }
+        String type = column.typeName().trim().toLowerCase(Locale.ROOT);
+        return "rowversion".equals(type) || "timestamp".equals(type);
+    }
+
+    /**
+     * Whether an Oracle-family column is one the database fills in on its own: a virtual
+     * (computed) column or an identity column. Both may be omitted from an insert.
+     *
+     * <p>Asked only for a column that otherwise looks like it would reject every insert, so
+     * the extra query is rare. A dictionary the driver cannot answer counts as "engine-filled":
+     * this check exists to avoid blocking a working sync, never to create a new blocker.
+     */
+    private static boolean isVirtualOrIdentityColumn(Connection conn, String schema,
+                                                     String tableName, String columnName) {
+        String sql = "SELECT VIRTUAL_COLUMN, IDENTITY_COLUMN FROM ALL_TAB_COLS"
+                + " WHERE OWNER = NVL(?, USER) AND TABLE_NAME = ? AND COLUMN_NAME = ?";
+        try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, schema);
+            ps.setString(2, tableName);
+            ps.setString(3, columnName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return true;
+                }
+                return "YES".equalsIgnoreCase(rs.getString("VIRTUAL_COLUMN"))
+                        || "YES".equalsIgnoreCase(rs.getString("IDENTITY_COLUMN"));
+            }
+        } catch (SQLException e) {
+            // View or column absent (11g, look-alikes): cannot confirm it is stored, so the
+            // safe answer is to leave it alone.
+            return true;
+        }
     }
 
     /**
@@ -327,8 +444,14 @@ public final class TargetTableVerifier {
         return VendorTypeMap.family(null, column.getJdbcType(), column.getTypeName());
     }
 
-    /** The target column's dictionary entry: JDBC type, declared width and type name. */
-    private record TargetColumn(int jdbcType, int columnSize, String typeName) {
+    /**
+     * The target column's dictionary entry: reported name, JDBC type, declared width, type
+     * name, and the flags deciding whether an insert must name it (nullability, default,
+     * auto-increment, generated).
+     */
+    private record TargetColumn(String name, int jdbcType, int columnSize, String typeName,
+                                String nullable, String columnDef, String autoIncrement,
+                                String generated) {
     }
 
     /**

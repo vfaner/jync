@@ -619,8 +619,36 @@ public class SyncEngine {
             result.addError(table.getName() + ": " + reason);
             return false;
         }
+        warnAboutExtraNotNullColumns(targetConn, ctx, table, targetTable, schema);
         verifiedTables.add(key);
         return true;
+    }
+
+    /**
+     * Names target columns that no insert can fill — as a warning, never a block.
+     *
+     * <p>A {@code BEFORE INSERT} trigger can fill such a column (a DBA-maintained audit
+     * column is the usual shape), and that deployment syncs fine today. Blocking would stop
+     * working syncs to catch broken ones, so the hint rides along in the log — once per table
+     * per process, because this runs right before the verdict is cached — and the inserts
+     * themselves stay the judge.
+     */
+    private void warnAboutExtraNotNullColumns(Connection targetConn, SyncContext ctx,
+                                              TableMeta table, String targetTable, String schema) {
+        try {
+            List<String> extras = TargetTableVerifier.extraNotNullColumnsWithoutDefault(
+                    targetConn, schema, targetTable, table, ctx.effectiveTargetType());
+            if (!extras.isEmpty()) {
+                log.warn("Project '{}': target table {} has column(s) {} declared NOT NULL with"
+                        + " no default that the source does not provide; inserts that omit them"
+                        + " fail unless a trigger fills them. Drop them, give them a default, or"
+                        + " add them to the source table.",
+                        ctx.projectName(), targetTable, String.join(", ", extras));
+            }
+        } catch (SQLException e) {
+            log.debug("Could not inspect extra columns of target table {}: {}",
+                    targetTable, e.getMessage());
+        }
     }
 
     /**

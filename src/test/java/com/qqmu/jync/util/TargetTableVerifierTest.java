@@ -235,6 +235,96 @@ class TargetTableVerifierTest {
         assertThat(reason).contains("incompatible type");
     }
 
+    // —— 目标表比源表多出来的列：可空、带默认值或自增/生成列都没问题，Jync 的 INSERT
+    // 不点名它们；但 NOT NULL 且没有默认值的列会让每一次插入都被目标库拒绝，报错来自
+    // 驱动、既不说列名也不说原因。这里钉住的是「点名」那一半：诊断在日志里给出列名和
+    // 建议，但绝不因此拦住同步（触发器也可能替这列填值）。 ——
+
+    @Test
+    void anExtraNotNullColumnWithoutADefaultIsNamed() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT, MANDATORY VARCHAR(10) NOT NULL)");
+
+        List<String> named = TargetTableVerifier.extraNotNullColumnsWithoutDefault(
+                conn, null, "T", source(col("ID", Types.BIGINT)), null);
+
+        assertThat(named).containsExactly("MANDATORY");
+    }
+
+    /**
+     * 诊断不是判决：BEFORE INSERT 触发器同样能替目标库填这列，那种配置今天是能同步的。
+     * 硬拦会把好的部署停掉，所以形状校验本身仍然放行，只在日志里点名并给出可执行的建议。
+     */
+    @Test
+    void anExtraNotNullColumnDoesNotBlockTheSyncItself() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT, MANDATORY VARCHAR(10) NOT NULL)");
+
+        assertThat(TargetTableVerifier.verify(conn, null, "T",
+                source(col("ID", Types.BIGINT)))).isNull();
+    }
+
+    @Test
+    void anExtraNullableColumnIsNotNamed() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT, NOTE VARCHAR(10))");
+
+        assertThat(TargetTableVerifier.extraNotNullColumnsWithoutDefault(conn, null, "T",
+                source(col("ID", Types.BIGINT)), null)).isEmpty();
+    }
+
+    @Test
+    void anExtraNotNullColumnWithADefaultIsNotNamed() throws SQLException {
+        createTarget("CREATE TABLE T (ID BIGINT, STAMP VARCHAR(10) DEFAULT 'x' NOT NULL)");
+
+        assertThat(TargetTableVerifier.extraNotNullColumnsWithoutDefault(conn, null, "T",
+                source(col("ID", Types.BIGINT)), null)).isEmpty();
+    }
+
+    @Test
+    void anExtraAutoIncrementColumnIsNotNamed() throws SQLException {
+        // 自增列由目标库自己填值，INSERT 不点名也不影响。
+        createTarget("CREATE TABLE T (ID BIGINT, SEQ BIGINT AUTO_INCREMENT)");
+
+        assertThat(TargetTableVerifier.extraNotNullColumnsWithoutDefault(conn, null, "T",
+                source(col("ID", Types.BIGINT)), null)).isEmpty();
+    }
+
+    @Test
+    void anExtraSqlServerRowVersionColumnIsNotNamed() throws SQLException {
+        // SQL Server 的 timestamp 就是 rowversion：引擎自己填值，INSERT 不该点名。
+        Connection mssql = metadataWithExtraColumn("timestamp", Types.VARBINARY, null);
+
+        assertThat(TargetTableVerifier.extraNotNullColumnsWithoutDefault(mssql, null, "T",
+                source(col("ID", Types.BIGINT)), DatabaseType.SQLSERVER)).isEmpty();
+    }
+
+    @Test
+    void anExtraOracleVirtualColumnIsNotNamed() throws SQLException {
+        // 虚拟列在读取时计算，插入可以省略；旧驱动不报 IS_GENERATEDCOLUMN，
+        // 只能查字典确认。
+        Connection oracle = metadataWithExtraColumn("NUMBER", Types.NUMERIC, "YES");
+
+        assertThat(TargetTableVerifier.extraNotNullColumnsWithoutDefault(oracle, null, "T",
+                source(col("ID", Types.BIGINT)), DatabaseType.ORACLE)).isEmpty();
+    }
+
+    @Test
+    void anExtraOracleStoredNotNullColumnIsStillNamed() throws SQLException {
+        // 控制组:虚拟列放行是查字典查出来的事实，不是「Oracle 一律不查」。
+        Connection oracle = metadataWithExtraColumn("NUMBER", Types.NUMERIC, "NO");
+
+        assertThat(TargetTableVerifier.extraNotNullColumnsWithoutDefault(oracle, null, "T",
+                source(col("ID", Types.BIGINT)), DatabaseType.ORACLE))
+                .containsExactly("MANDATORY");
+    }
+
+    @Test
+    void anOracleDictionaryTheDriverCannotAnswerNamesNothing() throws SQLException {
+        // 查不到 VIRTUAL_COLUMN 就没法确认这列是存值列，安全网只能放行。
+        Connection oracle = metadataWithExtraColumn("NUMBER", Types.NUMERIC, null);
+
+        assertThat(TargetTableVerifier.extraNotNullColumnsWithoutDefault(oracle, null, "T",
+                source(col("ID", Types.BIGINT)), DatabaseType.ORACLE)).isEmpty();
+    }
+
     // —— 缺列的「诊断」与「医治」分开：verify 只报告，补列由 StructureSyncService 执行。
     // 这里钉住诊断那一半：目标表有、源表没有的列不动，源表有、目标表没有的列按源顺序列出。 ——
 
@@ -456,6 +546,45 @@ class TargetTableVerifierTest {
      * the only way to exercise codes H2 cannot create. {@code prepareStatement} throws,
      * which is what the identity pre-check sees on a server without the dictionary view.
      */
+    /**
+     * A target metadata result with the source's ID plus one extra NOT NULL column of the
+     * given type — the shape a manually pre-created table has when the DBA added a column the
+     * source never writes.
+     */
+    private static Connection metadataWithExtraColumn(String typeName, int dataType,
+                                                      String oracleVirtualColumn)
+            throws SQLException {
+        Connection connection = mock(Connection.class);
+        DatabaseMetaData metaData = mock(DatabaseMetaData.class);
+        ResultSet columns = mock(ResultSet.class);
+        when(connection.getMetaData()).thenReturn(metaData);
+        when(metaData.getColumns(any(), any(), any(), any())).thenReturn(columns);
+        when(columns.next()).thenReturn(true, true, false);
+        when(columns.getString("TABLE_NAME")).thenReturn("T", "T");
+        when(columns.getString("COLUMN_NAME")).thenReturn("ID", "MANDATORY");
+        when(columns.getInt("DATA_TYPE")).thenReturn(Types.BIGINT, dataType);
+        when(columns.getInt("COLUMN_SIZE")).thenReturn(0, 0);
+        when(columns.getString("TYPE_NAME")).thenReturn("BIGINT", typeName);
+        when(columns.getString("IS_NULLABLE")).thenReturn("YES", "NO");
+        when(columns.getString("COLUMN_DEF")).thenReturn(null);
+        when(columns.getString("IS_AUTOINCREMENT")).thenReturn("NO", "NO");
+        when(columns.getString("IS_GENERATEDCOLUMN")).thenReturn("NO", "NO");
+        java.sql.PreparedStatement virtual = mock(java.sql.PreparedStatement.class);
+        ResultSet virtualRs = mock(ResultSet.class);
+        when(virtualRs.next()).thenReturn(true, false);
+        when(virtualRs.getString("VIRTUAL_COLUMN")).thenReturn(oracleVirtualColumn);
+        when(virtualRs.getString("IDENTITY_COLUMN")).thenReturn("NO");
+        when(virtual.executeQuery()).thenReturn(virtualRs);
+        when(connection.prepareStatement(anyString())).thenAnswer(inv -> {
+            String sql = inv.getArgument(0);
+            if (sql.contains("ALL_TAB_COLS") && oracleVirtualColumn != null) {
+                return virtual;
+            }
+            throw new SQLException("dictionary not exposed");
+        });
+        return connection;
+    }
+
     private static Connection metadataReporting(String columnName, int dataType)
             throws SQLException {
         return metadataReporting(columnName, dataType, 0);
