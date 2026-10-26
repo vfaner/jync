@@ -5,7 +5,6 @@ import java.sql.Statement;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.testcontainers.oracle.OracleContainer;
 
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.Project;

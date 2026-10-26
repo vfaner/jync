@@ -1,6 +1,5 @@
 package com.qqmu.jync.it;
 
-import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Connection;
 import java.sql.Statement;

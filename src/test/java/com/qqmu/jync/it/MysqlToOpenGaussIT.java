@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Connection;
 import java.sql.Statement;
-import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;

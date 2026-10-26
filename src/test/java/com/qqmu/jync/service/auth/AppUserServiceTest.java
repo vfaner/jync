@@ -11,7 +11,6 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 
 import com.qqmu.jync.model.AppUser;
-import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.repository.AppUserRepository;
 
 /**

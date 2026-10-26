@@ -23,7 +23,6 @@ import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
-import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
