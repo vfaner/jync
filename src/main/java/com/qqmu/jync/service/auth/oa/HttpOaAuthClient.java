@@ -75,6 +75,12 @@ public class HttpOaAuthClient implements OaAuthClient {
                     .build();
         } catch (IOException ex) {
             return OaAuthResult.failure("error.oa.badResponse");
+        } catch (IllegalArgumentException ex) {
+            // The scheme check above is necessary but not sufficient: "https:/login" has a
+            // scheme and no host, and it is HttpRequest.newBuilder — not URI.create — that
+            // rejects it. Without this the administrator's typo surfaced as a 500 on every
+            // password-mode sign-in instead of "the URL is invalid".
+            return OaAuthResult.failure("error.oa.url.invalid");
         }
 
         long startedNanos = System.nanoTime();

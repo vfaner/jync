@@ -305,4 +305,27 @@ class HttpOaAuthClientTest {
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getErrorKey()).isEqualTo("error.oa.unreachable");
     }
+
+    /**
+     * A login URL can carry the right scheme and still be unusable: {@code https:/login} parses
+     * as a URI with scheme "https" and no host, so it passes the scheme check and then blows up
+     * inside {@code HttpRequest.newBuilder}, which refuses a URI without an authority. That
+     * exception used to escape as a 500 on every password-mode sign-in instead of telling the
+     * administrator their URL is malformed — the ticket client already answers
+     * {@code error.oa.url.invalid} for the same input.
+     */
+    @Test
+    void aUrlWithoutAHostIsReportedAsAnInvalidUrlInsteadOfThrowing() {
+        OaAuthConfig config = new OaAuthConfig();
+        config.setEnabled(true);
+        config.setTimeoutMs(300);
+        config.setLoginUrl("https:/login");
+        config.setUserField("uid");
+
+        OaAuthResult result = client().authenticate(config, "alice", "pw");
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getErrorKey()).isEqualTo("error.oa.url.invalid");
+        assertThat(requestCount.get()).isZero();
+    }
 }
