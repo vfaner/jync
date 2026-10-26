@@ -23,8 +23,11 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 |---|---|
 | **Download (GitHub)** | [github.com/vfaner/jync/releases/latest](https://github.com/vfaner/jync/releases/latest) |
 | **Download (Gitee)** | [gitee.com/super_rgh/jync/releases/latest](https://gitee.com/super_rgh/jync/releases/latest) |
+| **Mirror (AtomGit)** | [gitcode.com/vfaner/jync](https://gitcode.com/vfaner/jync) |
 | **Website** | [jync.qqmu.com](https://jync.qqmu.com) |
 | **Video walkthrough** | [Bilibili · 26 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+
+> AtomGit (gitcode.com) is a synced mirror of the code and release assets; downloads, issues and pull requests are handled on GitHub / Gitee.
 
 ---
 
@@ -403,6 +406,7 @@ Download `jync.jar` from the release pages:
 
 - GitHub: <https://github.com/vfaner/jync/releases/latest>
 - Gitee: <https://gitee.com/super_rgh/jync/releases/latest>
+- AtomGit (mirror): <https://gitcode.com/vfaner/jync/releases/latest>
 
 Build from source:
 
@@ -413,7 +417,7 @@ mvn clean package -DskipTests
 cp target/jync.jar /opt/jync/
 ```
 
-In mainland China, clone from Gitee: `git clone https://gitee.com/super_rgh/jync.git`. Without `-DskipTests`, about 2,400 test cases run.
+In mainland China, clone from Gitee: `git clone https://gitee.com/super_rgh/jync.git`, or the AtomGit mirror: `git clone https://gitcode.com/vfaner/jync.git`. Without `-DskipTests`, about 2,500 test cases run.
 
 ### 3. Production configuration
 
@@ -595,7 +599,7 @@ Set `JYN_COOKIE_SECURE=true` for HTTPS. In gateway-header SSO mode, also add the
 1. Stop the service and back up `./data` (including `<name>.key`), `./logs` and `application.yml`.
 2. Replace `jync.jar` and start again. The schema evolves under `ddl-auto: update`.
 3. Changes made to the source while Jync was down are caught up by incremental sync or CDC after restart.
-4. Administrators can also use the built-in version check and one-click upgrade on the "System info" page; the old jar is kept as `jync.jar.bak`.
+4. Administrators can also use the built-in version check and one-click upgrade on the "System info" page; the old jar is kept as `jync.jar.bak`, and the restart script replays the current JVM options and program arguments (JDWP debug agents excepted), so `-Xmx`, `-D` properties and `--spring.profiles.active` survive the upgrade.
 
 > 🔐 Back up `<name>.key` and the metadata store together. Without the key, saved connection passwords and AI keys cannot be decrypted and must be re-entered.
 
@@ -774,14 +778,14 @@ com.qqmu.jync
 - **Known limitations and boundaries**: [docs/known-limitations.md](docs/known-limitations.md) — CDC boundaries, keyless tables, large values, procedure conversion
 - **Oracle → DM migration walkthrough**: [docs/migration-harness-oracle-to-dm.md](docs/migration-harness-oracle-to-dm.md)
 - **Project article**: [docs/jync-article.md](docs/jync-article.md)
-- **Release history**: [GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases)
+- **Release history**: [GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases) · [AtomGit mirror](https://gitcode.com/vfaner/jync/releases)
 - **Third-party driver licenses**: [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
 
 ```bash
 mvn test
 ```
 
-**2485 tests: 2484 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
+**2545 tests: 2544 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
 
 Coverage highlights:
 
@@ -817,4 +821,4 @@ Bug reports, feature requests and pull requests are welcome through any channel 
 
 [MIT License](LICENSE), for commercial and non-commercial use. Bundled third-party JDBC drivers keep their vendors' licenses; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). GBase, ShenTong and Huawei GaussDB drivers are not distributed with this project.
 
-Maintained by 沐沐开源工坊: GitHub [@vfaner](https://github.com/vfaner), Gitee [@super_rgh](https://gitee.com/super_rgh). The code is free to use, modify and redistribute under MIT; the only request is not to replace the "Jync / 捷同" name, logo or author credit with your own — see [TRADEMARK.md](TRADEMARK.md).
+Maintained by 沐沐开源工坊: GitHub [@vfaner](https://github.com/vfaner), Gitee [@super_rgh](https://gitee.com/super_rgh), AtomGit [@vfaner](https://gitcode.com/vfaner). The code is free to use, modify and redistribute under MIT; the only request is not to replace the "Jync / 捷同" name, logo or author credit with your own — see [TRADEMARK.md](TRADEMARK.md).

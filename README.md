@@ -23,8 +23,11 @@
 |---|---|
 | **下载（GitHub）** | [github.com/vfaner/jync/releases/latest](https://github.com/vfaner/jync/releases/latest) |
 | **下载（Gitee）** | [gitee.com/super_rgh/jync/releases/latest](https://gitee.com/super_rgh/jync/releases/latest) |
+| **镜像（AtomGit）** | [gitcode.com/vfaner/jync](https://gitcode.com/vfaner/jync) |
 | **官网** | [jync.qqmu.com](https://jync.qqmu.com) |
 | **视频演示** | [Bilibili · 26 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+
+> AtomGit（gitcode.com）是代码与发布包的同步镜像；下载、问题反馈与 PR 以 GitHub / Gitee 为准。
 
 ---
 
@@ -404,6 +407,7 @@ cd /opt/jync
 
 - GitHub：<https://github.com/vfaner/jync/releases/latest>
 - Gitee：<https://gitee.com/super_rgh/jync/releases/latest>
+- AtomGit（镜像）：<https://gitcode.com/vfaner/jync/releases/latest>
 
 源码编译：
 
@@ -414,7 +418,7 @@ mvn clean package -DskipTests
 cp target/jync.jar /opt/jync/
 ```
 
-国内可用 Gitee：`git clone https://gitee.com/super_rgh/jync.git`。不跳过测试会执行约 2400 个用例。
+国内可用 Gitee：`git clone https://gitee.com/super_rgh/jync.git`，或 AtomGit 镜像：`git clone https://gitcode.com/vfaner/jync.git`。不跳过测试会执行约 2500 个用例。
 
 ### 3. 生产配置
 
@@ -595,7 +599,7 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 1. 停止服务，备份 `./data`（连同 `<库名>.key`）、`./logs` 与 `application.yml`。
 2. 用新版 `jync.jar` 替换旧文件，重新启动；表结构随 `ddl-auto: update` 自动演进。
 3. 停机期间源库发生的变更，重启后由增量或 CDC 自动补齐。
-4. 管理员也可在"系统信息"页使用内置版本检查与一键升级，旧 jar 会保留为 `jync.jar.bak`。
+4. 管理员也可在"系统信息"页使用内置版本检查与一键升级，旧 jar 会保留为 `jync.jar.bak`；重启脚本会带上当前进程的 JVM 参数与程序参数（JDWP 调试参数除外），`-Xmx`、`-D` 属性与 `--spring.profiles.active` 等不会丢失。
 
 > 🔐 `<库名>.key` 与元数据库必须成对备份。密钥丢失后，已保存的连接密码与 AI 密钥将无法解密，只能重新填写。
 
@@ -774,14 +778,14 @@ com.qqmu.jync
 - **已知限制与边界**：[docs/known-limitations.md](docs/known-limitations.md)（CDC 边界、无主键表、大字段、过程转换）
 - **Oracle → 达梦迁移实战**：[docs/migration-harness-oracle-to-dm.md](docs/migration-harness-oracle-to-dm.md)
 - **项目介绍文章**：[docs/jync-article.md](docs/jync-article.md)
-- **版本记录**：[GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases)
+- **版本记录**：[GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases) · [AtomGit 镜像](https://gitcode.com/vfaner/jync/releases)
 - **第三方驱动许可证**：[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
 
 ```bash
 mvn test
 ```
 
-**2485 个测试：2484 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
+**2545 个测试：2544 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
 
 重点覆盖：
 
@@ -817,4 +821,4 @@ mvn test
 
 [MIT License](LICENSE)，商业与非商业用途均可。内置第三方 JDBC 驱动各自适用原厂许可证，见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)；GBase、神通与华为 GaussDB 驱动不随本项目分发。
 
-项目由沐沐开源工坊维护：GitHub [@vfaner](https://github.com/vfaner)、Gitee [@super_rgh](https://gitee.com/super_rgh)。代码可自由使用、修改与再分发（MIT）；唯一的请求是不要把「Jync / 捷同」名称、logo 与作者署名替换成自己的，详见 [TRADEMARK.md](TRADEMARK.md)。
+项目由沐沐开源工坊维护：GitHub [@vfaner](https://github.com/vfaner)、Gitee [@super_rgh](https://gitee.com/super_rgh)、AtomGit [@vfaner](https://gitcode.com/vfaner)。代码可自由使用、修改与再分发（MIT）；唯一的请求是不要把「Jync / 捷同」名称、logo 与作者署名替换成自己的，详见 [TRADEMARK.md](TRADEMARK.md)。
