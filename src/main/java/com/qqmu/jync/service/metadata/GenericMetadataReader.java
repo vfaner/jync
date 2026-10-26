@@ -97,6 +97,14 @@ public class GenericMetadataReader implements MetadataReader {
      * kind of metadata call — and it can only ever resolve tables that read back with zero
      * columns. Issuing it on a pass where every table read normally buys nothing, so it is
      * skipped: polling projects run this pass every cycle (default 2 s).
+     *
+     * <p><b>Known limit.</b> Both halves of the check are privilege-filtered on MySQL
+     * ({@code SHOW FULL TABLES}) and Oracle ({@code ALL_TABLES}/{@code ALL_TAB_COLUMNS}): a
+     * grant revoked for a single table mid-run makes it read back with zero columns and
+     * disappear from the listing, which is exactly what a real source-side drop looks like.
+     * With {@code allowDrop} on, that table's target copy is then dropped. No dictionary
+     * query can tell the two apart without elevated privileges, so the rule stays a
+     * best-effort signal, and {@code allowDrop} stays off by default.
      */
     private void recordAbsentTables(Connection conn, String schema, List<String> requested,
                                     DatabaseMeta meta) {
