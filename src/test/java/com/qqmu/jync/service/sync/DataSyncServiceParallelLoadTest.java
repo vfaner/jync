@@ -16,6 +16,7 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -341,6 +342,52 @@ class DataSyncServiceParallelLoadTest {
         // Sampled slices carry string bounds, which the long range columns cannot hold.
         assertThat(captor.getAllValues())
                 .anyMatch(c -> c.getRangeUpperKey() != null);
+    }
+
+    /**
+     * A sampled split asked NTILE for one bucket more than the configured parallelism, and a
+     * boundary list of m yields m ranges — so a table configured for 2 workers ran 3, and one
+     * configured for the documented pool cap of 4 would have tried 5 while the coordinator
+     * still held its own source connection. The arithmetic split runs exactly the configured
+     * number of ranges; sampling has to agree with it.
+     */
+    @Test
+    void aSampledSplitRunsNoMoreRangesThanTheConfiguredParallelism() throws SQLException {
+        exec(source, "CREATE TABLE ITEMS (ID VARCHAR(20) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE ITEMS (ID VARCHAR(20) PRIMARY KEY, NAME VARCHAR(50))");
+        StringBuilder insert = new StringBuilder("INSERT INTO ITEMS VALUES ");
+        for (int i = 1; i <= 10; i++) {
+            insert.append(i > 1 ? ", " : "").append("('k").append(i).append("', 'v").append(i)
+                    .append("')");
+        }
+        exec(source, insert.toString());
+
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(Types.VARCHAR);
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
+        TableMeta table = new TableMeta();
+        table.setName("ITEMS");
+        table.setPrimaryKeys(List.of("ID"));
+        table.setColumns(List.of(id, name));
+
+        DataSyncService.TableSyncResult result = service(2, 2).syncTable(
+                source, target, table, CursorStrategy.none("full load only"),
+                new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(count(target, "ITEMS")).isEqualTo(10);
+        ArgumentCaptor<ChunkCheckpoint> captor = ArgumentCaptor.forClass(ChunkCheckpoint.class);
+        verify(checkpoints, atLeastOnce()).save(captor.capture());
+        assertThat(captor.getAllValues().stream()
+                .map(ChunkCheckpoint::getRangeIndex)
+                .filter(Objects::nonNull)
+                .distinct()
+                .count())
+                .as("the pool cap counts workers, so the split must not add one of its own")
+                .isEqualTo(2);
     }
 
     @Test

@@ -2279,9 +2279,13 @@ public class DataSyncService {
             throws SQLException {
         List<String> pkColumns = table.getPrimaryKeys();
         List<Object> params = new ArrayList<>();
+        // One bucket per worker: NTILE returns exactly one boundary row per bucket, and
+        // sampledRanges turns m boundaries into m ranges, so parallelism + 1 buckets would
+        // run one worker more than the operator asked for — and one more than the connection
+        // pool reserved for it.
         String sql = KeysetChunker.sampledBoundarySql(ctx.getSourceDialect(),
                 ctx.getSourceSchema(), table.getName(), pkColumns, strategy, upperBound,
-                parallelism + 1, params);
+                parallelism, params);
         List<List<Object>> boundaries = new ArrayList<>();
         try (PreparedStatement st = sourceConn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
