@@ -343,235 +343,240 @@
                 </div>
             </div>
         </div>
-        <!-- 捕获策略卡片（C1）：CDC 卡片只对严格 MYSQL 源库渲染（验收 C①）。
-             selectedStrategy 是选中态的单一事实源：新建 MySQL 项目探测通过时它已经是
-             BINLOG_CDC（cdcRecommended），不会出现两张卡同时 checked。 -->
-        <div class="card" style="margin-top:18px">
-            <div class="card-head">
-                <h2><svg class="ico"><use href="#toggles"/></svg> <span th:text="#{project.strategy.title}">Capture strategy</span></h2>
-            </div>
-            <div class="card-body">
-                <div class="strategy-pick" th:with="sel=${selectedStrategy}">
-                    <label class="strategy-card" th:classappend="${sel == 'POLLING'} ? 'picked'">
-                        <input type="radio" name="captureStrategy" value="POLLING"
-                               th:checked="${sel == 'POLLING'}">
-                        <span class="strategy-name" th:text="#{project.strategy.polling.name}">Polling</span>
-                        <span class="strategy-desc" th:text="#{project.strategy.polling.desc}">desc</span>
-                    </label>
-                    <label class="strategy-card" th:classappend="${sel == 'FULL_COMPARE'} ? 'picked'">
-                        <input type="radio" name="captureStrategy" value="FULL_COMPARE"
-                               th:checked="${sel == 'FULL_COMPARE'}">
-                        <span class="strategy-name" th:text="#{project.strategy.fullcompare.name}">Full compare</span>
-                        <span class="strategy-desc" th:text="#{project.strategy.fullcompare.desc}">desc</span>
-                    </label>
-                    <label class="strategy-card" th:if="${isMysqlSource}"
-                           th:classappend="${sel == 'BINLOG_CDC'} ? 'picked'">
-                        <input type="radio" name="captureStrategy" value="BINLOG_CDC"
-                               th:checked="${sel == 'BINLOG_CDC'}">
-                        <span class="strategy-name">
-                            <span th:text="#{project.strategy.cdc.name}">Binlog CDC</span>
-                            <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'BINLOG_CDC'}"
-                                th:text="#{project.strategy.cdc.recommended}">recommended</em>
-                        </span>
-                        <span class="strategy-desc" th:text="#{project.strategy.cdc.desc}">desc</span>
-                        <!-- 探测未通过：逐项列出缺失前提（cdc.check.* 键来自 B2），并给出
-                             连接测试页入口。探测抛异常时 cdcProbe 为 null，整块不渲染。 -->
-                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'BINLOG_CDC'}">
-                            <span th:text="#{project.strategy.cdc.missing}">missing</span>
-                            <ul>
-                                <li th:each="chk : ${cdcMissingChecks}">✗ <span
-                                        th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
-                                        th:text="${chk.detail}">detail</span></li>
-                            </ul>
-                            <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
-                        </span>
-                    </label>
-                    <label class="strategy-card" th:if="${isOracleSource}"
-                           th:classappend="${sel == 'LOGMINER_CDC'} ? 'picked'">
-                        <input type="radio" name="captureStrategy" value="LOGMINER_CDC"
-                               th:checked="${sel == 'LOGMINER_CDC'}">
-                        <span class="strategy-name">
-                            <span th:text="#{project.strategy.logminer.name}">LogMiner CDC</span>
-                            <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'LOGMINER_CDC'}"
-                                th:text="#{project.strategy.cdc.recommended}">recommended</em>
-                        </span>
-                        <span class="strategy-desc" th:text="#{project.strategy.logminer.desc}">desc</span>
-                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'LOGMINER_CDC'}">
-                            <span th:text="#{project.strategy.cdc.missing}">missing</span>
-                            <ul>
-                                <li th:each="chk : ${cdcMissingChecks}">✗ <span
-                                        th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
-                                        th:text="${chk.detail}">detail</span></li>
-                            </ul>
-                            <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
-                        </span>
-                    </label>
-                    <label class="strategy-card" th:if="${isPostgresSource}"
-                           th:classappend="${sel == 'PG_LOGICAL_CDC'} ? 'picked'">
-                        <input type="radio" name="captureStrategy" value="PG_LOGICAL_CDC"
-                               th:checked="${sel == 'PG_LOGICAL_CDC'}">
-                        <span class="strategy-name">
-                            <span th:text="#{project.strategy.pg.name}">PG Logical CDC</span>
-                            <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'PG_LOGICAL_CDC'}"
-                                th:text="#{project.strategy.cdc.recommended}">recommended</em>
-                        </span>
-                        <span class="strategy-desc" th:text="#{project.strategy.pg.desc}">desc</span>
-                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'PG_LOGICAL_CDC'}">
-                            <span th:text="#{project.strategy.cdc.missing}">missing</span>
-                            <ul>
-                                <li th:each="chk : ${cdcMissingChecks}">✗ <span
-                                        th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
-                                        th:text="${chk.detail}">detail</span></li>
-                            </ul>
-                            <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
-                        </span>
-                    </label>
-                    <label class="strategy-card" th:if="${isSqlServerSource}"
-                           th:classappend="${sel == 'SQLSERVER_CDC'} ? 'picked'">
-                        <input type="radio" name="captureStrategy" value="SQLSERVER_CDC"
-                               th:checked="${sel == 'SQLSERVER_CDC'}">
-                        <span class="strategy-name">
-                            <span th:text="#{project.strategy.sqlserver.name}">SQL Server CDC</span>
-                            <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'SQLSERVER_CDC'}"
-                                th:text="#{project.strategy.cdc.recommended}">recommended</em>
-                        </span>
-                        <span class="strategy-desc" th:text="#{project.strategy.sqlserver.desc}">desc</span>
-                        <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'SQLSERVER_CDC'}">
-                            <span th:text="#{project.strategy.cdc.missing}">missing</span>
-                            <ul>
-                                <li th:each="chk : ${cdcMissingChecks}">✗ <span
-                                        th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
-                                        th:text="${chk.detail}">detail</span></li>
-                            </ul>
-                            <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
-                        </span>
-                    </label>
-                </div>
-            </div>
-        </div>
+        <!-- 捕获策略与「同步对象」同宽、与「同步选项」同一行：三张卡原来各占一行，
+             策略卡独占整行却只用掉半屏高度，下面全是空白。现在左列放策略卡和同步
+             对象，右列从「同步选项」往下接调度与加载性能——两列各自连续排列，列内
+             不会留空；窄屏（≤1100px）叠回单列时顺序仍是策略 → 对象 → 选项 → 调度。 -->
         <div class="split-wide" style="margin-top:18px">
-            <!-- 对象选择 -->
-            <div class="card" style="margin-top:0">
-                <div class="card-head">
-                    <h2><svg class="ico"><use href="#list-check"/></svg> <span th:text="#{project.syncObjects}">Objects</span></h2>
-                    <span class="badge badge-brand" th:if="${sourceObjects != null}">
-                        <svg class="ico"><use href="#database"/></svg>
-                        <span th:text="${sourceObjects.schema}">schema</span>
-                    </span>
+            <div>
+                <!-- 捕获策略卡片（C1）：CDC 卡片只对严格 MYSQL 源库渲染（验收 C①）。
+                     selectedStrategy 是选中态的单一事实源：新建 MySQL 项目探测通过时它已经是
+                     BINLOG_CDC（cdcRecommended），不会出现两张卡同时 checked。 -->
+                <div class="card" style="margin-top:0">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#toggles"/></svg> <span th:text="#{project.strategy.title}">Capture strategy</span></h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="strategy-pick" th:with="sel=${selectedStrategy}">
+                            <label class="strategy-card" th:classappend="${sel == 'POLLING'} ? 'picked'">
+                                <input type="radio" name="captureStrategy" value="POLLING"
+                                       th:checked="${sel == 'POLLING'}">
+                                <span class="strategy-name" th:text="#{project.strategy.polling.name}">Polling</span>
+                                <span class="strategy-desc" th:text="#{project.strategy.polling.desc}">desc</span>
+                            </label>
+                            <label class="strategy-card" th:classappend="${sel == 'FULL_COMPARE'} ? 'picked'">
+                                <input type="radio" name="captureStrategy" value="FULL_COMPARE"
+                                       th:checked="${sel == 'FULL_COMPARE'}">
+                                <span class="strategy-name" th:text="#{project.strategy.fullcompare.name}">Full compare</span>
+                                <span class="strategy-desc" th:text="#{project.strategy.fullcompare.desc}">desc</span>
+                            </label>
+                            <label class="strategy-card" th:if="${isMysqlSource}"
+                                   th:classappend="${sel == 'BINLOG_CDC'} ? 'picked'">
+                                <input type="radio" name="captureStrategy" value="BINLOG_CDC"
+                                       th:checked="${sel == 'BINLOG_CDC'}">
+                                <span class="strategy-name">
+                                    <span th:text="#{project.strategy.cdc.name}">Binlog CDC</span>
+                                    <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'BINLOG_CDC'}"
+                                        th:text="#{project.strategy.cdc.recommended}">recommended</em>
+                                </span>
+                                <span class="strategy-desc" th:text="#{project.strategy.cdc.desc}">desc</span>
+                                <!-- 探测未通过：逐项列出缺失前提（cdc.check.* 键来自 B2），并给出
+                                     连接测试页入口。探测抛异常时 cdcProbe 为 null，整块不渲染。 -->
+                                <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'BINLOG_CDC'}">
+                                    <span th:text="#{project.strategy.cdc.missing}">missing</span>
+                                    <ul>
+                                        <li th:each="chk : ${cdcMissingChecks}">✗ <span
+                                                th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
+                                                th:text="${chk.detail}">detail</span></li>
+                                    </ul>
+                                    <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
+                                </span>
+                            </label>
+                            <label class="strategy-card" th:if="${isOracleSource}"
+                                   th:classappend="${sel == 'LOGMINER_CDC'} ? 'picked'">
+                                <input type="radio" name="captureStrategy" value="LOGMINER_CDC"
+                                       th:checked="${sel == 'LOGMINER_CDC'}">
+                                <span class="strategy-name">
+                                    <span th:text="#{project.strategy.logminer.name}">LogMiner CDC</span>
+                                    <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'LOGMINER_CDC'}"
+                                        th:text="#{project.strategy.cdc.recommended}">recommended</em>
+                                </span>
+                                <span class="strategy-desc" th:text="#{project.strategy.logminer.desc}">desc</span>
+                                <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'LOGMINER_CDC'}">
+                                    <span th:text="#{project.strategy.cdc.missing}">missing</span>
+                                    <ul>
+                                        <li th:each="chk : ${cdcMissingChecks}">✗ <span
+                                                th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
+                                                th:text="${chk.detail}">detail</span></li>
+                                    </ul>
+                                    <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
+                                </span>
+                            </label>
+                            <label class="strategy-card" th:if="${isPostgresSource}"
+                                   th:classappend="${sel == 'PG_LOGICAL_CDC'} ? 'picked'">
+                                <input type="radio" name="captureStrategy" value="PG_LOGICAL_CDC"
+                                       th:checked="${sel == 'PG_LOGICAL_CDC'}">
+                                <span class="strategy-name">
+                                    <span th:text="#{project.strategy.pg.name}">PG Logical CDC</span>
+                                    <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'PG_LOGICAL_CDC'}"
+                                        th:text="#{project.strategy.cdc.recommended}">recommended</em>
+                                </span>
+                                <span class="strategy-desc" th:text="#{project.strategy.pg.desc}">desc</span>
+                                <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'PG_LOGICAL_CDC'}">
+                                    <span th:text="#{project.strategy.cdc.missing}">missing</span>
+                                    <ul>
+                                        <li th:each="chk : ${cdcMissingChecks}">✗ <span
+                                                th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
+                                                th:text="${chk.detail}">detail</span></li>
+                                    </ul>
+                                    <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
+                                </span>
+                            </label>
+                            <label class="strategy-card" th:if="${isSqlServerSource}"
+                                   th:classappend="${sel == 'SQLSERVER_CDC'} ? 'picked'">
+                                <input type="radio" name="captureStrategy" value="SQLSERVER_CDC"
+                                       th:checked="${sel == 'SQLSERVER_CDC'}">
+                                <span class="strategy-name">
+                                    <span th:text="#{project.strategy.sqlserver.name}">SQL Server CDC</span>
+                                    <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'SQLSERVER_CDC'}"
+                                        th:text="#{project.strategy.cdc.recommended}">recommended</em>
+                                </span>
+                                <span class="strategy-desc" th:text="#{project.strategy.sqlserver.desc}">desc</span>
+                                <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'SQLSERVER_CDC'}">
+                                    <span th:text="#{project.strategy.cdc.missing}">missing</span>
+                                    <ul>
+                                        <li th:each="chk : ${cdcMissingChecks}">✗ <span
+                                                th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
+                                                th:text="${chk.detail}">detail</span></li>
+                                    </ul>
+                                    <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
-                <div class="card-body">
-                    <!-- 勾选状态显式提交:字段在场 = 这是用户的完整选择,某一类全不勾就是
-                         "这一类都不同步";字段缺席(源库列举失败,选择器没渲染)时后端保留已保存
-                         的选择,不会把空提交误当成"全不要"。 -->
-                    <input type="hidden" name="objectSelectionExplicit" value="true"
-                           th:if="${sourceObjects != null}">
-                    <!-- 表 -->
-                    <div class="picker" data-role="picker">
-                        <div class="picker-head">
-                            <span class="picker-title">
-                                <svg class="ico"><use href="#table"/></svg>
-                                <span th:text="#{project.tables}">Tables</span>
-                                <span class="badge badge-mute" data-count
-                                      th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
-                            </span>
-                            <span class="picker-tools">
-                                <input type="search" class="input" data-filter th:placeholder="#{common.filter}">
-                                <button type="button" class="btn btn-ghost btn-xs" data-all
-                                        th:text="#{common.selectAll}">All</button>
-                                <button type="button" class="btn btn-ghost btn-xs" data-none
-                                        th:text="#{common.selectNone}">None</button>
-                            </span>
-                        </div>
-                        <!-- 显式白名单:勾了哪些就只同步哪些;全不勾 = 这一类都不同步,
-                             周期检测不到对象就空转(不报错)。includesTable 已经区分了
-                             "老配置的空集合=全部"与"保存过的空集合=全不选"。 -->
-                        <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.tables)}">
-                            <!--/* 每张表一行:左侧源表勾选框,中间虚线箭头,右侧目标表名。
-                                   目标表名留空 = 与源表同名(placeholder 显示源表名);输入中的
-                                   空格由 app.js 实时去掉,保存时服务端再规范化一次。隐藏的
-                                   mappingSource 与输入框按文档顺序成对提交,控制器据此重建映射。 */-->
-                            <div class="map-head">
-                                <span th:text="#{project.tableMap.source}">Source</span>
-                                <span aria-hidden="true"></span>
-                                <span th:text="#{project.tableMap.target}">Target</span>
+                <!-- 对象选择 -->
+                <div class="card" style="margin-top:18px">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#list-check"/></svg> <span th:text="#{project.syncObjects}">Objects</span></h2>
+                        <span class="badge badge-brand" th:if="${sourceObjects != null}">
+                            <svg class="ico"><use href="#database"/></svg>
+                            <span th:text="${sourceObjects.schema}">schema</span>
+                        </span>
+                    </div>
+                    <div class="card-body">
+                        <!-- 勾选状态显式提交:字段在场 = 这是用户的完整选择,某一类全不勾就是
+                             "这一类都不同步";字段缺席(源库列举失败,选择器没渲染)时后端保留已保存
+                             的选择,不会把空提交误当成"全不要"。 -->
+                        <input type="hidden" name="objectSelectionExplicit" value="true"
+                               th:if="${sourceObjects != null}">
+                        <!-- 表 -->
+                        <div class="picker" data-role="picker">
+                            <div class="picker-head">
+                                <span class="picker-title">
+                                    <svg class="ico"><use href="#table"/></svg>
+                                    <span th:text="#{project.tables}">Tables</span>
+                                    <span class="badge badge-mute" data-count
+                                          th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                                </span>
+                                <span class="picker-tools">
+                                    <input type="search" class="input" data-filter th:placeholder="#{common.filter}">
+                                    <button type="button" class="btn btn-ghost btn-xs" data-all
+                                            th:text="#{common.selectAll}">All</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" data-none
+                                            th:text="#{common.selectNone}">None</button>
+                                </span>
                             </div>
-                            <div class="pick map-row" th:each="tbl : ${sourceObjects.tables}"
-                                 th:with="mapped=${config.targetTableName(tbl)}">
-                                <label class="map-source">
-                                    <input type="checkbox" name="tables" th:value="${tbl}"
-                                           th:checked="${config.includesTable(tbl)}">
-                                    <span th:text="${tbl}">table</span>
+                            <!-- 显式白名单:勾了哪些就只同步哪些;全不勾 = 这一类都不同步,
+                                 周期检测不到对象就空转(不报错)。includesTable 已经区分了
+                                 "老配置的空集合=全部"与"保存过的空集合=全不选"。 -->
+                            <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.tables)}">
+                                <!--/* 每张表一行:左侧源表勾选框,中间虚线箭头,右侧目标表名。
+                                       目标表名留空 = 与源表同名(placeholder 显示源表名);输入中的
+                                       空格由 app.js 实时去掉,保存时服务端再规范化一次。隐藏的
+                                       mappingSource 与输入框按文档顺序成对提交,控制器据此重建映射。 */-->
+                                <div class="map-head">
+                                    <span th:text="#{project.tableMap.source}">Source</span>
+                                    <span aria-hidden="true"></span>
+                                    <span th:text="#{project.tableMap.target}">Target</span>
+                                </div>
+                                <div class="pick map-row" th:each="tbl : ${sourceObjects.tables}"
+                                     th:with="mapped=${config.targetTableName(tbl)}">
+                                    <label class="map-source">
+                                        <input type="checkbox" name="tables" th:value="${tbl}"
+                                               th:checked="${config.includesTable(tbl)}">
+                                        <span th:text="${tbl}">table</span>
+                                    </label>
+                                    <span class="map-arrow" aria-hidden="true"></span>
+                                    <input type="hidden" name="mappingSource" th:value="${tbl}">
+                                    <input type="text" class="input map-target" name="mappingTarget"
+                                           maxlength="128" th:value="${mapped == tbl ? '' : mapped}"
+                                           th:placeholder="${tbl}"
+                                           th:attr="data-source=${tbl}">
+                                </div>
+                            </div>
+                            <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.tables)}"
+                               th:text="#{project.noTables}">No tables.</p>
+                        </div>
+
+                        <!-- 视图 -->
+                        <div class="picker" data-role="picker">
+                            <div class="picker-head">
+                                <span class="picker-title">
+                                    <svg class="ico"><use href="#eye"/></svg>
+                                    <span th:text="#{project.views}">Views</span>
+                                    <span class="badge badge-mute" data-count
+                                          th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                                </span>
+                                <span class="picker-tools">
+                                    <button type="button" class="btn btn-ghost btn-xs" data-all
+                                            th:text="#{common.selectAll}">All</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" data-none
+                                            th:text="#{common.selectNone}">None</button>
+                                </span>
+                            </div>
+                            <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.views)}">
+                                <label class="pick" th:each="v : ${sourceObjects.views}">
+                                    <input type="checkbox" name="views" th:value="${v}"
+                                           th:checked="${config.includesView(v)}">
+                                    <span th:text="${v}">view</span>
                                 </label>
-                                <span class="map-arrow" aria-hidden="true"></span>
-                                <input type="hidden" name="mappingSource" th:value="${tbl}">
-                                <input type="text" class="input map-target" name="mappingTarget"
-                                       maxlength="128" th:value="${mapped == tbl ? '' : mapped}"
-                                       th:placeholder="${tbl}"
-                                       th:attr="data-source=${tbl}">
                             </div>
+                            <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.views)}"
+                               th:text="#{project.noViews}">No views.</p>
                         </div>
-                        <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.tables)}"
-                           th:text="#{project.noTables}">No tables.</p>
-                    </div>
 
-                    <!-- 视图 -->
-                    <div class="picker" data-role="picker">
-                        <div class="picker-head">
-                            <span class="picker-title">
-                                <svg class="ico"><use href="#eye"/></svg>
-                                <span th:text="#{project.views}">Views</span>
-                                <span class="badge badge-mute" data-count
-                                      th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
-                            </span>
-                            <span class="picker-tools">
-                                <button type="button" class="btn btn-ghost btn-xs" data-all
-                                        th:text="#{common.selectAll}">All</button>
-                                <button type="button" class="btn btn-ghost btn-xs" data-none
-                                        th:text="#{common.selectNone}">None</button>
-                            </span>
+                        <!-- 存储过程 -->
+                        <div class="picker" data-role="picker">
+                            <div class="picker-head">
+                                <span class="picker-title">
+                                    <svg class="ico"><use href="#code-square"/></svg>
+                                    <span th:text="#{project.procedures}">Procedures</span>
+                                    <span class="badge badge-mute" data-count
+                                          th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                                </span>
+                                <span class="picker-tools">
+                                    <button type="button" class="btn btn-ghost btn-xs" data-all
+                                            th:text="#{common.selectAll}">All</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" data-none
+                                            th:text="#{common.selectNone}">None</button>
+                                </span>
+                            </div>
+                            <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.procedures)}">
+                                <label class="pick" th:each="p : ${sourceObjects.procedures}">
+                                    <input type="checkbox" name="procedures" th:value="${p}"
+                                           th:checked="${config.includesProcedure(p)}">
+                                    <span th:text="${p}">proc</span>
+                                </label>
+                            </div>
+                            <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.procedures)}"
+                               th:text="#{project.noProcedures}">No procedures.</p>
                         </div>
-                        <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.views)}">
-                            <label class="pick" th:each="v : ${sourceObjects.views}">
-                                <input type="checkbox" name="views" th:value="${v}"
-                                       th:checked="${config.includesView(v)}">
-                                <span th:text="${v}">view</span>
-                            </label>
-                        </div>
-                        <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.views)}"
-                           th:text="#{project.noViews}">No views.</p>
-                    </div>
-
-                    <!-- 存储过程 -->
-                    <div class="picker" data-role="picker">
-                        <div class="picker-head">
-                            <span class="picker-title">
-                                <svg class="ico"><use href="#code-square"/></svg>
-                                <span th:text="#{project.procedures}">Procedures</span>
-                                <span class="badge badge-mute" data-count
-                                      th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
-                            </span>
-                            <span class="picker-tools">
-                                <button type="button" class="btn btn-ghost btn-xs" data-all
-                                        th:text="#{common.selectAll}">All</button>
-                                <button type="button" class="btn btn-ghost btn-xs" data-none
-                                        th:text="#{common.selectNone}">None</button>
-                            </span>
-                        </div>
-                        <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.procedures)}">
-                            <label class="pick" th:each="p : ${sourceObjects.procedures}">
-                                <input type="checkbox" name="procedures" th:value="${p}"
-                                       th:checked="${config.includesProcedure(p)}">
-                                <span th:text="${p}">proc</span>
-                            </label>
-                        </div>
-                        <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.procedures)}"
-                           th:text="#{project.noProcedures}">No procedures.</p>
                     </div>
                 </div>
             </div>
-
-            <!-- 选项与调度 -->
             <div>
+                <!-- 同步选项 -->
                 <div class="card" style="margin-top:0">
                     <div class="card-head">
                         <h2><svg class="ico"><use href="#toggles"/></svg> <span th:text="#{project.syncOptions}">Options</span></h2>
@@ -681,7 +686,7 @@
                         </label>
                     </div>
                 </div>
-
+                <!-- 选项与调度 -->
                 <!-- 调度卡片：仅轮询/全量比对模式生效。日志 CDC 模式下由长驻消费者持续流式回放，
                      Quartz 调度、cron、轮询间隔都是死配置，直接藏掉以避免误导。
                      data-role="polling-only" 由 app.js 在策略卡片切到任一日志 CDC 时同步隐藏。
