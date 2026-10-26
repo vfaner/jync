@@ -123,6 +123,31 @@ class ThroughputMeterTest {
     }
 
     /**
+     * The four shares are read as a breakdown of one pass, so they must add up to exactly 100.
+     * Rounding each of the measured three independently lets them sum to 101 (33.5 + 33.5 +
+     * 32.5 rounds to 34 + 34 + 33), which then forces the remainder to zero — a line that
+     * both overstates the total and hides a real, if small, commit share.
+     */
+    @Test
+    void theSharesAlwaysAddUpToOneHundred() {
+        ThroughputMeter meter = new ThroughputMeter("ORDERS", clock::get);
+        meter.recordQuery(335_000_000L);
+        meter.recordRead(335_000_000L);
+        meter.recordWrite(330_000_000L);
+        meter.recordCommit(5_000_000L); // inside the write windows above
+
+        String line = meter.describe(0);
+        int sum = 0;
+        // Space-prefixed tokens: "read=" alone also matches inside "thread=main".
+        for (String key : new String[] {"query=", "read=", "write=", "commit="}) {
+            int start = line.indexOf(" " + key) + 1 + key.length();
+            sum += Integer.parseInt(line.substring(start, line.indexOf('%', start)));
+        }
+
+        assertThat(sum).as(line).isEqualTo(100);
+    }
+
+    /**
      * A full-compare table is re-read every poll interval, so an idle project produces a "big"
      * pass that changed nothing every couple of seconds. At INFO those lines read as data
      * moving when the target is untouched — they belong on DEBUG, with the change count in the

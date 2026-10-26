@@ -130,13 +130,19 @@ final class ThroughputMeter {
      */
     String describe(int changedRows) {
         long measured = queryNanos + readNanos + writeNanos;
-        int queryPct = measured == 0 ? 0 : (int) Math.round(queryNanos * 100.0 / measured);
-        int readPct = measured == 0 ? 0 : (int) Math.round(readNanos * 100.0 / measured);
         // Write windows include the commit that closed a batch; report row work net of it.
         long rowWorkNanos = Math.max(0L, writeNanos - commitNanos);
-        int writePct = measured == 0 ? 0 : (int) Math.round(rowWorkNanos * 100.0 / measured);
-        // The remainder, so the shares always add up to 100 after rounding.
-        int commitPct = measured == 0 ? 0 : Math.max(0, 100 - queryPct - readPct - writePct);
+        // Each share is the difference of two rounded cumulative points, not its own rounded
+        // ratio: rounding three ratios independently can sum to 101 (33.5 + 33.5 + 32.5
+        // rounds to 34 + 34 + 33) and leave the remainder negative, which both overstates the
+        // total and hides the commit share. Cumulative differences always sum to 100.
+        int queryPct = percentOf(queryNanos, measured);
+        int readPct = percentOf(queryNanos + readNanos, measured) - queryPct;
+        int writePct = percentOf(queryNanos + readNanos + rowWorkNanos, measured)
+                - queryPct - readPct;
+        // Nothing measured is a pass that ended before the clock ticked: every share is 0,
+        // not a 100% "commit" made of nothing.
+        int commitPct = measured == 0 ? 0 : 100 - queryPct - readPct - writePct;
         double rowsPerBatch = batches == 0 ? 0 : (double) rows / batches;
         return String.format(Locale.ROOT,
                 "table=%s thread=%s rows=%d changed=%d elapsed=%.1fs rows/s=%.1f"
@@ -145,6 +151,11 @@ final class ThroughputMeter {
                 table, Thread.currentThread().getName(), rows, changedRows,
                 elapsedNanos() / 1e9, rowsPerSecond(), queryPct, readPct, writePct, commitPct,
                 batches, rowsPerBatch);
+    }
+
+    /** Rounded cumulative share; zero when nothing was measured. */
+    private static int percentOf(long part, long whole) {
+        return whole <= 0 ? 0 : (int) Math.round(part * 100.0 / whole);
     }
 
     /**
