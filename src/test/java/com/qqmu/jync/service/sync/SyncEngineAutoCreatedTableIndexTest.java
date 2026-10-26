@@ -112,6 +112,9 @@ class SyncEngineAutoCreatedTableIndexTest {
                 .thenReturn(CursorStrategy.identity("ID", Types.BIGINT, "test"));
         when(stateWriter.loadOrCreateProgress(eq(PROJECT_ID), anyString()))
                 .thenAnswer(inv -> new SyncProgress());
+        // The auto-CREATE path resets the table's cursor; hand the same instance back as the
+        // real writer does so the cycle continues with it.
+        when(stateWriter.forceReload(any())).thenAnswer(inv -> inv.getArgument(0));
 
         DataSyncService.TableSyncResult initialLoad = mock(DataSyncService.TableSyncResult.class);
         when(initialLoad.isInitialLoad()).thenReturn(true);

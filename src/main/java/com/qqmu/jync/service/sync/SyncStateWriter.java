@@ -127,6 +127,33 @@ public class SyncStateWriter {
     }
 
     /**
+     * Puts a table's progress back to "never loaded" so the next pass rebuilds it from scratch.
+     *
+     * <p>Used when Jync itself had to recreate a target table the target had lost. Clearing
+     * only the cursor is not enough:
+     * <ul>
+     *   <li>chunk checkpoints left by an interrupted earlier load are resume points for a
+     *       target that no longer exists — the "full" reload would skip every range they mark
+     *       as copied, into a table holding none of those rows;</li>
+     *   <li>{@code initialLoadDone} gates the one-time load of a table with no incremental
+     *       strategy, so leaving it set skips such a table forever, and it also arms the steps
+     *       that only run for a first load (deferred indexes, identity reseeding).</li>
+     * </ul>
+     *
+     * <p>Unlike {@link #clearCursor(SyncProgress)} this re-arms {@code truncateBeforeInitialLoad}.
+     * That is safe here and only here: the caller invokes it right after building an empty
+     * target table, so there are no rows a truncate could destroy.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public SyncProgress forceReload(SyncProgress progress) {
+        checkpointRepository.deleteByProjectIdAndTableName(
+                progress.getProjectId(), progress.getObjectName());
+        progress.setLastSyncValue(null);
+        progress.setInitialLoadDone(false);
+        return progressRepository.save(progress);
+    }
+
+    /**
      * Clears every cursor of a project (v1.5.0 C2 strategy switch): on POLLING → CDC the
      * polling cursors are meaningless to the stream, and on CDC → POLLING each table must
      * re-resolve its cursor from scratch rather than resume a pre-CDC window. Rows keep

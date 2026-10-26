@@ -311,6 +311,9 @@ class SyncEngineSnapshotGuardTest {
         SyncProgress progress = new SyncProgress();
         progress.setInitialLoadDone(true);
         when(stateWriter.loadOrCreateProgress(PROJECT_ID, "ORDERS")).thenReturn(progress);
+        // The auto-CREATE path resets the table's cursor; hand the same instance back as the
+        // real writer does so the cycle continues with it.
+        when(stateWriter.forceReload(any())).thenAnswer(inv -> inv.getArgument(0));
         when(cursorResolver.resolve(any(), any()))
                 .thenReturn(CursorStrategy.identity("ID", Types.BIGINT, "test"));
         when(structureSync.apply(any(),

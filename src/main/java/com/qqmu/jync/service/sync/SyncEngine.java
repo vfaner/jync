@@ -468,16 +468,18 @@ public class SyncEngine {
      * added to the set, so the listing stays true for the rest of the cycle.
      *
      * @return the table definition to use for the rest of the cycle — the full re-read when this
-     *     call had to build it, so later steps see its indexes — or null on failure.
+     *     call had to build it, so later steps see its indexes — and whether this call created
+     *     the table; null on failure.
      */
-    private TableMeta ensureTargetTableExists(TableMeta table, Connection sourceConn,
-                                              Connection targetConn,
-                                              SyncContext ctx, SyncResult result,
-                                              Set<String> knownTargetTables) {
+    private EnsuredTarget ensureTargetTableExists(TableMeta table, Connection sourceConn,
+                                                  Connection targetConn,
+                                                  SyncContext ctx, SyncResult result,
+                                                  Set<String> knownTargetTables) {
         String targetTable = ctx.getConfig().targetTableName(table.getName());
         if (knownTargetTables != null && knownTargetTables.contains(targetTable.toUpperCase())) {
             // 名字在清单里只证明"有这张表"，不证明形状对：手工预建的表可能缺列或类型不对。
-            return verifyShapeIfNeeded(table, targetConn, ctx, result, targetTable) ? table : null;
+            return verifyShapeIfNeeded(table, targetConn, ctx, result, targetTable)
+                    ? new EnsuredTarget(table, false) : null;
         }
         table = completeDefinitionForCreate(table, sourceConn, ctx);
         ChangeEvent createEvent = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,
@@ -496,7 +498,9 @@ public class SyncEngine {
 
         // 只在真的创建了的时候记日志、更新快照。
         // executeIdempotentCreate 在表已存在时会返回 "Table already present: ..."，那种情况跳过记录。
-        if (outcome.applied && outcome.detail != null && outcome.detail.startsWith("Created table")) {
+        boolean created = outcome.applied && outcome.detail != null
+                && outcome.detail.startsWith("Created table");
+        if (created) {
             log.info("Auto-created missing target table {}", targetTable);
             stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE, table.getName(),
                     ChangeType.CREATE, outcome.detail, true, 0);
@@ -518,7 +522,11 @@ public class SyncEngine {
         if (knownTargetTables != null) {
             knownTargetTables.add(targetTable.toUpperCase());
         }
-        return table;
+        return new EnsuredTarget(table, created);
+    }
+
+    /** The definition the data phase must use, and whether this cycle built the target table. */
+    private record EnsuredTarget(TableMeta table, boolean created) {
     }
 
     /**
@@ -848,12 +856,22 @@ public class SyncEngine {
         // The returned definition is the one the CREATE actually used: a structure-off cycle
         // read the reduced shape, so the deferred-index step below would otherwise see no
         // indexes and silently build none.
-        TableMeta effective = ensureTargetTableExists(table, sourceConn, targetConn, ctx, result,
+        EnsuredTarget ensured = ensureTargetTableExists(table, sourceConn, targetConn, ctx, result,
                 knownTargetTables);
-        if (effective == null) {
+        if (ensured == null) {
             return;
         }
-        table = effective;
+        table = ensured.table();
+        if (ensured.created()) {
+            // The target table Jync just built holds nothing, so the stored progress describes
+            // a target that no longer exists: rows below the cursor are missing and an
+            // incremental window never looks back. Start this table over as a first load —
+            // which also files its rows as inserts instead of falling into the phase heuristic
+            // reserved for revisions.
+            log.info("Target table {} was created this cycle; resetting its progress so it is"
+                    + " loaded from scratch", ctx.getConfig().targetTableName(table.getName()));
+            progress = stateWriter.forceReload(progress);
+        }
 
         boolean firstLoad = progress.getInitialLoadDone() == null || !progress.getInitialLoadDone();
         if (firstLoad && ctx.getConfig().isTruncateBeforeInitialLoad()) {
