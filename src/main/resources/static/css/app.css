@@ -653,6 +653,21 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .switch input:disabled ~ .track { cursor: not-allowed; opacity: .5; }
 .switch input:disabled ~ .switch-text { opacity: .5; }
 
+/* 基线全量加载分组(仅日志 CDC):标题行常显并说明作用域,点开才露出四项基线开关。
+   收起只影响界面,输入照常随表单提交;切回轮询时按钮隐藏、整组恢复常显。 */
+.baseline-options-toggle {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  margin: 0 0 12px; padding: 0; border: 0; background: none;
+  font: inherit; text-align: left; color: inherit; cursor: pointer;
+}
+.baseline-options-toggle:hover .baseline-options-title { color: var(--brand); }
+.baseline-options-toggle .baseline-options-chevron {
+  width: 12px; height: 12px; align-self: center; transition: transform .15s;
+}
+.baseline-options-toggle.is-open .baseline-options-chevron { transform: rotate(90deg); }
+.baseline-options-title { font-size: 13.5px; font-weight: 600; }
+.baseline-options-toggle .help { font-size: 12px; color: var(--ink-mute); }
+
 /* ─── 源/目标用途选择 ──────────────────────────────────── */
 .role-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .role-pick {

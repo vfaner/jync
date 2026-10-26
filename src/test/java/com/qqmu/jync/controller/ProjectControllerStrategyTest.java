@@ -362,4 +362,63 @@ class ProjectControllerStrategyTest {
                 .andReturn().getResponse().getContentAsString();
         assertThat(enabledPage).doesNotContain("id=\"cdc-rebaseline-disabled-hint\"");
     }
+
+    /** The markup strictly inside the baseline group body (up to its own closing div). */
+    private static String baselineBodyBlock(String page) {
+        int at = page.indexOf("id=\"baseline-options-body\"");
+        assertThat(at).as("baseline-options-body").isPositive();
+        int open = page.indexOf('>', at);
+        return page.substring(open + 1, page.indexOf("</div>", open));
+    }
+
+    /** The one tag carrying data-role="<role>", isolated from surrounding markup. */
+    private static String tagWithRole(String page, String role) {
+        String marker = "data-role=\"" + role + "\"";
+        int at = page.indexOf(marker);
+        assertThat(at).as("tag with " + marker).isPositive();
+        int start = page.lastIndexOf('<', at);
+        int end = page.indexOf('>', at);
+        return page.substring(start, end + 1);
+    }
+
+    /**
+     * 这四项只在 CDC 的基线全量加载里生效,流式回放不看它们。CDC 模式下它们收进一个
+     * 默认收起的「基线全量加载」分组 —— 标题就是作用域,不再靠一段容易被忽略的说明;
+     * 收起只影响界面,输入框照常提交,切回轮询恢复常显。
+     */
+    @Test
+    void detailCollapsesBaselineOptionsUnderLogCdc() throws Exception {
+        stubStrategyDetail(DatabaseType.ORACLE, CaptureStrategy.LOGMINER_CDC);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String toggle = tagWithRole(page, "baseline-options-toggle");
+        assertThat(toggle).doesNotContain("is-hidden");
+        assertThat(toggle).contains("aria-expanded=\"false\"")
+                .contains("type=\"button\"");
+        assertThat(tagWithRole(page, "baseline-options-body")).contains("is-hidden");
+        // 折叠不是禁用:四个值仍是表单的一部分,保存时原样带回。
+        assertThat(page).contains("name=\"allowDrop\"", "name=\"syncDeletes\"",
+                "name=\"disableTargetConstraints\"", "name=\"truncateBeforeInitialLoad\"");
+        // 视图/存储过程在基线会按开关执行,且不在执行期强制开启之列:它们必须留在可编辑的
+        // 分组里,不能跟结构/数据/索引一样被藏掉,否则 CDC 用户无法在本模式下关掉它们。
+        assertThat(baselineBodyBlock(page))
+                .contains("name=\"syncViews\"", "name=\"syncProcedures\"")
+                .doesNotContain("name=\"syncStructure\"", "name=\"syncData\"", "name=\"syncIndexes\"");
+        assertThat(page).doesNotContain("??project.syncOptions.baselineGroup");
+    }
+
+    @Test
+    void detailShowsBaselineOptionsExpandedForPolling() throws Exception {
+        stubDetail(DatabaseType.MYSQL);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(tagWithRole(page, "baseline-options-toggle")).contains("is-hidden");
+        assertThat(tagWithRole(page, "baseline-options-body")).doesNotContain("is-hidden");
+    }
 }

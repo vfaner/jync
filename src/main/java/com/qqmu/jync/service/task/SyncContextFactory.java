@@ -84,6 +84,7 @@ public class SyncContextFactory {
                         "Target database config " + project.getTargetDbId() + " no longer exists"));
 
         SyncConfig config = parseConfig(project);
+        applyCdcBaselineDefaults(config);
 
         DatabaseType.DialectFamily sourceFamily = source.resolvedFamily();
         DatabaseType.DialectFamily targetFamily = target.resolvedFamily();
@@ -259,6 +260,24 @@ public class SyncContextFactory {
                     project.getName(), e.getMessage());
             return new SyncConfig();
         }
+    }
+
+    /**
+     * The log-CDC baseline is the only full load a CDC project ever gets, and the form hides
+     * the structure/data/indexes switches in that mode. Hidden is not inert: a project saved
+     * as structure-only and then switched to CDC would load no rows during the baseline, and
+     * the change stream only covers changes after the baseline position. Treat the three as
+     * on for CDC execution, without writing back to the stored config — switching back to
+     * polling restores the user's original choices, and the dangerous switches
+     * ({@code allowDrop}, {@code syncDeletes}) stay exactly as saved.
+     */
+    static void applyCdcBaselineDefaults(SyncConfig config) {
+        if (config == null || !config.getCaptureStrategyOrDefault().isLogCdc()) {
+            return;
+        }
+        config.setSyncStructure(true);
+        config.setSyncData(true);
+        config.setSyncIndexes(true);
     }
 
     public String serializeConfig(SyncConfig config) {

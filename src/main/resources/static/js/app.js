@@ -2595,6 +2595,23 @@
     };
     syncPollingOnlyVisibility();
 
+    // 基线分组:视图/存储过程连四个「只在基线全量加载时生效」的开关,在日志 CDC 下
+    // 收进默认收起的分组,标题常显即作用域;收起只改界面,输入照常提交,切回轮询后
+    // 整组恢复常显。展开状态记在按钮的 aria-expanded 上,切换策略时不会被重算覆盖。
+    var syncBaselineOptionsVisibility = function () {
+      var picked = document.querySelector('input[name=captureStrategy]:checked');
+      var isCdc = picked && isLogCdcStrategy(picked.value);
+      document.querySelectorAll('[data-role="baseline-options-toggle"]').forEach(function (el) {
+        el.classList.toggle('is-hidden', !isCdc);
+      });
+      document.querySelectorAll('[data-role="baseline-options-body"]').forEach(function (el) {
+        var toggle = el.parentNode && el.parentNode.querySelector('[data-role="baseline-options-toggle"]');
+        var expanded = !isCdc || (!!toggle && toggle.getAttribute('aria-expanded') === 'true');
+        el.classList.toggle('is-hidden', !expanded);
+      });
+    };
+    syncBaselineOptionsVisibility();
+
     // B9(#1)：运行控制按钮区跟随「当前所选」策略实时联动 —— 选中日志 CDC 时
     // （哪怕尚未保存）隐藏「立即同步」及其帮助文案，避免“选了 CDC 却还看到
     // 立即同步按钮”的误导窗口；服务端仍按已保存配置兜底拒绝。初始状态由
@@ -2628,14 +2645,28 @@
       if (el && el.matches && el.matches('.strategy-card input')) {
         syncPollingOnlyVisibility();
         syncRunControlVisibility();
+        syncBaselineOptionsVisibility();
       }
     });
     document.addEventListener('click', function (e) {
       var el = e.target;
+      // 基线分组的展开/收起:按钮只在 CDC 下显示,展开状态写在 aria-expanded 上。
+      var toggle = el && typeof el.closest === 'function'
+        ? el.closest('[data-role="baseline-options-toggle"]') : null;
+      if (toggle) {
+        var open = toggle.getAttribute('aria-expanded') === 'true';
+        toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+        toggle.classList.toggle('is-open', !open);
+        var bodyId = toggle.getAttribute('aria-controls');
+        var body = bodyId && document.getElementById(bodyId);
+        if (body) body.classList.toggle('is-hidden', open);
+        return;
+      }
       while (el && el.nodeType === 1) {
         if (el.className && String(el.className).indexOf('strategy-card') >= 0) {
           syncPollingOnlyVisibility();
           syncRunControlVisibility();
+          syncBaselineOptionsVisibility();
           break;
         }
         el = el.parentNode;

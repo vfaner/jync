@@ -202,12 +202,19 @@ class ProjectControllerObjectSelectionTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        // The change stream does not consult these switches, so showing them invites edits
-        // that cannot take effect. They stay in the form (CSS-hidden, not disabled) so the
-        // saved values survive a save made while CDC is selected.
-        for (String name : List.of("syncStructure", "syncData", "syncIndexes",
-                "syncViews", "syncProcedures")) {
+        // The change stream does not consult these switches — and the execution layer forces
+        // them on for the baseline — so showing them invites edits that cannot take effect.
+        // They stay in the form (CSS-hidden, not disabled) so the saved values survive a save
+        // made while CDC is selected.
+        for (String name : List.of("syncStructure", "syncData", "syncIndexes")) {
             assertThat(labelTag(page, name)).contains("polling-only").contains("is-hidden");
+        }
+        // Views and routines are NOT forced on: they are synced whenever the baseline runs,
+        // per their saved switches. Hiding them would leave CDC users no way to turn them off
+        // without switching the strategy first, so they move into the collapsible baseline
+        // group instead of disappearing.
+        for (String name : List.of("syncViews", "syncProcedures")) {
+            assertThat(labelTag(page, name)).doesNotContain("polling-only").doesNotContain("is-hidden");
         }
         // The note explaining the disappearance must be shown in CDC mode.
         assertThat(cdcHiddenHintTag(page)).doesNotContain("is-hidden");
@@ -344,8 +351,11 @@ class ProjectControllerObjectSelectionTest {
 
     /** The <p> tag carrying the CDC-mode note about the hidden polling switches. */
     private static String cdcHiddenHintTag(String page) {
-        int at = page.indexOf("these polling switches are hidden");
+        // 锚在元素自身的结构标记上（这行内联样式只此一处），而非某一版文案：
+        // 复制改动不该让结构性断言失效；也不能用 class 属性，因为它的值随 CDC 状态变。
+        int at = page.indexOf("style=\"margin:0 0 10px\"");
         assertThat(at).as("CDC hidden-options note").isPositive();
+        assertThat(page.substring(page.lastIndexOf('<', at), at)).contains("data-cdc-visibility=\"cdc\"");
         int start = page.lastIndexOf("<p", at);
         int end = page.indexOf(">", at);
         return page.substring(start, end + 1);
