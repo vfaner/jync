@@ -800,6 +800,64 @@ class ProjectServiceTest {
         verify(projectRepository, never()).save(any());
     }
 
+    /**
+     * 从未显式保存过同步对象的任务(配置在「对象选择」出现之前保存,或首次保存时源库
+     * 列举失败)里表集合为空且不带 explicit 标记 —— 语义是「全部」。表单会把列出的每张
+     * 表都勾上再提交,于是「只改同步选项」的一次保存看起来像一次拓扑变更:上一轮还在
+     * 收尾时整次保存被拒,用户看到的就是开关保存后又退回原样。
+     *
+     * <p>实际生效的选择没有变化:「全部」只能被收窄,不可能凭空多出旧轮次没承诺的表,
+     * 而收窄对已在收尾的轮次无害(它启动时已经取好了自己的表清单)。因此不能拒绝。
+     */
+    @Test
+    void savingOptionsOnAProjectWhoseTablesWereNeverExplicitlySelectedIsNotATopologyChange() {
+        Project existing = storedProject(1L, false);
+        existing.setSyncConfig("{\"captureStrategy\":\"LOGMINER_CDC\"}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a:8081");
+        running.setLockExpiresAt(Instant.now().plusSeconds(60));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        assertThat(service.isRunning(existing))
+                .as("precondition: the previous round still holds a live lease")
+                .isTrue();
+        // 表单提交的就是源库列出的全部表,四开关全开,其余字段与已存配置一致。
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(
+                java.util.List.of("COURSE", "CLASS_INFO", "STUDENT")));
+        config.setAllowDrop(true);
+        config.setSyncDeletes(true);
+
+        service.saveConfig(1L, config);
+
+        assertThat(config.isAllowDrop()).isTrue();
+        assertThat(config.isSyncDeletes()).isTrue();
+        verify(projectRepository).save(existing);
+    }
+
+    /** The counterpart of the case above: an explicit empty selection means "sync nothing",
+     *  so selecting tables from it really does add topology and stays refused. */
+    @Test
+    void addingTablesToAnExplicitlyEmptySelectionWhileAStoppedProjectWrapsUpIsRefused() {
+        Project existing = storedProject(1L, false);
+        existing.setSyncConfig("{\"tables\":[],\"objectSelectionExplicit\":true}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a:8081");
+        running.setLockExpiresAt(Instant.now().plusSeconds(60));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("COURSE")));
+        config.setObjectSelectionExplicit(true);
+
+        assertThatThrownBy(() -> service.saveConfig(1L, config))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.stillStopping");
+        verify(projectRepository, never()).save(any());
+    }
+
     @Test
     void changingTheTableMappingWhileEnabledIsRefused() {
         Project existing = storedProject(1L, true);

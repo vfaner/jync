@@ -689,7 +689,19 @@ public class ProjectService {
                 ? Map.of() : previous.getTableNameMapping();
         Map<String, String> newNames = next.getTableNameMapping() == null
                 ? Map.of() : next.getTableNameMapping();
-        return !oldTables.equals(newTables) || !oldNames.equals(newNames);
+        if (!oldNames.equals(newNames)) {
+            return true;
+        }
+        // 没有 explicit 标记的空集合语义是「全部」(见 SyncConfig 顶部)。这种行来自
+        // 「对象选择」出现之前保存的配置,或首次保存时源库列举失败、只有策略落了库。
+        // 表单会把列出的每张表都勾上再提交,于是第一次保存会把「全部」物化成一张清单:
+        // 生效的选择并没有变(「全部」只能被收窄,不可能多出旧轮次没承诺的表,而收窄
+        // 对已在收尾的轮次无害 —— 它启动时已取好自己的表清单)。把它算作拓扑变更,
+        // 就会让「只改同步选项」的保存被「上一轮仍在收尾」拒掉,用户看到开关原样退回。
+        if (previous != null && !previous.isObjectSelectionExplicit() && oldTables.isEmpty()) {
+            return false;
+        }
+        return !oldTables.equals(newTables);
     }
 
     /** Corrupt or absent sync_config degrades to POLLING, matching CdcConsumerManager. */
