@@ -28,7 +28,6 @@ import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
-import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncTaskStore;
 import com.qqmu.jync.util.CryptoUtil;
 
@@ -37,13 +36,12 @@ class CdcBaselineServiceTest {
     private final DataSourceManager dataSourceManager = mock(DataSourceManager.class);
     private final SyncEngine engine = mock(SyncEngine.class);
     private final CdcPositionStore positionStore = mock(CdcPositionStore.class);
-    private final SyncStateWriter stateWriter = mock(SyncStateWriter.class);
     private final SyncTaskStore taskStore = mock(SyncTaskStore.class);
     private final CryptoUtil crypto = new CryptoUtil(props());   // @Component,构造吃 SyncProperties(默认 key/salt)
     private final BinlogClientFactory clientFactory =
             new BinlogClientFactory(crypto, props());
     private final CdcBaselineService service = new CdcBaselineService(
-            positionStore, clientFactory, stateWriter, taskStore, dataSourceManager, engine);
+            positionStore, clientFactory, taskStore, dataSourceManager, engine);
 
     private static com.qqmu.jync.config.SyncProperties props() {
         return new com.qqmu.jync.config.SyncProperties();
@@ -147,13 +145,30 @@ class CdcBaselineServiceTest {
 
         service.runBaseline(ctx(7L), () -> true);
 
-        InOrder order = inOrder(positionStore, stateWriter, engine);
+        InOrder order = inOrder(positionStore, engine);
         order.verify(positionStore).recordBaselineStart(eq(7L), eq("mysql-bin.000003"),
                 eq(154L), org.mockito.ArgumentMatchers.isNull(), anyLong());
-        order.verify(stateWriter).resetProject(7L);
+        order.verify(engine).resetProject(7L);
         order.verify(engine).runCycle(any(SyncContext.class));
         order.verify(positionStore).markBaselineDone(7L);
         // 关键顺序:位点先落库再全量——全量期间发生的变更不会漏(B4)
+    }
+
+    /**
+     * 基线重新加载的是「目标端此刻的样子」,进程内那些「这张表已经核对过/刚审计过」的
+     * 结论必须一起作废。只调 stateWriter.resetProject 清掉库里的进度与快照时,验证通过
+     * 的缓存(verifiedTables)会活过基线:目标表在基线前被手工重建/换 schema,全量却
+     * 跳过形状复核,把旧结论套到新表上,数据阶段才开始逐行报错。
+     */
+    @Test
+    void baselineEvictsTheEngineInMemoryVerdictsToo() throws SQLException {
+        Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(new SyncResult());
+
+        service.runBaseline(ctx(7L), () -> true);
+
+        verify(engine).resetProject(7L);
     }
 
     @Test
@@ -260,7 +275,7 @@ class CdcBaselineServiceTest {
         verify(positionStore).recordBaselineStartScn(12L, 77777L);
         verify(positionStore, never()).recordBaselineStart(anyLong(), any(),
                 org.mockito.ArgumentMatchers.anyLong(), any(), anyLong());
-        verify(stateWriter).resetProject(12L);
+        verify(engine).resetProject(12L);
         verify(positionStore).markBaselineDone(12L);
     }
 

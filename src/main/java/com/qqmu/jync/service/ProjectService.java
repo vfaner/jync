@@ -855,7 +855,7 @@ public class ProjectService {
     public void resetProgress(Long projectId) {
         Project project = require(projectId);
         // Progress rows play no part in CDC: the baseline wipes them itself before its full
-        // load (CdcBaselineService → SyncStateWriter.resetProject), and streaming afterwards
+        // load (CdcBaselineService → SyncEngine.resetProject), and streaming afterwards
         // follows the position row only. Clearing them would report success and change
         // nothing — "the next run reloads everything" would be a false promise. The button
         // that means it is 「重建基线」, next to this one.

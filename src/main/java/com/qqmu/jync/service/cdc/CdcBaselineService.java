@@ -14,7 +14,6 @@ import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
-import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncTaskStore;
 
 import lombok.extern.slf4j.Slf4j;
@@ -36,17 +35,15 @@ public class CdcBaselineService {
 
     private final CdcPositionStore positionStore;
     private final BinlogClientFactory clientFactory;
-    private final SyncStateWriter stateWriter;
     private final SyncTaskStore taskStore;
     private final DataSourceManager dataSourceManager;
     private final SyncEngine engine;
 
     public CdcBaselineService(CdcPositionStore positionStore, BinlogClientFactory clientFactory,
-                              SyncStateWriter stateWriter, SyncTaskStore taskStore,
+                              SyncTaskStore taskStore,
                               DataSourceManager dataSourceManager, SyncEngine engine) {
         this.positionStore = positionStore;
         this.clientFactory = clientFactory;
-        this.stateWriter = stateWriter;
         this.taskStore = taskStore;
         this.dataSourceManager = dataSourceManager;
         this.engine = engine;
@@ -212,7 +209,7 @@ public class CdcBaselineService {
                 case LOGMINER_CDC: {
                     long scn = readCurrentScn(ctx.getSourceConfig());
                     positionStore.recordBaselineStartScn(projectId, scn);
-                    stateWriter.resetProject(projectId);
+                    engine.resetProject(projectId);
                     log.info("CDC baseline for project {}: full load from SCN {} (LogMiner)",
                             projectId, scn);
                     break;
@@ -220,7 +217,7 @@ public class CdcBaselineService {
                 case PG_LOGICAL_CDC: {
                     String lsn = readCurrentLsnPg(ctx.getSourceConfig());
                     positionStore.recordBaselineStartLsn(projectId, lsn);
-                    stateWriter.resetProject(projectId);
+                    engine.resetProject(projectId);
                     log.info("CDC baseline for project {}: full load from LSN {} (PG logical)",
                             projectId, lsn);
                     break;
@@ -228,7 +225,7 @@ public class CdcBaselineService {
                 case SQLSERVER_CDC: {
                     String lsn = readCurrentLsnSqlServer(ctx.getSourceConfig());
                     positionStore.recordBaselineStartLsn(projectId, lsn);
-                    stateWriter.resetProject(projectId);
+                    engine.resetProject(projectId);
                     log.info("CDC baseline for project {}: full load from LSN {} (SQL Server CDC)",
                             projectId, lsn);
                     break;
@@ -240,7 +237,7 @@ public class CdcBaselineService {
                     CdcPositionMark mark = readCurrentPosition(ctx.getSourceConfig());
                     positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
                             mark.getGtidSet(), clientFactory.serverIdFor(projectId));
-                    stateWriter.resetProject(projectId);
+                    engine.resetProject(projectId);
                     log.info("CDC baseline for project {}: full load from position {}:{}",
                             projectId, mark.getFile(), mark.getPos());
                     break;
