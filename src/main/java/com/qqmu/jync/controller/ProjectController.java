@@ -246,7 +246,16 @@ public class ProjectController {
         // "When will it actually run?" has to be visible before the time comes: a stopped
         // project and a project whose job failed to register look identical otherwise, and
         // the fire time silently passes. Null when nothing is scheduled.
-        model.addAttribute("nextRunAt", projectService.nextFireTime(id));
+        java.time.LocalDateTime nextRunAt = projectService.nextFireTime(id);
+        model.addAttribute("nextRunAt", nextRunAt);
+        // A fire that is still executing keeps its trigger out of Quartz's time wheel
+        // (@DisallowConcurrentExecution), so the stored next-fire time stays frozen in the
+        // past while every later fire is skipped. The page has to say that, or the number
+        // reads as "the scheduler is late" and the operator just waits. The grace covers a
+        // normal cycle that simply has not finished by the time the page renders.
+        model.addAttribute("nextRunOverdue", nextRunAt != null
+                && nextRunAt.isBefore(java.time.LocalDateTime.now().minusSeconds(60)));
+        model.addAttribute("activeCycle", projectService.activeCycle(id));
         model.addAttribute("serverZone", java.time.ZoneId.systemDefault().getId());
 
         // --- capture-strategy cards (C1) ---------------------------------------------------

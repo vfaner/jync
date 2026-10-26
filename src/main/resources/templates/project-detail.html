@@ -108,6 +108,19 @@
                         <span th:unless="${nextRunAt != null}" class="muted"
                               th:text="${project.enabled} ? #{project.nextRun.pending}
                                        : #{project.nextRun.notStarted}">Not started</span>
+                        <!--/* 一个已经过去的「下次自动运行」不是调度丢了：这一轮 fire 还没
+                               返回，@DisallowConcurrentExecution 会在它结束前把该 job 的
+                               触发器从 Quartz 时间轮里摘掉，之后每次到点都被跳过。页面必须
+                               说出这一点，否则用户只会继续等（或者去点没用的强制解锁）。*/-->
+                        <div class="help" th:if="${activeCycle != null and activeCycle.running}"
+                             th:text="#{project.nextRun.executing(${activeCycle.minutesSinceProgress})}">
+                            Previous round still running</div>
+                        <div class="help text-danger"
+                             th:if="${activeCycle != null and activeCycle.running and activeCycle.stuck}"
+                             th:text="#{project.nextRun.stuck(${activeCycle.stuckThresholdMinutes})}">
+                            Possibly wedged</div>
+                        <div class="help" th:if="${nextRunOverdue and (activeCycle == null or !activeCycle.running)}"
+                             th:text="#{project.nextRun.overdue}">This time has passed</div>
                     </dd>
                 </th:block>
                 <!--/* 锁可见性：持有者 + 租约到期时间。过期的租约标红 —— 持有者已经

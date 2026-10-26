@@ -940,6 +940,8 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .dl dt { color: var(--ink-mute); font-weight: 600; }
 .dl dd { margin: 0; }
 .dl dd .help { font-size: 12px; color: var(--ink-mute); margin-top: 3px; line-height: 1.5; max-width: 480px; }
+/* 上一条选择器比 .text-danger 更具体，卡死提示单加 .text-danger 会保持灰色。 */
+.dl dd .help.text-danger { color: var(--danger); }
 /* 系统信息页：dt/dd 用 .kv 成对包裹后双列排布，卡片高度减半，
    全宽卡里 chip 右侧的大片空白也随之消失；窄屏回退见 900px 断点 */
 .dl.pairs { grid-template-columns: 1fr 1fr; gap: 10px 28px; }

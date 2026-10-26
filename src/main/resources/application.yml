@@ -157,6 +157,10 @@ sync:
   full-compare-max-rows: 20000
   # TTL for the per-project sync lock; a crashed node's lock expires after this
   lock-ttl-ms: 300000
+  # A polling cycle with no progress for this long is reported as wedged. Until it returns,
+  # Quartz skips every later fire of that project (the page shows a next-run time that has
+  # already passed); waiting does not recover it, a restart does. 0 disables the warning.
+  stuck-threshold-ms: 1800000
   # 多实例控制面：每个节点定期把本地 Quartz 调度与数据库里的 enabled 标志对账，
   # 别的节点上启动/停用的项目最多经过一个间隔就会在本节点生效。单实例部署时
   # 对账始终无差异，纯属保险。

@@ -86,6 +86,77 @@ class ProjectNextRunViewTest {
         assertThat(page).doesNotContain("未启动");
     }
 
+    /**
+     * A next-run time in the past is not a lost schedule: it is the signature of a fire
+     * that has not returned. {@code @DisallowConcurrentExecution} keeps the trigger out of
+     * Quartz's time wheel for the lifetime of that execution, so nothing new fires and the
+     * page keeps showing the same past time. Saying so is the difference between "wait" and
+     * "restart the instance".
+     */
+    @Test
+    void anOverdueNextRunWithoutALocalCycleSaysThePreviousRoundMayStillBeRunning()
+            throws Exception {
+        stubProject(true);
+        when(projectService.nextFireTime(1L))
+                .thenReturn(LocalDateTime.now().minusMinutes(5));
+
+        String page = render("zh-CN");
+
+        assertThat(page).contains("该时间已过");
+    }
+
+    @Test
+    void aRunningCycleIsShownWithTheAgeOfItsLastProgress() throws Exception {
+        stubProject(true);
+        when(projectService.nextFireTime(1L)).thenReturn(LocalDateTime.now().plusMinutes(1));
+        when(projectService.activeCycle(1L)).thenReturn(new ProjectService.CycleView(
+                true,
+                LocalDateTime.now().minusMinutes(4),
+                LocalDateTime.now().minusMinutes(3),
+                3, false, 30));
+
+        String page = render("zh-CN");
+
+        assertThat(page).contains("上一轮仍在执行");
+        assertThat(page).contains("3 分钟前");
+        assertThat(page).doesNotContain("疑似卡死");
+    }
+
+    @Test
+    void aStuckCycleWarnsThatTheScheduleCannotAdvance() throws Exception {
+        stubProject(true);
+        when(projectService.nextFireTime(1L)).thenReturn(LocalDateTime.now().minusMinutes(20));
+        when(projectService.activeCycle(1L)).thenReturn(new ProjectService.CycleView(
+                true,
+                LocalDateTime.now().minusMinutes(80),
+                LocalDateTime.now().minusMinutes(45),
+                45, true, 30));
+
+        String page = render("zh-CN");
+
+        assertThat(page).contains("疑似卡死");
+        assertThat(page).contains("30");
+        // The whole point of the hint: waiting longer does not help.
+        assertThat(page).contains("重启本实例");
+    }
+
+    @Test
+    void theEnglishPageWarnsAboutTheWedgedCycleToo() throws Exception {
+        stubProject(true);
+        when(projectService.nextFireTime(1L)).thenReturn(LocalDateTime.now().plusMinutes(1));
+        when(projectService.activeCycle(1L)).thenReturn(new ProjectService.CycleView(
+                true,
+                LocalDateTime.now().minusMinutes(80),
+                LocalDateTime.now().minusMinutes(45),
+                45, true, 30));
+
+        String page = render("en-US");
+
+        assertThat(page).contains("Possibly wedged");
+        assertThat(page).contains("restarts");
+        assertThat(page).doesNotContain("疑似卡死");
+    }
+
     private void stubProject(boolean enabled) {
         Project project = new Project();
         project.setId(1L);

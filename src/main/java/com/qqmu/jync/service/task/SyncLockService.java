@@ -1,6 +1,8 @@
 package com.qqmu.jync.service.task;
 
+import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -53,6 +55,13 @@ public class SyncLockService {
     private final SyncProperties properties;
 
     private final Map<Long, Semaphore> jvmLocks = new ConcurrentHashMap<>();
+
+    /**
+     * Polling cycles executing on this node, by project. Daemon leases are deliberately not
+     * listed: a CDC consumer renews forever by design and is not a fire whose return the
+     * schedule is waiting on.
+     */
+    private final Map<Long, LockHandle> activePolling = new ConcurrentHashMap<>();
 
     /**
      * Renews held leases in the background. Renewal at commit boundaries alone leaves a
@@ -125,7 +134,7 @@ public class SyncLockService {
      * @return a handle to close when done, or null when another runner holds the lock
      */
     public LockHandle tryAcquire(Long projectId) {
-        return tryAcquire(projectId, properties.getLockTtlMs(), MAX_WATCHDOG_TTLS);
+        return tryAcquire(projectId, properties.getLockTtlMs(), MAX_WATCHDOG_TTLS, false);
     }
 
     /**
@@ -134,10 +143,10 @@ public class SyncLockService {
      * exactly the takeover signal task book B6 asks for.
      */
     public LockHandle tryAcquireForDaemon(Long projectId, long ttlMs) {
-        return tryAcquire(projectId, ttlMs, Integer.MAX_VALUE);
+        return tryAcquire(projectId, ttlMs, Integer.MAX_VALUE, true);
     }
 
-    private LockHandle tryAcquire(Long projectId, long ttlMs, int maxRenewals) {
+    private LockHandle tryAcquire(Long projectId, long ttlMs, int maxRenewals, boolean daemon) {
         Semaphore jvmLock = jvmLocks.computeIfAbsent(projectId, id -> new Semaphore(1));
         if (!jvmLock.tryAcquire()) {
             log.debug("Project {} is already syncing in this JVM; skipping this fire", projectId);
@@ -152,12 +161,35 @@ public class SyncLockService {
                 jvmLock.release();
                 return null;
             }
-            return new LockHandle(projectId, jvmLock, ttlMs, maxRenewals);
+            LockHandle handle = new LockHandle(projectId, jvmLock, ttlMs, maxRenewals);
+            if (!daemon) {
+                // Polling cycles are the ones whose fire can freeze a Quartz trigger; the
+                // page needs to see them (see ActiveCycle).
+                activePolling.put(projectId, handle);
+            }
+            return handle;
         } catch (RuntimeException e) {
             // Never leak the JVM lock when the database call fails.
             jvmLock.release();
             throw e;
         }
+    }
+
+    /**
+     * Snapshot of a polling cycle executing in this JVM right now.
+     *
+     * <p>Started-at and last-progress-at are what let the project page explain a next-run
+     * time that has already passed: the trigger is skipped for as long as that cycle runs,
+     * so "overdue" means "the previous fire has not returned" — and no progress for a long
+     * time means it probably never will without a restart.
+     */
+    public record ActiveCycle(Long projectId, Instant startedAt, Instant lastProgressAt) {
+    }
+
+    /** The polling cycle running for this project on this node, if any. */
+    public Optional<ActiveCycle> activePollingCycle(Long projectId) {
+        LockHandle handle = activePolling.get(projectId);
+        return handle == null ? Optional.empty() : Optional.of(handle.snapshot());
     }
 
     /**
@@ -248,12 +280,24 @@ public class SyncLockService {
          * exclusion this class exists for.
          */
         private final AtomicBoolean closed = new AtomicBoolean();
+        /** When this cycle took the lock; shown by the project page. */
+        private final Instant startedAt;
+        /**
+         * When the cycle last proved it is moving: an explicit {@link #renew()} between
+         * batches, never a watchdog tick. The watchdog renews even when the worker thread is
+         * wedged, so it would mask exactly the condition the page must report.
+         */
+        private volatile Instant lastProgressAt;
+        /** One wedge warning per cycle, however many renewal ticks follow it. */
+        private final AtomicBoolean stallWarned = new AtomicBoolean();
 
         LockHandle(Long projectId, Semaphore jvmLock, long ttlMs, int maxRenewals) {
             this.projectId = projectId;
             this.jvmLock = jvmLock;
             this.ttlMs = ttlMs;
             this.maxRenewals = maxRenewals;
+            this.startedAt = Instant.now();
+            this.lastProgressAt = startedAt;
             this.watchdogDeadlineMs = System.currentTimeMillis()
                     + (long) maxRenewals * ttlMs;
             long intervalMs = Math.max(1000L, ttlMs / 3);
@@ -273,9 +317,59 @@ public class SyncLockService {
                 watchdogTask.cancel(false);
                 return;
             }
-            if (!renew()) {
+            warnIfNoProgress();
+            if (!extendLease()) {
                 watchdogTask.cancel(false);
             }
+        }
+
+        /**
+         * Reports a cycle that has not reported progress for longer than
+         * {@code sync.stuck-threshold-ms}.
+         *
+         * <p>The wedge matters beyond this lock: Quartz keeps the trigger out of its time
+         * wheel for the whole execution ({@code @DisallowConcurrentExecution}), so the
+         * project silently stops firing — the trigger's next-fire time stays frozen and
+         * every later fire is skipped. Neither force-unlock nor waiting helps; only the
+         * execution returning (or a restart) does. One WARN per cycle is the operator's
+         * only clue that this happened.
+         */
+        private void warnIfNoProgress() {
+            long thresholdMs = properties.getStuckThresholdMs();
+            if (thresholdMs <= 0) {
+                return;                                    // detection disabled by config
+            }
+            long idleMs = System.currentTimeMillis() - lastProgressAt.toEpochMilli();
+            if (idleMs < thresholdMs || !stallWarned.compareAndSet(false, true)) {
+                return;
+            }
+            log.warn("Project {}: the sync cycle has made no progress for {} min and still"
+                    + " holds its lease; the Quartz trigger stays skipped until that cycle"
+                    + " returns, so the project will not run again — restart the instance if"
+                    + " it does not finish (force-unlock clears the lock row, not the thread)",
+                    projectId, idleMs / 60_000L);
+        }
+
+        /** Extends the lease and reports whether it still belongs to this instance. */
+        private boolean extendLease() {
+            boolean renewed;
+            try {
+                renewed = store.renew(projectId, ownerId, ttlMs);
+            } catch (RuntimeException e) {
+                log.warn("Renewing the sync lock for project {} failed: {}", projectId,
+                        e.getMessage());
+                return false;
+            }
+            if (!renewed) {
+                log.warn("Could not renew the sync lock for project {}; another instance may have "
+                        + "taken it over", projectId);
+            }
+            return renewed;
+        }
+
+        /** What the project page needs to explain a frozen next-run time. */
+        ActiveCycle snapshot() {
+            return new ActiveCycle(projectId, startedAt, lastProgressAt);
         }
 
         public Long projectId() {
@@ -295,17 +389,11 @@ public class SyncLockService {
          *         meaning the cycle must stop writing — another instance may own the project
          */
         public boolean renew() {
-            boolean renewed;
-            try {
-                renewed = store.renew(projectId, ownerId, ttlMs);
-            } catch (RuntimeException e) {
-                log.warn("Renewing the sync lock for project {} failed: {}", projectId,
-                        e.getMessage());
-                return false;
-            }
-            if (!renewed) {
-                log.warn("Could not renew the sync lock for project {}; another instance may have "
-                        + "taken it over", projectId);
+            boolean renewed = extendLease();
+            if (renewed) {
+                // Only a caller-visible renewal counts: the cycle itself reached a safe
+                // point. Watchdog ticks call extendLease() directly and are not progress.
+                lastProgressAt = Instant.now();
             }
             return renewed;
         }
@@ -324,6 +412,7 @@ public class SyncLockService {
                 return;                                          // 幂等:恰好释放一次
             }
             watchdogTask.cancel(false);
+            activePolling.remove(projectId, this);
             try {
                 store.release(projectId, ownerId);
             } catch (RuntimeException e) {

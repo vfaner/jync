@@ -49,4 +49,34 @@ class SyncLockServiceLogTest {
         assertThat(LogCapture.messagesAt(Level.DEBUG, logs))
                 .anySatisfy(line -> assertThat(line).contains("locked by another instance"));
     }
+
+    /**
+     * A fire whose execution never returns freezes its Quartz trigger for good: the
+     * schedule silently stops while the page keeps showing a past "next run". The watchdog
+     * is the only component that runs for the whole lifetime of that execution, so it is
+     * where the wedge has to be reported — once, not every renewal tick.
+     */
+    @Test
+    void aCycleWithNoProgressWarnsOnceThatItIsWedged() throws InterruptedException {
+        SyncLockStore store = mock(SyncLockStore.class);
+        when(store.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
+        when(store.renew(eq(1L), anyString(), anyLong())).thenReturn(true);
+        SyncProperties properties = new SyncProperties();
+        properties.setLockTtlMs(600L);          // watchdog interval = max(1000, ttl/3)
+        properties.setStuckThresholdMs(200L);   // exceeded before the first tick
+        SyncLockService service = new SyncLockService(store, properties, 8080);
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(SyncLockService.class);
+        try (SyncLockService.LockHandle handle = service.tryAcquire(1L)) {
+            assertThat(handle).isNotNull();
+            Thread.sleep(2_500);   // two-plus watchdog ticks
+        } finally {
+            LogCapture.detach(SyncLockService.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .filteredOn(line -> line.contains("no progress"))
+                .as("one warning per cycle, however many renewal ticks follow")
+                .hasSize(1);
+    }
 }

@@ -134,6 +134,19 @@ public class SyncProperties {
     private long lockTtlMs = 300_000L;
 
     /**
+     * How long a polling cycle may go without reporting progress (a committed batch, a
+     * finished table) before the lock watchdog warns that it is wedged.
+     *
+     * <p>A fire whose execution never returns freezes its Quartz trigger
+     * ({@code @DisallowConcurrentExecution} keeps it out of the time wheel), so the project
+     * silently stops firing while the page keeps showing a next-run time in the past.
+     * Waiting does not recover from that; a restart does. 30 minutes is well above the
+     * 5-minute statement timeout and any single legitimately slow chunk, so the warning is
+     * about a wedge, not a big table. 0 disables the warning and the page's stuck hint.
+     */
+    private long stuckThresholdMs = 30 * 60_000L;
+
+    /**
      * Shortest gap between two row-count audits of the same table; 0 disables the audit.
      *
      * <p>The audit verifies that every source row the cursor claims to have delivered is

@@ -1266,6 +1266,46 @@ public class ProjectService {
         return scheduler.nextFireTime(projectId);
     }
 
+    /**
+     * A polling cycle executing on this node, presented for the project page.
+     *
+     * <p>{@code minutesSinceProgress} is the age of the last explicit lease renewal — the
+     * last time the cycle reached a safe point. It is not the age of the lease itself: the
+     * watchdog keeps renewing a wedged cycle's lease for up to ten TTLs, which is exactly
+     * the window in which the page must stop saying "almost done".
+     */
+    public record CycleView(boolean running, java.time.LocalDateTime startedAt,
+                            java.time.LocalDateTime lastProgressAt, long minutesSinceProgress,
+                            boolean stuck, long stuckThresholdMinutes) {
+    }
+
+    /**
+     * The polling cycle running for this project on this node, or null when none is.
+     *
+     * <p>Null rather than empty: the page renders it directly, and "no cycle" is the normal
+     * state of a stopped or idle project.
+     */
+    public CycleView activeCycle(Long projectId) {
+        SyncLockService.ActiveCycle cycle = lockService.activePollingCycle(projectId).orElse(null);
+        return cycle == null ? null : cycleView(cycle, properties.getStuckThresholdMs(),
+                Instant.now());
+    }
+
+    /** Pure mapping, kept static so the threshold arithmetic is testable without the service. */
+    static CycleView cycleView(SyncLockService.ActiveCycle cycle, long stuckThresholdMs,
+                               Instant now) {
+        long idleMs = Math.max(0L, java.time.Duration.between(cycle.lastProgressAt(), now)
+                .toMillis());
+        boolean detectionEnabled = stuckThresholdMs > 0;
+        return new CycleView(true,
+                java.time.LocalDateTime.ofInstant(cycle.startedAt(), java.time.ZoneId.systemDefault()),
+                java.time.LocalDateTime.ofInstant(cycle.lastProgressAt(),
+                        java.time.ZoneId.systemDefault()),
+                idleMs / 60_000L,
+                detectionEnabled && idleMs >= stuckThresholdMs,
+                Math.max(0L, stuckThresholdMs / 60_000L));
+    }
+
     private Project require(Long projectId) {
         return projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
