@@ -904,6 +904,10 @@ public class DataSyncService {
         // around the read is what makes a large source stream instead of landing in a heap
         // buffer. Other families read the same rows with autocommit untouched.
         SourceReadSession sourceRead = null;
+        // The meter starts before the page query, so elapsed is the pass's real wall time and
+        // rows/s cannot look healthy while most of the time is spent waiting for the cursor.
+        ThroughputMeter throughput = new ThroughputMeter(table.getName());
+        long queryStarted = System.nanoTime();
         try (PreparedStatement select = sourceConn.prepareStatement(selectSql)) {
             sourceRead = SourceReadSession.begin(sourceConn, needsSourceTransaction(ctx));
             JdbcUtil.applyQueryTimeout(select, properties.getQueryTimeoutSeconds());
@@ -922,6 +926,7 @@ public class DataSyncService {
             }
 
             try (ResultSet rs = select.executeQuery()) {
+                throughput.recordQuery(System.nanoTime() - queryStarted);
                 ResultSetMetaData md = rs.getMetaData();
                 List<String> columns = JdbcRowMapper.columnNames(md);
                 List<Integer> jdbcTypes = JdbcRowMapper.columnTypes(md);
@@ -979,7 +984,6 @@ public class DataSyncService {
                 // single-worker full load.
                 RowReadPlan readPlan = RowReadPlan.of(
                         columns, jdbcTypes, typeNames, lobPolicy);
-                ThroughputMeter throughput = new ThroughputMeter(table.getName());
                 try {
                     total = emulated
                             ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,

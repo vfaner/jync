@@ -30,6 +30,7 @@ final class ThroughputMeter {
     private final long startedNanos;
 
     private int rows;
+    private long queryNanos;
     private long readNanos;
     private long writeNanos;
     private long commitNanos;
@@ -44,6 +45,17 @@ final class ThroughputMeter {
         this.table = table;
         this.nanoClock = nanoClock;
         this.startedNanos = nanoClock.getAsLong();
+    }
+
+    /**
+     * Preparing and executing the page query, up to the moment the first row is available.
+     *
+     * <p>Charged to its own share because its remedy is the source's plan or load, not the
+     * row loop: without it a query that scans instead of seeking leaves a gap between chunk
+     * lines and nothing in the line to explain it.
+     */
+    void recordQuery(long nanos) {
+        queryNanos += nanos;
     }
 
     /**
@@ -81,6 +93,10 @@ final class ThroughputMeter {
         return rows;
     }
 
+    long queryNanos() {
+        return queryNanos;
+    }
+
     long readNanos() {
         return readNanos;
     }
@@ -113,20 +129,21 @@ final class ThroughputMeter {
      * because the two differ exactly when the pass re-read an unchanged table.
      */
     String describe(int changedRows) {
-        long measured = readNanos + writeNanos;
+        long measured = queryNanos + readNanos + writeNanos;
+        int queryPct = measured == 0 ? 0 : (int) Math.round(queryNanos * 100.0 / measured);
         int readPct = measured == 0 ? 0 : (int) Math.round(readNanos * 100.0 / measured);
         // Write windows include the commit that closed a batch; report row work net of it.
         long rowWorkNanos = Math.max(0L, writeNanos - commitNanos);
         int writePct = measured == 0 ? 0 : (int) Math.round(rowWorkNanos * 100.0 / measured);
-        // The remainder, so the three shares always add up to 100 after rounding.
-        int commitPct = measured == 0 ? 0 : Math.max(0, 100 - readPct - writePct);
+        // The remainder, so the shares always add up to 100 after rounding.
+        int commitPct = measured == 0 ? 0 : Math.max(0, 100 - queryPct - readPct - writePct);
         double rowsPerBatch = batches == 0 ? 0 : (double) rows / batches;
         return String.format(Locale.ROOT,
                 "table=%s thread=%s rows=%d changed=%d elapsed=%.1fs rows/s=%.1f"
-                        + " read=%d%% write=%d%% commit=%d%%"
+                        + " query=%d%% read=%d%% write=%d%% commit=%d%%"
                         + " batches=%d rowsPerBatch=%.0f",
                 table, Thread.currentThread().getName(), rows, changedRows,
-                elapsedNanos() / 1e9, rowsPerSecond(), readPct, writePct, commitPct,
+                elapsedNanos() / 1e9, rowsPerSecond(), queryPct, readPct, writePct, commitPct,
                 batches, rowsPerBatch);
     }
 

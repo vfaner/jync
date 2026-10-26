@@ -101,6 +101,28 @@ class ThroughputMeterTest {
     }
 
     /**
+     * Time the source spends before the first row is available (preparing and executing the
+     * page query) is part of the pass. Left out, a slow plan looks like a healthy row loop
+     * with a mysterious gap between chunk lines.
+     */
+    @Test
+    void queryWaitIsReportedAndCountedInTheShares() {
+        ThroughputMeter meter = new ThroughputMeter("ORDERS", clock::get);
+        meter.recordQuery(300_000_000L);    // 300 ms before the first row
+        for (int i = 0; i < 100; i++) {
+            meter.recordRead(3_000_000L);   // 300 ms total
+            meter.recordWrite(4_000_000L);  // 400 ms total
+        }
+
+        assertThat(meter.queryNanos()).isEqualTo(300_000_000L);
+        assertThat(meter.describe(0))
+                .contains("query=30%")
+                .contains("read=30%")
+                .contains("write=40%")
+                .contains("commit=0%");
+    }
+
+    /**
      * A full-compare table is re-read every poll interval, so an idle project produces a "big"
      * pass that changed nothing every couple of seconds. At INFO those lines read as data
      * moving when the target is untouched — they belong on DEBUG, with the change count in the

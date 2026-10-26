@@ -45,6 +45,9 @@ import com.qqmu.jync.service.version.VersionService;
         "sync.defer-secondary-indexes=true",
         "sync.initial-load-insert-first=true",
         "sync.max-pool-size=5",
+        // Pinned so the assertion below checks that this card renders the effective value,
+        // not that the packaged default happens to be this number: operators retune it.
+        "sync.lob.inline-max-bytes=65536",
         "sync.row-count-audit-interval-ms=60000",
         "sync.query-timeout-seconds=300",
         "sync.metadata-query-timeout-seconds=60",

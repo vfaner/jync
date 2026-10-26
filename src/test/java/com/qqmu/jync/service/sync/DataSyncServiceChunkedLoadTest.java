@@ -354,6 +354,72 @@ class DataSyncServiceChunkedLoadTest {
     }
 
     /**
+     * A page query that takes seconds before it yields its first row — a plan that scans
+     * instead of seeking, a busy source — leaves the row loop looking healthy. The wait used
+     * to fall outside the meter entirely, so the only symptom was a gap between chunk lines
+     * and no way to attribute it. It belongs in the line, and in the elapsed time that
+     * {@code rows/s} divides by.
+     */
+    @Test
+    void theThroughputLineReportsTheWaitBeforeTheFirstRow() throws SQLException {
+        createItems(1000);
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(ThroughputMeter.class);
+        try {
+            DataSyncService.TableSyncResult result = service(2000).syncTable(
+                    slowExecuteQuery(source, 200L), target, itemsMeta(), IDENTITY,
+                    new SyncProgress(), ctx);
+            assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        } finally {
+            LogCapture.detach(ThroughputMeter.class, logs);
+        }
+
+        String line = LogCapture.messagesAt(Level.INFO, logs).stream()
+                .filter(l -> l.contains("read="))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no throughput line: " + logs.list));
+        assertThat(line).contains("query=");
+        int queryPct = Integer.parseInt(line.replaceAll(".*query=(\\d+)%.*", "$1"));
+        assertThat(queryPct)
+                .as("time spent before the first row must not vanish from the line: %s", line)
+                .isGreaterThanOrEqualTo(50);
+        double elapsed = Double.parseDouble(line.replaceAll(".*elapsed=([0-9.]+)s.*", "$1"));
+        assertThat(elapsed)
+                .as("rows/s must divide by the real pass time, query wait included: %s", line)
+                .isGreaterThanOrEqualTo(0.2);
+    }
+
+    /** Delegates everything to the real source, but makes every page query take {@code millis}. */
+    private static Connection slowExecuteQuery(Connection real, long millis) {
+        return (Connection) java.lang.reflect.Proxy.newProxyInstance(
+                DataSyncServiceChunkedLoadTest.class.getClassLoader(),
+                new Class<?>[] {Connection.class},
+                (proxy, method, args) -> {
+                    Object result = invoke(real, method, args);
+                    if (result instanceof java.sql.PreparedStatement ps) {
+                        return slowExecutingStatement(ps, millis);
+                    }
+                    return result;
+                });
+    }
+
+    private static java.sql.PreparedStatement slowExecutingStatement(
+            java.sql.PreparedStatement real, long millis) {
+        return (java.sql.PreparedStatement) java.lang.reflect.Proxy.newProxyInstance(
+                DataSyncServiceChunkedLoadTest.class.getClassLoader(),
+                new Class<?>[] {java.sql.PreparedStatement.class},
+                (proxy, method, args) -> {
+                    if ("executeQuery".equals(method.getName())) {
+                        try {
+                            Thread.sleep(millis);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                    return invoke(real, method, args);
+                });
+    }
+
+    /**
      * Delegates everything to the real source, but makes every fifth column read take 3ms —
      * the mapping cost of a wide or LOB-heavy table, without a wide table in the fixture.
      */
