@@ -180,7 +180,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void aFailedColumnChangeWithholdsTheTableSnapshot() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(columnAlter()));
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of(columnAlter()));
         when(structureSync.apply(any(), any(), any()))
                 .thenReturn(StructureSyncService.ApplyOutcome.failed("ORA-01442 boom"));
 
@@ -196,7 +196,7 @@ class SyncEngineSnapshotGuardTest {
     @Test
     void aSkippedColumnChangeWithholdsTheTableSnapshotToo() throws Exception {
         // A skip means the target still holds the old shape — the same lie would be told.
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(columnAlter()));
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of(columnAlter()));
         when(structureSync.apply(any(), any(), any()))
                 .thenReturn(StructureSyncService.ApplyOutcome
                         .skipped("Target dialect cannot alter column types in place"));
@@ -208,7 +208,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void anAppliedColumnChangeRefreshesTheTableSnapshot() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(columnAlter()));
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of(columnAlter()));
         when(structureSync.apply(any(), any(), any()))
                 .thenReturn(StructureSyncService.ApplyOutcome.ok("Modified column AMOUNT"));
 
@@ -222,7 +222,7 @@ class SyncEngineSnapshotGuardTest {
     void oneFailedEventBlocksTheWholeTableEvenIfAnotherSucceeded() throws Exception {
         ChangeEvent indexEvent = ChangeEvent.of(ObjectType.INDEX, ChangeType.CREATE, "ORDERS",
                 "New index", new IndexMeta());
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any()))
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any()))
                 .thenReturn(List.of(columnAlter(), indexEvent));
         when(structureSync.apply(any(), any(), any()))
                 .thenReturn(StructureSyncService.ApplyOutcome.ok("Modified column AMOUNT"))
@@ -243,7 +243,7 @@ class SyncEngineSnapshotGuardTest {
     void anOutstandingIndexRetryWithholdsTheTableSnapshot() throws Exception {
         ChangeEvent indexEvent = ChangeEvent.of(ObjectType.INDEX, ChangeType.CREATE, "ORDERS",
                 "New index", new IndexMeta());
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(indexEvent));
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of(indexEvent));
         when(structureSync.apply(any(), any(), any()))
                 .thenReturn(StructureSyncService.ApplyOutcome.ok("Created index IX_ORDERS"));
         when(structureSync.hasPendingIndexes(PROJECT_ID, "ORDERS")).thenReturn(true);
@@ -255,7 +255,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void anOutstandingIndexRetryAlsoBlocksTheDataPhaseSnapshot() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
         when(structureSync.hasPendingIndexes(PROJECT_ID, "ORDERS")).thenReturn(true);
@@ -270,7 +270,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void anAutoCreatedTableWithAnOutstandingIndexRetryDoesNotSaveItsSnapshot() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of());
         when(structureSync.apply(any(),
@@ -291,7 +291,7 @@ class SyncEngineSnapshotGuardTest {
         ChangeEvent viewEvent = ChangeEvent.of(ObjectType.VIEW, ChangeType.CREATE, "V_ORDERS",
                 "New view", view);
 
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any()))
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any()))
                 .thenReturn(List.of(columnAlter(), viewEvent));
         when(structureSync.apply(any(), any(), any()))
                 .thenReturn(StructureSyncService.ApplyOutcome.failed("boom"))
@@ -325,7 +325,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void theDataPhaseDoesNotRefreshABlockedTablesSnapshot() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(columnAlter()));
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of(columnAlter()));
         when(structureSync.apply(any(),
                 argThat(e -> e != null && e.getObjectType() == ObjectType.COLUMN), any()))
                 .thenReturn(StructureSyncService.ApplyOutcome.failed("boom"));
@@ -340,7 +340,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void theDataPhaseDoesNotRefreshSnapshotsWhileStructureSyncIsOff() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
 
         engine.runCycle(ctx(false, true));
@@ -353,7 +353,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void aListedTargetTableSkipsThePerCycleCreate() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         // 目标端清单里有这张表：不该再发那个注定被「已存在」拒绝的 CREATE
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
@@ -368,7 +368,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void anUnlistedTargetTableStillTakesTheCreatePath() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         // 清单为空 = 目标端确实没有这张表（比如被手动删了）：必须走 CREATE 补建
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of());
@@ -389,7 +389,7 @@ class SyncEngineSnapshotGuardTest {
         name.setJdbcType(Types.VARCHAR);
         orders.setColumns(List.of(orders.getColumns().get(0), name));
 
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
 
@@ -411,7 +411,7 @@ class SyncEngineSnapshotGuardTest {
         name.setJdbcType(Types.VARCHAR);
         orders.setColumns(List.of(orders.getColumns().get(0), name));
 
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
         // 让 mock 真的在目标库上补列：校验是拿真实元数据复核的，只返回个名字不够。
@@ -440,7 +440,7 @@ class SyncEngineSnapshotGuardTest {
         try (java.sql.Statement st = targetConn.createStatement()) {
             st.execute("ALTER TABLE ORDERS ADD COLUMN AMOUNT INT");
         }
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
         when(structureSync.addMissingColumns(any(), any(), any(), any())).thenReturn(List.of());
@@ -463,7 +463,7 @@ class SyncEngineSnapshotGuardTest {
             st.execute("ALTER TABLE ORDERS ADD COLUMN AMOUNT INT");
         }
 
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
 
@@ -477,7 +477,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void aTableSkippedByDataSyncIsNamedInTheResultWithoutFailingIt() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
         com.qqmu.jync.service.sync.DataSyncService.TableSyncResult skipped =
                 mock(com.qqmu.jync.service.sync.DataSyncService.TableSyncResult.class);
@@ -515,7 +515,7 @@ class SyncEngineSnapshotGuardTest {
 
         assertThat(result.isSuccess()).isFalse();
         // Nothing may run: no structural events, no data movement.
-        verify(changeDetector, never()).detect(anyLong(), any(), any());
+        verify(changeDetector, never()).detect(anyLong(), any(), any(), any());
         verify(dataSync, never()).syncTable(any(), any(), any(), any(), any(), any());
         verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.TABLE), eq("demo"),
                 eq(ChangeType.ERROR), contains("same target table"), eq(false), eq(0L));
@@ -525,7 +525,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void aLostLockAbortsTheCycleBeforeTheNextTable() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
 
         SyncResult result = engine.runCycle(ctx(false, true), () -> false);
@@ -538,7 +538,7 @@ class SyncEngineSnapshotGuardTest {
 
     @Test
     void aHealthyLockRenewalLetsTheCycleFinish() throws Exception {
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         stubSuccessfulDataPhase();
 
         SyncResult result = engine.runCycle(ctx(false, true), () -> true);

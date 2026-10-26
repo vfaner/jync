@@ -385,6 +385,136 @@ class ChangeDetectorTest {
         assertThat(events).isEmpty();
     }
 
+    // ── 全库可见性：清单里的缺项到底是不是"源库删了" ─────────────────────────────
+
+    @Test
+    void aVanishedTableIsKeptWhenTheAccountCannotSeeTheWholeSchema() {
+        // 遗留的"空清单枚举"配置下，reader 的清单核对不运行（没有选中表可核对）；
+        // 枚举里少一张表既可能是源库删表，也可能是这张表的授权被收回。非全库可见的账户
+        // 上二者无法区分，所以保留目标表，而不是把无法撤销的 DROP 发给目标端。
+        TableMeta stored = new TableMeta();
+        stored.setName("ORDERS");
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", stored));
+
+        TableMeta survivor = new TableMeta();
+        survivor.setName("OTHER");
+        DatabaseMeta current = new DatabaseMeta();
+        current.setTables(List.of(survivor));
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        config.setTables(new java.util.LinkedHashSet<>(List.of("ORDERS")));
+        List<ChangeEvent> events = detector.detect(1L, current, config, () -> false);
+
+        assertThat(events).isEmpty();
+    }
+
+    @Test
+    void aVanishedTableIsStillDroppedWhenTheAccountSeesTheWholeSchema() {
+        // 全库可见时应保持原行为：真删表照常传播到目标端。
+        TableMeta stored = new TableMeta();
+        stored.setName("ORDERS");
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", stored));
+
+        TableMeta survivor = new TableMeta();
+        survivor.setName("OTHER");
+        DatabaseMeta current = new DatabaseMeta();
+        current.setTables(List.of(survivor));
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        config.setTables(new java.util.LinkedHashSet<>(List.of("ORDERS")));
+        List<ChangeEvent> events = detector.detect(1L, current, config, () -> true);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getChangeType()).isEqualTo(ChangeType.DROP);
+        assertThat(events.get(0).getObjectName()).isEqualTo("ORDERS");
+    }
+
+    @Test
+    void aVanishedViewAndRoutineAreKeptWhenTheAccountCannotSeeTheWholeSchema() {
+        // 视图和存储过程走同一份可见性判定；一次检测只问一次源库（表/视图/过程共用）。
+        ViewMeta storedView = new ViewMeta();
+        storedView.setName("V_GONE");
+        storedView.setDefinition("SELECT 1");
+        when(snapshotService.loadAll(1L, ObjectType.VIEW, ViewMeta.class))
+                .thenReturn(Map.of("V_GONE", storedView));
+
+        ProcedureMeta storedProc = new ProcedureMeta();
+        storedProc.setName("P_GONE");
+        storedProc.setDefinition("BEGIN END");
+        when(snapshotService.loadAll(1L, ObjectType.PROCEDURE, ProcedureMeta.class))
+                .thenReturn(Map.of("P_GONE", storedProc));
+
+        TableMeta storedTable = new TableMeta();
+        storedTable.setName("ORDERS");
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", storedTable));
+
+        ViewMeta survivorView = new ViewMeta();
+        survivorView.setName("V_OTHER");
+        survivorView.setDefinition("SELECT 2");
+        ProcedureMeta survivorProc = new ProcedureMeta();
+        survivorProc.setName("P_OTHER");
+        survivorProc.setDefinition("BEGIN END");
+        TableMeta survivorTable = new TableMeta();
+        survivorTable.setName("OTHER");
+
+        DatabaseMeta current = new DatabaseMeta();
+        current.setTables(List.of(survivorTable));
+        current.setViews(List.of(survivorView));
+        current.setProcedures(List.of(survivorProc));
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        config.setSyncViews(true);
+        config.setSyncProcedures(true);
+        config.setTables(new java.util.LinkedHashSet<>(List.of("ORDERS")));
+        config.setViews(new java.util.LinkedHashSet<>(List.of("V_GONE")));
+        config.setProcedures(new java.util.LinkedHashSet<>(List.of("P_GONE")));
+
+        java.util.concurrent.atomic.AtomicInteger probes =
+                new java.util.concurrent.atomic.AtomicInteger();
+        List<ChangeEvent> events = detector.detect(1L, current, config, () -> {
+            probes.incrementAndGet();
+            return false;
+        });
+
+        assertThat(events).isEmpty();
+        assertThat(probes).hasValue(1);
+    }
+
+    @Test
+    void theVisibilityProbeIsNotConsultedWhenNothingIsMissing() {
+        // 性能契约：健康轮次（没有删表候选）不产生任何额外源库查询。
+        TableMeta stored = new TableMeta();
+        stored.setName("ORDERS");
+        stored.getColumns().add(column("ID", null));
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", stored));
+
+        TableMeta live = new TableMeta();
+        live.setName("ORDERS");
+        live.getColumns().add(column("ID", null));
+        DatabaseMeta current = new DatabaseMeta();
+        current.setTables(List.of(live));
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+
+        java.util.concurrent.atomic.AtomicInteger probes =
+                new java.util.concurrent.atomic.AtomicInteger();
+        List<ChangeEvent> events = detector.detect(1L, current, config, () -> {
+            probes.incrementAndGet();
+            return true;
+        });
+
+        assertThat(events).isEmpty();
+        assertThat(probes).hasValue(0);
+    }
+
     @Test
     void aViewWithAReadableBodyStillDiffsNormally() {
         ViewMeta stored = new ViewMeta();

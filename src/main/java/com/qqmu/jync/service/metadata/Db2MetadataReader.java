@@ -29,6 +29,19 @@ public class Db2MetadataReader extends GenericMetadataReader {
         return null;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Conservative on purpose: {@code SYSCAT} views are granted to PUBLIC but their rows
+     * are filtered by the account's authorities, and telling DBADM/SYSADM apart from a
+     * table-level-grant account would need an authority probe this reader cannot verify
+     * against every DB2 edition. The inherited {@code false} keeps the target table.
+     */
+    @Override
+    public boolean schemaListingIsComplete(Connection conn, String schema) {
+        return false;
+    }
+
     @Override
     protected String schemaPattern(String schema) {
         // DB2 folds unquoted identifiers to upper case.

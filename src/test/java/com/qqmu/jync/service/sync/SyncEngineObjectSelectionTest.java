@@ -75,7 +75,7 @@ class SyncEngineObjectSelectionTest {
         // Un-stubbed List returns are null here, and the engine iterates them.
         when(structureSync.retryPendingIndexes(any(), any())).thenReturn(List.of());
         when(structureSync.sortByDependency(any())).thenReturn(List.of());
-        when(changeDetector.detect(anyLong(), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(anyLong(), any(), any(), any())).thenReturn(List.of());
 
         project = new Project();
         project.setId(9L);
@@ -140,7 +140,7 @@ class SyncEngineObjectSelectionTest {
         // finish cleanly with nothing applied instead of failing or syncing everything.
         SyncContext ctx = ctx(true, true);
         ctx.getConfig().setObjectSelectionExplicit(true);
-        when(changeDetector.detect(anyLong(), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(anyLong(), any(), any(), any())).thenReturn(List.of());
         when(structureSync.sortByDependency(any())).thenReturn(List.of());
 
         SyncResult result = engine.runCycle(ctx);

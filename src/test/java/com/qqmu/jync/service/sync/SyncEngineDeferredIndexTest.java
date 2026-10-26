@@ -110,7 +110,7 @@ class SyncEngineDeferredIndexTest {
 
         when(structureSync.logType(any())).thenAnswer(inv -> inv.getArgument(0));
         when(structureSync.sortByDependency(any())).thenReturn(List.of(orders));
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         when(cursorResolver.resolve(any(), any()))
                 .thenReturn(CursorStrategy.identity("ID", Types.BIGINT, "test"));
         SyncProgress progress = new SyncProgress();

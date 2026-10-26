@@ -107,7 +107,7 @@ class SyncEngineAutoCreatedTableIndexTest {
         when(structureSync.apply(any(), any(), any()))
                 .thenReturn(StructureSyncService.ApplyOutcome.ok("Created table ORDERS"));
         when(structureSync.hasPendingIndexes(PROJECT_ID, "ORDERS")).thenReturn(false);
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         when(cursorResolver.resolve(any(), any()))
                 .thenReturn(CursorStrategy.identity("ID", Types.BIGINT, "test"));
         when(stateWriter.loadOrCreateProgress(eq(PROJECT_ID), anyString()))

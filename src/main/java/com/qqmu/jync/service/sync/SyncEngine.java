@@ -189,7 +189,8 @@ public class SyncEngine {
             Set<String> blockedTables = Set.of();
             if (ctx.getConfig().isSyncStructure() || ctx.getConfig().isSyncViews()
                     || ctx.getConfig().isSyncProcedures()) {
-                blockedTables = applyStructuralChanges(sourceMeta, targetConn, ctx, result);
+                blockedTables = applyStructuralChanges(sourceMeta, sourceConn, targetConn, ctx,
+                        result);
             }
 
             warnOversizedFullCompareTables(sourceMeta, ctx);
@@ -332,10 +333,14 @@ public class SyncEngine {
      * @return the tables whose snapshot updates were withheld. The data phase must not refresh
      *         their snapshots either, or the retry record would be lost after all.
      */
-    private Set<String> applyStructuralChanges(DatabaseMeta sourceMeta, Connection targetConn,
-                                               SyncContext ctx, SyncResult result) {
+    private Set<String> applyStructuralChanges(DatabaseMeta sourceMeta, Connection sourceConn,
+                                               Connection targetConn, SyncContext ctx,
+                                               SyncResult result) {
+        // Drops are only propagated when the source account can see the whole schema; the
+        // reader probes that once, and only if this detection found something missing.
         List<ChangeEvent> events = changeDetector.detect(ctx.projectId(), sourceMeta,
-                ctx.getConfig());
+                ctx.getConfig(), () -> ctx.getSourceReader()
+                        .schemaListingIsComplete(sourceConn, ctx.getSourceSchema()));
         if (events.isEmpty()) {
             return Set.of();
         }

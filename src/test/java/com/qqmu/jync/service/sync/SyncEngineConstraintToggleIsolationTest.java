@@ -109,7 +109,7 @@ class SyncEngineConstraintToggleIsolationTest {
 
         when(structureSync.logType(any())).thenAnswer(inv -> inv.getArgument(0));
         when(structureSync.sortByDependency(any())).thenReturn(List.of(table("T1"), table("T2")));
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         when(cursorResolver.resolve(any(), any()))
                 .thenReturn(CursorStrategy.identity("ID", Types.BIGINT, "test"));
         when(stateWriter.loadOrCreateProgress(eq(PROJECT_ID), anyString()))

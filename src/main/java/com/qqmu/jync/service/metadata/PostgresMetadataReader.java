@@ -40,6 +40,17 @@ public class PostgresMetadataReader extends GenericMetadataReader {
         return schema == null || schema.isBlank() ? "public" : schema;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Always complete: {@code pg_class}/{@code pg_attribute} carry no row-level privilege
+     * filter, so every table and every column is listed whatever the account may read.
+     */
+    @Override
+    public boolean schemaListingIsComplete(Connection conn, String schema) {
+        return true;
+    }
+
     @Override
     public String resolveDefaultSchema(Connection conn) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement("SELECT current_schema()")) {

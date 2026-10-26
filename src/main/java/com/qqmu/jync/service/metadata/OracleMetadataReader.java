@@ -67,6 +67,39 @@ public class OracleMetadataReader extends GenericMetadataReader {
     }
 
     /**
+     * {@inheritDoc}
+     *
+     * <p>{@code ALL_TABLES} and {@code ALL_TAB_COLUMNS} are filtered by the account's object
+     * privileges, and Oracle answers {@code ORA-00942} for a dropped table and for a revoked
+     * grant alike. Two accounts still see the whole schema: its owner, and one holding
+     * {@code SELECT ANY TABLE} (role-granted privileges are enabled in the session and
+     * appear in {@code SESSION_PRIVS}). Any other account keeps the target table.
+     */
+    @Override
+    public boolean schemaListingIsComplete(Connection conn, String schema) {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT USER FROM DUAL")) {
+            MetadataTimeouts.apply(ps);
+            try (ResultSet rs = ps.executeQuery()) {
+                String user = rs.next() ? rs.getString(1) : null;
+                if (user != null && user.equalsIgnoreCase(schema)) {
+                    return true;                // the schema owner sees all of its tables
+                }
+            }
+            try (PreparedStatement priv = conn.prepareStatement(
+                    "SELECT COUNT(*) FROM SESSION_PRIVS WHERE PRIVILEGE = 'SELECT ANY TABLE'")) {
+                MetadataTimeouts.apply(priv);
+                try (ResultSet rs = priv.executeQuery()) {
+                    return rs.next() && rs.getInt(1) > 0;
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("Could not probe Oracle schema visibility; drops stay conservative: {}",
+                    e.getMessage());
+        }
+        return false;
+    }
+
+    /**
      * Adds the {@code ROWDEPENDENCIES} probe to the generic table read.
      *
      * <p>Only real Oracle is whitelisted: 达梦 and 崖山 mimic the dictionary layout (this

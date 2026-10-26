@@ -107,7 +107,7 @@ class SyncEngineForeignKeyOrderingTest {
         when(structureSync.logType(any())).thenAnswer(inv -> inv.getArgument(0));
         // The real comparator: the fixture's FK list must be what drives the order.
         when(structureSync.sortByDependency(any())).thenCallRealMethod();
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         when(cursorResolver.resolve(any(), any()))
                 .thenReturn(CursorStrategy.identity("ID", Types.BIGINT, "test"));
         when(stateWriter.loadOrCreateProgress(eq(PROJECT_ID), anyString()))

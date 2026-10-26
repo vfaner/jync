@@ -31,6 +31,29 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
         return schema == null || schema.isBlank() ? "dbo" : schema;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>SQL Server hides metadata for objects the account has no permission on, but
+     * {@code VIEW DEFINITION} at database scope (also implied by {@code db_owner}) reveals
+     * every object. {@code HAS_PERMS_BY_NAME} answers for the current security context,
+     * including role membership. Without it the answer stays conservative.
+     */
+    @Override
+    public boolean schemaListingIsComplete(Connection conn, String schema) {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION')")) {
+            MetadataTimeouts.apply(ps);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getInt(1) == 1;
+            }
+        } catch (SQLException e) {
+            log.debug("Could not probe SQL Server metadata visibility; drops stay conservative: {}",
+                    e.getMessage());
+            return false;
+        }
+    }
+
     @Override
     public String resolveDefaultSchema(Connection conn) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement("SELECT SCHEMA_NAME()")) {

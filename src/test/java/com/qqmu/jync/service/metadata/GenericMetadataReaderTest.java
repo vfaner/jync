@@ -30,6 +30,21 @@ class GenericMetadataReaderTest {
 
     private final GenericMetadataReader reader = new GenericMetadataReader();
 
+    /**
+     * A dialect whose listing covers the whole schema (owner or schema-wide grant). The
+     * plain generic reader is deliberately conservative — see
+     * {@link #aMissingTableIsNotCalledDroppedWhenTheAccountCannotSeeTheWholeSchema()} — so
+     * the drop-detection tests must pin the permissive side of the contract explicitly.
+     */
+    private static final class CompleteListingReader extends GenericMetadataReader {
+        @Override
+        public boolean schemaListingIsComplete(Connection conn, String schema) {
+            return true;
+        }
+    }
+
+    private final CompleteListingReader completeReader = new CompleteListingReader();
+
     @Test
     void columnsFromWildcardNameCollisionsAreFilteredOut() throws Exception {
         Connection conn = mock(Connection.class);
@@ -277,10 +292,26 @@ class GenericMetadataReaderTest {
         when(listing.next()).thenReturn(true, false);
         when(listing.getString("TABLE_NAME")).thenReturn("other");
 
-        DatabaseMeta meta = reader.readAll(connectionWithListing(listing), null,
+        DatabaseMeta meta = completeReader.readAll(connectionWithListing(listing), null,
                 List.of("orders"), null, null, false, false);
 
         assertThat(meta.getAbsentTables()).containsExactly("ORDERS");
+    }
+
+    @Test
+    void aMissingTableIsNotCalledDroppedWhenTheAccountCannotSeeTheWholeSchema() throws Exception {
+        // 单表授权被收回：读回零列、又从清单里消失，与真正删表同形。账户看不到整库时
+        // 清单不构成删除证据(目标表保留)，连这次清单查询都不必发。
+        ResultSet listing = mock(ResultSet.class);
+        when(listing.next()).thenReturn(true, false);
+        when(listing.getString("TABLE_NAME")).thenReturn("other");
+        Connection conn = connectionWithListing(listing);
+
+        DatabaseMeta meta = reader.readAll(conn, null,
+                List.of("orders"), null, null, false, false);
+
+        assertThat(meta.getAbsentTables()).isEmpty();
+        verify(conn.getMetaData(), never()).getTables(any(), any(), eq("%"), any(String[].class));
     }
 
     @Test
@@ -289,7 +320,7 @@ class GenericMetadataReaderTest {
         when(listing.next()).thenReturn(true, false);
         when(listing.getString("TABLE_NAME")).thenReturn("ORDERS");
 
-        DatabaseMeta meta = reader.readAll(connectionWithListing(listing), null,
+        DatabaseMeta meta = completeReader.readAll(connectionWithListing(listing), null,
                 List.of("orders"), null, null, false, false);
 
         assertThat(meta.getAbsentTables()).isEmpty();
@@ -298,7 +329,7 @@ class GenericMetadataReaderTest {
     @Test
     void anEmptyListingIsAmbiguousAndRecordsNothing() throws Exception {
         // 整库表都没了，与 schema 改名/权限被收回同形，无法区分：这一轮不做任何删除判定。
-        DatabaseMeta meta = reader.readAll(connectionWithListing(emptyResultSet()), null,
+        DatabaseMeta meta = completeReader.readAll(connectionWithListing(emptyResultSet()), null,
                 List.of("orders"), null, null, false, false);
 
         assertThat(meta.getAbsentTables()).isEmpty();
@@ -306,7 +337,7 @@ class GenericMetadataReaderTest {
 
     @Test
     void aFailedListingLeavesDropDetectionConservative() throws Exception {
-        DatabaseMeta meta = reader.readAll(connectionWithListing(null), null,
+        DatabaseMeta meta = completeReader.readAll(connectionWithListing(null), null,
                 List.of("orders"), null, null, false, false);
 
         assertThat(meta.getAbsentTables()).isEmpty();

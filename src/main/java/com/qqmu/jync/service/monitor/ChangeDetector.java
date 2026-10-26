@@ -3,8 +3,11 @@ package com.qqmu.jync.service.monitor;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BooleanSupplier;
 
 import org.springframework.stereotype.Service;
 
@@ -35,26 +38,55 @@ public class ChangeDetector {
 
     private final MetadataSnapshotService snapshotService;
 
+    /**
+     * One suppression warning per project and object kind per process: a revoked grant that
+     * keeps a drop from propagating is a lasting condition, and polling projects would repeat
+     * the line every cycle.
+     */
+    private final Set<String> warnedUnverifiableDrops = ConcurrentHashMap.newKeySet();
+
     public ChangeDetector(MetadataSnapshotService snapshotService) {
         this.snapshotService = snapshotService;
     }
 
     /**
-     * Compares the source's current shape with the last snapshot.
+     * Compares the source's current shape with the last snapshot, assuming the source's
+     * listing is complete. Product readers that know their account's privileges should use
+     * {@link #detect(Long, DatabaseMeta, SyncConfig, BooleanSupplier)} instead.
      *
      * @return events ordered so dependencies are created before the objects that use them
      */
     public List<ChangeEvent> detect(Long projectId, DatabaseMeta current, SyncConfig config) {
+        return detect(projectId, current, config, () -> true);
+    }
+
+    /**
+     * Compares the source's current shape with the last snapshot.
+     *
+     * <p>With drops allowed, an object the snapshot remembers but this read no longer returns
+     * is only treated as dropped when {@code sourceListingComplete} says the account can see
+     * the whole schema. On MySQL and Oracle the listing is filtered by the account's grants,
+     * so a revoked grant is indistinguishable from a drop; propagating it would delete a real
+     * target object, which cannot be undone. The probe is asked at most once per detection
+     * and only when a drop candidate exists, so a healthy cycle issues no query for it.
+     *
+     * @param sourceListingComplete whether the source's listing covers every object in the
+     *                              schema (see {@code MetadataReader#schemaListingIsComplete})
+     * @return events ordered so dependencies are created before the objects that use them
+     */
+    public List<ChangeEvent> detect(Long projectId, DatabaseMeta current, SyncConfig config,
+                                    BooleanSupplier sourceListingComplete) {
+        BooleanSupplier listingComplete = memoized(sourceListingComplete);
         List<ChangeEvent> events = new ArrayList<>();
 
         if (config.isSyncStructure()) {
-            detectTableChanges(projectId, current, config, events);
+            detectTableChanges(projectId, current, config, listingComplete, events);
         }
         if (config.isSyncViews()) {
-            detectViewChanges(projectId, current, config, events);
+            detectViewChanges(projectId, current, config, listingComplete, events);
         }
         if (config.isSyncProcedures()) {
-            detectProcedureChanges(projectId, current, config, events);
+            detectProcedureChanges(projectId, current, config, listingComplete, events);
         }
 
         events.sort((a, b) -> Integer.compare(a.getPriority(), b.getPriority()));
@@ -65,7 +97,7 @@ public class ChangeDetector {
     }
 
     private void detectTableChanges(Long projectId, DatabaseMeta current, SyncConfig config,
-                                    List<ChangeEvent> events) {
+                                    BooleanSupplier listingComplete, List<ChangeEvent> events) {
         Map<String, TableMeta> snapshots =
                 snapshotService.loadAll(projectId, ObjectType.TABLE, TableMeta.class);
         Set<String> seen = new LinkedHashSet<>();
@@ -136,17 +168,58 @@ public class ChangeDetector {
                         + " are snapshotted — suppressing drops this cycle (check the configured"
                         + " schema and account grants).", projectId, snapshots.size());
             } else {
+                List<TableMeta> gone = new ArrayList<>();
                 for (Map.Entry<String, TableMeta> e : snapshots.entrySet()) {
                     if (!seen.contains(e.getKey())
                             && !current.getUnreadableTables().contains(e.getKey())
                             && config.includesTable(e.getValue().getName())) {
+                        gone.add(e.getValue());
+                    }
+                }
+                if (!gone.isEmpty()
+                        && sourceListingProvesDrop(projectId, ObjectType.TABLE, listingComplete)) {
+                    for (TableMeta table : gone) {
                         events.add(ChangeEvent.of(ObjectType.TABLE, ChangeType.DROP,
-                                e.getValue().getName(), "Table no longer exists in source",
-                                e.getValue()));
+                                table.getName(), "Table no longer exists in source", table));
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Whether a listing entry that disappeared may be read as a source-side drop.
+     *
+     * <p>Only a complete listing makes absence conclusive; otherwise a revoked grant is the
+     * other, indistinguishable explanation and the target object is kept. Warned once per
+     * project and object kind so a lasting revocation does not repeat the line every cycle.
+     */
+    private boolean sourceListingProvesDrop(Long projectId, ObjectType type,
+                                            BooleanSupplier listingComplete) {
+        if (listingComplete.getAsBoolean()) {
+            return true;
+        }
+        if (warnedUnverifiableDrops.add(projectId + ":" + type)) {
+            log.warn("Project {}: some source {} objects are missing from the listing, but this"
+                    + " account cannot see every object in the schema, so a revoked grant looks"
+                    + " exactly like a drop. Their target copies are kept. Grant schema-wide"
+                    + " SELECT (or sync as the schema owner) to let source-side drops propagate.",
+                    projectId, type.name().toLowerCase(Locale.ROOT));
+        }
+        return false;
+    }
+
+    /** Single-threaded per detection: the probe runs on the first ask and is reused after. */
+    private static BooleanSupplier memoized(BooleanSupplier probe) {
+        boolean[] asked = new boolean[1];
+        boolean[] answer = new boolean[1];
+        return () -> {
+            if (!asked[0]) {
+                answer[0] = probe.getAsBoolean();
+                asked[0] = true;
+            }
+            return answer[0];
+        };
     }
 
     private void diffColumns(TableMeta current, TableMeta previous, List<ChangeEvent> events) {
@@ -252,7 +325,7 @@ public class ChangeDetector {
     }
 
     private void detectViewChanges(Long projectId, DatabaseMeta current, SyncConfig config,
-                                   List<ChangeEvent> events) {
+                                   BooleanSupplier listingComplete, List<ChangeEvent> events) {
         Map<String, ViewMeta> snapshots =
                 snapshotService.loadAll(projectId, ObjectType.VIEW, ViewMeta.class);
         Set<String> seen = new LinkedHashSet<>();
@@ -293,13 +366,19 @@ public class ChangeDetector {
                         + " are snapshotted — suppressing drops this cycle.",
                         projectId, snapshots.size());
             } else {
+                List<ViewMeta> gone = new ArrayList<>();
                 for (Map.Entry<String, ViewMeta> e : snapshots.entrySet()) {
                     if (!seen.contains(e.getKey())
                             && !current.getUnreadableViews().contains(e.getKey())
                             && config.includesView(e.getValue().getName())) {
+                        gone.add(e.getValue());
+                    }
+                }
+                if (!gone.isEmpty()
+                        && sourceListingProvesDrop(projectId, ObjectType.VIEW, listingComplete)) {
+                    for (ViewMeta view : gone) {
                         events.add(ChangeEvent.of(ObjectType.VIEW, ChangeType.DROP,
-                                e.getValue().getName(), "View no longer exists in source",
-                                e.getValue()));
+                                view.getName(), "View no longer exists in source", view));
                     }
                 }
             }
@@ -307,6 +386,7 @@ public class ChangeDetector {
     }
 
     private void detectProcedureChanges(Long projectId, DatabaseMeta current, SyncConfig config,
+                                        BooleanSupplier listingComplete,
                                         List<ChangeEvent> events) {
         Map<String, ProcedureMeta> snapshots =
                 snapshotService.loadAll(projectId, ObjectType.PROCEDURE, ProcedureMeta.class);
@@ -344,13 +424,19 @@ public class ChangeDetector {
                         + " are snapshotted — suppressing drops this cycle.",
                         projectId, snapshots.size());
             } else {
+                List<ProcedureMeta> gone = new ArrayList<>();
                 for (Map.Entry<String, ProcedureMeta> e : snapshots.entrySet()) {
                     if (!seen.contains(e.getKey())
                             && !current.getUnreadableProcedures().contains(e.getKey())
                             && config.includesProcedure(e.getValue().getName())) {
+                        gone.add(e.getValue());
+                    }
+                }
+                if (!gone.isEmpty()
+                        && sourceListingProvesDrop(projectId, ObjectType.PROCEDURE, listingComplete)) {
+                    for (ProcedureMeta proc : gone) {
                         events.add(ChangeEvent.of(ObjectType.PROCEDURE, ChangeType.DROP,
-                                e.getValue().getName(), "Routine no longer exists in source",
-                                e.getValue()));
+                                proc.getName(), "Routine no longer exists in source", proc));
                     }
                 }
             }

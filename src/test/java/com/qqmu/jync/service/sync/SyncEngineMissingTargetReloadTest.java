@@ -104,7 +104,7 @@ class SyncEngineMissingTargetReloadTest {
 
         when(structureSync.sortByDependency(any())).thenReturn(List.of(orders));
         when(structureSync.hasPendingIndexes(PROJECT_ID, "ORDERS")).thenReturn(false);
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of());
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of());
         when(cursorResolver.resolve(any(), any()))
                 .thenReturn(CursorStrategy.identity("ID", Types.BIGINT, "test"));
 
@@ -206,7 +206,7 @@ class SyncEngineMissingTargetReloadTest {
         meta.setTables(List.of(orders));
         when(sourceReader.readAll(any(), any(), any(), any(), any(), eq(false), eq(false)))
                 .thenReturn(meta);
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of(
                 ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE, "ORDERS",
                         "Missing on the target", orders)));
         when(structureSync.apply(any(), any(), any()))
@@ -234,7 +234,7 @@ class SyncEngineMissingTargetReloadTest {
         meta.setTables(List.of(orders));
         when(sourceReader.readAll(any(), any(), any(), any(), any(), eq(false), eq(false)))
                 .thenReturn(meta);
-        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any(), any())).thenReturn(List.of(
                 ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE, "ORDERS",
                         "Missing on the target", orders)));
         when(structureSync.apply(any(), any(), any()))

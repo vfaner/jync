@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 
 import org.springframework.stereotype.Component;
 
@@ -134,5 +135,75 @@ public class MySQLMetadataReader extends GenericMetadataReader {
 
     static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>{@code SHOW GRANTS} is readable by the account itself and names every grant, so a
+     * schema-wide ({@code ON *.*} or {@code ON db.*}) SELECT proves the listing is not
+     * filtered. A table-level grant is the hazardous case — it can be revoked, and the
+     * table then disappears from {@code SHOW FULL TABLES} exactly as a drop would — so it
+     * never counts. Grants inherited through roles are not expanded here; the answer then
+     * stays conservative.
+     */
+    @Override
+    public boolean schemaListingIsComplete(Connection conn, String schema) {
+        // A plain Statement: SHOW cannot be server-prepared, and some MySQL-family drivers
+        // reject it through prepareStatement.
+        try (Statement st = conn.createStatement()) {
+            MetadataTimeouts.apply(st);
+            try (ResultSet rs = st.executeQuery("SHOW GRANTS")) {
+                while (rs.next()) {
+                    if (grantCoversWholeSchema(rs.getString(1), schema)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("Could not read the MySQL grants; source-side drops stay conservative: {}",
+                    e.getMessage());
+        }
+        return false;
+    }
+
+    /** Whether one {@code SHOW GRANTS} line grants SELECT over the whole schema. */
+    static boolean grantCoversWholeSchema(String grant, String schema) {
+        if (grant == null) {
+            return false;
+        }
+        String line = grant.trim();
+        String upper = line.toUpperCase(java.util.Locale.ROOT);
+        int on = upper.indexOf(" ON ");
+        int to = upper.indexOf(" TO ");
+        // A role assignment ("GRANT `r`@`%` TO ...") carries no ON clause.
+        if (!upper.startsWith("GRANT ") || on < 0 || to <= on) {
+            return false;
+        }
+        if (!grantsSelect(upper.substring("GRANT ".length(), on))) {
+            return false;
+        }
+        String target = line.substring(on + " ON ".length(), to).trim();
+        if (!target.endsWith(".*")) {
+            return false;                       // table- or column-scoped grant
+        }
+        String scope = target.substring(0, target.length() - 2).trim();
+        if (scope.equals("*")) {
+            return true;                        // global grant
+        }
+        if (scope.length() >= 2 && scope.startsWith("`") && scope.endsWith("`")) {
+            scope = scope.substring(1, scope.length() - 1).replace("``", "`");
+        }
+        return scope.equalsIgnoreCase(schema);
+    }
+
+    private static boolean grantsSelect(String privileges) {
+        for (String privilege : privileges.split(",")) {
+            String token = privilege.trim();
+            if (token.equals("SELECT") || token.equals("ALL") || token.equals("ALL PRIVILEGES")) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -29,6 +29,27 @@ public interface MetadataReader {
 
     List<String> listProcedureNames(Connection conn, String schema) throws SQLException;
 
+    /**
+     * Whether a schema-wide listing is complete for this account — that is, whether an object
+     * missing from it was really dropped rather than hidden from this account by a privilege
+     * filter.
+     *
+     * <p>MySQL and Oracle filter both the per-object reads and the schema-wide listings by the
+     * account's grants, so a revoked grant and a dropped object produce the same two signals.
+     * Only an account that can see the whole schema (its owner, or a schema-wide {@code
+     * SELECT}) makes absence conclusive. The metadata read consults this for a selected table
+     * that came back with zero columns; change detection consults it before propagating any
+     * source-side DROP, so a filter can never silently erase a real target object.
+     *
+     * <p>Answers {@code false} by default — an unknown dictionary is assumed to filter — and
+     * implementations must fail conservative: any error answering the probe returns {@code
+     * false}. Callers only ask when a drop candidate exists, so a healthy cycle never pays for
+     * it.
+     */
+    default boolean schemaListingIsComplete(Connection conn, String schema) {
+        return false;
+    }
+
     /** Full definition of one table: columns, primary key, indexes and foreign keys. */
     TableMeta readTable(Connection conn, String schema, String tableName) throws SQLException;
 

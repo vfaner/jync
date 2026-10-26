@@ -56,6 +56,12 @@ public class GenericMetadataReader implements MetadataReader {
     private record TimedCount(long at, long count) {
     }
 
+    /**
+     * "SCHEMA.TABLE" keys already reported as unreadable-but-not-provably-dropped, so a
+     * mid-run revoked grant does not repeat the WARN on every polling cycle (default 2 s).
+     */
+    private final Set<String> warnedMissingTables = ConcurrentHashMap.newKeySet();
+
     @Override
     public boolean supports(DatabaseType type) {
         // Registered last, as the catch-all.
@@ -98,19 +104,23 @@ public class GenericMetadataReader implements MetadataReader {
      * columns. Issuing it on a pass where every table read normally buys nothing, so it is
      * skipped: polling projects run this pass every cycle (default 2 s).
      *
-     * <p><b>Known limit.</b> Both halves of the check are privilege-filtered on MySQL
-     * ({@code SHOW FULL TABLES}) and Oracle ({@code ALL_TABLES}/{@code ALL_TAB_COLUMNS}): a
-     * grant revoked for a single table mid-run makes it read back with zero columns and
-     * disappear from the listing, which is exactly what a real source-side drop looks like.
-     * With {@code allowDrop} on, that table's target copy is then dropped. No dictionary
-     * query can tell the two apart without elevated privileges, so the rule stays a
-     * best-effort signal, and {@code allowDrop} stays off by default.
+     * <p>Both halves of the check are privilege-filtered on MySQL ({@code SHOW FULL TABLES})
+     * and Oracle ({@code ALL_TABLES}/{@code ALL_TAB_COLUMNS}): a grant revoked for a single
+     * table mid-run makes it read back with zero columns and disappear from the listing,
+     * which is exactly what a real source-side drop looks like. Absence is therefore only
+     * read as a drop when the account can see the whole schema — see
+     * {@link #schemaListingIsComplete(Connection, String)}. Otherwise the table stays
+     * unreadable and the target copy is kept, because deleting it cannot be undone.
      */
     private void recordAbsentTables(Connection conn, String schema, List<String> requested,
                                     DatabaseMeta meta) {
         boolean anyUnreadable = meta.getTables().stream()
                 .anyMatch(t -> t.getColumns() == null || t.getColumns().isEmpty());
         if (!anyUnreadable) {
+            return;
+        }
+        if (!schemaListingIsComplete(conn, schema)) {
+            warnMissingWithoutWholeSchema(schema, meta);
             return;
         }
         Set<String> present = new HashSet<>();
@@ -130,6 +140,48 @@ public class GenericMetadataReader implements MetadataReader {
             if (!present.contains(name.toUpperCase(java.util.Locale.ROOT))) {
                 meta.addAbsentTable(name);
             }
+        }
+    }
+
+    /**
+     * Whether {@link #listTableNames} returned <em>every</em> table that exists in
+     * {@code schema}, rather than only the ones this account may use.
+     *
+     * <p>MySQL and Oracle filter both the per-table reads and the schema-wide listing by
+     * the account's privileges, so the zero-column read and the missing listing entry a
+     * revoked grant produces are the same two signals a real drop produces. Only a complete
+     * listing makes absence conclusive. When it is not complete the reader keeps the target
+     * table and warns, because deleting it cannot be undone.
+     *
+     * <p>The answer is {@code false} by default — an unknown dictionary is assumed to
+     * filter — and product readers override it with a probe of the account's privilege
+     * model. It is consulted only when a drop candidate exists (a selected table that read
+     * back with zero columns, or an object change detection no longer sees), so a healthy
+     * pass never pays for it. Implementations must fail conservative: any error answering
+     * the probe returns {@code false}.
+     */
+    @Override
+    public boolean schemaListingIsComplete(Connection conn, String schema) {
+        return false;
+    }
+
+    /** One WARN per table per process; see {@link #warnedMissingTables}. */
+    private void warnMissingWithoutWholeSchema(String schema, DatabaseMeta meta) {
+        for (TableMeta table : meta.getTables()) {
+            if (table.getColumns() != null && !table.getColumns().isEmpty()) {
+                continue;
+            }
+            String qualified = schema == null || schema.isBlank()
+                    ? table.getName() : schema + "." + table.getName();
+            String key = qualified.toUpperCase(java.util.Locale.ROOT);
+            if (!warnedMissingTables.add(key)) {
+                continue;
+            }
+            log.warn("Table {} read back with no columns and is missing from the source's table"
+                    + " listing, but this account cannot see every table in the schema, so a"
+                    + " revoked grant looks exactly like a drop. The target table is kept."
+                    + " Grant schema-wide SELECT (or sync as the schema owner) to let"
+                    + " source-side drops propagate.", qualified);
         }
     }
 
