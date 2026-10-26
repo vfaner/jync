@@ -1253,6 +1253,14 @@ public class DataSyncService {
             throws SQLException {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
+        // A one-shot row is executed alone — its stream dies with the cursor — but it does
+        // not have to be committed alone. Rows accumulate until the batch cadence or the
+        // byte budget closes the transaction, so a table of oversized LOBs pays one commit
+        // per batch instead of one per row.
+        int oneShotRows = 0;
+        long oneShotBytes = 0L;
+        long oneShotCommitBytes = properties.getLob() == null ? 0L
+                : properties.getLob().getBatchMaxBytes();
         // Row count alone cannot bound a batch of LOBs; the budget flushes by size too.
         com.qqmu.jync.service.lob.BatchByteBudget byteBudget =
                 new com.qqmu.jync.service.lob.BatchByteBudget(
@@ -1271,57 +1279,83 @@ public class DataSyncService {
             // One map for every row: a million-row load would otherwise allocate a million.
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                JdbcRowMapper.readRowInto(rs, readPlan, ctx.effectiveSourceType(), row, spillSession);
-                if (sink != null) {
-                    // The keyset boundary is bound against the RAW source keys on the next
-                    // page, so it must be captured before the cleanser rewrites them.
-                    sink.values = extractPk(row, pkTrack);
-                }
-                long read = System.nanoTime();
-                throughput.recordRead(read - mark);
-
-                cleanser.apply(row);
-                boolean immediate = false;
-                long rowBytes = 0L;
-                for (Object value : row.values()) {
-                    if (LobValues.requiresImmediateExecution(value)) {
-                        immediate = true;
+                try {
+                    JdbcRowMapper.readRowInto(rs, readPlan, ctx.effectiveSourceType(), row,
+                            spillSession);
+                    if (sink != null) {
+                        // The keyset boundary is bound against the RAW source keys on the next
+                        // page, so it must be captured before the cleanser rewrites them.
+                        sink.values = extractPk(row, pkTrack);
                     }
-                    rowBytes += com.qqmu.jync.service.lob.BatchByteBudget.sizeOf(value);
-                }
-                boolean budgetFlush = !immediate && byteBudget.wouldExceed(rowBytes);
-                if ((immediate || budgetFlush) && inBatch > 0) {
-                    // The stream is valid only until the cursor moves, and an oversized row
-                    // must not be added to a batch that is already over budget.
-                    executeBatch(upsert, targetConn, stats, ctx, throughput);
-                    releaseAll(pendingLobs);
-                    lobTracker.releaseAll();
-                    inBatch = 0;
-                    byteBudget.reset();
-                }
-                JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn,
-                        ctx.getTargetDialect(), lobTracker);
-                if (immediate) {
-                    executeSingle(upsert, targetConn, stats, ctx, throughput);
-                    lobTracker.releaseAll();
-                    releaseRowLobs(row);
-                } else {
-                    upsert.addBatch();
-                    inBatch++;
-                    byteBudget.add(rowBytes);
-                    trackRowLobs(row, pendingLobs);
-                    if (inBatch >= batchSize) {
+                    long read = System.nanoTime();
+                    throughput.recordRead(read - mark);
+
+                    cleanser.apply(row);
+                    boolean immediate = false;
+                    long rowBytes = 0L;
+                    for (Object value : row.values()) {
+                        if (LobValues.requiresImmediateExecution(value)) {
+                            immediate = true;
+                        }
+                        rowBytes += com.qqmu.jync.service.lob.BatchByteBudget.sizeOf(value);
+                    }
+                    boolean budgetFlush = !immediate && byteBudget.wouldExceed(rowBytes);
+                    if ((immediate || budgetFlush) && inBatch > 0) {
+                        // The stream is valid only until the cursor moves, and an oversized row
+                        // must not be added to a batch that is already over budget.
                         executeBatch(upsert, targetConn, stats, ctx, throughput);
                         releaseAll(pendingLobs);
                         lobTracker.releaseAll();
                         inBatch = 0;
                         byteBudget.reset();
+                        // That commit carried whatever one-shot rows were still open.
+                        oneShotRows = 0;
+                        oneShotBytes = 0L;
                     }
-                }
-                stats.read++;
+                    JdbcRowMapper.bind(upsert, row, bindOrder, typeByColumn,
+                            ctx.getTargetDialect(), lobTracker);
+                    if (immediate) {
+                        executeSingle(upsert, stats, ctx, throughput);
+                        lobTracker.releaseAll();
+                        releaseRowLobs(row);
+                        oneShotRows++;
+                        oneShotBytes += rowBytes;
+                        if (oneShotRows >= batchSize
+                                || (oneShotCommitBytes > 0
+                                    && oneShotBytes >= oneShotCommitBytes)) {
+                            commitAndRecord(targetConn, throughput);
+                            ctx.requireLease();
+                            oneShotRows = 0;
+                            oneShotBytes = 0L;
+                        }
+                    } else {
+                        upsert.addBatch();
+                        inBatch++;
+                        byteBudget.add(rowBytes);
+                        trackRowLobs(row, pendingLobs);
+                        if (inBatch >= batchSize) {
+                            executeBatch(upsert, targetConn, stats, ctx, throughput);
+                            releaseAll(pendingLobs);
+                            lobTracker.releaseAll();
+                            inBatch = 0;
+                            byteBudget.reset();
+                            // The batch commit also covers uncommitted one-shot rows.
+                            oneShotRows = 0;
+                            oneShotBytes = 0L;
+                        }
+                    }
+                    stats.read++;
 
-                throughput.recordWrite(System.nanoTime() - read);
-                mark = System.nanoTime();
+                    throughput.recordWrite(System.nanoTime() - read);
+                    mark = System.nanoTime();
+                } catch (SQLException | RuntimeException e) {
+                    // Only batched rows are tracked in pendingLobs; the row being written is
+                    // not. Without this its streamed readers would stay open on the shared
+                    // source connection until it closes. Release is idempotent, so a row that
+                    // was already tracked is safe to release twice.
+                    releaseRowLobs(row);
+                    throw e;
+                }
             }
             if (inBatch > 0) {
                 long tailStart = System.nanoTime();
@@ -1336,8 +1370,15 @@ public class DataSyncService {
         return stats;
     }
 
-    /** Executes one row outside the batch, for values whose stream ends when the cursor moves. */
-    private void executeSingle(PreparedStatement ps, Connection conn, WriteStats stats,
+    /**
+     * Executes one row outside the batch, for values whose stream ends when the cursor moves.
+     *
+     * <p>The row must run before the next {@code rs.next()}, but it does not have to be
+     * committed that early: the caller commits on the same cadence the batched rows use.
+     * Committing here made an oversized-LOB table pay one network round trip and one redo
+     * flush per row instead of per batch.
+     */
+    private void executeSingle(PreparedStatement ps, WriteStats stats,
                                SyncContext ctx, ThroughputMeter throughput) throws SQLException {
         int count;
         try {
@@ -1347,7 +1388,6 @@ public class DataSyncService {
                     e.getSQLState(), e.getErrorCode(), e);
         }
         throughput.recordBatch();
-        commitAndRecord(conn, throughput);
         ctx.requireLease();
         if (count == 0) {
             return;
@@ -1408,26 +1448,38 @@ public class DataSyncService {
             // Same reuse as the native writer: one row map for the whole pass.
             Map<String, Object> row = new java.util.LinkedHashMap<>();
             while (rs.next()) {
-                JdbcRowMapper.readRowInto(rs, readPlan, ctx.effectiveSourceType(), row, spillSession);
-                if (sink != null) {
-                    // Same rule as the native writer: the boundary must stay a raw source key.
-                    sink.values = extractPk(row, pkTrack);
-                }
-                long read = System.nanoTime();
-                throughput.recordRead(read - mark);
-                cleanser.apply(row);
-                // A row may bind twice (update then insert, or update again after a unique
-                // violation), so a streamed value must be replayable. The read policy spills
-                // for this path; this is a guard against a future policy regression, and it
-                // fails before the first bind rather than midway through the row.
-                for (Object value : row.values()) {
-                    if (!LobValues.isReplayable(value)) {
-                        throw new SQLException("Table " + targetTable + " is written through"
-                                + " an emulated upsert, which binds each row more than once;"
-                                + " its large values must be replayable. Enable"
-                                + " sync.lob.streaming-enabled (spill mode) or exclude the"
-                                + " column.");
+                long read;
+                try {
+                    JdbcRowMapper.readRowInto(rs, readPlan, ctx.effectiveSourceType(), row,
+                            spillSession);
+                    if (sink != null) {
+                        // Same rule as the native writer: the boundary must stay a raw source
+                        // key.
+                        sink.values = extractPk(row, pkTrack);
                     }
+                    read = System.nanoTime();
+                    throughput.recordRead(read - mark);
+                    cleanser.apply(row);
+                    // A row may bind twice (update then insert, or update again after a unique
+                    // violation), so a streamed value must be replayable. The read policy
+                    // spills for this path; this is a guard against a future policy
+                    // regression, and it fails before the first bind rather than midway
+                    // through the row.
+                    for (Object value : row.values()) {
+                        if (!LobValues.isReplayable(value)) {
+                            throw new SQLException("Table " + targetTable + " is written through"
+                                    + " an emulated upsert, which binds each row more than once;"
+                                    + " its large values must be replayable. Enable"
+                                    + " sync.lob.streaming-enabled (spill mode) or exclude the"
+                                    + " column.");
+                        }
+                    }
+                } catch (SQLException | RuntimeException e) {
+                    // A failure before the bind leaves the row's streamed values untracked;
+                    // release them here so the source connection does not carry the readers
+                    // (or spill files) into the next table. Release is idempotent.
+                    releaseRowLobs(row);
+                    throw e;
                 }
                 // A row may bind twice (update then insert, or update again after a unique
                 // violation); each bind gets its own temporary LOBs, freed at row end.

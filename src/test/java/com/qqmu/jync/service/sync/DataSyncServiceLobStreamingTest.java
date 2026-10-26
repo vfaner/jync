@@ -3,7 +3,11 @@ package com.qqmu.jync.service.sync;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
+import java.io.FilterReader;
+import java.io.IOException;
+import java.io.Reader;
 import java.io.StringReader;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -14,6 +18,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
@@ -231,6 +236,130 @@ class DataSyncServiceLobStreamingTest {
 
         assertThat(result.isSuccess()).isFalse();
         assertThat(spillFiles()).isZero();
+    }
+
+    /**
+     * A one-shot row must be executed before the cursor moves — that is what keeps its stream
+     * valid — but executing one row at a time is not a reason to also commit one row at a
+     * time. With a 50-row batch size, ten oversized rows are one transaction, not ten.
+     */
+    @Test
+    void oneShotRowsShareTheBatchCommitCadence() throws SQLException {
+        for (int id = 1; id <= 10; id++) {
+            insertRow(id, "z".repeat(60_000));
+        }
+
+        try (Connection my = DriverManager.getConnection(
+                "jdbc:h2:mem:lob_tgt_oneshot;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+             Statement st = my.createStatement()) {
+            st.execute("CREATE TABLE DOCS (ID BIGINT PRIMARY KEY, BODY CLOB,"
+                    + " PAYLOAD BLOB, NOTE VARCHAR(2000))");
+            AtomicInteger commits = new AtomicInteger();
+            SyncContext myCtx = ctx.toBuilder()
+                    .targetDialect(new com.qqmu.jync.service.converter.MySqlDialect())
+                    .targetType(DatabaseType.MYSQL)
+                    .build();
+
+            DataSyncService.TableSyncResult result = new DataSyncService(properties,
+                    mock(ChunkCheckpointRepository.class))
+                    .syncTable(source, countingCommits(my, commits), docsMeta(), IDENTITY,
+                            new SyncProgress(), myCtx);
+
+            assertThat(result.isSuccess()).as(result.getError()).isTrue();
+            assertThat(count(my, "DOCS")).isEqualTo(10);
+            assertThat(commits.get())
+                    .as("one-shot rows must share the batch commit cadence, not commit per row")
+                    .isLessThanOrEqualTo(2);
+        }
+    }
+
+    /**
+     * The stream of the row whose write failed must be closed before the failure surfaces.
+     * Row 1 succeeds and is released on the normal path; row 2 is rejected by the target, and
+     * without a release inside the loop its reader would stay open on the shared source
+     * connection for the rest of the cycle.
+     */
+    @Test
+    void aFailedOneShotRowClosesItsSourceReader() throws SQLException {
+        insertRow(1, "q".repeat(60_000));
+        insertRow(2, "q".repeat(60_000));
+
+        try (Connection my = DriverManager.getConnection(
+                "jdbc:h2:mem:lob_tgt_fail;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+             Statement st = my.createStatement()) {
+            st.execute("CREATE TABLE DOCS (ID BIGINT PRIMARY KEY CHECK (ID < 2),"
+                    + " BODY CLOB, PAYLOAD BLOB, NOTE VARCHAR(2000))");
+            AtomicInteger closedReaders = new AtomicInteger();
+            SyncContext myCtx = ctx.toBuilder()
+                    .targetDialect(new com.qqmu.jync.service.converter.MySqlDialect())
+                    .targetType(DatabaseType.MYSQL)
+                    .build();
+
+            DataSyncService.TableSyncResult result = new DataSyncService(properties,
+                    mock(ChunkCheckpointRepository.class))
+                    .syncTable(trackingLobReaders(source, closedReaders), my, docsMeta(),
+                            IDENTITY, new SyncProgress(), myCtx);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(closedReaders)
+                    .as("every streamed value must be closed, including the one that failed")
+                    .hasValue(2);
+        }
+    }
+
+    private static long count(Connection conn, String tableName) throws SQLException {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + tableName)) {
+            return rs.next() ? rs.getLong(1) : -1;
+        }
+    }
+
+    private static Connection countingCommits(Connection delegate, AtomicInteger commits) {
+        return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
+                new Class<?>[] {Connection.class}, (proxy, method, args) -> {
+                    if ("commit".equals(method.getName())) {
+                        commits.incrementAndGet();
+                    }
+                    return method.invoke(delegate, args);
+                });
+    }
+
+    /** Source connection whose character streams count when they are closed. */
+    private static Connection trackingLobReaders(Connection delegate, AtomicInteger closes) {
+        return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
+                new Class<?>[] {Connection.class}, (proxy, method, args) -> {
+                    Object result = method.invoke(delegate, args);
+                    return result instanceof PreparedStatement
+                            ? trackingResultSet((PreparedStatement) result, closes) : result;
+                });
+    }
+
+    private static PreparedStatement trackingResultSet(PreparedStatement delegate,
+                                                       AtomicInteger closes) {
+        return (PreparedStatement) Proxy.newProxyInstance(
+                PreparedStatement.class.getClassLoader(),
+                new Class<?>[] {PreparedStatement.class}, (proxy, method, args) -> {
+                    Object result = method.invoke(delegate, args);
+                    return result instanceof ResultSet
+                            ? trackingReaders((ResultSet) result, closes) : result;
+                });
+    }
+
+    private static ResultSet trackingReaders(ResultSet delegate, AtomicInteger closes) {
+        return (ResultSet) Proxy.newProxyInstance(ResultSet.class.getClassLoader(),
+                new Class<?>[] {ResultSet.class}, (proxy, method, args) -> {
+                    Object result = method.invoke(delegate, args);
+                    if (result instanceof Reader) {
+                        return new FilterReader((Reader) result) {
+                            @Override
+                            public void close() throws IOException {
+                                closes.incrementAndGet();
+                                super.close();
+                            }
+                        };
+                    }
+                    return result;
+                });
     }
 
     private void insertRow(long id, String body) throws SQLException {
