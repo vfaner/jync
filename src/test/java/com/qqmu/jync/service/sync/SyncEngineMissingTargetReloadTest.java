@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.dto.ChangeEvent;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.DatabaseMeta;
@@ -188,6 +189,63 @@ class SyncEngineMissingTargetReloadTest {
                 any(), anyBoolean(), anyLong(), any());
     }
 
+    /**
+     * The same reload rule when the structure phase, not the data phase, is what rebuilt the
+     * table. The data phase reads the target listing after structure sync ran, so the table is
+     * there and looks like any other pre-existing table — but the stored cursor still describes
+     * a table that no longer exists.
+     */
+    @Test
+    void aTableCreatedByTheStructurePhaseIsAlsoReloadedFromScratch() throws Exception {
+        try (Statement st = targetConn.createStatement()) {
+            st.execute("CREATE TABLE ORDERS (ID BIGINT)");
+        }
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
+        TableMeta orders = table("ORDERS");
+        DatabaseMeta meta = new DatabaseMeta();
+        meta.setTables(List.of(orders));
+        when(sourceReader.readAll(any(), any(), any(), any(), any(), eq(false), eq(false)))
+                .thenReturn(meta);
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(
+                ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE, "ORDERS",
+                        "Missing on the target", orders)));
+        when(structureSync.apply(any(), any(), any()))
+                .thenReturn(StructureSyncService.ApplyOutcome.ok("Created table ORDERS"));
+
+        engine.runCycle(ctx(true));
+
+        verify(stateWriter).forceReload(progress);
+        ArgumentCaptor<SyncProgress> handedToLoad = ArgumentCaptor.forClass(SyncProgress.class);
+        verify(dataSync).syncTable(any(), any(), any(), any(), handedToLoad.capture(), any());
+        assertNull(handedToLoad.getValue().getLastSyncValue(),
+                "the data phase must not resume above the old cursor of a rebuilt table");
+    }
+
+    /**
+     * The reset must happen when the table is built, not when the data phase gets to it: a
+     * cycle that stops between the phases (lease lost, stop requested) or runs structure only
+     * saves the snapshot, so the CREATE is never re-detected — and the data phase of a later
+     * cycle would happily resume above the old cursor of a table that now holds nothing.
+     */
+    @Test
+    void aTableCreatedByTheStructurePhaseResetsItsProgressEvenWithoutADataPhase() throws Exception {
+        TableMeta orders = table("ORDERS");
+        DatabaseMeta meta = new DatabaseMeta();
+        meta.setTables(List.of(orders));
+        when(sourceReader.readAll(any(), any(), any(), any(), any(), eq(false), eq(false)))
+                .thenReturn(meta);
+        when(changeDetector.detect(eq(PROJECT_ID), any(), any())).thenReturn(List.of(
+                ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE, "ORDERS",
+                        "Missing on the target", orders)));
+        when(structureSync.apply(any(), any(), any()))
+                .thenReturn(StructureSyncService.ApplyOutcome.ok("Created table ORDERS"));
+
+        engine.runCycle(ctx(true, false));
+
+        verify(stateWriter).forceReload(progress);
+        verify(dataSync, never()).syncTable(any(), any(), any(), any(), any(), any());
+    }
+
     @Test
     void anExistingTargetTableKeepsItsCursor() throws Exception {
         try (Statement st = targetConn.createStatement()) {
@@ -206,9 +264,17 @@ class SyncEngineMissingTargetReloadTest {
     }
 
     private SyncContext ctx() {
+        return ctx(false);
+    }
+
+    private SyncContext ctx(boolean syncStructure) {
+        return ctx(syncStructure, true);
+    }
+
+    private SyncContext ctx(boolean syncStructure, boolean syncData) {
         SyncConfig config = new SyncConfig();
-        config.setSyncStructure(false);
-        config.setSyncData(true);
+        config.setSyncStructure(syncStructure);
+        config.setSyncData(syncData);
         config.setSyncViews(false);
         config.setSyncProcedures(false);
         return SyncContext.builder()

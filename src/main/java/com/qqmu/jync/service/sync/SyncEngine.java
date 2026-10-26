@@ -366,6 +366,9 @@ public class SyncEngine {
             stateWriter.recordLog(ctx.projectId(), structureSync.logType(event.getObjectType()),
                     event.getObjectName(), event.getChangeType(), outcome.detail, true,
                     System.currentTimeMillis() - eventStart);
+            if (builtTargetTable(event, outcome)) {
+                resetProgressOfCreatedTable(ctx, event.getObjectName());
+            }
 
             if (affectsTableShape(event)) {
                 if (structureSync.hasPendingIndexes(ctx.projectId(), event.getObjectName())) {
@@ -391,6 +394,31 @@ public class SyncEngine {
             }
         });
         return blockedTables;
+    }
+
+    /**
+     * A target table this phase just built holds nothing, so any stored cursor describes rows
+     * that do not exist. Reset it here, at creation time, rather than leaving it to the data
+     * phase: a cycle that stops between the phases (lease lost, stop requested) or runs
+     * structure only still saves the snapshot, so the CREATE is never re-detected — and the
+     * next data phase would resume above the old watermark of an empty table.
+     */
+    private void resetProgressOfCreatedTable(SyncContext ctx, String tableName) {
+        stateWriter.forceReload(stateWriter.loadOrCreateProgress(ctx.projectId(), tableName));
+    }
+
+    /**
+     * Whether an applied event is the CREATE TABLE that built the target table itself.
+     *
+     * <p>The data phase reads the target listing after this phase ran, so a table created here
+     * is indistinguishable from one that was already there — unless the phase says so. Its
+     * stored progress belongs to a previous life of that table and must be reset.
+     */
+    private static boolean builtTargetTable(ChangeEvent event,
+                                            StructureSyncService.ApplyOutcome outcome) {
+        return event.getObjectType() == ObjectType.TABLE
+                && event.getChangeType() == ChangeType.CREATE
+                && outcome.detail != null && outcome.detail.startsWith("Created table");
     }
 
     /** True for events whose outcome changes what the owning table's snapshot should say. */
