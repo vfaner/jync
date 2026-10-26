@@ -716,7 +716,7 @@ public class UpgradeService {
      * ACL, which is already private.
      */
     private static void writeRestartScript(Path script, String content) throws IOException {
-        Files.writeString(script, content, StandardCharsets.UTF_8);
+        Files.write(script, scriptBytes(content, isWindows()));
         try {
             Files.setPosixFilePermissions(script,
                     java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
@@ -724,6 +724,19 @@ public class UpgradeService {
             // No POSIX view (Windows) or a filesystem that refuses the mode: no worse than
             // the previous behaviour, and the script sits next to the jar it launches.
         }
+    }
+
+    /**
+     * The helper script's bytes. A PowerShell script gets a UTF-8 BOM because Windows
+     * PowerShell 5.1 (the {@code powershell.exe} the launcher invokes, unlike PowerShell 7)
+     * decodes a BOM-less file in the system ANSI code page — a non-ASCII install path or
+     * {@code -D} value would then be mojibake, and both the relaunch and the rollback would
+     * name a path that does not exist. The bash script must carry no BOM: the kernel rejects
+     * one ahead of its shebang.
+     */
+    static byte[] scriptBytes(String content, boolean powershell) {
+        String body = powershell ? "\uFEFF" + content : content;
+        return body.getBytes(StandardCharsets.UTF_8);
     }
 
     // ── generated restart helper scripts ───────────────────────────────────────────────

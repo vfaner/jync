@@ -675,6 +675,31 @@ class UpgradeServiceTest {
     }
 
     @Test
+    void powerShellScriptBytesStartWithAUtf8Bom() {
+        // Windows PowerShell 5.1 decodes a BOM-less .ps1 in the system ANSI code page, so a
+        // non-ASCII install path would be mojibake inside the script: the relaunch and the
+        // rollback would both name a path that does not exist.
+        String content = "# 升级脚本\n$jar = 'D:\\百目\\jync.jar'\n";
+        byte[] bytes = UpgradeService.scriptBytes(content, true);
+
+        assertThat(bytes[0]).isEqualTo((byte) 0xEF);
+        assertThat(bytes[1]).isEqualTo((byte) 0xBB);
+        assertThat(bytes[2]).isEqualTo((byte) 0xBF);
+        assertThat(new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8))
+                .isEqualTo(content);
+    }
+
+    @Test
+    void shellScriptBytesCarryNoBom() {
+        // A BOM ahead of "#!/usr/bin/env bash" makes the kernel reject the script.
+        String content = "#!/usr/bin/env bash\necho ok\n";
+        byte[] bytes = UpgradeService.scriptBytes(content, false);
+
+        assertThat(bytes[0]).isEqualTo((byte) '#');
+        assertThat(new String(bytes, StandardCharsets.UTF_8)).isEqualTo(content);
+    }
+
+    @Test
     void shellScriptEscapesSingleQuotesInPaths() {
         // A single quote inside a path must not break out of the generated script's quoting.
         RestartSpec spec = new RestartSpec(1L, "/opt/jy'bin/java",
