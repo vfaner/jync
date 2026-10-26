@@ -62,8 +62,9 @@ public class SqlServerDialect extends AbstractSqlDialect {
         if (name == null) {
             return null;
         }
-        // Already bracket-wrapped: keep the exact form instead of re-wrapping.
-        if (name.length() >= 2 && name.charAt(0) == '[' && name.endsWith("]")) {
+        // Already bracket-wrapped: keep the exact form instead of re-wrapping. Only when its
+        // interior cannot close the bracket itself — see AbstractSqlDialect#isSafelyWrapped.
+        if (isSafelyWrapped(name, '[', ']')) {
             return name;
         }
         // Inside brackets only ] needs escaping (doubled); [ is literal there. Stripping

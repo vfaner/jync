@@ -174,6 +174,25 @@ class SqlDialectTest {
         assertThat(sqlServer.quoteIdentifier("[order]")).isEqualTo("[order]");
     }
 
+    /**
+     * Source object names are just bytes from the dictionary: a MySQL table may legitimately be
+     * named {@code `a`; DROP TABLE victim; -- `} (backticks are ordinary characters inside a
+     * quoted identifier). The "already wrapped" shortcut must not take that for quoting it can
+     * trust — returning it verbatim closes the identifier early and appends a second statement
+     * to every DDL/DML Jync sends to the target. Only a name whose interior quotes are all
+     * doubled may pass through untouched; anything else is re-quoted as a literal name.
+     */
+    @Test
+    void aWrappedNameWithALoneInteriorQuoteIsRequotedInsteadOfPassedThrough() {
+        assertThat(mysql.quoteIdentifier("`a`; DROP TABLE victim; -- `"))
+                .isEqualTo("```a``; DROP TABLE victim; -- ```");
+        assertThat(sqlServer.quoteIdentifier("[a]; DROP TABLE victim; -- ]"))
+                .isEqualTo("[[a]]; DROP TABLE victim; -- ]]]");
+        // A genuinely wrapped name whose interior quote is doubled keeps its exact form.
+        assertThat(mysql.quoteIdentifier("`a``b`")).isEqualTo("`a``b`");
+        assertThat(sqlServer.quoteIdentifier("[a]]b]")).isEqualTo("[a]]b]");
+    }
+
     @Test
     void anEmbeddedQuoteCharacterIsEscapedNotStripped() {
         // An identifier really containing the quote char must be escaped by doubling it.

@@ -33,8 +33,9 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         }
         char q = quoteChar();
         // A name that arrives already wrapped keeps its exact form: re-wrapping a wrapped
-        // name would corrupt it.
-        if (name.length() >= 2 && name.charAt(0) == q && name.charAt(name.length() - 1) == q) {
+        // name would corrupt it. The shortcut is only safe when the interior cannot close
+        // the identifier on its own — see isSafelyWrapped.
+        if (isSafelyWrapped(name, q)) {
             return name;
         }
         // Any other embedded quote char is doubled, which is how every symmetric-quote
@@ -42,6 +43,36 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         // silently rename the object: a column really named a"b would become ab.
         String escaped = normalizeBareIdentifier(name).replace(String.valueOf(q), "" + q + q);
         return q + escaped + q;
+    }
+
+    /**
+     * Whether {@code name} is a complete quoted identifier that can be passed through as is.
+     *
+     * <p>Names come from the source dictionary, not from this application: backticks, brackets
+     * and quotes are ordinary characters inside an identifier, so an object can literally be
+     * named {@code `a`; DROP TABLE victim; -- `}. The first and last characters alone therefore
+     * prove nothing — every quote inside the body must be doubled (its own escape), or the
+     * name would end its quoting early and append a second statement to the DDL/DML Jync
+     * sends to the target.
+     */
+    static boolean isSafelyWrapped(String name, char open, char close) {
+        int last = name.length() - 2;
+        if (last < 0 || name.charAt(0) != open || name.charAt(last + 1) != close) {
+            return false;
+        }
+        for (int i = 1; i <= last; i++) {
+            if (name.charAt(i) == close) {
+                if (i + 1 > last || name.charAt(i + 1) != close) {
+                    return false;
+                }
+                i++;
+            }
+        }
+        return true;
+    }
+
+    static boolean isSafelyWrapped(String name, char q) {
+        return isSafelyWrapped(name, q, q);
     }
 
     /**
