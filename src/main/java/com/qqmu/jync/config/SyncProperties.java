@@ -143,6 +143,11 @@ public class SyncProperties {
      * Waiting does not recover from that; a restart does. 30 minutes is well above the
      * 5-minute statement timeout and any single legitimately slow chunk, so the warning is
      * about a wedge, not a big table. 0 disables the warning and the page's stuck hint.
+     *
+     * <p>The log warning is emitted by the lock watchdog, which stops renewing after ten
+     * lock TTLs (50 minutes with the default 5-minute TTL); a threshold above that would
+     * never be reached by a watchdog tick. The page hint does not depend on the watchdog,
+     * so it still reports the configured value.
      */
     private long stuckThresholdMs = 30 * 60_000L;
 
