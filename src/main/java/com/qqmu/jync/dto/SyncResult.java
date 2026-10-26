@@ -6,6 +6,8 @@ import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
 
+import com.qqmu.jync.util.DurationFormat;
+
 /** Aggregate outcome of one sync run, summarized into the task's last result. */
 @Getter
 @Setter
@@ -81,9 +83,9 @@ public class SyncResult {
             return skippedTables.isEmpty() ? "No changes"
                     : "No changes, skipped " + skippedTables.size() + " table(s)";
         }
-        String summary = String.format("DDL=%d, rows +%d ~%d -%d, tables=%d, %dms",
+        String summary = String.format("DDL=%d, rows +%d ~%d -%d, tables=%d, %s",
                 structureChanges, rowsInserted, rowsUpdated, rowsDeleted,
-                tablesProcessed, durationMs);
+                tablesProcessed, DurationFormat.format(durationMs));
         if (!skippedTables.isEmpty()) {
             summary += ", skipped=" + skippedTables.size();
         }

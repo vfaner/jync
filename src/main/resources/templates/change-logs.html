@@ -95,7 +95,7 @@
                         </td>
                         <td class="num" th:text="${log.affectedRows ?: '—'}">0</td>
                         <td class="num small muted"
-                            th:text="${log.durationMs != null and log.durationMs > 0} ? ${log.durationMs} + ' ms' : '—'">—</td>
+                            th:text="${log.durationMs != null and log.durationMs > 0} ? ${log.durationLabel} : '—'">—</td>
                         <td>
                             <div class="wrap-detail" th:classappend="${!log.success} ? '' : 'muted'"
                                  th:style="${!log.success} ? 'color:var(--danger)' : ''"

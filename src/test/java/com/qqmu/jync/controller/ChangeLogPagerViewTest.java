@@ -120,6 +120,26 @@ class ChangeLogPagerViewTest {
     }
 
     @Test
+    void theDurationColumnReadsInHumanUnits() throws Exception {
+        ChangeLog entry = new ChangeLog();
+        entry.setId(1L);
+        entry.setObjectType(ObjectType.DATA);
+        entry.setObjectName("COURSE");
+        entry.setChangeType(ChangeType.INSERT);
+        entry.setSuccess(true);
+        entry.setDurationMs(99_550L);
+        entry.setOccurredAt(Instant.now());
+        when(changeLogService.count(any(), anyBoolean())).thenReturn(1L);
+        when(changeLogService.page(any(), anyBoolean(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(entry), PageRequest.of(0, 20), 1));
+        when(projectService.findAll()).thenReturn(List.of());
+
+        String html = render("");
+
+        assertThat(html).contains("1m 39s").doesNotContain("99550 ms");
+    }
+
+    @Test
     void theFailureFilterIsThreadedToTheServiceAndShownChecked() throws Exception {
         stubLogOf(3, PageRequest.of(0, 20));
 

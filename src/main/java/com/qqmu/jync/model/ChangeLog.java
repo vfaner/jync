@@ -16,6 +16,8 @@ import javax.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
 
+import com.qqmu.jync.util.DurationFormat;
+
 /** An audit record of one change applied to the target database. */
 @Entity
 @Table(name = "change_log", indexes = {
@@ -59,6 +61,14 @@ public class ChangeLog {
 
     @Column(name = "occurred_at", nullable = false)
     private Instant occurredAt;
+
+    /**
+     * The duration as a human label for the change-log table ({@code 99550 ms} → {@code 1m 39s}).
+     * Hibernate maps this entity by field, so this getter adds no column.
+     */
+    public String getDurationLabel() {
+        return durationMs == null ? null : DurationFormat.format(durationMs);
+    }
 
     public static ChangeLog of(Long projectId, ObjectType objectType, String objectName,
                               ChangeType changeType, String details) {
