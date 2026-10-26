@@ -167,6 +167,30 @@ class SyncEngineVerifiedTableCacheTest {
                 argThat(reason -> reason.contains("missing column")), eq(false), anyLong());
     }
 
+    @Test
+    void aVerdictForOneTargetSchemaDoesNotVouchForTheSameTableNameInAnother() throws Exception {
+        // Cycle 1: PUBLIC.T1 matches the source; the verdict is cached for this schema.
+        DataSyncService.TableSyncResult ok = successfulTable();
+        when(dataSync.syncTable(any(), any(), any(), any(), any(), any())).thenReturn(ok);
+        assertThat(engine.runCycle(ctx("PUBLIC")).isSuccess()).isTrue();
+
+        // The same table name, another schema, a shape that cannot receive the source rows:
+        // a table name alone is not a target table, so "T1 was verified" must not carry over.
+        try (Statement st = adminConn.createStatement()) {
+            st.execute("CREATE SCHEMA IF NOT EXISTS S2");
+            st.execute("DROP TABLE IF EXISTS S2.T1");
+            st.execute("CREATE TABLE S2.T1 (ID BIGINT)");
+        }
+
+        clearInvocations(dataSync, stateWriter);
+        SyncResult second = engine.runCycle(ctx("S2"));
+
+        assertThat(second.isSuccess()).isFalse();
+        assertThat(second.getErrors()).anySatisfy(error ->
+                assertThat(error).contains("missing column").contains("C1"));
+        verify(dataSync, never()).syncTable(any(), any(), any(), any(), any(), any());
+    }
+
     private DataSyncService.TableSyncResult successfulTable() {
         DataSyncService.TableSyncResult result = mock(DataSyncService.TableSyncResult.class);
         when(result.isSuccess()).thenReturn(true);
@@ -184,6 +208,10 @@ class SyncEngineVerifiedTableCacheTest {
     }
 
     private SyncContext ctx() {
+        return ctx(null);
+    }
+
+    private SyncContext ctx(String targetSchema) {
         SyncConfig config = new SyncConfig();
         // Structure sync off: the repair path is not under test here, only that the check
         // runs again and reports the blocker. It is the same code path either way.
@@ -196,6 +224,7 @@ class SyncEngineVerifiedTableCacheTest {
                 .config(config)
                 .sourceConfig(sourceCfg)
                 .targetConfig(targetCfg)
+                .targetSchema(targetSchema)
                 .sourceReader(sourceReader)
                 .targetReader(targetReader)
                 .sourceDialect(new GenericSqlDialect())

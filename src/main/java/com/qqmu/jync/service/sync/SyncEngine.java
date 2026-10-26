@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -62,7 +63,7 @@ public class SyncEngine {
 
     /**
      * Tables already confirmed column-compatible with their source, keyed
-     * {@code projectId:targetTableName} (upper-cased).
+     * {@code projectId:targetSchema:targetTableName} (upper-cased).
      *
      * <p>In-memory on purpose: the check is one round of {@code DatabaseMetaData.getColumns}
      * per table, so it runs once per process lifetime, not once per poll. A table fixed
@@ -509,7 +510,7 @@ public class SyncEngine {
             if (!structureSync.hasPendingIndexes(ctx.projectId(), table.getName())) {
                 stateWriter.saveSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName(), table);
             }
-            verifiedTables.add(verifiedKey(ctx.projectId(), targetTable));
+            verifiedTables.add(verifiedKey(ctx, targetTable));
         } else if (outcome.applied && outcome.detail != null
                 && outcome.detail.startsWith("Table already present")) {
             // 表已存在但不是我们这轮建的：核对列形状，不合规就拦住数据同步。
@@ -564,7 +565,7 @@ public class SyncEngine {
      */
     private boolean verifyShapeIfNeeded(TableMeta table, Connection targetConn, SyncContext ctx,
                                         SyncResult result, String targetTable) {
-        String key = verifiedKey(ctx.projectId(), targetTable);
+        String key = verifiedKey(ctx, targetTable);
         if (verifiedTables.contains(key)) {
             return true;
         }
@@ -647,8 +648,17 @@ public class SyncEngine {
         }
     }
 
-    private static String verifiedKey(long projectId, String targetTable) {
-        return projectId + ":" + targetTable.toUpperCase();
+    /**
+     * A verdict is about one concrete target table, so the target schema is part of the key:
+     * the same table name in another schema is another table. Without it, pointing the project
+     * at a different schema reuses a verdict the verifier never issued for that table, and the
+     * shape check — the repair path included — is skipped there until the process restarts.
+     */
+    private static String verifiedKey(SyncContext ctx, String targetTable) {
+        String schema = ctx.getTargetSchema();
+        String schemaPart = schema == null || schema.isBlank()
+                ? "" : schema.toUpperCase(Locale.ROOT);
+        return ctx.projectId() + ":" + schemaPart + ":" + targetTable.toUpperCase(Locale.ROOT);
     }
 
     /**
@@ -662,7 +672,7 @@ public class SyncEngine {
      * failing.
      */
     private void forgetVerifiedShape(SyncContext ctx, TableMeta table) {
-        verifiedTables.remove(verifiedKey(ctx.projectId(),
+        verifiedTables.remove(verifiedKey(ctx,
                 ctx.getConfig().targetTableName(table.getName())));
     }
 
