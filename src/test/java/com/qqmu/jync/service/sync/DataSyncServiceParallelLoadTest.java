@@ -24,6 +24,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,6 +41,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
+import com.qqmu.jync.service.cdc.LogCapture;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
@@ -281,6 +285,40 @@ class DataSyncServiceParallelLoadTest {
         verify(checkpoints, atLeastOnce()).save(captor.capture());
         assertThat(captor.getAllValues())
                 .anyMatch(c -> c.getRangeIndex() != null && c.getRangeIndex() > 0);
+    }
+
+    /**
+     * The split line is what an operator reads while tuning parallelism, so its worker count
+     * must be the workers that actually ran. A key span narrower than the requested split
+     * yields fewer ranges than the configured parallelism, and the line used to print the
+     * configured value anyway — claiming four workers where three threads ran.
+     */
+    @Test
+    void theSplitLineCountsTheWorkersThatActuallyRan() throws SQLException {
+        exec(source, "CREATE TABLE LEDGER (ID BIGINT, TENANT VARCHAR(10), NAME VARCHAR(50),"
+                + " PRIMARY KEY (ID, TENANT))");
+        exec(target, "CREATE TABLE LEDGER (ID BIGINT, TENANT VARCHAR(10), NAME VARCHAR(50),"
+                + " PRIMARY KEY (ID, TENANT))");
+        exec(source, "INSERT INTO LEDGER VALUES (1,'a','x'), (2,'a','y'), (3,'a','z'),"
+                + " (4,'b','p'), (5,'b','q'), (6,'b','r')");
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(DataSyncService.class);
+        DataSyncService.TableSyncResult result;
+        try {
+            result = service(4, 2).syncTable(
+                    source, target, ledgerMeta(Types.BIGINT, Types.VARCHAR), IDENTITY,
+                    new SyncProgress(), ctx);
+        } finally {
+            LogCapture.detach(DataSyncService.class, logs);
+        }
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                .filteredOn(m -> m.startsWith("Parallel full load of LEDGER"))
+                .singleElement()
+                .asString()
+                .contains("split into 3 ranges (3 workers")
+                .contains("parallelism 4 requested");
     }
 
     @Test

@@ -232,13 +232,15 @@ public final class KeysetChunker {
      * itself can hand back roughly evenly spaced keys.
      *
      * <p>Two window levels are needed: {@code NTILE} labels the buckets, and an outer
-     * {@code ROW_NUMBER PARTITION BY} keeps only the first row of each. The caller drops the
-     * first row (the global minimum) and uses the rest as inclusive upper edges; the final
-     * range is unbounded above, so no MAX query is needed. Requires window functions; the
-     * caller falls back to the sequential load when the product rejects the statement.
+     * {@code ROW_NUMBER PARTITION BY} keeps only the first row of each. The first row (the
+     * global minimum) is not needed as an edge because the first range is unbounded below;
+     * the remaining rows are inclusive upper edges, and each row is also the lower edge of
+     * the range spanning to the next one. The final range is unbounded above, so no MAX
+     * query is needed. Requires window functions; the caller falls back to the sequential
+     * load when the product rejects the statement.
      *
-     * @param buckets number of NTILE buckets; the caller asks for one more than the desired
-     *                number of ranges because the first returned row is discarded
+     * @param buckets number of NTILE buckets; one bucket per range, because every bucket
+     *                contributes exactly one range
      */
     public static String sampledBoundarySql(SqlDialect dialect, String schema, String table,
                                             List<String> pkColumns, CursorStrategy strategy,

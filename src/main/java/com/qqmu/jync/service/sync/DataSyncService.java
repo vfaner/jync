@@ -2064,8 +2064,14 @@ public class DataSyncService {
         // bounds cannot prove it covers the range it is now mapped onto; trusting it can skip
         // whole slices, so a mismatch is a full reload.
         List<ChunkCheckpoint> usable = validRangeCheckpoints(saved, ranges, table, ctx);
-        log.info("Parallel full load of {}: {} split into {} ranges ({} workers)",
-                table.getName(), split, ranges.size(), parallelism);
+        // One worker per range, so the range count is the worker count: a key span narrower
+        // than the split yields fewer ranges than the configured parallelism, and naming the
+        // configured value would claim workers that never ran. The requested value is still
+        // worth printing exactly when it differed — that is why fewer ran.
+        log.info("Parallel full load of {}: {} split into {} ranges ({} workers{})",
+                table.getName(), split, ranges.size(), ranges.size(),
+                ranges.size() < parallelism
+                        ? "; parallelism " + parallelism + " requested" : "");
 
         ExecutorService pool = Executors.newFixedThreadPool(ranges.size(), r -> {
             Thread t = new Thread(r, "full-load-" + table.getName());
