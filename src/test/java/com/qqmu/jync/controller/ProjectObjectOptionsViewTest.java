@@ -89,6 +89,17 @@ class ProjectObjectOptionsViewTest {
         return page.substring(start, end + 1);
     }
 
+    /** 提取 data-action 含 {@code action} 的那一个 <button ...> 标签。 */
+    private static String buttonTag(String page, String action) {
+        int at = page.indexOf("data-action=\"" + action + "\"");
+        assertThat(at).as("button for %s exists", action).isPositive();
+        int start = page.lastIndexOf("<button", at);
+        int end = page.indexOf(">", at);
+        assertThat(start).isPositive();
+        assertThat(end).isGreaterThan(at);
+        return page.substring(start, end + 1);
+    }
+
     private static void assertCheckedAndEnabled(String page, String name) {
         String tag = inputNamed(page, name);
         assertThat(tag).as("%s should be checked", name).contains("checked=\"checked\"");
@@ -99,6 +110,48 @@ class ProjectObjectOptionsViewTest {
         String tag = inputNamed(page, name);
         assertThat(tag).as("%s should be unchecked", name).doesNotContain("checked");
         assertThat(tag).as("%s should be disabled", name).contains("disabled=\"disabled\"");
+    }
+
+    /**
+     * 报告场景的另一半:页面上五个开关全绿,服务端却以 error.project.no.options 拒绝。
+     * 只要页面是从「已保存配置」渲染的,这两件事不可能同时成立 —— 开关的 checked 直接取自
+     * 同一份 SyncConfig。这条把该不变式钉住:配置里关掉的开关,页面必须显示为关。
+     * 真出现「看着全开、服务端说全关」,只可能是页面过期(另一个标签页保存过、浏览器前进
+     * 后退缓存)或开关的修改还没保存。
+     */
+    @Test
+    void switchesNeverRenderOnWhileTheSavedConfigHasThemOff() throws Exception {
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("proj");
+        project.setEnabled(false);
+        SyncConfig off = new SyncConfig();
+        off.setTables(new java.util.LinkedHashSet<>(List.of("ORDERS")));
+        off.setObjectSelectionExplicit(true);
+        off.setSyncStructure(false);
+        off.setSyncData(false);
+        off.setSyncIndexes(false);
+        off.setSyncViews(false);
+        off.setSyncProcedures(false);
+        when(projectService.findById(1L)).thenReturn(Optional.of(project));
+        when(projectService.loadConfig(project)).thenReturn(off);
+        when(databaseConfigService.findAll()).thenReturn(List.of());
+        when(projectService.findTask(1L)).thenReturn(Optional.empty());
+        when(projectService.findProgress(1L)).thenReturn(List.of());
+        when(projectService.isScheduled(1L)).thenReturn(false);
+        // 源库枚举成功且三类对象都有:页面没有理由替用户改动已保存的配置。
+        when(projectService.listSourceObjects(1L))
+                .thenReturn(objectsWith(List.of("ORDERS"), List.of("V"), List.of("P")));
+
+        String page = renderDetail();
+
+        for (String name : List.of("syncStructure", "syncData", "syncIndexes",
+                "syncViews", "syncProcedures")) {
+            assertThat(inputNamed(page, name))
+                    .as("%s must not render as on: the saved config has it off", name)
+                    .doesNotContain("checked");
+        }
+        assertThat(buttonTag(page, "/api/projects/1/start")).contains("disabled");
     }
 
     @Test

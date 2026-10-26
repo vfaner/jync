@@ -39,12 +39,14 @@ public class ScheduleReconciler {
     private final ProjectRepository projectRepository;
     private final SyncScheduler scheduler;
     private final CdcConsumerManager cdcManager;
+    private final SyncTaskRunner taskRunner;
 
     public ScheduleReconciler(ProjectRepository projectRepository, SyncScheduler scheduler,
-                              CdcConsumerManager cdcManager) {
+                              CdcConsumerManager cdcManager, SyncTaskRunner taskRunner) {
         this.projectRepository = projectRepository;
         this.scheduler = scheduler;
         this.cdcManager = cdcManager;
+        this.taskRunner = taskRunner;
     }
 
     /** Fixed delay, and the first tick lands one interval after startup — SyncBootstrap owns startup. */
@@ -93,6 +95,12 @@ public class ScheduleReconciler {
         } else if (!enabled && scheduled) {
             log.info("Reconciliation: project '{}' is stopped but still scheduled on this node;"
                     + " removing the schedule", project.getName());
+            // 停止可能是在另一台节点上按下的,那边的 requestStop 只作用于它自己的 JVM。
+            // 本节点这一轮可能还有一段很长的全量在跑,租约一直握着,用户保存配置就被判
+            // 「仍在收尾」。在这个迁移点补一次本节点信号,这轮才会在下一个安全点退出。
+            // 只在这一处发:已停且本来就没有 job 的项目不碰——停在停止状态的项目允许
+            // 手动「立即同步」,每 30 秒补一枪会把那一轮也打断。
+            taskRunner.requestStop(project.getId());
             scheduler.unschedule(project.getId());
         }
     }

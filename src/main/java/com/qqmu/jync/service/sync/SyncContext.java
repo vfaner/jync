@@ -91,6 +91,16 @@ public class SyncContext {
     private final BooleanSupplier lockRenewer;
 
     /**
+     * Answers whether this run has been asked to stop — the UI's 「停止同步」 pressed while
+     * the cycle is already in flight. Checked at the same safe points as the lease
+     * ({@link #requireLease()}), so the cycle unwinds at its next committed batch instead of
+     * renewing its lease for the rest of a long full load. {@code null} for runs nobody can
+     * stop this way: CDC consumers have their own {@code requestStop}, and hand-built test
+     * contexts hold no lease at all.
+     */
+    private final BooleanSupplier stopRequested;
+
+    /**
      * Opens additional pooled connections for parallel work inside one cycle (each parallel
      * full-load worker borrows its own source and target connection per chunk). May be
      * {@code null} for runs that never parallelize (e.g. unit tests); parallel features
@@ -182,8 +192,25 @@ public class SyncContext {
         return lockRenewer == null || lockRenewer.getAsBoolean();
     }
 
-    /** Renews the lease, aborting the run with {@link LockLostException} when it was lost. */
+    /**
+     * True when a stop was requested through this context. The flag stays set after the
+     * abort, which is how the runner tells a user-initiated stop from a failed cycle when it
+     * records the outcome.
+     */
+    public boolean isStopRequested() {
+        return stopRequested != null && stopRequested.getAsBoolean();
+    }
+
+    /**
+     * Renews the lease, aborting the run when it was lost, or earlier when the user asked
+     * this run to stop. Both are safe points: every caller sits on a committed batch, so
+     * nothing is left half-written by unwinding here.
+     */
     public void requireLease() {
+        if (isStopRequested()) {
+            throw new StopRequestedException("Sync of project '" + projectName()
+                    + "' stopped by request; aborting at the next safe point");
+        }
         if (!renewLease()) {
             throw new LockLostException("Sync lock lost mid-run (lease expired or reclaimed by"
                     + " another instance); aborting before further writes");

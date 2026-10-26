@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.annotation.PreDestroy;
 
@@ -78,6 +79,14 @@ public class SyncTaskRunner {
         thread.setDaemon(true);
         return thread;
     });
+
+    /**
+     * Per-project stop generation. {@link #requestStop} bumps it; a cycle captures the value
+     * when it starts and aborts as soon as it changes. A counter rather than a flag: a run
+     * that starts after the stop (the user restarts, or clicks 立即同步) must NOT inherit the
+     * previous stop, and a flag cleared at start would race a cycle that is still unwinding.
+     */
+    private final Map<Long, AtomicLong> stopEpochs = new ConcurrentHashMap<>();
 
     public SyncTaskRunner(ProjectRepository projectRepository,
                           SyncContextFactory contextFactory,
@@ -236,6 +245,27 @@ public class SyncTaskRunner {
         startQueuedRerun(projectId);
     }
 
+    /**
+     * Asks the project's in-flight polling cycle to stop.
+     *
+     * <p>Stopping only the schedule leaves the running round in charge: a full load renews
+     * its lease for minutes, and while it does, every config save is refused with "stop the
+     * sync first" — advice the user just followed. The cycle picks this up at its next
+     * committed batch ({@link SyncContext#requireLease()}), so nothing is cut mid-write.
+     *
+     * <p>Deliberately not awaited here: the caller has already committed the stop, and a
+     * batch can take a while. The cycle releases the lease as it unwinds, which is what the
+     * config guards observe.
+     */
+    public void requestStop(Long projectId) {
+        stopEpochs.computeIfAbsent(projectId, id -> new AtomicLong()).incrementAndGet();
+    }
+
+    private long stopEpoch(Long projectId) {
+        AtomicLong epoch = stopEpochs.get(projectId);
+        return epoch == null ? 0L : epoch.get();
+    }
+
     /** Whether a project row still exists; an orphaned Quartz job uses it to self-delete. */
     public boolean projectExists(Long projectId) {
         return projectRepository.existsById(projectId);
@@ -263,6 +293,10 @@ public class SyncTaskRunner {
 
     private SyncResult execute(Project project, SyncLockService.LockHandle lock) {
         long start = System.currentTimeMillis();
+        // Snapshot BEFORE the cycle does any work: a stop that lands after this point aborts
+        // this run, while one that landed before it belongs to whatever ran previously.
+        long stopEpoch = stopEpoch(project.getId());
+        SyncContext ctx = null;
         SyncResult result;
         try {
             // markRunning lives INSIDE the try: throwing before it used to escape execute()
@@ -270,7 +304,9 @@ public class SyncTaskRunner {
             taskStore.markRunning(project.getId());
             // The renewer rides on the context: the structure phase and each committed data
             // batch renew through it, so a lost lease aborts the cycle before further writes.
-            SyncContext ctx = contextFactory.build(project, lock.owner(), lock::renew);
+            // The stop signal rides along too, checked at those same safe points.
+            ctx = contextFactory.build(project, lock.owner(), lock::renew,
+                    () -> stopEpoch(project.getId()) != stopEpoch);
             result = syncEngine.runCycle(ctx);
         } catch (IllegalStateException e) {
             // Configuration problems — missing endpoint, unreachable database — land here.
@@ -287,7 +323,18 @@ public class SyncTaskRunner {
         // Outcome recording must not escape execute() either: a failure here previously
         // skipped startQueuedRerun, leaving the coalesced request stuck in the queue.
         try {
-            taskStore.recordOutcome(project.getId(), result);
+            // A run the user stopped is not a failed attempt: recording it through the
+            // failure ladder would show "FAILED" for a deliberate action and push a healthy
+            // project towards the max-retries ERROR hat after a few ordinary stops.
+            boolean stopped = ctx != null && ctx.isStopRequested() && !result.isSuccess();
+            if (stopped) {
+                // Also visible to callers: syncNow's HTTP response must say 「已停止」 rather
+                // than 「有失败项」 for a round the user ended themselves.
+                result.setStopped(true);
+                taskStore.recordStoppedOutcome(project.getId(), result);
+            } else {
+                taskStore.recordOutcome(project.getId(), result);
+            }
         } catch (RuntimeException e) {
             log.error("Failed to record sync outcome for project '{}'",
                     project.getName(), e);

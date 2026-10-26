@@ -179,8 +179,10 @@
                     <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
                     <span th:text="#{cdc.rebaseline.button}">Rebuild baseline</span>
                 </button>
+                <!--/* CDC 任务的进度行不参与续流,清空进度是空操作;全量重载的入口是
+                       旁边的「重建基线」。服务端同样会拒绝,这里只是不去点一个死按钮。 */-->
                 <button type="button" class="btn btn-outline-danger btn-sm"
-                        data-role="api-btn" data-reload="true"
+                        data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
                         th:attr="data-action=@{/api/projects/{id}/reset(id=${project.id})},
                                  data-confirm=#{common.confirm.reset(${project.name})},
                                  data-busy-text=#{common.loading}">
@@ -216,7 +218,8 @@
             <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin and !cdcActive}"
                data-cdc-visibility="non-cdc"
                th:text="#{project.syncNowHelp}">Sync now help</p>
-            <p class="small muted" style="margin:3px 0 0" th:if="${isAdmin}"
+            <p class="small muted" style="margin:3px 0 0"
+               th:if="${isAdmin and !cdcActive}" data-cdc-visibility="non-cdc"
                th:text="#{project.resetHelp}">Reset help</p>
             <p class="small muted" style="margin:0" th:unless="${isAdmin}"
                th:text="#{common.readOnly}">Read-only account.</p>

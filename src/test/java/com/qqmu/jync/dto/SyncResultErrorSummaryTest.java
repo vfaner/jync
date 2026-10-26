@@ -139,6 +139,17 @@ class SyncResultErrorSummaryTest {
     }
 
     @Test
+    void aRunTheUserStoppedSummarizesAsStoppedNotFailed() {
+        // 「停止同步」中止的一轮带着一句错误文本,但它不是失败:摘要若沿用 FAILED 开头,
+        // 手动「立即同步」被停止后的弹窗和任务行都会把用户的主动操作报成故障。
+        SyncResult result = new SyncResult();
+        result.addError("Sync of project 'p' stopped by request; aborting at the next safe point");
+        result.setStopped(true);
+
+        assertThat(result.summary()).isEqualTo("Stopped before finishing");
+    }
+
+    @Test
     void aFailedRunWithoutErrorEntriesSaysSo() {
         // success 只能由 addError 翻成 false,今天到不了这里;但 setSuccess 是公开的,
         // 真到了也不能输出 "FAILED: 0 error(s) — "。

@@ -68,16 +68,23 @@ public class ProjectApiController {
                 break;
         }
         SyncResult result = outcome.result().orElseGet(SyncResult::new);
-        Map<String, Object> body = ok(result.isSuccess()
-                ? "msg.sync.completed" : "msg.sync.completed.errors");
-        body.put("summary", result.summary());
+        Map<String, Object> body = ok(result.isStopped() ? "msg.sync.stopped"
+                : result.isSuccess() ? "msg.sync.completed" : "msg.sync.completed.errors");
+        if (result.isStopped()) {
+            // A round the user stopped mid-way is neither a success nor a failure: yellow
+            // instead of red, and no summary/errors — the abort sentence would only repeat
+            // "stopped" in English, and "明细见变更日志" points at nothing to fix.
+            body.put("toastKind", "warn");
+        } else {
+            body.put("summary", result.summary());
+            body.put("errors", result.getErrors());
+        }
         body.put("structureChanges", result.getStructureChanges());
         body.put("rowsInserted", result.getRowsInserted());
         body.put("rowsUpdated", result.getRowsUpdated());
         body.put("rowsDeleted", result.getRowsDeleted());
         body.put("tablesProcessed", result.getTablesProcessed());
         body.put("durationMs", result.getDurationMs());
-        body.put("errors", result.getErrors());
         body.put("skippedTables", result.getSkippedTables());
         body.put("success", result.isSuccess());
         return ResponseEntity.ok(body);

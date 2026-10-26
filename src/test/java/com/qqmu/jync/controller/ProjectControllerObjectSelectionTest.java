@@ -158,7 +158,7 @@ class ProjectControllerObjectSelectionTest {
         assertThat(buttonTag(page, "/api/projects/1/start")).contains("disabled");
         assertThat(buttonTag(page, "/api/projects/1/sync-now")).contains("disabled");
         // And the page says why, since a disabled button cannot explain itself.
-        assertThat(page).contains("No sync objects are selected");
+        assertThat(page).contains("The saved configuration has no sync objects selected");
     }
 
     @Test
@@ -190,7 +190,7 @@ class ProjectControllerObjectSelectionTest {
         // A polling cycle with no enabled category never writes anything.
         assertThat(buttonTag(page, "/api/projects/1/start")).contains("disabled");
         assertThat(buttonTag(page, "/api/projects/1/sync-now")).contains("disabled");
-        assertThat(page).contains("No sync options are enabled");
+        assertThat(page).contains("The saved configuration has no work to do");
     }
 
     @Test
@@ -276,7 +276,7 @@ class ProjectControllerObjectSelectionTest {
 
         assertThat(buttonTag(page, "/api/projects/1/start"))
                 .contains("disabled")
-                .contains("No sync options are enabled");
+                .contains("The saved configuration has no work to do");
         assertThat(buttonTag(page, "/api/projects/2/start")).doesNotContain("disabled");
     }
 

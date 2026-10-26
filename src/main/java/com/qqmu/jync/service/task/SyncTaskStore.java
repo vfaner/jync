@@ -92,6 +92,27 @@ public class SyncTaskStore {
         });
     }
 
+    /**
+     * Records a cycle the user stopped mid-run.
+     *
+     * <p>Not a failure: the failure ladder exists to park a project that keeps breaking, and
+     * a deliberate stop would otherwise climb it (three stops during long full loads → ERROR,
+     * which for CDC also parks the consumer). The status is STOPPED regardless of what the
+     * cycle's own outcome would have set; 上次同步 still advances when rows did land, because
+     * that timestamp answers "when did data last move".
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordStoppedOutcome(Long projectId, SyncResult result) {
+        taskRepository.findByProjectId(projectId).ifPresent(task -> {
+            if (result.hasChanges()) {
+                task.setLastSyncTime(Instant.now());
+            }
+            task.setLastSyncResult(truncate("Stopped before finishing"));
+            task.setStatus(TaskStatus.STOPPED);
+            taskRepository.save(task);
+        });
+    }
+
     /** Creates the task row on demand so a project always has one to lock against. */
     @Transactional
     public SyncTask ensureTask(Project project) {

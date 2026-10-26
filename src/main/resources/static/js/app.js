@@ -107,6 +107,7 @@
     function close() {
       if (!current) { return; }
       var el = current.el;
+      var onClose = current.onClose;
       current = null;
       if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
       document.removeEventListener('keydown', onKeydown);
@@ -118,6 +119,9 @@
       if (lastFocus && lastFocus.focus) { lastFocus.focus(); }
       lastFocus = null;
       if (queue.length) { show(queue.shift()); }
+      // 关闭后动作（如「页面已过期，刷新一次」）：任何关闭路径都算数 ——
+      // 点确定、点背景、ESC 都是用户已经看到了这条信息。
+      if (onClose) { onClose(); }
     }
 
     function show(opts) {
@@ -211,7 +215,7 @@
       lastFocus = document.activeElement;
       document.addEventListener('keydown', onKeydown);
       document.body.appendChild(ov);
-      current = { el: ov };
+      current = { el: ov, onClose: opts.onClose };
       if (opts.auto) { autoTimer = setTimeout(close, opts.autoMs || AUTO_MS); }
       if (primary) { primary.focus(); }
     }
@@ -232,9 +236,10 @@
       choose: function (kind, title, message, buttons) {
         show({ kind: kind, title: title, message: message, buttons: buttons });
       },
-      /** 阻塞式告知：必须点击「确定」才关闭，用于不该被错过的错误。 */
-      alert: function (message, kind) {
-        show({ kind: kind || 'danger', message: message });
+      /** 阻塞式告知：必须点击「确定」才关闭，用于不该被错过的错误。
+       *  onClose 在关闭后执行（点确定/点背景/ESC 都算），用于「看完再刷新」。 */
+      alert: function (message, kind, onClose) {
+        show({ kind: kind || 'danger', message: message, onClose: onClose });
       },
       /** 居中轻告知：约 2.6s 自动消失，点击或 ESC 可提前关闭。 */
       auto: function (message, kind) {
@@ -433,6 +438,17 @@
     return '<span class="spin"></span>' + (text ? ' ' + text : '');
   }
 
+  /**
+   * 这两条拒绝只针对「已保存的配置」。详情页的开关与对象勾选直接渲染自同一份
+   * 配置，全新渲染的页面不可能「看着全开」却被服务端判为空 —— 收到它只说明这一页
+   * 已经过期（另一个标签页或另一位管理员保存过、浏览器前进后退缓存）。留在旧页面
+   * 上只会反复撞同一堵墙，确认后刷新，让用户看到真正需要打开什么。
+   */
+  var STALE_CONFIG_REFUSAL = {
+    'error.project.no.options': true,
+    'error.project.no.objects': true
+  };
+
   /** 带加载态的动作按钮，完成后可选刷新页面 */
   function bindActionButton(btn) {
     btn.addEventListener('click', function (e) {
@@ -454,6 +470,13 @@
           // 还得自己从三段几乎相同的文本里认出原因；原文仍在变更日志里，不必搬进弹窗。
           if (payload.errors && payload.errors.length) {
             text += ' ' + t('msg.sync.errors.hint');
+          }
+          // 过期页面的「配置为空」拒绝：确认框一关就刷新（按钮保持加载态直到刷新）。
+          // 表单里有未保存的修改时不刷新 —— 那会静默丢掉用户的编辑；此时走普通
+          // 错误弹窗，文案里已经写明要先保存。
+          if (!payload.success && STALE_CONFIG_REFUSAL[payload.message] && !configDirty) {
+            JyncDialog.alert(text, 'danger', function () { window.location.reload(); });
+            return;
           }
           // 服务端可用 toastKind 指定级别（如「已排队补跑」用 warn），缺省按成败二色
           toast(text, payload.toastKind || (payload.success ? 'ok' : 'danger'));

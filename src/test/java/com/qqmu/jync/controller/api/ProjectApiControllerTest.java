@@ -72,6 +72,30 @@ class ProjectApiControllerTest {
     }
 
     @Test
+    void aStoppedManualSyncReturnsTheWarnToastInsteadOfAnErrorDigest() throws Exception {
+        // The user pressed 「停止同步」 while 「立即同步」 was running. The round ended with an
+        // error entry (that is how the abort is folded), but nothing failed and there is
+        // nothing to fix — a red "有失败项" toast plus the raw English abort sentence is a
+        // wrong report for the user's own action.
+        SyncResult result = new SyncResult();
+        result.addError("Sync of project 'p' stopped by request; aborting at the next safe point");
+        result.setStopped(true);
+        result.setRowsInserted(1200);
+        SyncTaskRunner.Outcome outcome = ReflectionTestUtils.invokeMethod(
+                SyncTaskRunner.Outcome.class, "executed", result);
+        when(projectService.syncNow(1L)).thenReturn(outcome);
+
+        mvc.perform(post("/api/projects/1/sync-now").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("msg.sync.stopped"))
+                .andExpect(jsonPath("$.toastKind").value("warn"))
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.rowsInserted").value(1200))
+                .andExpect(jsonPath("$.summary").doesNotExist())
+                .andExpect(jsonPath("$.errors").doesNotExist());
+    }
+
+    @Test
     void syncNowCarriesSkippedTablesForTheToastLoop() throws Exception {
         SyncResult result = new SyncResult();
         result.addSkipped("LOGS", "no usable cursor column and no primary key");

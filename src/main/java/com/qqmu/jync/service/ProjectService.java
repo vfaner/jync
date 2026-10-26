@@ -300,8 +300,11 @@ public class ProjectService {
             if (endpointsChanged && isRunning(existing)) {
                 // The running cycle (or live CDC consumer) holds the old endpoints; switching
                 // them mid-flight would read one database and write another within a single
-                // run. Stop the project first.
-                throw new IllegalStateException("error.project.edit.running");
+                // run. Stop the project first — unless it already is, in which case the
+                // blocker is the wrapping-up round and telling the user to stop again is
+                // advice they cannot act on.
+                throw new IllegalStateException(stoppedButRunningKey(existing,
+                        "error.project.edit.running"));
             }
             project.setEnabled(existing.getEnabled());
             project.setSyncConfig(existing.getSyncConfig());
@@ -361,7 +364,8 @@ public class ProjectService {
     public void saveCursorColumn(Long projectId, String tableName, String cursorColumn) {
         Project project = require(projectId);
         if (isRunning(project)) {
-            throw new IllegalStateException("error.project.stop.before.config");
+            throw new IllegalStateException(stoppedButRunningKey(project,
+                    "error.project.stop.before.config"));
         }
         SyncConfig config = loadConfig(project);
         String value = cursorColumn == null || cursorColumn.isBlank() ? null : cursorColumn.trim();
@@ -503,7 +507,8 @@ public class ProjectService {
         boolean switching = requested != null && requested != oldStrategy;
         if (!switching && mappingChanged(parseConfigLenient(project.getSyncConfig()), config)
                 && isRunning(project)) {
-            throw new IllegalStateException("error.project.mapping.running");
+            throw new IllegalStateException(stoppedButRunningKey(project,
+                    "error.project.mapping.running"));
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         Project saved = projectRepository.save(project);
@@ -594,6 +599,19 @@ public class ProjectService {
         }
         return task.getLockExpiresAt() == null
                 || task.getLockExpiresAt().isAfter(Instant.now());
+    }
+
+    /**
+     * The refusal message for a guard that {@link #isRunning} tripped.
+     *
+     * <p>When the project is enabled, "stop the sync first" is the actionable advice. When it
+     * is not, the only thing still running is a round that is wrapping up (here or on another
+     * instance) — repeating "stop the sync" to somebody who already did leaves them with no
+     * next step, so say what actually ends it: wait, or force-unlock a wedged holder.
+     */
+    private static String stoppedButRunningKey(Project project, String enabledKey) {
+        return Boolean.TRUE.equals(project.getEnabled())
+                ? enabledKey : "error.project.stillStopping";
     }
 
     /**
@@ -716,11 +734,13 @@ public class ProjectService {
             throw new IllegalStateException("error.project.cron.invalid");
         }
         if (config.hasNoSyncObjects()) {
+            logEmptyWorkRefusal("start", project, config, "error.project.no.objects");
             throw new IllegalStateException("error.project.no.objects");
         }
         // The option switches only reduce a POLLING/FULL_COMPARE cycle to a no-op; a CDC
         // consumer replays row events regardless of them, so its start must stay allowed.
         if (!config.getCaptureStrategyOrDefault().isLogCdc() && config.hasNoPollingWork()) {
+            logEmptyWorkRefusal("start", project, config, "error.project.no.options");
             throw new IllegalStateException("error.project.no.options");
         }
         project.setEnabled(true);
@@ -739,7 +759,35 @@ public class ProjectService {
         log.info("Started sync for project '{}'", saved.getName());
     }
 
-    /** Disables the project and removes its schedule. An in-flight cycle finishes on its own. */
+    /**
+     * 一条「没活可干」的拒绝只带走一个 i18n 键,判据本身没有落点。同一条
+     * {@code error.project.no.options} 可能来自「五个开关全关」,也可能来自「已开启的
+     * 选项在同步对象里一个都没选」——事后的截图只反映页面,复现不了当时的保存态。
+     * 把判据写进 INFO 日志(策略、五个开关、显式选择标记、三类已选数量),下一次反馈
+     * 就有可对照的记录。不含任何连接信息,可以安全留在生产日志里。
+     */
+    private void logEmptyWorkRefusal(String action, Project project, SyncConfig config,
+                                     String key) {
+        log.info("Refusing {} for project '{}' ({}): strategy={}, structure={}, data={},"
+                        + " indexes={}, views={}, procedures={}, explicitSelection={},"
+                        + " selectedTables={}, selectedViews={}, selectedProcedures={}",
+                action, project.getName(), key, config.getCaptureStrategyOrDefault(),
+                config.isSyncStructure(), config.isSyncData(), config.isSyncIndexes(),
+                config.isSyncViews(), config.isSyncProcedures(),
+                config.isObjectSelectionExplicit(),
+                config.getTables().size(), config.getViews().size(),
+                config.getProcedures().size());
+    }
+
+    /**
+     * Disables the project, removes its schedule, and asks an in-flight polling cycle to
+     * abort at its next committed batch.
+     *
+     * <p>The stop request is what makes the button mean what it says: without it a running
+     * full load keeps renewing its lease for minutes, and every config save is refused with
+     * "stop the sync first" — which the user has just done. The cycle unwinds on its own at
+     * a safe point, so nothing is cut mid-write and the lease is released by its owner.
+     */
     @Transactional
     public void stop(Long projectId) {
         Project project = require(projectId);
@@ -755,6 +803,10 @@ public class ProjectService {
                 taskStore.markStopped(projectId);
                 return;
             }
+            // Ask the cycle before dropping the schedule: the schedule entry is already
+            // gone for a running fire, and only the request reaches the thread that holds
+            // the lease.
+            taskRunner.requestStop(projectId);
             scheduler.unschedule(projectId);
         });
         log.info("Stopped sync for project '{}'", project.getName());
@@ -770,10 +822,12 @@ public class ProjectService {
         }
         SyncConfig config = loadConfig(project);
         if (config.hasNoSyncObjects()) {
+            logEmptyWorkRefusal("sync-now", project, config, "error.project.no.objects");
             throw new IllegalStateException("error.project.no.objects");
         }
         // CDC already returned above, so this is always a polling strategy.
         if (config.hasNoPollingWork()) {
+            logEmptyWorkRefusal("sync-now", project, config, "error.project.no.options");
             throw new IllegalStateException("error.project.no.options");
         }
         return taskRunner.runOnce(projectId);
@@ -788,6 +842,14 @@ public class ProjectService {
     @Transactional
     public void resetProgress(Long projectId) {
         Project project = require(projectId);
+        // Progress rows play no part in CDC: the baseline wipes them itself before its full
+        // load (CdcBaselineService → SyncStateWriter.resetProject), and streaming afterwards
+        // follows the position row only. Clearing them would report success and change
+        // nothing — "the next run reloads everything" would be a false promise. The button
+        // that means it is 「重建基线」, next to this one.
+        if (cdcManager.strategyOf(project).isLogCdc()) {
+            throw new IllegalStateException("error.project.cdc.reset.use.rebaseline");
+        }
         if (Boolean.TRUE.equals(project.getEnabled())) {
             throw new IllegalStateException("error.project.stop.before.reset");
         }
@@ -798,9 +860,29 @@ public class ProjectService {
         // still resumes from the old watermark. An expired lease does not block: the holder
         // is gone and TTL reclaim / force-unlock is the documented remedy.
         if (isRunning(project)) {
-            throw new IllegalStateException("error.project.sync.in.progress");
+            throw refusalWhileRunning("reset", project);
         }
         syncEngine.resetProject(projectId);
+    }
+
+    /**
+     * The refusal a destructive action throws while a sync lease is live, naming the holder
+     * in the log.
+     *
+     * <p>The user only sees "a cycle is still running", because one sentence has to cover both
+     * a round on this node and a peer instance's lease — the page cannot tell them apart. The
+     * log is where the difference lives: when someone reports «清空进度/删除被拒，但我已经停了»,
+     * the owner and expiry are the first thing needed to say whether the lease is alive, a
+     * peer's, or a dead owner waiting out its TTL (the force-unlock case).
+     */
+    private IllegalStateException refusalWhileRunning(String action, Project project) {
+        SyncTask task = taskStore.find(project.getId()).orElse(null);
+        log.warn("Refusing to {} project {} ('{}'): sync lease held by {} until {}", action,
+                project.getId(), project.getName(),
+                task == null ? "an unknown owner" : task.getLockOwner(),
+                task == null || task.getLockExpiresAt() == null ? "unknown"
+                        : task.getLockExpiresAt());
+        return new IllegalStateException("error.project.sync.in.progress");
     }
 
     /**
@@ -867,7 +949,7 @@ public class ProjectService {
         // null resource simply skips close(), so the refusal is just an early throw.
         try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
             if (lock == null) {
-                throw new IllegalStateException("error.project.sync.in.progress");
+                throw refusalWhileRunning("delete", project);
             }
             // Stop this node's CDC consumer before anything else: a live PG consumer
             // holds its replication slot (drop fails while the slot is active), and a

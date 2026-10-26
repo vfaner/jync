@@ -218,7 +218,11 @@ public class SyncScheduler {
         return "every " + interval + "ms";
     }
 
-    /** Removes the polling job, pausing the project. In-flight cycles finish on their own. */
+    /**
+     * Removes the polling job, pausing the project. A fire already running is not cancelled
+     * here — {@link com.qqmu.jync.service.ProjectService#stop(Long)} asks it to abort through
+     * the runner first; callers that only reconcile the schedule leave it to finish.
+     */
     public synchronized void unschedule(Long projectId) {
         try {
             if (scheduler.checkExists(jobKey(projectId))) {

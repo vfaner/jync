@@ -34,12 +34,13 @@ class ScheduleReconcilerTest {
     @Mock private ProjectRepository projectRepository;
     @Mock private SyncScheduler scheduler;
     @Mock private CdcConsumerManager cdcManager;
+    @Mock private SyncTaskRunner taskRunner;
 
     private ScheduleReconciler reconciler;
 
     @BeforeEach
     void setUp() {
-        reconciler = new ScheduleReconciler(projectRepository, scheduler, cdcManager);
+        reconciler = new ScheduleReconciler(projectRepository, scheduler, cdcManager, taskRunner);
     }
 
     private static Project project(long id, String name, boolean enabled) {
@@ -71,6 +72,37 @@ class ScheduleReconcilerTest {
 
         verify(scheduler).unschedule(2L);
         verify(scheduler, never()).schedule(any());
+        verify(taskRunner).requestStop(2L);
+    }
+
+    /**
+     * 停止可能是在另一台节点上按下的。那边的 requestStop 只作用于它自己的 JVM;本节点
+     * 这一轮全量可能还要跑很久,租约一直握着,用户那边保存配置仍被判「仍在收尾」。
+     * 迁移点上补一次本节点信号,这轮才会在下一个安全点退出。
+     */
+    @Test
+    void aProjectStoppedOnAnotherNodeAlsoSignalsALocalCycleToStop() {
+        when(projectRepository.findAll()).thenReturn(List.of(project(5L, "stopped-elsewhere", false)));
+        when(scheduler.isScheduled(5L)).thenReturn(true);
+
+        reconciler.reconcile();
+
+        verify(taskRunner).requestStop(5L);
+    }
+
+    /**
+     * 已停、本节点本来就没有 job 的项目不能发信号:停在停止状态的项目允许手动「立即同步」,
+     * 每 30 秒补一枪会把那一轮也打断。只有「这里还挂着 schedule」的迁移点才意味着停止
+     * 是刚发生的、本地可能正有一轮在跑。
+     */
+    @Test
+    void stoppedProjectsWithNoLocalScheduleAreNotSignalled() {
+        when(projectRepository.findAll()).thenReturn(List.of(project(6L, "stopped-here", false)));
+        when(scheduler.isScheduled(6L)).thenReturn(false);
+
+        reconciler.reconcile();
+
+        verify(taskRunner, never()).requestStop(anyLong());
     }
 
     @Test

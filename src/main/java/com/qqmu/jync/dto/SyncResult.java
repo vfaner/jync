@@ -13,6 +13,17 @@ public class SyncResult {
 
     private boolean success = true;
 
+    /**
+     * Whether the run was aborted by the user's 「停止同步」 request rather than failing.
+     *
+     * <p>The abort is carried as an error entry (that is how {@code SyncEngine} folds it), so
+     * {@code success} is false and everything that only looks at it — the failure ladder, the
+     * manual-sync toast — would report a deliberate stop as a fault. This flag is the
+     * difference: the runner records such a round as STOPPED, and the HTTP layer answers
+     * 「已停止」 instead of 「有失败项」.
+     */
+    private boolean stopped;
+
     private int structureChanges;
 
     private int rowsInserted;
@@ -52,6 +63,11 @@ public class SyncResult {
     }
 
     public String summary() {
+        if (stopped) {
+            // A stop is not a failure: the same sentence the task row gets, so a scheduled
+            // fire's log line does not read as "FAILED" for the user's own button press.
+            return "Stopped before finishing";
+        }
         if (!success) {
             // 只给一句人话:失败了几项、什么原因、哪些表。原文(full DDL)在变更日志里,
             // 这里堆原文会让弹窗和项目列表的 chip 一起变成一屏 SQL,见 ErrorDigest。

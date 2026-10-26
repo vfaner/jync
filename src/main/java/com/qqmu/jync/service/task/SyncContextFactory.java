@@ -58,6 +58,19 @@ public class SyncContextFactory {
      *                              a cycle cannot start without both
      */
     public SyncContext build(Project project, String lockOwner, BooleanSupplier lockRenewer) {
+        return build(project, lockOwner, lockRenewer, null);
+    }
+
+    /**
+     * Builds the context, resolving each side's effective schema by connecting to it.
+     *
+     * @param stopRequested answers whether a running cycle should abort; {@code null} for
+     *                      callers that stop their work another way (CDC consumers, tests)
+     * @throws IllegalStateException when either endpoint is unconfigured or unreachable, since
+     *                              a cycle cannot start without both
+     */
+    public SyncContext build(Project project, String lockOwner, BooleanSupplier lockRenewer,
+                             BooleanSupplier stopRequested) {
         if (project.getSourceDbId() == null || project.getTargetDbId() == null) {
             throw new IllegalStateException(
                     "Project '" + project.getName() + "' has no source or target database configured");
@@ -124,6 +137,7 @@ public class SyncContextFactory {
                 .deferSecondaryIndexes(properties.isDeferSecondaryIndexes())
                 .lockOwner(lockOwner)
                 .lockRenewer(lockRenewer)
+                .stopRequested(stopRequested)
                 .connectionProvider(dataSourceManager::getConnection)
                 .build();
     }

@@ -92,6 +92,38 @@ class SyncTaskStoreStopTest {
     }
 
     @Test
+    @DisplayName("a cycle aborted by a stop request is not counted as a failed attempt")
+    void aStopRequestedAbortDoesNotCountAsAFailure() {
+        store.markStopped(1L);
+        SyncResult aborted = new SyncResult();
+        // What SyncEngine hands back when StopRequestedException unwinds the cycle.
+        aborted.addError("Sync of project 'p' stopped by request");
+
+        store.recordStoppedOutcome(1L, aborted);
+
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.STOPPED);
+        // Three ordinary stops must not push a healthy project over the max-retries ladder
+        // and park it in ERROR; the stop is the user's decision, not a failed attempt.
+        assertThat(task.getConsecutiveFailures()).isZero();
+        assertThat(task.getLastSyncResult()).isEqualTo("Stopped before finishing");
+        assertThat(task.getLastSyncTime()).isNull();
+    }
+
+    @Test
+    @DisplayName("a stopped cycle that still moved rows advances 上次同步")
+    void aStoppedCycleThatMovedRowsAdvancesTheLastSyncTime() {
+        store.markStopped(1L);
+        SyncResult aborted = new SyncResult();
+        aborted.setRowsInserted(5);
+        aborted.addError("Sync of project 'p' stopped by request");
+
+        store.recordStoppedOutcome(1L, aborted);
+
+        assertThat(task.getLastSyncTime()).isNotNull();
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.STOPPED);
+    }
+
+    @Test
     @DisplayName("stopping keeps the in-flight cycle's lease until the runner releases it")
     void markStoppedKeepsTheLease() {
         task.setLockOwner("testhost:8080");

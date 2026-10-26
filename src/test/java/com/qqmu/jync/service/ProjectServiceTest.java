@@ -38,6 +38,7 @@ import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
+import com.qqmu.jync.service.cdc.LogCapture;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
@@ -47,6 +48,10 @@ import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.task.SyncTaskRunner;
 import com.qqmu.jync.service.task.SyncTaskStore;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 /**
  * The guards ProjectService keeps between the UI and Quartz/JPA.
@@ -576,6 +581,27 @@ class ProjectServiceTest {
 
         verify(cdcManager).ensureStopped(7L);
         verify(taskStore).markStopped(7L);
+        // The consumer manager has its own requestStop/join; the polling runner is not involved.
+        verify(taskRunner, never()).requestStop(7L);
+    }
+
+    /** Stopping a polling project must reach the cycle that is already running, not just the
+     *  Quartz trigger. The in-flight round (a full load can run for minutes) keeps renewing
+     *  its lease, and every config save is refused with "stop the sync first" — which the
+     *  user has just done. The stop request makes the cycle abort at its next committed batch. */
+    @Test
+    void stoppingAPollingProjectAsksItsInFlightCycleToAbort() {
+        Project project = project(7L);
+        project.setEnabled(true);
+        when(projectRepository.findById(7L)).thenReturn(Optional.of(project));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(cdcManager.strategyOf(project))
+                .thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
+
+        service.stop(7L);
+
+        verify(taskRunner).requestStop(7L);
+        verify(scheduler).unschedule(7L);
     }
 
     // --- running-state topology guards ------------------------------------------------------
@@ -630,9 +656,11 @@ class ProjectServiceTest {
         Project incoming = formProject(1L);
         incoming.setTargetDbId(21L);
 
+        // The project is already stopped, so "stop it first" would be advice the user cannot
+        // act on; the blocker is the round that is still wrapping up.
         assertThatThrownBy(() -> service.save(incoming))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("error.project.edit.running");
+                .hasMessage("error.project.stillStopping");
         verify(projectRepository, never()).save(any());
     }
 
@@ -666,9 +694,25 @@ class ProjectServiceTest {
     }
 
     @Test
+    void resettingProgressOnACdcProjectPointsAtRebaseline() {
+        Project existing = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        // CDC 任务的进度行不参与续流:基线一开始就整批清空(stateWriter.resetProject),
+        // 续流只看位点。清空进度对它是空操作——「下次运行将全量重载」是假承诺,还会
+        // 让用户以为已经重置,真正的入口是旁边的「重建基线」。
+        when(cdcManager.strategyOf(existing)).thenReturn(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+
+        assertThatThrownBy(() -> service.resetProgress(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.cdc.reset.use.rebaseline");
+        verify(syncEngine, never()).resetProject(1L);
+    }
+
+    @Test
     void resettingProgressWhileAStoppedProjectStillHasALiveCycleIsRefused() {
         Project existing = storedProject(1L, false);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(cdcManager.strategyOf(existing)).thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
         // stop() 只清 enabled:已经跑起来的周期会继续持有租约直到自己结束。此刻清游标
         // 是在和它抢同一批状态行——周期会把自己刚写的游标再写回来,重置报成功却不
         // 生效,下一次增量仍旧从旧水位继续。
@@ -687,6 +731,7 @@ class ProjectServiceTest {
     void resettingProgressAfterALiveCycleFinishedIsAllowed() {
         Project existing = storedProject(1L, false);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(cdcManager.strategyOf(existing)).thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
         // 租约过期意味着持有者已经不在了:按既有约定由 TTL 回收/强制解锁处理,
         // 不能把重置永久挡住。
         SyncTask stale = new SyncTask();
@@ -767,6 +812,40 @@ class ProjectServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.mapping.running");
         verify(projectRepository, never()).save(any());
+    }
+
+    /** A stopped project whose previous round is still wrapping up must not be told to
+     *  "stop the sync" — it already is stopped. The honest message points at waiting or the
+     *  force-unlock action, which is what actually ends a lease the user cannot reach. */
+    @Test
+    void changingTheTableMappingWhileAStoppedProjectWrapsUpSaysToWait() {
+        Project existing = storedProject(1L, false);
+        existing.setSyncConfig("{\"tableNameMapping\":{\"A\":\"X\"}}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a:8081");
+        running.setLockExpiresAt(Instant.now().plusSeconds(60));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        SyncConfig config = new SyncConfig();
+        config.getTableNameMapping().put("A", "Y");
+
+        assertThatThrownBy(() -> service.saveConfig(1L, config))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.stillStopping");
+    }
+
+    @Test
+    void savingTheCursorColumnWhileAStoppedProjectWrapsUpSaysToWait() {
+        Project existing = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a:8081");
+        running.setLockExpiresAt(Instant.now().plusSeconds(60));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+
+        assertThatThrownBy(() -> service.saveCursorColumn(1L, "T", "id"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.stillStopping");
     }
 
     @Test
@@ -1014,6 +1093,40 @@ class ProjectServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.no.options");
         verify(taskRunner, never()).runOnce(any());
+    }
+
+    /**
+     * 拒绝只带走一个 i18n 键,判据本身没有落点。同一条 error.project.no.options 可能来自
+     * 「五个开关全关」,也可能来自「已开启的选项在同步对象里一个都没选」——用户反馈的截图
+     * 只反映页面,复现不了当时的保存态,只能对着代码猜是哪一种。把判据(策略、五个开关、
+     * 显式选择、三类已选数量)写进日志,下一次反馈就有一条可对照的记录。
+     */
+    @Test
+    void refusingAConfigWithNoWorkLogsTheStateItJudged() {
+        Project project = storedProject(1L, false);
+        project.setName("orders-sync");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(contextFactory.parseConfig(project)).thenReturn(pollingWithNoOptions());
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(ProjectService.class);
+        try {
+            assertThatThrownBy(() -> service.start(1L))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("error.project.no.options");
+        } finally {
+            LogCapture.detach(ProjectService.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                .as("the refusal must leave the values it judged in the log")
+                .anySatisfy(message -> assertThat(message)
+                        .contains("orders-sync")
+                        .contains("error.project.no.options")
+                        .contains("strategy=POLLING")
+                        .contains("structure=false")
+                        .contains("data=false")
+                        .contains("explicitSelection=false")
+                        .contains("selectedTables=1"));
     }
 
     private SyncConfig pollingWithNoOptions() {
