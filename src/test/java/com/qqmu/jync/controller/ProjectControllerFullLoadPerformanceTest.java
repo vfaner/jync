@@ -211,6 +211,37 @@ class ProjectControllerFullLoadPerformanceTest {
         assertThat(textOf(page, "fullLoadParallelismTip")).contains("1-4");
     }
 
+    /**
+     * The browser validates the form before it posts it, and an HTML number input only accepts
+     * values on the grid {@code min + k * step}. {@code min="1" step="500"} therefore made
+     * 1, 501, 1001, … the only submittable batch sizes: typing the documented default 2000 or
+     * a round 5000 stopped the form from posting at all — no request, no error, the Save button
+     * looked dead and the dirty badge never cleared. Any integer the server keeps must be
+     * submittable, so the grid cannot be coarser than 1.
+     */
+    @Test
+    void everyNumberFieldAcceptsAnyIntegerItsBoundsAllow() throws Exception {
+        stubDetail(CaptureStrategy.POLLING);
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        java.util.regex.Matcher inputs = java.util.regex.Pattern
+                .compile("<input[^>]*type=\"number\"[^>]*>").matcher(page);
+        int checked = 0;
+        while (inputs.find()) {
+            String tag = inputs.group();
+            int at = tag.indexOf("step=\"");
+            String step = at < 0 ? null : tag.substring(at + 6, tag.indexOf('"', at + 6));
+            assertThat(step)
+                    .as("a coarser step makes the browser reject valid values: %s", tag)
+                    .isIn(null, "1", "any");
+            checked++;
+        }
+        assertThat(checked).as("the performance and schedule fields are number inputs")
+                .isGreaterThanOrEqualTo(3);
+    }
+
     /** Text content of the element with the given id (the tip body holds plain text only). */
     private static String textOf(String page, String id) {
         int at = page.indexOf("id=\"" + id + "\"");

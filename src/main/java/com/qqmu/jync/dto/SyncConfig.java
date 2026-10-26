@@ -78,7 +78,8 @@ public class SyncConfig {
     /**
      * Parallel workers for this project's chunked full load; null falls back to the global
      * {@code sync.full-load-parallelism}. The effective value is further capped by the
-     * connection pool, and only a single-column integer primary key can be range-split.
+     * connection pool. Any table with a primary key can be split: an integral leading column
+     * arithmetically into ranges, other key shapes on boundaries sampled from the source.
      */
     private Integer fullLoadParallelism;
 

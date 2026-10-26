@@ -754,7 +754,7 @@
                             <div class="field">
                                 <label for="pollIntervalMs" th:text="#{option.pollInterval}">Poll interval</label>
                                 <input type="number" class="input" id="pollIntervalMs" name="pollIntervalMs"
-                                       min="200" step="100" th:value="${config.pollIntervalMs}">
+                                       min="200" step="1" th:value="${config.pollIntervalMs}">
                                 <div class="help" th:text="#{option.pollIntervalHelp}">help</div>
                             </div>
                             <div class="field">
@@ -795,7 +795,7 @@
                                 </span>
                             </div>
                             <input type="number" class="input" id="batchSize" name="batchSize"
-                                   min="1" max="20000" step="500" th:value="${config.batchSize}"
+                                   min="1" max="20000" step="1" th:value="${config.batchSize}"
                                    th:placeholder="${fullLoadBatchDefault}">
                             <div class="help"
                                  th:text="#{option.batchSizeHelp(${fullLoadBatchDefault})}">help</div>
@@ -835,7 +835,7 @@
                         <div class="field">
                             <label for="cdcIdlePollMs" th:text="#{option.cdcIdlePoll}">CDC idle poll interval</label>
                             <input type="number" class="input" id="cdcIdlePollMs" name="cdcIdlePollMs"
-                                   min="50" step="50" th:value="${config.cdcIdlePollMs}"
+                                   min="50" step="1" th:value="${config.cdcIdlePollMs}"
                                    th:disabled="${selectedStrategy != 'LOGMINER_CDC'
                                        and selectedStrategy != 'PG_LOGICAL_CDC'
                                        and selectedStrategy != 'SQLSERVER_CDC'}">
