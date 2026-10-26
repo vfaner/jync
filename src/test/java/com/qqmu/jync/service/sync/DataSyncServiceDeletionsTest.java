@@ -137,6 +137,31 @@ class DataSyncServiceDeletionsTest {
                 .isEqualTo(3);
     }
 
+    /**
+     * The skip must be explainable, not silent: the engine turns this reason into one
+     * user-visible note per table so an operator does not believe deletions propagate when
+     * they cannot be detected at all.
+     */
+    @Test
+    void deletionDetectionSaysWhyATableIsSkipped() {
+        // Over the cap the two key sets would have to be read whole, so the feature is off.
+        assertThat(service.deletionDetectionSkipReason(table("BIG", "ID", 20_001L)))
+                .contains("20001")
+                .contains("sync.full-compare-max-rows");
+        // At the cap it still runs.
+        assertThat(service.deletionDetectionSkipReason(table("BIG", "ID", 20_000L))).isNull();
+
+        // No estimate is not a blank cheque: without a size the key sets cannot be bounded.
+        TableMeta unknown = table("BIG", "ID", 1L);
+        unknown.setApproximateRowCount(null);
+        assertThat(service.deletionDetectionSkipReason(unknown)).contains("could not be estimated");
+
+        // A keyless table has nothing to match rows on in the first place.
+        TableMeta keyless = table("BIG", "ID", 1L);
+        keyless.setPrimaryKeys(List.of());
+        assertThat(service.deletionDetectionSkipReason(keyless)).contains("primary key");
+    }
+
     @Test
     void keyPartsAreNormalizedByType() {
         assertThat(DataSyncService.keyPartOf(new byte[] {0x01, (byte) 0xAB})).isEqualTo("01ab");

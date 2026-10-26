@@ -84,6 +84,16 @@ public class SyncEngine {
      */
     private final Set<String> warnedOversizedFullCompare = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Project/table pairs already told that deletion detection cannot run for them.
+     *
+     * <p>The comparison reads both key sets in memory, so a table over the row cap (or one
+     * with no size estimate) is skipped. Silent skipping means "同步删除" quietly does nothing
+     * on exactly the tables people care about; per-poll repetition would bury the log. One
+     * WARN and one change-log entry per process, then the note stays in the audit trail.
+     */
+    private final Set<String> warnedDeletionSkips = ConcurrentHashMap.newKeySet();
+
     public SyncEngine(DataSourceManager dataSourceManager,
                       ChangeDetector changeDetector,
                       CursorStrategyResolver cursorResolver,
@@ -786,6 +796,33 @@ public class SyncEngine {
         }
     }
 
+    /**
+     * Says once per table why "同步删除" cannot run for it.
+     *
+     * <p>{@link DataSyncService#deletionDetectionSkipReason} answers with the reason or null;
+     * the first non-null answer becomes a WARN and one change-log entry, so the skip is
+     * visible both in the log and on the audit page without repeating every poll.
+     */
+    private void warnIfDeletionsAreSkipped(SyncContext ctx, TableMeta table) {
+        String reason = dataSync.deletionDetectionSkipReason(table);
+        if (reason == null) {
+            return;
+        }
+        String key = ctx.projectId() + ":" + table.getName().toUpperCase(java.util.Locale.ROOT);
+        if (!warnedDeletionSkips.add(key)) {
+            return;
+        }
+        String detail = "Deletion sync for " + table.getName() + " is skipped: " + reason
+                + ". Rows deleted at the source stay on the target. Raise"
+                + " sync.full-compare-max-rows if the table is small enough for an in-memory"
+                + " comparison, or use log-based CDC, which carries deletes.";
+        log.warn("Project '{}': {}", ctx.projectName(), detail);
+        // INFO, success=true: nothing failed — the operator's configuration just cannot
+        // deliver deletes for this table, and that belongs on the record.
+        stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
+                ChangeType.INFO, detail, true, 0);
+    }
+
     /** Synchronizes rows for every selected table, one table at a time. */
     private void syncData(DatabaseMeta sourceMeta, Connection sourceConn, Connection targetConn,
                           SyncContext ctx, SyncResult result, Set<String> blockedTables) {
@@ -1003,6 +1040,7 @@ public class SyncEngine {
 
         int deleted = 0;
         if (ctx.getConfig().isSyncDeletes()) {
+            warnIfDeletionsAreSkipped(ctx, table);
             try {
                 deleted = dataSync.syncDeletions(sourceConn, targetConn, table, ctx);
             } catch (SQLException e) {

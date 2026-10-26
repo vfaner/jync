@@ -2634,17 +2634,35 @@ public class DataSyncService {
      * <p>Only offered for tables small enough to enumerate keys on both sides, because
      * detecting deletions without a source-side audit trail requires comparing full key sets.
      */
+    /**
+     * Why deletion detection cannot run for this table, or {@code null} when it can.
+     *
+     * <p>Detection reads every key of both sides into memory, so a table above
+     * {@code sync.full-compare-max-rows} — or one whose size the source cannot estimate — is
+     * skipped rather than risking the heap. The engine turns a non-null reason into one WARN
+     * and one change-log entry per table: a "同步删除" that quietly never runs is worse than
+     * one that reports why.
+     */
+    public String deletionDetectionSkipReason(TableMeta table) {
+        if (!table.hasPrimaryKey()) {
+            return "it has no primary key, so rows cannot be matched";
+        }
+        Long rows = table.getApproximateRowCount();
+        if (rows == null) {
+            return "its row count could not be estimated";
+        }
+        long limit = properties.getFullCompareMaxRows();
+        if (rows > limit) {
+            return "it has about " + rows + " rows, over sync.full-compare-max-rows=" + limit;
+        }
+        return null;
+    }
+
     public int syncDeletions(Connection sourceConn, Connection targetConn, TableMeta table,
                              SyncContext ctx) throws SQLException {
-        if (!table.hasPrimaryKey()) {
-            log.debug("Cannot sync deletions for {}: no primary key", table.getName());
-            return 0;
-        }
-        long rows = table.getApproximateRowCount() == null ? Long.MAX_VALUE
-                : table.getApproximateRowCount();
-        if (rows > properties.getFullCompareMaxRows()) {
-            log.debug("Skipping deletion detection for {}: {} rows exceeds the comparison ceiling",
-                    table.getName(), rows);
+        String skipReason = deletionDetectionSkipReason(table);
+        if (skipReason != null) {
+            log.debug("Skipping deletion detection for {}: {}", table.getName(), skipReason);
             return 0;
         }
 
