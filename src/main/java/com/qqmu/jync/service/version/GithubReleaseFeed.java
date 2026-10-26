@@ -128,7 +128,7 @@ public class GithubReleaseFeed implements ReleaseFeed {
                 .build();
         HttpResponse<String> response = http.send(request, BodyHandlers.ofString());
         if (response.statusCode() != 200) {
-            throw new IllegalStateException("GitHub API responded " + response.statusCode());
+            throw ReleaseFeed.apiFailure(ReleaseFeed.Source.GITHUB, response.statusCode());
         }
         return parse(response.body());
     }

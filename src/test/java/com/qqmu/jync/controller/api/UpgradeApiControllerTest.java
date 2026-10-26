@@ -115,6 +115,31 @@ class UpgradeApiControllerTest {
                 .andExpect(jsonPath("$.message").value("新版本 1.8.0 已下载并替换完成，重启后生效"));
     }
 
+    /**
+     * What the operator actually reads when a mirror refuses anonymous calls: name the mirror,
+     * say what 403 usually means, and tell them the way out. Both bundles, because app.js
+     * prints this line verbatim.
+     */
+    @Test
+    void aRateLimitedMirrorIsRenderedAsAdviceInBothLanguages() throws Exception {
+        when(upgradeService.status()).thenReturn(new Status(Phase.FAILED,
+                new Localized("upgrade.lookupFailed.rateLimited", "Gitee", 403),
+                null, "GITEE", 0, 0));
+
+        mvc.perform(get("/api/upgrade/status").param("lang", "zh_CN"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(
+                        "获取最新版本失败: Gitee 拒绝了匿名请求（HTTP 403，通常是匿名调用限流）"
+                                + "。请切换下载源，或稍后重试"));
+
+        mvc.perform(get("/api/upgrade/status").param("lang", "en"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(
+                        "Could not fetch the latest version: Gitee refused the anonymous API"
+                                + " request (HTTP 403, usually rate limiting). Choose the other"
+                                + " download source or try again later"));
+    }
+
     @Test
     void anEnglishPollNeverSeesChinese() throws Exception {
         // app.js renders this message verbatim -- it goes nowhere near the frontend dictionary --

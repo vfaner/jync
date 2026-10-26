@@ -124,7 +124,7 @@ public class GiteeReleaseFeed implements ReleaseFeed {
                 .build();
         var response = http.send(request, BodyHandlers.ofString());
         if (response.statusCode() != 200) {
-            throw new IllegalStateException("Gitee API responded " + response.statusCode());
+            throw ReleaseFeed.apiFailure(ReleaseFeed.Source.GITEE, response.statusCode());
         }
         return parse(response.body(), owner, repo);
     }

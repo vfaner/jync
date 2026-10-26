@@ -34,6 +34,7 @@ import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.service.upgrade.UpgradeService.Localized;
 import com.qqmu.jync.service.upgrade.UpgradeService.Status;
 import com.qqmu.jync.service.version.ArtifactComparison;
+import com.qqmu.jync.service.version.ReleaseFeed;
 import com.qqmu.jync.service.version.ReleaseFeed.Asset;
 import com.qqmu.jync.service.version.ReleaseFeed.Release;
 import com.qqmu.jync.service.version.ReleaseFeed.Source;
@@ -460,6 +461,24 @@ class UpgradeServiceTest {
         Localized message = svc.status().message();
         assertThat(message.key()).isEqualTo("upgrade.lookupFailed.detail");
         assertThat(message.args()[0].toString()).contains("gitee blocked");
+    }
+
+    /**
+     * A mirror refusing anonymous calls (HTTP 403/429) is its rate limit, not a broken release.
+     * "Gitee API responded 403" tells an operator nothing they can act on; the dialog must say
+     * which mirror did it and that switching sources is the way out.
+     */
+    @Test
+    void aRateLimitedMirrorGetsAnActionableReasonInsteadOfAStatusNumber() throws Exception {
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        feed.failure = new ReleaseFeed.RateLimitedException(Source.GITEE, 403);
+        UpgradeService svc = service("1.7.2", downloader);
+
+        svc.start("GITEE");
+        awaitPhase(svc, UpgradeService.Phase.FAILED);
+        Localized message = svc.status().message();
+        assertThat(message.key()).isEqualTo("upgrade.lookupFailed.rateLimited");
+        assertThat(message.args()).containsExactly("Gitee", 403);
     }
 
     @Test

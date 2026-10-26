@@ -19,7 +19,49 @@ public interface ReleaseFeed {
     /** Which hosting platform a feed talks to; also drives the in-app upgrade download. */
     enum Source {
         GITHUB,
-        GITEE
+        GITEE;
+
+        /** Brand name for user-facing text; a proper noun, so it is never translated. */
+        public String displayName() {
+            return this == GITHUB ? "GitHub" : "Gitee";
+        }
+    }
+
+    /**
+     * A mirror refused an anonymous API call. Both platforms rate-limit unauthenticated
+     * requests per IP (Gitee answers 403 "Rate Limit Exceeded", GitHub 403/429), and a bare
+     * "Gitee API responded 403" gives an operator nothing to act on — this type lets the
+     * upgrade dialog name the mirror and point at the other download source instead.
+     */
+    class RateLimitedException extends Exception {
+        private final Source source;
+        private final int statusCode;
+
+        public RateLimitedException(Source source, int statusCode) {
+            super(source.displayName() + " API refused the anonymous request (HTTP "
+                    + statusCode + ")");
+            this.source = source;
+            this.statusCode = statusCode;
+        }
+
+        public Source source() {
+            return source;
+        }
+
+        public int statusCode() {
+            return statusCode;
+        }
+    }
+
+    /**
+     * Maps a non-200 response onto the exception the caller should see. Shared by the HTTP
+     * feeds so the classification cannot drift between them.
+     */
+    static Exception apiFailure(Source source, int statusCode) {
+        if (statusCode == 403 || statusCode == 429) {
+            return new RateLimitedException(source, statusCode);
+        }
+        return new IllegalStateException(source.displayName() + " API responded " + statusCode);
     }
 
     /**

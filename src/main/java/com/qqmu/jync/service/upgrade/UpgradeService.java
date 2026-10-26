@@ -282,6 +282,14 @@ public class UpgradeService {
             Release release;
             try {
                 release = feed.latestFrom(source);
+            } catch (ReleaseFeed.RateLimitedException e) {
+                // The mirror is fine; it is refusing anonymous calls. Quoting "403" would send
+                // the operator looking for a broken release, so say what it is and what to do.
+                log.warn("Upgrade: {} rate-limited the anonymous release lookup (HTTP {})",
+                        e.source().displayName(), e.statusCode());
+                status = failed(new Localized("upgrade.lookupFailed.rateLimited",
+                        e.source().displayName(), e.statusCode()));
+                return;
             } catch (Exception e) {
                 log.warn("Upgrade: release lookup on {} failed", source, e);
                 status = failed(new Localized("upgrade.lookupFailed.detail", describe(e)));
