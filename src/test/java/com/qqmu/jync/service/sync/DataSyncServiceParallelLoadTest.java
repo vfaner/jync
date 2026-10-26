@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -17,6 +18,8 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -319,6 +322,47 @@ class DataSyncServiceParallelLoadTest {
                 .asString()
                 .contains("split into 3 ranges (3 workers")
                 .contains("parallelism 4 requested");
+    }
+
+    /**
+     * Every worker of a table used to run under one thread name, and the throughput line names
+     * its thread — so four concurrent lines were indistinguishable exactly when one range was
+     * lagging and the operator needed to know which one. Each worker now carries its range.
+     */
+    @Test
+    void eachWorkerThreadIsNamedAfterItsRange() throws SQLException {
+        exec(source, "CREATE TABLE ITEMS (ID VARCHAR(20) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE ITEMS (ID VARCHAR(20) PRIMARY KEY, NAME VARCHAR(50))");
+        StringBuilder insert = new StringBuilder("INSERT INTO ITEMS VALUES ");
+        for (int i = 1; i <= 10; i++) {
+            insert.append(i > 1 ? ", " : "").append("('k").append(i).append("', 'v").append(i)
+                    .append("')");
+        }
+        exec(source, insert.toString());
+
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(Types.VARCHAR);
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
+        TableMeta table = new TableMeta();
+        table.setName("ITEMS");
+        table.setPrimaryKeys(List.of("ID"));
+        table.setColumns(List.of(id, name));
+
+        Set<String> workers = ConcurrentHashMap.newKeySet();
+        doAnswer(invocation -> {
+            workers.add(Thread.currentThread().getName());
+            return null;
+        }).when(checkpoints).save(any());
+
+        DataSyncService.TableSyncResult result = service(2, 2).syncTable(
+                source, target, table, CursorStrategy.none("full load only"),
+                new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(workers).containsExactlyInAnyOrder("full-load-ITEMS-1", "full-load-ITEMS-2");
     }
 
     @Test

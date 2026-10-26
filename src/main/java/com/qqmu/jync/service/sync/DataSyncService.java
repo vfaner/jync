@@ -2084,9 +2084,15 @@ public class DataSyncService {
             for (int i = 0; i < ranges.size(); i++) {
                 final int rangeIndex = i;
                 final KeyRange range = ranges.get(i);
-                futures.add(pool.submit(() -> copyRange(table, targetTable, strategy, upperBound,
-                        ctx, range, rangeIndex, resumePoint(usable, rangeIndex, table),
-                        insertFirst)));
+                futures.add(pool.submit(() -> {
+                    // One thread per range, named after it: the throughput line reports its
+                    // thread, and a shared name made concurrent workers of one table
+                    // indistinguishable exactly when one range was the one lagging.
+                    Thread.currentThread().setName(
+                            "full-load-" + table.getName() + "-" + (rangeIndex + 1));
+                    return copyRange(table, targetTable, strategy, upperBound, ctx, range,
+                            rangeIndex, resumePoint(usable, rangeIndex, table), insertFirst);
+                }));
             }
             total = awaitWorkerStats(futures, pool);
         } finally {
