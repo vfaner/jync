@@ -231,12 +231,23 @@ public class ProjectController {
         model.addAttribute("databases", databaseConfigService.findAll());
         SyncTask task = projectService.findTask(id).orElse(null);
         model.addAttribute("task", task);
+        // The polling cycle executing on this node, if any: the next-run block uses it to
+        // tell a slow round from a wedged one, the lock block to tell a live lease from the
+        // row a finished round left behind.
+        ProjectService.CycleView activeCycle = projectService.activeCycle(id);
+        model.addAttribute("activeCycle", activeCycle);
+        boolean cycleRunning = activeCycle != null && activeCycle.running();
         // Lock visibility: a held lease explains why start/sync-now/delete may refuse, and an
         // expired one tells the admin the holder is gone but the row has not been reclaimed.
         boolean lockHeld = task != null && task.getLockOwner() != null;
+        boolean lockExpired = lockHeld && task.getLockExpiresAt() != null
+                && task.getLockExpiresAt().isBefore(java.time.Instant.now());
         model.addAttribute("lockHeld", lockHeld);
-        model.addAttribute("lockExpired", lockHeld && task.getLockExpiresAt() != null
-                && task.getLockExpiresAt().isBefore(java.time.Instant.now()));
+        model.addAttribute("lockExpired", lockExpired);
+        // An expired lease with nothing running here is just leftover state: the next
+        // acquire accepts an expired lease and takes it over, so it blocks nothing and
+        // force-unlock — which only clears that row — has nothing to offer.
+        model.addAttribute("lockStale", lockExpired && !cycleRunning);
         var progressList = projectService.findProgress(id);
         model.addAttribute("progressList", progressList);
         // In-flight chunked full loads (checkpoints exist only while a load is unfinished):
@@ -255,7 +266,6 @@ public class ProjectController {
         // normal cycle that simply has not finished by the time the page renders.
         model.addAttribute("nextRunOverdue", nextRunAt != null
                 && nextRunAt.isBefore(java.time.LocalDateTime.now().minusSeconds(60)));
-        model.addAttribute("activeCycle", projectService.activeCycle(id));
         model.addAttribute("serverZone", java.time.ZoneId.systemDefault().getId());
 
         // --- capture-strategy cards (C1) ---------------------------------------------------

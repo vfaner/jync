@@ -123,19 +123,24 @@
                              th:text="#{project.nextRun.overdue}">This time has passed</div>
                     </dd>
                 </th:block>
-                <!--/* 锁可见性：持有者 + 租约到期时间。过期的租约标红 —— 持有者已经
-                       消失，行还没被回收，管理员可以强制解锁而不必等 TTL。 */-->
+                <!--/* 锁可见性：持有者 + 租约到期时间。过期分两种：本实例还有轮次在跑
+                       （红色，它已失去租约，会在下个安全点中止）；没有轮次在跑（灰色，
+                       只是上一轮留下的行，下一次取锁会直接接管，无需处理）。 */-->
                 <th:block th:if="${lockHeld}">
                     <dt th:text="#{project.lock}">Sync lock</dt>
                     <dd>
-                        <span class="badge" th:classappend="${lockExpired} ? 'badge-danger' : 'badge-warn'">
+                        <span class="badge" th:classappend="${lockStale} ? 'badge-mute'
+                                        : (${lockExpired} ? 'badge-danger' : 'badge-warn')">
                             <svg class="ico"><use href="#lock-fill"/></svg>
-                            <span th:text="${lockExpired} ? #{project.lock.expired} : #{project.lock.held}">Held</span>
+                            <span th:text="${lockStale} ? #{project.lock.stale}
+                                           : (${lockExpired} ? #{project.lock.expired} : #{project.lock.held})">Held</span>
                         </span>
                         <span class="small mono" th:text="${task.lockOwner}">owner</span>
                         <span class="small muted" th:if="${task.lockExpiresAt != null}"
                               th:text="#{project.lock.until} + ' '
                                        + ${#temporals.format(task.lockExpiresAt, 'yyyy-MM-dd HH:mm:ss')}">until</span>
+                        <div class="help" th:if="${lockStale}"
+                             th:text="#{project.lock.staleHelp}">Leftover lease, does not block</div>
                     </dd>
                 </th:block>
             </dl>
@@ -203,8 +208,10 @@
                     <span th:text="#{project.reset}">Reset progress</span>
                 </button>
                 <!--/* 强制解锁只在锁被持有时出现；持有者会在下一次续约时发现租约没了并中止。
+                       过期且本实例无轮次在跑的残留行没有可清的东西，因此不显示。
                        二次确认说明后果，因为这个操作可能停掉一轮还活着的同步。 */-->
-                <button type="button" class="btn btn-outline-danger btn-sm" th:if="${lockHeld}"
+                <button type="button" class="btn btn-outline-danger btn-sm"
+                        th:if="${lockHeld and !lockStale}"
                         data-role="api-btn" data-reload="true"
                         th:attr="data-action=@{/api/projects/{id}/force-unlock(id=${project.id})},
                                  data-confirm=#{project.confirm.forceUnlock(${task.lockOwner})},

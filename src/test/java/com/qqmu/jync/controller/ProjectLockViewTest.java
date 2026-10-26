@@ -128,15 +128,61 @@ class ProjectLockViewTest {
         assertThat(page).doesNotContain("??project.lock", "??msg.lock.forced");
     }
 
+    /**
+     * An expired lease with no round running here is not a lock — it is the row the last
+     * round left behind. The next acquire takes it over (the takeover clause accepts an
+     * expired lease), so it blocks nothing and there is nothing for force-unlock to clear.
+     * Painting it red with an admin button reads as "still locked" to the operator.
+     */
     @Test
-    void anExpiredLeaseIsFlaggedAsDanger() throws Exception {
+    void anExpiredLeaseWithNoRunningCycleIsShownAsLeftover() throws Exception {
         stubDetail(lockedTask(Instant.now().minus(5, ChronoUnit.MINUTES)));
+
+        // The bundle default here is English; pin zh-CN to check the primary wording.
+        String page = mvc.perform(get("/projects/1")
+                        .header("Accept-Language", "zh-CN")
+                        .with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("上一轮残留");
+        assertThat(page).doesNotContain("badge-danger");
+        assertThat(page).doesNotContain("force-unlock");
+    }
+
+    /**
+     * Expired while a local cycle still holds it is the opposite case: the cycle lost its
+     * lease (or stopped renewing) and will abort at its next safe point. That needs the
+     * danger styling and the escape hatch.
+     */
+    @Test
+    void anExpiredLeaseWithALocalCycleStillRunningStaysDanger() throws Exception {
+        stubDetail(lockedTask(Instant.now().minus(5, ChronoUnit.MINUTES)));
+        when(projectService.activeCycle(1L)).thenReturn(new ProjectService.CycleView(
+                true,
+                java.time.LocalDateTime.now().minusMinutes(80),
+                java.time.LocalDateTime.now().minusMinutes(45),
+                45, true, 30));
 
         String page = render(UserRole.ADMIN);
 
         assertThat(page).contains("node-A");
         assertThat(page).contains("badge-danger");
-        assertThat(page).doesNotContain("??project.lock.expired");
+        assertThat(page).contains("force-unlock");
+    }
+
+    @Test
+    void theEnglishPageAlsoCallsTheLeftoverLeaseLeftover() throws Exception {
+        stubDetail(lockedTask(Instant.now().minus(5, ChronoUnit.MINUTES)));
+
+        String page = mvc.perform(get("/projects/1")
+                        .header("Accept-Language", "en-US")
+                        .with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("Left by the previous round");
+        assertThat(page).doesNotContain("上一轮残留");
     }
 
     @Test
