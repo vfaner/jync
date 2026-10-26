@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -77,6 +78,51 @@ public class GenericMetadataReader implements MetadataReader {
         }
         Collections.sort(names);
         return names;
+    }
+
+    /**
+     * Confirms selected tables that vanished from the listing are really gone.
+     *
+     * <p>Reading a table by name through JDBC returns an empty column set for a table that no
+     * longer exists and throws nothing — indistinguishable from a revoked grant or a dictionary
+     * hiccup. The change detector therefore treats an empty column set as "unreadable" and
+     * never drops the target table on that alone, which also meant a genuinely dropped table
+     * could never be dropped at the target under {@code allowDrop}. Listing the schema's table
+     * names is the authoritative check: a selected name missing from a NON-EMPTY listing was
+     * dropped at the source. An empty listing (every table gone? schema renamed? grants
+     * revoked?) or a failed one is ambiguous and records nothing, so that cycle stays
+     * conservative.
+     *
+     * <p>The listing is a schema-wide dictionary query — on a large schema the most expensive
+     * kind of metadata call — and it can only ever resolve tables that read back with zero
+     * columns. Issuing it on a pass where every table read normally buys nothing, so it is
+     * skipped: polling projects run this pass every cycle (default 2 s).
+     */
+    private void recordAbsentTables(Connection conn, String schema, List<String> requested,
+                                    DatabaseMeta meta) {
+        boolean anyUnreadable = meta.getTables().stream()
+                .anyMatch(t -> t.getColumns() == null || t.getColumns().isEmpty());
+        if (!anyUnreadable) {
+            return;
+        }
+        Set<String> present = new HashSet<>();
+        try {
+            for (String name : listTableNames(conn, schema)) {
+                present.add(name.toUpperCase(java.util.Locale.ROOT));
+            }
+        } catch (SQLException e) {
+            log.warn("Could not list source tables to confirm {} selected table(s); source-side"
+                    + " drops stay undetected this cycle: {}", requested.size(), e.getMessage());
+            return;
+        }
+        if (present.isEmpty()) {
+            return;
+        }
+        for (String name : requested) {
+            if (!present.contains(name.toUpperCase(java.util.Locale.ROOT))) {
+                meta.addAbsentTable(name);
+            }
+        }
     }
 
     @Override
@@ -477,6 +523,14 @@ public class GenericMetadataReader implements MetadataReader {
                 log.warn("Skipping table {} — could not read metadata: {}", name, e.getMessage());
                 meta.addUnreadableTable(name);
             }
+        }
+
+        // Explicit selection: the only way to tell "dropped at the source" from "this pass
+        // could not read it". Runs AFTER the per-table reads (only they reveal a zero-column
+        // table) and only when one of them came back that way — see recordAbsentTables. A
+        // data-only pass never runs drop detection and skips the query entirely.
+        if (tables != null && !tables.isEmpty() && includeTableDetail) {
+            recordAbsentTables(conn, schema, tables, meta);
         }
 
         if (includeViews) {

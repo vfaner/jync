@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -245,6 +246,105 @@ class GenericMetadataReaderTest {
         // 显式空选择连列举查询都不该发:那正是"全部"才需要的代价。
         verify(md, never()).getTables(any(), any(), any(), any());
         verify(md, never()).getProcedures(any(), any(), any());
+    }
+
+    // ── 显式清单模式下确认"表真的被删了"：逐表读取对已删除的表只返回零列，必须靠一次
+    //    非空的表名清单核对；清单为空或读取失败都属于歧义，绝不作删除判定。 ──
+
+    private Connection connectionWithListing(ResultSet listing) throws Exception {
+        Connection conn = mock(Connection.class);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(conn.getMetaData()).thenReturn(md);
+        when(conn.getCatalog()).thenReturn(null);
+        if (listing == null) {
+            when(md.getTables(any(), any(), eq("%"), any(String[].class)))
+                    .thenThrow(new java.sql.SQLException("dictionary unavailable"));
+        } else {
+            when(md.getTables(any(), any(), eq("%"), any(String[].class))).thenReturn(listing);
+        }
+        ResultSet none = emptyResultSet();
+        when(md.getTables(any(), any(), eq("orders"), any(String[].class))).thenReturn(none);
+        when(md.getPrimaryKeys(any(), any(), anyString())).thenReturn(none);
+        when(md.getIndexInfo(any(), any(), anyString(), anyBoolean(), anyBoolean())).thenReturn(none);
+        when(md.getImportedKeys(any(), any(), anyString())).thenReturn(none);
+        when(md.getColumns(any(), any(), anyString(), anyString())).thenReturn(none);
+        return conn;
+    }
+
+    @Test
+    void aSelectedTableMissingFromANonEmptyListingIsRecordedAsAbsent() throws Exception {
+        ResultSet listing = mock(ResultSet.class);
+        when(listing.next()).thenReturn(true, false);
+        when(listing.getString("TABLE_NAME")).thenReturn("other");
+
+        DatabaseMeta meta = reader.readAll(connectionWithListing(listing), null,
+                List.of("orders"), null, null, false, false);
+
+        assertThat(meta.getAbsentTables()).containsExactly("ORDERS");
+    }
+
+    @Test
+    void aSelectedTableFoundAgainInTheListingIsNotRecordedAsAbsent() throws Exception {
+        ResultSet listing = mock(ResultSet.class);
+        when(listing.next()).thenReturn(true, false);
+        when(listing.getString("TABLE_NAME")).thenReturn("ORDERS");
+
+        DatabaseMeta meta = reader.readAll(connectionWithListing(listing), null,
+                List.of("orders"), null, null, false, false);
+
+        assertThat(meta.getAbsentTables()).isEmpty();
+    }
+
+    @Test
+    void anEmptyListingIsAmbiguousAndRecordsNothing() throws Exception {
+        // 整库表都没了，与 schema 改名/权限被收回同形，无法区分：这一轮不做任何删除判定。
+        DatabaseMeta meta = reader.readAll(connectionWithListing(emptyResultSet()), null,
+                List.of("orders"), null, null, false, false);
+
+        assertThat(meta.getAbsentTables()).isEmpty();
+    }
+
+    @Test
+    void aFailedListingLeavesDropDetectionConservative() throws Exception {
+        DatabaseMeta meta = reader.readAll(connectionWithListing(null), null,
+                List.of("orders"), null, null, false, false);
+
+        assertThat(meta.getAbsentTables()).isEmpty();
+    }
+
+    @Test
+    void aHealthySelectionNeedsNoExtraListingQuery() throws Exception {
+        // 核对只在「某张表读回来是零列」时才有意义——零列才分不清"被删"和"读不到"。
+        // 每张表都读到了列还去列一遍整库表名，就是每个轮询周期(默认 2 秒)白付一次
+        // schema 级元数据查询:大库上这是最贵的一类查询之一。
+        Connection conn = mock(Connection.class);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(conn.getMetaData()).thenReturn(md);
+        when(conn.getCatalog()).thenReturn(null);
+
+        ResultSet none = emptyResultSet();
+        ResultSet listing = emptyResultSet();
+        when(md.getTables(any(), any(), eq("%"), any(String[].class))).thenReturn(listing);
+        when(md.getTables(any(), any(), eq("orders"), any(String[].class))).thenReturn(none);
+        when(md.getPrimaryKeys(any(), any(), anyString())).thenReturn(none);
+        when(md.getIndexInfo(any(), any(), anyString(), anyBoolean(), anyBoolean())).thenReturn(none);
+        when(md.getImportedKeys(any(), any(), anyString())).thenReturn(none);
+
+        ResultSet columns = mock(ResultSet.class);
+        when(columns.next()).thenReturn(true, false);
+        when(columns.getString("TABLE_NAME")).thenReturn("orders");
+        when(columns.getString("COLUMN_NAME")).thenReturn("id");
+        when(columns.getString("TYPE_NAME")).thenReturn("BIGINT");
+        when(columns.getInt("DATA_TYPE")).thenReturn(java.sql.Types.BIGINT);
+        when(columns.getInt("ORDINAL_POSITION")).thenReturn(1);
+        when(md.getColumns(any(), any(), anyString(), anyString())).thenReturn(columns);
+
+        DatabaseMeta meta = reader.readAll(conn, null,
+                List.of("orders"), null, null, false, false);
+
+        assertThat(meta.getAbsentTables()).isEmpty();
+        // "%" 是整库表名清单;逐表读取用的是精确表名,不能把两者混为一谈。
+        verify(md, never()).getTables(any(), any(), eq("%"), any(String[].class));
     }
 
     private ResultSet emptyResultSet() throws Exception {

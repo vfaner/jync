@@ -75,6 +75,13 @@ public class ChangeDetector {
                 continue;
             }
             String key = table.getName().toUpperCase();
+            // The reader's listing cross-check already decided this one: the schema's table
+            // names came back non-empty and this table was not among them. Zero columns here
+            // mean a real drop, not a read failure, so it must NOT be marked seen — the DROP
+            // pass below owns it (and applies it only when allowDrop is on).
+            if (current.getAbsentTables().contains(key)) {
+                continue;
+            }
             seen.add(key);
             // A table the reader filled in with no columns was not really read: JDBC returns
             // empty result sets and throws nothing for a table that no longer exists (still

@@ -35,6 +35,22 @@ public class DatabaseMeta {
 
     private Set<String> unreadableProcedures = new HashSet<>();
 
+    /**
+     * Names (upper-case) of selected tables the reader confirmed are GONE: a non-empty
+     * listing of the schema's tables did not contain them. Reading a table by name through
+     * JDBC returns an empty column set for a dropped table and throws nothing, which is
+     * indistinguishable from a revoked grant or a dictionary hiccup — so only the listing
+     * cross-check may call a table absent. An empty or failed listing records nothing here,
+     * and the change detector keeps its conservative reading.
+     */
+    private Set<String> absentTables = new HashSet<>();
+
+    public void addAbsentTable(String name) {
+        if (name != null) {
+            absentTables.add(name.toUpperCase());
+        }
+    }
+
     public void addUnreadableTable(String name) {
         if (name != null) {
             unreadableTables.add(name.toUpperCase());

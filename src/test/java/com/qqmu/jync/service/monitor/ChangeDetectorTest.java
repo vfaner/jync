@@ -337,6 +337,55 @@ class ChangeDetectorTest {
     }
 
     @Test
+    void aSelectedTableConfirmedAbsentByTheListingIsDropped() {
+        // 零列本身不能证明表被删了（权限收回、字典抖动也是零列），但 reader 会用一次非空的
+        // 表名清单核对：清单里没有它，才是"源库真的删了"。这时 allowDrop 打开就要删目标表，
+        // 否则「允许执行删除」对整表删除永远不生效，目标和用户预期静默背离。
+        TableMeta stored = new TableMeta();
+        stored.setName("ORDERS");
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", stored));
+
+        TableMeta live = new TableMeta();
+        live.setName("ORDERS"); // zero columns
+        DatabaseMeta current = new DatabaseMeta();
+        current.getTables().add(live);
+        current.addAbsentTable("ORDERS");
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        config.setAllowDrop(true);
+        config.setTables(new java.util.LinkedHashSet<>(List.of("ORDERS")));
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getChangeType()).isEqualTo(ChangeType.DROP);
+        assertThat(events.get(0).getObjectName()).isEqualTo("ORDERS");
+    }
+
+    @Test
+    void anAbsentTableIsKeptWhenDropsAreNotAllowed() {
+        TableMeta stored = new TableMeta();
+        stored.setName("ORDERS");
+        when(snapshotService.loadAll(1L, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of("ORDERS", stored));
+
+        DatabaseMeta current = new DatabaseMeta();
+        TableMeta live = new TableMeta();
+        live.setName("ORDERS");
+        current.getTables().add(live);
+        current.addAbsentTable("ORDERS");
+
+        SyncConfig config = config();
+        config.setSyncStructure(true);
+        config.setAllowDrop(false);
+        config.setTables(new java.util.LinkedHashSet<>(List.of("ORDERS")));
+        List<ChangeEvent> events = detector.detect(1L, current, config);
+
+        assertThat(events).isEmpty();
+    }
+
+    @Test
     void aViewWithAReadableBodyStillDiffsNormally() {
         ViewMeta stored = new ViewMeta();
         stored.setName("V_ORDERS");
