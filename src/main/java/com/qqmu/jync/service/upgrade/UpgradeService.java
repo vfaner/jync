@@ -3,6 +3,7 @@ package com.qqmu.jync.service.upgrade;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.management.ManagementFactory;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
@@ -19,6 +20,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Enumeration;
+import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
@@ -28,6 +30,7 @@ import java.util.zip.ZipFile;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.info.BuildProperties;
 import org.springframework.context.event.EventListener;
@@ -161,9 +164,26 @@ public class UpgradeService {
         void exit(long delayMillis);
     }
 
-    /** Everything the generated helper scripts need, as plain strings. */
+    /**
+     * Everything the generated helper scripts need, as plain strings. {@code jvmArgs} and
+     * {@code programArgs} are the options the running process was started with, replayed so
+     * the restarted process keeps its memory limits, system properties and profiles.
+     */
     public record RestartSpec(long oldPid, String javaBinary, String jarPath, String backupPath,
-                              String workDir, Integer port, String failedPath) {
+                              String workDir, Integer port, String failedPath,
+                              List<String> jvmArgs, List<String> programArgs) {
+
+        public RestartSpec {
+            jvmArgs = jvmArgs == null ? List.of() : List.copyOf(jvmArgs);
+            programArgs = programArgs == null ? List.of() : List.copyOf(programArgs);
+        }
+
+        /** A specification with no explicit launch arguments. */
+        public RestartSpec(long oldPid, String javaBinary, String jarPath, String backupPath,
+                           String workDir, Integer port, String failedPath) {
+            this(oldPid, javaBinary, jarPath, backupPath, workDir, port, failedPath,
+                    List.of(), List.of());
+        }
     }
 
     private final Supplier<String> currentVersion;
@@ -174,6 +194,10 @@ public class UpgradeService {
     private final Supplier<Path> jarLocation;
     private final Supplier<Path> workDir;
     private final String port;
+    /** JVM options the current process was started with ({@code -Xmx}, {@code -D...}). */
+    private final Supplier<List<String>> jvmArgs;
+    /** Program arguments after the jar ({@code --spring.profiles.active=...}). */
+    private final Supplier<List<String>> programArgs;
     /** Whether the published jar is the running one; null when nothing was wired. */
     private final ArtifactComparison artifactComparison;
     private final I18nConfig.MessageSourceAccessorHolder messages;
@@ -187,6 +211,17 @@ public class UpgradeService {
                           Supplier<Path> jarLocation, Supplier<Path> workDir, String port,
                           I18nConfig.MessageSourceAccessorHolder messages,
                           ArtifactComparison artifactComparison) {
+        this(currentVersion, feed, downloader, launcher, shutdown, jarLocation, workDir, port,
+                messages, artifactComparison, List::of, List::of);
+    }
+
+    public UpgradeService(Supplier<String> currentVersion, SourceAwareFeed feed,
+                          JarDownloader downloader, RestartLauncher launcher, Shutdown shutdown,
+                          Supplier<Path> jarLocation, Supplier<Path> workDir, String port,
+                          I18nConfig.MessageSourceAccessorHolder messages,
+                          ArtifactComparison artifactComparison,
+                          Supplier<List<String>> jvmArgs,
+                          Supplier<List<String>> programArgs) {
         this.currentVersion = currentVersion;
         this.feed = feed;
         this.downloader = downloader;
@@ -197,6 +232,8 @@ public class UpgradeService {
         this.port = port;
         this.messages = messages;
         this.artifactComparison = artifactComparison;
+        this.jvmArgs = jvmArgs;
+        this.programArgs = programArgs;
         restoreReadyFromMarker();
     }
 
@@ -312,9 +349,11 @@ public class UpgradeService {
                     workDir.get().toString(),
                     parsePort(),
                     jar + ".failed-" + LocalDateTime.now()
-                            .format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")));
+                            .format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")),
+                    launchableJvmArgs(jvmArgs.get()),
+                    programArgs.get());
             String content = isWindows() ? buildPowerShellScript(spec) : buildShellScript(spec);
-            Files.writeString(script, content, StandardCharsets.UTF_8);
+            writeRestartScript(script, content);
             launcher.launch(script, workDir.get());
         } catch (Exception e) {
             throw new IllegalStateException(text("error.upgrade.restartFailed", describe(e)), e);
@@ -670,6 +709,23 @@ public class UpgradeService {
                 + (isWindows() ? ".exe" : "");
     }
 
+    /**
+     * Writes the helper script with owner-only permissions where the filesystem has them. The
+     * script now carries the original launch arguments, and a {@code -D} value can be a
+     * credential; on Windows there is no POSIX mode, and the file inherits the user profile's
+     * ACL, which is already private.
+     */
+    private static void writeRestartScript(Path script, String content) throws IOException {
+        Files.writeString(script, content, StandardCharsets.UTF_8);
+        try {
+            Files.setPosixFilePermissions(script,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException | IOException ignored) {
+            // No POSIX view (Windows) or a filesystem that refuses the mode: no worse than
+            // the previous behaviour, and the script sits next to the jar it launches.
+        }
+    }
+
     // ── generated restart helper scripts ───────────────────────────────────────────────
 
     /**
@@ -687,6 +743,12 @@ public class UpgradeService {
         sb.append("BACKUP=").append(shq(spec.backupPath())).append('\n');
         sb.append("FAILED=").append(shq(spec.failedPath())).append('\n');
         sb.append("WORKDIR=").append(shq(spec.workDir())).append('\n');
+        if (!spec.jvmArgs().isEmpty()) {
+            sb.append("JVM_ARGS=(").append(shellWordList(spec.jvmArgs())).append(")\n");
+        }
+        if (!spec.programArgs().isEmpty()) {
+            sb.append("PROG_ARGS=(").append(shellWordList(spec.programArgs())).append(")\n");
+        }
         sb.append("mkdir -p \"$WORKDIR/logs\"\n");
         sb.append("LOG=\"$WORKDIR/logs/jync-restart.log\"\n");
         sb.append("log() { echo \"$(date '+%F %T') $*\" >> \"$LOG\"; }\n");
@@ -694,7 +756,7 @@ public class UpgradeService {
         sb.append("  log \"$1\"\n");
         sb.append("  mv \"$JAR\" \"$FAILED\" 2>/dev/null\n");
         sb.append("  mv \"$BACKUP\" \"$JAR\"\n");
-        sb.append("  cd \"$WORKDIR\" && nohup \"$JAVA\" -jar \"$JAR\" >> \"$WORKDIR/logs/jync.log\" 2>&1 &\n");
+        sb.append("  cd \"$WORKDIR\" && ").append(shellLaunch(spec)).append('\n');
         sb.append("  log \"rolled back to previous jar, pid $!\"\n");
         sb.append("}\n");
         sb.append("log \"waiting for old process $OLD_PID to exit\"\n");
@@ -706,8 +768,10 @@ public class UpgradeService {
         sb.append("  exit 1\n");
         sb.append("fi\n");
         sb.append("cd \"$WORKDIR\" || exit 1\n");
+        // The arguments are deliberately absent from the log line: a -D value can be a
+        // credential, and this log is the file operators paste into tickets.
         sb.append("log \"starting new process: $JAVA -jar $JAR\"\n");
-        sb.append("nohup \"$JAVA\" -jar \"$JAR\" >> \"$WORKDIR/logs/jync.log\" 2>&1 &\n");
+        sb.append(shellLaunch(spec)).append('\n');
         sb.append("NEW_PID=$!\n");
         if (spec.port() != null) {
             sb.append("READY=0\n");
@@ -743,6 +807,7 @@ public class UpgradeService {
         String backup = psq(spec.backupPath());
         String failed = psq(spec.failedPath());
         String work = psq(spec.workDir());
+        String arguments = psq(windowsArgumentList(spec));
         StringBuilder sb = new StringBuilder();
         sb.append("# Generated by the Jync one-click upgrade; safe to delete.\n");
         sb.append("$oldPid = ").append(spec.oldPid()).append('\n');
@@ -759,7 +824,8 @@ public class UpgradeService {
         sb.append("  Log $m\n");
         sb.append("  Move-Item $jar $failed -Force -ErrorAction SilentlyContinue\n");
         sb.append("  Move-Item $backup $jar -Force\n");
-        sb.append("  Start-Process -FilePath $java -ArgumentList @('-jar', $jar) -WorkingDirectory $workDir -WindowStyle Hidden\n");
+        sb.append("  Start-Process -FilePath $java -ArgumentList ").append(arguments)
+                .append(" -WorkingDirectory $workDir -WindowStyle Hidden\n");
         sb.append("  Log 'rolled back to previous jar'\n");
         sb.append("}\n");
         sb.append("Log \"waiting for old process $oldPid to exit\"\n");
@@ -769,7 +835,8 @@ public class UpgradeService {
         sb.append("if (Get-Process -Id ").append(spec.oldPid())
                 .append(" -ErrorAction SilentlyContinue) { Log 'old process still alive; aborting'; exit 1 }\n");
         sb.append("Log 'starting new process'\n");
-        sb.append("$proc = Start-Process -FilePath $java -ArgumentList @('-jar', $jar) -WorkingDirectory $workDir -PassThru -WindowStyle Hidden\n");
+        sb.append("$proc = Start-Process -FilePath $java -ArgumentList ").append(arguments)
+                .append(" -WorkingDirectory $workDir -PassThru -WindowStyle Hidden\n");
         if (spec.port() != null) {
             sb.append("$ready = $false\n");
             sb.append("for ($i = 0; $i -lt 180; $i++) {\n");
@@ -791,6 +858,112 @@ public class UpgradeService {
             sb.append("else { Rollback 'new process died during startup' }\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * The bash relaunch command. The captured options are spliced in only when there are
+     * any, so an installation started as a bare {@code java -jar} keeps generating exactly
+     * the script it generated before.
+     */
+    private static String shellLaunch(RestartSpec spec) {
+        StringBuilder sb = new StringBuilder("nohup \"$JAVA\"");
+        if (!spec.jvmArgs().isEmpty()) {
+            sb.append(" \"${JVM_ARGS[@]}\"");
+        }
+        sb.append(" -jar \"$JAR\"");
+        if (!spec.programArgs().isEmpty()) {
+            sb.append(" \"${PROG_ARGS[@]}\"");
+        }
+        return sb.append(" >> \"$WORKDIR/logs/jync.log\" 2>&1 &").toString();
+    }
+
+    /** A bash array body: every word single-quoted, spaces between. */
+    private static String shellWordList(List<String> args) {
+        StringBuilder sb = new StringBuilder();
+        for (String arg : args) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(shq(arg));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * The JVM options that still make sense in a fresh process. A debug agent belongs to the
+     * IDE session that ended with the old JVM; replaying it makes the restarted process wait
+     * for a debugger that is no longer listening.
+     */
+    static List<String> launchableJvmArgs(List<String> captured) {
+        if (captured == null) {
+            return List.of();
+        }
+        return captured.stream()
+                .filter(arg -> arg != null && !isDebugAgent(arg))
+                .toList();
+    }
+
+    private static boolean isDebugAgent(String arg) {
+        return arg.startsWith("-agentlib:jdwp") || arg.startsWith("-Xrunjdwp")
+                || arg.equals("-Xdebug");
+    }
+
+    /**
+     * The whole command line for {@code java} as one Windows-quoted string. PowerShell joins
+     * an {@code -ArgumentList} array with spaces without quoting its elements, so passing the
+     * array meant a jar path with a space split into two arguments; one literal string is
+     * also how the captured options can be carried at all.
+     */
+    static String windowsArgumentList(RestartSpec spec) {
+        StringBuilder sb = new StringBuilder();
+        for (String arg : spec.jvmArgs()) {
+            appendWindowsArgument(sb, arg);
+        }
+        appendWindowsArgument(sb, "-jar");
+        appendWindowsArgument(sb, spec.jarPath());
+        for (String arg : spec.programArgs()) {
+            appendWindowsArgument(sb, arg);
+        }
+        return sb.toString();
+    }
+
+    private static void appendWindowsArgument(StringBuilder sb, String arg) {
+        if (sb.length() > 0) {
+            sb.append(' ');
+        }
+        sb.append(windowsQuote(arg));
+    }
+
+    /**
+     * Quotes one argument the way the target's CRT parses its command line: double quotes
+     * around anything containing a space, tab or quote; backslashes doubled before an embedded
+     * quote and before the closing quote.
+     */
+    static String windowsQuote(String arg) {
+        boolean needsQuotes = arg.isEmpty();
+        for (int i = 0; i < arg.length() && !needsQuotes; i++) {
+            char c = arg.charAt(i);
+            needsQuotes = c == ' ' || c == '\t' || c == '"';
+        }
+        if (!needsQuotes) {
+            return arg;
+        }
+        StringBuilder sb = new StringBuilder(arg.length() + 2).append('"');
+        int backslashes = 0;
+        for (int i = 0; i < arg.length(); i++) {
+            char c = arg.charAt(i);
+            if (c == '\\') {
+                backslashes++;
+                continue;
+            }
+            if (c == '"') {
+                sb.append("\\".repeat(backslashes * 2 + 1)).append('"');
+            } else {
+                sb.append("\\".repeat(backslashes)).append(c);
+            }
+            backslashes = 0;
+        }
+        return sb.append("\\".repeat(backslashes * 2)).append('"').toString();
     }
 
     /** PowerShell single-quoted literal: only {@code '} needs escaping, by doubling. */
@@ -902,7 +1075,8 @@ public class UpgradeService {
         public Bean(ObjectProvider<BuildProperties> buildProperties, SourceAwareFeed feed,
                     @Value("${server.port:8080}") String port,
                     I18nConfig.MessageSourceAccessorHolder messages,
-                    ArtifactComparison artifactComparison) {
+                    ArtifactComparison artifactComparison,
+                    ApplicationArguments applicationArguments) {
             super(() -> {
                         BuildProperties props = buildProperties.getIfAvailable();
                         String version = props == null ? null : props.getVersion();
@@ -916,7 +1090,9 @@ public class UpgradeService {
                     () -> Path.of(System.getProperty("user.dir")),
                     port,
                     messages,
-                    artifactComparison);
+                    artifactComparison,
+                    () -> ManagementFactory.getRuntimeMXBean().getInputArguments(),
+                    () -> Arrays.asList(applicationArguments.getSourceArgs()));
         }
 
         @EventListener(ApplicationReadyEvent.class)

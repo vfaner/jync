@@ -8,8 +8,10 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
@@ -19,6 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -136,6 +139,24 @@ class UpgradeServiceTest {
                 port,
                 messages(),
                 comparison);
+    }
+
+    /** A service that believes it was started with these launch arguments. */
+    private UpgradeService serviceWithArgs(String currentVersion, ScriptedDownloader downloader,
+                                           List<String> jvmArgs, List<String> programArgs) {
+        return new UpgradeService(
+                () -> currentVersion,
+                feed,
+                downloader,
+                launcher,
+                shutdown,
+                () -> jarFile,
+                () -> workDir,
+                "8081",
+                messages(),
+                null,
+                () -> jvmArgs,
+                () -> programArgs);
     }
 
     /**
@@ -674,6 +695,167 @@ class UpgradeServiceTest {
         String script = UpgradeService.buildPowerShellScript(spec);
 
         assertThat(script).contains("'C:\\app''o\\java.exe'");
+    }
+
+    // ── launch arguments survive the restart ──────────────────────────────────────────
+
+    /**
+     * The restart helper used to relaunch with a bare {@code java -jar}, so every JVM flag
+     * ({@code -Xmx}, certificates, system properties) and every program argument
+     * ({@code --spring.profiles.active}) silently disappeared on the first one-click upgrade.
+     * Those settings can decide which database or port the process binds, so the new process
+     * came up with defaults its operator never chose.
+     */
+    @Test
+    void shellScriptReplaysTheOriginalJvmAndProgramArguments() {
+        RestartSpec spec = new RestartSpec(12345L, "/usr/bin/java",
+                "/opt/jync/jync.jar", "/opt/jync/jync.jar.bak", "/opt/jync", 8081,
+                "/opt/jync/jync.jar.failed-x",
+                List.of("-Xmx1g", "-Dapp.mode=prod"),
+                List.of("--spring.profiles.active=prod"));
+        String script = UpgradeService.buildShellScript(spec);
+
+        assertThat(script).contains("JVM_ARGS=('-Xmx1g' '-Dapp.mode=prod')");
+        assertThat(script).contains("PROG_ARGS=('--spring.profiles.active=prod')");
+        // Both the forward launch and the rollback relaunch must carry them.
+        assertThat(script.lines()
+                .filter(line -> line.contains("nohup \"$JAVA\""))
+                .count()).isEqualTo(2);
+        assertThat(script.lines()
+                .filter(line -> line.contains("nohup \"$JAVA\""))
+                .filter(line -> line.contains("\"${JVM_ARGS[@]}\"")
+                        && line.contains("\"${PROG_ARGS[@]}\""))
+                .count()).isEqualTo(2);
+    }
+
+    /**
+     * Most installations start from an IDE or a plain {@code java -jar}: the runtime bean
+     * reports no explicit options, and the generated script must stay exactly what it was
+     * before this feature rather than gain empty arrays and quoting.
+     */
+    @Test
+    void shellScriptIsUnchangedWhenTheJvmHadNoExplicitArguments() {
+        RestartSpec spec = new RestartSpec(12345L, "/usr/bin/java",
+                "/opt/jync/jync.jar", "/opt/jync/jync.jar.bak", "/opt/jync", 8081,
+                "/opt/jync/jync.jar.failed-x");
+        String script = UpgradeService.buildShellScript(spec);
+
+        assertThat(script).doesNotContain("JVM_ARGS");
+        assertThat(script).doesNotContain("PROG_ARGS");
+        assertThat(script).contains(
+                "nohup \"$JAVA\" -jar \"$JAR\" >> \"$WORKDIR/logs/jync.log\" 2>&1 &");
+    }
+
+    @Test
+    void shellScriptQuotesArgumentsContainingQuotesAndSpaces() {
+        RestartSpec spec = new RestartSpec(1L, "/usr/bin/java",
+                "/opt/jync/jync.jar", "/opt/jync/jync.jar.bak", "/opt/jync", null,
+                "/opt/jync/jync.jar.failed-x",
+                List.of("-Dmsg=it's here"),
+                List.of());
+        String script = UpgradeService.buildShellScript(spec);
+
+        assertThat(script).contains("JVM_ARGS=('-Dmsg=it'\\''s here')");
+    }
+
+    /** A debug agent belongs to the IDE session that already ended with the old JVM. */
+    @Test
+    void debugAgentArgumentsAreNotReplayed() {
+        assertThat(UpgradeService.launchableJvmArgs(List.of(
+                "-Xmx1g",
+                "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005",
+                "-Xrunjdwp:transport=dt_socket,address=5005",
+                "-Xdebug",
+                "-Dfoo=bar")))
+                .containsExactly("-Xmx1g", "-Dfoo=bar");
+        assertThat(UpgradeService.launchableJvmArgs(null)).isEmpty();
+    }
+
+    @Test
+    void restartCapturesTheRunningJvmAndProgramArguments() throws Exception {
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = makeFatJar("new");
+        feed.release = release(Source.GITEE, "v1.8.0", null);
+        UpgradeService svc = serviceWithArgs("1.7.2", downloader,
+                List.of("-Xmx1g", "-agentlib:jdwp=transport=dt_socket,address=5005"),
+                List.of("--spring.profiles.active=prod"));
+
+        runToReady(svc);
+        svc.restart();
+
+        String script = Files.readString(launcher.script);
+        assertThat(script).contains("JVM_ARGS=('-Xmx1g')");
+        assertThat(script).doesNotContain("jdwp");
+        assertThat(script).contains("PROG_ARGS=('--spring.profiles.active=prod')");
+    }
+
+    /**
+     * A {@code -D} value can be a credential (a database password, an OA secret). It has to
+     * stay in the launch command or the restarted process cannot start, but it must never be
+     * echoed into the restart log, which operators paste into tickets.
+     */
+    @Test
+    void aSecretSystemPropertyIsNeverWrittenToTheRestartLog() {
+        RestartSpec spec = new RestartSpec(1L, "/usr/bin/java",
+                "/opt/jync/jync.jar", "/opt/jync/jync.jar.bak", "/opt/jync", 8081,
+                "/opt/jync/jync.jar.failed-x",
+                List.of("-Dspring.datasource.password=hunter2"),
+                List.of());
+        String script = UpgradeService.buildShellScript(spec);
+
+        assertThat(script).contains("JVM_ARGS=('-Dspring.datasource.password=hunter2')");
+        assertThat(script.lines()
+                .filter(line -> line.contains("log ") || line.contains("Log "))
+                .noneMatch(line -> line.contains("hunter2")))
+                .isTrue();
+    }
+
+    @Test
+    void powershellReplaysTheArgumentsAsOneQuotedArgumentList() {
+        RestartSpec spec = new RestartSpec(9L, "C:\\Java\\bin\\java.exe",
+                "C:\\app\\jync.jar", "C:\\app\\jync.jar.bak", "C:\\app", 8080,
+                "C:\\app\\jync.jar.failed-x",
+                List.of("-Xmx1g", "-Dname=a b"),
+                List.of("--spring.profiles.active=prod"));
+        String script = UpgradeService.buildPowerShellScript(spec);
+
+        // One string, not an array: Start-Process joins array elements with spaces and does
+        // not quote them, which is also why a jar path with spaces used to break the launch.
+        assertThat(script).contains(
+                "-ArgumentList '-Xmx1g \"-Dname=a b\" -jar C:\\app\\jync.jar"
+                        + " --spring.profiles.active=prod'");
+        assertThat(script.lines()
+                .filter(line -> line.contains("-ArgumentList"))
+                .count()).isEqualTo(2);
+    }
+
+    @Test
+    void powershellQuotesAJarPathThatContainsSpaces() {
+        RestartSpec spec = new RestartSpec(9L, "C:\\Program Files\\Java\\bin\\java.exe",
+                "C:\\Program Files\\Jync\\jync.jar", "C:\\Program Files\\Jync\\jync.jar.bak",
+                "C:\\Program Files\\Jync", 8080, "C:\\Program Files\\Jync\\jync.jar.failed-x");
+        String script = UpgradeService.buildPowerShellScript(spec);
+
+        assertThat(script).contains("-ArgumentList '-jar \"C:\\Program Files\\Jync\\jync.jar\"'");
+        assertThat(script).doesNotContain("@('-jar'");
+    }
+
+    /** The script now carries {@code -D} values, which can be credentials. */
+    @Test
+    void theHelperScriptIsNotReadableByOtherUsers() throws Exception {
+        Assumptions.assumeTrue(
+                FileSystems.getDefault().supportedFileAttributeViews().contains("posix"));
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = makeFatJar("new");
+        feed.release = release(Source.GITEE, "v1.8.0", null);
+        UpgradeService svc = serviceWithArgs("1.7.2", downloader,
+                List.of("-Dspring.datasource.password=hunter2"), List.of());
+
+        runToReady(svc);
+        svc.restart();
+
+        assertThat(Files.getPosixFilePermissions(launcher.script))
+                .doesNotContain(PosixFilePermission.GROUP_READ, PosixFilePermission.OTHERS_READ);
     }
 
     /** Minimal controllable feed: one canned release or a failure, and latestFrom only. */
