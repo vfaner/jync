@@ -170,6 +170,16 @@ public class CdcOperationsService {
      *       (the start re-baselines: no position row means full load, then streaming).</li>
      * </ol>
      *
+     * <p>DISABLED project (server-side enforcement, so a direct API call cannot bypass
+     * it): there is deliberately no start. Supervision only keeps consumers of enabled
+     * projects, so a consumer started here would begin the full load, be asked to stop on
+     * the next tick, and be interrupted at a chunk boundary after the join budget — the
+     * page would show "stopped" next to "CDC running" and a held lock meanwhile, and the
+     * load could never finish. The reset itself (position + cursors + ERROR hat) is the
+     * useful part: the next real start finds no position and runs the full baseline.
+     * {@code markStopped} — not {@code markCdcRunning} — clears the ERROR hat without
+     * claiming a consumer that is not running.
+     *
      * <p>Cross-node holder gate (final review FIX 1), BEFORE any mutation: on a node that
      * does not run the consumer, {@code ensureStopped} is a local no-op and
      * {@code ensureStarted} skips ("being consumed by another node") — yet
@@ -196,8 +206,11 @@ public class CdcOperationsService {
      *         when this node runs no local consumer AND the daemon lease is held by
      *         another live owner (the API controller turns that into a 409) — refused
      *         with ZERO mutations and ZERO trail rows
+     * @return {@code true} when the consumer was restarted (enabled project, full load
+     *         started now); {@code false} when the task is disabled and only the baseline
+     *         state was reset — the full load runs on the next start
      */
-    public void rebaseline(Long projectId) {
+    public boolean rebaseline(Long projectId) {
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
         if (!CaptureStrategyParser.parse(project.getSyncConfig()).isLogCdc()) {
@@ -218,14 +231,27 @@ public class CdcOperationsService {
         cdcManager.ensureStopped(projectId);
         positionStore.delete(projectId);
         stateWriter.clearCursor(projectId);
-        taskStore.markCdcRunning(projectId);                     // ERROR 帽子必须先摘
+        // Re-read AFTER the stop: the row may have been disabled while the join waited.
         Project fresh = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
-        cdcManager.ensureStarted(fresh);
+        boolean restarted = Boolean.TRUE.equals(fresh.getEnabled());
+        if (restarted) {
+            taskStore.markCdcRunning(projectId);                 // ERROR 帽子必须先摘
+            cdcManager.ensureStarted(fresh);
+        } else {
+            // Disabled: reset only. markStopped also lifts the ERROR hat (hasErrorHat
+            // reads status), so enabling the task later starts the consumer — and with
+            // no position row, that start runs the full baseline.
+            taskStore.markStopped(projectId);
+            log.info("CDC baseline of disabled project {} reset; it will be rebuilt when"
+                    + " the task is started", projectId);
+        }
+        String trail = restarted ? "baseline rebuilt" : "baseline reset (task disabled)";
         changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
-                fresh.getName(), ChangeType.INFO, "baseline rebuilt"));
+                fresh.getName(), ChangeType.INFO, trail));
         auditService.record(AuditAction.PROJECT_CDC_REBASELINE,
-                "project " + projectId + ": baseline rebuilt");
+                "project " + projectId + ": " + trail);
+        return restarted;
     }
 
 }

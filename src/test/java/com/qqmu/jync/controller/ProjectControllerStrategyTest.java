@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -361,6 +362,31 @@ class ProjectControllerStrategyTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(enabledPage).doesNotContain("id=\"cdc-rebaseline-disabled-hint\"");
+    }
+
+    /**
+     * 确认框必须按状态分两套文案:停用任务上再写「停止消费、重新全量加载」,
+     * 就把「重建基线会立刻全量」的误会留在了最显眼的位置。
+     */
+    @Test
+    void rebaselineConfirmMatchesTaskState() throws Exception {
+        stubCdcDetail(false);
+        String disabledPage = mvc.perform(get("/projects/1").locale(Locale.ENGLISH))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(disabledPage).contains(
+                "data-confirm=\"Rebuilding the baseline clears the current progress and the"
+                        + " error state and does not start sync; the next start runs a fresh"
+                        + " full load. Continue?\"");
+
+        stubCdcDetail(true);
+        String enabledPage = mvc.perform(get("/projects/1").locale(Locale.ENGLISH))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(enabledPage).contains(
+                "data-confirm=\"Rebuilding the baseline stops the consumer, clears the"
+                        + " position and reloads the target in full; target data may briefly"
+                        + " lag. Continue?\"");
     }
 
     /** The markup strictly inside the baseline group body (up to its own closing div). */

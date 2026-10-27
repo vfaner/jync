@@ -82,10 +82,27 @@ class CdcApiControllerTest {
 
     @Test
     void rebaselineReturnsOk() throws Exception {
+        when(operations.rebaseline(1L)).thenReturn(true);
+
         mvc.perform(post("/api/projects/1/cdc-rebaseline").with(csrf()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.ok").value(true));
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.message").value("msg.cdc.rebaseline.done"));
         verify(operations).rebaseline(1L);
+    }
+
+    /**
+     * 停用任务只重置基线、不启动消费者,接口必须换成「启用后重新全量」的提示,
+     * 不能沿用运行中的「基线已重建」,否则用户又会以为全量已经在跑。
+     */
+    @Test
+    void rebaselineOnDisabledTaskSaysPending() throws Exception {
+        when(operations.rebaseline(1L)).thenReturn(false);
+
+        mvc.perform(post("/api/projects/1/cdc-rebaseline").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.message").value("msg.cdc.rebaseline.pending"));
     }
 
     @Test

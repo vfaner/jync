@@ -180,7 +180,8 @@
                 <!--/* 立即同步只对非 CDC 项目渲染:CDC 是持续消费,「补一轮」没有意义,
                        服务端也会以 error.project.cdc.use.rebaseline 拒绝。CDC 项目的一键
                        恢复入口是重建基线(B7),复用 api-btn 的 postJson + data-confirm
-                       模式,确认文案明示三个后果(停消费/清位点/全量重载)。 */-->
+                       模式。确认文案按任务状态分两套:运行中明示停消费/清位点/立即全量,
+                       已停用则明示只清状态、启用后才全量(此时服务端不会启动消费者)。 */-->
                 <button type="button" class="btn btn-primary btn-sm" th:unless="${cdcActive}"
                         th:disabled="${noSyncWorkMessage != null}"
                         data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
@@ -192,7 +193,7 @@
                 <button type="button" class="btn btn-primary btn-sm" th:if="${cdcActive}"
                         data-role="api-btn" data-reload="true" data-cdc-visibility="cdc"
                         th:attr="data-action=@{/api/projects/{id}/cdc-rebaseline(id=${project.id})},
-                                 data-confirm=#{cdc.rebaseline.confirm},
+                                 data-confirm=${project.enabled} ? #{cdc.rebaseline.confirm} : #{cdc.rebaseline.confirm.pending},
                                  data-busy-text=#{common.loading}">
                     <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
                     <span th:text="#{cdc.rebaseline.button}">Rebuild baseline</span>
@@ -230,8 +231,10 @@
             <p class="small muted" style="margin:11px 0 0"
                th:if="${isAdmin and noSyncWorkMessage != null}"
                th:text="${noSyncWorkMessage}">No sync objects selected</p>
-            <!--/* 停用项目上的重建基线仍会跑完整启动序列,但巡检(sync.cdc.supervise-interval-ms,
-                   默认 10s)很快会把消费者再次停掉——把这段「先起后停」明说,别让用户猜。 */-->
+            <!--/* 停用项目上的重建基线只清进度和错误状态,不启动消费者(服务端强制):
+                   全量加载是消费者线程的一部分,巡检又只保留启用项目的消费者,先起后停
+                   必然打断基线,页面还会同时出现「已停止」与「CDC 运行中」。把「启用后
+                   才全量」明说,别让用户猜。 */-->
             <p class="small muted" id="cdc-rebaseline-disabled-hint" style="margin:11px 0 0"
                th:if="${isAdmin and cdcActive and !project.enabled}" data-cdc-visibility="cdc"
                th:text="#{cdc.rebaseline.disabled.hint}">Disabled-project rebaseline hint</p>

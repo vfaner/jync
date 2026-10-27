@@ -174,12 +174,23 @@ class CdcOperationsServiceTest {
         assertThat(version.getDetail()).contains("connection refused by db.local:3306");
     }
 
-    /** A CDC-strategy row; two instances let the sequence test tell the fresh re-read apart. */
+    /**
+     * A CDC-strategy row; two instances let the sequence test tell the fresh re-read
+     * apart. Enabled by default: the restart sequence is the running-task path.
+     */
     private static Project cdcProject(String name) {
         Project p = new Project();
         p.setId(1L);
         p.setName(name);
+        p.setEnabled(true);
         p.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");
+        return p;
+    }
+
+    /** The same row with the task stopped: rebaseline resets state but must not start. */
+    private static Project stoppedCdcProject(String name) {
+        Project p = cdcProject(name);
+        p.setEnabled(false);
         return p;
     }
 
@@ -196,7 +207,7 @@ class CdcOperationsServiceTest {
         when(projectRepository.findById(1L))
                 .thenReturn(Optional.of(stale), Optional.of(fresh));
 
-        service.rebaseline(1L);
+        assertThat(service.rebaseline(1L)).isTrue();
 
         InOrder sequence = inOrder(cdcManager, positionStore, stateWriter, taskStore);
         sequence.verify(cdcManager).ensureStopped(1L);
@@ -211,6 +222,37 @@ class CdcOperationsServiceTest {
         assertThat(changeLog.getValue().getObjectType()).isEqualTo(ObjectType.PROJECT);
         assertThat(changeLog.getValue().getChangeType()).isEqualTo(ChangeType.INFO);
         assertThat(changeLog.getValue().getDetails()).contains("baseline rebuilt");
+        verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), anyString());
+    }
+
+    /**
+     * 停用任务上的重建基线只重置状态:清位点、清游标、摘 ERROR 帽(markStopped),
+     * 不启动消费者。起点消费者会让巡检在 join 20 秒后打断全量,页面上还会同时出现
+     * 「已停止」和「CDC 运行中 + 锁持有中」。基线留给启用后的 ensureStarted 执行
+     * (无位点 → 全量)。双 trail 仍然要写:用户确实执行了一次重置。
+     */
+    @Test
+    void rebaselineOnDisabledProjectClearsBaselineButDoesNotStart() {
+        Project stale = stoppedCdcProject("stale");
+        Project fresh = stoppedCdcProject("fresh");
+        when(projectRepository.findById(1L))
+                .thenReturn(Optional.of(stale), Optional.of(fresh));
+
+        assertThat(service.rebaseline(1L)).isFalse();
+
+        InOrder sequence = inOrder(cdcManager, positionStore, stateWriter, taskStore);
+        sequence.verify(cdcManager).ensureStopped(1L);
+        sequence.verify(positionStore).delete(1L);
+        sequence.verify(stateWriter).clearCursor(1L);
+        sequence.verify(taskStore).markStopped(1L);              // 摘帽但不置 RUNNING
+        verify(taskStore, never()).markCdcRunning(1L);
+        verify(cdcManager, never()).ensureStarted(any());
+
+        ArgumentCaptor<ChangeLog> changeLog = ArgumentCaptor.forClass(ChangeLog.class);
+        verify(changeLogRepository).save(changeLog.capture());
+        assertThat(changeLog.getValue().getProjectId()).isEqualTo(1L);
+        assertThat(changeLog.getValue().getChangeType()).isEqualTo(ChangeType.INFO);
+        assertThat(changeLog.getValue().getDetails()).contains("baseline reset");
         verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), anyString());
     }
 

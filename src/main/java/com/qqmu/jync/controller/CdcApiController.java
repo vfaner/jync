@@ -94,8 +94,9 @@ public class CdcApiController {
      */
     @PostMapping("/{id}/cdc-rebaseline")
     public ResponseEntity<Map<String, Object>> rebaseline(@PathVariable Long id) {
+        boolean restarted;
         try {
-            operations.rebaseline(id);
+            restarted = operations.rebaseline(id);
         } catch (IllegalArgumentException e) {
             return badRequest(e);
         } catch (CdcNotHolderException e) {
@@ -104,7 +105,10 @@ public class CdcApiController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", true);
         body.put("success", true);
-        body.put("message", "msg.cdc.rebaseline.done");
+        // A disabled task is reset, not restarted: say so instead of the running-task
+        // "rebuilt" toast that would imply a baseline is loading right now.
+        body.put("message", restarted ? "msg.cdc.rebaseline.done"
+                : "msg.cdc.rebaseline.pending");
         return ResponseEntity.ok(body);
     }
 

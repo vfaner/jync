@@ -129,7 +129,7 @@
     <td align="center"><a href="docs/images/jync_xiangmu_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_add.png" alt="新建任务" width="100%"></a><br><sub><b>新建任务</b> · 源与目标各选一条已测通连接</sub></td>
   </tr>
   <tr>
-    <td></td>
+    <td align="center"><a href="docs/images/jync_xiangmu_batch.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_batch.png" alt="批量创建" width="100%"></a><br><sub><b>批量创建</b> · 按表大小分箱，一次建多个任务</sub></td>
     <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="核对行数" width="100%"></a><br><sub><b>核对行数</b> · 源 / 目标 COUNT 对比与差异标记</sub></td>
     <td></td>
   </tr>

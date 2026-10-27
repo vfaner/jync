@@ -129,7 +129,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
     <td align="center"><a href="docs/images/jync_xiangmu_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_add.png" alt="New task" width="100%"></a><br><sub><b>New task</b> · pick a tested connection on each side</sub></td>
   </tr>
   <tr>
-    <td></td>
+    <td align="center"><a href="docs/images/jync_xiangmu_batch.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_batch.png" alt="Bulk create" width="100%"></a><br><sub><b>Bulk create</b> · split tables by estimated size into several tasks</sub></td>
     <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="Row-count audit" width="100%"></a><br><sub><b>Row-count audit</b> · source vs target COUNT with differences flagged</sub></td>
     <td></td>
   </tr>
