@@ -124,6 +124,23 @@ class SyncTaskStoreStopTest {
     }
 
     @Test
+    @DisplayName("a stop that resets the baseline also clears the stale result text")
+    void markStoppedClearingResultDropsTheStaleSummary() {
+        task.setLastSyncResult("SERVER_ID_CONFLICT");
+        task.setLockOwner("testhost:8080");
+        task.setLockExpiresAt(Instant.now().plusSeconds(300));
+
+        store.markStoppedClearingResult(1L);
+
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.STOPPED);
+        // "重置基线" promises a clean slate, but markStopped only lifts the ERROR hat —
+        // the page would keep showing the old failure text next to a stopped task.
+        assertThat(task.getLastSyncResult()).isNull();
+        // Same lease rule as markStopped: a cycle may still be in flight.
+        assertThat(task.getLockOwner()).isEqualTo("testhost:8080");
+    }
+
+    @Test
     @DisplayName("stopping keeps the in-flight cycle's lease until the runner releases it")
     void markStoppedKeepsTheLease() {
         task.setLockOwner("testhost:8080");

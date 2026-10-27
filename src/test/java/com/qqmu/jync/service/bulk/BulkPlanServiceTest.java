@@ -31,6 +31,7 @@ import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.bulk.BulkPlan;
 import com.qqmu.jync.dto.bulk.BulkPlanRequest;
 import com.qqmu.jync.dto.bulk.TaskPlan;
+import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
@@ -81,9 +82,11 @@ class BulkPlanServiceTest {
         source.setName("源库");
         source.setType(DatabaseType.MYSQL);
         source.setSchemaName("shop");
+        source.setRole(ConnectionRole.SOURCE);
         target.setId(2L);
         target.setName("目标库");
         target.setType(DatabaseType.MYSQL);
+        target.setRole(ConnectionRole.TARGET);
 
         when(configService.findById(1L)).thenReturn(Optional.of(source));
         when(configService.findById(2L)).thenReturn(Optional.of(target));
@@ -209,6 +212,71 @@ class BulkPlanServiceTest {
 
         assertThat(plan.unknownTables()).isEqualTo(3);
         assertThat(plan.exactStatsUsed()).isFalse();
+    }
+
+    /**
+     * 下拉框只列对应角色的连接,但直连 POST 可以绕开页面。角色不符时拒绝,而不是把目标库
+     * 当源库读一遍——那既浪费一次全库清单,又让用户以为"什么都没发生"。
+     */
+    @Test
+    void aTargetRoleConnectionCannotBeUsedAsTheSource() {
+        source.setRole(ConnectionRole.TARGET);
+
+        assertThatThrownBy(() -> service().plan(
+                new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.bulk.source.role");
+    }
+
+    @Test
+    void aSourceRoleConnectionCannotBeUsedAsTheTarget() {
+        target.setRole(ConnectionRole.SOURCE);
+
+        assertThatThrownBy(() -> service().plan(
+                new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.bulk.target.role");
+    }
+
+    @Test
+    void aTaskCountBelowOneIsRefusedInsteadOfSilentlyBecomingOne() {
+        assertThatThrownBy(() -> service().plan(
+                new BulkPlanRequest(1L, 2L, 0, "t", null, false)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.bulk.taskcount.invalid");
+    }
+
+    /**
+     * 精确统计的单句超时固定 15 秒,整页预算 120 秒;最后一句若仍按 15 秒计,整页可跑到
+     * 135 秒。超时必须被剩余预算夹住。
+     */
+    @Test
+    void theStatementTimeoutIsClampedToWhatThePageBudgetHasLeft() {
+        assertThat(BulkPlanService.statementTimeoutSeconds(120_000L)).isEqualTo(15);
+        assertThat(BulkPlanService.statementTimeoutSeconds(15_001L)).isEqualTo(15);
+        assertThat(BulkPlanService.statementTimeoutSeconds(2_000L)).isEqualTo(2);
+        assertThat(BulkPlanService.statementTimeoutSeconds(1L)).isEqualTo(1);
+        assertThat(BulkPlanService.statementTimeoutSeconds(0L)).isZero();
+        assertThat(BulkPlanService.statementTimeoutSeconds(-5L)).isZero();
+    }
+
+    /**
+     * DB2 的 SYSCAT 视图把未加引号的 schema 折叠为大写(读清单和目录统计都折叠),精确
+     * COUNT 却按原样引号拼接;配置里写小写 db2inst1 时每一句都查不存在的 schema、静默
+     * 退回"未知"。与 Oracle 一样,拼 COUNT 之前先折叠。
+     */
+    @Test
+    void aDb2SchemaIsFoldedToUpperCaseBeforeCounting() throws SQLException {
+        source.setType(DatabaseType.DB2);
+        source.setSchemaName("db2inst1");
+        when(readerFactory.forType(eq(DatabaseType.DB2), any())).thenReturn(reader);
+        when(reader.listTableNames(eq(connection), anyString())).thenReturn(List.of("ORDERS"));
+        when(reader.estimateTableStats(eq(connection), anyString())).thenReturn(Map.of());
+        stubCountStar(3L, "\"");
+
+        service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, true));
+
+        verify(connection).prepareStatement("SELECT COUNT(*) FROM \"DB2INST1\".\"ORDERS\"");
     }
 
     @Test
@@ -353,6 +421,5 @@ class BulkPlanServiceTest {
         DatabaseMetaData metaData = mock(DatabaseMetaData.class);
         when(connection.getMetaData()).thenReturn(metaData);
         when(metaData.getIdentifierQuoteString()).thenReturn(quote);
-        when(ps.executeQuery()).thenReturn(rs);
     }
 }

@@ -132,6 +132,30 @@ class ProjectServiceStrategySwitchTest {
                 contains("POLLING -> BINLOG_CDC"));
     }
 
+    /**
+     * 停用任务切到 CDC 只做重置,不启动消费者。批量创建正是走这条路:新任务一律 enabled=false,
+     * saveConfig 的旧策略是 POLLING,被判定为切换后若照旧 ensureStarted,这些"应当从未启动"的
+     * 任务会立刻跑全量,直到巡检(最多 10 秒)把它们停掉——期间已可能往目标库写入,页面还会
+     * 同时显示"已停止"和"CDC 运行中"。基线留给启用后的 start() 执行(无位点 → 全量)。
+     */
+    @Test
+    void switchToCdcOnStoppedProjectResetsWithoutStartingTheConsumer() {
+        Project project = mysqlProject("{\"captureStrategy\":\"POLLING\"}");
+        project.setEnabled(false);
+
+        service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC");
+
+        InOrder order = inOrder(scheduler, stateWriter, positionStore, taskStore, cdcManager);
+        order.verify(scheduler).unschedule(1L);
+        order.verify(stateWriter).clearCursor(1L);
+        order.verify(positionStore).delete(1L);
+        order.verify(taskStore).markStoppedClearingResult(1L); // 摘帽、清旧错误文本,不置 RUNNING
+        verify(taskStore, never()).markCdcRunning(anyLong());
+        verify(cdcManager, never()).ensureStarted(any());
+        verify(auditService).record(eq(AuditAction.PROJECT_CAPTURE_SWITCH),
+                contains("POLLING -> BINLOG_CDC"));
+    }
+
     @Test
     void switchCdcToPollingStopsConsumerAndKeepsPosition() {
         mysqlProject("{\"captureStrategy\":\"BINLOG_CDC\"}");

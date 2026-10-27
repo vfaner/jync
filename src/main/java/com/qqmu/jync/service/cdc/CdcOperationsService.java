@@ -175,10 +175,10 @@ public class CdcOperationsService {
      * projects, so a consumer started here would begin the full load, be asked to stop on
      * the next tick, and be interrupted at a chunk boundary after the join budget — the
      * page would show "stopped" next to "CDC running" and a held lock meanwhile, and the
-     * load could never finish. The reset itself (position + cursors + ERROR hat) is the
-     * useful part: the next real start finds no position and runs the full baseline.
-     * {@code markStopped} — not {@code markCdcRunning} — clears the ERROR hat without
-     * claiming a consumer that is not running.
+     * load could never finish. The reset itself (position + cursors + ERROR hat + old
+     * result text) is the useful part: the next real start finds no position and runs the
+     * full baseline. {@code markStoppedClearingResult} — not {@code markCdcRunning} —
+     * clears the ERROR hat without claiming a consumer that is not running.
      *
      * <p>Cross-node holder gate (final review FIX 1), BEFORE any mutation: on a node that
      * does not run the consumer, {@code ensureStopped} is a local no-op and
@@ -239,10 +239,12 @@ public class CdcOperationsService {
             taskStore.markCdcRunning(projectId);                 // ERROR 帽子必须先摘
             cdcManager.ensureStarted(fresh);
         } else {
-            // Disabled: reset only. markStopped also lifts the ERROR hat (hasErrorHat
-            // reads status), so enabling the task later starts the consumer — and with
-            // no position row, that start runs the full baseline.
-            taskStore.markStopped(projectId);
+            // Disabled: reset only. markStoppedClearingResult lifts the ERROR hat
+            // (hasErrorHat reads status) AND drops the old failure text, so the page does
+            // not keep showing a stale error next to a task the user just reset. Enabling
+            // the task later starts the consumer — with no position row, that start runs
+            // the full baseline.
+            taskStore.markStoppedClearingResult(projectId);
             log.info("CDC baseline of disabled project {} reset; it will be rebuilt when"
                     + " the task is started", projectId);
         }

@@ -1,7 +1,6 @@
 package com.qqmu.jync.service.bulk;
 
 import java.sql.Connection;
-import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -24,6 +23,7 @@ import com.qqmu.jync.dto.bulk.BulkPlanRequest;
 import com.qqmu.jync.dto.bulk.StatsSource;
 import com.qqmu.jync.dto.bulk.TableEntry;
 import com.qqmu.jync.dto.bulk.TaskPlan;
+import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
@@ -107,11 +107,25 @@ public class BulkPlanService {
         if (request.sourceDbId().equals(request.targetDbId())) {
             throw new IllegalArgumentException("error.project.same.database");
         }
+        if (request.taskCount() < 1) {
+            // The form's min=1 does not guard a direct POST; silently turning 0 into one
+            // task would create a plan the user never asked for.
+            throw new IllegalArgumentException("error.project.bulk.taskcount.invalid");
+        }
         String prefix = normalizePrefix(request.namePrefix());
         DatabaseConfig source = databaseConfigService.findById(request.sourceDbId())
                 .orElseThrow(() -> new IllegalArgumentException("error.project.bulk.source.not.found"));
         DatabaseConfig target = databaseConfigService.findById(request.targetDbId())
                 .orElseThrow(() -> new IllegalArgumentException("error.project.bulk.source.not.found"));
+        // The page's dropdowns only list the matching role, but a direct POST can name any
+        // connection. Reading a target as the source would scan the wrong database for a
+        // listing and then quietly sync from it. A null role is a legacy row: leave it alone.
+        if (source.getRole() != null && source.getRole() != ConnectionRole.SOURCE) {
+            throw new IllegalArgumentException("error.project.bulk.source.role");
+        }
+        if (target.getRole() != null && target.getRole() != ConnectionRole.TARGET) {
+            throw new IllegalArgumentException("error.project.bulk.target.role");
+        }
         MetadataReader reader = metadataReaderFactory.forType(source.getType(),
                 source.resolvedFamily());
 
@@ -186,7 +200,7 @@ public class BulkPlanService {
         List<BinPacker.Item> items = entries.values().stream()
                 .map(entry -> new BinPacker.Item(entry.name(), entry.rows()))
                 .toList();
-        int requested = Math.max(1, request.taskCount());
+        int requested = request.taskCount();
         List<BinPacker.Bin> bins = BinPacker.pack(items, Math.min(requested, MAX_TASK_COUNT));
         boolean taskCountClamped = bins.size() < requested;
 
@@ -324,11 +338,12 @@ public class BulkPlanService {
     /**
      * A configured schema in the form the source actually stores it.
      *
-     * <p>Oracle-family dictionaries key unquoted identifiers upper case, and the sync path
-     * folds a configured name the same way ({@code SyncContextFactory.normalizeConfiguredSchema}).
-     * The exact-count statement below quotes this name verbatim, so a lower-case "scott"
-     * would address a schema that does not exist and every count would silently fail back to
-     * "unknown" — the listing itself hides the problem because the reader folds internally.
+     * <p>Oracle-family and DB2 dictionaries key unquoted identifiers upper case, and their
+     * readers fold a configured name the same way (the sync path does too:
+     * {@code SyncContextFactory.normalizeConfiguredSchema}). The exact-count statement below
+     * quotes this name verbatim, so a lower-case "scott" would address a schema that does not
+     * exist and every count would silently fail back to "unknown" — the listing itself hides
+     * the problem because the reader folds internally.
      */
     private static String normalizeSchema(DatabaseConfig source, String schema) {
         if (schema == null) {
@@ -338,7 +353,9 @@ public class BulkPlanService {
         if (trimmed.isEmpty()) {
             return trimmed;
         }
-        return source.resolvedFamily() == DatabaseType.DialectFamily.ORACLE
+        DatabaseType.DialectFamily family = source.resolvedFamily();
+        return family == DatabaseType.DialectFamily.ORACLE
+                || family == DatabaseType.DialectFamily.DB2
                 ? trimmed.toUpperCase(Locale.ROOT)
                 : trimmed;
     }
@@ -354,20 +371,37 @@ public class BulkPlanService {
         return prefix;
     }
 
+    /**
+     * Query timeout for one exact count: the fixed per-statement cap, clamped to what the
+     * page budget has left (rounded up to the next second). Zero means the budget is spent.
+     *
+     * <p>Without the clamp the last statement could still run its full 15 seconds after the
+     * 120-second budget ran out, turning the page's promise into 135.
+     */
+    static int statementTimeoutSeconds(long remainingMs) {
+        if (remainingMs <= 0) {
+            return 0;
+        }
+        long seconds = (remainingMs + 999) / 1000;
+        return (int) Math.min(EXACT_COUNT_TIMEOUT_SECONDS, Math.max(1L, seconds));
+    }
+
     private ExactCounts exactCounts(Connection conn, String schema, List<String> tables) {
         Map<String, Long> counts = new HashMap<>();
         long budgetNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, exactCountBudgetMs));
-        long startedAt = System.nanoTime();
+        long deadline = System.nanoTime() + budgetNanos;
         boolean truncated = false;
-        String quote = identifierQuote(conn);
+        String quote = JdbcUtil.identifierQuote(conn);
         for (String table : tables) {
-            if (System.nanoTime() - startedAt >= budgetNanos) {
+            int timeoutSeconds = statementTimeoutSeconds(
+                    TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()));
+            if (timeoutSeconds == 0) {
                 truncated = true;
                 break;
             }
             try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT COUNT(*) FROM " + qualifiedName(quote, schema, table))) {
-                JdbcUtil.applyQueryTimeout(ps, EXACT_COUNT_TIMEOUT_SECONDS);
+                    "SELECT COUNT(*) FROM " + JdbcUtil.qualifiedName(quote, schema, table))) {
+                JdbcUtil.applyQueryTimeout(ps, timeoutSeconds);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
                         counts.put(table, Math.max(0L, rs.getLong(1)));
@@ -380,27 +414,6 @@ public class BulkPlanService {
             }
         }
         return new ExactCounts(counts, truncated);
-    }
-
-    private static String identifierQuote(Connection conn) {
-        try {
-            DatabaseMetaData metaData = conn.getMetaData();
-            String quote = metaData == null ? null : metaData.getIdentifierQuoteString();
-            // JDBC returns a single space when the product does not support quoting.
-            return quote == null || quote.isBlank() ? "" : quote;
-        } catch (SQLException e) {
-            return "";
-        }
-    }
-
-    private static String qualifiedName(String quote, String schema, String table) {
-        if (quote.isEmpty()) {
-            return schema == null || schema.isBlank() ? table : schema + "." + table;
-        }
-        String quotedTable = quote + table.replace(quote, quote + quote) + quote;
-        return schema == null || schema.isBlank()
-                ? quotedTable
-                : quote + schema.replace(quote, quote + quote) + quote + "." + quotedTable;
     }
 
     private record ExactCounts(Map<String, Long> counts, boolean truncated) {

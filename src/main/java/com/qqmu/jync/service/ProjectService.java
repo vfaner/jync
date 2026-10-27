@@ -553,7 +553,10 @@ public class ProjectService {
      *   <li>→ BINLOG_CDC: drop the Quartz job, invalidate the old binlog position (the
      *       consumer re-baselines with a chunked full load), lift any polling-era ERROR
      *       hat that would silently block the start (Task 13: ensureStarted skips parked
-     *       projects), then start the consumer.</li>
+     *       projects), then start the consumer — but only when the project is enabled.
+     *       A disabled project (e.g. one just created by the bulk wizard) is reset only;
+     *       its consumer starts from {@link #start(Long)}, which re-baselines anyway
+     *       because the position was just deleted.</li>
      *   <li>BINLOG_CDC →: stop the consumer FIRST and let the join complete, so the old
      *       stream can no longer write (Review Focus #5); then rebuild the polling
      *       schedule. The cdc_position row is KEPT (C2) as informational history only —
@@ -571,12 +574,22 @@ public class ProjectService {
         Long projectId = project.getId();
         if (to.isLogCdc()) {
             // BINLOG_CDC 与 LOGMINER_CDC 的切换序列完全一致:删 Quartz、清 cursor、
-            // 删位点(下一个消费者无论哪种都从新锚点重跑基线)、摘 ERROR 帽、起消费者。
+            // 删位点(下一个消费者无论哪种都从新锚点重跑基线)、摘 ERROR 帽。
             scheduler.unschedule(projectId);
             stateWriter.clearCursor(projectId);
             positionStore.delete(projectId);
-            taskStore.markCdcRunning(projectId);
-            cdcManager.ensureStarted(project);
+            if (Boolean.TRUE.equals(project.getEnabled())) {
+                taskStore.markCdcRunning(projectId);
+                cdcManager.ensureStarted(project);
+            } else {
+                // 停用任务只做重置,不启动消费者。批量创建正是这条路:新任务一律
+                // enabled=false,若在这里 ensureStarted,巡检(最多 10 秒后)会把它停掉,
+                // 期间已可能往目标库写入,页面还会同时显示"已停止"和"CDC 运行中"。
+                // 基线留给启用后的 start() 执行:无位点 → 全量。
+                taskStore.markStoppedClearingResult(projectId);
+                log.info("Project '{}': switched to {} while stopped; the consumer starts"
+                        + " when the project is started", project.getName(), to);
+            }
         } else {
             cdcManager.ensureStopped(projectId);
             stateWriter.clearCursor(projectId);

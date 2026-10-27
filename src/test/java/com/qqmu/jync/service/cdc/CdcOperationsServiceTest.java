@@ -244,7 +244,7 @@ class CdcOperationsServiceTest {
         sequence.verify(cdcManager).ensureStopped(1L);
         sequence.verify(positionStore).delete(1L);
         sequence.verify(stateWriter).clearCursor(1L);
-        sequence.verify(taskStore).markStopped(1L);              // 摘帽但不置 RUNNING
+        sequence.verify(taskStore).markStoppedClearingResult(1L); // 摘帽、清旧错误文本,不置 RUNNING
         verify(taskStore, never()).markCdcRunning(1L);
         verify(cdcManager, never()).ensureStarted(any());
 

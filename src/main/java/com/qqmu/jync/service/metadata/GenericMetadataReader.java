@@ -24,6 +24,7 @@ import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -665,9 +666,8 @@ public class GenericMetadataReader implements MetadataReader {
             }
         }
 
-        String qualified = schema == null || schema.isBlank()
-                ? quote(conn, tableName)
-                : quote(conn, schema) + "." + quote(conn, tableName);
+        String qualified = JdbcUtil.qualifiedName(
+                JdbcUtil.identifierQuote(conn), schema, tableName);
         long count;
         try (Statement st = conn.createStatement()) {
             MetadataTimeouts.apply(st);
@@ -695,11 +695,14 @@ public class GenericMetadataReader implements MetadataReader {
      * {@code TABLE_NAME}, {@code ROW_EST} and {@code TOTAL_BYTES}, one row per table.
      *
      * <p>Shared so that the five overrides differ only in their SQL — the "unknown" rules stay
-     * in one place: a null, zero or negative number means the dictionary has no usable value
-     * (InnoDB's not-yet-analyzed {@code TABLE_ROWS}, PostgreSQL's {@code reltuples = -1},
-     * DB2's {@code CARD = -1}), and an unreadable dictionary yields an empty map. Neither is an
-     * exception: a planner page listing thousands of tables must render rather than fail, and
-     * must never be tempted to fall back to {@code COUNT(*)} behind the user's back.
+     * in one place: null and negative mean the dictionary has no usable value (Oracle's
+     * {@code NUM_ROWS} before ANALYZE, PostgreSQL's {@code reltuples = -1}, DB2's
+     * {@code CARD = -1}), and an unreadable dictionary yields an empty map. Zero is a real
+     * size — an analyzed, empty table — and is kept, because weighting it at the median
+     * would skew the binning the same way the exact {@code COUNT(*)} path already fixed.
+     * Neither is an exception: a planner page listing thousands of tables must render rather
+     * than fail, and must never be tempted to fall back to {@code COUNT(*)} behind the
+     * user's back.
      */
     protected Map<String, MetadataReader.TableStat> queryTableStats(Connection conn, String sql,
                                                                    String schemaParam) {
@@ -714,7 +717,8 @@ public class GenericMetadataReader implements MetadataReader {
                         continue;
                     }
                     stats.put(name, new MetadataReader.TableStat(
-                            positiveOrNull(rs, "ROW_EST"), positiveOrNull(rs, "TOTAL_BYTES")));
+                            nonNegativeOrNull(rs, "ROW_EST"),
+                            nonNegativeOrNull(rs, "TOTAL_BYTES")));
                 }
             }
         } catch (SQLException e) {
@@ -725,20 +729,13 @@ public class GenericMetadataReader implements MetadataReader {
         return stats;
     }
 
-    /** A statistics column as the planner reads it: null when unset, zero or negative. */
-    private static Long positiveOrNull(ResultSet rs, String column) throws SQLException {
+    /**
+     * A statistics column as the planner reads it: null when unset or negative ("not
+     * analyzed"). Zero is kept — see {@link #queryTableStats}.
+     */
+    private static Long nonNegativeOrNull(ResultSet rs, String column) throws SQLException {
         long value = rs.getLong(column);
-        return rs.wasNull() || value <= 0 ? null : value;
-    }
-
-    protected String quote(Connection conn, String identifier) throws SQLException {
-        String q = conn.getMetaData().getIdentifierQuoteString();
-        if (q == null || q.isBlank() || " ".equals(q)) {
-            return identifier;
-        }
-        // Double any quote chars inside the identifier, or an embedded one closes the quoted
-        // name early — a table named a"b would otherwise break the generated identifier.
-        return q + identifier.replace(q, q + q) + q;
+        return rs.wasNull() || value < 0 ? null : value;
     }
 
     /**

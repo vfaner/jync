@@ -127,8 +127,29 @@ public class SyncTaskStore {
 
     @Transactional
     public void markStopped(Long projectId) {
+        markStopped(projectId, false);
+    }
+
+    /**
+     * Stop the task and clear the result summary as well.
+     *
+     * <p>{@link #markStopped} keeps the summary on purpose: a stop requested mid-cycle still
+     * reports what that cycle found. A baseline reset on a disabled project is the opposite
+     * promise — the page says the state was wiped, so leaving {@code SERVER_ID_CONFLICT} (or
+     * any other old failure) next to a fresh-looking stopped task is a lie. Same lease rule
+     * as {@link #markStopped}: an in-flight cycle keeps its lock.
+     */
+    @Transactional
+    public void markStoppedClearingResult(Long projectId) {
+        markStopped(projectId, true);
+    }
+
+    private void markStopped(Long projectId, boolean clearResult) {
         taskRepository.findByProjectId(projectId).ifPresent(task -> {
             task.setStatus(TaskStatus.STOPPED);
+            if (clearResult) {
+                task.setLastSyncResult(null);
+            }
             // The lease is deliberately NOT cleared here: a cycle may still be in
             // flight, and dropping its lock would let another instance acquire it and
             // run concurrently. The runner releases the lock when the cycle ends; a

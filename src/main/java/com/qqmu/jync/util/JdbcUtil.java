@@ -1,5 +1,7 @@
 package com.qqmu.jync.util;
 
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 
@@ -26,6 +28,42 @@ public final class JdbcUtil {
         } catch (SQLException e) {
             log.debug("Driver does not support setQueryTimeout: {}", e.getMessage());
         }
+    }
+
+    /**
+     * The product's identifier quote string, or {@code ""} when it has none.
+     *
+     * <p>JDBC returns a single space for "this product does not quote identifiers"; drivers
+     * may also return null, and a custom driver may fail the metadata call. All three mean
+     * "leave the identifier bare".
+     */
+    public static String identifierQuote(Connection conn) {
+        try {
+            DatabaseMetaData metaData = conn.getMetaData();
+            String quote = metaData == null ? null : metaData.getIdentifierQuoteString();
+            return quote == null || quote.isBlank() ? "" : quote;
+        } catch (SQLException e) {
+            log.debug("Identifier quote unavailable: {}", e.getMessage());
+            return "";
+        }
+    }
+
+    /** One identifier wrapped in {@code quote}, any embedded quote character doubled. */
+    public static String quotedIdentifier(String quote, String identifier) {
+        if (quote == null || quote.isEmpty()) {
+            return identifier;
+        }
+        // An embedded quote would otherwise close the quoted name early — a table named
+        // a"b would break the generated identifier.
+        return quote + identifier.replace(quote, quote + quote) + quote;
+    }
+
+    /** {@code schema.table}, each part quoted when the product supports quoting. */
+    public static String qualifiedName(String quote, String schema, String table) {
+        String quotedTable = quotedIdentifier(quote, table);
+        return schema == null || schema.isBlank()
+                ? quotedTable
+                : quotedIdentifier(quote, schema) + "." + quotedTable;
     }
 
     /**

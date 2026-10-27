@@ -27,7 +27,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>All five product readers expose the same three labels ({@code TABLE_NAME},
  * {@code ROW_EST}, {@code TOTAL_BYTES}) so the parsing is shared; these tests pin that
- * contract and the "unknown" rules: null, zero and negative all mean unknown.
+ * contract and the "unknown" rules: null and negative mean unknown, while zero is a real
+ * size — an analyzed, empty table.
  */
 class TableStatsReadersTest {
 
@@ -93,13 +94,17 @@ class TableStatsReadersTest {
     }
 
     @Test
-    void oracleTreatsZeroAsUnknown() throws SQLException {
-        Connection conn = connectionWithRows(new Row("unanalyzed", 0L, 0L));
+    void aZeroRowCountIsAnEmptyTableNotAnUnknownOne() throws SQLException {
+        // Oracle's NUM_ROWS is NULL until ANALYZE and 0 for an analyzed, empty table; the
+        // same reading applies to PG reltuples = 0, SQL Server's exact partition sum and
+        // DB2's CARD = 0. Treating 0 as unknown weights an empty table at the median and
+        // skews the binning — the same bug the exact COUNT(*) path already fixed.
+        Connection conn = connectionWithRows(new Row("empty", 0L, 0L));
 
         Map<String, MetadataReader.TableStat> stats = stats(new OracleMetadataReader(), conn);
 
-        assertThat(stats.get("unanalyzed").rows()).isNull();
-        assertThat(stats.get("unanalyzed").bytes()).isNull();
+        assertThat(stats.get("empty").rows()).isZero();
+        assertThat(stats.get("empty").bytes()).isZero();
     }
 
     @Test
