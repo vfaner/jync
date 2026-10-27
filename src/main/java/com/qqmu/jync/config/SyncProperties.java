@@ -286,6 +286,20 @@ public class SyncProperties {
         private long changeWindowMs = 10_000L;
         /** Handshake timeout for BinaryLogClient.connect(). */
         private long connectTimeoutMs = 10_000L;
+        /**
+         * Rows one source transaction may buffer in memory before the project parks with a
+         * clear "transaction too large" verdict instead of dying on the heap and replaying
+         * forever. Applies to every CDC engine (MySQL binlog, Oracle LogMiner, PostgreSQL
+         * logical, SQL Server). 0 disables the row dimension.
+         */
+        private long maxTransactionRows = 1_000_000L;
+        /**
+         * Estimated bytes one source transaction may buffer, counted from the mapped row
+         * values (oversized LOBs already live in the spill store). 0 disables the byte
+         * dimension. Raise both limits when a legitimate bulk transaction must be replayed
+         * as one commit.
+         */
+        private long maxTransactionBytes = 536_870_912L;
 
         /** Oracle LogMiner tuning (v1.6.0) — only consulted when a project runs LOGMINER_CDC. */
         private final Logminer logminer = new Logminer();

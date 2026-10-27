@@ -785,7 +785,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**2571 tests: 2570 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
+**2595 tests: 2594 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
 
 Coverage highlights:
 

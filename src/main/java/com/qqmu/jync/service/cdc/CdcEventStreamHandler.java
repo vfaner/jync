@@ -88,6 +88,12 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     private final long spillThresholdBytes;
 
     /**
+     * Caps the rows one source transaction may buffer; see {@link CdcTransactionBudget}.
+     * A hand-built handler in a test gets the unlimited budget unless it passes one.
+     */
+    private final CdcTransactionBudget budget;
+
+    /**
      * Owns the files of the transaction currently buffered. Created lazily on the first
      * oversized value, closed on every path that clears the buffer.
      */
@@ -127,7 +133,8 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     public CdcEventStreamHandler(SyncConfig config, String sourceSchema, CdcTableMetaSupplier supplier,
                                  CdcRowMapper mapper, CdcRuntimeStats stats,
                                  Supplier<String> gtidSetSupplier, TransactionSink sink) {
-        this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink, null, 0L);
+        this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink, null, 0L,
+                CdcTransactionBudget.unlimited());
     }
 
     /**
@@ -138,6 +145,19 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                                  CdcRowMapper mapper, CdcRuntimeStats stats,
                                  Supplier<String> gtidSetSupplier, TransactionSink sink,
                                  LobSpillStore spillStore, long spillThresholdBytes) {
+        this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink, spillStore,
+                spillThresholdBytes, CdcTransactionBudget.unlimited());
+    }
+
+    /**
+     * @param budget caps the transaction's buffered rows; the production caller passes
+     *               {@link CdcTransactionBudget#from}.
+     */
+    CdcEventStreamHandler(SyncConfig config, String sourceSchema, CdcTableMetaSupplier supplier,
+                          CdcRowMapper mapper, CdcRuntimeStats stats,
+                          Supplier<String> gtidSetSupplier, TransactionSink sink,
+                          LobSpillStore spillStore, long spillThresholdBytes,
+                          CdcTransactionBudget budget) {
         this.config = config;
         this.sourceSchema = sourceSchema;
         this.supplier = supplier;
@@ -147,6 +167,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         this.sink = sink;
         this.spillStore = spillStore;
         this.spillThresholdBytes = Math.max(0L, spillThresholdBytes);
+        this.budget = budget;
     }
 
     /**
@@ -637,6 +658,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     /** Drops the buffered transaction together with the files it spilled. */
     private void clearBuffer() {
         buffered.clear();
+        budget.reset();
         releaseSpill();
     }
 
@@ -673,16 +695,18 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      * <p>Key identity (including {@code byte[]} PK columns) is {@link CdcPrimaryKey}'s:
      * binary keys compare by content, never by array identity.
      */
-    private static void appendUpsert(TableChange change, Map<String, Object> row) {
+    private void appendUpsert(TableChange change, Map<String, Object> row) {
         List<Object> key = CdcPrimaryKey.of(row, change.binding);
         change.deletes.removeIf(buffered -> CdcPrimaryKey.of(buffered, change.binding).equals(key));
         change.upserts.add(row);
+        budget.add(row);
     }
 
-    private static void appendDelete(TableChange change, Map<String, Object> row) {
+    private void appendDelete(TableChange change, Map<String, Object> row) {
         List<Object> key = CdcPrimaryKey.of(row, change.binding);
         change.upserts.removeIf(buffered -> CdcPrimaryKey.of(buffered, change.binding).equals(key));
         change.deletes.add(row);
+        budget.add(row);
     }
 
     private void countAndLogUnmappable(CdcTableBinding binding, String operation,

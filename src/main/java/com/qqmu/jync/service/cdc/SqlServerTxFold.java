@@ -50,6 +50,20 @@ final class SqlServerTxFold {
     /** binding -> last op=3 image awaiting its paired op=4. */
     private final Map<CdcTableBinding, Map<String, Object>> pendingBefore = new LinkedHashMap<>();
 
+    /** txLsn -> per-transaction buffer cap; see {@link CdcTransactionBudget}. */
+    private final Map<String, CdcTransactionBudget> budgets = new LinkedHashMap<>();
+    private final long maxTransactionRows;
+    private final long maxTransactionBytes;
+
+    SqlServerTxFold() {
+        this(0L, 0L);
+    }
+
+    SqlServerTxFold(long maxTransactionRows, long maxTransactionBytes) {
+        this.maxTransactionRows = maxTransactionRows;
+        this.maxTransactionBytes = maxTransactionBytes;
+    }
+
     void accept(String txLsn, CdcTableBinding binding, int op, Map<String, Object> row) {
         switch (op) {
             case 3:
@@ -60,17 +74,17 @@ final class SqlServerTxFold {
             case 4: {
                 Map<String, Object> before = pendingBefore.remove(binding);
                 Buffer buf = buffer(txLsn, binding);
-                appendUpsert(buf, binding, row);
+                appendUpsert(txLsn, buf, binding, row);
                 if (before != null && CdcPrimaryKey.changed(before, row, binding)) {
-                    appendDelete(buf, binding, before);
+                    appendDelete(txLsn, buf, binding, before);
                 }
                 return;
             }
             case 1:
-                appendDelete(buffer(txLsn, binding), binding, row);
+                appendDelete(txLsn, buffer(txLsn, binding), binding, row);
                 return;
             case 2:
-                appendUpsert(buffer(txLsn, binding), binding, row);
+                appendUpsert(txLsn, buffer(txLsn, binding), binding, row);
                 return;
             default:
                 log.warn("Ignoring SQL Server CDC row with unknown __$operation {}"
@@ -88,15 +102,25 @@ final class SqlServerTxFold {
                 .computeIfAbsent(binding, k -> new Buffer());
     }
 
-    private static void appendUpsert(Buffer buf, CdcTableBinding binding, Map<String, Object> row) {
+    private void appendUpsert(String txLsn, Buffer buf, CdcTableBinding binding,
+                              Map<String, Object> row) {
         List<Object> key = CdcPrimaryKey.of(row, binding);
         buf.deletes.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
         buf.upserts.add(row);
+        budget(txLsn).add(row);
     }
 
-    private static void appendDelete(Buffer buf, CdcTableBinding binding, Map<String, Object> row) {
+    private void appendDelete(String txLsn, Buffer buf, CdcTableBinding binding,
+                              Map<String, Object> row) {
         List<Object> key = CdcPrimaryKey.of(row, binding);
         buf.upserts.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
         buf.deletes.add(row);
+        budget(txLsn).add(row);
+    }
+
+    /** Per-transaction accounting: one source transaction is applied as one target commit. */
+    private CdcTransactionBudget budget(String txLsn) {
+        return budgets.computeIfAbsent(txLsn,
+                k -> new CdcTransactionBudget(maxTransactionRows, maxTransactionBytes));
     }
 }

@@ -59,7 +59,7 @@ public class ForcePasswordChangeFilter extends OncePerRequestFilter {
             return;
         }
 
-        String path = pathWithinApplication(request);
+        String path = RequestPaths.withinApplication(request);
         if (isAllowed(path)) {
             filterChain.doFilter(request, response);
             return;
@@ -98,14 +98,5 @@ public class ForcePasswordChangeFilter extends OncePerRequestFilter {
             return true;
         }
         return ALLOWED_PREFIXES.stream().anyMatch(path::startsWith);
-    }
-
-    private static String pathWithinApplication(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        String context = request.getContextPath();
-        if (context != null && !context.isEmpty() && uri.startsWith(context)) {
-            return uri.substring(context.length());
-        }
-        return uri;
     }
 }

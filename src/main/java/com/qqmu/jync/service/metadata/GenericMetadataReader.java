@@ -68,12 +68,36 @@ public class GenericMetadataReader implements MetadataReader {
         return true;
     }
 
+    /**
+     * JDBC table type names the listing asks for. The default is the portable pair only;
+     * a reader widens it when its driver maps extra kinds to distinct types (PostgreSQL
+     * reports declarative partitioned tables and materialized views separately).
+     */
+    protected String[] tableTypes() {
+        return new String[]{"TABLE"};
+    }
+
+    /** JDBC view type names the listing asks for; see {@link #tableTypes()}. */
+    protected String[] viewTypes() {
+        return new String[]{"VIEW"};
+    }
+
     @Override
     public List<String> listTableNames(Connection conn, String schema) throws SQLException {
+        return listNames(conn, schema, tableTypes());
+    }
+
+    /**
+     * One schema-wide listing of the objects matching {@code types}, sorted and filtered
+     * through {@link #isSystemObject}. Extracted so a reader can retry with a narrower
+     * type list when its driver rejects a widened one.
+     */
+    protected List<String> listNames(Connection conn, String schema, String[] types)
+            throws SQLException {
         List<String> names = new ArrayList<>();
         DatabaseMetaData md = conn.getMetaData();
         try (ResultSet rs = md.getTables(catalogFor(conn, schema), schemaPattern(schema), "%",
-                new String[]{"TABLE"})) {
+                types)) {
             while (rs.next()) {
                 String name = rs.getString("TABLE_NAME");
                 if (name != null && !isSystemObject(rs.getString("TABLE_CAT"),
@@ -187,20 +211,7 @@ public class GenericMetadataReader implements MetadataReader {
 
     @Override
     public List<String> listViewNames(Connection conn, String schema) throws SQLException {
-        List<String> names = new ArrayList<>();
-        DatabaseMetaData md = conn.getMetaData();
-        try (ResultSet rs = md.getTables(catalogFor(conn, schema), schemaPattern(schema), "%",
-                new String[]{"VIEW"})) {
-            while (rs.next()) {
-                String name = rs.getString("TABLE_NAME");
-                if (name != null && !isSystemObject(rs.getString("TABLE_CAT"),
-                        rs.getString("TABLE_SCHEM"), name)) {
-                    names.add(name);
-                }
-            }
-        }
-        Collections.sort(names);
-        return names;
+        return listNames(conn, schema, viewTypes());
     }
 
     @Override

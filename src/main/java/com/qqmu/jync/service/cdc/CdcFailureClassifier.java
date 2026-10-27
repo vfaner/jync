@@ -19,7 +19,8 @@ import lombok.extern.slf4j.Slf4j;
 public final class CdcFailureClassifier {
 
     public enum Kind {
-        PURGED, SERVER_ID_CONFLICT, AUTH_FAILURE, SCHEMA_CONFLICT, XA_ORDERING, TRANSIENT
+        PURGED, SERVER_ID_CONFLICT, AUTH_FAILURE, SCHEMA_CONFLICT, XA_ORDERING,
+        TRANSACTION_TOO_LARGE, TRANSIENT
     }
 
     private CdcFailureClassifier() { }
@@ -90,6 +91,12 @@ public final class CdcFailureClassifier {
             // XA branches, neither of which a retry can do.
             if (message.contains("unsupported xa transaction ordering")) {
                 return Kind.XA_ORDERING;
+            }
+            // A transaction that exceeds the configured buffer cap: replaying it would
+            // buffer the same rows again (previously until the heap died), so backoff
+            // cannot help. Park it with a verdict naming the limits and the remedies.
+            if (message.contains("cdc transaction exceeds the configured buffer limit")) {
+                return Kind.TRANSACTION_TOO_LARGE;
             }
             // P2-5: ORA-01555 (snapshot too old — the undo backing the consistent read
             // was overwritten under load; a fresh mining session gets a fresh snapshot)

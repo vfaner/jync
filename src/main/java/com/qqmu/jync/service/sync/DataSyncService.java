@@ -14,7 +14,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -1507,7 +1506,7 @@ public class DataSyncService {
                                 stats.inserted++;
                             }
                         } catch (SQLException e) {
-                            if (isUniqueViolation(e) && update != null) {
+                            if (UniqueViolations.isUniqueViolation(e) && update != null) {
                                 // A concurrent writer may have inserted the same key between
                                 // our UPDATE and INSERT. Retrying the update converges without
                                 // failing — but only if it actually reaches a row. Zero
@@ -1522,7 +1521,7 @@ public class DataSyncService {
                                 } else {
                                     throw e;
                                 }
-                            } else if (isUniqueViolation(e)) {
+                            } else if (UniqueViolations.isUniqueViolation(e)) {
                                 // Key-only table — update is null exactly when every column
                                 // is part of the key, so there is no UPDATE whose row count
                                 // could decide. Existence is checked directly: a row already
@@ -2531,24 +2530,6 @@ public class DataSyncService {
         return types;
     }
 
-    /**
-     * Whether the rejected INSERT may have collided with an existing key. 23505 is the
-     * standard unique-violation state (DB2, H2, PostgreSQL); 23000 is what MySQL (1062),
-     * SQL Server (2627/2601) and Oracle (ORA-00001) use — but the same state also carries
-     * their foreign-key, CHECK and NOT NULL failures, so this is only a CANDIDATE test.
-     * The caller decides by evidence: the retried UPDATE's row count, or a primary-key
-     * existence probe for key-only tables. Anything that fails those checks is rethrown.
-     */
-    boolean isUniqueViolation(SQLException e) {
-        String state = e.getSQLState();
-        if (state != null && ("23505".equals(state) || "23000".equals(state))) {
-            return true;
-        }
-        String message = e.getMessage();
-        return message != null
-                && (message.toLowerCase(Locale.ROOT).contains("duplicate")
-                        || message.toLowerCase(Locale.ROOT).contains("unique constraint"));
-    }
 
     /**
      * Executes a batch, commits it, and records what the target did with each row.

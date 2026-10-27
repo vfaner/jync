@@ -37,6 +37,16 @@ class CdcFailureClassifierTest {
     }
 
     @Test
+    void aTransactionOverTheBufferCapParksInsteadOfRetrying() {
+        // 重连必然重放同一个事务、再次超限；退避热循环只会把停机拖成 OOM 反复。
+        assertThat(CdcFailureClassifier.classify(new IllegalStateException(
+                CdcTransactionBudget.TOO_LARGE_MARKER + ": 1000001 row(s), about 300 byte(s)"
+                        + " buffered for one source transaction (limits: 1000000 rows,"
+                        + " unlimited bytes).")))
+                .isEqualTo(CdcFailureClassifier.Kind.TRANSACTION_TOO_LARGE);
+    }
+
+    @Test
     void xaOrderingViolationIsFatalNotTransient() {
         // 源端在 XA 分支准备期间提交了别的被跟踪事务/分支交错:重连只会重放同一段流、
         // 再次命中同一处,退避热重连毫无意义。必须一次性停机等人处置(改用轮询或让

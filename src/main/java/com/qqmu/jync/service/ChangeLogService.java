@@ -60,19 +60,28 @@ public class ChangeLogService {
 
     /**
      * Clears change-log entries. With a project id only that project's logs are removed;
-     * with null the entire audit trail is wiped.
+     * with null the entire audit trail is wiped. When {@code failedOnly} is set — the
+     * errors-only filter is active — only failed entries go, in the same scope.
      *
      * <p>Because this erases history, the act itself is written to the append-only admin
      * audit trail with the row count and scope — the one record a clear can never remove.
      */
     @Transactional
-    public void clear(Long projectId) {
-        int removed = projectId != null
-                ? repository.deleteByProjectId(projectId)
-                : repository.deleteAllBulk();
+    public void clear(Long projectId, boolean failedOnly) {
+        int removed;
+        if (failedOnly) {
+            removed = projectId != null
+                    ? repository.deleteByProjectIdAndSuccessFalse(projectId)
+                    : repository.deleteAllSuccessFalse();
+        } else {
+            removed = projectId != null
+                    ? repository.deleteByProjectId(projectId)
+                    : repository.deleteAllBulk();
+        }
+        String scope = projectId != null
+                ? " change-log entries of project " + projectId
+                : " change-log entries (entire history)";
         auditService.record(AuditAction.CHANGELOG_CLEAR, "Cleared " + removed
-                + (projectId != null
-                        ? " change-log entries of project " + projectId
-                        : " change-log entries (entire history)"));
+                + (failedOnly ? " failed" : "") + scope);
     }
 }

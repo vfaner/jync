@@ -280,6 +280,26 @@ class PgLogicalCdcConsumerDrainTest {
     }
 
     @Test
+    void aTransactionOverTheBufferCapFailsFatalAndAdvancesNothing() throws Exception {
+        // 一个源事务 = 一个目标提交,行必须全部驻留内存等 COMMIT。越过上限时 drain 必须
+        // 直接失败(分类为 TRANSACTION_TOO_LARGE 而非可重试):重连只会重放同一事务。
+        properties.getCdc().setMaxTransactionRows(1);
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", insert(1L, "a")},
+                new String[]{"0/1002", insert(2L, "b")},
+                new String[]{"0/1003", COMMIT});
+
+        assertThatThrownBy(() -> consumer.drain(source, "jync_1"))
+                .isInstanceOf(CdcTransactionBudget.CdcTransactionTooLargeException.class)
+                .hasMessageContaining(CdcTransactionBudget.TOO_LARGE_MARKER);
+
+        assertThat(targetRowCount()).isZero();
+        verify(advancePs, never()).executeQuery();
+        verify(positionStore, never()).advanceLsn(anyLong(), anyString());
+    }
+
+    @Test
     void targetFailureRollsBackAndNeverAdvancesSlot() throws Exception {
         // 目标端开不出连接 → drain 抛出;slot 必须原样不动,下周期 peek 重读同事务。
         SyncContext brokenCtx = SyncContext.builder()

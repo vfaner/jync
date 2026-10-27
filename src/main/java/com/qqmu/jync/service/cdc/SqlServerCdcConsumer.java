@@ -138,9 +138,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private final CdcChangeWindowLogger windowLogger;
 
     /** LOB spill store for buffered rows, built on first use; null when switched off. */
-    private volatile LobSpillStore lobSpillStore;
-    /** Owns the files of the window currently folded; null between drains. */
-    private CdcLobSpiller spiller;
+    private final LazyLobSpillStore lobSpillStore = new LazyLobSpillStore();
+    /** Owns the files of the window currently folded; reset when the window ends. */
+    private final CdcSpillerHolder spillers = new CdcSpillerHolder();
 
     public SqlServerCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                 SyncContext ctx, CdcPositionStore positionStore,
@@ -275,7 +275,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     log.warn("SQLServer cycle for project {} failed ({}); next cycle in {} ms",
                             projectId, detail, delay);
                 }
-                if (!sleepWhileRunning(delay)) break;
+                if (!CdcWaits.sleepWhileRunning(() -> running, delay)) break;
             }
         } catch (RuntimeException | Error e) {
             if (e instanceof LockLostException) {
@@ -437,7 +437,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         // ORDER BY __$start_lsn, __$seqval): same-PK last-op-wins, op=3/op=4 pairs
         // delete the old PK when an UPDATE moved it, and transactions flush in
         // ascending txLsn order so advanceLsn stays monotonic across capture instances.
-        SqlServerTxFold fold = new SqlServerTxFold();
+        SqlServerTxFold fold = new SqlServerTxFold(
+                properties.getCdc().getMaxTransactionRows(),
+                properties.getCdc().getMaxTransactionBytes());
         for (CaptureInstance ci : instances) {
             // A stop landing between CIs makes the shared fold partial just as surely as one
             // landing mid-ResultSet: a transaction spanning tables only a later CI scans
@@ -693,37 +695,16 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     /** This drain window's spiller, disposed when the window ends. */
     private CdcLobSpiller spiller() {
-        if (spiller == null) {
-            LobSpillStore store = spillStore();
-            spiller = store == null ? CdcLobSpiller.disabled()
-                    : new CdcLobSpiller(store, properties.getLob().getCdcSpillThresholdBytes(),
-                            ctx.getConfig());
-        }
-        return spiller;
+        return spillers.get(ctx, properties, spillStore());
     }
 
     private void resetSpiller() {
-        if (spiller != null) {
-            spiller.close();
-            spiller = null;
-        }
+        spillers.reset();
     }
 
+    /** The LOB spill store, or {@code null} when streaming is switched off. */
     private LobSpillStore spillStore() {
-        if (!properties.getLob().isStreamingEnabled()) {
-            return null;
-        }
-        LobSpillStore store = lobSpillStore;
-        if (store == null) {
-            synchronized (this) {
-                store = lobSpillStore;
-                if (store == null) {
-                    store = LobSpillStore.from(properties);
-                    lobSpillStore = store;
-                }
-            }
-        }
-        return store;
+        return lobSpillStore.get(properties);
     }
 
     private void flushTransaction(long projectId, String txLsn,
@@ -987,21 +968,6 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
                 ChangeType.ERROR, detail, false, 0L);
         log.error("SQLServer consumer for project {} parking in ERROR — {}", projectId, detail);
-    }
-
-    private boolean sleepWhileRunning(long delayMs) {
-        long remaining = delayMs;
-        while (remaining > 0 && running && !Thread.currentThread().isInterrupted()) {
-            long slice = Math.min(100L, remaining);
-            try {
-                Thread.sleep(slice);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-            remaining -= slice;
-        }
-        return running && !Thread.currentThread().isInterrupted();
     }
 
     private static void closeQuietly(AutoCloseable c) {

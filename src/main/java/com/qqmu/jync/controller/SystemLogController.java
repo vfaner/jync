@@ -1,7 +1,6 @@
 package com.qqmu.jync.controller;
 
 import java.util.List;
-import java.util.Locale;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -21,8 +20,6 @@ import com.qqmu.jync.service.log.SystemLogService;
 @Controller
 public class SystemLogController {
 
-    static final List<String> LEVELS = List.of("ALL", "DEBUG", "INFO", "WARN", "ERROR");
-
     private final SystemLogService logService;
 
     public SystemLogController(SystemLogService logService) {
@@ -38,23 +35,15 @@ public class SystemLogController {
         String selectedFile = StringUtils.hasText(file)
                 ? file.trim()
                 : (files.isEmpty() ? null : files.get(0).getName());
-        String selectedLevel = normalizeLevel(level);
+        String selectedLevel = SystemLogService.normalizeLevel(level);
 
         model.addAttribute("files", files);
         model.addAttribute("selectedFile", selectedFile);
         model.addAttribute("level", selectedLevel);
-        model.addAttribute("levels", LEVELS);
+        model.addAttribute("levels", SystemLogService.LEVELS);
         // The keyword is echoed back into the box; the service only ever sees a trimmed copy.
         model.addAttribute("keyword", q == null ? "" : q);
         model.addAttribute("result", logService.query(selectedFile, selectedLevel, q));
         return "system-logs";
-    }
-
-    private static String normalizeLevel(String level) {
-        if (!StringUtils.hasText(level)) {
-            return "ALL";
-        }
-        String upper = level.trim().toUpperCase(Locale.ROOT);
-        return LEVELS.contains(upper) ? upper : "ALL";
     }
 }

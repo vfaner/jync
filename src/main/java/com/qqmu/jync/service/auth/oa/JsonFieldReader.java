@@ -32,8 +32,8 @@ public final class JsonFieldReader {
 
     /** True when the field resolves to one of the comma-separated accepted values. */
     public static boolean matches(JsonNode root, String field, String commaSeparatedValues) {
-        String path = trimToNull(field);
-        String values = trimToNull(commaSeparatedValues);
+        String path = OaText.trimToNull(field);
+        String values = OaText.trimToNull(commaSeparatedValues);
         if (path == null || values == null) {
             return false;
         }
@@ -47,13 +47,5 @@ public final class JsonFieldReader {
             }
         }
         return false;
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }

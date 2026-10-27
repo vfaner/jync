@@ -107,9 +107,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     private final CdcChangeWindowLogger windowLogger;
 
     /** LOB spill store for buffered rows, built on first use; null when switched off. */
-    private volatile LobSpillStore lobSpillStore;
-    /** Owns the current transaction's spilled values; null between transactions. */
-    private CdcLobSpiller spiller;
+    private final LazyLobSpillStore lobSpillStore = new LazyLobSpillStore();
+    /** Owns the current transaction's spilled values; reset on every boundary. */
+    private final CdcSpillerHolder spillers = new CdcSpillerHolder();
 
     public PgLogicalCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                 SyncContext ctx, CdcPositionStore positionStore,
@@ -252,7 +252,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     log.warn("PG cycle for project {} failed ({}); next cycle in {} ms",
                             projectId, detail, delay);
                 }
-                if (!sleepWhileRunning(delay)) {
+                if (!CdcWaits.sleepWhileRunning(() -> running, delay)) {
                     break;
                 }
             }
@@ -357,6 +357,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         int total = 0;
         Map<CdcTableBinding, List<Map<String, Object>>> upserts = new LinkedHashMap<>();
         Map<CdcTableBinding, List<Map<String, Object>>> deletes = new LinkedHashMap<>();
+        CdcTransactionBudget budget = CdcTransactionBudget.from(properties);
         String lastCommitLsn = null;
         boolean originalAutoCommit = conn.getAutoCommit();
         conn.setAutoCommit(false);
@@ -382,6 +383,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 // as part of the wrong transaction.
                                 upserts.clear();
                                 deletes.clear();
+                                budget.reset();
                                 resetSpiller();
                                 continue;
                             }
@@ -396,6 +398,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                     flushTransaction(projectId, commitLsn, upserts, deletes);
                                     upserts.clear();
                                     deletes.clear();
+                                    budget.reset();
                                 }
                                 resetSpiller();
                                 advanceSlot(conn, slotName, commitLsn);
@@ -500,16 +503,19 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                             }
                             if (change.op == PgTestDecodingParser.Op.DELETE) {
                                 appendDelete(upserts, deletes, binding, change.row);
+                                budget.add(change.row);
                             } else {
                                 // Only upserts can carry large payloads to the target; a
                                 // delete binds primary keys alone and stays in memory.
                                 appendUpsert(upserts, deletes, binding,
                                         spiller().spill(binding, change.row));
+                                budget.add(change.row);
                                 if (change.oldImage != null
                                         && CdcPrimaryKey.changed(change.oldImage, change.row, binding)) {
                                     // The key moved: the new image cannot locate the old row,
                                     // so delete it explicitly or it stays on the target forever.
                                     appendDelete(upserts, deletes, binding, change.oldImage);
+                                    budget.add(change.oldImage);
                                 }
                             }
                             stats.touchEvent(System.currentTimeMillis());
@@ -576,37 +582,16 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
 
     /** This transaction's spiller; one per buffered transaction, disposed on its boundary. */
     private CdcLobSpiller spiller() {
-        if (spiller == null) {
-            LobSpillStore store = spillStore();
-            spiller = store == null ? CdcLobSpiller.disabled()
-                    : new CdcLobSpiller(store, properties.getLob().getCdcSpillThresholdBytes(),
-                            ctx.getConfig());
-        }
-        return spiller;
+        return spillers.get(ctx, properties, spillStore());
     }
 
     private void resetSpiller() {
-        if (spiller != null) {
-            spiller.close();
-            spiller = null;
-        }
+        spillers.reset();
     }
 
+    /** The LOB spill store, or {@code null} when streaming is switched off. */
     private LobSpillStore spillStore() {
-        if (!properties.getLob().isStreamingEnabled()) {
-            return null;
-        }
-        LobSpillStore store = lobSpillStore;
-        if (store == null) {
-            synchronized (this) {
-                store = lobSpillStore;
-                if (store == null) {
-                    store = LobSpillStore.from(properties);
-                    lobSpillStore = store;
-                }
-            }
-        }
-        return store;
+        return lobSpillStore.get(properties);
     }
 
     /**
@@ -828,21 +813,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
                 ChangeType.ERROR, detail, false, 0L);
         log.error("PG consumer for project {} parking in ERROR — {}", projectId, detail);
-    }
-
-    private boolean sleepWhileRunning(long delayMs) {
-        long remaining = delayMs;
-        while (remaining > 0 && running && !Thread.currentThread().isInterrupted()) {
-            long slice = Math.min(100L, remaining);
-            try {
-                Thread.sleep(slice);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-            remaining -= slice;
-        }
-        return running && !Thread.currentThread().isInterrupted();
     }
 
     private static String truncate(String s, int max) {

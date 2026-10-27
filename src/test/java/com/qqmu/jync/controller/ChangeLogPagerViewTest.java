@@ -162,6 +162,8 @@ class ChangeLogPagerViewTest {
                         .param("failedOnly", "true").with(asAdmin()))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/change-logs?failedOnly=true"));
+        // The hidden flag must reach the service: ignoring it wiped the whole log.
+        verify(changeLogService).clear(null, true);
     }
 
     @Test

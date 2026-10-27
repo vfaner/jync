@@ -54,20 +54,22 @@ public class ChangeLogController {
 
     /**
      * Clears change-log entries. When a project filter is active, only that project's logs
-     * are removed; otherwise the entire audit trail is wiped.
+     * are removed; otherwise the entire audit trail is wiped. Under the errors-only filter
+     * the clear removes just the failed entries the user is actually looking at.
      */
     @PostMapping("/change-logs/clear")
     public String clear(@RequestParam(required = false) Long projectId,
                         @RequestParam(required = false, defaultValue = "false") Boolean failedOnly,
                         RedirectAttributes flash) {
-        changeLogService.clear(projectId);
+        boolean failedOnlyFilter = Boolean.TRUE.equals(failedOnly);
+        changeLogService.clear(projectId, failedOnlyFilter);
         flash.addFlashAttribute("message", "log.clear.success");
         StringBuilder url = new StringBuilder("/change-logs");
         boolean hasProject = projectId != null;
         if (hasProject) {
             url.append("?projectId=").append(projectId);
         }
-        if (Boolean.TRUE.equals(failedOnly)) {
+        if (failedOnlyFilter) {
             url.append(hasProject ? '&' : '?').append("failedOnly=true");
         }
         return "redirect:" + url;

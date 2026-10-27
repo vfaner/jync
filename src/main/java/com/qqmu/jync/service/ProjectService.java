@@ -469,7 +469,7 @@ public class ProjectService {
                     "error.project.tablemapping.duplicate:" + mappingConflicts.get(0));
         }
         // Read the OLD strategy off the row before it is overwritten below.
-        CaptureStrategy oldStrategy = parseStrategy(project.getSyncConfig());
+        CaptureStrategy oldStrategy = CaptureStrategyParser.parse(project.getSyncConfig());
         CaptureStrategy requested = null;
         if (captureStrategy != null && !captureStrategy.isBlank()) {
             try {
@@ -702,20 +702,6 @@ public class ProjectService {
             return false;
         }
         return !oldTables.equals(newTables);
-    }
-
-    /** Corrupt or absent sync_config degrades to POLLING, matching CdcConsumerManager. */
-    private static CaptureStrategy parseStrategy(String json) {
-        if (json == null || json.isBlank()) {
-            return CaptureStrategy.POLLING;
-        }
-        try {
-            return STRATEGY_JSON.readValue(json, SyncConfig.class).getCaptureStrategyOrDefault();
-        } catch (IOException | RuntimeException e) {
-            log.warn("Unreadable sync_config while resolving the capture strategy ({});"
-                    + " treating it as POLLING", e.getMessage());
-            return CaptureStrategy.POLLING;
-        }
     }
 
     public SyncConfig loadConfig(Project project) {

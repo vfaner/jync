@@ -306,6 +306,20 @@ class CdcConsumerManagerTest {
     }
 
     @Test
+    void aStopThatLandsDuringTheTickWinsOverTheTicksStaleSnapshot() {
+        // supervise 不再整轮持锁,所以「用户停止」可能落在本轮读到清单之后、启动之前。
+        // 本轮必须以停止后的清单为准收敛,否则消费者会在停止后继续跑到下一轮(10s)。
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+        Project project = cdcProject(9L, true);
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project), List.of());
+
+        manager.supervise();
+
+        assertThat(starter.last).isNotNull();          // 本轮确实按旧清单启动过
+        assertThat(manager.statsFor(9L)).isNull();     // 但停止后的复查把同一轮内清掉了
+    }
+
+    @Test
     void superviseStopsConsumerWhenProjectSwitchedAway() {
         when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
         manager.ensureStarted(cdcProject(9L, true));

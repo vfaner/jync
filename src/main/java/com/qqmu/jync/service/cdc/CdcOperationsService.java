@@ -1,17 +1,12 @@
 package com.qqmu.jync.service.cdc;
 
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
-import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -22,6 +17,7 @@ import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -41,17 +37,6 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @Slf4j
 public class CdcOperationsService {
-
-    /**
-     * Own mapper for {@link #parseStrategy}, configured exactly like the ones in
-     * CdcConsumerManager and ProjectService so all three reads of sync_config agree; a
-     * skew would let rebaseline reject (or worse, accept) the wrong projects. The manager
-     * bean cannot be reused here because rebaseline's "not a CDC project" refusal must
-     * happen with ZERO manager interaction (Task 17 test contract), which a
-     * {@code cdcManager.strategyOf} call would break under unit-test mocks.
-     */
-    private static final ObjectMapper STRATEGY_JSON = new ObjectMapper()
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
@@ -215,7 +200,7 @@ public class CdcOperationsService {
     public void rebaseline(Long projectId) {
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
-        if (!parseStrategy(project.getSyncConfig()).isLogCdc()) {
+        if (!CaptureStrategyParser.parse(project.getSyncConfig()).isLogCdc()) {
             throw new IllegalArgumentException("error.project.cdc.not.cdc");
         }
         // Holder gate (see javadoc). Read-only on purpose: acquire-then-release would race
@@ -243,17 +228,4 @@ public class CdcOperationsService {
                 "project " + projectId + ": baseline rebuilt");
     }
 
-    /** Corrupt or absent sync_config degrades to POLLING, matching CdcConsumerManager. */
-    private static CaptureStrategy parseStrategy(String json) {
-        if (json == null || json.isBlank()) {
-            return CaptureStrategy.POLLING;
-        }
-        try {
-            return STRATEGY_JSON.readValue(json, SyncConfig.class).getCaptureStrategyOrDefault();
-        } catch (IOException | RuntimeException e) {
-            log.warn("Unreadable sync_config while resolving the capture strategy ({});"
-                    + " treating it as POLLING", e.getMessage());
-            return CaptureStrategy.POLLING;
-        }
-    }
 }

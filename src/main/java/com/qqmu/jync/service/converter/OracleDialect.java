@@ -435,11 +435,6 @@ public class OracleDialect extends AbstractSqlDialect {
     }
 
     @Override
-    public String getDropColumnSql(String schema, String table, String columnName) {
-        return "ALTER TABLE " + qualify(schema, table) + " DROP COLUMN " + quoteIdentifier(columnName);
-    }
-
-    @Override
     public List<String> getCreateViewSql(ViewMeta view, String schema, DatabaseType sourceType) {
         return List.of("CREATE OR REPLACE VIEW " + qualify(schema, view.getName())
                 + " AS " + stripTrailingSemicolon(view.getDefinition()));

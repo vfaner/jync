@@ -106,22 +106,22 @@ public class OaAuthConfigService {
     public OaAuthConfig save(OaAuthConfig config, String newSecretValue, boolean clearSecret) {
         config.setId(SINGLETON_ID);
         config.setMode(config.getMode() == null ? OaAuthConfig.Mode.PASSWORD : config.getMode());
-        config.setLoginUrl(trimToNull(config.getLoginUrl()));
-        config.setUsernameField(orDefault(config.getUsernameField(), DEFAULT_USERNAME_FIELD));
-        config.setPasswordField(orDefault(config.getPasswordField(), DEFAULT_PASSWORD_FIELD));
-        config.setSuccessField(trimToNull(config.getSuccessField()));
-        config.setSuccessValue(trimToNull(config.getSuccessValue()));
-        config.setUserField(trimToNull(config.getUserField()));
-        config.setAdminField(trimToNull(config.getAdminField()));
-        config.setAdminValue(trimToNull(config.getAdminValue()));
-        config.setAdminUsers(trimToNull(config.getAdminUsers()));
-        config.setLoginEntryUrl(trimToNull(config.getLoginEntryUrl()));
-        config.setLogoutRedirectUrl(trimToNull(config.getLogoutRedirectUrl()));
-        config.setUserHeader(trimToNull(config.getUserHeader()));
-        config.setAdminHeader(trimToNull(config.getAdminHeader()));
-        config.setSecretHeaderName(trimToNull(config.getSecretHeaderName()));
-        config.setValidateUrl(trimToNull(config.getValidateUrl()));
-        config.setTicketParam(orDefault(config.getTicketParam(), DEFAULT_TICKET_PARAM));
+        config.setLoginUrl(OaText.trimToNull(config.getLoginUrl()));
+        config.setUsernameField(OaText.orDefault(config.getUsernameField(), DEFAULT_USERNAME_FIELD));
+        config.setPasswordField(OaText.orDefault(config.getPasswordField(), DEFAULT_PASSWORD_FIELD));
+        config.setSuccessField(OaText.trimToNull(config.getSuccessField()));
+        config.setSuccessValue(OaText.trimToNull(config.getSuccessValue()));
+        config.setUserField(OaText.trimToNull(config.getUserField()));
+        config.setAdminField(OaText.trimToNull(config.getAdminField()));
+        config.setAdminValue(OaText.trimToNull(config.getAdminValue()));
+        config.setAdminUsers(OaText.trimToNull(config.getAdminUsers()));
+        config.setLoginEntryUrl(OaText.trimToNull(config.getLoginEntryUrl()));
+        config.setLogoutRedirectUrl(OaText.trimToNull(config.getLogoutRedirectUrl()));
+        config.setUserHeader(OaText.trimToNull(config.getUserHeader()));
+        config.setAdminHeader(OaText.trimToNull(config.getAdminHeader()));
+        config.setSecretHeaderName(OaText.trimToNull(config.getSecretHeaderName()));
+        config.setValidateUrl(OaText.trimToNull(config.getValidateUrl()));
+        config.setTicketParam(OaText.orDefault(config.getTicketParam(), DEFAULT_TICKET_PARAM));
         config.setValidateMethod(config.getValidateMethod() == null
                 ? OaAuthConfig.ValidateMethod.GET : config.getValidateMethod());
         config.setLocalLoginEnabled(config.getLocalLoginEnabled() == null
@@ -159,7 +159,7 @@ public class OaAuthConfigService {
      * settings page and pressing save does not silently turn the shared secret off.
      */
     private String resolveSecret(OaAuthConfig stored, String newSecretValue) {
-        String typed = trimToNull(newSecretValue);
+        String typed = OaText.trimToNull(newSecretValue);
         if (typed != null) {
             return crypto.encrypt(typed);
         }
@@ -289,18 +289,5 @@ public class OaAuthConfigService {
         } catch (IllegalArgumentException ex) {
             throw new IllegalArgumentException("error.oa.logoutUrl.invalid");
         }
-    }
-
-    private static String orDefault(String value, String fallback) {
-        String trimmed = trimToNull(value);
-        return trimmed == null ? fallback : trimmed;
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }

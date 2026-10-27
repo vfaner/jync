@@ -114,6 +114,22 @@ class PgLogicalCdcConsumerLobTest {
     }
 
     @Test
+    void aSpilledValueCountsOnlyItsHandleAgainstTheTransactionByteBudget() throws Exception {
+        // The payload left the heap for a spill file, so the buffered row is small. A cap
+        // far below the raw payload must not park the project: the budget measures what is
+        // held in memory, not what the source sent.
+        properties.getCdc().setMaxTransactionBytes(1024L);
+        String big = "中".repeat(2000);
+        scriptCall(new String[] {"0/1000", "BEGIN 1"},
+                new String[] {"0/1001", insert(1L, big)},
+                new String[] {"0/1002", "COMMIT 1"});
+
+        pgConsumer().drain(source, "jync_1");
+
+        assertThat(readBody()).isEqualTo(big);
+    }
+
+    @Test
     void exceedingTheSpillCapFailsTheTransactionInsteadOfWritingHalfARow() throws Exception {
         properties.getLob().setSpillMaxBytes(8);
         scriptCall(new String[] {"0/1000", "BEGIN 1"},

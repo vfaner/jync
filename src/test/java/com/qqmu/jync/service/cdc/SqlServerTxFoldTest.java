@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Types;
 import java.util.ArrayList;
@@ -227,5 +228,30 @@ class SqlServerTxFoldTest {
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
         assertThat(ids(buf.upserts)).containsExactly(3L);
         assertThat(ids(buf.deletes)).containsExactly(1L, 2L);
+    }
+
+    @Test
+    void aTransactionOverTheRowCapIsRefused() {
+        // 一个源事务 = 一个目标提交,行只能在内存里等 COMMIT。超限必须立刻非瞬态失败,
+        // 否则 OOM 会被当成可重试错误,重连后重放同一个事务,直到项目停车。
+        SqlServerTxFold fold = new SqlServerTxFold(1L, 0L);
+        CdcTableBinding b = ordersBinding();
+        fold.accept(TX_A, b, 2, row(1L, "a"));
+
+        assertThatThrownBy(() -> fold.accept(TX_A, b, 2, row(2L, "b")))
+                .isInstanceOf(CdcTransactionBudget.CdcTransactionTooLargeException.class)
+                .hasMessageContaining(CdcTransactionBudget.TOO_LARGE_MARKER);
+    }
+
+    @Test
+    void theRowCapIsPerTransaction() {
+        // 上限按事务计,不是整轮扫描计:两个各 1 行的事务在 max-rows=1 下都应正常缓冲。
+        SqlServerTxFold fold = new SqlServerTxFold(1L, 0L);
+        CdcTableBinding b = ordersBinding();
+        fold.accept(TX_A, b, 2, row(1L, "a"));
+        fold.accept(TX_B, b, 2, row(2L, "b"));
+
+        assertThat(ids(buffer(fold, TX_A, b).upserts)).containsExactly(1L);
+        assertThat(ids(buffer(fold, TX_B, b).upserts)).containsExactly(2L);
     }
 }

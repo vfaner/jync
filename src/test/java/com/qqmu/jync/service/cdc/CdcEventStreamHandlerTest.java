@@ -154,6 +154,38 @@ class CdcEventStreamHandlerTest {
     }
 
     @Test
+    void aTransactionCrossingTheRowCapFailsFatalAndNeverReachesTheSink() {
+        handler = new CdcEventStreamHandler(config, "app", supplier, new CdcRowMapper(), stats,
+                () -> "uuid:1-7", sink, null, 0L, new CdcTransactionBudget(2L, 0L));
+        tableMap(11L, "app", "orders");
+
+        assertThatThrownBy(() -> write(11L, row(1L, "a"), row(2L, "b"), row(3L, "c")))
+                .isInstanceOf(CdcTransactionBudget.CdcTransactionTooLargeException.class)
+                .hasMessageContaining(CdcTransactionBudget.TOO_LARGE_MARKER);
+
+        // The choke path stores the cause for the consumer's classifier: it must park
+        // instead of reconnecting and replaying the same oversized transaction.
+        assertThat(handler.takeFailure())
+                .isInstanceOf(CdcTransactionBudget.CdcTransactionTooLargeException.class);
+        assertThat(sink.changes).as("no partial transaction may reach the target").isEmpty();
+    }
+
+    @Test
+    void theRowCapIsPerTransactionNotForTheWholeStream() {
+        handler = new CdcEventStreamHandler(config, "app", supplier, new CdcRowMapper(), stats,
+                () -> "uuid:1-7", sink, null, 0L, new CdcTransactionBudget(2L, 0L));
+        tableMap(11L, "app", "orders");
+
+        write(11L, row(1L, "a"), row(2L, "b"));
+        xid(500L);
+        write(11L, row(3L, "c"), row(4L, "d"));
+        xid(600L);
+
+        assertThat(sink.changes).hasSize(2);
+        assertThat(sink.changes.get(1).upserts).hasSize(2);
+    }
+
+    @Test
     void otherSchemaAndUnselectedTablesIgnored() {
         tableMap(12L, "other_db", "orders");   // 库不匹配
         write(12L, row(1L, "x"));

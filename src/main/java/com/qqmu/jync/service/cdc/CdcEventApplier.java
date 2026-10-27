@@ -6,7 +6,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 import com.qqmu.jync.service.converter.GenericSqlDialect;
@@ -14,6 +13,7 @@ import com.qqmu.jync.service.lob.LobBinder;
 import com.qqmu.jync.service.sync.ColumnCleanser;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
 import com.qqmu.jync.service.sync.SyncContext;
+import com.qqmu.jync.service.sync.UniqueViolations;
 import com.qqmu.jync.util.CollectionUtil;
 import com.qqmu.jync.util.JdbcUtil;
 
@@ -210,7 +210,7 @@ public final class CdcEventApplier {
                     try {
                         insert.executeUpdate();
                     } catch (SQLException e) {
-                        if (isUniqueViolation(e) && update != null) {
+                        if (UniqueViolations.isUniqueViolation(e) && update != null) {
                             // A concurrent writer may have inserted the same key between our
                             // UPDATE and INSERT. Retrying the update converges without failing —
                             // but only if it actually reaches a row. Zero affected rows means
@@ -222,7 +222,7 @@ public final class CdcEventApplier {
                             if (update.executeUpdate() == 0) {
                                 throw e;
                             }
-                        } else if (isUniqueViolation(e)) {
+                        } else if (UniqueViolations.isUniqueViolation(e)) {
                             // Key-only table — update is null exactly when every column is part
                             // of the key. There is no UPDATE whose row count could decide
                             // anything, so existence is checked directly: a row already holding
@@ -272,14 +272,4 @@ public final class CdcEventApplier {
      * The callers decide by evidence: the retried UPDATE's row count, or a primary-key
      * existence probe for key-only tables. Anything that fails those checks is rethrown.
      */
-    static boolean isUniqueViolation(SQLException e) {
-        String state = e.getSQLState();
-        if (state != null && ("23505".equals(state) || "23000".equals(state))) {
-            return true;
-        }
-        String message = e.getMessage();
-        return message != null
-                && (message.toLowerCase(Locale.ROOT).contains("duplicate")
-                        || message.toLowerCase(Locale.ROOT).contains("unique constraint"));
-    }
 }

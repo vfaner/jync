@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.List;
 
 import org.springframework.stereotype.Component;
 
@@ -38,6 +39,52 @@ public class PostgresMetadataReader extends GenericMetadataReader {
     @Override
     protected String schemaPattern(String schema) {
         return schema == null || schema.isBlank() ? "public" : schema;
+    }
+
+    /**
+     * pgjdbc maps each JDBC type to exactly one {@code relkind} ("TABLE" → 'r',
+     * "VIEW" → 'v'). Asking for those alone would hide declarative partitioned tables
+     * ('p') and materialized views ('m') from discovery entirely — the picker is a
+     * checkbox list, so a user could never select them. {@code getColumns} already
+     * accepts both kinds, so widening the listing is enough.
+     */
+    @Override
+    protected String[] tableTypes() {
+        return new String[]{"TABLE", "PARTITIONED TABLE"};
+    }
+
+    @Override
+    protected String[] viewTypes() {
+        return new String[]{"VIEW", "MATERIALIZED VIEW"};
+    }
+
+    /**
+     * The widened type names are understood by pgjdbc; a pgjdbc-derived fork whose
+     * {@code getTables} rejects an unknown type must not lose discovery altogether, so
+     * the classic listing answers instead of failing the whole cycle.
+     */
+    @Override
+    public List<String> listTableNames(Connection conn, String schema)
+            throws SQLException {
+        try {
+            return super.listTableNames(conn, schema);
+        } catch (SQLException e) {
+            log.debug("Widened PostgreSQL table listing failed ({}); listing plain tables",
+                    e.getMessage());
+            return listNames(conn, schema, new String[]{"TABLE"});
+        }
+    }
+
+    @Override
+    public List<String> listViewNames(Connection conn, String schema)
+            throws SQLException {
+        try {
+            return super.listViewNames(conn, schema);
+        } catch (SQLException e) {
+            log.debug("Widened PostgreSQL view listing failed ({}); listing plain views",
+                    e.getMessage());
+            return listNames(conn, schema, new String[]{"VIEW"});
+        }
     }
 
     /**

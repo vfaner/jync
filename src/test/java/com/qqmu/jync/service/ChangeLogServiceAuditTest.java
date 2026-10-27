@@ -28,7 +28,7 @@ class ChangeLogServiceAuditTest {
         when(repository.deleteAllBulk()).thenReturn(42);
         ChangeLogService service = new ChangeLogService(repository, auditService);
 
-        service.clear(null);
+        service.clear(null, false);
 
         verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
                 contains("42"));
@@ -41,7 +41,7 @@ class ChangeLogServiceAuditTest {
         when(repository.deleteByProjectId(7L)).thenReturn(3);
         ChangeLogService service = new ChangeLogService(repository, auditService);
 
-        service.clear(7L);
+        service.clear(7L, false);
 
         verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
                 contains("project 7"));

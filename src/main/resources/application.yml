@@ -41,6 +41,13 @@ spring:
     properties:
       org.quartz.scheduler.instanceName: jync-scheduler
       org.quartz.threadPool.threadCount: "10"
+  task:
+    scheduling:
+      pool:
+        # Spring 默认只有 1 个调度线程。CDC 巡检 (supervise) 会同步建连/等待线程退出,
+        # 一次慢网络就能把后面的日志清理和任务对账整轮推迟;给三个 @Scheduled 任务
+        # 各自留出线程。
+        size: 4
   h2:
     console:
       enabled: false
@@ -184,6 +191,10 @@ sync:
     lock-ttl-ms: 30000
     supervise-interval-ms: 10000
     connect-timeout-ms: 10000
+    # 单个源事务的缓冲上限(一个源事务 = 一个目标提交,提交前必须整笔驻留内存)。
+    # 超限按非瞬态失败停车,而不是 OOM → 重连 → 重放同一事务;0 表示该维度不限。
+    max-transaction-rows: 1000000
+    max-transaction-bytes: 536870912
     # Oracle LogMiner(v1.6.0)。行外(out-of-line)LOB 在 SQL_REDO 中没有取值,无法还原:
     # skip 计数 + 限流告警后继续,fail 在第一条此类变更处停住且不推进位点。两者都会在
     # CDC 状态面板的 skippedMissingLob / missingLobByTable 中可见。

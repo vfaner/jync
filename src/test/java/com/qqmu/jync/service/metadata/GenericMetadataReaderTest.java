@@ -16,6 +16,7 @@ import java.sql.ResultSet;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -243,6 +244,24 @@ class GenericMetadataReaderTest {
 
         assertThat(reader.listTableNames(conn, "ruoyi"))
                 .containsExactly("biz_order", "sys_role", "sys_user");
+    }
+
+    @Test
+    void theGenericListingAsksForPlainTablesOnly() throws Exception {
+        // 只有 PostgreSQL 家族需要放宽类型名(分区表/物化视图);其它驱动维持原契约,
+        // 避免把不认识的类型名递给第三方 getTables()。
+        Connection conn = mock(Connection.class);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(conn.getMetaData()).thenReturn(md);
+        ResultSet empty = mock(ResultSet.class);
+        when(empty.next()).thenReturn(false);
+        when(md.getTables(any(), any(), anyString(), any(String[].class))).thenReturn(empty);
+
+        reader.listTableNames(conn, "app");
+
+        ArgumentCaptor<String[]> types = ArgumentCaptor.forClass(String[].class);
+        verify(md).getTables(any(), any(), anyString(), types.capture());
+        assertThat(types.getValue()).containsExactly("TABLE");
     }
 
     @Test

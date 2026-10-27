@@ -55,7 +55,8 @@ public class SystemLogService {
 
     private static final Pattern LEVEL_TOKEN =
             Pattern.compile("\\s(TRACE|DEBUG|INFO|WARN|ERROR)\\s");
-    private static final List<String> LEVELS = List.of("ALL", "DEBUG", "INFO", "WARN", "ERROR");
+    /** Filter values the page offers; also the only accepted {@code level} parameters. */
+    public static final List<String> LEVELS = List.of("ALL", "DEBUG", "INFO", "WARN", "ERROR");
 
     private final String configuredPath;
     private final long maxBytesScanned;
@@ -216,7 +217,11 @@ public class SystemLogService {
         return matcher.find() && matcher.group(1).equals(level);
     }
 
-    private static String normalizeLevel(String level) {
+    /**
+     * An unrecognized or blank level becomes {@code ALL}. The page echoes this value back
+     * into the select, so the controller and the query must agree on it — hence one copy.
+     */
+    public static String normalizeLevel(String level) {
         if (!StringUtils.hasText(level)) {
             return "ALL";
         }

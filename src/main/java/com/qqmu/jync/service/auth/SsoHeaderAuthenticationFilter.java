@@ -53,7 +53,7 @@ public class SsoHeaderAuthenticationFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = pathWithinApplication(request);
+        String path = RequestPaths.withinApplication(request);
         return SKIPPED_PATHS.contains(path)
                 || SKIPPED_PREFIXES.stream().anyMatch(path::startsWith);
     }
@@ -108,14 +108,5 @@ public class SsoHeaderAuthenticationFilter extends OncePerRequestFilter {
         UserRole role = ExternalIdentity.role(config, username, headerAdmin);
         signIn.signIn(request, response, username, role, "HEADER");
         filterChain.doFilter(request, response);
-    }
-
-    private static String pathWithinApplication(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        String context = request.getContextPath();
-        if (context != null && !context.isEmpty() && uri.startsWith(context)) {
-            return uri.substring(context.length());
-        }
-        return uri;
     }
 }

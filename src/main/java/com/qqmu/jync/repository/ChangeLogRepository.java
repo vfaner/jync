@@ -56,6 +56,16 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     @Query("delete from ChangeLog c")
     int deleteAllBulk();
 
+    /** Remove only the failed entries of one project, in bulk. */
+    @Modifying
+    @Query("delete from ChangeLog c where c.projectId = :projectId and c.success = false")
+    int deleteByProjectIdAndSuccessFalse(@Param("projectId") Long projectId);
+
+    /** Remove every failed entry, in bulk. */
+    @Modifying
+    @Query("delete from ChangeLog c where c.success = false")
+    int deleteAllSuccessFalse();
+
     /**
      * Retention pruning for the audit trail.
      *

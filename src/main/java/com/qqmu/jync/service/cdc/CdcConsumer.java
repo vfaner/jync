@@ -111,7 +111,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
      * Temp files for oversized values in a buffered binlog transaction. Built on first
      * use, and only when {@code sync.lob.streaming-enabled} is on.
      */
-    private volatile LobSpillStore lobSpillStore;
+    private final LazyLobSpillStore lobSpillStore = new LazyLobSpillStore();
 
     /**
      * Ruling R3b: a connection must demonstrably LIVE before the reconnect backoff may
@@ -260,7 +260,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     log.warn("CDC stream for project {} dropped ({}), retrying in {} ms",
                             projectId, CdcFailureClassifier.describe(failure), delay);
                 }
-                if (!sleepWhileRunning(delay)) {
+                if (!CdcWaits.sleepWhileRunning(() -> running, delay)) {
                     break;   // requestStop 落在退避期:≤100ms 内退出(分片 sleep)
                 }
             }
@@ -364,22 +364,6 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         }
     }
 
-    /** 100ms 分片 sleep;片间查 running/中断位,被 interrupt 时恢复中断位并返回 false。 */
-    private boolean sleepWhileRunning(long delayMs) {
-        long remaining = delayMs;
-        while (remaining > 0 && running && !Thread.currentThread().isInterrupted()) {
-            long slice = Math.min(100L, remaining);
-            try {
-                Thread.sleep(slice);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-            remaining -= slice;
-        }
-        return running && !Thread.currentThread().isInterrupted();
-    }
-
     /** > 5 consecutive deserialization failures with no successful transaction between. */
     private boolean deserializationStrikeOut() {
         return deserializationFailures.get() > MAX_DESERIALIZATION_FAILURES;
@@ -421,7 +405,8 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         CdcEventStreamHandler handler = new CdcEventStreamHandler(
                 ctx.getConfig(), ctx.getSourceSchema(), supplier, new CdcRowMapper(), stats,
                 client::getGtidSet, sink, spillStore(),
-                properties.getLob().getCdcSpillThresholdBytes());
+                properties.getLob().getCdcSpillThresholdBytes(),
+                CdcTransactionBudget.from(properties));
         handler.attachClient(client);                            // R1:choke 时自行断连
         client.registerEventListener(handler);
         client.registerLifecycleListener(new BinaryLogClient.AbstractLifecycleListener() {
@@ -466,20 +451,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
 
     /** The LOB spill store, or {@code null} when streaming is switched off. */
     private LobSpillStore spillStore() {
-        if (!properties.getLob().isStreamingEnabled()) {
-            return null;
-        }
-        LobSpillStore store = lobSpillStore;
-        if (store == null) {
-            synchronized (this) {
-                store = lobSpillStore;
-                if (store == null) {
-                    store = LobSpillStore.from(properties);
-                    lobSpillStore = store;
-                }
-            }
-        }
-        return store;
+        return lobSpillStore.get(properties);
     }
 
     /**

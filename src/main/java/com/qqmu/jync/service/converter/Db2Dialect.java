@@ -154,13 +154,6 @@ public class Db2Dialect extends AbstractSqlDialect {
     }
 
     @Override
-    public String getAddColumnSql(String schema, String table, ColumnMeta column,
-                                  DatabaseType sourceType) {
-        return "ALTER TABLE " + qualify(schema, table) + " ADD COLUMN "
-                + columnDefinition(column, sourceType);
-    }
-
-    @Override
     public List<String> getCreateViewSql(ViewMeta view, String schema, DatabaseType sourceType) {
         List<String> stmts = new ArrayList<>();
         // DB2 has no CREATE OR REPLACE VIEW before 9.7 and no IF EXISTS on DROP; the

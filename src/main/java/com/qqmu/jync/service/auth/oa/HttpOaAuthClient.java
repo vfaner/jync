@@ -111,7 +111,7 @@ public class HttpOaAuthClient implements OaAuthClient {
             return OaAuthResult.failure("error.oa.responseTooLarge");
         }
 
-        String successField = trimToNull(config.getSuccessField());
+        String successField = OaText.trimToNull(config.getSuccessField());
         if (successField == null) {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 return OaAuthResult.failure("error.oa.rejected");
@@ -127,7 +127,7 @@ public class HttpOaAuthClient implements OaAuthClient {
 
         if (successField != null) {
             String actual = JsonFieldReader.textAt(root, successField);
-            String expected = trimToNull(config.getSuccessValue());
+            String expected = OaText.trimToNull(config.getSuccessValue());
             if (actual == null || expected == null || !actual.equals(expected)) {
                 return OaAuthResult.failure("error.oa.rejected");
             }
@@ -153,8 +153,8 @@ public class HttpOaAuthClient implements OaAuthClient {
 
     /** The submitted credentials, in the shape the configured format expects. */
     private String body(OaAuthConfig config, String username, String password) throws IOException {
-        String usernameField = orDefault(config.getUsernameField(), "username");
-        String passwordField = orDefault(config.getPasswordField(), "password");
+        String usernameField = OaText.orDefault(config.getUsernameField(), "username");
+        String passwordField = OaText.orDefault(config.getPasswordField(), "password");
         if (config.getRequestFormat() == OaAuthConfig.RequestFormat.JSON) {
             Map<String, String> payload = new LinkedHashMap<>();
             payload.put(usernameField, username);
@@ -165,18 +165,5 @@ public class HttpOaAuthClient implements OaAuthClient {
                 + URLEncoder.encode(username == null ? "" : username, StandardCharsets.UTF_8) + "&"
                 + URLEncoder.encode(passwordField, StandardCharsets.UTF_8) + "="
                 + URLEncoder.encode(password == null ? "" : password, StandardCharsets.UTF_8);
-    }
-
-    private static String orDefault(String value, String fallback) {
-        String trimmed = trimToNull(value);
-        return trimmed == null ? fallback : trimmed;
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }

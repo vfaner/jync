@@ -1,6 +1,5 @@
 package com.qqmu.jync.service.cdc;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Map;
@@ -13,10 +12,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.config.SyncProperties;
-import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
@@ -24,6 +20,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncTaskRepository;
+import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
@@ -100,15 +97,6 @@ public class CdcConsumerManager {
     private final ConsumerStarter starter;
     private final LogMinerSessionFactory logMinerSessionFactory;
 
-    /**
-     * Own mapper for {@link #strategyOf}: the reconciler and supervise call it per project
-     * per tick, and the injected {@code SyncContextFactory} is a heavyweight build path
-     * (dialects, readers, endpoints). Corrupt/absent JSON degrades to POLLING, matching
-     * {@code SyncContextFactory.parseConfig} semantics.
-     */
-    private final ObjectMapper objectMapper = new ObjectMapper()
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-
     /** projectId -> live consumer of THIS node. Absent = not owned here (other node or stopped). */
     private final Map<Long, Registration> registry = new ConcurrentHashMap<>();
 
@@ -169,23 +157,15 @@ public class CdcConsumerManager {
     }
 
     /**
-     * The capture strategy stored in the project's sync_config JSON. Single parsing
-     * authority for CDC routing — ScheduleReconciler, SyncBootstrap, ProjectService and
-     * {@link #supervise} all go through here. Corrupt or absent config means POLLING, so
-     * a broken row can never silently claim a CDC consumer.
+     * The capture strategy stored in the project's sync_config JSON. The parsing itself
+     * lives in {@link CaptureStrategyParser} so CDC routing and the save/rebuild paths share
+     * one read; corrupt or absent config means POLLING, so a broken row can never silently
+     * claim a CDC consumer.
      */
     public CaptureStrategy strategyOf(Project project) {
         String json = project == null ? null : project.getSyncConfig();
-        if (json == null || json.isBlank()) {
-            return CaptureStrategy.POLLING;
-        }
-        try {
-            return objectMapper.readValue(json, SyncConfig.class).getCaptureStrategyOrDefault();
-        } catch (IOException | RuntimeException e) {
-            log.warn("Project {} has unreadable sync_config ({}); treating it as POLLING",
-                    project.getId(), e.getMessage());
-            return CaptureStrategy.POLLING;
-        }
+        Long projectId = project == null ? null : project.getId();
+        return CaptureStrategyParser.parse(json, projectId);
     }
 
     /**
@@ -345,9 +325,14 @@ public class CdcConsumerManager {
      *   <li>stop: registered consumers whose project is no longer enabled-CDC get
      *       {@link #ensureStopped} (disabled, deleted, or switched back to polling).</li>
      * </ol>
+     *
+     * <p>Deliberately NOT {@code synchronized}: every mutation is delegated to the
+     * synchronized {@link #ensureStarted}/{@link #ensureStopped}, so holding the monitor
+     * for the whole tick would only make a UI stop wait behind the rest of the tick's
+     * projects — including their network connects.
      */
     @Scheduled(fixedDelayString = "${sync.cdc.supervise-interval-ms:10000}")
-    public synchronized void supervise() {
+    public void supervise() {
         registry.entrySet().removeIf(entry -> {
             if (entry.getValue().thread.isAlive()) {
                 return false;
@@ -357,6 +342,7 @@ public class CdcConsumerManager {
         });
 
         Set<Long> wanted = new HashSet<>();
+        boolean startedAny = false;
         try {
             for (Project project : projectRepository.findByEnabledTrue()) {
                 if (!strategyOf(project).isLogCdc()) {
@@ -366,11 +352,18 @@ public class CdcConsumerManager {
                 if (!registry.containsKey(project.getId())) {
                     try {
                         ensureStarted(project);
+                        startedAny = true;
                     } catch (RuntimeException e) {
                         log.error("CDC supervise could not start project {}: {}",
                                 project.getId(), e.getMessage());
                     }
                 }
+            }
+            if (startedAny) {
+                // Not synchronized (see the javadoc): a stop can commit between the read
+                // above and ensureStarted, which would leave that consumer running until
+                // the next tick. Re-read once so the stop wins inside this same tick.
+                wanted = cdcProjectIds();
             }
         } catch (RuntimeException e) {
             // A database hiccup makes `wanted` incomplete — converging stops against it
@@ -389,6 +382,17 @@ public class CdcConsumerManager {
                 }
             }
         }
+    }
+
+    /** Ids of the enabled projects that need a consumer, read fresh from the store. */
+    private Set<Long> cdcProjectIds() {
+        Set<Long> ids = new HashSet<>();
+        for (Project project : projectRepository.findByEnabledTrue()) {
+            if (strategyOf(project).isLogCdc()) {
+                ids.add(project.getId());
+            }
+        }
+        return ids;
     }
 
     /**

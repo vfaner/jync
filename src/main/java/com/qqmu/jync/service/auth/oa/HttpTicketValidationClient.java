@@ -46,7 +46,7 @@ public class HttpTicketValidationClient implements TicketValidationClient {
 
     @Override
     public OaAuthResult validate(OaAuthConfig config, String ticket) {
-        String base = trimToNull(config.getValidateUrl());
+        String base = OaText.trimToNull(config.getValidateUrl());
         if (base == null) {
             return OaAuthResult.failure("error.oa.ticket.urlRequired");
         }
@@ -123,10 +123,10 @@ public class HttpTicketValidationClient implements TicketValidationClient {
             return OaAuthResult.failure("error.oa.badResponse");
         }
 
-        String successField = trimToNull(config.getSuccessField());
+        String successField = OaText.trimToNull(config.getSuccessField());
         if (successField != null) {
             String actual = JsonFieldReader.textAt(root, successField);
-            String expected = trimToNull(config.getSuccessValue());
+            String expected = OaText.trimToNull(config.getSuccessValue());
             if (actual == null || expected == null || !actual.equals(expected)) {
                 return OaAuthResult.failure("error.oa.rejected");
             }
@@ -142,13 +142,5 @@ public class HttpTicketValidationClient implements TicketValidationClient {
         boolean admin = JsonFieldReader.matches(
                 root, config.getAdminField(), config.getAdminValue());
         return OaAuthResult.success(username, admin);
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }

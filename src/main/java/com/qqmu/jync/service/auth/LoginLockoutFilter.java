@@ -42,7 +42,7 @@ public class LoginLockoutFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        String path = pathWithinApplication(request);
+        String path = RequestPaths.withinApplication(request);
         boolean local = LOGIN_PATH.equals(path);
         boolean oa = OA_LOGIN_PATH.equals(path);
         if ("POST".equalsIgnoreCase(request.getMethod()) && (local || oa)) {
@@ -62,17 +62,4 @@ public class LoginLockoutFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    /**
-     * The path below the context path, taken from the request URI rather than
-     * {@code getServletPath()}: the mock request used by the view tests leaves the servlet path
-     * empty, so a check keyed on it would silently never run there.
-     */
-    private static String pathWithinApplication(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        String context = request.getContextPath();
-        if (context != null && !context.isEmpty() && uri.startsWith(context)) {
-            return uri.substring(context.length());
-        }
-        return uri;
-    }
 }

@@ -112,9 +112,9 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     private final CdcChangeWindowLogger windowLogger;
 
     /** LOB spill store for buffered rows, built on first use; null when switched off. */
-    private volatile LobSpillStore lobSpillStore;
-    /** Owns the files of the buffered transaction; null between transactions. */
-    private CdcLobSpiller spiller;
+    private final LazyLobSpillStore lobSpillStore = new LazyLobSpillStore();
+    /** Owns the files of the buffered transaction; reset on every boundary. */
+    private final CdcSpillerHolder spillers = new CdcSpillerHolder();
 
     public LogMinerCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                SyncContext ctx, CdcPositionStore positionStore,
@@ -273,7 +273,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     log.warn("LogMiner cycle for project {} failed ({}); next cycle in {} ms",
                             projectId, detail, delay);
                 }
-                if (!sleepWhileRunning(delay)) {
+                if (!CdcWaits.sleepWhileRunning(() -> running, delay)) {
                     break;
                 }
             }
@@ -414,6 +414,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         long currentCsn = -1L;
         Map<CdcTableBinding, List<Map<String, Object>>> upserts = new LinkedHashMap<>();
         Map<CdcTableBinding, List<Map<String, Object>>> deletes = new LinkedHashMap<>();
+        CdcTransactionBudget budget = CdcTransactionBudget.from(properties);
         int applied = 0;
         while (running && !Thread.currentThread().isInterrupted()) {
             List<LogMinerSession.Row> batch = session.nextBatch();
@@ -472,6 +473,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     flushTransaction(projectId, currentCsn, upserts, deletes);
                     upserts.clear();
                     deletes.clear();
+                    budget.reset();
                     resetSpiller();
                     currentCsn = row.csn;
                 }
@@ -541,6 +543,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 if (op == SqlRedoParser.Op.DELETE) {
                     // Deletes bind primary keys only; no reason to write their payload.
                     bufferDelete(deletes, upserts, binding, parsed.row);
+                    budget.add(parsed.row);
                 } else {
                     // A statement that moved the primary key must also delete the old key:
                     // the upsert only writes the new one, and the old target row would stay
@@ -550,9 +553,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     if (parsed.previousKey != null
                             && CdcPrimaryKey.changed(parsed.previousKey, parsed.row, binding)) {
                         bufferDelete(deletes, upserts, binding, parsed.previousKey);
+                        budget.add(parsed.previousKey);
                     }
-                    bufferUpsert(upserts, deletes, binding,
-                            spiller().spill(binding, parsed.row));
+                    Map<String, Object> buffered = spiller().spill(binding, parsed.row);
+                    bufferUpsert(upserts, deletes, binding, buffered);
+                    budget.add(buffered);
                 }
                 if (row.rowTime != null) {
                     stats.touchEvent(row.rowTime.getTime());
@@ -638,37 +643,16 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     /** This transaction's spiller, disposed at the CSN boundary. */
     private CdcLobSpiller spiller() {
-        if (spiller == null) {
-            LobSpillStore store = spillStore();
-            spiller = store == null ? CdcLobSpiller.disabled()
-                    : new CdcLobSpiller(store, properties.getLob().getCdcSpillThresholdBytes(),
-                            ctx.getConfig());
-        }
-        return spiller;
+        return spillers.get(ctx, properties, spillStore());
     }
 
     private void resetSpiller() {
-        if (spiller != null) {
-            spiller.close();
-            spiller = null;
-        }
+        spillers.reset();
     }
 
+    /** The LOB spill store, or {@code null} when streaming is switched off. */
     private LobSpillStore spillStore() {
-        if (!properties.getLob().isStreamingEnabled()) {
-            return null;
-        }
-        LobSpillStore store = lobSpillStore;
-        if (store == null) {
-            synchronized (this) {
-                store = lobSpillStore;
-                if (store == null) {
-                    store = LobSpillStore.from(properties);
-                    lobSpillStore = store;
-                }
-            }
-        }
-        return store;
+        return lobSpillStore.get(properties);
     }
 
     private boolean matchesProjectTable(String owner, String table) {
@@ -723,21 +707,6 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
                 ChangeType.ERROR, detail, false, 0L);
         log.error("LogMiner consumer for project {} parking in ERROR — {}", projectId, detail);
-    }
-
-    private boolean sleepWhileRunning(long delayMs) {
-        long remaining = delayMs;
-        while (remaining > 0 && running && !Thread.currentThread().isInterrupted()) {
-            long slice = Math.min(100L, remaining);
-            try {
-                Thread.sleep(slice);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-            remaining -= slice;
-        }
-        return running && !Thread.currentThread().isInterrupted();
     }
 
     private static String truncate(String s, int max) {
