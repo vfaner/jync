@@ -515,22 +515,6 @@ public abstract class OracleCdcHarnessIT {
         return databaseConfigRepository.save(config);
     }
 
-    /** CDB$ROOT service JDBC URL (dbName, not PDB service name). */
-    protected String rootJdbcUrl() {
-        OracleContainer oracle = createContainer();
-        String pdbUrl = oracle.getJdbcUrl();
-        String dbName;
-        try (Connection src = sourceJdbc();
-             Statement st = src.createStatement();
-             ResultSet rs = st.executeQuery("SELECT NAME FROM V$DATABASE")) {
-            rs.next();
-            dbName = rs.getString(1);
-        } catch (SQLException e) {
-            throw new IllegalStateException("Could not read CDB name", e);
-        }
-        return pdbUrl.substring(0, pdbUrl.lastIndexOf('/') + 1) + dbName;
-    }
-
     /**
      * Grants SELECT on all SRC tables to C##MINER — needed because baseline full-load
      * reads from the root connection. Call after creating each new table.

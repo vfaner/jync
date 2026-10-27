@@ -128,7 +128,7 @@ final class ThroughputMeter {
      * be attributed to the code path that ran it. {@code changedRows} is next to {@code rows}
      * because the two differ exactly when the pass re-read an unchanged table.
      */
-    String describe(int changedRows) {
+    String describe(long changedRows) {
         long measured = queryNanos + readNanos + writeNanos;
         // Write windows include the commit that closed a batch; report row work net of it.
         long rowWorkNanos = Math.max(0L, writeNanos - commitNanos);
@@ -163,7 +163,7 @@ final class ThroughputMeter {
      * its whole table every poll interval, so keying INFO on the row count alone made an idle
      * target look busy. Unchanged passes and small windows/tails go to DEBUG.
      */
-    void logSummary(int changedRows) {
+    void logSummary(long changedRows) {
         if (rows >= SMALL_PASS_ROWS && changedRows > 0) {
             log.info("{}", describe(changedRows));
         } else {

@@ -28,11 +28,13 @@ public class SyncResult {
 
     private int structureChanges;
 
-    private int rowsInserted;
+    // long, not int: a full baseline of one table can exceed 2^31 rows, and an int counter
+    // wrapped negative — the task list then showed "rows +-1294967296" and hasChanges() lied.
+    private long rowsInserted;
 
-    private int rowsUpdated;
+    private long rowsUpdated;
 
-    private int rowsDeleted;
+    private long rowsDeleted;
 
     private int tablesProcessed;
 
@@ -56,7 +58,7 @@ public class SyncResult {
         this.skippedTables.add(new SkippedTable(table, reason));
     }
 
-    public int totalRows() {
+    public long totalRows() {
         return rowsInserted + rowsUpdated + rowsDeleted;
     }
 

@@ -197,7 +197,7 @@ class SyncEngineForeignKeyOrderingTest {
         when(result.isSuccess()).thenReturn(true);
         when(result.isSkipped()).thenReturn(false);
         when(result.isInitialLoad()).thenReturn(false);
-        when(result.getRowsChanged()).thenReturn(0);
+        when(result.getRowsChanged()).thenReturn(0L);
         return result;
     }
 

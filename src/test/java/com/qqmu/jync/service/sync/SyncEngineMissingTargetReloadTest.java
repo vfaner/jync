@@ -126,7 +126,7 @@ class SyncEngineMissingTargetReloadTest {
         when(result.isInitialLoad()).thenReturn(true);
         when(result.isSuccess()).thenReturn(true);
         when(result.isSkipped()).thenReturn(false);
-        when(result.getRowsChanged()).thenReturn(0);
+        when(result.getRowsChanged()).thenReturn(0L);
         when(dataSync.syncTable(any(), any(), any(), any(), any(), any())).thenReturn(result);
     }
 
@@ -170,12 +170,12 @@ class SyncEngineMissingTargetReloadTest {
             when(load.isInitialLoad()).thenReturn(handed.getLastSyncValue() == null);
             when(load.isSuccess()).thenReturn(true);
             when(load.isSkipped()).thenReturn(false);
-            when(load.getRowsChanged()).thenReturn(5);
+            when(load.getRowsChanged()).thenReturn(5L);
             // A rewritten MySQL batch reports no per-row kind: all five arrive unclassified.
-            when(load.getRowsInserted()).thenReturn(0);
-            when(load.getRowsUpdated()).thenReturn(0);
-            when(load.getRowsChangedUnclassified()).thenReturn(5);
-            when(load.getRowsWritten()).thenReturn(5);
+            when(load.getRowsInserted()).thenReturn(0L);
+            when(load.getRowsUpdated()).thenReturn(0L);
+            when(load.getRowsChangedUnclassified()).thenReturn(5L);
+            when(load.getRowsWritten()).thenReturn(5L);
             return load;
         });
 

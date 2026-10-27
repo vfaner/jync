@@ -105,22 +105,24 @@ public class DataSyncService {
     /** Outcome of synchronizing one table. */
     @Getter
     public static class TableSyncResult {
+        // Counters are long throughout: one cycle over a multi-billion-row table would wrap
+        // ints negative.
         /**
          * Rows read from the source and handed to the target. For a full-compare table this is
          * the whole table on every cycle, so it measures work done, not change delivered.
          */
-        private int rowsWritten;
+        private long rowsWritten;
         /** Rows the target inserted, where the target reports that distinctly. */
-        private int rowsInserted;
+        private long rowsInserted;
         /** Rows the target updated, where the target reports that distinctly. */
-        private int rowsUpdated;
+        private long rowsUpdated;
         /**
          * Rows the target changed without saying whether it inserted or updated them. Most
          * targets cannot tell the two apart in an upsert's update count; those rows land here
          * and get attributed by sync phase instead of by what actually happened.
          */
-        private int rowsChangedUnclassified;
-        private int rowsDeleted;
+        private long rowsChangedUnclassified;
+        private long rowsDeleted;
         private boolean skipped;
         private String skipReason;
         private String error;
@@ -143,7 +145,7 @@ public class DataSyncService {
          * full-compare cycle that found nothing new lands at zero rather than at the table's
          * row count.
          */
-        public int getRowsChanged() {
+        public long getRowsChanged() {
             return rowsInserted + rowsUpdated + rowsChangedUnclassified;
         }
 
@@ -160,13 +162,13 @@ public class DataSyncService {
      * log report a real change count instead of the size of the window we scanned.
      */
     private static final class WriteStats {
-        private int read;
-        private int inserted;
-        private int updated;
-        private int unclassified;
+        private long read;
+        private long inserted;
+        private long updated;
+        private long unclassified;
 
         /** Rows the target actually inserted or updated; zero for an unchanged full-compare pass. */
-        int changedRows() {
+        long changedRows() {
             return inserted + updated + unclassified;
         }
     }
@@ -1702,7 +1704,7 @@ public class DataSyncService {
                     table.getName(), chunkIndex);
         }
 
-        int totalRead = 0;
+        long totalRead = 0;
         while (true) {
             // Stop-requested abort (final review FIX 2): a CDC disable/rebaseline/shutdown
             // whose join budget expired INTERRUPTS this thread; without this check the load
@@ -1740,7 +1742,8 @@ public class DataSyncService {
             // Checkpoint only after the page's rows are committed on the target: a page that
             // died mid-write leaves no boundary behind and is simply re-read next time.
             checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), 0, chunkIndex,
-                    KeysetChunker.encodePk(sink.values), stats.read, ChunkCheckpoint.STATUS_CHUNK));
+                    KeysetChunker.encodePk(sink.values), (int) Math.min(stats.read, Integer.MAX_VALUE),
+                    ChunkCheckpoint.STATUS_CHUNK));
             lastPk = sink.values;
             chunkIndex++;
             if (stats.read < chunkSize) {
@@ -1843,7 +1846,7 @@ public class DataSyncService {
         boolean insertFirst = properties.isInitialLoadInsertFirst()
                 && ctx.getTargetDialect().supportsInsertFirstInitialLoad();
 
-        int totalRead = 0;
+        long totalRead = 0;
         long position = offset;
         while (true) {
             // Same stop-requested abort point as the keyed chunk loop: the previous page is
@@ -1939,7 +1942,7 @@ public class DataSyncService {
 
     /** Same cursor semantics as the classic full load, computed over the chunks' totals. */
     private String fullLoadCursorTail(TableMeta table, CursorStrategy strategy,
-                                      String watermark, int totalRead) {
+                                      String watermark, long totalRead) {
         return strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE
                 ? CursorStrategy.FULL_COMPARE_ROWCOUNT_PREFIX + totalRead
                 : (watermark == null ? null : applySafetyLagIfKeyed(table, watermark));
@@ -2251,7 +2254,8 @@ public class DataSyncService {
             totals.updated += stats.updated;
             totals.unclassified += stats.unclassified;
             checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
-                    chunkIndex++, KeysetChunker.encodePk(sink.values), stats.read,
+                    chunkIndex++, KeysetChunker.encodePk(sink.values),
+                    (int) Math.min(stats.read, Integer.MAX_VALUE),
                     ChunkCheckpoint.STATUS_CHUNK, range.lowerLong(), range.upperLong(),
                     range.lowerKeyJson(), range.upperKeyJson()));
             lastPk = sink.values;

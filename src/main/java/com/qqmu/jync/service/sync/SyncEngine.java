@@ -1076,17 +1076,17 @@ public class SyncEngine {
         }
 
         result.setTablesProcessed(result.getTablesProcessed() + 1);
-        int changed = tableResult.getRowsChanged();
+        long changed = tableResult.getRowsChanged();
         // Gate on rows the target actually changed. A full-compare table re-upserts every row
         // on every cycle, and each of those upserts is a no-op when nothing moved — logging the
         // scan size instead would post an identical "51 row(s)" entry every couple of seconds.
         if (changed > 0) {
-            int inserted = tableResult.getRowsInserted();
-            int updated = tableResult.getRowsUpdated();
+            long inserted = tableResult.getRowsInserted();
+            long updated = tableResult.getRowsUpdated();
             // Rows the target changed without saying how. Attribute them by phase, which is the
             // best available guess: an initial load into an empty table is all inserts, and a
             // later window is more often revisions of rows already delivered.
-            int unclassified = tableResult.getRowsChangedUnclassified();
+            long unclassified = tableResult.getRowsChangedUnclassified();
             if (unclassified > 0) {
                 if (tableResult.isInitialLoad()) {
                     inserted += unclassified;
@@ -1209,7 +1209,7 @@ public class SyncEngine {
      */
     private void recordDataLog(SyncContext ctx, TableMeta table, CursorStrategy strategy,
                                DataSyncService.TableSyncResult tableResult, ChangeType changeType,
-                               int rows, long durationMs) {
+                               long rows, long durationMs) {
         String scanned = scanDetail(rows, tableResult.getRowsChanged(),
                 tableResult.getRowsWritten(), tableResult.isInitialLoad());
         String phase = tableResult.isInitialLoad() ? "Initial load: " : "Incremental sync: ";
@@ -1218,7 +1218,15 @@ public class SyncEngine {
                 phase + rows + " row(s)" + verb + scanned + " via "
                         + strategy.getKind().name().toLowerCase() + " strategy"
                         + (strategy.getColumn() != null ? " on " + strategy.getColumn() : ""),
-                true, durationMs, rows);
+                true, durationMs, affectedRows(rows));
+    }
+
+    /**
+     * A row count for {@code ChangeLog.affected_rows}, which is an INTEGER column: saturate
+     * rather than wrap a multi-billion-row count into a negative number in the audit log.
+     */
+    private static Integer affectedRows(long rows) {
+        return rows > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) rows;
     }
 
     /**
@@ -1232,12 +1240,13 @@ public class SyncEngine {
      * Incremental windows and full-compare cycles rescan a margin or a whole table by design,
      * so the clause is initial-load only — there it would be per-cycle noise.
      */
-    static String scanDetail(int rows, int changedRows, int scannedRows, boolean initialLoad) {
+    static String scanDetail(long rows, long changedRows, long scannedRows,
+                             boolean initialLoad) {
         if (scannedRows <= rows) {
             return "";
         }
         String detail = scannedRows + " scanned";
-        int upToDate = scannedRows - changedRows;
+        long upToDate = scannedRows - changedRows;
         if (initialLoad && upToDate > 0) {
             detail += ", " + upToDate + " already up to date";
         }

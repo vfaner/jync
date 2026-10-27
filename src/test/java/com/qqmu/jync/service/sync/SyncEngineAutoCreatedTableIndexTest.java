@@ -120,7 +120,7 @@ class SyncEngineAutoCreatedTableIndexTest {
         when(initialLoad.isInitialLoad()).thenReturn(true);
         when(initialLoad.isSuccess()).thenReturn(true);
         when(initialLoad.isSkipped()).thenReturn(false);
-        when(initialLoad.getRowsChanged()).thenReturn(0);
+        when(initialLoad.getRowsChanged()).thenReturn(0L);
         when(dataSync.syncTable(any(), any(), any(), any(), any(), any())).thenReturn(initialLoad);
     }
 
