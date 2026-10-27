@@ -539,12 +539,12 @@ sudo systemctl status jync
 ### 6. Docker and Compose
 
 ```bash
-docker build -t jync:1.8.0 .
+docker build -t jync:1.8.1 .
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
   -e TZ=Asia/Shanghai \
-  --restart unless-stopped jync:1.8.0
+  --restart unless-stopped jync:1.8.1
 ```
 
 Or with Compose:
@@ -560,13 +560,13 @@ docker compose up -d --build
 ### 7. Kubernetes
 
 ```bash
-docker build -t registry.example.com/qqmu/jync:1.8.0 .
-docker push registry.example.com/qqmu/jync:1.8.0
+docker build -t registry.example.com/qqmu/jync:1.8.1 .
+docker push registry.example.com/qqmu/jync:1.8.1
 kubectl apply -k deploy/k8s/
 kubectl -n jync get pods
 ```
 
-- The manifests default to `jync:1.8.0`; change the image with the `images` transform in `kustomization.yaml`.
+- The manifests default to `jync:1.8.1`; change the image with the `images` transform in `kustomization.yaml`.
 - The Service is `ClusterIP`. From outside the cluster use `kubectl -n jync port-forward svc/jync 8080:80` or configure an Ingress.
 - The H2 metadata store is a `ReadWriteOnce` PVC, so **replicas must stay at 1**. For more replicas, move the metadata store to external MySQL or PostgreSQL first (`SPRING_DATASOURCE_*` environment variables), then raise `replicas`.
 

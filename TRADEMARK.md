@@ -5,12 +5,12 @@ Jync（捷同）的代码以 [MIT License](LICENSE) 开源：任何人都可以�
 作者保留的只是项目标识：
 
 - 名称「Jync」「捷同」，以及项目 logo 与图标；
-- 界面页脚署名「© 2026 任冠华（沐沐开源工坊）· MIT 许可」与官网地址 `jync.qqmu.com`。
+- 界面页脚署名「© 2026 沐沐开源工坊 · MIT 许可」与官网地址 `jync.qqmu.com`。
 
 再分发时请遵守两点：
 
 - 保留源码与发行包中的版权声明和 MIT 许可声明（这是 MIT 本身的要求）；
-- 不要把上述名称、logo 或作者署名替换成你自己的。你可以为自己的修改补充版权声明，但不要移除或覆盖原有署名。
+- 不要把上述名称、logo 或品牌署名替换成你自己的。你可以为自己的修改补充版权声明，但不要移除或覆盖原有署名。
 
 如果确实需要去掉品牌标识、改名后发行（白标），请先联系作者取得书面同意：vfaner@88.com。
 
@@ -23,12 +23,12 @@ The code of Jync is released under the [MIT License](LICENSE): anyone is free to
 What the author retains is the project identity:
 
 - the names "Jync" and "捷同", and the project logo and icons;
-- the footer credit "© 2026 Ren Guanhua (Mumu Open Source Workshop) · MIT License" and the website address `jync.qqmu.com`.
+- the footer credit "© 2026 Mumu Open Source Workshop · MIT License" and the website address `jync.qqmu.com`.
 
 When redistributing, please follow two points:
 
 - keep the copyright and MIT license notices in the source and in the distribution (this is what MIT itself requires);
-- do not replace those names, the logo or the author credit with your own. You may add a copyright notice for your own changes, but do not remove or overwrite the original credit.
+- do not replace those names, the logo or the workshop credit with your own. You may add a copyright notice for your own changes, but do not remove or overwrite the original credit.
 
 If you genuinely need to remove the brand marks and distribute under a different name (white-label), contact the author for written permission first: vfaner@88.com.
 
