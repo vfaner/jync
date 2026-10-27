@@ -183,6 +183,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
                 int drained;
+                boolean applyFailed = false;
                 try {
                     Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig());
                     currentSource = conn;
@@ -196,7 +197,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
-                    drained = drain(session);
+                    try {
+                        drained = drain(session);
+                    } catch (Throwable e) {
+                        applyFailed = true;        // 写目标端失败才计入熔断
+                        throw e;
+                    }
                     // C2 fix: advance the watermark to THIS session's high-water so the
                     // next open does not re-ADD_LOGFILE the entire archive stream from the
                     // baseline SCN. positionStore.advanceScn already persisted each
@@ -206,10 +212,14 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     session.close();
                 } catch (Throwable e) {
                     // F-12: count failed cycles. drain's per-row parse skips are counted
-                    // separately (parseFailures); anything that makes it here — target
-                    // flush rejection, source/mining connect failure, session open — is
-                    // a failed cycle and escalates after MAX_APPLY_FAILURES in a row.
-                    applyFailures.incrementAndGet();
+                    // separately (parseFailures), and only an APPLY failure escalates:
+                    // a connect/open failure is the source being unreachable for a few
+                    // seconds, which backoff-retry fixes (and is how the MySQL consumer
+                    // already behaves). Counting it here parked the project in ERROR
+                    // after ~30 s of network trouble and required a human to clear it.
+                    if (applyFailed) {
+                        applyFailures.incrementAndGet();
+                    }
                     lastFailure.compareAndSet(null, e);
                     drained = 0;
                     // The mining loop opens a connection per cycle, so "connected" cannot be

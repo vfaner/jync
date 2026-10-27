@@ -145,7 +145,7 @@ public class Db2MetadataReader extends GenericMetadataReader {
                 "SELECT TABNAME AS TABLE_NAME, CARD AS ROW_EST,"
                         + " CAST(NULL AS BIGINT) AS TOTAL_BYTES"
                         + " FROM SYSCAT.TABLES WHERE TABSCHEMA = ? AND TYPE = 'T'",
-                schemaPattern(schema));
+                schemaPattern(schema), true);
     }
 
     private String trim(String s) {

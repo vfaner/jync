@@ -308,7 +308,7 @@ public class OracleMetadataReader extends GenericMetadataReader {
                 "SELECT TABLE_NAME, NUM_ROWS AS ROW_EST,"
                         + " NUM_ROWS * AVG_ROW_LEN AS TOTAL_BYTES"
                         + " FROM ALL_TABLES WHERE OWNER = NVL(?, USER)",
-                upperOrNull(schema));
+                upperOrNull(schema), true);
     }
 
     private String upperOrNull(String s) {

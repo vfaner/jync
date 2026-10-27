@@ -16,6 +16,8 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -135,6 +137,38 @@ class CdcConsumerManagerTest {
         when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(null);
         manager.ensureStarted(cdcProject(9L, true));
         assertThat(starter.last).isNull(); // 不持锁不启动,等 supervise 接管
+    }
+
+    @Test
+    void aSlowContextBuildDoesNotBlockAStop() throws Exception {
+        // build() 连源库和目标库解析默认 schema，最长要等满连接超时。它过去在
+        // synchronized 监视器里执行，于是页面上停用任何一个项目（ensureStopped 同样
+        // synchronized）都得排在这次建连后面。契约：建连不持监视器；并且一个在
+        // 建连期间被停止的启动，回到监视器时不得把消费者注册起来。
+        CountDownLatch buildEntered = new CountDownLatch(1);
+        CountDownLatch releaseBuild = new CountDownLatch(1);
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+        when(contextFactory.build(any(), anyString(), any())).thenAnswer(inv -> {
+            buildEntered.countDown();
+            releaseBuild.await(10, TimeUnit.SECONDS);
+            return SyncContext.builder().config(new SyncConfig()).build();
+        });
+
+        Thread start = new Thread(() -> manager.ensureStarted(cdcProject(9L, true)),
+                "slow-start");
+        start.start();
+        assertThat(buildEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        long before = System.nanoTime();
+        manager.ensureStopped(9L);
+        long waitedMs = (System.nanoTime() - before) / 1_000_000L;
+
+        releaseBuild.countDown();
+        start.join(5_000L);
+
+        assertThat(waitedMs).as("停止不能排在建连后面").isLessThan(2_000L);
+        assertThat(starter.last).as("被停止超越的启动不得注册消费者").isNull();
+        verify(lock).close();                                    // 租约必须放回去
     }
 
     @Test

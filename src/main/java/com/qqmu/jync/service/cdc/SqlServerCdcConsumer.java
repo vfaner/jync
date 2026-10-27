@@ -208,20 +208,33 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
                 int rowsDrained;
+                boolean applyFailed = false;
                 try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                     currentSource = conn;
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
-                    DrainResult result = drain(conn, fromLsn);
-                    rowsDrained = result.rows;
-                    if (result.nextLsn != null) {
-                        fromLsn = result.nextLsn;
+                    try {
+                        DrainResult result = drain(conn, fromLsn);
+                        rowsDrained = result.rows;
+                        if (result.nextLsn != null) {
+                            fromLsn = result.nextLsn;
+                        }
+                    } catch (Throwable e) {
+                        applyFailed = true;        // 写目标端失败才计入熔断
+                        throw e;
                     }
                 } catch (Throwable e) {
                     // Any drain exception leaves fromLsn unchanged: the next iteration
                     // re-reads the same interval (data-first at-least-once).
-                    applyFailures.incrementAndGet(); // F-13: count the failed cycle
+                    // F-13 counts APPLY failures only: a source connect failure is the
+                    // database being unreachable for a few seconds, which backoff-retry
+                    // fixes (and is how the MySQL consumer already behaves). Counting it
+                    // parked the project in ERROR after ~30 s of network trouble and
+                    // required a human to clear it.
+                    if (applyFailed) {
+                        applyFailures.incrementAndGet();
+                    }
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
                     // The poll loop opens a connection per cycle, so "connected" cannot be

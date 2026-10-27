@@ -697,15 +697,26 @@ public class GenericMetadataReader implements MetadataReader {
      * <p>Shared so that the five overrides differ only in their SQL — the "unknown" rules stay
      * in one place: null and negative mean the dictionary has no usable value (Oracle's
      * {@code NUM_ROWS} before ANALYZE, PostgreSQL's {@code reltuples = -1}, DB2's
-     * {@code CARD = -1}), and an unreadable dictionary yields an empty map. Zero is a real
-     * size — an analyzed, empty table — and is kept, because weighting it at the median
-     * would skew the binning the same way the exact {@code COUNT(*)} path already fixed.
-     * Neither is an exception: a planner page listing thousands of tables must render rather
-     * than fail, and must never be tempted to fall back to {@code COUNT(*)} behind the
+     * {@code CARD = -1}), and an unreadable dictionary yields an empty map. An unreadable
+     * dictionary is not an exception: a planner page listing thousands of tables must render
+     * rather than fail, and must never be tempted to fall back to {@code COUNT(*)} behind the
      * user's back.
+     *
+     * <p>Zero is more delicate. Where the catalog says 0 only after it has statistics —
+     * Oracle's {@code NUM_ROWS}, SQL Server's exact partition sum, DB2's {@code CARD} after
+     * RUNSTATS — it means an empty table and is kept, because weighting it at the median
+     * would skew the binning the same way the exact {@code COUNT(*)} path already fixed.
+     * MySQL's InnoDB {@code TABLE_ROWS} and PostgreSQL's {@code reltuples} (before v14, which
+     * introduced -1) also read 0 for a table that has simply never been analyzed, so there 0
+     * cannot be told apart from "no estimate" and stays unknown.
+     *
+     * @param zeroRowEstimateIsEmpty true when this product reports 0 only for tables it has
+     *     statistics for — a constant per product, except PostgreSQL, where the reader
+     *     switches it on from v14
      */
     protected Map<String, MetadataReader.TableStat> queryTableStats(Connection conn, String sql,
-                                                                   String schemaParam) {
+                                                                   String schemaParam,
+                                                                   boolean zeroRowEstimateIsEmpty) {
         Map<String, MetadataReader.TableStat> stats = new LinkedHashMap<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             MetadataTimeouts.apply(ps);
@@ -717,8 +728,8 @@ public class GenericMetadataReader implements MetadataReader {
                         continue;
                     }
                     stats.put(name, new MetadataReader.TableStat(
-                            nonNegativeOrNull(rs, "ROW_EST"),
-                            nonNegativeOrNull(rs, "TOTAL_BYTES")));
+                            nonNegativeOrNull(rs, "ROW_EST", zeroRowEstimateIsEmpty),
+                            nonNegativeOrNull(rs, "TOTAL_BYTES", true)));
                 }
             }
         } catch (SQLException e) {
@@ -731,11 +742,13 @@ public class GenericMetadataReader implements MetadataReader {
 
     /**
      * A statistics column as the planner reads it: null when unset or negative ("not
-     * analyzed"). Zero is kept — see {@link #queryTableStats}.
+     * analyzed"), and null for zero unless the caller vouches that this product's zero is a
+     * real size. See {@link #queryTableStats}.
      */
-    private static Long nonNegativeOrNull(ResultSet rs, String column) throws SQLException {
+    private static Long nonNegativeOrNull(ResultSet rs, String column, boolean zeroIsKnown)
+            throws SQLException {
         long value = rs.getLong(column);
-        return rs.wasNull() || value < 0 ? null : value;
+        return rs.wasNull() || value < 0 || (value == 0 && !zeroIsKnown) ? null : value;
     }
 
     /**

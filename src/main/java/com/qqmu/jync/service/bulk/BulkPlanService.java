@@ -15,7 +15,8 @@ import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.bulk.BulkPlan;
@@ -69,15 +70,18 @@ public class BulkPlanService {
     private final ProjectRepository projectRepository;
     private final ProjectService projectService;
     private final long exactCountBudgetMs;
+    private final TransactionTemplate transactions;
 
     @Autowired
     public BulkPlanService(DatabaseConfigService databaseConfigService,
                            DataSourceManager dataSourceManager,
                            MetadataReaderFactory metadataReaderFactory,
                            ProjectRepository projectRepository,
-                           ProjectService projectService) {
+                           ProjectService projectService,
+                           PlatformTransactionManager transactionManager) {
         this(databaseConfigService, dataSourceManager, metadataReaderFactory,
-                projectRepository, projectService, DEFAULT_EXACT_COUNT_BUDGET_MS);
+                projectRepository, projectService, DEFAULT_EXACT_COUNT_BUDGET_MS,
+                transactionManager);
     }
 
     /** Visible for tests that need a deterministic budget. */
@@ -86,13 +90,15 @@ public class BulkPlanService {
                     MetadataReaderFactory metadataReaderFactory,
                     ProjectRepository projectRepository,
                     ProjectService projectService,
-                    long exactCountBudgetMs) {
+                    long exactCountBudgetMs,
+                    PlatformTransactionManager transactionManager) {
         this.databaseConfigService = databaseConfigService;
         this.dataSourceManager = dataSourceManager;
         this.metadataReaderFactory = metadataReaderFactory;
         this.projectRepository = projectRepository;
         this.projectService = projectService;
         this.exactCountBudgetMs = exactCountBudgetMs;
+        this.transactions = new TransactionTemplate(transactionManager);
     }
 
     /**
@@ -171,11 +177,15 @@ public class BulkPlanService {
             MetadataReader.TableStat stat = stats.get(name);
             Long rows = stat == null ? null : stat.rows();
             Long bytes = stat == null ? null : stat.bytes();
-            if (rows != null) {
+            if (rows != null || bytes != null) {
+                // Any catalog number counts: MySQL reports bytes for a table whose row
+                // count is still uncollected, and the page must not then claim the library
+                // gave no statistics at all while its table shows a size.
                 catalogStatsUsed = true;
             }
             entries.put(name, new TableEntry(name, rows, bytes,
-                    rows == null ? StatsSource.NONE : StatsSource.CATALOG));
+                    rows == null && bytes == null
+                            ? StatsSource.NONE : StatsSource.CATALOG));
         }
         if (entries.isEmpty()) {
             throw new IllegalArgumentException("error.project.bulk.no.tables");
@@ -232,7 +242,7 @@ public class BulkPlanService {
     }
 
     /**
-     * Creates one stopped task per bin, all in the caller's transaction.
+     * Creates one stopped task per bin, all in one transaction.
      *
      * <p>The plan is recomputed here rather than carried from the preview: the preview is a
      * GET-rendered view with no state, and re-reading keeps the create path honest about what
@@ -241,31 +251,38 @@ public class BulkPlanService {
      *
      * @return the number of tasks created
      */
-    @Transactional
     public int create(BulkPlanRequest request) {
+        // The plan is computed BEFORE the transaction opens: reading the listing (and up
+        // to two minutes of exact counting) then holds no metadata-database connection,
+        // and — just as important — the duplicate-name check stays milliseconds away from
+        // the inserts. A read-then-insert window stretched to minutes let two concurrent
+        // creates both pass the check and write duplicate names; there is no unique
+        // constraint on Project.name, and a later edit of such a pair fails on findByName.
         BulkPlan plan = plan(request);
-        for (TaskPlan task : plan.tasks()) {
-            if (projectRepository.findByName(task.name()).isPresent()) {
-                throw new IllegalArgumentException(
-                        "error.project.bulk.name.duplicate:" + task.name());
+        return transactions.execute(status -> {
+            for (TaskPlan task : plan.tasks()) {
+                if (projectRepository.findByName(task.name()).isPresent()) {
+                    throw new IllegalArgumentException(
+                            "error.project.bulk.name.duplicate:" + task.name());
+                }
             }
-        }
-        for (TaskPlan task : plan.tasks()) {
-            Project project = new Project();
-            project.setName(task.name());
-            project.setSourceDbId(request.sourceDbId());
-            project.setTargetDbId(request.targetDbId());
-            Project saved = projectService.save(project);
+            for (TaskPlan task : plan.tasks()) {
+                Project project = new Project();
+                project.setName(task.name());
+                project.setSourceDbId(request.sourceDbId());
+                project.setTargetDbId(request.targetDbId());
+                Project saved = projectService.save(project);
 
-            SyncConfig config = new SyncConfig();
-            config.setObjectSelectionExplicit(true);
-            config.setTables(new LinkedHashSet<>(task.tables().stream()
-                    .map(TableEntry::name).toList()));
-            projectService.saveConfig(saved.getId(), config, request.captureStrategy());
-        }
-        log.info("Bulk create: {} task(s) from '{}'.'{}' to '{}'", plan.tasks().size(),
-                plan.sourceName(), plan.schema(), plan.targetName());
-        return plan.tasks().size();
+                SyncConfig config = new SyncConfig();
+                config.setObjectSelectionExplicit(true);
+                config.setTables(new LinkedHashSet<>(task.tables().stream()
+                        .map(TableEntry::name).toList()));
+                projectService.saveConfig(saved.getId(), config, request.captureStrategy());
+            }
+            log.info("Bulk create: {} task(s) from '{}'.'{}' to '{}'", plan.tasks().size(),
+                    plan.sourceName(), plan.schema(), plan.targetName());
+            return plan.tasks().size();
+        });
     }
 
     /**

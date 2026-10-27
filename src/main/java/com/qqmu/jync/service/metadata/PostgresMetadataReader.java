@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.metadata;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -219,13 +220,29 @@ public class PostgresMetadataReader extends GenericMetadataReader {
     @Override
     public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
         // 'r' is a plain table, 'p' a declarative partitioned parent (its size includes the
-        // children, so binning by it is right). reltuples is -1 until the table is analyzed,
-        // which the shared parser reports as unknown rather than as "empty".
+        // children, so binning by it is right). reltuples is -1 until the table is analyzed
+        // on PostgreSQL 14+, which the shared parser reports as unknown rather than as
+        // "empty"; on 9.4-13 the same never-analyzed table reads 0, so there a zero stays
+        // unknown too.
         return queryTableStats(conn,
                 "SELECT c.relname AS TABLE_NAME, c.reltuples::bigint AS ROW_EST,"
                         + " pg_total_relation_size(c.oid) AS TOTAL_BYTES"
                         + " FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
                         + " WHERE n.nspname = ? AND c.relkind IN ('r', 'p')",
-                schemaPattern(schema));
+                schemaPattern(schema), zeroRelTuplesMeansEmpty(conn));
+    }
+
+    /**
+     * True from PostgreSQL 14 on, where a never-analyzed table reports -1 and a zero can only
+     * mean an empty table. Unknown or older servers keep the conservative reading (zero is
+     * not a usable estimate).
+     */
+    private static boolean zeroRelTuplesMeansEmpty(Connection conn) {
+        try {
+            DatabaseMetaData metaData = conn.getMetaData();
+            return metaData != null && metaData.getDatabaseMajorVersion() >= 14;
+        } catch (SQLException e) {
+            return false;
+        }
     }
 }

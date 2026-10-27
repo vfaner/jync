@@ -186,17 +186,30 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
                 int rowsDrained;
+                boolean applyFailed = false;
                 try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                     currentSource = conn;
                     ensureSlot(conn, slotName);
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
-                    rowsDrained = drain(conn, slotName);
+                    try {
+                        rowsDrained = drain(conn, slotName);
+                    } catch (Throwable e) {
+                        applyFailed = true;        // 写目标端失败才计入熔断
+                        throw e;
+                    }
                 } catch (Throwable e) {
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
-                    applyFailures.incrementAndGet();
+                    // F-10 counts APPLY failures only: a connection or slot failure is
+                    // the source being unreachable for a few seconds, which backoff-retry
+                    // fixes (and is how the MySQL consumer already behaves). Counting it
+                    // parked the project in ERROR after ~30 s of network trouble and
+                    // required a human to clear it.
+                    if (applyFailed) {
+                        applyFailures.incrementAndGet();
+                    }
                     // The poll loop opens a connection per cycle, so "connected" cannot be tied
                     // to the connection's lifetime: between cycles there is none, and the
                     // panel would show 已断开 for almost the whole run of a healthy consumer.

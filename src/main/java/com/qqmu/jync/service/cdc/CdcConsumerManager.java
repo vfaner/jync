@@ -101,6 +101,16 @@ public class CdcConsumerManager {
     private final Map<Long, Registration> registry = new ConcurrentHashMap<>();
 
     /**
+     * projectId -> number of stops requested so far. A start acquires its lease and reads
+     * this counter under the monitor, builds its context WITHOUT it (that step connects to
+     * both endpoints and can wait out a connect timeout), then re-enters and refuses to
+     * register when the counter moved: a stop that ran while the build was in flight has
+     * already returned, so registering here would revive a consumer the caller declared
+     * stopped. Same idea as the polling runner's stop epochs.
+     */
+    private final Map<Long, Long> stopGenerations = new ConcurrentHashMap<>();
+
+    /**
      * Projects already warned about while parked in ERROR. {@link #supervise} re-asks every
      * tick, so without this the same WARN repeats every 10 s for as long as the project stays
      * parked (thousands of identical lines a day, hiding real ones). The warning marks a
@@ -177,53 +187,60 @@ public class CdcConsumerManager {
      * project until a human rebuilds the baseline; restarting it here would loop the
      * failure across every node); lease held elsewhere (another node owns the stream —
      * launching here would mean two writers).
+     *
+     * <p>The monitor covers only the decisions and the registration. The context build —
+     * which connects to both endpoints — runs outside it, so a stop of ANY project does
+     * not wait for a database that is slow or unreachable; the re-entry then checks
+     * {@link #stopGenerations} so a stop that landed during the build wins.
      */
-    public synchronized void ensureStarted(Project project) {
+    public void ensureStarted(Project project) {
         Long projectId = project.getId();
-        if (registry.containsKey(projectId)) {
-            return;                                              // 幂等:已在本节点运行
-        }
-        if (hasErrorHat(projectId)) {
-            if (parkedWarned.add(projectId)) {
-                log.warn("CDC project {} is parked in ERROR; not starting a consumer"
-                        + " (rebuild the baseline to resume)", projectId);
-            } else {
-                log.debug("CDC project {} is still parked in ERROR", projectId);
+        long stopGeneration;
+        SyncLockService.LockHandle lock;
+        synchronized (this) {
+            if (registry.containsKey(projectId)) {
+                return;                                          // 幂等:已在本节点运行
             }
-            return;
-        }
-        parkedWarned.remove(projectId);                          // 帽子已摘:下一段停机会重新警告
-        SyncLockService.LockHandle lock = lockService.tryAcquireForDaemon(
-                projectId, properties.getCdc().getLockTtlMs());
-        if (lock == null) {
-            log.info("CDC project {} is being consumed by another node; skipping here",
-                    projectId);
-            return;
+            if (hasErrorHat(projectId)) {
+                if (parkedWarned.add(projectId)) {
+                    log.warn("CDC project {} is parked in ERROR; not starting a consumer"
+                            + " (rebuild the baseline to resume)", projectId);
+                } else {
+                    log.debug("CDC project {} is still parked in ERROR", projectId);
+                }
+                return;
+            }
+            parkedWarned.remove(projectId);                      // 帽子已摘:下一段停机会重新警告
+            lock = lockService.tryAcquireForDaemon(
+                    projectId, properties.getCdc().getLockTtlMs());
+            if (lock == null) {
+                log.info("CDC project {} is being consumed by another node; skipping here",
+                        projectId);
+                return;
+            }
+            stopGeneration = stopGenerations.getOrDefault(projectId, 0L);
         }
         try {
+            // Building the context connects to both endpoints to resolve their default
+            // schemas and can wait out a connect timeout. It must NOT run under the
+            // monitor: ensureStopped is synchronized, so a UI stop would otherwise queue
+            // behind an unreachable database.
             SyncContext ctx = contextFactory.build(project, lock.owner(), lock::renew);
-            CdcRuntimeStats stats = new CdcRuntimeStats();
             CaptureStrategy strategy = strategyOf(project);
-            ManagedCdcConsumer consumer;
-            if (strategy == CaptureStrategy.LOGMINER_CDC) {
-                consumer = new LogMinerCdcConsumer(project, lock, ctx, positionStore,
-                        baselineService, taskStore, stateWriter, dataSourceManager,
-                        stats, properties, logMinerSessionFactory);
-            } else if (strategy == CaptureStrategy.PG_LOGICAL_CDC) {
-                consumer = new PgLogicalCdcConsumer(project, lock, ctx, positionStore,
-                        baselineService, taskStore, stateWriter, dataSourceManager,
-                        stats, properties);
-            } else if (strategy == CaptureStrategy.SQLSERVER_CDC) {
-                consumer = new SqlServerCdcConsumer(project, lock, ctx, positionStore,
-                        baselineService, taskStore, stateWriter, dataSourceManager,
-                        stats, properties);
-            } else {
-                consumer = new CdcConsumer(project, lock, ctx, clientFactory,
-                        positionStore, baselineService, taskStore, stateWriter,
-                        dataSourceManager, stats, properties);
+            CdcRuntimeStats stats = new CdcRuntimeStats();
+            ManagedCdcConsumer consumer = consumerFor(project, lock, ctx, strategy, stats);
+            synchronized (this) {
+                if (stopGenerations.getOrDefault(projectId, 0L) != stopGeneration) {
+                    // A stop ran while we were connecting. It found nothing to stop and
+                    // already returned, so registering now would revive what it stopped.
+                    lock.close();
+                    log.info("CDC project {} was stopped while its consumer was being"
+                            + " prepared; not starting it", projectId);
+                    return;
+                }
+                Thread thread = starter.start(consumer, "jync-cdc-" + projectId);
+                registry.put(projectId, new Registration(consumer, thread, stats));
             }
-            Thread thread = starter.start(consumer, "jync-cdc-" + projectId);
-            registry.put(projectId, new Registration(consumer, thread, stats));
             log.info("CDC consumer ({}) for project {} started on this node as {}",
                     strategy, projectId, lock.owner());
         } catch (RuntimeException e) {
@@ -245,6 +262,35 @@ public class CdcConsumerManager {
     }
 
     /**
+     * One engine instance for the project's capture strategy.
+     *
+     * <p>Constructors only wire fields — no I/O — so this runs outside the monitor, right
+     * before the registration half of {@link #ensureStarted}.
+     */
+    private ManagedCdcConsumer consumerFor(Project project, SyncLockService.LockHandle lock,
+                                           SyncContext ctx, CaptureStrategy strategy,
+                                           CdcRuntimeStats stats) {
+        if (strategy == CaptureStrategy.LOGMINER_CDC) {
+            return new LogMinerCdcConsumer(project, lock, ctx, positionStore,
+                    baselineService, taskStore, stateWriter, dataSourceManager,
+                    stats, properties, logMinerSessionFactory);
+        }
+        if (strategy == CaptureStrategy.PG_LOGICAL_CDC) {
+            return new PgLogicalCdcConsumer(project, lock, ctx, positionStore,
+                    baselineService, taskStore, stateWriter, dataSourceManager,
+                    stats, properties);
+        }
+        if (strategy == CaptureStrategy.SQLSERVER_CDC) {
+            return new SqlServerCdcConsumer(project, lock, ctx, positionStore,
+                    baselineService, taskStore, stateWriter, dataSourceManager,
+                    stats, properties);
+        }
+        return new CdcConsumer(project, lock, ctx, clientFactory,
+                positionStore, baselineService, taskStore, stateWriter,
+                dataSourceManager, stats, properties);
+    }
+
+    /**
      * Stops this node's consumer for the project and WAITS for it (Review Focus #5):
      * when this method returns, the old stream can no longer write to the target —
      * essential before a strategy switch starts a polling job for the same project.
@@ -259,6 +305,9 @@ public class CdcConsumerManager {
      * make death within the grace window the expected case; the signature is unchanged.
      */
     public synchronized void ensureStopped(Long projectId) {
+        // Bump FIRST, even when nothing is registered here: a start that is inside its
+        // out-of-monitor context build reads this on re-entry and must not register.
+        stopGenerations.merge(projectId, 1L, Long::sum);
         parkedWarned.remove(projectId);                          // 停/启边界:下次启动重新提示
         Registration registration = registry.remove(projectId);
         if (registration == null) {

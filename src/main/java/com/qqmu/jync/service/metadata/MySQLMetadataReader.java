@@ -138,13 +138,15 @@ public class MySQLMetadataReader extends GenericMetadataReader {
     public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
         // TABLE_ROWS is InnoDB's estimate — good enough to rank and bin tables, and free.
         // Views are excluded: their TABLE_ROWS is null and they are not sync targets here.
+        // Zero is not trusted as "empty": InnoDB's statistics read 0 until the table is
+        // analyzed, which can be long after it holds data, so a 0 stays unknown.
         return queryTableStats(conn,
                 "SELECT TABLE_NAME, TABLE_ROWS AS ROW_EST,"
                         + " COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS TOTAL_BYTES"
                         + " FROM information_schema.TABLES"
                         + " WHERE TABLE_SCHEMA = COALESCE(?, DATABASE())"
                         + " AND TABLE_TYPE = 'BASE TABLE'",
-                blankToNull(schema));
+                blankToNull(schema), false);
     }
 
     static String blankToNull(String s) {

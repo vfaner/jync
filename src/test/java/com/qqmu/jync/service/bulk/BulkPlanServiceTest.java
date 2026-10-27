@@ -99,8 +99,13 @@ class BulkPlanServiceTest {
     }
 
     private BulkPlanService service() {
+        return service(mock(org.springframework.transaction.PlatformTransactionManager.class));
+    }
+
+    private BulkPlanService service(
+            org.springframework.transaction.PlatformTransactionManager transactions) {
         return new BulkPlanService(configService, dataSourceManager, readerFactory,
-                projectRepository, projectService, 120_000L);
+                projectRepository, projectService, 120_000L, transactions);
     }
 
     private static Map<String, MetadataReader.TableStat> stats(String name, Long rows, Long bytes) {
@@ -192,7 +197,8 @@ class BulkPlanServiceTest {
         when(reader.estimateTableStats(connection, "shop")).thenReturn(Map.of());
 
         BulkPlan plan = new BulkPlanService(configService, dataSourceManager, readerFactory,
-                projectRepository, projectService, 0L)
+                projectRepository, projectService, 0L,
+                mock(org.springframework.transaction.PlatformTransactionManager.class))
                 .plan(new BulkPlanRequest(1L, 2L, 2, "t", null, true));
 
         assertThat(plan.exactStatsUsed()).isFalse();
@@ -389,6 +395,47 @@ class BulkPlanServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.name.duplicate:t-01");
         verify(projectService, never()).save(any());
+    }
+
+    @Test
+    void planningRunsBeforeTheTransactionOpens() {
+        // 规划要连源库（勾了精确统计时最长 120 秒）。放在事务里会把这个项目的元数据
+        // 库连接占住这么久，还把"查重 → 插入"的窗口拉长到分钟级——两个标签页同时
+        // 提交同名前缀就可能都通过查重，写进两条同名任务（name 没有唯一约束）。
+        // 契约：事务只包住查重与写入，规划失败时事务根本不开。
+        when(dataSourceManager.createTransientDataSource(source))
+                .thenThrow(new IllegalStateException("source down"));
+        org.springframework.transaction.PlatformTransactionManager transactions =
+                mock(org.springframework.transaction.PlatformTransactionManager.class);
+
+        assertThatThrownBy(() -> service(transactions)
+                .create(new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.bulk.source.failed");
+
+        verify(transactions, never()).getTransaction(any());
+    }
+
+    @Test
+    void aCatalogThatKnowsOnlyBytesIsStillCredited() throws SQLException {
+        // MySQL 未收集统计的表：TABLE_ROWS 读作 0（未知），但 DATA_LENGTH 是真实大小。
+        // 旧实现按"行数未知"就把来源标成未知，于是整库如此时页面还提示"该库未提供
+        // 目录统计，所有表大小未知"，而表格里明明列着大小。
+        when(reader.estimateTableStats(connection, "shop"))
+                .thenReturn(Map.of("big", new MetadataReader.TableStat(null, 8_192L)));
+
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, false));
+
+        assertThat(plan.catalogStatsUsed()).isTrue();
+        assertThat(plan.tasks().get(0).tables())
+                .filteredOn(table -> table.name().equals("big"))
+                .singleElement()
+                .satisfies(table -> {
+                    assertThat(table.source())
+                            .isEqualTo(com.qqmu.jync.dto.bulk.StatsSource.CATALOG);
+                    assertThat(table.bytes()).isEqualTo(8_192L);
+                    assertThat(table.rows()).isNull();
+                });
     }
 
     @Test

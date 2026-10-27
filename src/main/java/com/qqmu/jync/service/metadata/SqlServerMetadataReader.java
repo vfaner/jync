@@ -170,6 +170,6 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
                         + " ON a.container_id = p.partition_id"
                         + " WHERE s.name = ?"
                         + " GROUP BY t.name",
-                schemaPattern(schema));
+                schemaPattern(schema), true);
     }
 }

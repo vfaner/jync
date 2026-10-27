@@ -138,7 +138,10 @@ public interface MetadataReader {
      * {@code COUNT(*)} for a table without statistics, which is affordable for the handful of
      * tables a sync cycle reads and ruinous for a planner listing thousands. Here a missing
      * number is reported as {@code null}, and a dictionary this reader cannot query is an empty
-     * map — the caller decides whether to pay for an exact count.
+     * map — the caller decides whether to pay for an exact count. A zero is a real size only
+     * where the product's catalog distinguishes "analyzed, empty" from "never analyzed"
+     * (Oracle, SQL Server, DB2, PostgreSQL from v14); MySQL and PostgreSQL before v14 report
+     * {@code null} instead, because their zero can mean either.
      *
      * <p>One schema-wide query per product, keyed by the case the product stores, so callers
      * match names case-insensitively. Never throws: a catalog query that fails is a listing of

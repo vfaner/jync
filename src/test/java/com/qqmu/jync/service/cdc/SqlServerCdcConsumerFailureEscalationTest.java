@@ -267,6 +267,22 @@ class SqlServerCdcConsumerFailureEscalationTest {
     }
 
     @Test
+    void sourceConnectFailuresOnlyBackOffAndNeverPark() throws Exception {
+        // 源库不可达只说明"现在连不上"：没读到 CDC 变更表、也没写坏目标端，退避
+        // 重连就是全部补救。旧实现把它和目标端 flush 失败记进同一个连续失败计数，
+        // 一次约 30 秒的源端抖动就把项目 park 到 ERROR，必须人工清错误才能恢复。
+        when(dsm.getConnection(any()))
+                .thenThrow(new SQLException("source down: connection refused"));
+
+        SqlServerCdcConsumer consumer = newConsumer(
+                contextWithStagedTarget(true), boundedLock(20));
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
+    @Test
     void aSuccessfulTransactionResetsTheFailureEscalation() throws Exception {
         // 3 败 → 1 成 → 3 败:任一连续段都不到阈值,lock 到期安静退出,全程绝不
         // park;且成功周期必须真正 commit(证明确实 flush 成功、计数被清零)。

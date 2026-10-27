@@ -146,6 +146,9 @@ class ProjectServiceStrategySwitchTest {
         service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC");
 
         InOrder order = inOrder(scheduler, stateWriter, positionStore, taskStore, cdcManager);
+        // 本节点可能还残留刚被停用的旧消费者:必须先 join 再删位点,否则它停机时会把
+        // 位点重新写回去,重置就白做了。
+        order.verify(cdcManager).ensureStopped(1L);
         order.verify(scheduler).unschedule(1L);
         order.verify(stateWriter).clearCursor(1L);
         order.verify(positionStore).delete(1L);
