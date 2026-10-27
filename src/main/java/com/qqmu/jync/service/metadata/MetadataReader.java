@@ -3,6 +3,7 @@ package com.qqmu.jync.service.metadata;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Map;
 
 import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
@@ -122,4 +123,28 @@ public interface MetadataReader {
 
     /** Approximate row count, from statistics when available and {@code COUNT(*)} otherwise. */
     long estimateRowCount(Connection conn, String schema, String tableName) throws SQLException;
+
+    /**
+     * Estimated storage for one table: either field is {@code null} when the dictionary has no
+     * reliable number for it.
+     */
+    record TableStat(Long rows, Long bytes) {
+    }
+
+    /**
+     * Rows and bytes per table for the whole schema, from the product's optimizer statistics.
+     *
+     * <p>Deliberately separate from {@link #estimateRowCount}: that method falls back to
+     * {@code COUNT(*)} for a table without statistics, which is affordable for the handful of
+     * tables a sync cycle reads and ruinous for a planner listing thousands. Here a missing
+     * number is reported as {@code null}, and a dictionary this reader cannot query is an empty
+     * map — the caller decides whether to pay for an exact count.
+     *
+     * <p>One schema-wide query per product, keyed by the case the product stores, so callers
+     * match names case-insensitively. Never throws: a catalog query that fails is a listing of
+     * unknowns, not an error the page must handle.
+     */
+    default Map<String, TableStat> estimateTableStats(Connection conn, String schema) {
+        return Map.of();
+    }
 }

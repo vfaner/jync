@@ -11,6 +11,9 @@
             <p class="sub" th:text="#{project.listHint}">Source-to-target synchronization projects</p>
         </div>
         <div class="page-actions" th:if="${isAdmin}">
+            <a class="btn btn-ghost btn-sm" th:href="@{/projects/bulk}">
+                <svg class="ico"><use href="#diagram-3"/></svg><span th:text="#{project.bulk.button}">Bulk create</span>
+            </a>
             <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
             </a>

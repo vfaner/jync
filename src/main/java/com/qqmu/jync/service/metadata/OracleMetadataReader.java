@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -295,6 +296,19 @@ public class OracleMetadataReader extends GenericMetadataReader {
             log.debug("ALL_TABLES estimate failed for {}: {}", tableName, e.getMessage());
         }
         return super.estimateRowCount(conn, schema, tableName);
+    }
+
+    @Override
+    public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
+        // NUM_ROWS and AVG_ROW_LEN come from the same dictionary row, so the byte estimate
+        // costs nothing extra. Both are null until the table has been analyzed, and the product
+        // is selected through ALL_TABLES so a schema the account cannot see simply returns
+        // fewer rows rather than failing the whole listing.
+        return queryTableStats(conn,
+                "SELECT TABLE_NAME, NUM_ROWS AS ROW_EST,"
+                        + " NUM_ROWS * AVG_ROW_LEN AS TOTAL_BYTES"
+                        + " FROM ALL_TABLES WHERE OWNER = NVL(?, USER)",
+                upperOrNull(schema));
     }
 
     private String upperOrNull(String s) {

@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
@@ -131,6 +132,19 @@ public class MySQLMetadataReader extends GenericMetadataReader {
             log.debug("information_schema row estimate failed for {}: {}", tableName, e.getMessage());
         }
         return super.estimateRowCount(conn, schema, tableName);
+    }
+
+    @Override
+    public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
+        // TABLE_ROWS is InnoDB's estimate — good enough to rank and bin tables, and free.
+        // Views are excluded: their TABLE_ROWS is null and they are not sync targets here.
+        return queryTableStats(conn,
+                "SELECT TABLE_NAME, TABLE_ROWS AS ROW_EST,"
+                        + " COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS TOTAL_BYTES"
+                        + " FROM information_schema.TABLES"
+                        + " WHERE TABLE_SCHEMA = COALESCE(?, DATABASE())"
+                        + " AND TABLE_TYPE = 'BASE TABLE'",
+                blankToNull(schema));
     }
 
     static String blankToNull(String s) {

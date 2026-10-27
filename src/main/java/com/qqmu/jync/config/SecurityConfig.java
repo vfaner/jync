@@ -66,6 +66,10 @@ public class SecurityConfig {
     private static final String[] ADMIN_ONLY_GET = {
             "/databases/new", "/databases/*/edit",
             "/projects/new", "/projects/*/edit",
+            // The bulk wizard reads a whole source's table listing and creates tasks in one
+            // go; the POSTs are admin-only by the blanket rule below, so the GET must be too
+            // — otherwise a viewer is shown a form whose every submit is refused.
+            "/projects/bulk",
             "/ai/new", "/ai/*/edit",
             // The external-authentication page holds the endpoints credentials are sent to and
             // the shared secret's configuration; a viewer has no use for it, and its Save button

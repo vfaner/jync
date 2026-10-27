@@ -75,7 +75,7 @@ class EnglishUiLeakTest {
     @ParameterizedTest
     @ValueSource(strings = {
             "/", "/dashboard",
-            "/projects", "/projects/new",
+            "/projects", "/projects/new", "/projects/bulk",
             "/databases", "/databases/new",
             "/ai", "/ai/new",
             "/settings",

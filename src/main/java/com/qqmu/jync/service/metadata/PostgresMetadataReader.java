@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
@@ -213,5 +214,18 @@ public class PostgresMetadataReader extends GenericMetadataReader {
             log.debug("reltuples estimate failed for {}: {}", tableName, e.getMessage());
         }
         return super.estimateRowCount(conn, schema, tableName);
+    }
+
+    @Override
+    public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
+        // 'r' is a plain table, 'p' a declarative partitioned parent (its size includes the
+        // children, so binning by it is right). reltuples is -1 until the table is analyzed,
+        // which the shared parser reports as unknown rather than as "empty".
+        return queryTableStats(conn,
+                "SELECT c.relname AS TABLE_NAME, c.reltuples::bigint AS ROW_EST,"
+                        + " pg_total_relation_size(c.oid) AS TOTAL_BYTES"
+                        + " FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+                        + " WHERE n.nspname = ? AND c.relkind IN ('r', 'p')",
+                schemaPattern(schema));
     }
 }

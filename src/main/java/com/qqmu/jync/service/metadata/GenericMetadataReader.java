@@ -2,6 +2,7 @@ package com.qqmu.jync.service.metadata;
 
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -687,6 +688,47 @@ public class GenericMetadataReader implements MetadataReader {
         }
         countCache.put(cacheKey, new TimedCount(now, count));
         return count;
+    }
+
+    /**
+     * Runs one product statistics query and parses the shape every override produces:
+     * {@code TABLE_NAME}, {@code ROW_EST} and {@code TOTAL_BYTES}, one row per table.
+     *
+     * <p>Shared so that the five overrides differ only in their SQL — the "unknown" rules stay
+     * in one place: a null, zero or negative number means the dictionary has no usable value
+     * (InnoDB's not-yet-analyzed {@code TABLE_ROWS}, PostgreSQL's {@code reltuples = -1},
+     * DB2's {@code CARD = -1}), and an unreadable dictionary yields an empty map. Neither is an
+     * exception: a planner page listing thousands of tables must render rather than fail, and
+     * must never be tempted to fall back to {@code COUNT(*)} behind the user's back.
+     */
+    protected Map<String, MetadataReader.TableStat> queryTableStats(Connection conn, String sql,
+                                                                   String schemaParam) {
+        Map<String, MetadataReader.TableStat> stats = new LinkedHashMap<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, schemaParam);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String name = rs.getString("TABLE_NAME");
+                    if (name == null) {
+                        continue;
+                    }
+                    stats.put(name, new MetadataReader.TableStat(
+                            positiveOrNull(rs, "ROW_EST"), positiveOrNull(rs, "TOTAL_BYTES")));
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("Catalog statistics unavailable ({}); every table reports unknown",
+                    e.getMessage());
+            return Map.of();
+        }
+        return stats;
+    }
+
+    /** A statistics column as the planner reads it: null when unset, zero or negative. */
+    private static Long positiveOrNull(ResultSet rs, String column) throws SQLException {
+        long value = rs.getLong(column);
+        return rs.wasNull() || value <= 0 ? null : value;
     }
 
     protected String quote(Connection conn, String identifier) throws SQLException {

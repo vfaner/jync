@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
@@ -146,5 +147,24 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
             log.debug("sys.partitions estimate failed for {}: {}", tableName, e.getMessage());
         }
         return super.estimateRowCount(conn, schema, tableName);
+    }
+
+    @Override
+    public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
+        // One row per table: partition rows summed over index_id 0/1 (heap or clustered index,
+        // which is the row count), pages summed over that partition's allocation units. The
+        // LEFT JOIN matters — a table with no allocated pages yet still lists, with an unknown
+        // size rather than a zero that would rank it as empty.
+        return queryTableStats(conn,
+                "SELECT t.name AS TABLE_NAME, SUM(p.rows) AS ROW_EST,"
+                        + " SUM(a.total_pages) * 8192 AS TOTAL_BYTES"
+                        + " FROM sys.tables t"
+                        + " JOIN sys.schemas s ON s.schema_id = t.schema_id"
+                        + " JOIN sys.partitions p ON p.object_id = t.object_id"
+                        + " AND p.index_id IN (0, 1)"
+                        + " LEFT JOIN sys.allocation_units a ON a.container_id = p.partition_id"
+                        + " WHERE s.name = ?"
+                        + " GROUP BY t.name",
+                schemaPattern(schema));
     }
 }

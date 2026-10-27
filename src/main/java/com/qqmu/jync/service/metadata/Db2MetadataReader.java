@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Locale;
+import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
@@ -133,6 +134,18 @@ public class Db2MetadataReader extends GenericMetadataReader {
             log.debug("SYSCAT.TABLES estimate failed for {}: {}", tableName, e.getMessage());
         }
         return super.estimateRowCount(conn, schema, tableName);
+    }
+
+    @Override
+    public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
+        // SYSCAT.TABLES.CARD is the statistics row count (-1 until RUNSTATS). DB2 has no
+        // per-table byte total in this view without joining tablespaces, so the size stays
+        // unknown and the planner bins by rows alone — which is what it does everywhere.
+        return queryTableStats(conn,
+                "SELECT TABNAME AS TABLE_NAME, CARD AS ROW_EST,"
+                        + " CAST(NULL AS BIGINT) AS TOTAL_BYTES"
+                        + " FROM SYSCAT.TABLES WHERE TABSCHEMA = ? AND TYPE = 'T'",
+                schemaPattern(schema));
     }
 
     private String trim(String s) {
