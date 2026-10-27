@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.ChangeEvent;
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -279,9 +280,15 @@ public class SyncEngine {
                     ctx.getConfig().isSyncViews(), ctx.getConfig().isSyncProcedures());
         }
 
-        // Row estimates decide whether full comparison is affordable, so collect them here
-        // while the source connection is already open.
-        if (ctx.getConfig().isSyncData()) {
+        // Row estimates are a catalog round trip per table per cycle, so collect them here
+        // only when a consumer reads every table's number. Deletion detection caps its key
+        // scan by table size, and an explicit FULL_COMPARE project warns about (and banners)
+        // the tables it re-reads each cycle — both need the whole set. Everything else reaches
+        // the estimate only through the automatic-strategy fallback, which asks about the one
+        // table that has no cursor candidate at all; that table fetches its own estimate in
+        // syncOneTable. Collecting for every table there is pure cost: a 2000-table project
+        // over a 20 ms link would spend 40 s per cycle on numbers nobody reads.
+        if (ctx.getConfig().isSyncData() && rowEstimatesAreReadForEveryTable(ctx.getConfig())) {
             for (TableMeta table : meta.getTables()) {
                 try {
                     table.setApproximateRowCount(ctx.getSourceReader()
@@ -292,6 +299,19 @@ public class SyncEngine {
             }
         }
         return meta;
+    }
+
+    /**
+     * Whether this task's data phase reads the row estimate of <em>every</em> table.
+     *
+     * <p>Deletion detection asks "is this table small enough to scan its whole key set", and
+     * an explicit full-comparison task warns and banners from the same numbers — so those two
+     * configurations need the set up front. A polling task with delete detection off reads
+     * the estimate only at the strategy fallback (see {@link #syncOneTable}).
+     */
+    private static boolean rowEstimatesAreReadForEveryTable(SyncConfig config) {
+        return config.isSyncDeletes()
+                || config.getCaptureStrategyOrDefault() == CaptureStrategy.FULL_COMPARE;
     }
 
     /**
@@ -958,6 +978,23 @@ public class SyncEngine {
         long tableStart = System.currentTimeMillis();
         SyncProgress progress = stateWriter.loadOrCreateProgress(ctx.projectId(), table.getName());
         CursorStrategy strategy = cursorResolver.resolve(table, ctx.getConfig());
+        if (strategy.getKind() == CursorStrategy.Kind.NONE
+                && table.getApproximateRowCount() == null
+                && ctx.getConfig().isSyncData()) {
+            // The resolver fell through every cursor candidate and stopped at the step whose
+            // answer depends on the table's size — which this cycle did not fetch, because
+            // nothing else reads it (see readSourceMetadata). Pay the catalog round trip for
+            // this one table and let the resolver decide again: without it a small keyless
+            // table is parked as "size unknown, too large to compare" and never re-read,
+            // where before it was fully compared every cycle.
+            try {
+                table.setApproximateRowCount(ctx.getSourceReader()
+                        .estimateRowCount(sourceConn, ctx.getSourceSchema(), table.getName()));
+                strategy = cursorResolver.resolve(table, ctx.getConfig());
+            } catch (SQLException e) {
+                log.debug("Row estimate failed for {}: {}", table.getName(), e.getMessage());
+            }
+        }
 
         // 目标表可能被手动删除了，或者快照与实际状态不同步。
         // 在开始数据同步前确认一下，缺失就用源表结构建一张，避免后续 upsert 整批失败。
