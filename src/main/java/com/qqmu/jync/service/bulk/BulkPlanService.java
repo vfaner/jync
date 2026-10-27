@@ -29,6 +29,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -132,6 +133,10 @@ public class BulkPlanService {
         if (target.getRole() != null && target.getRole() != ConnectionRole.TARGET) {
             throw new IllegalArgumentException("error.project.bulk.target.role");
         }
+        // Refuse a strategy the source cannot serve BEFORE the listing is read: the preview
+        // must not present a plan that create() would then reject in saveConfig, and a bogus
+        // strategy name has no reason to cost a source connect at all.
+        CaptureStrategyParser.parseRequested(request.captureStrategy(), source.getType());
         MetadataReader reader = metadataReaderFactory.forType(source.getType(),
                 source.resolvedFamily());
 

@@ -252,6 +252,29 @@ class BulkPlanServiceTest {
                 .hasMessage("error.project.bulk.taskcount.invalid");
     }
 
+    @Test
+    void aStrategyTheSourceCannotSupportIsRefusedBeforeAnyConnectionIsOpened() {
+        // 预览页只校验表单,直连 POST 可以带任意策略;旧实现要等到 create() 里
+        // saveConfig 才拒绝,而那时预览已经展示了一份注定建不出来的计划。
+        // 契约:布局阶段就按源库类型拒绝,连接都不开。
+        assertThatThrownBy(() -> service().plan(
+                new BulkPlanRequest(1L, 2L, 2, "t", "LOGMINER_CDC", false)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.oracle");
+
+        verify(dataSourceManager, never()).createTransientDataSource(any());
+    }
+
+    @Test
+    void anUnknownStrategyNameIsRefusedBeforeAnyConnectionIsOpened() {
+        assertThatThrownBy(() -> service().plan(
+                new BulkPlanRequest(1L, 2L, 2, "t", "FOO", false)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.strategy.invalid");
+
+        verify(dataSourceManager, never()).createTransientDataSource(any());
+    }
+
     /**
      * 精确统计的单句超时固定 15 秒,整页预算 120 秒;最后一句若仍按 15 秒计,整页可跑到
      * 135 秒。超时必须被剩余预算夹住。

@@ -39,7 +39,6 @@ import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ChunkCheckpoint;
 import com.qqmu.jync.model.DatabaseConfig;
-import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
@@ -470,34 +469,17 @@ public class ProjectService {
         }
         // Read the OLD strategy off the row before it is overwritten below.
         CaptureStrategy oldStrategy = CaptureStrategyParser.parse(project.getSyncConfig());
-        CaptureStrategy requested = null;
-        if (captureStrategy != null && !captureStrategy.isBlank()) {
-            try {
-                requested = CaptureStrategy.valueOf(captureStrategy.trim());
-            } catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("error.project.strategy.invalid");
-            }
-            // The endpoint is resolved for every explicit strategy submission, so the CDC
-            // gate always checks against the real source type (strict == MYSQL: MariaDB
-            // and the MySQL-wire compatibles speak a different binlog dialect).
-            DatabaseConfig source = project.getSourceDbId() == null ? null
-                    : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
-            if (requested == CaptureStrategy.BINLOG_CDC
-                    && (source == null || source.getType() != DatabaseType.MYSQL)) {
-                throw new IllegalArgumentException("error.project.cdc.not.mysql");
-            }
-            if (requested == CaptureStrategy.LOGMINER_CDC
-                    && (source == null || source.getType() != DatabaseType.ORACLE)) {
-                throw new IllegalArgumentException("error.project.cdc.not.oracle");
-            }
-            if (requested == CaptureStrategy.PG_LOGICAL_CDC
-                    && (source == null || source.getType() != DatabaseType.POSTGRESQL)) {
-                throw new IllegalArgumentException("error.project.cdc.not.postgres");
-            }
-            if (requested == CaptureStrategy.SQLSERVER_CDC
-                    && (source == null || source.getType() != DatabaseType.SQLSERVER)) {
-                throw new IllegalArgumentException("error.project.cdc.not.sqlserver");
-            }
+        // The endpoint is resolved for every explicit strategy submission, so the CDC gate
+        // always checks against the real source type (strict == MYSQL: MariaDB and the
+        // MySQL-wire compatibles speak a different binlog dialect). The gate itself lives in
+        // CaptureStrategyParser so the bulk planner cannot accept what this path refuses.
+        DatabaseConfig source = captureStrategy == null || captureStrategy.isBlank()
+                || project.getSourceDbId() == null
+                ? null
+                : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
+        CaptureStrategy requested = CaptureStrategyParser.parseRequested(captureStrategy,
+                source == null ? null : source.getType());
+        if (requested != null) {
             config.setCaptureStrategy(requested);
         }
         // Table selection and name mapping are topology: changing them under a running

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
+import com.qqmu.jync.model.DatabaseType;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -35,6 +36,45 @@ public final class CaptureStrategyParser {
 
     public static CaptureStrategy parse(String json) {
         return parse(json, null);
+    }
+
+    /**
+     * The strategy a form submitted, validated against the source it will read.
+     *
+     * <p>Shared by every save path that accepts a strategy name ({@code ProjectService.saveConfig}
+     * and the bulk planner), so the acceptance rules cannot skew between the two. Only the
+     * endpoint's own type is accepted for each CDC strategy: the MySQL-wire compatibles speak a
+     * different binlog dialect, so a "close enough" type check would route to a consumer that
+     * cannot read the stream.
+     *
+     * @param requested the submitted name, or null/blank to leave the current strategy alone
+     * @param sourceType the source connection's product, or null when it cannot be resolved
+     * @return the parsed strategy, or null when nothing was submitted
+     * @throws IllegalArgumentException with an i18n key the page knows how to translate
+     */
+    public static CaptureStrategy parseRequested(String requested, DatabaseType sourceType) {
+        if (requested == null || requested.isBlank()) {
+            return null;
+        }
+        CaptureStrategy strategy;
+        try {
+            strategy = CaptureStrategy.valueOf(requested.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("error.project.strategy.invalid");
+        }
+        if (strategy == CaptureStrategy.BINLOG_CDC && sourceType != DatabaseType.MYSQL) {
+            throw new IllegalArgumentException("error.project.cdc.not.mysql");
+        }
+        if (strategy == CaptureStrategy.LOGMINER_CDC && sourceType != DatabaseType.ORACLE) {
+            throw new IllegalArgumentException("error.project.cdc.not.oracle");
+        }
+        if (strategy == CaptureStrategy.PG_LOGICAL_CDC && sourceType != DatabaseType.POSTGRESQL) {
+            throw new IllegalArgumentException("error.project.cdc.not.postgres");
+        }
+        if (strategy == CaptureStrategy.SQLSERVER_CDC && sourceType != DatabaseType.SQLSERVER) {
+            throw new IllegalArgumentException("error.project.cdc.not.sqlserver");
+        }
+        return strategy;
     }
 
     /** @param projectId when known, only used to make the degrade warning actionable. */
