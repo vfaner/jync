@@ -169,11 +169,15 @@ public final class CdcEventApplier {
             throws SQLException {
         List<String> columns = binding.columnNames();
         List<String> pkColumns = binding.pkNames();
+        // One map for both consumers: the insert SQL's placeholder types and the per-row
+        // binding below. Building it twice walked every column (and re-mapped each vendor
+        // type) twice per flushed transaction.
+        Map<String, Integer> types = binding.typeByColumn(
+                ctx.getTargetDialect(), ctx.effectiveSourceType());
         String updateSql = generic.getUpdateByPkSql(
                 ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns);
         String insertSql = ctx.getTargetDialect().getUpsertSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), columns, List.of(),
-                binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType()));
+                ctx.getTargetSchema(), binding.getTargetTable(), columns, List.of(), types);
 
         List<String> updateBindOrder = new ArrayList<>();
         if (updateSql != null) {
@@ -186,7 +190,6 @@ public final class CdcEventApplier {
             updateBindOrder.addAll(pkColumns);
         }
 
-        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType());
         try (PreparedStatement insert = targetConn.prepareStatement(insertSql);
              PreparedStatement update = updateSql == null ? null
                      : targetConn.prepareStatement(updateSql)) {

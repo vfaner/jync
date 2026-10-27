@@ -979,8 +979,7 @@ public class SyncEngine {
         SyncProgress progress = stateWriter.loadOrCreateProgress(ctx.projectId(), table.getName());
         CursorStrategy strategy = cursorResolver.resolve(table, ctx.getConfig());
         if (strategy.getKind() == CursorStrategy.Kind.NONE
-                && table.getApproximateRowCount() == null
-                && ctx.getConfig().isSyncData()) {
+                && table.getApproximateRowCount() == null) {
             // The resolver fell through every cursor candidate and stopped at the step whose
             // answer depends on the table's size — which this cycle did not fetch, because
             // nothing else reads it (see readSourceMetadata). Pay the catalog round trip for
