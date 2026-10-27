@@ -82,7 +82,7 @@
 | 增量同步 | 时间戳 / 行级 SCN / 自增列 / 全表比对自动选策略；一条游标区间查询；水位线安全回退；游标提交后推进 |
 | 日志 CDC | MySQL binlog、Oracle LogMiner、PostgreSQL 逻辑解码、SQL Server CDC；长驻线程流式回放，秒级延迟 |
 | 结构同步 | 表、索引、视图、存储过程/函数；类型映射、函数转换、标识符引号、分页语法、DDL 覆盖 |
-| 数据加工 | 列清洗（7 种规则）、表名映射、只读数据预览、按需行数核对、任务克隆 |
+| 数据加工 | 列清洗（7 种规则）、表名映射、只读数据预览、按需行数核对、任务克隆、批量建任务（按表大小分箱） |
 | 可靠性 | 幂等 upsert、检查点续传、数据库租约锁、at-least-once、停机变更自动补齐 |
 | 可观测 | 看板、变更日志、审计日志、系统日志、每表吞吐日志与 CDC 状态面板、按需行数核对 |
 | 交付形态 | jar / Docker / Kubernetes；中英双语、昼夜主题；响应式布局，手机浏览器可用；本地账号与三种统一认证 |
@@ -418,7 +418,7 @@ mvn clean package -DskipTests
 cp target/jync.jar /opt/jync/
 ```
 
-国内可用 Gitee：`git clone https://gitee.com/super_rgh/jync.git`，或 AtomGit 镜像：`git clone https://gitcode.com/vfaner/jync.git`。不跳过测试会执行约 2500 个用例。
+国内可用 Gitee：`git clone https://gitee.com/super_rgh/jync.git`，或 AtomGit 镜像：`git clone https://gitcode.com/vfaner/jync.git`。不跳过测试会执行约 2700 个用例。
 
 ### 3. 生产配置
 
@@ -785,7 +785,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**2604 个测试：2603 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
+**2683 个测试：2682 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
 
 重点覆盖：
 

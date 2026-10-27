@@ -82,7 +82,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | Incremental sync | Timestamp, row SCN, identity column or full comparison, selected automatically; one cursor-range query; safety-lagged watermark; cursor advances only after commit |
 | Log CDC | MySQL binlog, Oracle LogMiner, PostgreSQL logical decoding, SQL Server CDC; long-lived streaming replay with second-level latency |
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
-| Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, on-demand row-count audit, task cloning |
+| Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
 | Reliability | Idempotent upsert, checkpoint resume, database leases, at-least-once delivery, automatic catch-up after downtime |
 | Observability | Dashboard, change log, audit log, system log, per-table throughput log and CDC status panel, on-demand row-count audit |
 | Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout usable on phones; local accounts plus three SSO modes |
@@ -417,7 +417,7 @@ mvn clean package -DskipTests
 cp target/jync.jar /opt/jync/
 ```
 
-In mainland China, clone from Gitee: `git clone https://gitee.com/super_rgh/jync.git`, or the AtomGit mirror: `git clone https://gitcode.com/vfaner/jync.git`. Without `-DskipTests`, about 2,500 test cases run.
+In mainland China, clone from Gitee: `git clone https://gitee.com/super_rgh/jync.git`, or the AtomGit mirror: `git clone https://gitcode.com/vfaner/jync.git`. Without `-DskipTests`, about 2,700 test cases run.
 
 ### 3. Production configuration
 
@@ -785,7 +785,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**2604 tests: 2603 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
+**2683 tests: 2682 pass, and 1 Linux-only key-file permission case is skipped on macOS.**
 
 Coverage highlights:
 
