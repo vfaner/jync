@@ -133,7 +133,12 @@
                 <div class="alert alert-warn" th:if="${!plan.catalogStatsUsed() and !plan.exactStatsUsed()}">
                     <div class="alert-body">
                         <div th:text="#{project.bulk.no.catalog}">No catalog statistics.</div>
-                        <div th:text="#{project.bulk.no.catalog.exact}">Enable exact counting if you need sizes.</div>
+                        <!-- Telling the user to tick a box they already ticked reads as a page bug;
+                             say what actually happened instead. -->
+                        <div th:unless="${request.exactStats()}"
+                             th:text="#{project.bulk.no.catalog.exact}">Enable exact counting if you need sizes.</div>
+                        <div th:if="${request.exactStats()}"
+                             th:text="#{project.bulk.no.catalog.exact.failed}">Exact counting returned no row counts either.</div>
                     </div>
                 </div>
                 <div class="alert alert-warn" th:if="${plan.exactStatsTruncated()}">

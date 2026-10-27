@@ -8,8 +8,8 @@ ${AnsiColor.BRIGHT_CYAN}
 ${AnsiColor.BRIGHT_BLUE}
  :: 捷同 (Jync) :: 数据库实时同步引擎 ::
 ${AnsiColor.BRIGHT_BLACK}
- Version    : v1.8.0
- Author     : 任冠华 (沐沐开源工坊)
+ Version    : v${app.version}
+ Author     : 沐沐开源工坊
  License    : MIT License
  Website    : https://jync.qqmu.com
 ${AnsiColor.DEFAULT}

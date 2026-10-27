@@ -70,6 +70,9 @@ server:
         secure: ${JYN_COOKIE_SECURE:false}
 
 app:
+  # The banner reads this; @project.version@ is filtered from pom.xml at build time,
+  # so the startup banner follows the POM without a second place to edit.
+  version: @project.version@
   login:
     # 应急开关：关闭本地登录后如果外部认证不可用，以 JYN_RESET_LOGIN=true 启动一次，
     # 就会把本地登录重新打开并保存；修好外部配置后去掉该变量并重启。

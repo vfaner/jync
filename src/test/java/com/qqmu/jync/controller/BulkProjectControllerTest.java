@@ -166,6 +166,32 @@ class BulkProjectControllerTest {
     }
 
     @Test
+    void aPlanWithoutStatisticsDoesNotTellTheUserToTickWhatIsAlreadyTicked() throws Exception {
+        // Exact counting was requested and still produced nothing (the source refuses
+        // COUNT(*), or every table vanished between listing and counting). Telling the user
+        // to tick the box they ticked reads as a bug in the page.
+        when(bulkPlanService.plan(any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
+                List.of(new TaskPlan("批量任务-01",
+                        List.of(new TableEntry("orders", null, null, StatsSource.NONE)),
+                        0L)),
+                1, 0L, 1, false, false, false, false));
+
+        mvc.perform(post("/projects/bulk/preview").with(csrf())
+                        .param("sourceDbId", "1")
+                        .param("targetDbId", "2")
+                        .param("taskCount", "1")
+                        .param("namePrefix", "批量任务")
+                        .param("exactStats", "true")
+                        .param("lang", "en"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("returned no catalog statistics")))
+                .andExpect(content().string(
+                        not(containsString("Tick \"Count exact rows\" above"))))
+                .andExpect(content().string(
+                        containsString("Exact counting returned no row counts either")));
+    }
+
+    @Test
     void exactCountsSuppressTheNoCatalogWarning() throws Exception {
         // Exact counting already filled every size; the catalog warning would contradict
         // the numbers in the table right below it.
