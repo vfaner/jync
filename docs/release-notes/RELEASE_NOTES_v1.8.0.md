@@ -39,6 +39,7 @@
 
 ## 修复
 
+- **CDC 批量写入不再退化为平方复杂度**：事务内同一主键的多个镜像此前靠逐个扫描折叠，批量 `REPLACE`/`MERGE` 或数据修复会随事务行数呈平方增长——十万行的事务光折叠就要二十多秒，消费线程期间不推进位点。现在按主键索引折叠，代价随行数线性；同一事务内同一行的多个镜像只按最终结果下发一次，目标端语句也更少。
 - **源库删表只在能看见整个 schema 时联动**：源库账户被收回单表授权时，该表会从清单里消失，与真删表同形，此前会把目标表一起删掉。现在只有能看见整个 schema（表属主、库级 `SELECT`、`SELECT ANY TABLE`、SQL Server `VIEW DEFINITION`，PostgreSQL 系恒可见）时才把清单缺项当作删表，否则保留目标表并告警一次。
 - **目标表被重建后重置进度**：不再沿用旧游标在空表上跑增量窗口，改为按首次加载重新灌入，变更日志正确记为插入。
 - **CDC 停车/停机时释放连接**：不再残留 keepalive 拉流，避免继续占用同一 `server_id` 把其他实例踢下线。
@@ -61,7 +62,7 @@
 - **新增表**：`oa_auth_config`、`update_artifact_dismissal` 由 `ddl-auto=update` 首次启动自动创建；随 `./data` 一起备份。
 - **新增配置/环境变量**：`app.update-check.match-artifact`（默认 `true`）、`sync.stuck-threshold-ms`（默认 `1800000`，0 关闭）、`sync.cdc.max-transaction-rows`（默认 1000000）、`sync.cdc.max-transaction-bytes`（默认 536870912，0 表示该维度不限）、`JYN_RESET_LOGIN`、`JYN_COOKIE_SAME_SITE`（默认 `lax`，iframe 嵌入需配合 HTTPS 设为 `None`）。
 - **旧地址**：`/oa/settings` 保留为 302 → `/external-auth`（仅 GET）。
-- **同步行为不变**：同步数据路径与类型映射不变；本次只新增 CDC 缓冲上限、补齐 PostgreSQL 对象发现，并修正 CDC 停车时的连接释放。
+- **同步行为不变**：同步数据路径与类型映射不变；本次新增 CDC 缓冲上限、把 CDC 事务折叠改为线性、补齐 PostgreSQL 对象发现，并修正 CDC 停车时的连接释放。
 
 ## 测试与升级
 
