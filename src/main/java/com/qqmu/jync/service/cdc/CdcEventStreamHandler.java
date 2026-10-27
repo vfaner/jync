@@ -55,11 +55,32 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     /** One source table's buffered changes inside the current transaction. */
     public static final class TableChange {
         public final CdcTableBinding binding;
-        public final List<Map<String, Object>> upserts = new ArrayList<>();
-        public final List<Map<String, Object>> deletes = new ArrayList<>();
+        /**
+         * Folded net changes, keyed by PK. Keyed rather than scanned so a bulk REPLACE
+         * (DELETE+INSERT of the same PKs) folds in linear time — the list version was
+         * O(n²) on exactly that shape, which a million-row transaction made a hang.
+         * Insertion order is the order of each key's LAST occurrence, matching the old
+         * last-op-wins result.
+         */
+        private final Map<List<Object>, Map<String, Object>> upserts = new LinkedHashMap<>();
+        private final Map<List<Object>, Map<String, Object>> deletes = new LinkedHashMap<>();
 
         TableChange(CdcTableBinding binding) {
             this.binding = binding;
+        }
+
+        /** Net upserts, ready to apply; each call returns a fresh list. */
+        public List<Map<String, Object>> upserts() {
+            return new ArrayList<>(upserts.values());
+        }
+
+        /** Net deletes, ready to apply; each call returns a fresh list. */
+        public List<Map<String, Object>> deletes() {
+            return new ArrayList<>(deletes.values());
+        }
+
+        boolean isEmpty() {
+            return upserts.isEmpty() && deletes.isEmpty();
         }
     }
 
@@ -605,7 +626,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     private void flushTransaction(long pos) {
         List<TableChange> changes = new ArrayList<>();
         for (TableChange change : buffered.values()) {
-            if (!change.upserts.isEmpty() || !change.deletes.isEmpty()) {
+            if (!change.isEmpty()) {
                 changes.add(change);
             }
         }
@@ -689,23 +710,27 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      * upsert drops any buffered delete of the same PK; appending a delete drops any
      * buffered upsert of the same PK.
      *
-     * <p>Cost: one O(n) scan of the opposite list per append — fine for typical small CDC
-     * transactions; a rare bulk {@code REPLACE ... SELECT} pays a one-time quadratic.
+     * <p>Cost: O(1) per append on top of the PK tuple — the buffers are keyed maps, so a
+     * bulk {@code REPLACE ... SELECT} that touches every key twice stays linear.
      *
      * <p>Key identity (including {@code byte[]} PK columns) is {@link CdcPrimaryKey}'s:
      * binary keys compare by content, never by array identity.
      */
     private void appendUpsert(TableChange change, Map<String, Object> row) {
         List<Object> key = CdcPrimaryKey.of(row, change.binding);
-        change.deletes.removeIf(buffered -> CdcPrimaryKey.of(buffered, change.binding).equals(key));
-        change.upserts.add(row);
+        // remove-then-put: the last image wins and moves to the end, so the batch stays
+        // in source order without keeping the superseded copies.
+        change.deletes.remove(key);
+        change.upserts.remove(key);
+        change.upserts.put(key, row);
         budget.add(row);
     }
 
     private void appendDelete(TableChange change, Map<String, Object> row) {
         List<Object> key = CdcPrimaryKey.of(row, change.binding);
-        change.upserts.removeIf(buffered -> CdcPrimaryKey.of(buffered, change.binding).equals(key));
-        change.deletes.add(row);
+        change.upserts.remove(key);
+        change.deletes.remove(key);
+        change.deletes.put(key, row);
         budget.add(row);
     }
 

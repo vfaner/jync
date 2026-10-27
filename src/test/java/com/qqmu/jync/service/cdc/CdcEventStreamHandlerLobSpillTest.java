@@ -57,7 +57,7 @@ class CdcEventStreamHandlerLobSpillTest {
         CdcEventStreamHandler handler = handler((changes, mark) -> {
             spillFilesDuringApply.add((int) spillFiles());
             // Read it while the sink is running: the files are released right after.
-            LobValue value = (LobValue) changes.get(0).upserts.get(0).get("BODY");
+            LobValue value = (LobValue) changes.get(0).upserts().get(0).get("BODY");
             try {
                 bodySeenBySink = CdcLobSpillerTest.read(value);
             } catch (IOException e) {
@@ -70,7 +70,7 @@ class CdcEventStreamHandlerLobSpillTest {
         xid(handler);
 
         assertThat(applied).hasSize(1);
-        Map<String, Object> row = applied.get(0).upserts.get(0);
+        Map<String, Object> row = applied.get(0).upserts().get(0);
         assertThat(row.get("BODY")).isInstanceOf(LobValue.class);
         assertThat(bodySeenBySink).isEqualTo("中".repeat(100));
         assertThat(spillFilesDuringApply).containsExactly(1);

@@ -468,8 +468,8 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 originalAutoCommit = target.getAutoCommit();
                 target.setAutoCommit(false);
                 for (CdcEventStreamHandler.TableChange tc : changes) {
-                    applier.applyUpserts(target, tc.binding, tc.upserts);
-                    applier.applyDeletes(target, tc.binding, tc.deletes);
+                    applier.applyUpserts(target, tc.binding, tc.upserts());
+                    applier.applyDeletes(target, tc.binding, tc.deletes());
                 }
                 target.commit();
             } catch (Exception e) {

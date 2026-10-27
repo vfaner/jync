@@ -5,7 +5,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -355,8 +354,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         long projectId = project.getId();
         int batchSize = (int) Math.min(Integer.MAX_VALUE, properties.getCdc().getPg().getBatchSize());
         int total = 0;
-        Map<CdcTableBinding, List<Map<String, Object>>> upserts = new LinkedHashMap<>();
-        Map<CdcTableBinding, List<Map<String, Object>>> deletes = new LinkedHashMap<>();
+        CdcTransactionBuffer tx = new CdcTransactionBuffer();
         CdcTransactionBudget budget = CdcTransactionBudget.from(properties);
         String lastCommitLsn = null;
         boolean originalAutoCommit = conn.getAutoCommit();
@@ -381,8 +379,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 // stale buffer makes a defensive re-peek (or any server
                                 // quirk) idempotent — buffered rows must never be flushed
                                 // as part of the wrong transaction.
-                                upserts.clear();
-                                deletes.clear();
+                                tx.clear();
                                 budget.reset();
                                 resetSpiller();
                                 continue;
@@ -394,10 +391,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 // otherwise the transaction is re-decoded next peek.
                                 // Empty transactions are confirmed too.
                                 String commitLsn = lsn;
-                                if (!upserts.isEmpty() || !deletes.isEmpty()) {
-                                    flushTransaction(projectId, commitLsn, upserts, deletes);
-                                    upserts.clear();
-                                    deletes.clear();
+                                if (!tx.isEmpty()) {
+                                    flushTransaction(projectId, commitLsn, tx);
+                                    tx.clear();
                                     budget.reset();
                                 }
                                 resetSpiller();
@@ -502,19 +498,18 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 continue;
                             }
                             if (change.op == PgTestDecodingParser.Op.DELETE) {
-                                appendDelete(upserts, deletes, binding, change.row);
+                                tx.delete(binding, change.row);
                                 budget.add(change.row);
                             } else {
                                 // Only upserts can carry large payloads to the target; a
                                 // delete binds primary keys alone and stays in memory.
-                                appendUpsert(upserts, deletes, binding,
-                                        spiller().spill(binding, change.row));
+                                tx.upsert(binding, spiller().spill(binding, change.row));
                                 budget.add(change.row);
                                 if (change.oldImage != null
                                         && CdcPrimaryKey.changed(change.oldImage, change.row, binding)) {
                                     // The key moved: the new image cannot locate the old row,
                                     // so delete it explicitly or it stays on the target forever.
-                                    appendDelete(upserts, deletes, binding, change.oldImage);
+                                    tx.delete(binding, change.oldImage);
                                     budget.add(change.oldImage);
                                 }
                             }
@@ -525,7 +520,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 if (!running || Thread.currentThread().isInterrupted()) {
                     break; // shutdown mid-drain; the slot was not advanced
                 }
-                boolean holdsHalfTransaction = !upserts.isEmpty() || !deletes.isEmpty();
+                boolean holdsHalfTransaction = !tx.isEmpty();
                 if (holdsHalfTransaction) {
                     if (rowsThisCall < batchSize) {
                         // Defensive only: peek cannot emit a half transaction (F-11).
@@ -534,7 +529,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                         log.warn("PG slot for project {} returned a half transaction ({}"
                                 + " buffered rows discarded, slot not advanced);"
                                 + " re-peeking next cycle",
-                                projectId, upserts.size() + deletes.size());
+                                projectId, tx.size());
                         break;
                     }
                     continue; // budget cut mid-stream: peek again (complete txns only)
@@ -544,7 +539,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 }
             }
             boolean clean = running && !Thread.currentThread().isInterrupted()
-                    && upserts.isEmpty() && deletes.isEmpty();
+                    && tx.isEmpty();
             // Source commit/rollback only closes the streaming transaction — slot
             // position is unaffected either way (F-11). Rollback on a non-clean exit
             // releases the cursor transaction without having advanced anything.
@@ -614,19 +609,19 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         }
     }
 
-    private void flushTransaction(long projectId, String commitLsn,
-                                  Map<CdcTableBinding, List<Map<String, Object>>> upserts,
-                                  Map<CdcTableBinding, List<Map<String, Object>>> deletes)
+    private void flushTransaction(long projectId, String commitLsn, CdcTransactionBuffer tx)
             throws Exception {
         Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
         boolean originalAutoCommit = true;
         try {
             originalAutoCommit = target.getAutoCommit();
             target.setAutoCommit(false);
-            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : upserts.entrySet()) {
+            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e
+                    : tx.upserts().entrySet()) {
                 applier.applyUpserts(target, e.getKey(), e.getValue());
             }
-            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : deletes.entrySet()) {
+            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e
+                    : tx.deletes().entrySet()) {
                 applier.applyDeletes(target, e.getKey(), e.getValue());
             }
             target.commit();
@@ -646,37 +641,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         // F-10:一个事务完整落库即证明毒事务已消失(DBA 补了列/目标恢复),连续失败
         // 计数必须清零 —— 否则偶发几次抖动后长期健康运行也会被老账 park。
         applyFailures.set(0);
-    }
-
-    /**
-     * Same-PK folding inside one transaction, the rule {@code CdcEventStreamHandler}'s
-     * FIX C and {@link SqlServerTxFold} already apply: the flusher runs every upsert
-     * before every delete (that order is what makes PK chains A→B, B→C land correctly),
-     * so a buffer holding an upsert AND a delete for one key applies them in the wrong
-     * order. A DELETE followed by an INSERT of the same key (REPLACE) is the common
-     * shape, and unfolded it leaves the target row deleted while the source has it.
-     * Appending an upsert therefore drops any buffered delete of that key, and vice versa.
-     */
-    private static void appendUpsert(Map<CdcTableBinding, List<Map<String, Object>>> upserts,
-                                     Map<CdcTableBinding, List<Map<String, Object>>> deletes,
-                                     CdcTableBinding binding, Map<String, Object> row) {
-        List<Object> key = CdcPrimaryKey.of(row, binding);
-        List<Map<String, Object>> buffered = deletes.get(binding);
-        if (buffered != null) {
-            buffered.removeIf(bufferedRow -> CdcPrimaryKey.of(bufferedRow, binding).equals(key));
-        }
-        upserts.computeIfAbsent(binding, k -> new ArrayList<>()).add(row);
-    }
-
-    private static void appendDelete(Map<CdcTableBinding, List<Map<String, Object>>> upserts,
-                                     Map<CdcTableBinding, List<Map<String, Object>>> deletes,
-                                     CdcTableBinding binding, Map<String, Object> row) {
-        List<Object> key = CdcPrimaryKey.of(row, binding);
-        List<Map<String, Object>> buffered = upserts.get(binding);
-        if (buffered != null) {
-            buffered.removeIf(bufferedRow -> CdcPrimaryKey.of(bufferedRow, binding).equals(key));
-        }
-        deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(row);
     }
 
     private boolean matchesProjectTable(String qualified) {

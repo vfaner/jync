@@ -145,7 +145,7 @@ class CdcEventStreamHandlerTest {
         xid(500L);
 
         assertThat(sink.changes).hasSize(1);
-        assertThat(sink.changes.get(0).upserts).hasSize(2);
+        assertThat(sink.changes.get(0).upserts()).hasSize(2);
         assertThat(sink.changes.get(0).binding.getTargetTable()).isEqualTo("orders_dst");
         CdcPositionMark mark = sink.marks.get(0);
         assertThat(mark.getPos()).isEqualTo(500L);
@@ -182,7 +182,7 @@ class CdcEventStreamHandlerTest {
         xid(600L);
 
         assertThat(sink.changes).hasSize(2);
-        assertThat(sink.changes.get(1).upserts).hasSize(2);
+        assertThat(sink.changes.get(1).upserts()).hasSize(2);
     }
 
     @Test
@@ -215,6 +215,23 @@ class CdcEventStreamHandlerTest {
     }
 
     @Test
+    void theSameRowTouchedTwiceInOneTransactionIsAppliedOnceWithTheLastImage() {
+        // A bulk REPLACE or a data-repair job can hit one PK several times inside a
+        // single source transaction. The net effect is the last image, so batching it
+        // once is what the fold already promises — and it is also what keeps the fold
+        // linear: the previous scan-per-append cost O(n^2) on exactly this shape.
+        tableMap(11L, "app", "orders");
+        write(11L, row(1L, "first"), row(2L, "other"), row(1L, "last"));
+        xid(500L);
+
+        assertThat(sink.changes.get(0).upserts()).hasSize(2);
+        assertThat(sink.changes.get(0).upserts())
+                .anySatisfy(u -> assertThat(u)
+                        .containsEntry("id", 1L)
+                        .containsEntry("name", "last"));
+    }
+
+    @Test
     void pkChangeEmitsDeletePlusUpsert() {
         // Review Focus #2:before=(1,"a") after=(2,"a") → delete 旧主键 + upsert 新行
         tableMap(11L, "app", "orders");
@@ -226,10 +243,10 @@ class CdcEventStreamHandlerTest {
         xid(301L);
 
         assertThat(sink.changes).hasSize(1);
-        assertThat(sink.changes.get(0).upserts).hasSize(1);
-        assertThat(sink.changes.get(0).upserts.get(0)).containsEntry("id", 2L);
-        assertThat(sink.changes.get(0).deletes).hasSize(1);
-        assertThat(sink.changes.get(0).deletes.get(0)).containsEntry("id", 1L);
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
+        assertThat(sink.changes.get(0).upserts().get(0)).containsEntry("id", 2L);
+        assertThat(sink.changes.get(0).deletes()).hasSize(1);
+        assertThat(sink.changes.get(0).deletes().get(0)).containsEntry("id", 1L);
     }
 
     @Test
@@ -241,8 +258,8 @@ class CdcEventStreamHandlerTest {
                 row(1L, "a"), row(1L, "b"))));
         handler.onEvent(event(EventType.EXT_UPDATE_ROWS, data, 310L));
         xid(311L);
-        assertThat(sink.changes.get(0).deletes).isEmpty();
-        assertThat(sink.changes.get(0).upserts).hasSize(1);
+        assertThat(sink.changes.get(0).deletes()).isEmpty();
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
     }
 
     /**
@@ -265,8 +282,8 @@ class CdcEventStreamHandlerTest {
         handler.onEvent(event(EventType.EXT_UPDATE_ROWS, data, 340L));
         xid(341L);
 
-        assertThat(sink.changes.get(0).upserts).hasSize(1);
-        assertThat(sink.changes.get(0).deletes).isEmpty();
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
+        assertThat(sink.changes.get(0).deletes()).isEmpty();
     }
 
     /**
@@ -291,8 +308,8 @@ class CdcEventStreamHandlerTest {
         handler.onEvent(event(EventType.EXT_WRITE_ROWS, write, 360L));
         xid(361L);
 
-        assertThat(sink.changes.get(0).deletes).isEmpty();
-        assertThat(sink.changes.get(0).upserts).hasSize(1);
+        assertThat(sink.changes.get(0).deletes()).isEmpty();
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
     }
 
     @Test
@@ -303,8 +320,8 @@ class CdcEventStreamHandlerTest {
         data.setRows(List.<Serializable[]>of(row(5L, "gone")));
         handler.onEvent(event(EventType.EXT_DELETE_ROWS, data, 320L));
         xid(321L);
-        assertThat(sink.changes.get(0).deletes).hasSize(1);
-        assertThat(sink.changes.get(0).deletes.get(0)).containsEntry("id", 5L);
+        assertThat(sink.changes.get(0).deletes()).hasSize(1);
+        assertThat(sink.changes.get(0).deletes().get(0)).containsEntry("id", 5L);
     }
 
     @Test
@@ -353,8 +370,8 @@ class CdcEventStreamHandlerTest {
         write(11L, row(2L, "b"));
         xid(400L);
         assertThat(sink.changes).hasSize(1);
-        assertThat(sink.changes.get(0).upserts).hasSize(1);
-        assertThat(sink.changes.get(0).upserts.get(0)).containsEntry("id", 2L);
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
+        assertThat(sink.changes.get(0).upserts().get(0)).containsEntry("id", 2L);
         assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(0L);
     }
 
@@ -373,7 +390,7 @@ class CdcEventStreamHandlerTest {
         assertThat(sink.changes).isEmpty(); // PREPARE 不是提交:尚未可见,不能 flush
         query("XA COMMIT 'gtrid2'");
         assertThat(sink.changes).hasSize(1);
-        assertThat(sink.changes.get(0).upserts.get(0)).containsEntry("id", 1L);
+        assertThat(sink.changes.get(0).upserts().get(0)).containsEntry("id", 1L);
         assertThat(sink.marks).hasSize(1);
         assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(0L);
 
@@ -493,8 +510,8 @@ class CdcEventStreamHandlerTest {
 
         query("XA COMMIT 'branchA'");
         assertThat(sink.changes).hasSize(1);
-        assertThat(sink.changes.get(0).upserts).hasSize(1);
-        assertThat(sink.changes.get(0).upserts.get(0)).containsEntry("id", 1L);
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
+        assertThat(sink.changes.get(0).upserts().get(0)).containsEntry("id", 1L);
     }
 
     @Test
@@ -631,10 +648,10 @@ class CdcEventStreamHandlerTest {
         xid(401L);
 
         assertThat(sink.changes).hasSize(1);
-        assertThat(sink.changes.get(0).upserts).hasSize(1);
-        assertThat(sink.changes.get(0).upserts.get(0))
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
+        assertThat(sink.changes.get(0).upserts().get(0))
                 .containsEntry("id", 1L).containsEntry("name", "new"); // 活下来的是新行
-        assertThat(sink.changes.get(0).deletes).isEmpty();             // 旧 delete 被折叠掉
+        assertThat(sink.changes.get(0).deletes()).isEmpty();             // 旧 delete 被折叠掉
     }
 
     @Test
@@ -646,9 +663,9 @@ class CdcEventStreamHandlerTest {
         xid(411L);
 
         assertThat(sink.changes).hasSize(1);
-        assertThat(sink.changes.get(0).upserts).isEmpty();
-        assertThat(sink.changes.get(0).deletes).hasSize(1);
-        assertThat(sink.changes.get(0).deletes.get(0)).containsEntry("id", 2L);
+        assertThat(sink.changes.get(0).upserts()).isEmpty();
+        assertThat(sink.changes.get(0).deletes()).hasSize(1);
+        assertThat(sink.changes.get(0).deletes().get(0)).containsEntry("id", 2L);
     }
 
     // —— 裁定 R1(choke 路径):0.41.5 的 notifyEventListeners 吞掉监听器异常(打
@@ -699,10 +716,10 @@ class CdcEventStreamHandlerTest {
         xid(422L);
 
         assertThat(sink.changes).hasSize(1);
-        assertThat(sink.changes.get(0).upserts).hasSize(1);
-        assertThat(sink.changes.get(0).upserts.get(0)).containsEntry("id", 3L);
-        assertThat(sink.changes.get(0).deletes).hasSize(2);
-        assertThat(sink.changes.get(0).deletes.get(0)).containsEntry("id", 1L);
-        assertThat(sink.changes.get(0).deletes.get(1)).containsEntry("id", 2L);
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
+        assertThat(sink.changes.get(0).upserts().get(0)).containsEntry("id", 3L);
+        assertThat(sink.changes.get(0).deletes()).hasSize(2);
+        assertThat(sink.changes.get(0).deletes().get(0)).containsEntry("id", 1L);
+        assertThat(sink.changes.get(0).deletes().get(1)).containsEntry("id", 2L);
     }
 }

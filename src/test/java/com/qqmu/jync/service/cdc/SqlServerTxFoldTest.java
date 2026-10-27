@@ -106,8 +106,22 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, b, 2, row(1L, "back"));
 
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
-        assertThat(ids(buf.upserts)).containsExactly(1L);
-        assertThat(buf.deletes).isEmpty();
+        assertThat(ids(buf.upserts())).containsExactly(1L);
+        assertThat(buf.deletes()).isEmpty();
+    }
+
+    @Test
+    void theSameRowInsertedTwiceInOneTransactionIsAppliedOnceWithTheLastImage() {
+        // 同事务对同一 PK 写两次(批量 REPLACE / 数据修复):净效果是最后一个镜像。
+        // 只排一次批,既少一条目标端语句,也让折叠保持线性(逐条扫描是 O(n²))。
+        SqlServerTxFold fold = new SqlServerTxFold();
+        CdcTableBinding b = ordersBinding();
+        fold.accept(TX_A, b, 2, row(1L, "first"));
+        fold.accept(TX_A, b, 2, row(1L, "last"));
+
+        SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
+        assertThat(buf.upserts()).hasSize(1);
+        assertThat(buf.upserts().get(0)).containsEntry("name", "last");
     }
 
     @Test
@@ -118,8 +132,8 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, b, 1, row(1L, "temp"));
 
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
-        assertThat(buf.upserts).isEmpty();
-        assertThat(ids(buf.deletes)).containsExactly(1L);
+        assertThat(buf.upserts()).isEmpty();
+        assertThat(ids(buf.deletes())).containsExactly(1L);
     }
 
     @Test
@@ -132,8 +146,8 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, b, 4, row(2L, "v"));
 
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
-        assertThat(ids(buf.upserts)).containsExactly(2L);
-        assertThat(ids(buf.deletes)).containsExactly(1L);
+        assertThat(ids(buf.upserts())).containsExactly(2L);
+        assertThat(ids(buf.deletes())).containsExactly(1L);
     }
 
     @Test
@@ -144,9 +158,9 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, b, 4, row(1L, "new"));
 
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
-        assertThat(buf.upserts).hasSize(1);
-        assertThat(buf.upserts.get(0).get("name")).isEqualTo("new");
-        assertThat(buf.deletes).isEmpty();
+        assertThat(buf.upserts()).hasSize(1);
+        assertThat(buf.upserts().get(0).get("name")).isEqualTo("new");
+        assertThat(buf.deletes()).isEmpty();
     }
 
     /**
@@ -162,9 +176,9 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, b, 4, binaryRow(new byte[] {1, 2, 3}, "new"));
 
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
-        assertThat(buf.upserts).hasSize(1);
-        assertThat(buf.upserts.get(0).get("name")).isEqualTo("new");
-        assertThat(buf.deletes).isEmpty();
+        assertThat(buf.upserts()).hasSize(1);
+        assertThat(buf.upserts().get(0).get("name")).isEqualTo("new");
+        assertThat(buf.deletes()).isEmpty();
     }
 
     /** 二进制主键的 DELETE→INSERT 同事务折叠:净效果是行存在(REPLACE/MERGE 场景)。 */
@@ -176,8 +190,8 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, b, 2, binaryRow(new byte[] {9}, "back"));
 
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
-        assertThat(buf.upserts).hasSize(1);
-        assertThat(buf.deletes).isEmpty();
+        assertThat(buf.upserts()).hasSize(1);
+        assertThat(buf.deletes()).isEmpty();
     }
 
     @Test
@@ -207,10 +221,10 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, items, 4, itemRow);
         fold.accept(TX_A, orders, 2, row(1L, "y"));
 
-        assertThat(ids(buffer(fold, TX_A, orders).upserts)).containsExactly(1L);
-        assertThat(buffer(fold, TX_A, orders).deletes).isEmpty();
-        assertThat(buffer(fold, TX_A, items).deletes).isEmpty();
-        assertThat(buffer(fold, TX_A, items).upserts).hasSize(1);
+        assertThat(ids(buffer(fold, TX_A, orders).upserts())).containsExactly(1L);
+        assertThat(buffer(fold, TX_A, orders).deletes()).isEmpty();
+        assertThat(buffer(fold, TX_A, items).deletes()).isEmpty();
+        assertThat(buffer(fold, TX_A, items).upserts()).hasSize(1);
     }
 
     @Test
@@ -226,8 +240,8 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, b, 4, row(3L, "v1"));
 
         SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
-        assertThat(ids(buf.upserts)).containsExactly(3L);
-        assertThat(ids(buf.deletes)).containsExactly(1L, 2L);
+        assertThat(ids(buf.upserts())).containsExactly(3L);
+        assertThat(ids(buf.deletes())).containsExactly(1L, 2L);
     }
 
     @Test
@@ -251,7 +265,7 @@ class SqlServerTxFoldTest {
         fold.accept(TX_A, b, 2, row(1L, "a"));
         fold.accept(TX_B, b, 2, row(2L, "b"));
 
-        assertThat(ids(buffer(fold, TX_A, b).upserts)).containsExactly(1L);
-        assertThat(ids(buffer(fold, TX_B, b).upserts)).containsExactly(2L);
+        assertThat(ids(buffer(fold, TX_A, b).upserts())).containsExactly(1L);
+        assertThat(ids(buffer(fold, TX_B, b).upserts())).containsExactly(2L);
     }
 }

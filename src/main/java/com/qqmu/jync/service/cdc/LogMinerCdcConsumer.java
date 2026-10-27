@@ -2,7 +2,6 @@ package com.qqmu.jync.service.cdc;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -412,8 +411,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     private int drainSession(LogMinerSession session) throws Exception {
         long projectId = project.getId();
         long currentCsn = -1L;
-        Map<CdcTableBinding, List<Map<String, Object>>> upserts = new LinkedHashMap<>();
-        Map<CdcTableBinding, List<Map<String, Object>>> deletes = new LinkedHashMap<>();
+        CdcTransactionBuffer tx = new CdcTransactionBuffer();
         CdcTransactionBudget budget = CdcTransactionBudget.from(properties);
         int applied = 0;
         while (running && !Thread.currentThread().isInterrupted()) {
@@ -470,9 +468,8 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 if (currentCsn < 0) {
                     currentCsn = row.csn;
                 } else if (row.csn != currentCsn) {
-                    flushTransaction(projectId, currentCsn, upserts, deletes);
-                    upserts.clear();
-                    deletes.clear();
+                    flushTransaction(projectId, currentCsn, tx);
+                    tx.clear();
                     budget.reset();
                     resetSpiller();
                     currentCsn = row.csn;
@@ -542,7 +539,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 parseFailures.set(0);
                 if (op == SqlRedoParser.Op.DELETE) {
                     // Deletes bind primary keys only; no reason to write their payload.
-                    bufferDelete(deletes, upserts, binding, parsed.row);
+                    tx.delete(binding, parsed.row);
                     budget.add(parsed.row);
                 } else {
                     // A statement that moved the primary key must also delete the old key:
@@ -552,11 +549,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     // the parsed row keeps the check independent of that policy.
                     if (parsed.previousKey != null
                             && CdcPrimaryKey.changed(parsed.previousKey, parsed.row, binding)) {
-                        bufferDelete(deletes, upserts, binding, parsed.previousKey);
+                        tx.delete(binding, parsed.previousKey);
                         budget.add(parsed.previousKey);
                     }
                     Map<String, Object> buffered = spiller().spill(binding, parsed.row);
-                    bufferUpsert(upserts, deletes, binding, buffered);
+                    tx.upsert(binding, buffered);
                     budget.add(buffered);
                 }
                 if (row.rowTime != null) {
@@ -565,8 +562,8 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 applied++;
             }
         }
-        if (currentCsn >= 0 && (!upserts.isEmpty() || !deletes.isEmpty())) {
-            flushTransaction(projectId, currentCsn, upserts, deletes);
+        if (currentCsn >= 0 && !tx.isEmpty()) {
+            flushTransaction(projectId, currentCsn, tx);
         }
         return applied;
     }
@@ -576,50 +573,19 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
      * watermark — data-first at-least-once: a crash between commit and advanceScn replays
      * the same CSCN against idempotent upserts.
      */
-    /**
-     * Same-PK last-op-wins folding within one CSCN — the LogMiner counterpart of
-     * {@code CdcEventStreamHandler}'s FIX C. The flush applies upserts BEFORE deletes (that
-     * order is what makes PK chains A→B, B→C safe), so an unfolded buffer holding both an
-     * upsert and a delete for the SAME key — a source that does DELETE then INSERT, the
-     * usual "replace a row" idiom — would write the row and then delete it: silent row
-     * loss. Appending an upsert drops any buffered delete of that key, and vice versa.
-     */
-    private static void bufferUpsert(Map<CdcTableBinding, List<Map<String, Object>>> upserts,
-                                     Map<CdcTableBinding, List<Map<String, Object>>> deletes,
-                                     CdcTableBinding binding, Map<String, Object> row) {
-        List<Object> key = CdcPrimaryKey.of(row, binding);
-        List<Map<String, Object>> pendingDeletes = deletes.get(binding);
-        if (pendingDeletes != null) {
-            pendingDeletes.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
-        }
-        upserts.computeIfAbsent(binding, k -> new ArrayList<>()).add(row);
-    }
-
-    /** @see #bufferUpsert */
-    private static void bufferDelete(Map<CdcTableBinding, List<Map<String, Object>>> deletes,
-                                     Map<CdcTableBinding, List<Map<String, Object>>> upserts,
-                                     CdcTableBinding binding, Map<String, Object> row) {
-        List<Object> key = CdcPrimaryKey.of(row, binding);
-        List<Map<String, Object>> pendingUpserts = upserts.get(binding);
-        if (pendingUpserts != null) {
-            pendingUpserts.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
-        }
-        deletes.computeIfAbsent(binding, k -> new ArrayList<>()).add(row);
-    }
-
-    private void flushTransaction(long projectId, long csn,
-                                   Map<CdcTableBinding, List<Map<String, Object>>> upserts,
-                                   Map<CdcTableBinding, List<Map<String, Object>>> deletes)
+    private void flushTransaction(long projectId, long csn, CdcTransactionBuffer tx)
             throws Exception {
         Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
         boolean originalAutoCommit = true;
         try {
             originalAutoCommit = target.getAutoCommit();
             target.setAutoCommit(false);
-            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : upserts.entrySet()) {
+            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e
+                    : tx.upserts().entrySet()) {
                 applier.applyUpserts(target, e.getKey(), e.getValue());
             }
-            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : deletes.entrySet()) {
+            for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e
+                    : tx.deletes().entrySet()) {
                 applier.applyDeletes(target, e.getKey(), e.getValue());
             }
             target.commit();

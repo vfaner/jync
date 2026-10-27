@@ -39,10 +39,24 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 final class SqlServerTxFold {
 
-    /** One binding's folded net changes inside one transaction. */
+    /** One binding's folded net changes inside one transaction, keyed by PK. */
     static final class Buffer {
-        final List<Map<String, Object>> upserts = new ArrayList<>();
-        final List<Map<String, Object>> deletes = new ArrayList<>();
+        private final Map<List<Object>, Map<String, Object>> upserts = new LinkedHashMap<>();
+        private final Map<List<Object>, Map<String, Object>> deletes = new LinkedHashMap<>();
+
+        /** Net upserts in the order of each key's last occurrence; a fresh list per call. */
+        List<Map<String, Object>> upserts() {
+            return new ArrayList<>(upserts.values());
+        }
+
+        /** Net deletes in the order of each key's last occurrence; a fresh list per call. */
+        List<Map<String, Object>> deletes() {
+            return new ArrayList<>(deletes.values());
+        }
+
+        boolean isEmpty() {
+            return upserts.isEmpty() && deletes.isEmpty();
+        }
     }
 
     /** txLsn (ascending) -> binding -> folded buffer. */
@@ -105,16 +119,20 @@ final class SqlServerTxFold {
     private void appendUpsert(String txLsn, Buffer buf, CdcTableBinding binding,
                               Map<String, Object> row) {
         List<Object> key = CdcPrimaryKey.of(row, binding);
-        buf.deletes.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
-        buf.upserts.add(row);
+        // remove-then-put: the last image wins and moves to the end (source order), and
+        // the fold stays linear regardless of how many keys a transaction touches.
+        buf.deletes.remove(key);
+        buf.upserts.remove(key);
+        buf.upserts.put(key, row);
         budget(txLsn).add(row);
     }
 
     private void appendDelete(String txLsn, Buffer buf, CdcTableBinding binding,
                               Map<String, Object> row) {
         List<Object> key = CdcPrimaryKey.of(row, binding);
-        buf.upserts.removeIf(buffered -> CdcPrimaryKey.of(buffered, binding).equals(key));
-        buf.deletes.add(row);
+        buf.upserts.remove(key);
+        buf.deletes.remove(key);
+        buf.deletes.put(key, row);
         budget(txLsn).add(row);
     }
 

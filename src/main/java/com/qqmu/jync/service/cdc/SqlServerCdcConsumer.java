@@ -719,14 +719,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             // Upserts before deletes: with the fold's same-PK collapsing this order is
             // what makes PK chains (1→2→3 in one tx) land on the source's final state.
             for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
-                if (!e.getValue().upserts.isEmpty()) {
-                    applier.applyUpserts(target, e.getKey(), e.getValue().upserts);
-                }
+                applier.applyUpserts(target, e.getKey(), e.getValue().upserts());
             }
             for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
-                if (!e.getValue().deletes.isEmpty()) {
-                    applier.applyDeletes(target, e.getKey(), e.getValue().deletes);
-                }
+                applier.applyDeletes(target, e.getKey(), e.getValue().deletes());
             }
             target.commit();
         } catch (Exception e) {
