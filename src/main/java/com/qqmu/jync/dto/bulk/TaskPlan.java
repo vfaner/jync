@@ -7,10 +7,8 @@ import java.util.List;
  *
  * @param name         generated task name, e.g. {@code 同步任务-01}
  * @param estimatedRows sum of the known row counts in {@code tables}; unknown tables add 0
- * @param unknownCount tables in this bin whose row count is still unknown
  */
 public record TaskPlan(String name,
                        List<TableEntry> tables,
-                       long estimatedRows,
-                       int unknownCount) {
+                       long estimatedRows) {
 }

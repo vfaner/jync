@@ -197,21 +197,19 @@ public class BulkPlanService {
         for (BinPacker.Bin bin : bins) {
             List<TableEntry> tables = new ArrayList<>(bin.items().size());
             long rowsInBin = 0L;
-            int unknownInBin = 0;
             for (BinPacker.Item item : bin.items()) {
                 TableEntry entry = entries.get(item.name());
                 tables.add(entry);
                 if (entry.rows() == null) {
-                    unknownInBin++;
+                    unknownTables++;
                 } else {
                     rowsInBin += entry.rows();
                 }
             }
             estimatedRows += rowsInBin;
-            unknownTables += unknownInBin;
             String name = prefix + "-" + String.format(Locale.ROOT,
                     "%0" + width + "d", bin.index() + 1);
-            tasks.add(new TaskPlan(name, List.copyOf(tables), rowsInBin, unknownInBin));
+            tasks.add(new TaskPlan(name, List.copyOf(tables), rowsInBin));
         }
 
         return new BulkPlan(source.getName(), target.getName(), schema, List.copyOf(tasks),
@@ -251,8 +249,8 @@ public class BulkPlanService {
                     .map(TableEntry::name).toList()));
             projectService.saveConfig(saved.getId(), config, request.captureStrategy());
         }
-        log.info("Bulk create: {} task(s) from '{}' to '{}'", plan.tasks().size(),
-                plan.sourceName(), plan.targetName());
+        log.info("Bulk create: {} task(s) from '{}'.'{}' to '{}'", plan.tasks().size(),
+                plan.sourceName(), plan.schema(), plan.targetName());
         return plan.tasks().size();
     }
 

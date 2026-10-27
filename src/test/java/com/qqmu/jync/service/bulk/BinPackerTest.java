@@ -33,8 +33,6 @@ class BinPackerTest {
 
         assertThat(bins).hasSize(1);
         assertThat(names(bins.get(0))).containsExactly("huge", "mid", "small");
-        assertThat(bins.get(0).estimatedRows()).isEqualTo(1_110L);
-        assertThat(bins.get(0).unknownCount()).isZero();
     }
 
     @Test
@@ -54,10 +52,27 @@ class BinPackerTest {
                         item("c", 1L), item("d", 1L)), 2);
 
         assertThat(bins).hasSize(2);
-        assertThat(bins.get(0).estimatedRows()).isEqualTo(100L);
         assertThat(names(bins.get(0))).containsExactly("big");
-        assertThat(bins.get(1).estimatedRows()).isEqualTo(4L);
         assertThat(names(bins.get(1))).containsExactly("a", "b", "c", "d");
+    }
+
+    @Test
+    void anExactlyCountedEmptyTableIsLighterThanAnUnknownOne() {
+        // Exact counting reports 0 for an empty table. That is a known size, not a missing
+        // one: weighing it at the median would rank a table with no rows above a small one.
+        List<BinPacker.Bin> bins = BinPacker.pack(
+                List.of(item("full", 100L), item("mystery", null), item("empty", 0L)), 1);
+
+        assertThat(names(bins.get(0))).containsExactly("full", "mystery", "empty");
+    }
+
+    @Test
+    void emptyTablesStillSpreadAcrossTheBins() {
+        List<BinPacker.Bin> bins = BinPacker.pack(
+                List.of(item("a", 0L), item("b", 0L), item("c", 0L), item("d", 0L)), 2);
+
+        assertThat(bins.get(0).items()).hasSize(2);
+        assertThat(bins.get(1).items()).hasSize(2);
     }
 
     @Test
@@ -69,8 +84,6 @@ class BinPackerTest {
                         item("mid", 20L), item("small", 10L)), 1);
 
         assertThat(names(bins.get(0))).containsExactly("large", "mid", "mystery", "small");
-        assertThat(bins.get(0).estimatedRows()).isEqualTo(80L);
-        assertThat(bins.get(0).unknownCount()).isEqualTo(1);
     }
 
     @Test
@@ -81,7 +94,6 @@ class BinPackerTest {
         assertThat(bins).hasSize(2);
         assertThat(bins.get(0).items()).hasSize(2);
         assertThat(bins.get(1).items()).hasSize(2);
-        assertThat(bins).allSatisfy(bin -> assertThat(bin.unknownCount()).isEqualTo(2));
     }
 
     @Test
@@ -111,13 +123,12 @@ class BinPackerTest {
     }
 
     @Test
-    void everyTableAppearsExactlyOnceAndUnknownRowsDoNotInflateTheTotal() {
+    void everyTableAppearsExactlyOnce() {
         List<BinPacker.Bin> bins = BinPacker.pack(
                 List.of(item("a", 10L), item("b", null), item("c", 30L)), 2);
 
         assertThat(bins).flatExtracting(BinPacker.Bin::items)
                 .extracting(BinPacker.Item::name)
                 .containsExactlyInAnyOrder("a", "b", "c");
-        assertThat(bins.stream().mapToLong(BinPacker.Bin::estimatedRows).sum()).isEqualTo(60L);
     }
 }

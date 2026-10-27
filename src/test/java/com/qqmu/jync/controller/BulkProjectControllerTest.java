@@ -70,7 +70,7 @@ class BulkProjectControllerTest {
         return new BulkPlan("源库", "目标库", "shop",
                 List.of(new TaskPlan("批量任务-01",
                         List.of(new TableEntry("orders", 1_000L, 8_192L, StatsSource.CATALOG)),
-                        1_000L, 0)),
+                        1_000L)),
                 1, 1_000L, 0, true, false, false, false);
     }
 
@@ -131,7 +131,7 @@ class BulkProjectControllerTest {
                 List.of(new TaskPlan("批量任务-01",
                         List.of(new TableEntry("orders", 1_000L, 8_192L, StatsSource.CATALOG),
                                 new TableEntry("audit", null, null, StatsSource.NONE)),
-                        1_000L, 1)),
+                        1_000L)),
                 2, 1_000L, 1, true, false, false, false);
         when(bulkPlanService.plan(any())).thenReturn(plan);
 
@@ -151,7 +151,7 @@ class BulkProjectControllerTest {
         when(bulkPlanService.plan(any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
                 List.of(new TaskPlan("批量任务-01",
                         List.of(new TableEntry("orders", null, null, StatsSource.NONE)),
-                        0L, 1)),
+                        0L)),
                 1, 0L, 1, false, false, false, false));
 
         mvc.perform(post("/projects/bulk/preview").with(csrf())
@@ -172,7 +172,7 @@ class BulkProjectControllerTest {
         when(bulkPlanService.plan(any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
                 List.of(new TaskPlan("批量任务-01",
                         List.of(new TableEntry("orders", 42L, null, StatsSource.EXACT)),
-                        42L, 0)),
+                        42L)),
                 1, 42L, 0, false, true, false, false));
 
         mvc.perform(post("/projects/bulk/preview").with(csrf())

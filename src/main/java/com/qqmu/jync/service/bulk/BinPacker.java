@@ -25,8 +25,8 @@ final class BinPacker {
     record Item(String name, Long rows) {
     }
 
-    /** One group: the tables placed in it, in descending size, and its totals. */
-    record Bin(int index, List<Item> items, long estimatedRows, int unknownCount) {
+    /** One group: the tables placed in it, in descending size. */
+    record Bin(int index, List<Item> items) {
     }
 
     private BinPacker() {
@@ -62,24 +62,27 @@ final class BinPacker {
 
         List<Bin> bins = new ArrayList<>(binCount);
         for (int i = 0; i < binCount; i++) {
-            List<Item> binItems = List.copyOf(buckets.get(i));
-            int unknown = (int) binItems.stream().filter(item -> !known(item)).count();
-            bins.add(new Bin(i, binItems, totals[i], unknown));
+            bins.add(new Bin(i, List.copyOf(buckets.get(i))));
         }
         return List.copyOf(bins);
     }
 
     private static boolean known(Item item) {
-        return item.rows() != null && item.rows() > 0;
+        // Zero is a real answer (an empty table, usually from exact counting); only a null
+        // means the dictionary could not say.
+        return item.rows() != null;
     }
 
     private static long weightOf(Item item, long fallbackWeight) {
-        return known(item) ? item.rows() : fallbackWeight;
+        // A known zero weighs one unit rather than nothing: with every weight at zero the
+        // greedy step would put the whole listing in the first bin. One unit changes no
+        // ordering that matters and keeps empty tables spread by count.
+        return known(item) ? Math.max(1L, item.rows()) : fallbackWeight;
     }
 
     /**
-     * Median of the known sizes (average of the two middle values for an even count), or 1
-     * when nothing is known so that the bins balance by table count.
+     * Median of the known sizes (average of the two middle values for an even count), never
+     * below 1 — unknown tables must still spread across bins even when every known size is 0.
      */
     private static long medianOfKnown(List<Item> items) {
         List<Long> known = items.stream()
@@ -91,8 +94,9 @@ final class BinPacker {
             return 1L;
         }
         int middle = known.size() / 2;
-        return known.size() % 2 == 1
+        long median = known.size() % 2 == 1
                 ? known.get(middle)
                 : (known.get(middle - 1) + known.get(middle)) / 2;
+        return Math.max(1L, median);
     }
 }

@@ -153,8 +153,11 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
     public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
         // One row per table: partition rows summed over index_id 0/1 (heap or clustered index,
         // which is the row count), pages summed over that partition's allocation units. The
-        // LEFT JOIN matters — a table with no allocated pages yet still lists, with an unknown
-        // size rather than a zero that would rank it as empty.
+        // allocation units are aggregated first: a partition usually owns more than one
+        // (in-row, LOB, row-overflow), and joining them directly would count its rows once per
+        // unit and report a table as several times larger than it is. The LEFT JOIN matters —
+        // a table with no allocated pages yet still lists, with an unknown size rather than a
+        // zero that would rank it as empty.
         return queryTableStats(conn,
                 "SELECT t.name AS TABLE_NAME, SUM(p.rows) AS ROW_EST,"
                         + " SUM(a.total_pages) * 8192 AS TOTAL_BYTES"
@@ -162,7 +165,9 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
                         + " JOIN sys.schemas s ON s.schema_id = t.schema_id"
                         + " JOIN sys.partitions p ON p.object_id = t.object_id"
                         + " AND p.index_id IN (0, 1)"
-                        + " LEFT JOIN sys.allocation_units a ON a.container_id = p.partition_id"
+                        + " LEFT JOIN (SELECT container_id, SUM(total_pages) AS total_pages"
+                        + " FROM sys.allocation_units GROUP BY container_id) a"
+                        + " ON a.container_id = p.partition_id"
                         + " WHERE s.name = ?"
                         + " GROUP BY t.name",
                 schemaPattern(schema));
