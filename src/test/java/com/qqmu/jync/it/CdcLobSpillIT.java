@@ -14,6 +14,7 @@ import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 
 import com.qqmu.jync.dto.SyncConfig;
@@ -39,6 +40,16 @@ import com.qqmu.jync.service.cdc.CdcPositionStore;
         "sync.lob.cdc-spill-threshold-bytes=1024",
         "sync.lob.spill-dir=${java.io.tmpdir}/jync-lob-it"
 })
+/*
+ * This class' @TestPropertySource gives it a Spring context of its own, and Spring keeps
+ * cached contexts alive for the rest of the JVM. Every live context runs its own scheduled
+ * CDC supervise tick against the same metadata store, so left open it competes with the
+ * harness family's context for project leases: running this class before CdcResilienceIT
+ * made the failover test hand its forged lease to the other context's manager and then wait
+ * 60s for an owner id that never held it. Closing the context here keeps the IT suite
+ * honest when several classes share one JVM.
+ */
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class CdcLobSpillIT extends CdcMySqlContainerHarnessIT {
 
     private static final int TEXT_CHARS = 700_000;       // ≈ 2.1 MB of UTF-8
