@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Field;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Optional;
 import java.util.Properties;
 
 import ch.qos.logback.classic.Level;
@@ -58,8 +59,7 @@ class SyncSchedulerCronTest {
         quartz = new StdSchedulerFactory(props).getScheduler();
 
         runner = mock(SyncTaskRunner.class);
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(true);
+        when(runner.findProject(1L)).thenReturn(Optional.of(project("订单同步")));
         when(runner.runOnce(1L)).thenReturn(SyncTaskRunner.Outcome.queued());
         quartz.setJobFactory((bundle, scheduler) -> {
             SyncJob job = new SyncJob();

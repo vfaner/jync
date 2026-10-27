@@ -153,6 +153,48 @@ class SyncTaskRunnerRerunTest {
     }
 
     @Test
+    void aRerunWhoseLocalHolderJustFinishedServesItselfInsteadOfStranding() throws Exception {
+        // runClaimedRerun 撞上"本 JVM 里还有持锁者"时,条目交给那个持锁者收尾。但持锁者
+        // 可能在 tryAcquire 失败之后、我们把条目放回队列之前就结束并排空了队列——
+        // 这个窗口里的条目再没人消费,等到项目下一次自然运行才被幽灵触发。
+        // 契约:放回队列后像 runOnce 一样复查本地持锁者,没人了就自己接手。
+        SyncLockService lockService = mock(SyncLockService.class);
+        SyncLockService.LockHandle handle = mock(SyncLockService.LockHandle.class);
+        when(lockService.tryAcquire(9L)).thenReturn(null, handle);
+        when(lockService.isLockedInThisJvm(9L)).thenReturn(true, false); // 检查后本地持锁者已退出
+        Project project = new Project();
+        project.setId(9L);
+        project.setName("p9");
+        project.setEnabled(true);
+        when(projectRepository.findById(9L)).thenReturn(Optional.of(project));
+        SyncEngine engine = mock(SyncEngine.class);
+        when(engine.runCycle(any())).thenAnswer(invocation -> {
+            cycles.incrementAndGet();
+            return new SyncResult();
+        });
+        SyncTaskRunner local = new SyncTaskRunner(projectRepository,
+                mock(SyncContextFactory.class), engine, lockService, taskStore);
+        try {
+            queuedReruns(local).add(9L);
+            Method runClaimed = SyncTaskRunner.class.getDeclaredMethod(
+                    "runClaimedRerun", Long.class);
+            runClaimed.setAccessible(true);
+            runClaimed.invoke(local, 9L);
+
+            long deadline = System.currentTimeMillis() + 3000;
+            while (cycles.get() < 1 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25);
+            }
+            assertThat(cycles.get()).as("队列条目必须被自己接手,而不是留给已经不存在的持锁者")
+                    .isEqualTo(1);
+            assertThat(queuedReruns(local)).isEmpty();
+            verify(lockService, org.mockito.Mockito.times(2)).tryAcquire(9L);
+        } finally {
+            local.shutdownRerunExecutor();
+        }
+    }
+
+    @Test
     void aClickWithNoCycleInFlightExecutesImmediatelyAndQueuesNothing() throws Exception {
         stubEngine(0);
 
@@ -260,19 +302,68 @@ class SyncTaskRunnerRerunTest {
         assertThat(cycles.get()).isZero();
     }
 
+    /**
+     * 一次调度触发只需要项目行一次:存在性与 enabled 都出自同一次读。分成两次查
+     * (existsById + findById)时,两次读之间的删除会让第二次读到空,孤儿分支反而
+     * 走进"已停用"分支——日志说错了原因。
+     */
     @Test
-    void projectExistsReflectsTheRepository() {
-        when(projectRepository.existsById(7L)).thenReturn(true);
+    void findProjectReturnsTheSingleRowTheFireReads() {
+        assertThat(runner.findProject(1L)).get()
+                .extracting(Project::getId).isEqualTo(1L);
+        assertThat(runner.findProject(2L)).isEmpty();
+    }
 
-        assertThat(runner.projectExists(7L)).isTrue();
-        assertThat(runner.projectExists(8L)).isFalse();
+    @Test
+    void forgetDropsAllInMemoryStateOfADeletedProject() throws Exception {
+        // 删除项目后,这三张表里的键会一直留到进程重启:队列条目、失败计数、停机代数。
+        // 其中队列条目最糟——同名新项目若拿到同一个 id,会带着旧条目"幽灵"多跑一轮。
+        queuedReruns().add(9L);
+        java.util.Map<Long, Integer> attempts =
+                field(runner, "rerunAttempts");
+        attempts.put(9L, 3);
+        java.util.Map<Long, java.util.concurrent.atomic.AtomicLong> epochs =
+                field(runner, "stopEpochs");
+        epochs.put(9L, new java.util.concurrent.atomic.AtomicLong(5L));
+
+        runner.forget(9L);
+
+        assertThat(queuedReruns()).doesNotContain(9L);
+        assertThat(attempts).doesNotContainKey(9L);
+        assertThat(epochs).doesNotContainKey(9L);
+    }
+
+    @Test
+    void forgetAlsoClearsTheIdleHeartbeatMarkerOfADeletedProject() throws Exception {
+        Field field = SyncJob.class.getDeclaredField("LAST_IDLE_HEARTBEAT");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.Map<Long, Long> heartbeats = (java.util.Map<Long, Long>) field.get(null);
+        heartbeats.put(9L, System.currentTimeMillis());
+
+        runner.forget(9L);
+
+        assertThat(heartbeats).doesNotContainKey(9L);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T field(SyncTaskRunner target, String name)
+            throws ReflectiveOperationException {
+        Field field = SyncTaskRunner.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return (T) field.get(target);
     }
 
     @SuppressWarnings("unchecked")
     private Set<Long> queuedReruns() throws ReflectiveOperationException {
+        return queuedReruns(runner);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Long> queuedReruns(SyncTaskRunner target) throws ReflectiveOperationException {
         Field field = SyncTaskRunner.class.getDeclaredField("queuedReruns");
         field.setAccessible(true);
-        return (Set<Long>) field.get(runner);
+        return (Set<Long>) field.get(target);
     }
 
     private void awaitQueueDrained() throws InterruptedException {
@@ -289,18 +380,4 @@ class SyncTaskRunnerRerunTest {
         assertThat(queued).isEmpty();
     }
 
-    /** The scheduled-fire gate reads the durable flag, never the local schedule. */
-    @Test
-    void projectEnabledReflectsTheDurableFlag() {
-        Project stopped = new Project();
-        stopped.setId(3L);
-        stopped.setEnabled(false);
-        when(projectRepository.findById(3L)).thenReturn(Optional.of(stopped));
-
-        assertThat(runner.projectEnabled(1L)).isTrue();
-        assertThat(runner.projectEnabled(3L)).isFalse();
-        // A missing row must never answer true: SyncJob checks existence first, but the
-        // gate itself stays safe on its own.
-        assertThat(runner.projectEnabled(2L)).isFalse();
-    }
 }

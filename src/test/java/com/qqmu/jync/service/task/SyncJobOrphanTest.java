@@ -6,6 +6,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.Optional;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.quartz.JobDataMap;
@@ -16,6 +18,7 @@ import org.quartz.Scheduler;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.qqmu.jync.dto.SyncResult;
+import com.qqmu.jync.model.Project;
 
 /**
  * A Quartz fire whose project was deleted must not run forever into a warn-only log.
@@ -49,18 +52,18 @@ class SyncJobOrphanTest {
 
     @Test
     void aMissingProjectDeletesTheOrphanedJob() throws Exception {
-        when(runner.projectExists(1L)).thenReturn(false);
+        when(runner.findProject(1L)).thenReturn(Optional.empty());
 
         assertThatCode(() -> job.execute(context)).doesNotThrowAnyException();
 
         verify(scheduler).deleteJob(jobKey);
+        verify(runner).forget(1L);
         verify(runner, never()).runOnce(1L);
     }
 
     @Test
     void anExistingProjectRunsTheCycleAsUsual() {
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(true);
+        when(runner.findProject(1L)).thenReturn(Optional.of(project(true)));
         when(runner.runOnce(1L)).thenReturn(
                 SyncTaskRunner.Outcome.executed(new SyncResult()));
 
@@ -76,12 +79,18 @@ class SyncJobOrphanTest {
      */
     @Test
     void aDisabledProjectDeletesTheStaleJobWithoutRunningACycle() throws Exception {
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(false);
+        when(runner.findProject(1L)).thenReturn(Optional.of(project(false)));
 
         assertThatCode(() -> job.execute(context)).doesNotThrowAnyException();
 
         verify(scheduler).deleteJob(jobKey);
         verify(runner, never()).runOnce(1L);
+    }
+
+    private static Project project(boolean enabled) {
+        Project project = new Project();
+        project.setId(1L);
+        project.setEnabled(enabled);
+        return project;
     }
 }

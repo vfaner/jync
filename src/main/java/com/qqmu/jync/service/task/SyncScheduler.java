@@ -131,7 +131,10 @@ public class SyncScheduler {
             log.info("Scheduled sync for project '{}' ({}), next fire: {}", project.getName(),
                     describeTrigger(task, config), describeNextFire(trigger));
         } catch (SchedulerException e) {
-            if (oldJob != null) {
+            // A durable job without a trigger (the usual leftover of a deleted job) has no
+            // registration to restore; scheduleJob(job, null) would only throw NPE and hide
+            // the real failure.
+            if (oldJob != null && oldTrigger != null) {
                 try {
                     scheduler.scheduleJob(oldJob, oldTrigger);
                     log.warn("Failed to replace the schedule for project '{}'; restored the"

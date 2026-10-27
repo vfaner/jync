@@ -965,6 +965,9 @@ public class ProjectService {
             snapshotService.deleteAllForProject(projectId);
             changeLogRepository.deleteByProjectId(projectId);
             projectRepository.deleteById(projectId);
+            // Drop the runner's per-project state (queued rerun, attempt count, stop epoch,
+            // heartbeat marker) so a reused id cannot inherit a ghost cycle.
+            taskRunner.forget(projectId);
             auditService.record(AuditAction.PROJECT_DELETE,
                     "Deleted project '" + project.getName() + "' and all its sync state");
         }

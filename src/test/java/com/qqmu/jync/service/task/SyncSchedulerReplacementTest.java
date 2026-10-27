@@ -88,6 +88,30 @@ class SyncSchedulerReplacementTest {
     }
 
     @Test
+    void aJobWithNoTriggerIsNotRolledBackWithANullTrigger() throws Exception {
+        // 持久 job 可以没有触发器(旧实现 deleteJob 后只剩它,或者手工注册过)。替换失败时
+        // 回滚会调用 scheduleJob(oldJob, null) —— Quartz 抛 NPE,既没恢复任何东西,还把
+        // 真正的失败原因盖成了空指针。契约:没有旧触发器就没有可回滚的注册,照常抛
+        // IllegalStateException("Could not schedule")。
+        when(quartz.getTrigger(any())).thenReturn(null);
+        doThrow(new SchedulerException("boom"))
+                .when(quartz).scheduleJob(any(JobDetail.class), any(Trigger.class));
+
+        Project project = new Project();
+        project.setId(9L);
+        project.setName("demo");
+        project.setEnabled(true);
+
+        assertThatThrownBy(() -> syncScheduler.schedule(project))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Could not schedule");
+
+        // 只尝试过一次注册;没有用 null 触发器"恢复"(nullable:被断言的正是那个 null)
+        verify(quartz, times(1)).scheduleJob(any(JobDetail.class),
+                org.mockito.ArgumentMatchers.nullable(Trigger.class));
+    }
+
+    @Test
     void aSuccessfulReplacementDoesNotRestoreAnything() throws Exception {
         Project project = new Project();
         project.setId(9L);

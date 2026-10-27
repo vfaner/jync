@@ -12,6 +12,7 @@ import org.quartz.SchedulerException;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import com.qqmu.jync.dto.SyncResult;
+import com.qqmu.jync.model.Project;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -56,6 +57,11 @@ public class SyncJob implements Job {
         LAST_IDLE_HEARTBEAT.clear();
     }
 
+    /** Drops the heartbeat marker of a deleted project; see {@link SyncTaskRunner#forget}. */
+    static void forgetProject(Long projectId) {
+        LAST_IDLE_HEARTBEAT.remove(projectId);
+    }
+
     /**
      * Injected by {@link org.springframework.scheduling.quartz.SpringBeanJobFactory}; Quartz
      * instantiates the job itself, so constructor injection is not available.
@@ -72,7 +78,10 @@ public class SyncJob implements Job {
         // or is due for the idle heartbeat to INFO.
         log.debug("Project '{}': scheduled sync starting", project);
 
-        if (!runner.projectExists(projectId)) {
+        // One repository read answers both questions, so a delete cannot land between them
+        // and make the enabled check masquerade as the orphan case (or the reverse).
+        Project projectRow = runner.findProject(projectId).orElse(null);
+        if (projectRow == null) {
             // The project was deleted but a delete-vs-schedule race left the Quartz job
             // behind; delete the orphan instead of firing forever into a warn-only log.
             log.warn("Scheduled sync found no project {}; deleting the orphaned job", projectId);
@@ -82,11 +91,12 @@ public class SyncJob implements Job {
                 log.error("Could not delete the orphaned job for project {}: {}",
                         projectId, e.getMessage());
             }
+            runner.forget(projectId);       // 项目没了:内存里的队列/计数/心跳一并丢掉
             finish(projectId, project, startedAt,
                     "project no longer exists; orphaned job removed", true);
             return;
         }
-        if (!runner.projectEnabled(projectId)) {
+        if (!Boolean.TRUE.equals(projectRow.getEnabled())) {
             // Stopped — possibly on another instance sharing the database, which cannot
             // remove this node's trigger. The enabled flag is the durable truth, so drop
             // the stale local schedule instead of running cycles for a stopped project.

@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.Optional;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -20,6 +21,7 @@ import org.quartz.JobDataMap;
 import org.quartz.JobExecutionContext;
 
 import com.qqmu.jync.dto.SyncResult;
+import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.cdc.LogCapture;
 
 /**
@@ -49,8 +51,7 @@ class SyncJobLogTest {
 
     @Test
     void anIdleRunKeepsOneInfoHeartbeatWithoutAPerCycleStartLine() throws Exception {
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(true);
+        when(runner.findProject(1L)).thenReturn(Optional.of(enabledProject()));
         when(runner.runOnce(1L)).thenReturn(SyncTaskRunner.Outcome.queued());
 
         ListAppender<ILoggingEvent> logs = captureAll(context("订单同步"));
@@ -66,8 +67,7 @@ class SyncJobLogTest {
 
     @Test
     void repeatedIdleCyclesCollapseToOneHeartbeat() throws Exception {
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(true);
+        when(runner.findProject(1L)).thenReturn(Optional.of(enabledProject()));
         when(runner.runOnce(1L)).thenReturn(SyncTaskRunner.Outcome.queued());
         JobExecutionContext context = context("订单同步");
 
@@ -87,8 +87,7 @@ class SyncJobLogTest {
 
     @Test
     void aChangedCycleIsStillInfoRightAfterAnIdleHeartbeat() throws Exception {
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(true);
+        when(runner.findProject(1L)).thenReturn(Optional.of(enabledProject()));
         when(runner.runOnce(1L)).thenReturn(SyncTaskRunner.Outcome.queued());
         JobExecutionContext context = context("订单同步");
         ListAppender<ILoggingEvent> logs = LogCapture.attach(SyncJob.class);
@@ -113,8 +112,7 @@ class SyncJobLogTest {
         SyncResult result = mock(SyncResult.class);
         when(result.hasChanges()).thenReturn(true);
         when(result.summary()).thenReturn("inserted 12, updated 3");
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(true);
+        when(runner.findProject(1L)).thenReturn(Optional.of(enabledProject()));
         when(runner.runOnce(1L)).thenReturn(SyncTaskRunner.Outcome.executed(result));
 
         List<String> info = runAndCaptureInfo("订单同步");
@@ -125,8 +123,7 @@ class SyncJobLogTest {
 
     @Test
     void aFailingRunStillReportsThatItEnded() throws Exception {
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(true);
+        when(runner.findProject(1L)).thenReturn(Optional.of(enabledProject()));
         when(runner.runOnce(1L)).thenThrow(new RuntimeException("connection reset"));
 
         List<String> info = runAndCaptureInfo("订单同步");
@@ -137,8 +134,7 @@ class SyncJobLogTest {
 
     @Test
     void aRunWithoutAStoredNameFallsBackToTheProjectId() throws Exception {
-        when(runner.projectExists(1L)).thenReturn(true);
-        when(runner.projectEnabled(1L)).thenReturn(true);
+        when(runner.findProject(1L)).thenReturn(Optional.of(enabledProject()));
         when(runner.runOnce(1L)).thenReturn(SyncTaskRunner.Outcome.queued());
         JobExecutionContext context = context(null);
 
@@ -146,6 +142,13 @@ class SyncJobLogTest {
 
         assertThat(info).anySatisfy(line -> assertThat(line)
                 .contains("Project '1'").contains("finished in"));
+    }
+
+    private static Project enabledProject() {
+        Project project = new Project();
+        project.setId(1L);
+        project.setEnabled(true);
+        return project;
     }
 
     private List<String> runAndCaptureInfo(String projectName) throws Exception {

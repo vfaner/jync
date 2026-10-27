@@ -218,6 +218,10 @@ public class SyncTaskRunner {
                 // retry attempts on that ordinary wait.
                 if (lockService.isLockedInThisJvm(projectId)) {
                     queuedReruns.add(projectId);
+                    // That holder may have finished between the read above and this add;
+                    // it drained the queue on its way out, so nobody would serve this entry.
+                    // Same gap, same remedy as runOnce.
+                    selfServeQueuedRerun(projectId);
                     return;
                 }
                 int attempt = rerunAttempts.merge(projectId, 1, Integer::sum);
@@ -266,24 +270,35 @@ public class SyncTaskRunner {
         return epoch == null ? 0L : epoch.get();
     }
 
-    /** Whether a project row still exists; an orphaned Quartz job uses it to self-delete. */
-    public boolean projectExists(Long projectId) {
-        return projectRepository.existsById(projectId);
+    /**
+     * The project row a scheduled fire is about, read ONCE.
+     *
+     * <p>Existence and the durable enabled flag both come from this single read: asked as two
+     * queries (existsById, then findById), a delete landing between them made the orphan
+     * path read an empty row and report "project is stopped" instead of removing the job.
+     *
+     * <p>The flag is consulted at every scheduled fire rather than trusted from the local
+     * schedule: with several instances sharing one database, a stop processed on another
+     * node leaves this node's Quartz trigger alive, and the database flag is the only truth
+     * all nodes see. Manual sync-now deliberately does not consult it — running one
+     * deliberate cycle on a stopped project stays a feature, not a leak.
+     */
+    public Optional<Project> findProject(Long projectId) {
+        return projectRepository.findById(projectId);
     }
 
     /**
-     * Whether the project exists <em>and</em> its durable enabled flag is set.
+     * Drops every in-memory trace of a project that has just been deleted.
      *
-     * <p>Asked at every scheduled fire rather than trusted from the local schedule: with
-     * several instances sharing one database, a stop processed on another node leaves this
-     * node's Quartz trigger alive, and the database flag is the only truth all nodes see.
-     * Manual sync-now deliberately does not consult this — running one deliberate cycle on a
-     * stopped project stays a feature, not a leak.
+     * <p>These maps are keyed by project id and would otherwise keep one entry each until the
+     * process restarts. The queue entry is the harmful one: if the id is reused, the new
+     * project inherits a queued "ghost" cycle nobody asked for.
      */
-    public boolean projectEnabled(Long projectId) {
-        return projectRepository.findById(projectId)
-                .map(p -> Boolean.TRUE.equals(p.getEnabled()))
-                .orElse(false);
+    public void forget(Long projectId) {
+        queuedReruns.remove(projectId);
+        rerunAttempts.remove(projectId);
+        stopEpochs.remove(projectId);
+        SyncJob.forgetProject(projectId);
     }
 
     @PreDestroy
