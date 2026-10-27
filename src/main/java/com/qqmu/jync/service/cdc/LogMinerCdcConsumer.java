@@ -103,6 +103,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     private final AtomicInteger parseFailures = new AtomicInteger();
     /** F-12: consecutive failed mine cycles (target flush rejection, connect failure...). */
     private final AtomicInteger applyFailures = new AtomicInteger();
+    /**
+     * Whether THIS cycle failed while applying to the target. Set only around a target
+     * flush (see {@link #drainSession}), so a source-side read failure mid-mining retries
+     * with backoff instead of accumulating towards APPLY_STRIKE_OUT.
+     */
+    private boolean applyFailedThisCycle;
     private final AtomicLong connectedAtNs = new AtomicLong();
 
     private CdcReconnectBackoff backoff;
@@ -182,8 +188,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 }
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
+                // F-12 counts APPLY failures only. drain marks this when a target flush
+                // fails; a source read/stream failure mid-mining leaves it false, so it
+                // retries with backoff (the same rule as "source unreachable"). Counting
+                // every drain exception parked the project after ~30 s of network trouble.
+                applyFailedThisCycle = false;
                 int drained;
-                boolean applyFailed = false;
                 try {
                     Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig());
                     currentSource = conn;
@@ -197,12 +207,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
-                    try {
-                        drained = drain(session);
-                    } catch (Throwable e) {
-                        applyFailed = true;        // 写目标端失败才计入熔断
-                        throw e;
-                    }
+                    drained = drain(session);
                     // C2 fix: advance the watermark to THIS session's high-water so the
                     // next open does not re-ADD_LOGFILE the entire archive stream from the
                     // baseline SCN. positionStore.advanceScn already persisted each
@@ -211,13 +216,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     lastScn = session.highWaterScn();
                     session.close();
                 } catch (Throwable e) {
-                    // F-12: count failed cycles. drain's per-row parse skips are counted
-                    // separately (parseFailures), and only an APPLY failure escalates:
-                    // a connect/open failure is the source being unreachable for a few
-                    // seconds, which backoff-retry fixes (and is how the MySQL consumer
-                    // already behaves). Counting it here parked the project in ERROR
-                    // after ~30 s of network trouble and required a human to clear it.
-                    if (applyFailed) {
+                    // drain's per-row parse skips are counted separately (parseFailures),
+                    // and only an APPLY failure escalates: a connect/open failure is the
+                    // source being unreachable for a few seconds, which backoff-retry
+                    // fixes (and is how the MySQL consumer already behaves).
+                    if (applyFailedThisCycle) {
                         applyFailures.incrementAndGet();
                     }
                     lastFailure.compareAndSet(null, e);
@@ -478,7 +481,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 if (currentCsn < 0) {
                     currentCsn = row.csn;
                 } else if (row.csn != currentCsn) {
-                    flushTransaction(projectId, currentCsn, tx);
+                    try {
+                        flushTransaction(projectId, currentCsn, tx);
+                    } catch (Exception e) {
+                        applyFailedThisCycle = true; // 写目标端失败才计入熔断
+                        throw e;
+                    }
                     tx.clear();
                     budget.reset();
                     resetSpiller();
@@ -573,7 +581,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             }
         }
         if (currentCsn >= 0 && !tx.isEmpty()) {
-            flushTransaction(projectId, currentCsn, tx);
+            try {
+                flushTransaction(projectId, currentCsn, tx);
+            } catch (Exception e) {
+                applyFailedThisCycle = true;        // 写目标端失败才计入熔断
+                throw e;
+            }
         }
         return applied;
     }

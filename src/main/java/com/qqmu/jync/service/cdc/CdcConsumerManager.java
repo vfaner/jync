@@ -245,13 +245,19 @@ public class CdcConsumerManager {
                     strategy, projectId, lock.owner());
         } catch (RuntimeException e) {
             lock.close();                                        // 先放租约:他节点可接管
-            // Only a failure a human must fix earns the ERROR hat. build() connects to both
-            // endpoints to resolve their default schemas, so the common case here is a
-            // TRANSIENT outage (the database simply is not up yet, or a network blip on a
-            // supervise tick). Parking that would kill CDC on every node until somebody
-            // rebuilds the baseline by hand — the exact failure mode the consumers avoid by
-            // retrying TRANSIENT and parking only after a strike-out.
-            if (CdcFailureClassifier.classify(e) != CdcFailureClassifier.Kind.TRANSIENT) {
+            // A stop that landed during the build already answered "should this run?";
+            // it must not be overridden by an ERROR hat the failure would otherwise earn
+            // (the next enable would find the project parked and silently keep it down).
+            if (stopGenerationChanged(projectId, stopGeneration)) {
+                log.info("CDC project {} was stopped while its consumer was being prepared;"
+                        + " not parking the start failure", projectId);
+            } else if (CdcFailureClassifier.classify(e) != CdcFailureClassifier.Kind.TRANSIENT) {
+                // Only a failure a human must fix earns the ERROR hat. build() connects to
+                // both endpoints to resolve their default schemas, so the common case here is
+                // a TRANSIENT outage (the database simply is not up yet, or a network blip on
+                // a supervise tick). Parking that would kill CDC on every node until somebody
+                // rebuilds the baseline by hand — the exact failure mode the consumers avoid
+                // by retrying TRANSIENT and parking only after a strike-out.
                 parkQuietly(projectId, project.getName(), e);    // ERROR 帽子,防跨节点重启风暴
             } else {
                 log.warn("CDC project {} could not start (transient, the next supervise tick"
@@ -259,6 +265,16 @@ public class CdcConsumerManager {
             }
             throw e;
         }
+    }
+
+    /**
+     * Whether an {@link #ensureStopped} for this project landed after the given generation
+     * was read. Read under the monitor so it cannot interleave with the bump in
+     * {@code ensureStopped} — otherwise a stop committed just after the check would still
+     * let a start failure park the project.
+     */
+    private synchronized boolean stopGenerationChanged(Long projectId, long expected) {
+        return stopGenerations.getOrDefault(projectId, 0L) != expected;
     }
 
     /**

@@ -219,6 +219,44 @@ class CdcConsumerManagerTest {
     }
 
     @Test
+    void aStopDuringAFatalStartFailureDoesNotParkTheProject() throws Exception {
+        // 用户在建连期间点了"停用"(或禁用/删除流程跑了 ensureStopped),建连随后抛出一个
+        // 人必须介入的失败(凭据错误)。旧实现只看异常种类,直接戴 ERROR 帽——可这个项目
+        // 刚刚被明确停掉,帽子会让 supervise 在所有节点都不再启动它,下次启用时也悄悄失效。
+        // 契约:停/启边界以 stopGenerations 为准,已被停止的启动不再 park。
+        CountDownLatch buildEntered = new CountDownLatch(1);
+        CountDownLatch releaseBuild = new CountDownLatch(1);
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+        when(contextFactory.build(any(), anyString(), any())).thenAnswer(inv -> {
+            buildEntered.countDown();
+            releaseBuild.await(10, TimeUnit.SECONDS);
+            throw new IllegalStateException(
+                    "Cannot connect to 'src': Access denied for user 'jync'",
+                    new java.sql.SQLException("Access denied for user 'jync'"));
+        });
+
+        Thread start = new Thread(() -> {
+            try {
+                manager.ensureStarted(cdcProject(9L, true));
+            } catch (RuntimeException expected) {
+                // supervise 的调用方会记日志;这里只要它不 park
+            }
+        }, "fatal-start-stopped");
+        start.start();
+        assertThat(buildEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        manager.ensureStopped(9L);                               // 停止先落地
+        releaseBuild.countDown();
+        start.join(5_000L);
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+        verify(stateWriter, never()).recordLog(anyLong(), any(), anyString(),
+                eq(com.qqmu.jync.model.ChangeType.ERROR), anyString(), anyBoolean(), anyLong());
+        verify(lock).close();                                    // 租约必须放回去
+        assertThat(starter.last).as("被停止超越的启动不得注册消费者").isNull();
+    }
+
+    @Test
     void aParkedProjectWarnsOnceAcrossSuperviseTicks() {
         // supervise 每 10s 重新问一遍同一个被 ERROR 帽挡住的项目。每拍都 WARN,日志就成了
         // 同一条消息的复读机(现场一天几万行);警告的语义是"状态变成被 park",一段停机

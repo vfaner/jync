@@ -295,6 +295,35 @@ class LogMinerCdcConsumerFailureEscalationTest {
     }
 
     @Test
+    void sourceReadFailuresMidStreamOnlyBackOffAndNeverPark() throws Exception {
+        // 源端在 mining 途中断流(网络抖动、防火墙复位):这一轮没读到完整的变更,
+        // 也没向目标端写任何东西。旧实现把 drain 抛出的异常一律记为应用失败,连续
+        // 6 个这样的周期就把项目 park 到 ERROR —— 与"源端连不上只退避"的契约相违。
+        LogMinerSession session = new LogMinerSession(null, 1_000L, 1_000L, null, null) {
+            @Override
+            public List<LogMinerSession.Row> nextBatch() throws SQLException {
+                throw new SQLException("source stream reset");
+            }
+
+            @Override
+            public long highWaterScn() {
+                return 1_000L;
+            }
+
+            @Override
+            public void close() {
+                // real close() runs END_LOGMNR on the super's (null) source connection
+            }
+        };
+        LogMinerCdcConsumer consumer = newConsumer(
+                stagedTargetContext(true), boundedLock(20), session);
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
+    @Test
     void aSuccessfulTransactionResetsTheFailureEscalation() throws Exception {
         // 3 败 → 1 成 → 3 败(之后保持失败):任一连续段都不到阈值,lock 到期安静
         // 退出,全程绝不 park;且成功周期的行必须真正落库(证明确实 flush 成功)。

@@ -283,6 +283,25 @@ class SqlServerCdcConsumerFailureEscalationTest {
     }
 
     @Test
+    void sourceReadFailuresMidWindowOnlyBackOffAndNeverPark() throws Exception {
+        // 源端在读取变更窗口途中断流(网络抖动、防火墙复位):这一轮没有读到完整的
+        // 事务,更没有向目标端写任何东西。旧实现把 drain 抛出的异常一律记为应用失败,
+        // 连续 6 个这样的周期就把项目 park 到 ERROR。
+        PreparedStatement failingChanges = mock(PreparedStatement.class);
+        when(failingChanges.executeQuery())
+                .thenThrow(new SQLException("source stream reset"));
+        when(sourceConn.prepareStatement(contains("fn_cdc_get_all_changes_")))
+                .thenReturn(failingChanges);
+
+        SqlServerCdcConsumer consumer = newConsumer(
+                contextWithStagedTarget(true), boundedLock(20));
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
+    @Test
     void aSuccessfulTransactionResetsTheFailureEscalation() throws Exception {
         // 3 败 → 1 成 → 3 败:任一连续段都不到阈值,lock 到期安静退出,全程绝不
         // park;且成功周期必须真正 commit(证明确实 flush 成功、计数被清零)。

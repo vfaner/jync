@@ -130,6 +130,12 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
     /** F-13: consecutive failed drain cycles; reset to 0 on every successful flush. */
     private final AtomicInteger applyFailures = new AtomicInteger();
+    /**
+     * Whether THIS cycle failed while applying to the target. Set only around a target
+     * flush (see {@link #drain}), so a source-side read failure mid-window retries with
+     * backoff instead of accumulating towards APPLY_STRIKE_OUT.
+     */
+    private boolean applyFailedThisCycle;
     private final AtomicLong connectedAtNs = new AtomicLong();
 
     private CdcReconnectBackoff backoff;
@@ -207,32 +213,26 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 }
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
+                // F-13 counts APPLY failures only. drain marks this when a target flush
+                // fails; a source read/stream failure mid-window leaves it false, so it
+                // retries with backoff (the same rule as "source unreachable"). Counting
+                // every drain exception parked the project after ~30 s of network trouble.
+                applyFailedThisCycle = false;
                 int rowsDrained;
-                boolean applyFailed = false;
                 try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                     currentSource = conn;
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
-                    try {
-                        DrainResult result = drain(conn, fromLsn);
-                        rowsDrained = result.rows;
-                        if (result.nextLsn != null) {
-                            fromLsn = result.nextLsn;
-                        }
-                    } catch (Throwable e) {
-                        applyFailed = true;        // 写目标端失败才计入熔断
-                        throw e;
+                    DrainResult result = drain(conn, fromLsn);
+                    rowsDrained = result.rows;
+                    if (result.nextLsn != null) {
+                        fromLsn = result.nextLsn;
                     }
                 } catch (Throwable e) {
                     // Any drain exception leaves fromLsn unchanged: the next iteration
                     // re-reads the same interval (data-first at-least-once).
-                    // F-13 counts APPLY failures only: a source connect failure is the
-                    // database being unreachable for a few seconds, which backoff-retry
-                    // fixes (and is how the MySQL consumer already behaves). Counting it
-                    // parked the project in ERROR after ~30 s of network trouble and
-                    // required a human to clear it.
-                    if (applyFailed) {
+                    if (applyFailedThisCycle) {
                         applyFailures.incrementAndGet();
                     }
                     lastFailure.compareAndSet(null, e);
@@ -563,7 +563,12 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             if (!running || Thread.currentThread().isInterrupted()) {
                 break;
             }
-            flushTransaction(projectId, e.getKey(), e.getValue());
+            try {
+                flushTransaction(projectId, e.getKey(), e.getValue());
+            } catch (Exception ex) {
+                applyFailedThisCycle = true;            // 写目标端失败才计入熔断
+                throw ex;
+            }
         }
         // #3: reaching here means the loop completed without aborting — every tracked
         // CI was scanned over (fromLsn, maxLsn] (normally, or from a #2 clamp point).

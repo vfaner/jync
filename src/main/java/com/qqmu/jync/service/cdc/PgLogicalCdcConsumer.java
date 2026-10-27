@@ -98,6 +98,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     // 源库停机期 ADD COLUMN 而目标表没有该列:openGauss 42703 分类为 TRANSIENT,
     // 旧代码空转无限重试,既不落数据也不 park。
     private final AtomicInteger applyFailures = new AtomicInteger();
+    /**
+     * Whether THIS cycle failed while applying to the target. Set only around a target
+     * flush (see {@link #drain}), so a source-side read/stream failure mid-drain retries
+     * with backoff instead of accumulating towards APPLY_STRIKE_OUT.
+     */
+    private boolean applyFailedThisCycle;
     private final AtomicLong connectedAtNs = new AtomicLong();
 
     private CdcReconnectBackoff backoff;
@@ -185,29 +191,23 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 }
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
+                // F-10 counts APPLY failures only. drain marks this when a target flush
+                // fails; a source read/stream failure mid-drain leaves it false, so it
+                // retries with backoff (the same rule as "source unreachable"). Counting
+                // every drain exception parked the project after ~30 s of network trouble.
+                applyFailedThisCycle = false;
                 int rowsDrained;
-                boolean applyFailed = false;
                 try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                     currentSource = conn;
                     ensureSlot(conn, slotName);
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
-                    try {
-                        rowsDrained = drain(conn, slotName);
-                    } catch (Throwable e) {
-                        applyFailed = true;        // 写目标端失败才计入熔断
-                        throw e;
-                    }
+                    rowsDrained = drain(conn, slotName);
                 } catch (Throwable e) {
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
-                    // F-10 counts APPLY failures only: a connection or slot failure is
-                    // the source being unreachable for a few seconds, which backoff-retry
-                    // fixes (and is how the MySQL consumer already behaves). Counting it
-                    // parked the project in ERROR after ~30 s of network trouble and
-                    // required a human to clear it.
-                    if (applyFailed) {
+                    if (applyFailedThisCycle) {
                         applyFailures.incrementAndGet();
                     }
                     // The poll loop opens a connection per cycle, so "connected" cannot be tied
@@ -405,7 +405,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 // Empty transactions are confirmed too.
                                 String commitLsn = lsn;
                                 if (!tx.isEmpty()) {
-                                    flushTransaction(projectId, commitLsn, tx);
+                                    try {
+                                        flushTransaction(projectId, commitLsn, tx);
+                                    } catch (Exception e) {
+                                        applyFailedThisCycle = true; // 写目标端失败才计入熔断
+                                        throw e;
+                                    }
                                     tx.clear();
                                     budget.reset();
                                 }
