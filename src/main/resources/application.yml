@@ -162,6 +162,11 @@ sync:
   # holds every row the cursor claims to have delivered. Set to 0 to disable.
   # Costs one COUNT(*) per side per table, hence the throttle.
   row-count-audit-interval-ms: 60000
+  # Largest drift the audit repairs by key (walk the audited key range, upsert only the
+  # missing rows, keep the cursor) before falling back to clearing the cursor and
+  # reloading the whole table. 0 disables the targeted repair. A shortfall this small
+  # means a backfilled row or two; a wider gap means the table needs rebuilding anyway.
+  row-count-repair-max-rows: 1000
   # Row count ceiling under which a table with no usable cursor column is
   # synchronized by full comparison instead of being skipped
   full-compare-max-rows: 20000

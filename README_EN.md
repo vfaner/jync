@@ -632,6 +632,7 @@ Main settings in `application.yml` (the `sync.*` prefix):
 | `sync.safety-lag-ms` | `1000` | Timestamp watermark pull-back |
 | `sync.full-compare-max-rows` | `20000` | Row-count ceiling for *automatic* full-compare selection; an explicit task-level choice bypasses it, and the page plus the start-up warning will say so |
 | `sync.row-count-audit-interval-ms` | `60000` | Row-count audit interval; `0` disables it |
+| `sync.row-count-repair-max-rows` | `1000` | Largest shortfall the audit repairs by key (walk the audited range, upsert only the missing rows, keep the cursor); above it, without a primary key, or with a cursor column that cannot be compared on the target, the cursor is cleared and the table reloads; `0` disables targeted repair |
 | `sync.lock-ttl-ms` | `300000` | Sync lock lease duration |
 | `sync.cdc.reconnect-backoff-ms` | `1000` | Initial CDC reconnect backoff |
 | `sync.cdc.reconnect-backoff-max-ms` | `60000` | Maximum reconnect backoff |

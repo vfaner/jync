@@ -1239,12 +1239,44 @@ public class SyncEngine {
             // Read before clearing: clearCursor nulls this field on the same instance.
             String cursor = progress.getLastSyncValue();
             log.warn("Row count audit failed for {}: source has {} row(s) at or below cursor {}"
-                            + " but target has {} — forcing a full reload of this table",
+                            + " but target has {}",
                     table.getName(), audit.getSourceRows(), cursor, audit.getTargetRows());
+            DataSyncService.RowDriftRepair targeted = null;
+            try {
+                // Cheapest way to make the rows visible: fetch them by key and keep the
+                // cursor. A decline (no key, gap too wide, an unreadable cursor column) or a
+                // failure falls through to the reload below, which is what always used to happen.
+                targeted = dataSync.repairMissingRows(sourceConn, targetConn, table, strategy,
+                        progress, audit, ctx);
+            } catch (LockLostException | StopRequestedException e) {
+                // Control flow, not a repair failure: the cycle is ending for a reason the
+                // caller must see, so neither swallowing nor falling back is allowed here.
+                throw e;
+            } catch (SQLException | RuntimeException e) {
+                // The audit must never fail the table it audits; the reload it was going to
+                // trigger anyway is the fallback for any repair that cannot finish.
+                log.warn("Targeted repair of {} could not run ({}); falling back to a full"
+                        + " reload", table.getName(), e.getMessage());
+            }
+            if (targeted != null && targeted.isHandled()) {
+                log.info("Row count audit repaired {}: {} missing row(s) re-copied by key; the"
+                        + " cursor stays at {}", table.getName(), targeted.getRepairedRows(),
+                        cursor);
+                // There is no reload to fold the counts into, and nothing else in this cycle
+                // will describe the repair, so it files its own entry — exactly one per repair.
+                AuditRepair repaired = AuditRepair.byKey(missing, audit.getSourceRows(),
+                        audit.getTargetRows(), targeted.getRepairedRows(), cursor);
+                reportAuditRepair(ctx, table, repaired);
+                return AuditedProgress.unrepaired(progress);
+            }
+            if (targeted != null && targeted.getReason() != null) {
+                log.info("Targeted repair of {} declined ({}); forcing a full reload",
+                        table.getName(), targeted.getReason());
+            }
             progress = stateWriter.clearCursor(progress);
             // Deliberately not filed here: the reload that follows is this repair's visible
             // half, and filing both turned one backfilled row into two log lines.
-            return new AuditedProgress(progress, new AuditRepair(missing,
+            return new AuditedProgress(progress, AuditRepair.byReload(missing,
                     audit.getSourceRows(), audit.getTargetRows(), cursor));
         } catch (SQLException e) {
             // Worth knowing about, but not worth failing the table over.
@@ -1287,10 +1319,28 @@ public class SyncEngine {
      * <p>Kept as data rather than written out immediately so the cycle can report the repair once
      * — as the cause of the entry that reports the reload, or on its own when there is none.
      */
-    private record AuditRepair(long missing, long sourceRows, long targetRows, String cursor) {
+    private record AuditRepair(long missing, long sourceRows, long targetRows, String cursor,
+                               long repairedRows, boolean targeted) {
+
+        /** A repair that clears the cursor and lets the next pass reload the table. */
+        static AuditRepair byReload(long missing, long sourceRows, long targetRows,
+                                    String cursor) {
+            return new AuditRepair(missing, sourceRows, targetRows, cursor, 0L, false);
+        }
+
+        /** A repair that copied the missing rows by key and kept the cursor where it was. */
+        static AuditRepair byKey(long missing, long sourceRows, long targetRows,
+                                 long repairedRows, String cursor) {
+            return new AuditRepair(missing, sourceRows, targetRows, cursor, repairedRows, true);
+        }
 
         /** The whole entry, for a cycle whose repair produced no data entry of its own. */
         String entry() {
+            if (targeted()) {
+                return "Row count audit: target was missing " + missing + " row(s) already"
+                        + " marked as synced (" + counts() + "). " + repairedRows + " row(s)"
+                        + " re-copied by key; the cursor was kept and no reload was needed.";
+            }
             return "Row count audit: target is missing " + missing + " row(s) already marked as"
                     + " synced (" + counts() + "). Cursor cleared; the table will be fully"
                     + " reloaded.";
@@ -1298,6 +1348,11 @@ public class SyncEngine {
 
         /** The cause, appended to the entry that reports the reload this repair triggered. */
         String cause() {
+            if (targeted()) {
+                return " — row count audit: target was missing " + missing + " row(s) already"
+                        + " marked as synced (" + counts() + "); " + repairedRows
+                        + " row(s) re-copied by key, cursor kept";
+            }
             return " — row count audit: target was missing " + missing + " row(s) already marked"
                     + " as synced (" + counts() + "); cursor cleared and the table reloaded";
         }

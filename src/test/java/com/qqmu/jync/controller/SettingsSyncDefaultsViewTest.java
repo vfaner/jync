@@ -49,6 +49,9 @@ import com.qqmu.jync.service.version.VersionService;
         // not that the packaged default happens to be this number: operators retune it.
         "sync.lob.inline-max-bytes=65536",
         "sync.row-count-audit-interval-ms=60000",
+        // Pinned below its packaged default so the card proves it renders the effective
+        // value rather than the default that happens to coincide.
+        "sync.row-count-repair-max-rows=750",
         "sync.query-timeout-seconds=300",
         "sync.metadata-query-timeout-seconds=60",
         "sync.shutdown-wait-ms=20000",
@@ -114,11 +117,13 @@ class SettingsSyncDefaultsViewTest {
 
         assertThat(page).contains("每库连接池上限");
         assertThat(page).contains("行数审计间隔");
+        assertThat(page).contains("按主键修补的缺口上限");
         assertThat(page).contains("数据查询超时");
         assertThat(page).contains("元数据查询超时");
         assertThat(page).contains("停机等待时长");
         assertThat(page).contains("调度对账间隔");
         assertThat(page).contains("60000");
+        assertThat(page).contains("750");
     }
 
     @Test
@@ -166,6 +171,7 @@ class SettingsSyncDefaultsViewTest {
         assertThat(page).contains("CDC engine parameters");
         assertThat(page).contains("Large objects and streaming");
         assertThat(page).contains("LogMiner missing-LOB policy");
+        assertThat(page).contains("Row-count repair ceiling");
         assertThat(page).doesNotContain("全量加载性能");
         assertThat(page).doesNotContain("大字段与流式");
         assertThat(page).doesNotContain("??settings.");

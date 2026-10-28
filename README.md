@@ -633,6 +633,7 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 | `sync.full-compare-max-rows` | `20000` | 自动选用全表比对的行数上限；手动在任务级选择时不生效，超出时页面与启动日志会提示 |
 | `sync.delete-compare-max-rows` | `0` | 分块删除比对的行数上限；`0` 关闭。超过 `full-compare-max-rows` 的表在这个上限内可按主键分页比对（每周期多扫一遍目标全表），主键带列清洗规则的表不适用 |
 | `sync.row-count-audit-interval-ms` | `60000` | 行数审计间隔；`0` 关闭 |
+| `sync.row-count-repair-max-rows` | `1000` | 审计发现目标少行时，按主键单独补齐的缺口上限；超出、无主键或游标列无法在目标侧比较时清空游标整表重载；`0` 关闭按主键修补 |
 | `sync.lock-ttl-ms` | `300000` | 同步锁租约时长 |
 | `sync.cdc.reconnect-backoff-ms` | `1000` | CDC 断线重连初始退避 |
 | `sync.cdc.reconnect-backoff-max-ms` | `60000` | 重连退避上限 |

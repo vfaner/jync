@@ -161,6 +161,152 @@ public final class KeysetChunker {
     }
 
     /**
+     * One page of <em>keys only</em> — the projection of the drift walk.
+     *
+     * <p>The row-count repair compares which keys each side holds, never what a row contains;
+     * projecting the key columns keeps the walk index-only even on a table whose rows carry
+     * LOBs that {@code SELECT *} would spill across the wire for nothing.
+     *
+     * @param lastPk   exclusive lower boundary, or null for the first page of the range
+     * @param upperKey inclusive upper edge of the range, or null for unbounded
+     */
+    public static String keyPageSql(SqlDialect dialect, String schema, String table,
+                                    List<String> pkColumns, List<Object> lastPk,
+                                    List<Object> upperKey, CursorStrategy strategy,
+                                    Object upperBound, int limit, List<Object> paramsOut) {
+        String where = rangeWhere(dialect, pkColumns, lastPk, upperKey, strategy, upperBound,
+                paramsOut);
+        List<String> projected = new ArrayList<>(pkColumns.size());
+        for (String column : pkColumns) {
+            projected.add(dialect.quoteIdentifier(column));
+        }
+        String projection = String.join(", ", projected);
+        StringBuilder sql = new StringBuilder("SELECT ").append(projection)
+                .append(" FROM ").append(dialect.qualify(schema, table));
+        if (!where.isEmpty()) {
+            sql.append(" WHERE ").append(where);
+        }
+        sql.append(" ORDER BY ").append(projection);
+        // The projection is repeated in the pagination wrapper: Oracle's ROWNUM form adds a
+        // helper column that an outer SELECT * would surface as a key column.
+        return dialect.getProjectedPaginationSql(sql.toString(), projected, 0, limit);
+    }
+
+    /**
+     * {@code COUNT(*)} of the rows inside a key range and at or below the watermark — the
+     * audit's per-side count narrowed to one range of the drift walk.
+     *
+     * <p>Both sides of the walk are counted with this one statement shape, so the two numbers
+     * describe the same set of rows, which is the only thing that makes them comparable.
+     */
+    public static String rangeCountSql(SqlDialect dialect, String schema, String table,
+                                       List<String> pkColumns, List<Object> lowerExclusive,
+                                       List<Object> upperInclusive, CursorStrategy strategy,
+                                       Object upperBound, List<Object> paramsOut) {
+        String where = rangeWhere(dialect, pkColumns, lowerExclusive, upperInclusive, strategy,
+                upperBound, paramsOut);
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ")
+                .append(dialect.qualify(schema, table));
+        if (!where.isEmpty()) {
+            sql.append(" WHERE ").append(where);
+        }
+        return sql.toString();
+    }
+
+    /**
+     * The full rows for a known set of keys — how a repair fetches only the rows it proved
+     * missing. A single-column key uses {@code IN}; a composite key uses the same row-equality
+     * OR-chain as the pager, because a tuple {@code IN} is not accepted everywhere.
+     *
+     * <p>Callers batch the key list: Oracle rejects an {@code IN} list longer than 1000
+     * expressions, and every product is happier with a short statement.
+     */
+    public static String keysSelectSql(SqlDialect dialect, String schema, String table,
+                                       List<String> pkColumns, List<List<Object>> keys,
+                                       CursorStrategy strategy, Object upperBound,
+                                       List<Object> paramsOut) {
+        if (keys == null || keys.isEmpty()) {
+            throw new IllegalArgumentException("A key fetch needs at least one key");
+        }
+        StringBuilder match = new StringBuilder();
+        if (pkColumns.size() == 1) {
+            match.append('(').append(dialect.quoteIdentifier(pkColumns.get(0))).append(" IN (");
+            for (int i = 0; i < keys.size(); i++) {
+                match.append(i > 0 ? ", ?" : "?");
+                paramsOut.add(keys.get(i).get(0));
+            }
+            match.append("))");
+        } else {
+            // The whole OR-chain stays parenthesized: the following AND (the watermark) must
+            // bind to the chain, not to its last term.
+            match.append('(');
+            for (int k = 0; k < keys.size(); k++) {
+                List<Object> key = keys.get(k);
+                if (key.size() != pkColumns.size()) {
+                    throw new IllegalArgumentException("Key has " + key.size()
+                            + " values but the key has " + pkColumns.size() + " columns");
+                }
+                if (k > 0) {
+                    match.append(" OR ");
+                }
+                match.append('(');
+                for (int i = 0; i < key.size(); i++) {
+                    if (i > 0) {
+                        match.append(" AND ");
+                    }
+                    match.append(dialect.quoteIdentifier(pkColumns.get(i))).append(" = ?");
+                    paramsOut.add(key.get(i));
+                }
+                match.append(')');
+            }
+            match.append(')');
+        }
+        StringBuilder sql = new StringBuilder("SELECT * FROM ")
+                .append(dialect.qualify(schema, table)).append(" WHERE ").append(match);
+        appendCursorBound(sql, dialect, strategy, upperBound, paramsOut);
+        return sql.toString();
+    }
+
+    /** The key-range predicate plus the watermark, shared by the count and the key page. */
+    private static String rangeWhere(SqlDialect dialect, List<String> pkColumns,
+                                     List<Object> lowerExclusive, List<Object> upperInclusive,
+                                     CursorStrategy strategy, Object upperBound,
+                                     List<Object> paramsOut) {
+        if (pkColumns == null || pkColumns.isEmpty()) {
+            throw new IllegalArgumentException("Key-range queries require a primary key");
+        }
+        StringBuilder where = new StringBuilder();
+        if (lowerExclusive != null) {
+            String lower = keysetWhere(dialect, pkColumns, lowerExclusive, paramsOut);
+            where.append(lowerExclusive.size() > 1 ? "(" + lower + ")" : lower);
+        }
+        if (upperInclusive != null) {
+            if (where.length() > 0) {
+                where.append(" AND ");
+            }
+            String upper = upperWhere(dialect, pkColumns, upperInclusive, paramsOut);
+            where.append(upperInclusive.size() > 1 ? "(" + upper + ")" : upper);
+        }
+        appendCursorBound(where, dialect, strategy, upperBound, paramsOut);
+        return where.toString();
+    }
+
+    /** Appends the watermark predicate in place when one applies; a no-op otherwise. */
+    private static void appendCursorBound(StringBuilder where, SqlDialect dialect,
+                                          CursorStrategy strategy, Object upperBound,
+                                          List<Object> paramsOut) {
+        if (upperBound == null || strategy == null || strategy.getColumn() == null) {
+            return;
+        }
+        if (where.length() > 0) {
+            where.append(" AND ");
+        }
+        where.append('(')
+                .append(cursorPredicate(dialect, strategy, upperBound, paramsOut))
+                .append(')');
+    }
+
+    /**
      * The watermark bound shared by every paged read: the cursor column at or below the
      * captured watermark, plus rows whose cursor is NULL (they fall outside every comparison
      * and would be silently lost). A pseudo-column such as {@code ORA_ROWSCN} is never NULL, so

@@ -173,6 +173,17 @@ public class SyncProperties {
     private long rowCountAuditIntervalMs = 60_000L;
 
     /**
+     * Largest drift the audit repairs by key before falling back to clearing the cursor and
+     * reloading the whole table; 0 disables the targeted repair (every drift reloads).
+     *
+     * <p>A shortfall this small is a backfilled row or two: walking the key range and
+     * upserting just those rows costs a fraction of a full reload and leaves the cursor — and
+     * with it the incremental position — untouched. A gap this wide means the table needs
+     * rebuilding anyway, and diffing further would cost more than the reload it replaces.
+     */
+    private int rowCountRepairMaxRows = 1_000;
+
+    /**
      * How long a data-plane statement may run before the driver aborts it.
      *
      * <p>Without a bound, a locked table or a broken network stack parks the sync worker (and the

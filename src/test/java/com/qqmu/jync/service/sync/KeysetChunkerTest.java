@@ -265,4 +265,82 @@ class KeysetChunkerTest {
         assertThat(sql).doesNotContain("rnum_");
         assertThat(sql).startsWith("SELECT * FROM (SELECT \"SEQ\", \"NAME\" FROM \"APP\".\"EVENTS\"");
     }
+
+    // --- drift walk primitives -------------------------------------------------------
+
+    private static final CursorStrategy BY_UPDATED =
+            CursorStrategy.timestamp("UPDATED", Types.TIMESTAMP, "update time");
+
+    @Test
+    void keyPageSqlProjectsOnlyTheKeysSoADriftWalkNeverReadsRowBodies() {
+        // A drift walk only needs to know WHICH keys exist; SELECT * would drag every LOB of
+        // the table across the wire for a comparison that never looks at a single value.
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.keyPageSql(new MySqlDialect(), null, "ITEMS",
+                List.of("ID"), List.of(4L), List.of(8L), BY_UPDATED, new Timestamp(5L),
+                50, params);
+
+        assertThat(sql).isEqualTo("SELECT `ID` FROM `ITEMS`"
+                + " WHERE (`ID` > ?) AND (`ID` <= ?)"
+                + " AND (`UPDATED` <= ? OR `UPDATED` IS NULL)"
+                + " ORDER BY `ID` LIMIT 50 OFFSET 0");
+        assertThat(params).containsExactly(4L, 8L, new Timestamp(5L));
+    }
+
+    @Test
+    void rangeCountSqlCountsInsideAKeyRangeWithTheAuditsWatermark() {
+        // The per-range count is the audit's COUNT(*) narrowed to (lo, hi]; it must carry the
+        // very same watermark predicate, or the two sides would count different row sets.
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.rangeCountSql(new MySqlDialect(), null, "ITEMS",
+                List.of("ID"), List.of(4L), List.of(8L), BY_UPDATED, new Timestamp(5L), params);
+
+        assertThat(sql).isEqualTo("SELECT COUNT(*) FROM `ITEMS`"
+                + " WHERE (`ID` > ?) AND (`ID` <= ?)"
+                + " AND (`UPDATED` <= ? OR `UPDATED` IS NULL)");
+        assertThat(params).containsExactly(4L, 8L, new Timestamp(5L));
+    }
+
+    @Test
+    void anUnboundedRangeCountOnlyCarriesTheWatermark() {
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.rangeCountSql(new MySqlDialect(), null, "ITEMS",
+                List.of("ID"), null, null, BY_UPDATED, new Timestamp(5L), params);
+
+        assertThat(sql).isEqualTo("SELECT COUNT(*) FROM `ITEMS`"
+                + " WHERE (`UPDATED` <= ? OR `UPDATED` IS NULL)");
+        assertThat(params).containsExactly(new Timestamp(5L));
+    }
+
+    @Test
+    void keysSelectSqlFetchesExactlyTheMissingKeysAndNothingElse() {
+        // One statement per batch of missing keys: IN for a single-column key, bounded by the
+        // same watermark, so a row that moved past the claimed cursor since the audit is left
+        // to the normal incremental window.
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.keysSelectSql(new MySqlDialect(), null, "ITEMS",
+                List.of("ID"), List.of(List.of(4L), List.of(9L)), BY_UPDATED,
+                new Timestamp(5L), params);
+
+        assertThat(sql).isEqualTo("SELECT * FROM `ITEMS`"
+                + " WHERE (`ID` IN (?, ?))"
+                + " AND (`UPDATED` <= ? OR `UPDATED` IS NULL)");
+        assertThat(params).containsExactly(4L, 9L, new Timestamp(5L));
+    }
+
+    @Test
+    void aCompositeMissingKeySetUsesTheRowEqualityOrChain() {
+        // Composite keys have no IN form that every product accepts for a tuple, so the same
+        // OR-chain the pager uses for row comparison is used for equality.
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.keysSelectSql(new MySqlDialect(), null, "LEDGER",
+                List.of("TENANT", "ID"),
+                List.of(List.of("acme", 1L), List.of("globex", 2L)), BY_UPDATED,
+                new Timestamp(5L), params);
+
+        assertThat(sql).isEqualTo("SELECT * FROM `LEDGER`"
+                + " WHERE ((`TENANT` = ? AND `ID` = ?) OR (`TENANT` = ? AND `ID` = ?))"
+                + " AND (`UPDATED` <= ? OR `UPDATED` IS NULL)");
+        assertThat(params).containsExactly("acme", 1L, "globex", 2L, new Timestamp(5L));
+    }
 }

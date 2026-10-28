@@ -187,6 +187,48 @@ class SyncEngineRowCountAuditLogTest {
     }
 
     @Test
+    void aTargetedRepairKeepsTheCursorAndFilesOneEntry() throws Exception {
+        // The drift was small enough to patch by key, so there is no reload to fold the
+        // counts into: the repair files its own entry, the cursor survives, and the cycle
+        // continues incrementally instead of re-reading the table.
+        when(dataSync.auditSyncedRowCounts(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new DataSyncService.RowCountAudit(456, 455));
+        when(dataSync.repairMissingRows(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(DataSyncService.RowDriftRepair.repaired(1));
+        stubLoad(0);
+
+        engine.runCycle(ctx());
+
+        verify(stateWriter, never()).clearCursor(any(SyncProgress.class));
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(stateWriter, times(1)).recordLog(eq(PROJECT_ID), eq(ObjectType.DATA),
+                eq("ORDERS"), eq(ChangeType.INFO), message.capture(), eq(true), anyLong(), any());
+        String logged = message.getValue();
+        assertTrue(logged.toLowerCase(Locale.ROOT).contains("row count audit"), logged);
+        assertTrue(logged.contains("1 row(s)"), logged);
+        assertFalse(logged.contains("Cursor cleared"),
+                "a targeted repair clears nothing: " + logged);
+    }
+
+    @Test
+    void aRepairTheTargetedWalkDeclinesFallsBackToClearingTheCursor() throws Exception {
+        when(dataSync.auditSyncedRowCounts(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new DataSyncService.RowCountAudit(456, 455));
+        when(dataSync.repairMissingRows(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(DataSyncService.RowDriftRepair.unhandled("table has no primary key"));
+        stubLoad(0);
+
+        engine.runCycle(ctx());
+
+        verify(stateWriter, times(1)).clearCursor(progress);
+        verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.DATA), eq("ORDERS"),
+                eq(ChangeType.INFO),
+                org.mockito.ArgumentMatchers.argThat(
+                        m -> m != null && m.contains("Cursor cleared")),
+                eq(true), anyLong(), any());
+    }
+
+    @Test
     void anOrdinaryLoadCarriesNoAuditText() throws Exception {
         when(dataSync.auditSyncedRowCounts(any(), any(), any(), any(), any(), any()))
                 .thenReturn(null);

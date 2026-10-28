@@ -13,8 +13,10 @@ import java.sql.Types;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -668,23 +670,7 @@ public class DataSyncService {
         SqlDialect targetDialect = ctx.getTargetDialect();
         String targetTable = ctx.getConfig().targetTableName(table.getName());
 
-        // The target cursor column can be coarser than the source's — a legacy table
-        // created as DATETIME(0) before the MySQL dialect emitted DATETIME(6). Drivers
-        // ROUND fractional seconds on insert, so a row exactly at the bound can be stored
-        // up to half a unit ABOVE it; comparing the raw bound on both sides then reports
-        // the target as permanently short and fires corrective reload after reload.
-        // Truncate the bound to the target column's own scale and use it for both counts:
-        // every row the truncated bound counts at the source was synced, and its rounded
-        // stored value still satisfies the truncated bound — no false deficit. Rows whose
-        // stored value rounds past it simply drop out of both counts, and an unsynced row
-        // just above the bound can only inflate the TARGET side, which the one-sided test
-        // ignores by design.
-        Object bound = cursor;
-        if (cursor instanceof Timestamp) {
-            int scale = targetCursorScale(targetConn, ctx.getTargetSchema(), targetTable,
-                    strategy.getColumn(), mysqlFamily(ctx));
-            bound = truncateToScale((Timestamp) cursor, scale);
-        }
+        Object bound = auditedBound(targetConn, ctx, table, strategy, cursor);
 
         SqlDialect sourceDialect = ctx.getSourceDialect();
         long sourceRows = countAtOrBelow(sourceConn,
@@ -698,6 +684,345 @@ public class DataSyncService {
                 targetDialect.quoteIdentifier(strategy.getColumn()), bound);
 
         return new RowCountAudit(sourceRows, targetRows);
+    }
+
+    /**
+     * The cursor value the audit AND its targeted repair are both bounded by.
+     *
+     * <p>The target cursor column can be coarser than the source's — a legacy table created as
+     * DATETIME(0) before the MySQL dialect emitted DATETIME(6). Drivers ROUND fractional
+     * seconds on insert, so a row exactly at the bound can be stored up to half a unit ABOVE
+     * it; comparing the raw bound on both sides then reports the target as permanently short
+     * and fires corrective reload after reload. Truncate the bound to the target column's own
+     * scale and use it everywhere: every row the truncated bound counts at the source was
+     * synced, and its rounded stored value still satisfies the truncated bound — no false
+     * deficit. Rows whose stored value rounds past it simply drop out of both counts, and an
+     * unsynced row just above the bound can only inflate the TARGET side, which the one-sided
+     * test ignores by design.
+     */
+    private Object auditedBound(Connection targetConn, SyncContext ctx, TableMeta table,
+                                CursorStrategy strategy, Object cursor) {
+        Object bound = cursor;
+        if (cursor instanceof Timestamp) {
+            int scale = targetCursorScale(targetConn, ctx.getTargetSchema(),
+                    ctx.getConfig().targetTableName(table.getName()), strategy.getColumn(),
+                    mysqlFamily(ctx));
+            bound = truncateToScale((Timestamp) cursor, scale);
+        }
+        return bound;
+    }
+
+    /**
+     * Verdict of a targeted drift repair.
+     *
+     * <p>{@code handled} means the missing rows were found by key and upserted; an unhandled
+     * repair changes nothing and leaves the caller its existing fallback (clear the cursor,
+     * reload the whole table).
+     */
+    @Getter
+    public static final class RowDriftRepair {
+        private final boolean handled;
+        private final long repairedRows;
+        private final String reason;
+
+        private RowDriftRepair(boolean handled, long repairedRows, String reason) {
+            this.handled = handled;
+            this.repairedRows = repairedRows;
+            this.reason = reason;
+        }
+
+        public static RowDriftRepair repaired(long rows) {
+            return new RowDriftRepair(true, rows, null);
+        }
+
+        public static RowDriftRepair unhandled(String reason) {
+            return new RowDriftRepair(false, 0L, reason);
+        }
+    }
+
+    /**
+     * Repairs a short target without reloading it: walk the audited key range in index-only
+     * key pages, compare the keys each side holds, and upsert only the rows that are missing.
+     *
+     * <p>This is the answer to the backfilled-row case the audit exists for. Clearing the
+     * cursor and reloading is correct — a row written with a cursor value at or below the
+     * watermark is invisible to the incremental window forever, and the reload is what makes
+     * it visible — but it pays a full read and a full rewrite of the table to recover a
+     * handful of rows. The same job is done here for a fraction of that: the source's keys
+     * are compared against the target's inside the very range the audit counted, and only the
+     * differing rows are copied.
+     *
+     * <p>The walk is deliberately cheap: the audited range is first split on sampled key
+     * boundaries and only the ranges whose counts disagree are walked page by page, so a
+     * mostly-clean table transfers almost no keys. Where the ranges cannot be sampled (no
+     * window functions) the whole range is walked once, which is still index-only.
+     *
+     * <p>The cursor is untouched. Declining — no primary key, no readable cursor column, a
+     * gap above {@code sync.row-count-repair-max-rows}, or a walk that finds nothing — is not
+     * a failure: the caller falls back to the full reload, exactly as before this existed.
+     *
+     * @return the outcome; never null
+     * @throws SQLException when a statement fails; the caller must treat that as "declined"
+     *                      and fall back, never as a reason to fail the table
+     */
+    public RowDriftRepair repairMissingRows(Connection sourceConn, Connection targetConn,
+                                            TableMeta table, CursorStrategy strategy,
+                                            SyncProgress progress, RowCountAudit audit,
+                                            SyncContext ctx) throws SQLException {
+        if (audit == null || !audit.isTargetShort()) {
+            return RowDriftRepair.unhandled("the target already holds every claimed row");
+        }
+        if (!strategy.isIncremental() || strategy.getColumn() == null
+                || strategy.isPseudoColumn()) {
+            return RowDriftRepair.unhandled(
+                    "the cursor column cannot be compared on the target");
+        }
+        List<String> pkColumns = table.getPrimaryKeys();
+        if (pkColumns == null || pkColumns.isEmpty()) {
+            return RowDriftRepair.unhandled(
+                    "the table has no primary key, so the missing rows cannot be named");
+        }
+        long missing = audit.getSourceRows() - audit.getTargetRows();
+        int ceiling = properties.getRowCountRepairMaxRows();
+        if (ceiling <= 0 || missing > ceiling) {
+            return RowDriftRepair.unhandled(missing + " row(s) missing is above the"
+                    + " targeted-repair ceiling of " + ceiling);
+        }
+        Object cursor = parseCursor(progress.getLastSyncValue(), strategy);
+        if (cursor == null) {
+            return RowDriftRepair.unhandled("the stored cursor cannot be parsed");
+        }
+        SqlDialect sourceDialect = ctx.getSourceDialect();
+        SqlDialect targetDialect = ctx.getTargetDialect();
+        Object bound = auditedBound(targetConn, ctx, table, strategy, cursor);
+        int pageSize = Math.max(1, properties.getChunkSize());
+
+        List<List<Object>> missingKeys = new ArrayList<>();
+        for (KeyRange range : repairCandidateRanges(sourceConn, table, strategy, bound, ctx,
+                audit.getSourceRows(), pageSize)) {
+            if (Thread.currentThread().isInterrupted()) {
+                return RowDriftRepair.unhandled("stop requested mid-walk");
+            }
+            long sourceRows = countKeyRange(sourceConn, sourceDialect, ctx.getSourceSchema(),
+                    table.getName(), pkColumns, range, strategy, bound);
+            if (sourceRows == 0) {
+                continue;
+            }
+            long targetRows = countKeyRange(targetConn, targetDialect, ctx.getTargetSchema(),
+                    ctx.getConfig().targetTableName(table.getName()), pkColumns, range, strategy,
+                    bound);
+            if (sourceRows <= targetRows) {
+                // Surplus rows on the target are expected (deletes not synced); only a range
+                // that is short can hold a missing key.
+                continue;
+            }
+            collectMissingKeys(sourceConn, targetConn, sourceDialect, targetDialect,
+                    ctx.getSourceSchema(), table.getName(), ctx.getTargetSchema(),
+                    ctx.getConfig().targetTableName(table.getName()), pkColumns, strategy, bound,
+                    range, pageSize, missingKeys);
+            if (missingKeys.size() > ceiling) {
+                return RowDriftRepair.unhandled(missingKeys.size() + " missing row(s) found"
+                        + " is above the targeted-repair ceiling of " + ceiling);
+            }
+        }
+        if (missingKeys.isEmpty()) {
+            return RowDriftRepair.unhandled("the key walk found no missing row"
+                    + " (a duplicate on the target may be masking the deficit)");
+        }
+
+        long repaired = 0L;
+        // Batched so a single statement stays short: Oracle rejects an IN list longer than
+        // 1000 expressions, and 200 keys is a comfortable size everywhere.
+        int keyBatch = 200;
+        for (int from = 0; from < missingKeys.size(); from += keyBatch) {
+            List<List<Object>> slice = missingKeys.subList(from,
+                    Math.min(from + keyBatch, missingKeys.size()));
+            List<Object> params = new ArrayList<>();
+            String sql = KeysetChunker.keysSelectSql(sourceDialect, ctx.getSourceSchema(),
+                    table.getName(), pkColumns, slice, strategy, bound, params);
+            repaired += copyRows(sourceConn, targetConn, sql, params, table,
+                    ctx.getConfig().targetTableName(table.getName()), ctx).read;
+        }
+        if (repaired == 0) {
+            // Keys were found but none of their rows could be read back inside the watermark.
+            // That is not a repair; let the caller do what always worked.
+            return RowDriftRepair.unhandled(
+                    "the missing keys no longer resolve to rows inside the audited range");
+        }
+        return RowDriftRepair.repaired(repaired);
+    }
+
+    /**
+     * The key ranges worth counting: the audited span split on sampled boundaries, or the
+     * single whole span when the source cannot sample (no window functions).
+     */
+    private List<KeyRange> repairCandidateRanges(Connection sourceConn, TableMeta table,
+                                                 CursorStrategy strategy, Object bound,
+                                                 SyncContext ctx, long sourceRows, int pageSize)
+            throws SQLException {
+        // Enough ranges that a walk of one costs about a page, but capped so a huge table
+        // does not spend its savings on sampling and counting. Two is the minimum: one range
+        // is the unsampled walk.
+        long wanted = (sourceRows + pageSize - 1) / pageSize;
+        int buckets = (int) Math.max(2, Math.min(16, wanted));
+        List<List<Object>> boundaries = sampleKeyBoundaries(sourceConn, table, strategy, bound,
+                ctx, buckets);
+        if (boundaries != null) {
+            List<KeyRange> ranges = sampledRanges(boundaries);
+            if (!ranges.isEmpty()) {
+                return ranges;
+            }
+        }
+        return List.of(KeyRange.sampled(null, null));
+    }
+
+    /** {@code COUNT(*)} of one key range at or below the watermark, on either side. */
+    private long countKeyRange(Connection conn, SqlDialect dialect, String schema, String table,
+                               List<String> pkColumns, KeyRange range, CursorStrategy strategy,
+                               Object bound) throws SQLException {
+        List<Object> params = new ArrayList<>();
+        String sql = KeysetChunker.rangeCountSql(dialect, schema, table, pkColumns, range.lower,
+                range.upper, strategy, bound, params);
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
+            for (int i = 0; i < params.size(); i++) {
+                ps.setObject(i + 1, params.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0L;
+            }
+        }
+    }
+
+    /**
+     * Walks one key range page by page and records every source key the target lacks.
+     *
+     * <p>Only keys cross the wire — never row bodies — and the target's page read is bounded
+     * by the same window as the source's page, so the two lists describe the same rows.
+     */
+    private void collectMissingKeys(Connection sourceConn, Connection targetConn,
+                                    SqlDialect sourceDialect, SqlDialect targetDialect,
+                                    String sourceSchema, String sourceTable, String targetSchema,
+                                    String targetTable, List<String> pkColumns,
+                                    CursorStrategy strategy, Object bound, KeyRange range,
+                                    int pageSize, List<List<Object>> missingKeys)
+            throws SQLException {
+        // The lower edge moves page by page; the range's own upper edge always bounds it.
+        List<Object> lastPk = range.lower;
+        while (true) {
+            List<Object> params = new ArrayList<>();
+            String sql = KeysetChunker.keyPageSql(sourceDialect, sourceSchema, sourceTable,
+                    pkColumns, lastPk, range.upper, strategy, bound, pageSize, params);
+            List<List<Object>> sourceKeys = readKeys(sourceConn, sql, params, pkColumns.size());
+            if (sourceKeys.isEmpty()) {
+                return;
+            }
+            List<Object> pageEnd = sourceKeys.get(sourceKeys.size() - 1);
+            List<Object> targetParams = new ArrayList<>();
+            String targetSql = KeysetChunker.keyPageSql(targetDialect, targetSchema, targetTable,
+                    pkColumns, lastPk, pageEnd, strategy, bound, pageSize, targetParams);
+            Set<String> present = new HashSet<>();
+            for (List<Object> key : readKeys(targetConn, targetSql, targetParams,
+                    pkColumns.size())) {
+                present.add(normalizedKey(key));
+            }
+            for (List<Object> key : sourceKeys) {
+                if (!present.contains(normalizedKey(key))) {
+                    missingKeys.add(key);
+                }
+            }
+            if (sourceKeys.size() < pageSize) {
+                return;
+            }
+            lastPk = pageEnd;
+        }
+    }
+
+    /** Reads a key projection, one {@code List} per row, in result-column order. */
+    private List<List<Object>> readKeys(Connection conn, String sql, List<Object> params,
+                                        int arity) throws SQLException {
+        List<List<Object>> keys = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
+            for (int i = 0; i < params.size(); i++) {
+                ps.setObject(i + 1, params.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    List<Object> key = new ArrayList<>(arity);
+                    for (int i = 1; i <= arity; i++) {
+                        key.add(rs.getObject(i));
+                    }
+                    keys.add(key);
+                }
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * One key tuple as a comparable string, so the source's and the target's copies of the
+     * same key compare equal even when the two drivers hand back different Java classes for
+     * it (an {@code Integer} 5 and a {@code Long} 5, a {@code BigDecimal} 5 and 5.00).
+     *
+     * <p>Both sides read the SAME catalog values through their own drivers, so only the
+     * representation differs — never the value. Comparing the canonical form keeps a type
+     * mismatch from turning every shared key into a false "missing" row.
+     */
+    static String normalizedKey(List<Object> key) {
+        StringBuilder sb = new StringBuilder();
+        for (Object value : key) {
+            if (value == null) {
+                sb.append("\u0000null");
+            } else if (value instanceof Number) {
+                sb.append(new BigDecimal(value.toString()).stripTrailingZeros().toPlainString());
+            } else if (value instanceof Timestamp) {
+                // Nanos matter: two keys can share a millisecond.
+                Timestamp stamp = (Timestamp) value;
+                sb.append(instantKey(stamp.toInstant(), stamp.getNanos()));
+            } else if (value instanceof java.time.LocalDateTime) {
+                // The same wall clock a Timestamp carries, so a LocalDateTime key from one
+                // driver matches the Timestamp key from the other.
+                Timestamp stamp = Timestamp.valueOf((java.time.LocalDateTime) value);
+                sb.append(instantKey(stamp.toInstant(), stamp.getNanos()));
+            } else if (value instanceof java.time.LocalDate) {
+                Timestamp stamp = Timestamp.valueOf(
+                        ((java.time.LocalDate) value).atStartOfDay());
+                sb.append(instantKey(stamp.toInstant(), stamp.getNanos()));
+            } else if (value instanceof java.util.Date) {
+                // java.sql.Date / java.sql.Time land here: they carry no sub-millisecond part.
+                long millis = ((java.util.Date) value).getTime();
+                sb.append(instantKey(Instant.ofEpochMilli(millis),
+                        (int) Math.floorMod(millis, 1000L) * 1_000_000));
+            } else if (value instanceof java.time.OffsetDateTime) {
+                java.time.OffsetDateTime offset = (java.time.OffsetDateTime) value;
+                sb.append(instantKey(offset.toInstant(), offset.getNano()));
+            } else if (value instanceof java.time.ZonedDateTime) {
+                java.time.ZonedDateTime zoned = (java.time.ZonedDateTime) value;
+                sb.append(instantKey(zoned.toInstant(), zoned.getNano()));
+            } else if (value instanceof java.time.Instant) {
+                Instant instant = (Instant) value;
+                sb.append(instantKey(instant, instant.getNano()));
+            } else if (value instanceof byte[]) {
+                sb.append(java.util.Arrays.toString((byte[]) value));
+            } else {
+                sb.append(value);
+            }
+            sb.append('\u0001');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * One instant as {@code epochSecond:nanosOfSecond}.
+     *
+     * <p>Every temporal branch of {@link #normalizedKey(List)} funnels through this, so two
+     * drivers returning the same value as different {@code java.time} / {@code java.sql}
+     * types still produce the same key. Nanos are kept separate from the millisecond part
+     * because a {@link Timestamp} carries both and two keys can share a millisecond.
+     */
+    private static String instantKey(Instant instant, int nanos) {
+        return instant.getEpochSecond() + ":" + nanos;
     }
 
     /**

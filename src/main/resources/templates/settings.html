@@ -261,6 +261,13 @@
                     </dd>
                 </div>
                 <div class="kv wide">
+                    <dt th:text="#{settings.rowCountRepairMaxRows}">Row-count repair ceiling</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.rowCountRepairMaxRows}">1000</span>
+                        <div class="help" th:text="#{settings.rowCountRepairMaxRowsHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
                     <dt th:text="#{settings.queryTimeout}">Data query timeout</dt>
                     <dd>
                         <span class="chip" th:text="${properties.queryTimeoutSeconds} + ' s'">300 s</span>
