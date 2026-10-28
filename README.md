@@ -196,6 +196,7 @@ SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 | PostgreSQL 逻辑解码 | PostgreSQL 11+（推进位点依赖 `pg_replication_slot_advance`）及 PG 系国产内核（openGauss、GaussDB、Kingbase、Highgo、Vastbase、Oscar、RaseSQL、SeaBoxSQL）；`wal_level=logical`；账号具备 `REPLICATION`（openGauss 不要求该属性）；表 `REPLICA IDENTITY` 非 `NOTHING`；openGauss 建议 `enable_slot_log=on`，否则重启后逻辑槽失效 | LSN |
 | SQL Server CDC | 2012+；库级 `sp_cdc_enable_db`；SQL Server Agent 运行中；账号在 `cdc_Admin` / `cdc_reader` | LSN |
 
+- **崖山（YashanDB）除外**：23.4.7.100 实测没有 `DBMS_LOGMNR`，日志 CDC 在该产品上不可用（见 [docs/dm-logminer-spike.md](docs/dm-logminer-spike.md) 第 7 节）；崖山源库请用轮询或全表比对。
 - **统一流程**：先记位点 → 分块全量基线 → 长驻线程连续回放。达梦与 Oracle 共用同一套 LogMiner 流水线，只有取位点、可挖文件与调用方式走各自的方言适配层。位点在基线之前写入，所以基线期间的变更不会漏。
 - **低空闲延迟**：有数据时本轮捞完立即开下一轮，0 额外等待；只有真空闲才休眠（LogMiner / SQL Server 默认 1s、PostgreSQL 500ms，最低 50ms）。MySQL binlog 是服务端推送，不做轮询。
 - **多实例接管**：同一任务的 CDC 流用数据库租约互斥，持锁节点宕机后 ≤ 60s 由其他节点接管续传。

@@ -136,9 +136,13 @@ class LogMinerCdcProbeTest {
      * look-alike that answers CURRENT_SCN is still refused — by name, until its redo format
      * has been measured. (DM is no longer refused: it answers the Oracle probe with an
      * error and is then served by its own dialect — see LogMinerCdcProbeDmTest.)
+     *
+     * <p>The refusal is the WHOLE report: the remaining checks ask Oracle questions the
+     * product cannot answer, and their remediation text ("enable supplemental logging")
+     * would send a DBA down a path that cannot work.
      */
     @Test
-    void anOracleModeLookAlikeIsRefusedUntilMeasured() throws SQLException {
+    void anOracleModeLookAlikeIsRefusedAtTheSourceCheckAlone() throws SQLException {
         DatabaseMetaData md = mock(DatabaseMetaData.class);
         when(md.getDatabaseProductName()).thenReturn("OceanBase");
         when(md.getDatabaseProductVersion()).thenReturn("4.2.1");
@@ -146,11 +150,37 @@ class LogMinerCdcProbeTest {
 
         CdcProbeResult r = probe.probe(conn, Collections.emptyList());
         assertThat(r.passed()).isFalse();
+        assertThat(r.getChecks()).hasSize(1);
         CdcProbeResult.Check c = byName(r, CdcProbeResult.ORACLE_SOURCE);
         assertThat(c.isPassed()).isFalse();
         assertThat(c.getDetail())
                 .contains("product=OceanBase")
                 .contains("refused");
+    }
+
+    /**
+     * YashanDB answers the Oracle probe ({@code V$DATABASE.CURRENT_SCN} exists) but ships
+     * no {@code SYS.DBMS_LOGMNR} and no {@code V$LOGMNR_CONTENTS} — measured 2026-10-29 on
+     * 23.4.7.100 (see docs/dm-logminer-spike.md). The refusal must say that, because
+     * "not measured yet" would imply a configuration change could unlock it.
+     */
+    @Test
+    void yashanDbIsRefusedBecauseItHasNoMiningPackage() throws SQLException {
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(md.getDatabaseProductName()).thenReturn("YashanDB");
+        when(md.getDatabaseProductVersion()).thenReturn("23.4.7.100");
+        when(conn.getMetaData()).thenReturn(md);
+
+        CdcProbeResult r = probe.probe(conn, Collections.emptyList());
+
+        assertThat(r.passed()).isFalse();
+        assertThat(r.getChecks()).hasSize(1);
+        CdcProbeResult.Check c = byName(r, CdcProbeResult.ORACLE_SOURCE);
+        assertThat(c.isPassed()).isFalse();
+        assertThat(c.getDetail())
+                .contains("product=YashanDB")
+                .contains("DBMS_LOGMNR")
+                .contains("polling");
     }
 
     @Test

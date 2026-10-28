@@ -42,8 +42,9 @@ public final class CdcProbeResult {
     /**
      * The source answers the redo-catalogue probe <em>and</em> is one of the products whose
      * mining behaviour has been measured (v1.9.0: Oracle, DM8). A look-alike that answers
-     * like Oracle — 崖山, OceanBase Oracle mode — is refused by name until it has its own
-     * measurement, because "the SQL parses" says nothing about the redo format underneath.
+     * like Oracle — 崖山, OceanBase Oracle mode — is refused by name, because "the SQL
+     * parses" says nothing about the redo format underneath; 崖山 was measured on
+     * 2026-10-29 and ships no {@code DBMS_LOGMNR} at all (docs/dm-logminer-spike.md §7).
      */
     public static final String ORACLE_SOURCE = "ORACLE_SOURCE";
     /** LOG_MODE = ARCHIVELOG — LogMiner needs archived redo (DM: ARCH_MODE = 'Y'). */

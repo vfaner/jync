@@ -24,8 +24,9 @@ import lombok.extern.slf4j.Slf4j;
  * runs is decided by {@link MiningDialects#detect(Connection)}, the same capability probe
  * the engine itself uses, so the readiness report cannot disagree with what mining will
  * actually do. Products that merely <em>answer</em> like Oracle (崖山, OceanBase Oracle
- * mode) are refused by {@link CdcProbeResult#ORACLE_SOURCE} until they have their own
- * measurement.
+ * mode) are refused by {@link CdcProbeResult#ORACLE_SOURCE}, and that refusal is the whole
+ * report: YashanDB 23.4.7.100 was measured on 2026-10-29 and has no {@code DBMS_LOGMNR} at
+ * all, so the following checks would ask it questions it cannot answer.
  */
 @Component
 @Slf4j
@@ -66,8 +67,17 @@ public class LogMinerCdcProbe {
 
     private CdcProbeResult probeOracle(Connection conn, List<String[]> ownerTables,
                                        com.qqmu.jync.model.DatabaseConfig config) {
+        CdcProbeResult.Check source = checkOracleSource(conn);
+        if (!source.isPassed()) {
+            // A product that only ANSWERS like Oracle has no measured mining path, and the
+            // rest of the list would ask it Oracle questions anyway: YashanDB 23.4.7.100 has
+            // no DBMS_LOGMNR at all, yet it happily reports LOG_MODE=ARCHIVELOG and
+            // SUPPLEMENTAL_LOG_DATA_MIN=NO — which would earn a DBA the advice to enable
+            // supplemental logging for a miner that does not exist. One verdict, no noise.
+            return CdcProbeResult.of(List.of(source));
+        }
         List<CdcProbeResult.Check> checks = new ArrayList<>();
-        checks.add(checkOracleSource(conn));
+        checks.add(source);
         int major = majorVersion(conn);
         checks.add(checkVersion(major));
         checks.add(checkArchivelog(conn));
@@ -275,9 +285,14 @@ public class LogMinerCdcProbe {
             if (product == null || !product.toUpperCase(Locale.ROOT).contains("ORACLE")) {
                 return CdcProbeResult.Check.of(CdcProbeResult.ORACLE_SOURCE, false,
                         "product=" + product + " — answered the Oracle redo probe, but only"
-                                + " Oracle and DM8 (which has its own dialect) have measured"
-                                + " mining behaviour; Oracle-mode look-alikes (YashanDB,"
-                                + " OceanBase) are refused until their redo format is measured");
+                                + " Oracle and DM8 (which has its own dialect) have a measured"
+                                + " mining path. YashanDB 23.4.7.100 was measured on"
+                                + " 2026-10-29 and ships no SYS.DBMS_LOGMNR and no"
+                                + " V$LOGMNR_CONTENTS, so redo mining there cannot be enabled by"
+                                + " configuration; other Oracle-mode look-alikes (e.g."
+                                + " OceanBase) are refused until measured. Capture this source"
+                                + " with polling (timestamp column or numeric key) or full"
+                                + " comparison instead");
             }
             return CdcProbeResult.Check.of(CdcProbeResult.ORACLE_SOURCE, true, product);
         } catch (SQLException e) {

@@ -1,6 +1,6 @@
 # 达梦 DBMS_LOGMNR 实测记录
 
-这份记录是一次**可行性验证**，不是功能文档：用于判断 DM / 崖山要不要走独立的日志 CDC 引擎，以及如果走，适配层要补什么。所有结论都来自一次真实 DM8 实例（Docker `xuxuclassmate/dameng:latest`，`DB Version: 0x7000c`）。
+这份记录是一次**可行性验证**，不是功能文档：用于判断 DM / 崖山要不要走独立的日志 CDC 引擎，以及如果走，适配层要补什么。第 1–6 节的结论来自一次真实 DM8 实例（Docker `xuxuclassmate/dameng:latest`，`DB Version: 0x7000c`）；第 7 节是 2026-10-29 对崖山 YashanDB 23.4.7.100 的独立复测。
 
 > **2026-10-28 更正。** 本记录第一版的核心结论（「`SQL_REDO` 不能当 SQL 用，列名被改写成 `COL n`，只能走 `MINE_VALUE`」）**是错的**。原因是挖掘时没有带 `DICT_FROM_ONLINE_CATALOG`，DM 拿不到字典，只能把列名降级成 `COL n` 渲染。带上该选项后 DM 输出标准 SQL，与 Oracle 的 `SQL_REDO` 几乎同形。下面全部是重测后的结果；第一版的错误结论已删除，不是并存。
 
@@ -194,7 +194,7 @@ UPDATE "SYSDBA"."LM_T5" SET "C" = OUT_CLOB, "B" = OUT_BLOB WHERE "ID" = 1;
 - 字面量：补齐 ANSI `DATE`/`TIMESTAMP`、`0x` 十六进制；`OUT_CLOB`/`OUT_BLOB` → 缺列。
 - 位点：存 `CSCN`，与 Oracle 引擎同构。
 - 前提探测：连上后检查 `ARCH_MODE`（`V$DATABASE` / `V$INSTANCE`）、`RLOG_APPEND_LOGIC`（`V$DM_INI`），任一不满足就在能力探测里给出可执行的修复语句，而不是等到挖不出数据再报错。
-- 崖山（YashanDB）：接口同源但**未实测**，落地前必须按本记录的每一条复测，不能假定与 DM 相同——尤其是 `RLOG_APPEND_LOGIC` 语义、`SQL_REDO` 大小写、以及 `DATE`/`TIMESTAMP` 的渲染形态。
+- 崖山（YashanDB）：**已复测，结论是不支持**（第 7 节）。它接受 Oracle 式的归档与补充日志 DDL，却没有 `SYS.DBMS_LOGMNR` 与 `V$LOGMNR_CONTENTS`，因此不存在"配置对了就能挖"的路径——崖山源库请用轮询或全表比对。
 
 ### 6.1 落地进度
 
@@ -206,4 +206,33 @@ UPDATE "SYSDBA"."LM_T5" SET "C" = OUT_CLOB, "B" = OUT_BLOB WHERE "ID" = 1;
 | `ARCH_MODE`、`RLOG_APPEND_LOGIC`、归档范围与新鲜度的能力探测与修复提示 | 已实现（`LogMinerCdcProbe` 的 DM 分支：①源库 ②版本 ③`ARCH_MODE` ④`DM_LOGIC_REDO` ⑤`DM_ARCHIVE_PERIOD` ⑥挖掘权限；Oracle 专属的表级补充日志 / LONG / CDB 检查在 DM 上不出现） |
 | `LOGMINER_CDC` 的 ORACLE 家族门禁（保存校验、连接测试探测、项目页探测、推荐项、策略卡片） | 已实现，按 `resolvedFamily()` 判；能不能真挖由连上后的能力探测决定 |
 | 基线起点 SCN 改由方言提供（Oracle `CURRENT_SCN` / DM `MAX(NEXT_CHANGE#)`，无归档时给出可执行提示） | 已实现（`CdcBaselineService.readCurrentScn` 走 `MiningDialect.highWaterScn`） |
-| 崖山复测 | **未做**（下一步：不得假定与 DM 相同） |
+| 崖山复测 | **已做（2026-10-29）**：崖山没有 `DBMS_LOGMNR`，日志 CDC 在该产品上不可用，探测改为在 ①源库 一项上直接给出结论——见第 7 节 |
+
+---
+
+## 7. 崖山（YashanDB）复测记录（2026-10-29）
+
+复测不是"再确认一次 DM 的结论"，而是逐条问崖山同样的问题。结论是**不成立**：崖山 23.4.7.100 里没有 LogMiner 这个能力本身。
+
+实例：Docker 镜像 `yasdb/yashandb:23.4.7.100`（原生 aarch64），`V$VERSION` = `YashanDB SQL Enterprise Edition Release 23.4.7.100 aarch64`，`V$DATABASE.LOG_MODE=ARCHIVELOG`。
+
+| 探测项 | DM8 实测 | 崖山 23.4.7.100 实测 |
+|---|---|---|
+| `SYS.DBMS_LOGMNR` 包 | 有 | **不存在**（`all_objects` 里 14 个内置包，无此包） |
+| `V$LOGMNR_CONTENTS` | 有 | **不存在**（`YAS-02012 table or view does not exist`） |
+| `V$RLOGFILE`（DM 方言探针） | 有 | 不存在 → DM 方言探测失败，崖山**不会**被识别成 DM |
+| `V$DATABASE.CURRENT_SCN`（Oracle 方言探针） | 字段不存在 | **有** → 崖山被识别成 Oracle 方言 |
+| `ARCH_MODE`（DM 的归档判断列） | 有（`Y`/`N`） | `YAS-04243 invalid identifier` |
+| `V$DATABASE.LOG_MODE` | 不存在 | `ARCHIVELOG` |
+| `SUPPLEMENTAL_LOG_DATA_MIN` | — | 有，默认 `NO`；`ALTER DATABASE ADD SUPPLEMENTAL LOG DATA` **执行成功**并翻成 `YES` |
+| `RLOG_APPEND_LOGIC` / `V$DM_INI` | 必需参数与参数视图 | 参数视图是 Oracle 式的 `V$PARAMETER`/`V$SYSTEM_PARAMETER`，**没有** `RLOG_APPEND_LOGIC` 或任何 `%LOGIC%` 参数 |
+| `V$ARCHIVED_LOG` | 有 | 有，`NAME`/`SEQUENCE#`/`FIRST_CHANGE#`/`NEXT_CHANGE#`/`COMPLETION_TIME` 齐全 |
+| `ORA_ROWSCN` | 不存在 | 不存在（`YAS-04243`），行级 SCN 游标同样不成立 |
+| `DBA_TAB_PRIVS` 里的 `DBMS_LOGMNR` 授权 | — | 0 行（因为包不存在） |
+
+两点值得记录：
+
+1. **崖山会"假装"满足 Oracle 的前提条件。** `LOG_MODE` 报 `ARCHIVELOG`、补充日志 DDL 执行成功、`CURRENT_SCN` 可读——如果不看包里到底有没有挖掘过程，探测会一路绿灯，然后在第一次挖掘时炸。所以 `LogMinerCdcProbe` 的 Oracle 分支在 ①源库 失败时**只返回这一项**，不再往下问补充日志、LONG、CDB 这些它答不了也办不到的问题。
+2. **"未实测"这个措辞不能再用了。** 之前拒绝崖山的文案是"实测前拒绝"，暗示配置对了就能放开。实测结果是产品根本没有这个能力，文案改成实测事实 + 明确给出替代路径（时间戳/数值键轮询、全表比对）。
+
+崖山作为 Jync 的**源库**仍然可用，只是走轮询或全表比对；`OracleMetadataReader` 也已按 `isOracleProduct()` 把 `ORA_ROWSCN` 探测排除在外，与本次实测一致。
