@@ -179,7 +179,7 @@ Jync 有三条数据通路，分别解决"第一次怎么搬""之后怎么追""�
 SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 ```
 
-- 游标列自动识别：`TIMESTAMP` 识别新增与更新，`ROW_SCN` 识别 Oracle 行级变更，`IDENTITY` 只识别新增。有主键的小表可选用 `FULL_COMPARE` 周期性整表比对：自动选择只覆盖行数不超过 `sync.full-compare-max-rows`（默认 20000）的表，手动在任务级选择则不受该上限约束，但每个轮询周期都会整表读取源库；删除只有在开启「同步行删除」且表行数不超过上限时才会处理。详情页与启动日志会列出超限、或按当前轮询间隔负担过重的表，并给出建议间隔。
+- 游标列自动识别：`TIMESTAMP` 识别新增与更新，`ROW_SCN` 识别 Oracle 行级变更，`IDENTITY` 只识别新增。有主键的小表可选用 `FULL_COMPARE` 周期性整表比对：自动选择只覆盖行数不超过 `sync.full-compare-max-rows`（默认 20000）的表，手动在任务级选择则不受该上限约束，但每个轮询周期都会整表读取源库；删除只有在开启「同步行删除」且表行数不超过上限时才会处理；更大的表可把 `sync.delete-compare-max-rows`（默认 0 = 关闭）调大，改用按主键分页的分块比对（每周期多扫一遍目标全表，主键带列清洗规则的表不适用），或使用日志 CDC。详情页与启动日志会列出超限、或按当前轮询间隔负担过重的表，并给出建议间隔。
 - 水位线回退 `safety-lag-ms`：晚提交的事务会在下一轮被重新读到，幂等 upsert 吸收重叠。
 - **游标在目标库提交之后才推进**，因此故障恢复语义是 at-least-once，不会丢行。
 - 默认的轮询模式不碰源库 binlog，也不建触发器，只需一个只读账号。
@@ -630,6 +630,7 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 | `sync.max-pool-size` | `5` | 每个数据库连接池上限，建议 5–10；并行度还会被池上限反过来限制 |
 | `sync.safety-lag-ms` | `1000` | 时间戳水位线回退量 |
 | `sync.full-compare-max-rows` | `20000` | 自动选用全表比对的行数上限；手动在任务级选择时不生效，超出时页面与启动日志会提示 |
+| `sync.delete-compare-max-rows` | `0` | 分块删除比对的行数上限；`0` 关闭。超过 `full-compare-max-rows` 的表在这个上限内可按主键分页比对（每周期多扫一遍目标全表），主键带列清洗规则的表不适用 |
 | `sync.row-count-audit-interval-ms` | `60000` | 行数审计间隔；`0` 关闭 |
 | `sync.lock-ttl-ms` | `300000` | 同步锁租约时长 |
 | `sync.cdc.reconnect-backoff-ms` | `1000` | CDC 断线重连初始退避 |

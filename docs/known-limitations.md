@@ -48,8 +48,8 @@ Jync 的 README 只讲它能做什么。这份文档讲清楚它在哪些输入�
 ### 3.1 轮询看不到 DELETE
 
 - 时间戳、行级 SCN、自增列三种游标都只能看到"出现了哪些新行/被更新的行"。源库的 `DELETE` 不会出现在结果集里。
-- 有主键的小表可用 `FULL_COMPARE`：每轮重读整表、按主键 upsert。代价是整表读取；自动选择只在行数不超过 `full-compare-max-rows`（默认 20000）时启用，手动在任务级选择则不受该上限约束；详情页与启动日志会提示超限、或按当前轮询间隔负担过重的表，并给出建议间隔（按约 1,000 行/秒估算，实际以数据库性能为准）。源库删除只在开启「同步行删除」且表行数不超过上限时才会同步；无主键表只做一次种子加载，之后跳过。
-- 大表需要删除同步时，只能使用日志 CDC。
+- 有主键的小表可用 `FULL_COMPARE`：每轮重读整表、按主键 upsert。代价是整表读取；自动选择只在行数不超过 `full-compare-max-rows`（默认 20000）时启用，手动在任务级选择则不受该上限约束；详情页与启动日志会提示超限、或按当前轮询间隔负担过重的表，并给出建议间隔（按约 1,000 行/秒估算，实际以数据库性能为准）。源库删除只在开启「同步行删除」且表行数不超过上限时才会同步（分块比对见下一条）；无主键表只做一次种子加载，之后跳过。
+- 超过该上限的表要同步删除，有两条路：日志 CDC，或者把 `sync.delete-compare-max-rows`（默认 0 = 关闭）调大。后者是**分块比对**：把目标表按主键键序翻页，每页只把这一页的主键拿回源库按等值查在不在，内存占用从"整表所有键"降到"一页"。代价是每个周期多扫一遍目标全表、并多出「行数 / 每页键数」次源库查询，所以默认关闭、由运维按表的大小和轮询间隔自行开启；开启后页面与启动日志不再提示该表被跳过。主键上有列清洗规则的表不能走分块（目标库里存的是清洗后的键，回源查不到原始键），仍按上一条跳过。
 
 ### 3.2 游标列必须随更新变化
 
@@ -76,7 +76,7 @@ Jync 的 README 只讲它能做什么。这份文档讲清楚它在哪些输入�
 
 四种引擎都需要在源库开启相应能力并授予额外权限，详见 README 的 CDC 前提表。几个容易忽略的点：
 
-- **MySQL**：`binlog_row_image=FULL` 才能拿到完整行；`REPLICATION SLAVE` 与 `REPLICATION CLIENT` 两个权限都要有；binlog 保留时间必须覆盖最长停机窗口。
+- **MySQL 系**：`binlog_row_image=FULL` 才能拿到完整行；`REPLICATION SLAVE`（8.0.22+ 名 `REPLICATION REPLICA`）与 `REPLICATION CLIENT` 两个权限都要有——MariaDB 10.5 起 `REPLICATION CLIENT` 在 `SHOW GRANTS` 里显示为 `BINLOG MONITOR`，探测两种名字都认；binlog 保留时间必须覆盖最长停机窗口。v1.9.0 起 binlog CDC 不再按产品名拒绝，MariaDB / TiDB / OceanBase 等 MySQL 协议产品都可以选，**能否真正使用由连接时的能力探测决定**：对非原厂 MySQL 的源，探测会真的开一条一次性复制流（server_id 取 4294967294，不占用也不踢掉任何任务），从**上一份** binlog 文件开头读事件，解出一条行事件（TableMap / WriteRows / UpdateRows / DeleteRows）才判通过；解不出就把解码器的原始报错写进检查项。之所以读上一份文件：刚轮转出的当前文件只有 FormatDescription / GTID / CHECKPOINT 事件，没有任何行事件（实测 MariaDB 11.8）。原厂 MySQL 跳过这条流探测——生产里每条 CDC 任务都在持续验证它的线格式。
 - **Oracle**：`ARCHIVELOG`、库级补充日志、表级 `(ALL) COLUMNS` 缺一不可；归档保留同样要覆盖停机窗口。
 - **PostgreSQL 系**：PostgreSQL 11+（推进位点依赖 `pg_replication_slot_advance`，9.4–10 的探测会失败）；`wal_level=logical`；Jync 会用 `test_decoding` 创建逻辑复制槽，因此该插件必须可用；表的 `REPLICA IDENTITY` 不能是 `NOTHING`。v1.9.0 起 PG 家族（openGauss、翰高、Vastbase、Kingbase 等）也能选 PG 逻辑 CDC，但**能否真正使用由连接时的能力探测决定**：openGauss 5.0 已实测通过（另建议 `enable_slot_log=on`，否则服务器重启后槽不保留，需要重建基线），其余内核需在目标环境自检。探测不是「按品牌猜」：它会建一个一次性逻辑槽，在上面**真跑**消费端要用的 peek 与位点推进语句，再逐表检查 `REPLICA IDENTITY`，任何一条语句不被该内核接受即判不可用，并把服务器原始报错写进检查项 —— 所以「自检」不需要人工拼 SQL，点一次探测即可。
 - **SQL Server**：库级 CDC 已启用，且 **SQL Server Agent 必须持续运行**；Agent 停止后 CDC 捕获表不再增长，Jync 看起来"没有变更"。
