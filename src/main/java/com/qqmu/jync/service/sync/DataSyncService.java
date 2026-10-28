@@ -25,6 +25,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.ChunkCheckpoint;
@@ -2691,16 +2692,28 @@ public class DataSyncService {
      * <p>Only offered for tables small enough to enumerate keys on both sides, because
      * detecting deletions without a source-side audit trail requires comparing full key sets.
      */
+    /** Target keys held in memory, and sent to the source, per chunked-comparison page. */
+    static final int DELETION_CHUNK_KEYS = 500;
+
+    /** Bind-parameter budget per statement: Oracle's IN list stops at 1000 expressions. */
+    private static final int DELETION_MAX_PARAMS = 900;
+
     /**
      * Why deletion detection cannot run for this table, or {@code null} when it can.
      *
-     * <p>Detection reads every key of both sides into memory, so a table above
-     * {@code sync.full-compare-max-rows} — or one whose size the source cannot estimate — is
-     * skipped rather than risking the heap. The engine turns a non-null reason into one WARN
-     * and one change-log entry per table: a "同步删除" that quietly never runs is worse than
-     * one that reports why.
+     * <p>Above {@code sync.full-compare-max-rows} the in-memory comparison is out (it holds
+     * every key of both sides), so two things are left: the chunked comparison, which holds
+     * one page of target keys and sends them to the source, and giving up. The chunked path
+     * is gated by {@code sync.delete-compare-max-rows} because it costs a full target scan
+     * plus one source lookup per key on every cycle. It is also unavailable when a column
+     * rule rewrites the primary key: the target then stores cleaned keys that cannot be
+     * looked up in the source, and only the in-memory path (which cleanses the source keys
+     * before comparing) is correct.
+     *
+     * <p>The engine turns a non-null reason into one WARN and one change-log entry per table:
+     * a "同步删除" that quietly never runs is worse than one that reports why.
      */
-    public String deletionDetectionSkipReason(TableMeta table) {
+    public String deletionDetectionSkipReason(TableMeta table, SyncConfig config) {
         if (!table.hasPrimaryKey()) {
             return "it has no primary key, so rows cannot be matched";
         }
@@ -2709,18 +2722,58 @@ public class DataSyncService {
             return "its row count could not be estimated";
         }
         long limit = properties.getFullCompareMaxRows();
-        if (rows > limit) {
-            return "it has about " + rows + " rows, over sync.full-compare-max-rows=" + limit;
+        if (rows <= limit) {
+            return null;
+        }
+        String inMemory = "it has about " + rows + " rows, over sync.full-compare-max-rows=" + limit;
+        if (!canCompareInChunks(config, table)) {
+            return inMemory + " (a column rule rewrites its primary key, so keys can only be"
+                    + " compared in memory)";
+        }
+        long ceiling = properties.getDeleteCompareMaxRows();
+        if (ceiling <= 0) {
+            return inMemory;
+        }
+        if (rows > ceiling) {
+            return "it has about " + rows + " rows, over sync.delete-compare-max-rows=" + ceiling;
         }
         return null;
     }
 
+    /**
+     * Whether keys can be compared a page at a time against the source.
+     *
+     * <p>A cleansed primary key breaks it: the target holds {@code 'A'} where the source holds
+     * {@code 'tmp_A'}, so looking the target key up in the source returns nothing and every
+     * row would be deleted. The in-memory path transforms the source keys before comparing,
+     * which is why it stays correct there.
+     */
+    private static boolean canCompareInChunks(SyncConfig config, TableMeta table) {
+        List<String> pk = table.getPrimaryKeys();
+        if (pk == null || pk.isEmpty()) {
+            return false;
+        }
+        for (String ruled : ColumnCleanser.forTable(config, table.getName()).columns()) {
+            for (String key : pk) {
+                if (key.equalsIgnoreCase(ruled)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     public int syncDeletions(Connection sourceConn, Connection targetConn, TableMeta table,
                              SyncContext ctx) throws SQLException {
-        String skipReason = deletionDetectionSkipReason(table);
+        String skipReason = deletionDetectionSkipReason(table, ctx.getConfig());
         if (skipReason != null) {
             log.debug("Skipping deletion detection for {}: {}", table.getName(), skipReason);
             return 0;
+        }
+        Long rows = table.getApproximateRowCount();
+        if (rows != null && rows > properties.getFullCompareMaxRows()
+                && canCompareInChunks(ctx.getConfig(), table)) {
+            return syncDeletionsByChunk(sourceConn, targetConn, table, ctx);
         }
 
         List<String> pk = table.getPrimaryKeys();
@@ -2811,6 +2864,217 @@ public class DataSyncService {
         }
         log.info("Deleted {} row(s) from {} that no longer exist in source", deleted, targetTable);
         return deleted;
+    }
+
+    /**
+     * Deletes target rows whose keys no longer exist in the source, one page of target keys
+     * at a time.
+     *
+     * <p>Memory stays O(page): the target is walked in primary-key order with keyset
+     * pagination ({@code WHERE pk > last ORDER BY pk} plus {@code setMaxRows}), never OFFSET —
+     * a keyset cursor does not shift when the rows before it are deleted, which is exactly
+     * this method's case. Each page's keys are then looked up in the source by equality, so
+     * no comparison depends on the two databases agreeing on a collation or sort order. The
+     * keys themselves are still compared in their canonical rendered form, like the
+     * in-memory path, so both paths make the same decision for the same row.
+     */
+    private int syncDeletionsByChunk(Connection sourceConn, Connection targetConn,
+                                     TableMeta table, SyncContext ctx) throws SQLException {
+        List<String> pk = table.getPrimaryKeys();
+        SqlDialect sourceDialect = ctx.getSourceDialect();
+        SqlDialect targetDialect = ctx.getTargetDialect();
+        String targetTableName = ctx.getConfig().targetTableName(table.getName());
+        String targetRef = targetDialect.qualify(ctx.getTargetSchema(), targetTableName);
+        String sourceRef = sourceDialect.qualify(ctx.getSourceSchema(), table.getName());
+        String targetColumns = pk.stream().map(targetDialect::quoteIdentifier)
+                .reduce((a, b) -> a + ", " + b).orElseThrow();
+        String sourceColumns = pk.stream().map(sourceDialect::quoteIdentifier)
+                .reduce((a, b) -> a + ", " + b).orElseThrow();
+        int chunkKeys = Math.max(1, Math.min(DELETION_CHUNK_KEYS,
+                DELETION_MAX_PARAMS / Math.max(1, pk.size())));
+        String firstPage = "SELECT " + targetColumns + " FROM " + targetRef
+                + " ORDER BY " + targetColumns;
+        String nextPage = "SELECT " + targetColumns + " FROM " + targetRef
+                + " WHERE " + keysetPredicate(targetDialect, pk) + " ORDER BY " + targetColumns;
+        String deleteSql = targetDialect.getDeleteByPkSql(ctx.getTargetSchema(), targetTableName, pk);
+
+        boolean originalAutoCommit = targetConn.getAutoCommit();
+        int deleted = 0;
+        int inBatch = 0;
+        boolean inTransaction = false;
+        Object[] lastKey = null;
+        try (PreparedStatement ps = targetConn.prepareStatement(deleteSql)) {
+            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
+            while (true) {
+                List<Object[]> chunk = readTargetPage(targetConn,
+                        lastKey == null ? firstPage : nextPage, pk, chunkKeys, lastKey);
+                if (chunk.isEmpty()) {
+                    break;
+                }
+                java.util.Set<String> stillInSource = sourceKeysOf(sourceConn, sourceRef,
+                        sourceColumns, pk, sourceDialect, chunk);
+                for (Object[] row : chunk) {
+                    if (stillInSource.contains(renderKey(row))) {
+                        continue;
+                    }
+                    // 与整表比对同一条纪律:只有真要删的时候才关自动提交,恢复动作由驱动
+                    // 实现成"提交当前事务",所以异常路径必须显式回滚。
+                    if (!inTransaction) {
+                        targetConn.setAutoCommit(false);
+                        inTransaction = true;
+                    }
+                    for (int i = 0; i < row.length; i++) {
+                        ps.setObject(i + 1, row[i]);
+                    }
+                    ps.addBatch();
+                    if (++inBatch >= ctx.getBatchSize()) {
+                        deleted += sumCounts(ps.executeBatch());
+                        targetConn.commit();
+                        ctx.requireLease();
+                        inBatch = 0;
+                    }
+                }
+                lastKey = chunk.get(chunk.size() - 1);
+                if (chunk.size() < chunkKeys) {
+                    break;
+                }
+            }
+            if (inTransaction) {
+                if (inBatch > 0) {
+                    deleted += sumCounts(ps.executeBatch());
+                }
+                targetConn.commit();
+            }
+        } catch (SQLException e) {
+            // The transaction only opens when the first deletion is found, so a failure in
+            // the read phase arrives with auto-commit still on — and PostgreSQL answers a
+            // rollback there with "Cannot rollback when autoCommit is enabled", which would
+            // replace the real error with a misleading one.
+            if (inTransaction) {
+                targetConn.rollback();
+            }
+            throw e;
+        } catch (RuntimeException e) {
+            if (inTransaction) {
+                try {
+                    targetConn.rollback();
+                } catch (SQLException rollbackError) {
+                    log.error("Rollback after an unchecked failure failed for {}: {}",
+                            targetTableName, rollbackError.getMessage());
+                }
+            }
+            throw e;
+        } finally {
+            if (inTransaction) {
+                targetConn.setAutoCommit(originalAutoCommit);
+            }
+        }
+        log.info("Deleted {} row(s) from {} that no longer exist in source (chunked comparison)",
+                deleted, targetTableName);
+        return deleted;
+    }
+
+    /** One page of target keys, in primary-key order, after {@code lastKey} when given. */
+    private List<Object[]> readTargetPage(Connection conn, String sql, List<String> pk,
+                                          int chunkKeys, Object[] lastKey) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            // setMaxRows is portable where LIMIT / TOP / FETCH FIRST are not.
+            ps.setMaxRows(chunkKeys);
+            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
+            if (lastKey != null) {
+                // Disjunct i binds the whole key prefix [0..i]; the values repeat, which is
+                // cheaper than rewriting the predicate per page.
+                int index = 1;
+                for (int column = 0; column < lastKey.length; column++) {
+                    for (int prefix = 0; prefix <= column; prefix++) {
+                        ps.setObject(index++, lastKey[prefix]);
+                    }
+                }
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                List<Object[]> rows = new ArrayList<>();
+                while (rs.next()) {
+                    Object[] row = new Object[pk.size()];
+                    for (int i = 0; i < row.length; i++) {
+                        row[i] = rs.getObject(i + 1);
+                    }
+                    rows.add(row);
+                }
+                return rows;
+            }
+        }
+    }
+
+    /**
+     * Lexicographic {@code key > ?} for a composite primary key:
+     * {@code (a > ?) OR (a = ? AND b > ?) OR (a = ? AND b = ? AND c > ?)}.
+     */
+    private static String keysetPredicate(SqlDialect dialect, List<String> pk) {
+        List<String> disjuncts = new ArrayList<>();
+        for (int i = 0; i < pk.size(); i++) {
+            List<String> parts = new ArrayList<>();
+            for (int j = 0; j < i; j++) {
+                parts.add(dialect.quoteIdentifier(pk.get(j)) + " = ?");
+            }
+            parts.add(dialect.quoteIdentifier(pk.get(i)) + " > ?");
+            disjuncts.add("(" + String.join(" AND ", parts) + ")");
+        }
+        return String.join(" OR ", disjuncts);
+    }
+
+    /**
+     * The rendered keys of this page that still exist in the source.
+     *
+     * <p>Equality, not a key range: a range would depend on the source and the target
+     * agreeing on a sort order — different collations, different CHAR padding, different
+     * numeric ordering — and a key the source sorts outside the range would look deleted
+     * and be removed from the target.
+     */
+    private java.util.Set<String> sourceKeysOf(Connection conn, String sourceRef,
+                                               String sourceColumns, List<String> pk,
+                                               SqlDialect dialect, List<Object[]> chunk)
+            throws SQLException {
+        String predicate;
+        if (pk.size() == 1) {
+            String placeholders = String.join(", ",
+                    java.util.Collections.nCopies(chunk.size(), "?"));
+            predicate = dialect.quoteIdentifier(pk.get(0)) + " IN (" + placeholders + ")";
+        } else {
+            String group = "(" + pk.stream().map(dialect::quoteIdentifier)
+                    .reduce((a, b) -> a + " = ? AND " + b).orElseThrow() + " = ?)";
+            predicate = String.join(" OR ",
+                    java.util.Collections.nCopies(chunk.size(), group));
+        }
+        String sql = "SELECT " + sourceColumns + " FROM " + sourceRef + " WHERE " + predicate;
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
+            int index = 1;
+            for (Object[] row : chunk) {
+                for (Object value : row) {
+                    ps.setObject(index++, value);
+                }
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    keys.add(keyOf(rs, pk.size()));
+                }
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * The composite-key text a row of raw values renders to — the same format as
+     * {@link #keyOf(ResultSet, int)} so both paths compare identical strings.
+     */
+    private static String renderKey(Object[] values) {
+        StringBuilder sb = new StringBuilder();
+        for (Object value : values) {
+            String part = keyPartOf(value);
+            sb.append(part.length()).append(':').append(part).append('\u0001');
+        }
+        return sb.toString();
     }
 
     /** Source-side key, transformed by the project's column rules before comparison. */

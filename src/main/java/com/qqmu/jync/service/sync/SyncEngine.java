@@ -829,7 +829,7 @@ public class SyncEngine {
      * visible both in the log and on the audit page without repeating every poll.
      */
     private void warnIfDeletionsAreSkipped(SyncContext ctx, TableMeta table) {
-        String reason = dataSync.deletionDetectionSkipReason(table);
+        String reason = dataSync.deletionDetectionSkipReason(table, ctx.getConfig());
         if (reason == null) {
             return;
         }
@@ -840,7 +840,9 @@ public class SyncEngine {
         String detail = "Deletion sync for " + table.getName() + " is skipped: " + reason
                 + ". Rows deleted at the source stay on the target. Raise"
                 + " sync.full-compare-max-rows if the table is small enough for an in-memory"
-                + " comparison, or use log-based CDC, which carries deletes.";
+                + " comparison, raise sync.delete-compare-max-rows to compare it one key page"
+                + " at a time (one extra full scan of the target per cycle), or use log-based"
+                + " CDC, which carries deletes.";
         log.warn("Project '{}': {}", ctx.projectName(), detail);
         // INFO, success=true: nothing failed — the operator's configuration just cannot
         // deliver deletes for this table, and that belongs on the record.

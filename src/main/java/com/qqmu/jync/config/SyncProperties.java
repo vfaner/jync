@@ -121,6 +121,18 @@ public class SyncProperties {
     private long fullCompareMaxRows = 20000L;
 
     /**
+     * Row-count ceiling for chunked deletion comparison; {@code 0} keeps it off.
+     *
+     * <p>Above {@link #fullCompareMaxRows}, detecting source-side deletes used to stop: the
+     * comparison held every key of both sides in memory. The chunked path holds one page of
+     * target keys at a time instead, so the ceiling is the cost the operator accepts rather
+     * than the heap's: each cycle scans the whole target table and asks the source about
+     * every key it finds. That is one extra full scan per table per cycle, hence off by
+     * default — a version upgrade must not silently start scanning million-row tables.
+     */
+    private long deleteCompareMaxRows = 0L;
+
+    /**
      * Maximum size of each per-database connection pool.
      *
      * <p>A running cycle borrows only one connection per side, but the pool must also absorb

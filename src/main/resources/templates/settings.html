@@ -146,6 +146,13 @@
                         <dt th:text="#{settings.fullCompareMax}">Full-compare ceiling</dt>
                         <dd><span class="chip" th:text="${properties.fullCompareMaxRows}">20000</span></dd>
                     </div>
+                    <div class="kv wide">
+                        <dt th:text="#{settings.deleteCompareMax}">Chunked delete ceiling</dt>
+                        <dd>
+                            <span class="chip" th:text="${properties.deleteCompareMaxRows}">0</span>
+                            <div class="help" th:text="#{settings.deleteCompareMaxHelp}">help</div>
+                        </dd>
+                    </div>
                     <!-- 带说明的行跨满双列：值和说明并排成一条长行，不挤在右半栏窄格里 -->
                     <div class="kv wide">
                         <dt th:text="#{settings.changeLogRetention}">Change-log retention (days)</dt>

@@ -165,6 +165,11 @@ sync:
   # Row count ceiling under which a table with no usable cursor column is
   # synchronized by full comparison instead of being skipped
   full-compare-max-rows: 20000
+  # Row count ceiling for chunked deletion comparison (0 = off). Above
+  # full-compare-max-rows the keys no longer fit in memory; with this raised, a table
+  # is compared one page of target keys at a time instead of being skipped. Cost: one
+  # full scan of the target plus one source lookup per key, every cycle.
+  delete-compare-max-rows: 0
   # TTL for the per-project sync lock; a crashed node's lock expires after this
   lock-ttl-ms: 300000
   # A polling cycle with no progress for this long is reported as wedged. Until it returns,
