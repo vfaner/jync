@@ -78,7 +78,7 @@ Jync 的 README 只讲它能做什么。这份文档讲清楚它在哪些输入�
 
 - **MySQL**：`binlog_row_image=FULL` 才能拿到完整行；`REPLICATION SLAVE` 与 `REPLICATION CLIENT` 两个权限都要有；binlog 保留时间必须覆盖最长停机窗口。
 - **Oracle**：`ARCHIVELOG`、库级补充日志、表级 `(ALL) COLUMNS` 缺一不可；归档保留同样要覆盖停机窗口。
-- **PostgreSQL**：`wal_level=logical`；Jync 会用 `test_decoding` 创建逻辑复制槽，因此该插件必须可用；表的 `REPLICA IDENTITY` 不能是 `NOTHING`。
+- **PostgreSQL 系**：`wal_level=logical`；Jync 会用 `test_decoding` 创建逻辑复制槽，因此该插件必须可用；表的 `REPLICA IDENTITY` 不能是 `NOTHING`。v1.9.0 起 PG 家族（openGauss、翰高、Vastbase、Kingbase 等）也能选 PG 逻辑 CDC，但**能否真正使用由连接时的能力探测决定**：openGauss 5.0 已实测通过（另建议 `enable_slot_log=on`，否则服务器重启后槽不保留，需要重建基线），其余内核需在目标环境自检。
 - **SQL Server**：库级 CDC 已启用，且 **SQL Server Agent 必须持续运行**；Agent 停止后 CDC 捕获表不再增长，Jync 看起来"没有变更"。
 
 ### 4.2 主键是必需项
