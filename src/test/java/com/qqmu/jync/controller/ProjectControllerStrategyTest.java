@@ -262,6 +262,42 @@ class ProjectControllerStrategyTest {
         assertThat(mysqlPage).contains("value=\"BINLOG_CDC\"");
     }
 
+    /**
+     * v1.9.0:PG 逻辑 CDC 的门禁已按方言家族放行,页面的策略卡片必须同步放行 ——
+     * 卡片仍按字面 POSTGRESQL 渲染时,openGauss 用户在项目页根本选不到该策略,
+     * 后端放行等于没放行。
+     */
+    @Test
+    void detailShowsThePgCardForEveryPostgresFamilySource() throws Exception {
+        stubDetail(DatabaseType.OPENGAUSS);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("value=\"PG_LOGICAL_CDC\"");
+        assertThat(page).doesNotContain("value=\"BINLOG_CDC\"");
+    }
+
+    /** v1.9.0:openGauss 新项目探测通过时,同样默认选中 PG 逻辑 CDC 卡片。 */
+    @Test
+    void newOpenGaussProjectWithPassingProbePreselectsPgCdc() throws Exception {
+        stubDetail(DatabaseType.OPENGAUSS);
+        CdcProbeResult passing = CdcProbeResult.of(List.of(
+                CdcProbeResult.Check.of(CdcProbeResult.PG_SOURCE, true,
+                        "openGauss 5.0.0 (openGauss-compatible; capabilities are verified"
+                                + " by the checks below, not by the product name)")));
+        when(cdcOperationsService.probeProject(1L)).thenReturn(passing);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("data-original-strategy=\"POLLING\"");
+        assertThat(cardOf(page, "PG_LOGICAL_CDC")).contains("picked").contains("checked");
+        assertThat(page).contains("badge-recommend");
+    }
+
     @Test
     void newMysqlProjectWithPassingProbePreselectsCdc() throws Exception {
         stubDetail(DatabaseType.MYSQL);

@@ -192,7 +192,7 @@ Four source families can run log CDC per task, reading the source's log and seei
 |---|---|---|
 | MySQL binlog | 5.7+; `log_bin=ON`, `binlog_format=ROW`, `binlog_row_image=FULL`; grants `REPLICATION SLAVE` and `REPLICATION CLIENT`; binlog retained ≥ 24h | binlog file + offset (GTID included) |
 | Oracle LogMiner | 11g+; `ARCHIVELOG` mode; database-level `SUPPLEMENTAL LOG DATA`; table-level `SUPPLEMENTAL LOG DATA (ALL) COLUMNS`; mining privileges; archive retention ≥ 24h | SCN |
-| PostgreSQL logical decoding | 9.4+; `wal_level=logical`; `REPLICATION` grant; table `REPLICA IDENTITY` not `NOTHING` | LSN |
+| PostgreSQL logical decoding | PostgreSQL 11+ (position advance uses `pg_replication_slot_advance`), plus PG-family domestic kernels (openGauss, GaussDB, Kingbase, Highgo, Vastbase, Oscar, RaseSQL, SeaBoxSQL); `wal_level=logical`; `REPLICATION` grant (not required by openGauss); table `REPLICA IDENTITY` not `NOTHING`; on openGauss prefer `enable_slot_log=on` or the slot does not survive a restart | LSN |
 | SQL Server CDC | 2012+; database-level `sp_cdc_enable_db`; SQL Server Agent running; `cdc_Admin` / `cdc_reader` membership | LSN |
 
 - **One flow for all four**: record the position → chunked full-load baseline → long-lived replay. The position is written before the baseline, so changes during the baseline cannot be missed.

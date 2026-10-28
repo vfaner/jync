@@ -57,11 +57,19 @@ public final class CdcProbeResult {
 
     // —— v1.7.0 PostgreSQL logical replication checks ——
 
-    /** Source must be literal PostgreSQL (dialect-compatible look-alikes rejected). */
+    /**
+     * The source reports a product name at all. v1.9.0: PG-family kernels that answer
+     * "PostgreSQL" (openGauss and friends) must pass, so this check no longer rejects
+     * look-alikes by name; ②–⑤ decide whether logical decoding actually works.
+     */
     public static final String PG_SOURCE = "PG_SOURCE";
     /** wal_level = logical — required for logical decoding. */
     public static final String PG_WAL_LEVEL = "PG_WAL_LEVEL";
-    /** Current user has the REPLICATION attribute (or SUPERUSER). */
+    /**
+     * Current user has the REPLICATION attribute (or SUPERUSER) — on openGauss this
+     * passes on the measured fact that slot creation does not require it; ⑤ is the
+     * authority there.
+     */
     public static final String PG_REPLICATION_ROLE = "PG_REPLICATION_ROLE";
     /** Free max_replication_slots headroom — an exhausted quota blocks slot creation (P1-9/I6). */
     public static final String PG_SLOT_HEADROOM = "PG_SLOT_HEADROOM";

@@ -1,10 +1,71 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 
 import org.junit.jupiter.api.Test;
 
 class PgLogicalDialectTest {
+
+    // —— v1.9.0(能力判定):方言由"服务器有没有这个能力"决定,不由品牌名决定 ——
+
+    /**
+     * 目录回答:{@code pg_lsn} 类型存在与否。实测 postgres:16.15 有、openGauss 5.0.0 没有。
+     * 这一条事实就决定整套 SQL 的形态(见 {@link PgLogicalDialect} 类注释)。
+     */
+    private static Connection capability(long hasPgLsn) throws SQLException {
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        ResultSet rs = mock(ResultSet.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(anyString())).thenReturn(rs);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getLong(1)).thenReturn(hasPgLsn);
+        return conn;
+    }
+
+    @Test
+    void catalogWithPgLsnIsNativePostgres() throws SQLException {
+        assertThat(PgLogicalDialect.detectLive(capability(1)))
+                .isEqualTo(PgLogicalDialect.POSTGRES);
+    }
+
+    @Test
+    void catalogWithoutPgLsnIsTheOpenGaussSurface() throws SQLException {
+        assertThat(PgLogicalDialect.detectLive(capability(0)))
+                .isEqualTo(PgLogicalDialect.OPENGAUSS);
+    }
+
+    /** 目录读不到(权限/非 PG 服务器)时退回品牌名 + 横幅,即 v1.7.0–v1.9.0 的旧路径。 */
+    @Test
+    void unreadableCatalogFallsBackToTheVersionBanner() throws SQLException {
+        Connection conn = mock(Connection.class);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(conn.getMetaData()).thenReturn(md);
+        when(md.getDatabaseProductName()).thenReturn("PostgreSQL");
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        // 目录查询失败,横幅查询成功 —— 两个独立 stub,不在 Answer 里再建/再 stub ，
+        // 那样会打断 Mockito 的 ongoing stubbing,第二次查询拿不到结果。
+        when(st.executeQuery(contains("pg_type")))
+                .thenThrow(new SQLException("catalog is not readable"));
+        ResultSet banner = mock(ResultSet.class);
+        when(banner.next()).thenReturn(true, false);
+        when(banner.getString(1)).thenReturn("(openGauss 5.0.0 build ) compiled at 2023-04-18");
+        when(st.executeQuery("SELECT version()")).thenReturn(banner);
+
+        assertThat(PgLogicalDialect.detectLive(conn)).isEqualTo(PgLogicalDialect.OPENGAUSS);
+    }
+
 
     @Test
     void detectsOpenGaussFromVersionBanner() {

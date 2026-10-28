@@ -18,12 +18,17 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>Itemized, never throws: a merely-unready source degrades to failed checks with
  * remediation text a DBA can act on. The consumer reads a {@code test_decoding} slot
- * via JDBC ({@code pg_logical_slot_get_changes}); the probe validates that the slot can
- * be created and that UPDATE/DELETE events will carry enough keys to drive upserts.
+ * via JDBC ({@code pg_logical_slot_peek_changes}, then an explicit advance); the probe
+ * creates that slot, runs both statements against it (⑤ — the only way to learn whether
+ * this particular kernel's SQL surface matches), and checks that UPDATE/DELETE events will
+ * carry enough keys to drive upserts (⑥).
  *
- * <p>Scope: literal PostgreSQL only. openGauss / Kingbase / Highgo / Vastbase / DM
- * PG-compatible dialects are rejected by {@link CdcProbeResult#PG_SOURCE} unless the
- * caller has filtered them upstream already.
+ * <p>Scope: the PostgreSQL family — PostgreSQL itself and the domestic kernels built on
+ * PG logical decoding (openGauss / GaussDB / Kingbase / Highgo / Vastbase / Oscar /
+ * RaseSQL / SeaBoxSQL). {@link CdcProbeResult#PG_SOURCE} accepts any server that reports
+ * a product name; what actually decides "usable" are the checks below, and the SQL surface
+ * is picked by capability in {@link PgLogicalDialect#detectLive}, never by brand. DM is
+ * <b>not</b> in this family (Oracle-compatible; it has its own LogMiner-style capture).
  */
 @Component
 @Slf4j
@@ -45,7 +50,7 @@ public class PgLogicalReplicationCdcProbe {
         checks.add(checkWalLevel(conn));
         checks.add(checkReplicationRole(conn, dialect));
         checks.add(checkSlotHeadroom(conn));
-        checks.add(checkPluginAvailable(conn));
+        checks.add(checkPluginAvailable(conn, dialect));
         if (ownerTables != null && !ownerTables.isEmpty()) {
             checks.add(checkReplicaIdentity(conn, ownerTables));
         }
@@ -125,8 +130,9 @@ public class PgLogicalReplicationCdcProbe {
     /**
      * openGauss-only advisory appended to a passing plugin check: with
      * {@code enable_slot_log=off} the slot still works (measured), but it does not
-     * survive a server restart. Vanilla PostgreSQL has no such GUC — a failed query
-     * simply yields no hint, and the check's verdict never depends on it.
+     * survive a server restart. Vanilla PostgreSQL has no such GUC at all, so asking
+     * there is a guaranteed-failing round trip on every probe — the caller only asks
+     * when the dialect is openGauss. The check's verdict never depends on the answer.
      */
     private static String slotLogHint(Statement st) {
         try (ResultSet rs = st.executeQuery("SHOW enable_slot_log")) {
@@ -136,7 +142,7 @@ public class PgLogicalReplicationCdcProbe {
                         + " restart (after a restart the position is rebuilt from a baseline)";
             }
         } catch (SQLException | RuntimeException ignored) {
-            // not openGauss — no hint to give
+            // an old openGauss build without the GUC — no hint to give
         }
         return "";
     }
@@ -173,7 +179,8 @@ public class PgLogicalReplicationCdcProbe {
 
     // —— ⑤ test_decoding plugin available ——
 
-    private CdcProbeResult.Check checkPluginAvailable(Connection conn) {
+    private CdcProbeResult.Check checkPluginAvailable(Connection conn,
+                                                      PgLogicalDialect dialect) {
         // Probe by creating a throwaway slot with the test_decoding plugin and dropping it
         // immediately. A missing plugin surfaces as an SQL error; we convert it into a
         // failed check with remediation text instead of throwing.
@@ -189,10 +196,12 @@ public class PgLogicalReplicationCdcProbe {
             st.execute("SELECT pg_create_logical_replication_slot('" + slotName
                     + "', 'test_decoding')");
             created = true;
+            String position = verifySqlSurface(conn, dialect, slotName);
             st.execute("SELECT pg_drop_replication_slot('" + slotName + "')");
             return CdcProbeResult.Check.of(CdcProbeResult.PG_PLUGIN_AVAILABLE, true,
-                    "test_decoding reachable (probe slot created + dropped)"
-                            + slotLogHint(st));
+                    "test_decoding reachable (probe slot created, read, advanced to "
+                            + position + " and dropped)"
+                            + (dialect == PgLogicalDialect.OPENGAUSS ? slotLogHint(st) : ""));
         } catch (SQLException e) {
             // P1-9(I5): only a slot that WAS created can leak. If the cleanup drop also
             // fails, the slot occupies one max_replication_slots quota and pins WAL until
@@ -208,11 +217,84 @@ public class PgLogicalReplicationCdcProbe {
                             slotName, dropFailure.getMessage(), slotName);
                 }
             }
-            return CdcProbeResult.Check.of(CdcProbeResult.PG_PLUGIN_AVAILABLE, false,
-                    msg(e) + " — test_decoding is shipped with vanilla PG ≥ 9.4; if it"
-                            + " was disabled, ensure shared_preload_libraries includes"
-                            + " 'test_decoding' or use a custom output plugin");
+            String detail = msg(e);
+            if (!detail.startsWith(SURFACE_FAILURE)) {
+                // Only a genuine "the plugin is missing" failure earns this remediation.
+                // A statement that ran and was refused is a different problem, and
+                // blaming shared_preload_libraries there sends the DBA the wrong way.
+                detail += " — test_decoding is shipped with vanilla PG ≥ 9.4; if it"
+                        + " was disabled, ensure shared_preload_libraries includes"
+                        + " 'test_decoding' or use a custom output plugin";
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.PG_PLUGIN_AVAILABLE, false, detail);
         }
+    }
+
+    /**
+     * v1.9.0: runs the exact statements the consumer will run, against the throwaway slot —
+     * the peek it reads changes with and the advance it moves the position with. "The slot
+     * could be created" does not prove either: the domestic PG-family kernels are forks of
+     * different PG releases, and their surface differs in ways only execution reveals (the
+     * peek's {@code lsn} vs {@code location} column, the argument casts, whether
+     * {@code pg_replication_slot_advance} — PostgreSQL 11+ — exists at all). Without this,
+     * such a kernel passed the probe, loaded a whole baseline, and then failed forever at
+     * the first position advance.
+     *
+     * @return the WAL position the probe slot was advanced to
+     * @throws SQLException naming which statement the server refused; the caller converts it
+     *                      into a failed check (and still drops the slot)
+     */
+    private static String verifySqlSurface(Connection conn, PgLogicalDialect dialect,
+                                           String slotName) throws SQLException {
+        try (java.sql.PreparedStatement peek = conn.prepareStatement(dialect.peekChangesSql())) {
+            peek.setString(1, slotName);
+            peek.setInt(2, 1);
+            // A slot created a moment ago holds no transaction: an empty result is success.
+            // Executing it at all proves the function signature and both column names.
+            try (ResultSet rs = peek.executeQuery()) {
+                while (rs.next()) {
+                    rs.getString(2);
+                }
+            }
+        } catch (SQLException | RuntimeException e) {
+            throw surfaceFailure("the peek statement Jync reads changes with", e);
+        }
+        String position;
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(dialect.currentLsnSql())) {
+            position = rs.next() ? rs.getString(1) : null;
+        } catch (SQLException | RuntimeException e) {
+            throw surfaceFailure("the WAL-position query", e);
+        }
+        if (position == null || position.isBlank()) {
+            throw surfaceFailure("the WAL-position query", null);
+        }
+        boolean advanced;
+        try (java.sql.PreparedStatement advance =
+                     conn.prepareStatement(dialect.advanceSlotSql())) {
+            advance.setString(1, slotName);
+            advance.setString(2, position);
+            try (ResultSet rs = advance.executeQuery()) {
+                advanced = rs.next();
+            }
+        } catch (SQLException | RuntimeException e) {
+            throw surfaceFailure("the advance statement", e);
+        }
+        if (!advanced) {
+            throw surfaceFailure("the advance statement", null);
+        }
+        return position;
+    }
+
+    /** Marks a failure as "the statement ran and was refused", not "the plugin is missing". */
+    private static final String SURFACE_FAILURE =
+            "Jync's capture statements do not run on this server";
+
+    private static SQLException surfaceFailure(String statement, Exception cause) {
+        String detail = cause == null ? statement + " returned no row"
+                : statement + " failed: " + (cause instanceof SQLException sql
+                        ? msg(sql) : String.valueOf(cause.getMessage()));
+        return new SQLException(SURFACE_FAILURE + " — " + detail, cause);
     }
 
     // —— ⑥ per-table REPLICA IDENTITY ——
@@ -220,24 +302,17 @@ public class PgLogicalReplicationCdcProbe {
     private CdcProbeResult.Check checkReplicaIdentity(Connection conn, List<String[]> ownerTables) {
         List<String> missing = new ArrayList<>();
         for (String[] ot : ownerTables) {
-            String schema = ot[0];
+            String schema = ot[0] == null ? "public" : ot[0];
             String table = ot[1];
-            try (java.sql.PreparedStatement ps = conn.prepareStatement(
-                    "SELECT c.relreplident FROM pg_catalog.pg_class c"
-                            + " JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
-                            + " WHERE n.nspname = ? AND c.relname = ?")) {
-                ps.setString(1, schema == null ? "public" : schema.toLowerCase(Locale.ROOT));
-                ps.setString(2, table.toLowerCase(Locale.ROOT));
-                ResultSet rs = ps.executeQuery();
-                String ident = rs.next() ? rs.getString(1) : null;
+            try {
+                String ident = replicaIdentityOf(conn, schema, table);
                 // pg_class.relreplident 官方语义:'d'=DEFAULT(主键作 old key)、'f'=FULL
                 // (全行旧镜像)、'i'=INDEX(指定唯一索引列作 old key,足以定位原行)、
                 // 'n'=NOTHING(UPDATE/DELETE 事件不带任何旧键 — 消费端无法定位原行,
                 // upsert 残留旧行、delete 落空,必须拒绝)。历史上此处把 i/n 写反:
                 // 误拒可用的 INDEX、放行不可用的 NOTHING。
                 if (ident == null || "n".equals(ident)) {
-                    missing.add((schema == null ? "public" : schema) + "." + table
-                            + " (replica_identity=" + ident + ")");
+                    missing.add(schema + "." + table + " (replica_identity=" + ident + ")");
                 }
             } catch (SQLException e) {
                 return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICA_IDENTITY, false,
@@ -252,6 +327,44 @@ public class PgLogicalReplicationCdcProbe {
                 "unsuitable REPLICA IDENTITY on: " + String.join(", ", missing)
                         + " — fix with: ALTER TABLE \"<schema>\".\"<table>\""
                         + " REPLICA IDENTITY DEFAULT;  -- or FULL if no PK");
+    }
+
+    /**
+     * The stored {@code relreplident} of one table, or {@code null} when it is not there.
+     *
+     * <p>The exact name is asked first: the catalog keeps a quoted identifier's real case
+     * ({@code "MyTable"}) and the picker stores names verbatim, so folding unconditionally
+     * would report such a table missing. Only when that finds nothing is the SQL-unquoted
+     * form retried (identifiers fold to lower case) — which also covers a name typed with
+     * different case by the caller. {@code relreplident} is {@code char NOT NULL}, so a
+     * found row answers non-null: null means "no such table", never "unknown identity".
+     */
+    private static String replicaIdentityOf(Connection conn, String schema, String table)
+            throws SQLException {
+        String ident = lookupReplicaIdentity(conn, schema, table);
+        if (ident != null) {
+            return ident;
+        }
+        String foldedSchema = schema.toLowerCase(Locale.ROOT);
+        String foldedTable = table.toLowerCase(Locale.ROOT);
+        if (foldedSchema.equals(schema) && foldedTable.equals(table)) {
+            return null;
+        }
+        return lookupReplicaIdentity(conn, foldedSchema, foldedTable);
+    }
+
+    private static String lookupReplicaIdentity(Connection conn, String schema, String table)
+            throws SQLException {
+        try (java.sql.PreparedStatement ps = conn.prepareStatement(
+                "SELECT c.relreplident FROM pg_catalog.pg_class c"
+                        + " JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
+                        + " WHERE n.nspname = ? AND c.relname = ?")) {
+            ps.setString(1, schema);
+            ps.setString(2, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
+        }
     }
 
     private static String msg(SQLException e) {

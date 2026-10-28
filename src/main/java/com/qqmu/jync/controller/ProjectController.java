@@ -275,7 +275,12 @@ public class ProjectController {
                 : databaseConfigService.findById(project.getSourceDbId()).orElse(null);
         boolean isMysqlSource = source != null && source.getType() == DatabaseType.MYSQL;
         boolean isOracleSource = source != null && source.getType() == DatabaseType.ORACLE;
-        boolean isPostgresSource = source != null && source.getType() == DatabaseType.POSTGRESQL;
+        // v1.9.0: the PG card follows the same family gate as the backend
+        // (CaptureStrategyParser + the capability probe). Keyed on the literal
+        // PostgreSQL preset, an openGauss source never rendered the card at all —
+        // the parser accepted the strategy while the page offered no way to pick it.
+        boolean isPostgresSource = source != null && source.getType() != null
+                && source.getType().getFamily() == DatabaseType.DialectFamily.POSTGRES;
         boolean isSqlServerSource = source != null && source.getType() == DatabaseType.SQLSERVER;
         model.addAttribute("isMysqlSource", isMysqlSource);
         model.addAttribute("isOracleSource", isOracleSource);

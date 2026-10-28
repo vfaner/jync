@@ -3,6 +3,7 @@ package com.qqmu.jync.it;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.Map;
 
@@ -54,6 +55,22 @@ class PostgresToOpenGaussIT extends PgCdcHarnessIT {
         config.setUsername(OpenGaussSupport.USER);
         config.setPassword(cryptoUtil.encrypt(OpenGaussSupport.PASSWORD));
         return databaseConfigRepository.save(config);
+    }
+
+    /**
+     * 方言判定的前提事实,在真库上钉住:PostgreSQL 16 <b>有</b> {@code pg_lsn} 类型。
+     *
+     * <p>这条查询就是 {@code PgLogicalDialect.detectLive} 发出的那条。若它在真库上报错,
+     * detectLive 会退回产品名/横幅,恰好也判成 POSTGRES —— 其余用例全绿也发现不了。
+     */
+    @Test
+    void sourceCatalogHasThePgLsnType() throws Exception {
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT count(*) FROM pg_catalog.pg_type WHERE typname = 'pg_lsn'")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getLong(1)).isGreaterThan(0L);
+        }
     }
 
     private SyncConfig cdcConfig(String... tables) {

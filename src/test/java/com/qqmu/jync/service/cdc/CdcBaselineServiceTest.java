@@ -342,25 +342,22 @@ class CdcBaselineServiceTest {
         Connection conn = mock(Connection.class);
         Statement st = mock(Statement.class);
         when(conn.createStatement()).thenReturn(st);
-        when(st.executeQuery(any(String.class))).thenAnswer(inv -> {
-            String sql = inv.getArgument(0);
-            ResultSet rs = mock(ResultSet.class);
-            if (sql.contains("version()")) {
-                when(rs.next()).thenReturn(true, false);
-                when(rs.getString(1)).thenReturn("(openGauss 5.0.0 build ) compiled at"
-                        + " 2023-04-18 10:27:05 commit 0 last mr  on aarch64-unknown-linux-gnu");
-            } else if (sql.contains("pg_current_xlog_location")) {
-                when(rs.next()).thenReturn(true, false);
-                when(rs.getString(1)).thenReturn("0/D890C70");
-            } else {
-                throw new SQLException("function pg_current_wal_lsn() does not exist");
-            }
-            return rs;
-        });
+        // 目录读不到 → 退回横幅判定,这条用例钉的就是退回后的那条路。
+        when(st.executeQuery(contains("pg_type")))
+                .thenThrow(new SQLException("catalog is not readable"));
+        ResultSet banner = mock(ResultSet.class);
+        when(banner.next()).thenReturn(true, false);
+        when(banner.getString(1)).thenReturn("(openGauss 5.0.0 build ) compiled at"
+                + " 2023-04-18 10:27:05 commit 0 last mr  on aarch64-unknown-linux-gnu");
+        when(st.executeQuery(contains("version()"))).thenReturn(banner);
+        ResultSet lsn = mock(ResultSet.class);
+        when(lsn.next()).thenReturn(true, false);
+        when(lsn.getString(1)).thenReturn("0/D890C70");
+        when(st.executeQuery("SELECT pg_current_xlog_location()::text")).thenReturn(lsn);
         when(dataSourceManager.getConnection(any())).thenReturn(conn);
 
         assertThat(service.readCurrentLsnPg(source())).isEqualTo("0/D890C70");
-        verify(st, never()).executeQuery(contains("pg_current_wal_lsn"));
+        verify(st, never()).executeQuery("SELECT pg_current_wal_lsn()::text");
     }
 
     @Test
@@ -368,10 +365,16 @@ class CdcBaselineServiceTest {
         Connection conn = mock(Connection.class);
         Statement st = mock(Statement.class);
         when(conn.createStatement()).thenReturn(st);
+        // 能力判定先跑:pg_lsn 与 pg_current_wal_lsn 都在 → 原生 POSTGRES 分支。
+        ResultSet catalog = mock(ResultSet.class);
+        when(catalog.next()).thenReturn(true, false);
+        when(catalog.getLong(1)).thenReturn(1L);
+        when(catalog.getLong(2)).thenReturn(1L);
+        when(st.executeQuery(contains("pg_type"))).thenReturn(catalog);
         ResultSet rs = mock(ResultSet.class);
         when(rs.next()).thenReturn(true, false);
         when(rs.getString(1)).thenReturn("0/16B3748");
-        when(st.executeQuery(contains("pg_current_wal_lsn"))).thenReturn(rs);
+        when(st.executeQuery("SELECT pg_current_wal_lsn()::text")).thenReturn(rs);
         when(dataSourceManager.getConnection(any())).thenReturn(conn);
 
         assertThat(service.readCurrentLsnPg(source())).isEqualTo("0/16B3748");

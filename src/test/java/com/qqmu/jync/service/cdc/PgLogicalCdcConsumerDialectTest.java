@@ -1,7 +1,7 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -38,10 +38,14 @@ class PgLogicalCdcConsumerDialectTest {
         when(md.getDatabaseProductName()).thenReturn("PostgreSQL");
         Statement st = mock(Statement.class);
         when(conn.createStatement()).thenReturn(st);
-        ResultSet rs = mock(ResultSet.class);
-        when(rs.next()).thenReturn(true, false);
-        when(rs.getString(1)).thenReturn("(openGauss 5.0.0 build ) compiled at 2023-04-18");
-        when(st.executeQuery(anyString())).thenReturn(rs);
+        // 目录读不到(catalog 查询直接抛),只剩横幅一条证据 —— 若方言判定偷偷走了
+        // "目录能读" 的分支,这里就再也拿不到 OPENGAUSS。
+        when(st.executeQuery(contains("pg_type")))
+                .thenThrow(new SQLException("catalog is not readable"));
+        ResultSet banner = mock(ResultSet.class);
+        when(banner.next()).thenReturn(true, false);
+        when(banner.getString(1)).thenReturn("(openGauss 5.0.0 build ) compiled at 2023-04-18");
+        when(st.executeQuery("SELECT version()")).thenReturn(banner);
 
         assertThat(PgLogicalCdcConsumer.dialectOf(conn)).isEqualTo(PgLogicalDialect.OPENGAUSS);
     }

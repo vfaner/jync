@@ -312,38 +312,13 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
-     * F-11: read via PEEK (non-consuming). The options argument is VARIADIC text[],
-     * which a PreparedStatement cannot bind directly (a bound text parameter does not
-     * coerce to text[]). The option names/values are internal constants, so inline-quoting
-     * them is injection-safe. The slot name parameter needs an explicit ::name cast — the
-     * driver binds it as varchar, and PG does not implicitly coerce varchar to name when
-     * the call also carries a VARIADIC array (overload resolution fails).
+     * Resolves the server dialect from the live connection. Any catalog/metadata failure
+     * keeps the vanilla-PostgreSQL behavior, which is exactly the pre-v1.9.0 code path.
      *
-     * <p>The {@code max_changes} argument is a hint, not a hard cut: logical decoding never
-     * emits half a transaction — if the next complete transaction would exceed the limit,
-     * only already-decoded transactions are returned (empirically, limit=2 still returned
-     * a 7-row transaction). Hence every peeked transaction is flushable as a whole.
-     */
-    /** Kept under the old name for readability; the string is the POSTGRES dialect's. */
-    static final String PEEK_CHANGES_SQL = PgLogicalDialect.POSTGRES.peekChangesSql();
-
-    /**
-     * F-11: the slot is confirmed explicitly, one applied transaction at a time. The
-     * second parameter is cast ::pg_lsn because the driver binds the string as varchar.
-     * Advancing to the transaction's COMMIT LSN is exactly right: confirmed_flush is
-     * exclusive, and the next transaction's BEGIN may carry that same LSN and is still
-     * delivered.
-     */
-    /** Kept under the old name for readability; the string is the POSTGRES dialect's. */
-    static final String ADVANCE_SLOT_SQL = PgLogicalDialect.POSTGRES.advanceSlotSql();
-
-    /**
-     * Resolves the server dialect from the live connection. Any metadata failure keeps
-     * the vanilla-PostgreSQL behavior, which is exactly the pre-v1.9.0 code path.
-     *
-     * <p>Delegates to {@link PgLogicalDialect#detectLive(Connection)}: openGauss's
-     * official driver reports the product name "PostgreSQL", so the banner from
-     * {@code SELECT version()} is what actually identifies it.
+     * <p>Delegates to {@link PgLogicalDialect#detectLive(Connection)}: the server's
+     * capabilities decide (openGauss lacks the {@code pg_lsn} type), with the product name
+     * and the {@code SELECT version()} banner only as the fallback — openGauss's official
+     * driver reports the product name "PostgreSQL".
      */
     static PgLogicalDialect dialectOf(Connection conn) {
         return PgLogicalDialect.detectLive(conn);

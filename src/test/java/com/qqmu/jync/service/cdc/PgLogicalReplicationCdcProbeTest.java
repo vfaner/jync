@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
@@ -38,6 +40,11 @@ class PgLogicalReplicationCdcProbeTest {
     private final PgLogicalReplicationCdcProbe probe = new PgLogicalReplicationCdcProbe();
     private Connection conn;
     private Statement stmt;
+    /** ⑤ 起槽后可读性的两条语句:peek 与 advance 各自的 PreparedStatement。 */
+    private PreparedStatement peekPs;
+    private PreparedStatement advancePs;
+    /** ⑥ 查 relreplident 的 PreparedStatement(同一条 SQL 可能被问两次:原名、折叠名)。 */
+    private PreparedStatement identityPs;
     /** 当前表被 stub 的 relreplident 值;每次 executeQuery 都产一份新 ResultSet,支持重复 probe()。 */
     private String currentReplicaIdentity = "d";
 
@@ -66,19 +73,38 @@ class PgLogicalReplicationCdcProbeTest {
                 when(rs.next()).thenReturn(true, false);
                 when(rs.getInt(1)).thenReturn(1);
                 when(rs.getInt(2)).thenReturn(10);
+            } else if (sql.contains("pg_current_wal_lsn")
+                    || sql.contains("pg_current_xlog_location")) {
+                // ⑤ 的 SQL 面探测要一个真实位点作 advance 目标。
+                when(rs.next()).thenReturn(true, false);
+                when(rs.getString(1)).thenReturn("0/16B6C50");
             }
             return rs;
         });
 
-        // ⑤ relreplident 走 PreparedStatement(pg_class JOIN pg_namespace)。
-        PreparedStatement ps = mock(PreparedStatement.class);
-        when(conn.prepareStatement(anyString())).thenReturn(ps);
-        when(ps.executeQuery()).thenAnswer(inv -> {
+        // ⑥ relreplident 走 PreparedStatement(pg_class JOIN pg_namespace)。
+        identityPs = mock(PreparedStatement.class);
+        when(conn.prepareStatement(contains("relreplident"))).thenReturn(identityPs);
+        when(identityPs.executeQuery()).thenAnswer(inv -> {
             ResultSet rs = mock(ResultSet.class);
             when(rs.next()).thenReturn(true, false);
             when(rs.getString(1)).thenReturn(currentReplicaIdentity);
             return rs;
         });
+
+        // ⑤ 的 SQL 面探测:peek 读一个空槽(无行),advance 回一行 end_lsn。
+        peekPs = mock(PreparedStatement.class);
+        when(conn.prepareStatement(contains("pg_logical_slot_peek_changes"))).thenReturn(peekPs);
+        ResultSet emptyPeek = mock(ResultSet.class);
+        when(emptyPeek.next()).thenReturn(false);
+        when(peekPs.executeQuery()).thenReturn(emptyPeek);
+
+        advancePs = mock(PreparedStatement.class);
+        when(conn.prepareStatement(contains("pg_replication_slot_advance"))).thenReturn(advancePs);
+        ResultSet advanced = mock(ResultSet.class);
+        when(advanced.next()).thenReturn(true, false);
+        when(advanced.getString(1)).thenReturn("0/16B6C50");
+        when(advancePs.executeQuery()).thenReturn(advanced);
     }
 
     private void replicaIdentity(String ident) {
@@ -183,6 +209,89 @@ class PgLogicalReplicationCdcProbeTest {
         assertThat(role.getDetail()).contains("REPLICATION");
     }
 
+    // —— v1.9.0:enable_slot_log 只属于 openGauss ——
+
+    /** 覆盖 setUp 的 anyString 分发:目录里有没有 {@code pg_lsn} 类型决定方言。 */
+    private void capability(long hasPgLsn) throws SQLException {
+        when(stmt.executeQuery(contains("pg_type"))).thenAnswer(inv -> {
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.next()).thenReturn(true, false);
+            when(rs.getLong(1)).thenReturn(hasPgLsn);
+            return rs;
+        });
+    }
+
+    /**
+     * 原生 PG 没有 {@code enable_slot_log} 这个 GUC:每次探测都发一条注定失败的
+     * {@code SHOW},白白多一次往返(错误被吞掉,不影响结论)。
+     */
+    @Test
+    void vanillaPostgresProbeDoesNotPokeTheOpenGaussOnlyGuc() throws SQLException {
+        capability(1);
+        assertThat(check(probeOneTable(), CdcProbeResult.PG_PLUGIN_AVAILABLE).isPassed()).isTrue();
+        verify(stmt, never()).executeQuery(contains("enable_slot_log"));
+    }
+
+    /** openGauss 上这条提示是真实可行动的:槽能建但不跨重启。 */
+    @Test
+    void openGaussProbeKeepsTheSlotLogHint() throws SQLException {
+        capability(0);
+        when(stmt.executeQuery(contains("enable_slot_log"))).thenAnswer(inv -> {
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.next()).thenReturn(true, false);
+            when(rs.getString(1)).thenReturn("off");
+            return rs;
+        });
+        CdcProbeResult.Check plugin = check(probeOneTable(),
+                CdcProbeResult.PG_PLUGIN_AVAILABLE);
+        assertThat(plugin.isPassed()).isTrue();
+        assertThat(plugin.getDetail()).contains("enable_slot_log=off");
+    }
+
+    // —— v1.9.0:⑤ 在起槽后真跑一遍消费链路要用的语句 ——
+    // 信创内核各家的逻辑解码 SQL 面并不一致(列名 lsn/location、函数签名、advance 是否存在),
+    // 只看「槽能建」会把不兼容的内核放行到同步中途才炸。探测必须跑一遍真实语句。
+
+    /** 方言选定的 peek 语句在真库上跑不通时,插件检查必须失败——而不是报告「可用」。 */
+    @Test
+    void peekStatementTheServerCannotRunFailsThePluginCheck() throws SQLException {
+        when(peekPs.executeQuery()).thenThrow(new SQLException(
+                "function pg_logical_slot_peek_changes(character varying, unknown, bigint,"
+                        + " text[]) does not exist"));
+        CdcProbeResult.Check plugin = check(probeOneTable(), CdcProbeResult.PG_PLUGIN_AVAILABLE);
+        assertThat(plugin.isPassed()).isFalse();
+        assertThat(plugin.getDetail()).contains("peek statement");
+    }
+
+    /** advance(PostgreSQL 11+ 才有的函数)缺失/kernel 不支持时同样在门口失败。 */
+    @Test
+    void advanceStatementTheServerCannotRunFailsThePluginCheck() throws SQLException {
+        when(advancePs.executeQuery()).thenThrow(
+                new SQLException("function pg_replication_slot_advance does not exist"));
+        CdcProbeResult.Check plugin = check(probeOneTable(), CdcProbeResult.PG_PLUGIN_AVAILABLE);
+        assertThat(plugin.isPassed()).isFalse();
+        assertThat(plugin.getDetail()).contains("advance statement");
+    }
+
+    /** 探测用的位点必须来自方言自己的当前位置查询,并原样交给 advance。 */
+    @Test
+    void probeAdvancesTheProbeSlotToTheDialectsCurrentPosition() throws SQLException {
+        capability(1);  // 原生 PG:pg_lsn 存在 → pg_current_wal_lsn()
+        probeOneTable();
+        verify(stmt).executeQuery(contains("pg_current_wal_lsn"));
+        verify(peekPs).setInt(2, 1);
+        verify(advancePs).setString(2, "0/16B6C50");
+    }
+
+    /** 没有 pg_lsn 类型的内核走 xlog 位置函数:方言决定语句,不是品牌决定。 */
+    @Test
+    void openGaussSurfaceUsesItsOwnPositionFunction() throws SQLException {
+        capability(0);
+        probeOneTable();
+        verify(stmt).executeQuery(contains("pg_current_xlog_location"));
+        verify(advancePs).setString(2, "0/16B6C50");
+    }
+
     // —— P1-9(I6):max_replication_slots 余量 ——
 
     /** 覆盖 setUp 的 anyString 分发:槽用量/上限由本方法钉死。 */
@@ -277,6 +386,35 @@ class PgLogicalReplicationCdcProbeTest {
         replicaIdentity("f");
         assertThat(check(probeOneTable(), CdcProbeResult.PG_REPLICA_IDENTITY).isPassed())
                 .isTrue();
+    }
+
+    /** 加了引号建的表在目录里保留真实大小写,查询必须原样问,不能无条件折叠。 */
+    @Test
+    void mixedCaseTableIsLookedUpVerbatim() throws SQLException {
+        replicaIdentity("d");
+        CdcProbeResult.Check identity = check(
+                probe.probe(conn, List.<String[]>of(new String[]{"Public", "MyTable"})),
+                CdcProbeResult.PG_REPLICA_IDENTITY);
+        assertThat(identity.isPassed()).isTrue();
+        verify(identityPs).setString(1, "Public");
+        verify(identityPs).setString(2, "MyTable");
+    }
+
+    /** 原名查不到时按 SQL 未加引号的语义折叠再问一次,而不是直接判表不存在。 */
+    @Test
+    void missingExactNameIsRetriedFoldedBeforeReportingTheTableMissing() throws SQLException {
+        ResultSet missing = mock(ResultSet.class);
+        when(missing.next()).thenReturn(false);
+        ResultSet found = mock(ResultSet.class);
+        when(found.next()).thenReturn(true, false);
+        when(found.getString(1)).thenReturn("d");
+        when(identityPs.executeQuery()).thenReturn(missing, found);
+
+        CdcProbeResult.Check identity = check(
+                probe.probe(conn, List.<String[]>of(new String[]{"Public", "MyTable"})),
+                CdcProbeResult.PG_REPLICA_IDENTITY);
+        assertThat(identity.isPassed()).isTrue();
+        verify(identityPs).setString(2, "mytable");
     }
 
     @Test

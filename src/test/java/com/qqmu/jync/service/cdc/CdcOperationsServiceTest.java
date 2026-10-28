@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -27,6 +28,7 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
@@ -40,6 +42,7 @@ import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.SyncStateWriter;
+import com.qqmu.jync.service.task.SyncContextFactory;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
 
@@ -58,6 +61,7 @@ class CdcOperationsServiceTest {
     @Mock private ProjectRepository projectRepository;
     @Mock private DatabaseConfigRepository databaseConfigRepository;
     @Mock private DataSourceManager dataSourceManager;
+    @Mock private SyncContextFactory contextFactory;
     @Mock private BinlogCdcProbe probe;
     @Mock private LogMinerCdcProbe logMinerProbe;
     @Mock private PgLogicalReplicationCdcProbe pgProbe;
@@ -76,7 +80,7 @@ class CdcOperationsServiceTest {
     @BeforeEach
     void setUp() {
         service = new CdcOperationsService(projectRepository, databaseConfigRepository,
-                dataSourceManager, probe, logMinerProbe, pgProbe, mssqlProbe,
+                dataSourceManager, contextFactory, probe, logMinerProbe, pgProbe, mssqlProbe,
                 clientFactory, cdcManager, positionStore, stateWriter, taskStore,
                 auditService, changeLogRepository, lockService);
     }
@@ -158,6 +162,55 @@ class CdcOperationsServiceTest {
                 org.mockito.ArgumentMatchers.anyList())).thenReturn(expected);
 
         assertThat(service.probeProject(1L)).isSameAs(expected);
+    }
+
+    /**
+     * 项目级探测必须把手上的表清单交给探测:表级检查(REPLICA IDENTITY)以前永远收不到表,
+     * 于是对真实项目从不执行——探测报「全部通过」而某张表的 UPDATE/DELETE 事件连旧键都
+     * 不会带出来,消费端静默漏数。schema 取连接配置,未配置时问连接本身。
+     */
+    @Test
+    void probeProjectHandsTheProjectsTablesToThePgProbe() throws SQLException {
+        Project p = project();
+        p.setSyncConfig("{\"captureStrategy\":\"PG_LOGICAL_CDC\",\"objectSelectionExplicit\":true,"
+                + "\"tables\":[\"t1\",\"sales.t2\"]}");
+        SyncConfig config = new SyncConfig();
+        config.getTables().addAll(List.of("t1", "sales.t2"));
+        when(contextFactory.parseConfig(p)).thenReturn(config);
+        DatabaseConfig src = source(DatabaseType.OPENGAUSS);
+        src.setSchemaName("app");
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        when(pgProbe.probe(any(Connection.class), anyList()))
+                .thenReturn(CdcProbeResult.of(List.of()));
+
+        service.probeProject(1L);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String[]>> tables = ArgumentCaptor.forClass(List.class);
+        verify(pgProbe).probe(same(conn), tables.capture());
+        assertThat(tables.getValue().stream().map(t -> t[0] + "." + t[1]).toList())
+                .containsExactly("app.t1", "sales.t2");
+    }
+
+    /** 未显式选表(旧配置 = 同步源库全部对象)时清单未知,跳过表级检查而不是当成「没有表」。 */
+    @Test
+    void probeProjectSkipsTableChecksWhenTheSelectionIsImplicit() throws SQLException {
+        Project p = project();
+        p.setSyncConfig("{\"captureStrategy\":\"PG_LOGICAL_CDC\"}");
+        when(contextFactory.parseConfig(p)).thenReturn(new SyncConfig()); // 空表集 = 源库全部
+        source(DatabaseType.POSTGRESQL);
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        when(pgProbe.probe(any(Connection.class), anyList()))
+                .thenReturn(CdcProbeResult.of(List.of()));
+
+        service.probeProject(1L);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String[]>> tables = ArgumentCaptor.forClass(List.class);
+        verify(pgProbe).probe(same(conn), tables.capture());
+        assertThat(tables.getValue()).isEmpty();
     }
 
     @Test

@@ -2,10 +2,12 @@ package com.qqmu.jync.service.cdc;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
@@ -20,6 +22,7 @@ import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.SyncStateWriter;
+import com.qqmu.jync.service.task.SyncContextFactory;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
 
@@ -41,6 +44,7 @@ public class CdcOperationsService {
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
     private final DataSourceManager dataSourceManager;
+    private final SyncContextFactory contextFactory;
     private final BinlogCdcProbe probe;
     private final LogMinerCdcProbe logMinerProbe;
     private final PgLogicalReplicationCdcProbe pgProbe;
@@ -57,6 +61,7 @@ public class CdcOperationsService {
     public CdcOperationsService(ProjectRepository projectRepository,
                                 DatabaseConfigRepository databaseConfigRepository,
                                 DataSourceManager dataSourceManager,
+                                SyncContextFactory contextFactory,
                                 BinlogCdcProbe probe,
                                 LogMinerCdcProbe logMinerProbe,
                                 PgLogicalReplicationCdcProbe pgProbe,
@@ -72,6 +77,7 @@ public class CdcOperationsService {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
         this.dataSourceManager = dataSourceManager;
+        this.contextFactory = contextFactory;
         this.probe = probe;
         this.logMinerProbe = logMinerProbe;
         this.pgProbe = pgProbe;
@@ -91,11 +97,14 @@ public class CdcOperationsService {
      * the same server id the consumer would later use ({@link BinlogClientFactory#serverIdFor}),
      * so a collision shows up here rather than at connect time.
      *
-     * <p>Dispatches by source type: MySQL → binlog probe (existing, unchanged); Oracle →
-     * LogMiner probe (v1.6.0); anything else → 400 {@code cdc.probe.unsupported}.
+     * <p>Dispatches by source type: MySQL → binlog probe; Oracle → LogMiner probe; the
+     * PostgreSQL family (PostgreSQL and the PG-compatible domestic kernels) → PG logical
+     * probe, which is given the project's own table selection so its table-level checks
+     * actually run; SQL Server → its own probe; anything else → 400
+     * {@code cdc.probe.unsupported}.
      *
      * @throws IllegalArgumentException with the bare key {@code cdc.probe.unsupported} when
-     *         the project's source is missing or neither MySQL nor Oracle (the API
+     *         the project's source is missing or has no CDC integration (the API
      *         controller turns that into a 400)
      */
     public CdcProbeResult probeProject(Long projectId) {
@@ -116,13 +125,23 @@ public class CdcOperationsService {
                 return probe.probe(conn, plannedServerId);
             }
             if (source.getType().getFamily() == DatabaseType.DialectFamily.POSTGRES) {
-                return pgProbe.probe(conn, List.of());
+                // v1.9.0: this IS the per-project probe, so it must carry the project's
+                // tables — it used to pass an empty list (a comment copied from the
+                // connection-test path), which silently disabled the table-level
+                // REPLICA IDENTITY check: a table left at NOTHING passed the probe, then
+                // delivered UPDATE/DELETE events without any old key, and the consumer
+                // could neither find the original row nor delete it.
+                return pgProbe.probe(conn, ownerTables(
+                        contextFactory.parseConfig(project), source, conn));
             }
             if (source.getType() == DatabaseType.SQLSERVER) {
+                // SQL Server's table-level checks are not wired here either — same gap as
+                // Oracle below, out of this release's scope.
                 return mssqlProbe.probe(conn, List.of());
             }
-            // Connection-test-time probe has no project context — table-level checks
-            // (supplemental logging per table, LONG columns) are skipped when empty.
+            // Oracle's table-level checks (per-table supplemental logging, LONG columns)
+            // still get no list: their per-table semantics are not part of v1.9.0 and are
+            // not verified against live servers.
             // P0-2: the saved source config travels so the CDB mining-mode check can
             // see whether a mining account is configured.
             return logMinerProbe.probe(conn, List.of(), source);
@@ -144,6 +163,54 @@ public class CdcOperationsService {
             }
             return CdcProbeResult.of(List.of(CdcProbeResult.Check.of(anchor,
                     false, String.valueOf(e.getMessage()))));
+        }
+    }
+
+    /**
+     * The probe's {@code [schema, table]} pairs for a project's table selection.
+     *
+     * <p>Empty means "unknown, skip table-level checks", never "no tables": a legacy config
+     * selects nothing explicitly and means "every object discovered in the source", a list
+     * only a metadata read could produce — not this probe's job.
+     *
+     * <p>Table names are stored unqualified by the picker, so each one borrows the
+     * connection's schema; an already-qualified {@code schema.table} entry keeps its own.
+     * The schema comes from the saved connection, falling back to what the live connection
+     * reports (a {@code search_path} default other than {@code public} would otherwise
+     * make every table look missing).
+     */
+    private static List<String[]> ownerTables(SyncConfig config, DatabaseConfig source,
+                                              Connection conn) {
+        if (config == null || config.getTables() == null || config.getTables().isEmpty()) {
+            return List.of();
+        }
+        String schema = probeSchema(source, conn);
+        List<String[]> pairs = new ArrayList<>(config.getTables().size());
+        for (String name : config.getTables()) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            String trimmed = name.trim();
+            int dot = trimmed.indexOf('.');
+            if (dot > 0 && dot < trimmed.length() - 1) {
+                pairs.add(new String[]{trimmed.substring(0, dot), trimmed.substring(dot + 1)});
+            } else {
+                pairs.add(new String[]{schema, trimmed});
+            }
+        }
+        return pairs;
+    }
+
+    private static String probeSchema(DatabaseConfig source, Connection conn) {
+        String configured = source.getSchemaName();
+        if (configured != null && !configured.isBlank()) {
+            return configured.trim();
+        }
+        try {
+            return conn.getSchema();
+        } catch (SQLException | RuntimeException e) {
+            // No answer → the probe falls back to "public", its pre-v1.9.0 behavior.
+            return null;
         }
     }
 

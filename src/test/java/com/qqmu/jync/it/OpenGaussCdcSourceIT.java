@@ -3,6 +3,7 @@ package com.qqmu.jync.it;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
@@ -17,7 +18,9 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
+import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.cdc.CdcProbeResult;
 
 /**
  * v1.9.0: openGauss 5.0.0 <b>作源库</b>的逻辑复制 CDC 真库集成测试。
@@ -37,6 +40,7 @@ class OpenGaussCdcSourceIT extends PgCdcHarnessIT {
 
     @Autowired private CdcConsumerManager manager;
     @Autowired private CdcPositionStore positionStore;
+    @Autowired private CdcOperationsService cdcOperations;
 
     @Override
     protected GenericContainer<?> createContainer() {
@@ -121,6 +125,51 @@ class OpenGaussCdcSourceIT extends PgCdcHarnessIT {
         }
         return (Long.parseUnsignedLong(parts[0], 16) << 32)
                 | Long.parseUnsignedLong(parts[1], 16);
+    }
+
+    /**
+     * 场景 0:用户真正走的那条门禁 —— 保存任务 / 测试连接时的 PG 逻辑复制探测。
+     *
+     * <p>前两个场景证明消费端能跑，却绕过了探测；若 ② {@code SHOW wal_level}、④ 槽配额
+     * 查询或 ⑤ 建槽+删槽 在 openGauss 上有任何一项不成立，用户看到的就是"该源不可用"，
+     * 而消费端 IT 全绿也发现不了。这里在真库上把五项检查整体跑一遍。
+     */
+    @Test
+    void probePassesOnARealOpenGaussSource() throws Exception {
+        createOrdersTable("og_probe_orders", 1);
+        Project project = newProject("og-probe", cdcConfig("og_probe_orders"));
+
+        CdcProbeResult result = cdcOperations.probeProject(project.getId());
+
+        assertThat(result.getChecks()).isNotEmpty();
+        assertThat(result.failures())
+                .as("failed probe checks on a real openGauss source: %s", result.getChecks())
+                .isEmpty();
+        assertThat(result.passed()).isTrue();
+        // jync 是 SYSADMIN(rolsuper/rolreplication 全为 f):角色检查必须走 openGauss 的
+        // 放宽分支,而不是把真实用户拦在门外。
+        assertThat(result.getChecks())
+                .anyMatch(c -> CdcProbeResult.PG_REPLICATION_ROLE.equals(c.getName())
+                        && c.isPassed() && c.getDetail().contains("openGauss"));
+
+        disableProject(project);
+    }
+
+    /**
+     * 方言判定的前提事实,在真库上钉住:openGauss 5.0.0 <b>没有</b> {@code pg_lsn} 类型。
+     *
+     * <p>这条查询就是 {@code PgLogicalDialect.detectLive} 发出的那条。不加这条用例,
+     * 即使目录查询在 openGauss 上直接报错、退回 {@code SELECT version()} 横幅,消费端
+     * 用例照样全绿 —— 「按能力判定」就成了纸面说法。
+     */
+    @Test
+    void sourceCatalogHasNoPgLsnType() throws Exception {
+        try (Connection src = sourceJdbc(); Statement st = src.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT count(*) FROM pg_catalog.pg_type WHERE typname = 'pg_lsn'")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getLong(1)).isZero();
+        }
     }
 
     /**

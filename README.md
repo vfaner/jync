@@ -80,7 +80,7 @@
 |---|---|
 | 全量加载 | 主键 keyset 分块 + 单表内并行 + 结果集流式读取 + 逐块检查点；空表 INSERT-first、延迟二级索引；单表 20 万行/秒量级 |
 | 增量同步 | 时间戳 / 行级 SCN / 自增列 / 全表比对自动选策略；一条游标区间查询；水位线安全回退；游标提交后推进 |
-| 日志 CDC | MySQL binlog、Oracle LogMiner、PostgreSQL 逻辑解码、SQL Server CDC；长驻线程流式回放，秒级延迟 |
+| 日志 CDC | MySQL binlog、Oracle LogMiner、PostgreSQL 系逻辑解码（含 openGauss 等国产内核）、SQL Server CDC；长驻线程流式回放，秒级延迟 |
 | 结构同步 | 表、索引、视图、存储过程/函数；类型映射、函数转换、标识符引号、分页语法、DDL 覆盖 |
 | 数据加工 | 列清洗（7 种规则）、表名映射、只读数据预览、按需行数核对、任务克隆、批量建任务（按表大小分箱） |
 | 可靠性 | 幂等 upsert、检查点续传、数据库租约锁、at-least-once、停机变更自动补齐 |
@@ -192,7 +192,7 @@ SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 |---|---|---|
 | MySQL binlog | 5.7+；`log_bin=ON`、`binlog_format=ROW`、`binlog_row_image=FULL`；账号具备 `REPLICATION SLAVE` 与 `REPLICATION CLIENT`；binlog 保留 ≥ 24h | binlog 文件 + 偏移（含 GTID） |
 | Oracle LogMiner | 11g+；`ARCHIVELOG` 模式；库级 `SUPPLEMENTAL LOG DATA`；表级 `SUPPLEMENTAL LOG DATA (ALL) COLUMNS`；挖掘权限；归档保留 ≥ 24h | SCN |
-| PostgreSQL 逻辑解码 | 9.4+；`wal_level=logical`；账号具备 `REPLICATION`；表 `REPLICA IDENTITY` 非 `NOTHING` | LSN |
+| PostgreSQL 逻辑解码 | PostgreSQL 11+（推进位点依赖 `pg_replication_slot_advance`）及 PG 系国产内核（openGauss、GaussDB、Kingbase、Highgo、Vastbase、Oscar、RaseSQL、SeaBoxSQL）；`wal_level=logical`；账号具备 `REPLICATION`（openGauss 不要求该属性）；表 `REPLICA IDENTITY` 非 `NOTHING`；openGauss 建议 `enable_slot_log=on`，否则重启后逻辑槽失效 | LSN |
 | SQL Server CDC | 2012+；库级 `sp_cdc_enable_db`；SQL Server Agent 运行中；账号在 `cdc_Admin` / `cdc_reader` | LSN |
 
 - **统一流程**：先记位点 → 分块全量基线 → 长驻线程连续回放。位点在基线之前写入，所以基线期间的变更不会漏。

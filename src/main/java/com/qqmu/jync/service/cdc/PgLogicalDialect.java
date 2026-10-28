@@ -8,15 +8,52 @@ import java.sql.Statement;
 import java.util.Locale;
 
 /**
- * Server-side dialect for {@code PG_LOGICAL_CDC}. Selected from the product name the
- * server actually reports — never from the preset the user picked, because a
- * "PostgreSQL" preset can point at an openGauss instance.
+ * Server-side dialect for {@code PG_LOGICAL_CDC}. Selected from what the server can
+ * actually do — never from the preset the user picked, because a "PostgreSQL" preset can
+ * point at an openGauss instance.
  *
- * <p>The POSTGRES SQL strings are byte-for-byte the constants v1.7.0 shipped; keep them
- * that way or native PostgreSQL behavior changes with no test able to tell.
+ * <p><b>Capability, not brand (v1.9.0).</b> The domestic PG-family kernels do not carry
+ * their own CDC mechanism: each is PostgreSQL logical decoding on top of whatever PG
+ * release it forked, and the SQL surface differs by one catalog fact — whether the
+ * {@code pg_lsn} type exists. With it: the {@code lsn} column and the {@code ::pg_lsn}
+ * casts (PG 9.4+). Without it: the pre-9.4 {@code location} column and plain casts
+ * (measured on openGauss 5.0.0, a 9.2 fork). Measured: postgres:16.15 → present,
+ * openGauss 5.0.0 → absent. Asking the catalog is therefore both more accurate and more
+ * general than matching product names — a kernel nobody has tested yet lands on the
+ * correct surface by what it supports, not by what it calls itself. The name/banner check
+ * survives only as the fallback for a server whose catalog cannot be read.
+ *
+ * <p>Why the WAL-position function name is <b>not</b> a third dialect: only PostgreSQL
+ * 9.4–9.6 combines {@code pg_current_xlog_location()} with a {@code pg_lsn} type, and
+ * those servers also lack {@code pg_replication_slot_advance()} (PostgreSQL 11+). A
+ * pre-10 branch would anchor the baseline, load, stream — then fail forever on the first
+ * position advance, which is strictly worse than failing loudly at the baseline anchor.
+ * They stay on POSTGRES.
  */
 enum PgLogicalDialect {
 
+    /**
+     * Vanilla PostgreSQL. The two SQL strings are byte-for-byte the constants v1.7.0
+     * shipped; keep them that way or native PostgreSQL behavior changes with no test
+     * able to tell.
+     *
+     * <p>Why they look the way they do (F-11): reads use PEEK, never {@code get_changes}
+     * — peeking is non-consuming, so a crash mid-apply replays the transaction instead of
+     * losing it. The options argument is {@code VARIADIC text[]}, which a
+     * PreparedStatement cannot bind directly (a bound text parameter does not coerce to
+     * {@code text[]}); the option names/values are internal constants, so inline-quoting
+     * them is injection-safe. The slot name needs an explicit {@code ::name} cast — the
+     * driver binds it as varchar and PG does not implicitly coerce varchar to name once
+     * the call also carries a VARIADIC array (overload resolution fails). Likewise the
+     * advance parameter is {@code ::pg_lsn}. Advancing to the transaction's COMMIT LSN is
+     * exactly right: {@code confirmed_flush} is exclusive, and the next transaction's
+     * BEGIN may carry that same LSN and is still delivered.
+     *
+     * <p>{@code max_changes} is a hint, not a hard cut: logical decoding never emits half
+     * a transaction — if the next complete transaction would exceed the limit, only
+     * already-decoded transactions are returned (empirically, limit=2 still returned a
+     * 7-row transaction). Hence every peeked transaction is flushable as a whole.
+     */
     POSTGRES(
             "SELECT lsn::text, data FROM pg_logical_slot_peek_changes("
                     + "?::name, NULL::pg_lsn, ?::integer,"
@@ -84,12 +121,21 @@ enum PgLogicalDialect {
     }
 
     /**
-     * Resolves the dialect from a live connection. Cheap by construction: the extra
-     * {@code SELECT version()} round trip only happens when the product name already
-     * failed to name openGauss, and callers ask once per connection, never per poll.
-     * Every failure degrades to POSTGRES rather than throwing.
+     * Resolves the dialect from a live connection, asking the catalog what the server can
+     * do (one round trip, one query, both facts). Callers ask once per connection, never
+     * per poll.
+     *
+     * <p>When the catalog cannot be read — a non-PostgreSQL server behind a PG-family
+     * preset, a locked-down catalog — fall back to the product name and the
+     * {@code SELECT version()} banner, i.e. the v1.7.0–v1.8.1 behaviour, which keeps a
+     * lying product name from costing a working connection. Anything unrecognised stays
+     * POSTGRES. Never throws.
      */
     static PgLogicalDialect detectLive(Connection conn) {
+        Boolean hasPgLsn = hasPgLsnType(conn);
+        if (hasPgLsn != null) {
+            return hasPgLsn ? POSTGRES : OPENGAUSS;
+        }
         String product = null;
         try {
             DatabaseMetaData md = conn.getMetaData();
@@ -102,6 +148,23 @@ enum PgLogicalDialect {
         }
         return detect(product, versionText(conn));
     }
+
+    /**
+     * Catalog form, not {@code to_regtype}: that function arrived in PG 9.4, and the whole
+     * point of this query is to work on the 9.2-lineage kernels that predate it.
+     * {@code null} means "cannot tell", never "unsupported".
+     */
+    private static Boolean hasPgLsnType(Connection conn) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(CAPABILITY_SQL)) {
+            return rs.next() ? rs.getLong(1) > 0 : null;
+        } catch (SQLException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static final String CAPABILITY_SQL =
+            "SELECT count(*) FROM pg_catalog.pg_type WHERE typname = 'pg_lsn'";
 
     /** {@code SELECT version()} as text, or null when the server will not answer. */
     static String versionText(Connection conn) {
