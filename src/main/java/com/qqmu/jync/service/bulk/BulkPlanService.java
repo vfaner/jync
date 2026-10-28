@@ -136,7 +136,8 @@ public class BulkPlanService {
         // Refuse a strategy the source cannot serve BEFORE the listing is read: the preview
         // must not present a plan that create() would then reject in saveConfig, and a bogus
         // strategy name has no reason to cost a source connect at all.
-        CaptureStrategyParser.parseRequested(request.captureStrategy(), source.getType());
+        CaptureStrategyParser.parseRequested(request.captureStrategy(), source.getType(),
+                source.resolvedFamily());
         MetadataReader reader = metadataReaderFactory.forType(source.getType(),
                 source.resolvedFamily());
 

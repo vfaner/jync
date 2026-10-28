@@ -614,7 +614,17 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             ps.setString(1, slotName);
             ps.setString(2, commitLsn);
             try (ResultSet rs = ps.executeQuery()) {
-                rs.next(); // result row reports the end LSN the slot actually reached
+                // The result row reports the end LSN the slot actually reached. No row means
+                // the slot did NOT move: continuing would re-peek the same transaction every
+                // cycle while the local position advanced, with nothing on the panel to show
+                // it. Fail the cycle so it retries (at-least-once, idempotent upserts) and
+                // the error becomes visible — probe ⑤ refuses such a server up front, so
+                // this is the runtime backstop.
+                if (!rs.next()) {
+                    throw new SQLException("pg_replication_slot_advance returned no row for"
+                            + " slot '" + slotName + "' at " + commitLsn
+                            + " — the slot did not advance");
+                }
             }
         }
     }

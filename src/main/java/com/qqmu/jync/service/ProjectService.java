@@ -478,7 +478,8 @@ public class ProjectService {
                 ? null
                 : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
         CaptureStrategy requested = CaptureStrategyParser.parseRequested(captureStrategy,
-                source == null ? null : source.getType());
+                source == null ? null : source.getType(),
+                source == null ? null : source.resolvedFamily());
         if (requested != null) {
             config.setCaptureStrategy(requested);
         }

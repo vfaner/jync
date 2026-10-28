@@ -7,6 +7,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
@@ -36,9 +37,11 @@ public class PgLogicalReplicationCdcProbe {
 
     /**
      * @param conn        live source connection (already opened by the caller)
-     * @param ownerTables each element is {@code [schema, table]} lowercase — the tables the
-     *                    project intends to capture; may be empty (connection test before
-     *                    any project is configured) in which case table-level checks are
+     * @param ownerTables each element is {@code [schema, table]} exactly as the project
+     *                    stores it (a quoted mixed-case name is matched verbatim first and
+     *                    only then by its lower-case folding) — the tables the project
+     *                    intends to capture; may be empty (connection test before any
+     *                    project is configured) in which case table-level checks are
      *                    skipped.
      */
     public CdcProbeResult probe(Connection conn, List<String[]> ownerTables) {
@@ -299,72 +302,146 @@ public class PgLogicalReplicationCdcProbe {
 
     // —— ⑥ per-table REPLICA IDENTITY ——
 
+    /**
+     * At most this many table names per catalog query. PostgreSQL allows 65535 bind
+     * parameters; the cap keeps the statement small and the round trip short without
+     * splitting a realistic selection (hundreds of tables) into more than one query.
+     */
+    private static final int IDENTITY_QUERY_BATCH = 500;
+
+    /**
+     * ⑥ per-table REPLICA IDENTITY, one catalog query per schema per batch.
+     *
+     * <p>Not one query per table: a project may select hundreds of tables (bulk creation
+     * allows thousands), and this check also runs while the detail page of a brand-new
+     * project renders. A round trip per table made an advisory check scale with the
+     * selection.
+     *
+     * <p>Names are matched exactly first and by their SQL-unquoted folding second (see
+     * {@link #identitiesByTable}); a table that the catalog does not hold at all is reported
+     * separately from one whose identity is {@code NOTHING} — the two have different fixes
+     * (re-check the selection vs. {@code ALTER TABLE … REPLICA IDENTITY}).
+     */
     private CdcProbeResult.Check checkReplicaIdentity(Connection conn, List<String[]> ownerTables) {
-        List<String> missing = new ArrayList<>();
+        // schema -> table names, preserving selection order for a stable message.
+        java.util.LinkedHashMap<String, List<String>> bySchema = new java.util.LinkedHashMap<>();
         for (String[] ot : ownerTables) {
-            String schema = ot[0] == null ? "public" : ot[0];
-            String table = ot[1];
-            try {
-                String ident = replicaIdentityOf(conn, schema, table);
-                // pg_class.relreplident 官方语义:'d'=DEFAULT(主键作 old key)、'f'=FULL
-                // (全行旧镜像)、'i'=INDEX(指定唯一索引列作 old key,足以定位原行)、
-                // 'n'=NOTHING(UPDATE/DELETE 事件不带任何旧键 — 消费端无法定位原行,
-                // upsert 残留旧行、delete 落空,必须拒绝)。历史上此处把 i/n 写反:
-                // 误拒可用的 INDEX、放行不可用的 NOTHING。
-                if (ident == null || "n".equals(ident)) {
-                    missing.add(schema + "." + table + " (replica_identity=" + ident + ")");
-                }
-            } catch (SQLException e) {
-                return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICA_IDENTITY, false,
-                        msg(e));
+            if (ot == null || ot.length < 2 || ot[1] == null || ot[1].isBlank()) {
+                continue;
             }
+            String schema = ot[0] == null || ot[0].isBlank() ? "public" : ot[0];
+            bySchema.computeIfAbsent(schema, k -> new ArrayList<>()).add(ot[1]);
         }
-        if (missing.isEmpty()) {
+        List<String> missing = new ArrayList<>();
+        List<String> notFound = new ArrayList<>();
+        int checked = 0;
+        try {
+            for (Map.Entry<String, List<String>> e : bySchema.entrySet()) {
+                String schema = e.getKey();
+                Map<String, String> identities = new java.util.HashMap<>();
+                for (String variant : schemaVariants(schema)) {
+                    identitiesByTable(conn, variant, e.getValue())
+                            .forEach(identities::putIfAbsent);
+                }
+                for (String table : e.getValue()) {
+                    // pg_class.relreplident 官方语义:'d'=DEFAULT(主键作 old key)、'f'=FULL
+                    // (全行旧镜像)、'i'=INDEX(指定唯一索引列作 old key,足以定位原行)、
+                    // 'n'=NOTHING(UPDATE/DELETE 事件不带任何旧键 — 消费端无法定位原行,
+                    // upsert 残留旧行、delete 落空,必须拒绝)。历史上此处把 i/n 写反:
+                    // 误拒可用的 INDEX、放行不可用的 NOTHING。
+                    String ident = identities.get(table);
+                    if (ident == null) {
+                        ident = identities.get(table.toLowerCase(Locale.ROOT));
+                    }
+                    checked++;
+                    if (ident == null) {
+                        notFound.add(schema + "." + table);
+                    } else if ("n".equals(ident)) {
+                        missing.add(schema + "." + table);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICA_IDENTITY, false,
+                    msg(e));
+        }
+        if (missing.isEmpty() && notFound.isEmpty()) {
             return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICA_IDENTITY, true,
-                    ownerTables.size() + " table(s) with usable REPLICA IDENTITY");
+                    checked + " table(s) with usable REPLICA IDENTITY");
+        }
+        List<String> parts = new ArrayList<>(2);
+        if (!missing.isEmpty()) {
+            parts.add("REPLICA IDENTITY is NOTHING on: " + String.join(", ", missing)
+                    + " — fix with: ALTER TABLE \"<schema>\".\"<table>\""
+                    + " REPLICA IDENTITY DEFAULT;  -- or FULL if no PK");
+        }
+        if (!notFound.isEmpty()) {
+            parts.add("not found in the source catalog: " + String.join(", ", notFound)
+                    + " — the table may have been renamed or dropped, or the selection uses"
+                    + " another schema (an exact name is tried first, then its lower-case"
+                    + " folding)");
         }
         return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICA_IDENTITY, false,
-                "unsuitable REPLICA IDENTITY on: " + String.join(", ", missing)
-                        + " — fix with: ALTER TABLE \"<schema>\".\"<table>\""
-                        + " REPLICA IDENTITY DEFAULT;  -- or FULL if no PK");
+                String.join("; ", parts));
+    }
+
+    /** The schema as given, plus its SQL-unquoted folding when that differs. */
+    private static List<String> schemaVariants(String schema) {
+        String folded = schema.toLowerCase(Locale.ROOT);
+        return folded.equals(schema) ? List.of(schema) : List.of(schema, folded);
     }
 
     /**
-     * The stored {@code relreplident} of one table, or {@code null} when it is not there.
+     * {@code relname -> relreplident} for the named tables of one schema, in batches.
      *
-     * <p>The exact name is asked first: the catalog keeps a quoted identifier's real case
-     * ({@code "MyTable"}) and the picker stores names verbatim, so folding unconditionally
-     * would report such a table missing. Only when that finds nothing is the SQL-unquoted
-     * form retried (identifiers fold to lower case) — which also covers a name typed with
-     * different case by the caller. {@code relreplident} is {@code char NOT NULL}, so a
-     * found row answers non-null: null means "no such table", never "unknown identity".
+     * <p>Each name is looked up by its exact spelling first and by the SQL-unquoted folding
+     * second. The catalog keeps a quoted identifier's real case ({@code "MyTable"}), and the
+     * picker stores names verbatim, so folding unconditionally would report such a table
+     * missing; asking only the exact form would report a name the caller typed in another
+     * case. Both spellings travel in the same query, and resolution prefers the exact hit,
+     * so a schema holding both {@code "MyTable"} and {@code mytable} still matches the
+     * table the project actually selected.
+     *
+     * <p>{@code relreplident} is {@code char NOT NULL}: an absent key in the map means
+     * "no such table", never "unknown identity".
      */
-    private static String replicaIdentityOf(Connection conn, String schema, String table)
+    private static Map<String, String> identitiesByTable(Connection conn, String schema,
+                                                         List<String> tables)
             throws SQLException {
-        String ident = lookupReplicaIdentity(conn, schema, table);
-        if (ident != null) {
-            return ident;
+        // Every name to ask about, exact spelling first; keep order deterministic.
+        java.util.LinkedHashSet<String> asked = new java.util.LinkedHashSet<>();
+        for (String table : tables) {
+            asked.add(table);
         }
-        String foldedSchema = schema.toLowerCase(Locale.ROOT);
-        String foldedTable = table.toLowerCase(Locale.ROOT);
-        if (foldedSchema.equals(schema) && foldedTable.equals(table)) {
-            return null;
+        for (String table : tables) {
+            asked.add(table.toLowerCase(Locale.ROOT));
         }
-        return lookupReplicaIdentity(conn, foldedSchema, foldedTable);
-    }
-
-    private static String lookupReplicaIdentity(Connection conn, String schema, String table)
-            throws SQLException {
-        try (java.sql.PreparedStatement ps = conn.prepareStatement(
-                "SELECT c.relreplident FROM pg_catalog.pg_class c"
-                        + " JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
-                        + " WHERE n.nspname = ? AND c.relname = ?")) {
-            ps.setString(1, schema);
-            ps.setString(2, table);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getString(1) : null;
+        List<String> names = new ArrayList<>(asked);
+        Map<String, String> identities = new java.util.HashMap<>();
+        for (int from = 0; from < names.size(); from += IDENTITY_QUERY_BATCH) {
+            List<String> batch = names.subList(from,
+                    Math.min(names.size(), from + IDENTITY_QUERY_BATCH));
+            StringBuilder sql = new StringBuilder(
+                    "SELECT c.relreplident, c.relname FROM pg_catalog.pg_class c"
+                            + " JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
+                            + " WHERE n.nspname = ? AND c.relname IN (");
+            for (int i = 0; i < batch.size(); i++) {
+                sql.append(i == 0 ? "?" : ", ?");
+            }
+            sql.append(')');
+            try (java.sql.PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+                ps.setString(1, schema);
+                for (int i = 0; i < batch.size(); i++) {
+                    ps.setString(i + 2, batch.get(i));
+                }
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        identities.put(rs.getString(2), rs.getString(1));
+                    }
+                }
             }
         }
+        return identities;
     }
 
     private static String msg(SQLException e) {

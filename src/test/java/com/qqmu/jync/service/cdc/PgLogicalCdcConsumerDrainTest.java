@@ -213,6 +213,31 @@ class PgLogicalCdcConsumerDrainTest {
         return ids;
     }
 
+    /**
+     * {@code pg_replication_slot_advance} answers one row on every server the probe admits.
+     * If it ever answers none, the slot did NOT move: the old code ignored the empty result
+     * and moved its own idea of the position, so every later cycle re-peeked the same
+     * transaction with nothing on the panel to show it. Treat it as a failed cycle — the
+     * rows already applied are replayed idempotently, exactly like any other retry.
+     */
+    @Test
+    void anAdvanceThatReturnsNoRowFailsTheCycleInsteadOfStallingSilently() throws Exception {
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", insert(1L, "a")},
+                new String[]{"0/1002", COMMIT});
+        ResultSet noRow = mock(ResultSet.class);
+        when(noRow.next()).thenReturn(false);
+        when(advancePs.executeQuery()).thenReturn(noRow);
+
+        assertThatThrownBy(() -> consumer.drain(source, "jync_1"))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("jync_1");
+
+        // The target write happened before the advance; the next cycle replays it.
+        assertThat(targetRowCount()).isEqualTo(1);
+    }
+
     @Test
     void deleteThenInsertOfTheSameKeyWithinOneTransactionKeepsTheRow() throws Exception {
         // REPLACE 语义:同一事务里 DELETE 1 → INSERT 1,源端净效果是行存在。

@@ -1,10 +1,13 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -14,7 +17,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,10 +50,14 @@ class PgLogicalReplicationCdcProbeTest {
     /** ⑤ 起槽后可读性的两条语句:peek 与 advance 各自的 PreparedStatement。 */
     private PreparedStatement peekPs;
     private PreparedStatement advancePs;
-    /** ⑥ 查 relreplident 的 PreparedStatement(同一条 SQL 可能被问两次:原名、折叠名)。 */
+    /** ⑥ 查 relreplident 的 PreparedStatement:一条 SQL 带上本次要问的全部表名。 */
     private PreparedStatement identityPs;
-    /** 当前表被 stub 的 relreplident 值;每次 executeQuery 都产一份新 ResultSet,支持重复 probe()。 */
-    private String currentReplicaIdentity = "d";
+    /** 每批 executeQuery 绑定过的表名(参数 1 是 schema)。 */
+    private final List<String> identityBindings = new ArrayList<>();
+    /** 目录里存在的表 → relreplident;未列出的表按 {@link #defaultReplicaIdentity} 处理。 */
+    private final Map<String, String> replicaIdentityByName = new HashMap<>();
+    /** 未显式列出的表被 stub 的 relreplident;null = 目录里查不到(表不存在)。 */
+    private String defaultReplicaIdentity = "d";
 
     @BeforeEach
     void setUp() throws SQLException {
@@ -82,14 +93,27 @@ class PgLogicalReplicationCdcProbeTest {
             return rs;
         });
 
-        // ⑥ relreplident 走 PreparedStatement(pg_class JOIN pg_namespace)。
+        // ⑥ relreplident 走 PreparedStatement(pg_class JOIN pg_namespace)。一次查询带多张
+        // 表:mock 记录绑定的表名,executeQuery 只为目录里「存在」的表产行。
         identityPs = mock(PreparedStatement.class);
         when(conn.prepareStatement(contains("relreplident"))).thenReturn(identityPs);
+        doAnswer(inv -> {
+            if ((Integer) inv.getArgument(0) >= 2) {
+                identityBindings.add(inv.getArgument(1));
+            }
+            return null;
+        }).when(identityPs).setString(anyInt(), anyString());
         when(identityPs.executeQuery()).thenAnswer(inv -> {
-            ResultSet rs = mock(ResultSet.class);
-            when(rs.next()).thenReturn(true, false);
-            when(rs.getString(1)).thenReturn(currentReplicaIdentity);
-            return rs;
+            List<String[]> rows = new ArrayList<>();
+            for (String name : identityBindings) {
+                String ident = replicaIdentityByName.containsKey(name)
+                        ? replicaIdentityByName.get(name) : defaultReplicaIdentity;
+                if (ident != null) {
+                    rows.add(new String[]{ident, name});
+                }
+            }
+            identityBindings.clear();
+            return resultSetOf(rows);
         });
 
         // ⑤ 的 SQL 面探测:peek 读一个空槽(无行),advance 回一行 end_lsn。
@@ -108,7 +132,23 @@ class PgLogicalReplicationCdcProbeTest {
     }
 
     private void replicaIdentity(String ident) {
-        currentReplicaIdentity = ident;
+        defaultReplicaIdentity = ident;
+        replicaIdentityByName.clear();
+    }
+
+    /** A one-use ResultSet over {@code [relreplident, relname]} rows. */
+    private static ResultSet resultSetOf(List<String[]> rows) throws SQLException {
+        ResultSet rs = mock(ResultSet.class);
+        Iterator<String[]> it = rows.iterator();
+        String[][] current = new String[1][];
+        when(rs.next()).thenAnswer(inv -> {
+            boolean has = it.hasNext();
+            current[0] = has ? it.next() : null;
+            return has;
+        });
+        when(rs.getString(1)).thenAnswer(inv -> current[0][0]);
+        when(rs.getString(2)).thenAnswer(inv -> current[0][1]);
+        return rs;
     }
 
     private CdcProbeResult.Check check(CdcProbeResult result, String name) {
@@ -396,33 +436,64 @@ class PgLogicalReplicationCdcProbeTest {
                 probe.probe(conn, List.<String[]>of(new String[]{"Public", "MyTable"})),
                 CdcProbeResult.PG_REPLICA_IDENTITY);
         assertThat(identity.isPassed()).isTrue();
-        verify(identityPs).setString(1, "Public");
-        verify(identityPs).setString(2, "MyTable");
+        // 混合大小写的 schema 还会按折叠形式再问一次,所以用 atLeastOnce。
+        verify(identityPs, org.mockito.Mockito.atLeastOnce()).setString(1, "Public");
+        verify(identityPs, org.mockito.Mockito.atLeastOnce()).setString(2, "MyTable");
     }
 
-    /** 原名查不到时按 SQL 未加引号的语义折叠再问一次,而不是直接判表不存在。 */
+    /** 原名查不到时按 SQL 未加引号的语义折叠再查一次,而不是直接判表不存在。 */
     @Test
     void missingExactNameIsRetriedFoldedBeforeReportingTheTableMissing() throws SQLException {
-        ResultSet missing = mock(ResultSet.class);
-        when(missing.next()).thenReturn(false);
-        ResultSet found = mock(ResultSet.class);
-        when(found.next()).thenReturn(true, false);
-        when(found.getString(1)).thenReturn("d");
-        when(identityPs.executeQuery()).thenReturn(missing, found);
+        replicaIdentity(null);                       // 原名在目录里不存在
+        replicaIdentityByName.put("mytable", "d");   // 只有折叠后的名字存在
 
         CdcProbeResult.Check identity = check(
                 probe.probe(conn, List.<String[]>of(new String[]{"Public", "MyTable"})),
                 CdcProbeResult.PG_REPLICA_IDENTITY);
         assertThat(identity.isPassed()).isTrue();
-        verify(identityPs).setString(2, "mytable");
+        verify(identityPs, org.mockito.Mockito.atLeastOnce()).setString(3, "mytable");
     }
 
     @Test
     void missingTableRowFailsIdentityCheck() throws SQLException {
         // pg_class 查不到行(表不存在/schema 错)→ ident=null → 必须失败。
         replicaIdentity(null);
-        assertThat(check(probeOneTable(), CdcProbeResult.PG_REPLICA_IDENTITY).isPassed())
-                .isFalse();
+        CdcProbeResult.Check identity = check(probeOneTable(),
+                CdcProbeResult.PG_REPLICA_IDENTITY);
+        assertThat(identity.isPassed()).isFalse();
+        // Missing and NOTHING are different problems with different fixes: one is a stale
+        // selection, the other an ALTER TABLE. The detail must not send the DBA to the
+        // wrong one.
+        assertThat(identity.getDetail()).contains("not found");
+    }
+
+    /**
+     * A project may select hundreds of tables (bulk creation allows up to thousands). One
+     * catalog round trip per table made the probe — which also runs while the project
+     * detail page renders — scale with the selection. All tables of one schema share one
+     * query.
+     */
+    @Test
+    void tablesOfOneSchemaShareACatalogQuery() throws SQLException {
+        replicaIdentity("d");
+        probe.probe(conn, List.of(
+                new String[]{"public", "a"},
+                new String[]{"public", "b"},
+                new String[]{"public", "c"}));
+
+        verify(identityPs, times(1)).executeQuery();
+    }
+
+    /** Different schemas cannot share one predicate — one query each, still not one per table. */
+    @Test
+    void tablesOfDifferentSchemasAreGroupedBySchema() throws SQLException {
+        replicaIdentity("d");
+        probe.probe(conn, List.of(
+                new String[]{"app", "a"},
+                new String[]{"app", "b"},
+                new String[]{"sales", "c"}));
+
+        verify(identityPs, times(2)).executeQuery();
     }
 
     @Test

@@ -213,6 +213,31 @@ class CdcOperationsServiceTest {
         assertThat(tables.getValue()).isEmpty();
     }
 
+    /**
+     * A CUSTOM connection that declares the PostgreSQL family is a PostgreSQL server as far
+     * as the rest of the stack is concerned ({@code DatabaseConfig.resolvedFamily}).
+     * The probe must dispatch to the PG checks — which decide usability by capability —
+     * instead of rejecting the connection as "unsupported" before it ever connects.
+     */
+    @Test
+    void probeProjectDispatchesACustomConnectionWithThePostgresFamilyToThePgProbe()
+            throws SQLException {
+        Project p = project();
+        p.setSyncConfig("{\"captureStrategy\":\"PG_LOGICAL_CDC\"}");
+        when(contextFactory.parseConfig(p)).thenReturn(new SyncConfig());
+        DatabaseConfig src = source(DatabaseType.CUSTOM);
+        src.setDialectFamily(DatabaseType.DialectFamily.POSTGRES);
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        when(pgProbe.probe(any(Connection.class), anyList()))
+                .thenReturn(CdcProbeResult.of(List.of()));
+
+        service.probeProject(1L);
+
+        verify(pgProbe).probe(same(conn), anyList());
+        verify(logMinerProbe, never()).probe(any(), anyList(), any());
+    }
+
     @Test
     void probeProjectRejectsUnsupportedSource() throws SQLException {
         project();

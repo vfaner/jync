@@ -78,7 +78,7 @@ Jync 的 README 只讲它能做什么。这份文档讲清楚它在哪些输入�
 
 - **MySQL**：`binlog_row_image=FULL` 才能拿到完整行；`REPLICATION SLAVE` 与 `REPLICATION CLIENT` 两个权限都要有；binlog 保留时间必须覆盖最长停机窗口。
 - **Oracle**：`ARCHIVELOG`、库级补充日志、表级 `(ALL) COLUMNS` 缺一不可；归档保留同样要覆盖停机窗口。
-- **PostgreSQL 系**：`wal_level=logical`；Jync 会用 `test_decoding` 创建逻辑复制槽，因此该插件必须可用；表的 `REPLICA IDENTITY` 不能是 `NOTHING`。v1.9.0 起 PG 家族（openGauss、翰高、Vastbase、Kingbase 等）也能选 PG 逻辑 CDC，但**能否真正使用由连接时的能力探测决定**：openGauss 5.0 已实测通过（另建议 `enable_slot_log=on`，否则服务器重启后槽不保留，需要重建基线），其余内核需在目标环境自检。探测不是「按品牌猜」：它会建一个一次性逻辑槽，在上面**真跑**消费端要用的 peek 与位点推进语句，再逐表检查 `REPLICA IDENTITY`，任何一条语句不被该内核接受即判不可用，并把服务器原始报错写进检查项 —— 所以「自检」不需要人工拼 SQL，点一次探测即可。
+- **PostgreSQL 系**：PostgreSQL 11+（推进位点依赖 `pg_replication_slot_advance`，9.4–10 的探测会失败）；`wal_level=logical`；Jync 会用 `test_decoding` 创建逻辑复制槽，因此该插件必须可用；表的 `REPLICA IDENTITY` 不能是 `NOTHING`。v1.9.0 起 PG 家族（openGauss、翰高、Vastbase、Kingbase 等）也能选 PG 逻辑 CDC，但**能否真正使用由连接时的能力探测决定**：openGauss 5.0 已实测通过（另建议 `enable_slot_log=on`，否则服务器重启后槽不保留，需要重建基线），其余内核需在目标环境自检。探测不是「按品牌猜」：它会建一个一次性逻辑槽，在上面**真跑**消费端要用的 peek 与位点推进语句，再逐表检查 `REPLICA IDENTITY`，任何一条语句不被该内核接受即判不可用，并把服务器原始报错写进检查项 —— 所以「自检」不需要人工拼 SQL，点一次探测即可。
 - **SQL Server**：库级 CDC 已启用，且 **SQL Server Agent 必须持续运行**；Agent 停止后 CDC 捕获表不再增长，Jync 看起来"没有变更"。
 
 ### 4.2 主键是必需项

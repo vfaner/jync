@@ -52,4 +52,54 @@ class CaptureStrategyParserTest {
     void blankRequestLeavesTheStrategyAlone() {
         assertThat(CaptureStrategyParser.parseRequested("  ", DatabaseType.MYSQL)).isNull();
     }
+
+    // —— v1.9.0 follow-up: CUSTOM connections declare their family ——
+
+    /**
+     * A CUSTOM connection is how a PG-compatible product without a preset (IvorySQL,
+     * PolarDB-PG, MogDB, …) is added, and the rest of the stack — dialect, type mapping,
+     * metadata reader — already follows {@code DatabaseConfig.resolvedFamily()}. The CDC
+     * gate must agree, or the one engine that verifies itself by capability stays closed
+     * to exactly the products it was built to accept.
+     */
+    @Test
+    void aCustomConnectionThatDeclaresThePostgresFamilyAcceptsPgLogicalCdc() {
+        assertThat(CaptureStrategyParser.parseRequested("PG_LOGICAL_CDC",
+                DatabaseType.CUSTOM, DatabaseType.DialectFamily.POSTGRES))
+                .isEqualTo(CaptureStrategy.PG_LOGICAL_CDC);
+    }
+
+    @Test
+    void aCustomConnectionWithoutADeclaredFamilyStillRejectsPgLogicalCdc() {
+        assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("PG_LOGICAL_CDC",
+                DatabaseType.CUSTOM, DatabaseType.DialectFamily.GENERIC))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.postgres");
+    }
+
+    /** The declared family unlocks only the capability-probed engine, never the literal ones. */
+    @Test
+    void aDeclaredFamilyDoesNotUnlockTheLiteralEngines() {
+        assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("BINLOG_CDC",
+                DatabaseType.CUSTOM, DatabaseType.DialectFamily.MYSQL))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.mysql");
+        assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("LOGMINER_CDC",
+                DatabaseType.CUSTOM, DatabaseType.DialectFamily.ORACLE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.oracle");
+        assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("SQLSERVER_CDC",
+                DatabaseType.CUSTOM, DatabaseType.DialectFamily.SQLSERVER))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.sqlserver");
+    }
+
+    /** The two-arg form keeps deciding by the preset's own family (CUSTOM → GENERIC). */
+    @Test
+    void theTwoArgFormStillRejectsCustomWithoutADeclaredFamily() {
+        assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("PG_LOGICAL_CDC",
+                DatabaseType.CUSTOM))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.postgres");
+    }
 }

@@ -279,6 +279,50 @@ class ProjectControllerStrategyTest {
         assertThat(page).doesNotContain("value=\"BINLOG_CDC\"");
     }
 
+    /**
+     * The card follows the same rule the backend and the rest of the stack use: a CUSTOM
+     * connection that declares the PostgreSQL family gets the PG card, because that family
+     * is what its dialect, type mapping and metadata reader already get.
+     */
+    @Test
+    void detailShowsThePgCardForACustomConnectionThatDeclaresThePostgresFamily()
+            throws Exception {
+        stubDetail(DatabaseType.CUSTOM);
+        when(databaseConfigService.findById(5L)).thenReturn(Optional.of(customSource(
+                DatabaseType.DialectFamily.POSTGRES)));
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("value=\"PG_LOGICAL_CDC\"");
+        assertThat(page).doesNotContain("value=\"BINLOG_CDC\"");
+    }
+
+    /** A CUSTOM connection that declares nothing stays generic: no CDC card at all. */
+    @Test
+    void detailShowsNoCdcCardForACustomConnectionWithoutADeclaredFamily() throws Exception {
+        stubDetail(DatabaseType.CUSTOM);
+        when(databaseConfigService.findById(5L)).thenReturn(Optional.of(customSource(null)));
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).doesNotContain("value=\"PG_LOGICAL_CDC\"")
+                .doesNotContain("value=\"BINLOG_CDC\"")
+                .doesNotContain("value=\"LOGMINER_CDC\"")
+                .doesNotContain("value=\"SQLSERVER_CDC\"");
+    }
+
+    private static DatabaseConfig customSource(DatabaseType.DialectFamily family) {
+        DatabaseConfig source = new DatabaseConfig();
+        source.setId(5L);
+        source.setType(DatabaseType.CUSTOM);
+        source.setDialectFamily(family);
+        return source;
+    }
+
     /** v1.9.0:openGauss 新项目探测通过时,同样默认选中 PG 逻辑 CDC 卡片。 */
     @Test
     void newOpenGaussProjectWithPassingProbePreselectsPgCdc() throws Exception {

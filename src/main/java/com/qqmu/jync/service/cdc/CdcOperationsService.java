@@ -112,10 +112,13 @@ public class CdcOperationsService {
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
+        // resolvedFamily(), not the preset's family: a CUSTOM connection that declares the
+        // PostgreSQL family gets the PG checks (the same family its dialect, type mapping
+        // and metadata reader already get). The other engines stay keyed on the preset.
         if (source == null || source.getType() == null
                 || (source.getType() != DatabaseType.MYSQL
                         && source.getType() != DatabaseType.ORACLE
-                        && source.getType().getFamily() != DatabaseType.DialectFamily.POSTGRES
+                        && source.resolvedFamily() != DatabaseType.DialectFamily.POSTGRES
                         && source.getType() != DatabaseType.SQLSERVER)) {
             throw new IllegalArgumentException("cdc.probe.unsupported");
         }
@@ -124,7 +127,7 @@ public class CdcOperationsService {
                 long plannedServerId = clientFactory.serverIdFor(projectId);
                 return probe.probe(conn, plannedServerId);
             }
-            if (source.getType().getFamily() == DatabaseType.DialectFamily.POSTGRES) {
+            if (source.resolvedFamily() == DatabaseType.DialectFamily.POSTGRES) {
                 // v1.9.0: this IS the per-project probe, so it must carry the project's
                 // tables — it used to pass an empty list (a comment copied from the
                 // connection-test path), which silently disabled the table-level
@@ -153,7 +156,7 @@ public class CdcOperationsService {
             String anchor;
             if (source.getType() == DatabaseType.ORACLE) {
                 anchor = CdcProbeResult.ORACLE_SOURCE;
-            } else if (source.getType().getFamily()
+            } else if (source.resolvedFamily()
                     == DatabaseType.DialectFamily.POSTGRES) {
                 anchor = CdcProbeResult.PG_SOURCE;
             } else if (source.getType() == DatabaseType.SQLSERVER) {

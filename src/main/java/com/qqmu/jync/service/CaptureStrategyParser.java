@@ -53,6 +53,26 @@ public final class CaptureStrategyParser {
      * @throws IllegalArgumentException with an i18n key the page knows how to translate
      */
     public static CaptureStrategy parseRequested(String requested, DatabaseType sourceType) {
+        return parseRequested(requested, sourceType,
+                sourceType == null ? null : sourceType.getFamily());
+    }
+
+    /**
+     * The same gate, with the source's <em>declared</em> dialect family supplied explicitly.
+     *
+     * <p>A {@code CUSTOM} connection carries the {@code GENERIC} preset family but declares
+     * the family it actually speaks ({@link com.qqmu.jync.model.DatabaseConfig#resolvedFamily()});
+     * that declared family is what the dialect, type mapping and metadata reader already
+     * follow. Only the PostgreSQL branch uses it: PG logical CDC is the one engine that
+     * verifies itself against the live server by capability, so a PG-compatible product
+     * without a preset gets the same treatment as openGauss. The literal engines
+     * (binlog / LogMiner / SQL Server CDC) keep checking the preset, because their
+     * compatibility is unverified and a declared family is not evidence.
+     *
+     * @param sourceFamily the source's resolved family, or null when it cannot be resolved
+     */
+    public static CaptureStrategy parseRequested(String requested, DatabaseType sourceType,
+                                                 DatabaseType.DialectFamily sourceFamily) {
         if (requested == null || requested.isBlank()) {
             return null;
         }
@@ -70,9 +90,11 @@ public final class CaptureStrategyParser {
         }
         // v1.9.0: PG 家族一律放行到探测。家族成员能否真正使用由连接时的能力探测
         // 决定（openGauss 5.0 已实测；其余内核探测不过即拒绝），这里不按字面产品名拦。
+        // CUSTOM 连接按它声明的方言家族算 —— 其余链路（方言、类型映射、元数据读取）
+        // 早就用 resolvedFamily()，只有这里按预设家族会把「自定义接入的 PG 系产品」
+        // 挡在唯一一个靠能力自证的引擎之外。
         if (strategy == CaptureStrategy.PG_LOGICAL_CDC
-                && (sourceType == null
-                        || sourceType.getFamily() != DatabaseType.DialectFamily.POSTGRES)) {
+                && sourceFamily != DatabaseType.DialectFamily.POSTGRES) {
             throw new IllegalArgumentException("error.project.cdc.not.postgres");
         }
         if (strategy == CaptureStrategy.SQLSERVER_CDC && sourceType != DatabaseType.SQLSERVER) {

@@ -269,8 +269,10 @@ public class ProjectController {
         model.addAttribute("serverZone", java.time.ZoneId.systemDefault().getId());
 
         // --- capture-strategy cards (C1) ---------------------------------------------------
-        // The CDC card exists only for a strictly-MySQL or Oracle source; every other type
-        // does not even render it (acceptance C①).
+        // A CDC card renders only when the backend would accept that strategy for this
+        // source: the literal presets for MySQL binlog, Oracle LogMiner and SQL Server CDC,
+        // and the whole PostgreSQL family for PG logical decoding. Every other type does
+        // not render the card at all (acceptance C①).
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigService.findById(project.getSourceDbId()).orElse(null);
         boolean isMysqlSource = source != null && source.getType() == DatabaseType.MYSQL;
@@ -279,8 +281,8 @@ public class ProjectController {
         // (CaptureStrategyParser + the capability probe). Keyed on the literal
         // PostgreSQL preset, an openGauss source never rendered the card at all —
         // the parser accepted the strategy while the page offered no way to pick it.
-        boolean isPostgresSource = source != null && source.getType() != null
-                && source.getType().getFamily() == DatabaseType.DialectFamily.POSTGRES;
+        boolean isPostgresSource = source != null
+                && source.resolvedFamily() == DatabaseType.DialectFamily.POSTGRES;
         boolean isSqlServerSource = source != null && source.getType() == DatabaseType.SQLSERVER;
         model.addAttribute("isMysqlSource", isMysqlSource);
         model.addAttribute("isOracleSource", isOracleSource);
