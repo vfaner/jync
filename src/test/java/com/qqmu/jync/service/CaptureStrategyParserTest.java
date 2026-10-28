@@ -37,7 +37,11 @@ class CaptureStrategyParserTest {
     }
 
     @Test
-    void otherStrategiesKeepTheirLiteralGates() {
+    void binlogFollowsTheMysqlFamilyWhileLogMinerStaysLiteral() {
+        // v1.9.0: binlog 与 PG 逻辑 CDC 一样改为家族 + 连接时事件探测，MySQL 系兼容库
+        // （MariaDB / TiDB / OceanBase …）不再在保存时被品牌名一票否决。
+        assertThat(CaptureStrategyParser.parseRequested("BINLOG_CDC", DatabaseType.MARIADB))
+                .isEqualTo(CaptureStrategy.BINLOG_CDC);
         assertThatThrownBy(() ->
                 CaptureStrategyParser.parseRequested("BINLOG_CDC", DatabaseType.OPENGAUSS))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -77,13 +81,16 @@ class CaptureStrategyParserTest {
                 .hasMessage("error.project.cdc.not.postgres");
     }
 
-    /** The declared family unlocks only the capability-probed engine, never the literal ones. */
+    /**
+     * Only the engines that verify themselves on the live server accept a declared family.
+     * Binlog and PG logical decoding both do (event-stream probe / slot probe); LogMiner and
+     * SQL Server CDC do not, so they keep their literal preset gate.
+     */
     @Test
-    void aDeclaredFamilyDoesNotUnlockTheLiteralEngines() {
-        assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("BINLOG_CDC",
+    void aDeclaredFamilyUnlocksOnlyTheCapabilityProbedEngines() {
+        assertThat(CaptureStrategyParser.parseRequested("BINLOG_CDC",
                 DatabaseType.CUSTOM, DatabaseType.DialectFamily.MYSQL))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("error.project.cdc.not.mysql");
+                .isEqualTo(CaptureStrategy.BINLOG_CDC);
         assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("LOGMINER_CDC",
                 DatabaseType.CUSTOM, DatabaseType.DialectFamily.ORACLE))
                 .isInstanceOf(IllegalArgumentException.class)

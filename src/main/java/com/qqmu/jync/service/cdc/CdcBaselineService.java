@@ -62,19 +62,7 @@ public class CdcBaselineService {
                     rs.close();
                 }
             }
-            String gtidSet = null;
-            try (Statement st = conn.createStatement()) {
-                ResultSet rs = st.executeQuery("SELECT @@GLOBAL.gtid_mode");
-                String mode = rs.next() ? rs.getString(1) : "OFF";
-                rs.close();
-                if ("ON".equalsIgnoreCase(mode)) {
-                    rs = st.executeQuery("SELECT @@GLOBAL.gtid_executed");
-                    if (rs.next()) {
-                        gtidSet = rs.getString(1);
-                    }
-                    rs.close();
-                }
-            }
+            String gtidSet = readGtidSet(conn);
             if (file == null || file.isBlank()) {
                 throw new IllegalStateException(
                         "Could not read binary log position — is log_bin enabled?");
@@ -82,6 +70,36 @@ public class CdcBaselineService {
             return new CdcPositionMark(file, pos, gtidSet);
         } catch (SQLException e) {
             throw new IllegalStateException("Failed to read binlog position: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The MySQL GTID set to resume from, or null when the server has none to offer.
+     *
+     * <p>GTID is an optimisation, never a requirement: the file/position pair read above is
+     * a complete resume point on its own. MariaDB has no {@code gtid_mode} variable at all
+     * (its GTID is a different, domain-server-sequence format that the MySQL binlog client
+     * cannot consume), and several MySQL-wire products omit it too. Letting that one query
+     * abort the whole baseline parked every such source before it wrote a single row — the
+     * SQLException escaped to the caller's catch and became
+     * "Failed to read binlog position".
+     */
+    private String readGtidSet(Connection conn) {
+        try (Statement st = conn.createStatement()) {
+            ResultSet rs = st.executeQuery("SELECT @@GLOBAL.gtid_mode");
+            String mode = rs.next() ? rs.getString(1) : "OFF";
+            rs.close();
+            if (!"ON".equalsIgnoreCase(mode)) {
+                return null;
+            }
+            rs = st.executeQuery("SELECT @@GLOBAL.gtid_executed");
+            String set = rs.next() ? rs.getString(1) : null;
+            rs.close();
+            return set == null || set.isBlank() ? null : set;
+        } catch (SQLException e) {
+            log.info("Source does not expose a MySQL GTID set ({}); resuming from the"
+                    + " file/position pair instead", e.getMessage());
+            return null;
         }
     }
 

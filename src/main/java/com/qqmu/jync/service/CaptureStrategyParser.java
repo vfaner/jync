@@ -63,11 +63,11 @@ public final class CaptureStrategyParser {
      * <p>A {@code CUSTOM} connection carries the {@code GENERIC} preset family but declares
      * the family it actually speaks ({@link com.qqmu.jync.model.DatabaseConfig#resolvedFamily()});
      * that declared family is what the dialect, type mapping and metadata reader already
-     * follow. Only the PostgreSQL branch uses it: PG logical CDC is the one engine that
-     * verifies itself against the live server by capability, so a PG-compatible product
-     * without a preset gets the same treatment as openGauss. The literal engines
-     * (binlog / LogMiner / SQL Server CDC) keep checking the preset, because their
-     * compatibility is unverified and a declared family is not evidence.
+     * follow. The two engines that verify themselves against the live server by capability
+     * — PG logical CDC and MySQL binlog CDC — accept the whole family, so a look-alike
+     * without a preset gets the same treatment as a preset member: it passes the gate and
+     * then has to pass the probe. LogMiner and SQL Server CDC keep checking the preset,
+     * because their compatibility is unverified and a declared family is not evidence.
      *
      * @param sourceFamily the source's resolved family, or null when it cannot be resolved
      */
@@ -82,7 +82,13 @@ public final class CaptureStrategyParser {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("error.project.strategy.invalid");
         }
-        if (strategy == CaptureStrategy.BINLOG_CDC && sourceType != DatabaseType.MYSQL) {
+        // v1.9.0: binlog follows the MySQL family, for the same reason PG does — the
+        // engine no longer trusts a product name. Any MySQL-wire source may be saved with
+        // BINLOG_CDC, and the capability probe (BinlogCdcProbe) decides at connect time
+        // whether its event stream actually decodes; a look-alike that cannot be decoded
+        // fails there with the decoder's own message instead of being refused by name.
+        if (strategy == CaptureStrategy.BINLOG_CDC
+                && sourceFamily != DatabaseType.DialectFamily.MYSQL) {
             throw new IllegalArgumentException("error.project.cdc.not.mysql");
         }
         if (strategy == CaptureStrategy.LOGMINER_CDC && sourceType != DatabaseType.ORACLE) {

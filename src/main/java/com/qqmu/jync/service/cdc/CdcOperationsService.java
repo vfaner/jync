@@ -97,11 +97,12 @@ public class CdcOperationsService {
      * the same server id the consumer would later use ({@link BinlogClientFactory#serverIdFor}),
      * so a collision shows up here rather than at connect time.
      *
-     * <p>Dispatches by source type: MySQL → binlog probe; Oracle → LogMiner probe; the
-     * PostgreSQL family (PostgreSQL and the PG-compatible domestic kernels) → PG logical
-     * probe, which is given the project's own table selection so its table-level checks
-     * actually run; SQL Server → its own probe; anything else → 400
-     * {@code cdc.probe.unsupported}.
+     * <p>Dispatches by source family: the MySQL family (MySQL and every MySQL-wire
+     * product) → binlog probe, which additionally decodes one real event on anything but
+     * native MySQL; the PostgreSQL family (PostgreSQL and the PG-compatible domestic
+     * kernels) → PG logical probe, which is given the project's own table selection so its
+     * table-level checks actually run; literal Oracle → LogMiner probe; literal SQL
+     * Server → its own probe; anything else → 400 {@code cdc.probe.unsupported}.
      *
      * @throws IllegalArgumentException with the bare key {@code cdc.probe.unsupported} when
      *         the project's source is missing or has no CDC integration (the API
@@ -113,19 +114,23 @@ public class CdcOperationsService {
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
         // resolvedFamily(), not the preset's family: a CUSTOM connection that declares the
-        // PostgreSQL family gets the PG checks (the same family its dialect, type mapping
-        // and metadata reader already get). The other engines stay keyed on the preset.
+        // MySQL or PostgreSQL family gets that family's checks (the same family its
+        // dialect, type mapping and metadata reader already get). LogMiner and SQL Server
+        // CDC stay keyed on the preset — their compatibility is unverified.
         if (source == null || source.getType() == null
-                || (source.getType() != DatabaseType.MYSQL
+                || (source.resolvedFamily() != DatabaseType.DialectFamily.MYSQL
                         && source.getType() != DatabaseType.ORACLE
                         && source.resolvedFamily() != DatabaseType.DialectFamily.POSTGRES
                         && source.getType() != DatabaseType.SQLSERVER)) {
             throw new IllegalArgumentException("cdc.probe.unsupported");
         }
         try (Connection conn = dataSourceManager.getConnection(source)) {
-            if (source.getType() == DatabaseType.MYSQL) {
+            if (source.resolvedFamily() == DatabaseType.DialectFamily.MYSQL) {
                 long plannedServerId = clientFactory.serverIdFor(projectId);
-                return probe.probe(conn, plannedServerId);
+                // The saved source travels too: on anything but native MySQL the probe
+                // opens a throwaway stream through this very config, so the credentials
+                // and port it presents are the ones the consumer would use.
+                return probe.probe(conn, source, plannedServerId);
             }
             if (source.resolvedFamily() == DatabaseType.DialectFamily.POSTGRES) {
                 // v1.9.0: this IS the per-project probe, so it must carry the project's

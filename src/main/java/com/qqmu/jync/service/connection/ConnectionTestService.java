@@ -108,10 +108,11 @@ public class ConnectionTestService {
                 // 与源端一样:预检只是附加信息,炸掉降级为无检查项(B2)
                 log.warn("Target DDL probe failed during connection test; reporting none", e);
             }
-        } else if (config.getType() == DatabaseType.MYSQL) {
+        } else if (config.resolvedFamily() == DatabaseType.DialectFamily.MYSQL) {
             try {
                 // 连接页没有项目上下文 → plannedServerId 传 0(只查非 0,不查撞 id)
-                cdcChecks = cdcProbe.probe(conn, 0L).getChecks();
+                // config 随行:非原生 MySQL 的探测要用它开一条一次性复制流验证事件可解码
+                cdcChecks = cdcProbe.probe(conn, config, 0L).getChecks();
             } catch (RuntimeException e) {
                 // 探测只是附加信息:自身炸掉降级为无检查项,绝不阻断连接测试(B2)
                 log.warn("CDC probe failed during connection test; reporting none", e);
@@ -168,7 +169,7 @@ public class ConnectionTestService {
         private final String catalog;
         private final String schema;
         private final long elapsedMs;
-        /** Itemized CDC probe results; null when not probed (non-MySQL) or the probe blew up. */
+        /** Itemized CDC probe results; null when the source has no CDC engine or the probe blew up. */
         private final List<CdcProbeResult.Check> cdcChecks;
 
         private TestResult(boolean success, String message, String productInfo, String driverInfo,

@@ -128,7 +128,8 @@ class CdcOperationsServiceTest {
         Connection conn = org.mockito.Mockito.mock(Connection.class);
         when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
         when(clientFactory.serverIdFor(1L)).thenReturn(612001L);
-        when(probe.probe(any(Connection.class), anyLong())).thenReturn(fivePassTwoFail());
+        when(probe.probe(any(Connection.class), any(DatabaseConfig.class), anyLong()))
+                .thenReturn(fivePassTwoFail());
 
         CdcProbeResult result = service.probeProject(1L);
 
@@ -142,7 +143,7 @@ class CdcOperationsServiceTest {
         assertThat(serverId.getDetail()).contains("612001");
         // 探测收到的 plannedServerId 必须就是 serverIdFor(projectId)。
         ArgumentCaptor<Long> plannedServerId = ArgumentCaptor.forClass(Long.class);
-        verify(probe).probe(same(conn), plannedServerId.capture());
+        verify(probe).probe(same(conn), same(source), plannedServerId.capture());
         assertThat(plannedServerId.getValue()).isEqualTo(612001L);
         assertThat(plannedServerId.getValue()).isEqualTo(clientFactory.serverIdFor(1L));
         assertThat(source.getType()).isEqualTo(DatabaseType.MYSQL);
@@ -235,6 +236,22 @@ class CdcOperationsServiceTest {
         service.probeProject(1L);
 
         verify(pgProbe).probe(same(conn), anyList());
+        verify(logMinerProbe, never()).probe(any(), anyList(), any());
+    }
+
+    @Test
+    void probeProjectDispatchesAMariaDbSourceToTheBinlogProbe() throws SQLException {
+        project();
+        DatabaseConfig src = source(DatabaseType.MARIADB);
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        when(probe.probe(any(Connection.class), any(DatabaseConfig.class), anyLong()))
+                .thenReturn(CdcProbeResult.of(List.of()));
+
+        service.probeProject(1L);
+
+        verify(probe).probe(same(conn), same(src), anyLong());
+        verify(pgProbe, never()).probe(any(), anyList());
         verify(logMinerProbe, never()).probe(any(), anyList(), any());
     }
 

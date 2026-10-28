@@ -55,11 +55,7 @@ public class BinlogClientFactory {
     }
 
     public BinaryLogClient createClient(DatabaseConfig source, long projectId, CdcPosition resumeFrom) {
-        String host = source.getHost() == null || source.getHost().trim().isEmpty()
-                ? "localhost" : source.getHost().trim();
-        int port = source.getPort() != null ? source.getPort() : source.getType().getDefaultPort();
-        BinaryLogClient client = new BinaryLogClient(host, port,
-                source.getUsername(), cryptoUtil.decrypt(source.getPassword()));
+        BinaryLogClient client = newClient(source);
         client.setServerId(serverIdFor(projectId));
         // #3 fix: without a heartbeat, a half-open TCP (NAT idle cut, source crash with
         // no FIN) leaves the event loop parked on a read — client.isConnected() stays
@@ -80,7 +76,6 @@ public class BinlogClientFactory {
             log.warn("setHeartbeatInterval unavailable ({}); falling back to keepAlive"
                     + " only — half-open sockets may linger longer", e.toString());
         }
-        client.setEventDeserializer(deserializer());
         if (resumeFrom != null) {
             if (resumeFrom.getGtidSet() != null && !resumeFrom.getGtidSet().trim().isEmpty()) {
                 client.setGtidSet(resumeFrom.getGtidSet().trim());
@@ -89,6 +84,30 @@ public class BinlogClientFactory {
                 client.setBinlogPosition(resumeFrom.getBinlogPos() == null ? 4L : resumeFrom.getBinlogPos());
             }
         }
+        return client;
+    }
+
+    /**
+     * A one-shot stream for the capability probe: no keep-alive reconnect (a rejected
+     * stream must fail once, not retry behind the probe's back) and an explicit position.
+     */
+    public BinaryLogClient createProbeClient(DatabaseConfig source, long serverId,
+                                             String binlogFile, long position) {
+        BinaryLogClient client = newClient(source);
+        client.setServerId(serverId);
+        client.setKeepAlive(false);
+        client.setBinlogFilename(binlogFile);
+        client.setBinlogPosition(position);
+        return client;
+    }
+
+    private BinaryLogClient newClient(DatabaseConfig source) {
+        String host = source.getHost() == null || source.getHost().trim().isEmpty()
+                ? "localhost" : source.getHost().trim();
+        int port = source.getPort() != null ? source.getPort() : source.getType().getDefaultPort();
+        BinaryLogClient client = new BinaryLogClient(host, port,
+                source.getUsername(), cryptoUtil.decrypt(source.getPassword()));
+        client.setEventDeserializer(deserializer());
         return client;
     }
 

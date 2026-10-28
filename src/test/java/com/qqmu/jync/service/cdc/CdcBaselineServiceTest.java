@@ -137,6 +137,30 @@ class CdcBaselineServiceTest {
     }
 
     @Test
+    void aSourceWithoutTheGtidModeVariableStillYieldsItsPosition() throws SQLException {
+        // MariaDB 及部分 MySQL 兼容库没有 @@GLOBAL.gtid_mode。旧实现把这条查询放在
+        // 同一个 try 里，变量不存在就抛 SQLException，整条基线直接失败——位点明明
+        // 已经读到了。GTID 只是恢复位点的优化，读不到就退回 file+pos。
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        ResultSet status = mock(ResultSet.class);
+        when(st.executeQuery("SHOW BINARY LOG STATUS")).thenReturn(status);
+        when(status.next()).thenReturn(true, false);
+        when(status.getString("File")).thenReturn("mysql-bin.000009");
+        when(status.getLong("Position")).thenReturn(321L);
+        when(st.executeQuery("SELECT @@GLOBAL.gtid_mode"))
+                .thenThrow(new SQLException("Unknown system variable 'gtid_mode'"));
+        when(dataSourceManager.getConnection(any())).thenReturn(conn);
+
+        CdcPositionMark mark = service.readCurrentPosition(source());
+
+        assertThat(mark.getFile()).isEqualTo("mysql-bin.000009");
+        assertThat(mark.getPos()).isEqualTo(321L);
+        assertThat(mark.getGtidSet()).isNull();
+    }
+
+    @Test
     void baselineSequenceIsPositionResetRunMarkDone() throws SQLException {
         Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
         when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);

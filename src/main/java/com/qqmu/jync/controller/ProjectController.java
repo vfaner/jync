@@ -270,12 +270,18 @@ public class ProjectController {
 
         // --- capture-strategy cards (C1) ---------------------------------------------------
         // A CDC card renders only when the backend would accept that strategy for this
-        // source: the literal presets for MySQL binlog, Oracle LogMiner and SQL Server CDC,
-        // and the whole PostgreSQL family for PG logical decoding. Every other type does
-        // not render the card at all (acceptance C①).
+        // source: the MySQL and PostgreSQL families (their engines verify themselves
+        // against the live server by capability), and the literal presets for Oracle
+        // LogMiner and SQL Server CDC. Every other type does not render the card at all
+        // (acceptance C①).
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigService.findById(project.getSourceDbId()).orElse(null);
-        boolean isMysqlSource = source != null && source.getType() == DatabaseType.MYSQL;
+        // v1.9.0: family gate, same as CaptureStrategyParser and the capability probe —
+        // a MariaDB / TiDB / OceanBase source is accepted by the parser, so the page has
+        // to offer the card. A product whose stream cannot be decoded is refused by the
+        // probe's BINLOG_EVENT_READABLE check instead of by product name.
+        boolean isMysqlSource = source != null
+                && source.resolvedFamily() == DatabaseType.DialectFamily.MYSQL;
         boolean isOracleSource = source != null && source.getType() == DatabaseType.ORACLE;
         // v1.9.0: the PG card follows the same family gate as the backend
         // (CaptureStrategyParser + the capability probe). Keyed on the literal

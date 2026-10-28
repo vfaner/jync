@@ -101,6 +101,10 @@ class ConnectionTestCdcChecksTest {
         return config;
     }
 
+    /** 事件流读取只对非原厂 MySQL 生效；健康 MySQL 的探测不会打开流。 */
+    private final BinlogEventReader streamReader =
+            (source, file, position, serverId, timeout) -> "FormatDescriptionEvent";
+
     private ConnectionTestService serviceReturning(Connection conn) {
         DataSourceManager dsm = mock(DataSourceManager.class);
         try {
@@ -108,7 +112,8 @@ class ConnectionTestCdcChecksTest {
         } catch (SQLException e) {
             throw new IllegalStateException(e);
         }
-        return new ConnectionTestService(dsm, new BinlogCdcProbe(), new LogMinerCdcProbe(),
+        return new ConnectionTestService(dsm, new BinlogCdcProbe(streamReader),
+                new LogMinerCdcProbe(),
                 new PgLogicalReplicationCdcProbe(), new SqlServerCdcProbe(),
                 new TargetDdlProbe(), new SyncProperties());
     }
@@ -178,8 +183,26 @@ class ConnectionTestCdcChecksTest {
         ConnectionTestService.TestResult result = service.test(savedMysql());
         assertThat(result.isSuccess()).isTrue();
         List<CdcProbeResult.Check> checks = result.getCdcChecks();
-        assertThat(checks).isNotNull().hasSize(8);
+        assertThat(checks).isNotNull().hasSize(9);
         assertThat(checks).allMatch(CdcProbeResult.Check::isPassed);
+    }
+
+    /** v1.9.0: MySQL 系兼容库在连接页也要跑 binlog 探测（含事件流解码）。 */
+    @Test
+    void mariaDbSourceCarriesTheEventStreamCheck() throws SQLException {
+        Connection conn = healthyMySqlConnection();
+        when(conn.getMetaData().getDatabaseProductName()).thenReturn("MariaDB");
+        when(conn.getMetaData().getDatabaseProductVersion()).thenReturn("11.4.2-MariaDB");
+        DatabaseConfig config = savedMysql();
+        config.setType(DatabaseType.MARIADB);
+
+        ConnectionTestService.TestResult result = serviceReturning(conn).test(config);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getCdcChecks()).hasSize(9);
+        assertThat(result.getCdcChecks())
+                .anyMatch(c -> CdcProbeResult.BINLOG_EVENT_READABLE.equals(c.getName())
+                        && c.isPassed());
     }
 
     @Test

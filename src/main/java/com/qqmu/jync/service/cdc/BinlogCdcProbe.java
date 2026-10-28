@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -11,13 +12,21 @@ import java.util.function.Predicate;
 
 import org.springframework.stereotype.Component;
 
+import com.qqmu.jync.model.DatabaseConfig;
+
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * B2 capability probe: itemized checks against a MySQL source, all through plain JDBC.
- * Runs inside the existing connection test (connection page) and per project
- * (strategy card + CDC status panel). Never throws for a merely-unready source; SQL
- * errors on individual checks degrade to a failed check with the error as the detail.
+ * B2 capability probe: itemized checks against a MySQL-family source. Runs inside the
+ * existing connection test (connection page) and per project (strategy card + CDC status
+ * panel). Never throws for a merely-unready source; SQL errors on individual checks
+ * degrade to a failed check with the error as the detail.
+ *
+ * <p>v1.9.0: the source may be any MySQL-wire product, not just the MySQL preset. The
+ * SQL surface (variables, grants, position statements) is shared, so the JDBC checks
+ * apply unchanged; what is <em>not</em> shared is the binlog wire format, which is why
+ * a non-native product additionally has to decode one real event
+ * ({@link CdcProbeResult#BINLOG_EVENT_READABLE}) before the probe passes.
  */
 @Component
 @Slf4j
@@ -26,7 +35,27 @@ public class BinlogCdcProbe {
     /** Retention below this is a trap: one long weekend purges the position away. */
     private static final long MIN_RETENTION_SECONDS = 24 * 3600L;
 
-    public CdcProbeResult probe(Connection conn, long plannedServerId) {
+    /**
+     * The fake replica id the capability probe presents. Deliberately above the project
+     * range (server-id-offset + projectId) and the common real-replica range, so opening
+     * a probe stream cannot evict a running Jync consumer or a real replica.
+     */
+    static final long PROBE_SERVER_ID = 4_294_967_294L;
+
+    /** Connect + first-event budget; the reader may wait this long twice. */
+    private static final Duration STREAM_PROBE_TIMEOUT = Duration.ofSeconds(4);
+
+    /** Upper bound on SHOW BINARY LOGS rows read while looking for the previous file. */
+    private static final int MAX_LISTED_BINLOGS = 1024;
+
+    private final BinlogEventReader eventReader;
+
+    public BinlogCdcProbe(BinlogEventReader eventReader) {
+        this.eventReader = eventReader;
+    }
+
+    public CdcProbeResult probe(Connection conn, DatabaseConfig config, long plannedServerId) {
+        BinlogPosition position = readPosition(conn);
         List<CdcProbeResult.Check> checks = new ArrayList<>();
         checks.add(checkVersion(conn));
         checks.add(checkVariable(conn, CdcProbeResult.LOG_BIN, "log_bin",
@@ -38,9 +67,14 @@ public class BinlogCdcProbe {
                 "binlog_row_image is %s — CDC applies full after-images and needs FULL"));
         checks.add(checkServerId(conn, plannedServerId));
         checks.add(checkGrants(conn));
-        checks.add(checkBinlogStatus(conn));
+        checks.add(checkBinlogStatus(position));
         checks.add(checkRetention(conn));
+        checks.add(checkEventDecodable(conn, config, position));
         return CdcProbeResult.of(checks);
+    }
+
+    /** The current file/position, or the reason it could not be read. */
+    private record BinlogPosition(String file, long pos, String error) {
     }
 
     /**
@@ -50,7 +84,7 @@ public class BinlogCdcProbe {
      * REPLICATION CLIENT actually works — SHOW GRANTS text matching can be fooled by
      * role grants — and that the position read the stream start depends on will succeed.
      */
-    private CdcProbeResult.Check checkBinlogStatus(Connection conn) {
+    private BinlogPosition readPosition(Connection conn) {
         SQLException last = null;
         for (String sql : new String[]{"SHOW BINARY LOG STATUS", "SHOW MASTER STATUS"}) {
             try (Statement st = conn.createStatement(); ResultSet rs = st.executeQuery(sql)) {
@@ -58,17 +92,22 @@ public class BinlogCdcProbe {
                     String file = rs.getString("File");
                     long pos = rs.getLong("Position");
                     if (file != null && !file.isBlank()) {
-                        return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_STATUS, true,
-                                file + ":" + pos + " readable");
+                        return new BinlogPosition(file, pos, null);
                     }
                 }
             } catch (SQLException e) {
                 last = e; // 8.0-: SHOW BINARY LOG STATUS 不存在,落到下一条
             }
         }
-        return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_STATUS, false,
-                last != null ? String.valueOf(last.getMessage())
-                        : "could not read the binary log position (is log_bin enabled?)");
+        return new BinlogPosition(null, 4L, last != null ? String.valueOf(last.getMessage())
+                : "could not read the binary log position (is log_bin enabled?)");
+    }
+
+    private CdcProbeResult.Check checkBinlogStatus(BinlogPosition position) {
+        return position.file() != null
+                ? CdcProbeResult.Check.of(CdcProbeResult.BINLOG_STATUS, true,
+                        position.file() + ":" + position.pos() + " readable")
+                : CdcProbeResult.Check.of(CdcProbeResult.BINLOG_STATUS, false, position.error());
     }
 
     private CdcProbeResult.Check checkVersion(Connection conn) {
@@ -76,9 +115,12 @@ public class BinlogCdcProbe {
             String product = conn.getMetaData().getDatabaseProductName();
             String version = conn.getMetaData().getDatabaseProductVersion();
             String banner = product + " " + version;
-            if (version != null && version.toUpperCase(Locale.ROOT).contains("MARIADB")) {
-                return CdcProbeResult.Check.of(CdcProbeResult.VERSION, false,
-                        "MariaDB detected (" + banner + ") — its binlog dialect is out of scope");
+            if (!isNativeMysql(product, version)) {
+                // MariaDB / TiDB / OceanBase and the rest report their own banner or a
+                // vendor suffix. A MySQL version floor means nothing to them: their
+                // capability question is answered by the event-stream check below.
+                return CdcProbeResult.Check.of(CdcProbeResult.VERSION, true,
+                        banner + " — a MySQL-wire product; the binlog stream is verified below");
             }
             int major = leadingNumber(version);
             int minor = secondNumber(version);
@@ -87,6 +129,99 @@ public class BinlogCdcProbe {
                     ok ? banner : banner + " — MySQL 5.7 or newer required");
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.VERSION, false, String.valueOf(e.getMessage()));
+        }
+    }
+
+    /**
+     * Whether this is Oracle MySQL itself rather than a MySQL-wire look-alike.
+     *
+     * <p>TiDB answers "MySQL" with a version like {@code 5.7.25-TiDB-v7.5.0}, so the
+     * product name alone is not enough; the vendor marker in the version is the tell.
+     */
+    private static boolean isNativeMysql(String product, String version) {
+        if (product == null || !"mysql".equalsIgnoreCase(product.trim())) {
+            return false;
+        }
+        String v = String.valueOf(version).toLowerCase(Locale.ROOT);
+        return !v.contains("mariadb") && !v.contains("tidb");
+    }
+
+    /**
+     * Decode one event from a real stream on a non-native product.
+     *
+     * <p>Native MySQL skips it: its wire format is exercised by every running project.
+     * For everything else this is the only check that can distinguish "MySQL-compatible
+     * SQL" from "the rows events this client can actually read".
+     */
+    private CdcProbeResult.Check checkEventDecodable(Connection conn, DatabaseConfig config,
+                                                     BinlogPosition position) {
+        String product;
+        String version;
+        try {
+            product = conn.getMetaData().getDatabaseProductName();
+            version = conn.getMetaData().getDatabaseProductVersion();
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_EVENT_READABLE, false,
+                    String.valueOf(e.getMessage()));
+        }
+        if (isNativeMysql(product, version)) {
+            return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_EVENT_READABLE, true,
+                    "native MySQL " + version + " — the production consumer exercises the stream");
+        }
+        if (config == null || position.file() == null) {
+            return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_EVENT_READABLE, false,
+                    "the binlog position is unreadable, so no stream can be opened");
+        }
+        String probeFile = probeFile(conn, position.file());
+        try {
+            String decoded = eventReader.readFirstEvent(config, probeFile, 4L,
+                    PROBE_SERVER_ID, STREAM_PROBE_TIMEOUT);
+            return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_EVENT_READABLE, true,
+                    "decoded " + decoded + " from " + probeFile + ":4"
+                            + " (probe server_id " + PROBE_SERVER_ID + ")");
+        } catch (CdcDecodeException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_EVENT_READABLE, false,
+                    message(e) + " — this product's binlog event format cannot be decoded by"
+                            + " the MySQL CDC engine");
+        } catch (Exception e) {
+            // Credentials, grants, network, a silent stream: all real failures, none of
+            // them evidence that the product's format is incompatible.
+            return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_EVENT_READABLE, false,
+                    message(e) + " — the probe could not read the binlog stream");
+        }
+    }
+
+    /**
+     * The file the stream probe opens: the one just before the current binlog, when the
+     * server lists one.
+     *
+     * <p>Measured on MariaDB 11.8: right after a rotation the current file holds only
+     * FormatDescription, GTID_LIST and CHECKPOINT events — no row events at all. The
+     * previous file is closed and full of recent DML, so reading from its start reaches a
+     * TableMap/WriteRows event within a few events, which is the part of the wire format
+     * that actually differs between MySQL-compatible products. Falls back to the current
+     * file when it is the only one (fresh server) or when the list cannot be read (no
+     * REPLICATION CLIENT) — the probe then still proves the framing decodes.
+     */
+    private String probeFile(Connection conn, String currentFile) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SHOW BINARY LOGS")) {
+            List<String> files = new ArrayList<>();
+            // 有界:一份正常的 binlog 索引只有几百条,而一个永远返回 true 的结果集
+            // 会让这里转不出去(损坏的驱动、代理层)。够用来找当前文件的前一份即可。
+            int scanned = 0;
+            while (rs.next() && scanned++ < MAX_LISTED_BINLOGS) {
+                String name = rs.getString(1);
+                if (name != null && !name.isBlank()) {
+                    files.add(name.trim());
+                }
+            }
+            int index = files.indexOf(currentFile);
+            return index > 0 ? files.get(index - 1) : currentFile;
+        } catch (SQLException e) {
+            log.debug("SHOW BINARY LOGS unavailable ({}); probing the current file {}",
+                    e.getMessage(), currentFile);
+            return currentFile;
         }
     }
 
@@ -140,7 +275,11 @@ public class BinlogCdcProbe {
                         || grant.contains("REPLICATION REPLICA")) {
                     slave = true;
                 }
-                if (all || grant.contains("REPLICATION CLIENT")) {
+                // MariaDB 10.5 renamed REPLICATION CLIENT to BINLOG MONITOR; the old name
+                // is still accepted by GRANT but SHOW GRANTS prints only the new one, so a
+                // correctly privileged MariaDB account looked like it was missing the grant.
+                if (all || grant.contains("REPLICATION CLIENT")
+                        || grant.contains("BINLOG MONITOR")) {
                     client = true;
                 }
             }
@@ -157,7 +296,7 @@ public class BinlogCdcProbe {
             missing.add("REPLICATION REPLICA (named REPLICATION SLAVE before MySQL 8.0.22)");
         }
         if (!client) {
-            missing.add("REPLICATION CLIENT");
+            missing.add("REPLICATION CLIENT (named BINLOG MONITOR on MariaDB 10.5+)");
         }
         return CdcProbeResult.Check.of(CdcProbeResult.REPLICATION_GRANTS, false,
                 "missing grant(s): " + String.join(", ", missing));
@@ -196,6 +335,10 @@ public class BinlogCdcProbe {
             return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_RETENTION, false,
                     String.valueOf(e.getMessage()));
         }
+    }
+
+    private static String message(Exception e) {
+        return e.getMessage() == null ? e.toString() : e.getMessage();
     }
 
     private static String showVariable(Connection conn, String name) throws SQLException {

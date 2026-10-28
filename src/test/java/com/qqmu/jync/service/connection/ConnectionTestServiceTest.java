@@ -36,7 +36,9 @@ class ConnectionTestServiceTest {
     private java.sql.DatabaseMetaData metaData;
 
     private ConnectionTestService service() {
-        return new ConnectionTestService(dataSourceManager, new BinlogCdcProbe(),
+        return new ConnectionTestService(dataSourceManager,
+                // 原生 MySQL 不触发事件探测;这里的读取器只满足构造签名
+                new BinlogCdcProbe((source, file, pos, serverId, timeout) -> "FormatDescriptionEvent"),
                 new com.qqmu.jync.service.cdc.LogMinerCdcProbe(),
                 new com.qqmu.jync.service.cdc.PgLogicalReplicationCdcProbe(),
                 new com.qqmu.jync.service.cdc.SqlServerCdcProbe(),

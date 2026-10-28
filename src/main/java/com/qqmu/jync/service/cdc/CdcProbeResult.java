@@ -29,6 +29,13 @@ public final class CdcProbeResult {
      */
     public static final String BINLOG_STATUS = "BINLOG_STATUS";
     public static final String BINLOG_RETENTION = "BINLOG_RETENTION";
+    /**
+     * v1.9.0: one event was actually decoded from a live stream. Native MySQL skips the
+     * read (its wire format is exercised by every running project); every other
+     * MySQL-wire product — MariaDB, TiDB, OceanBase, the domestic kernels — must prove it,
+     * because a MySQL-compatible SQL surface says nothing about the binlog event format.
+     */
+    public static final String BINLOG_EVENT_READABLE = "BINLOG_EVENT_READABLE";
 
     // —— v1.6.0 Oracle LogMiner checks ——
 
