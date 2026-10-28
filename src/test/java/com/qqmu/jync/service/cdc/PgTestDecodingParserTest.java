@@ -22,6 +22,17 @@ class PgTestDecodingParserTest {
     }
 
     @Test
+    void openGaussCommitLineWithCsnSuffixStillEndsTheTransaction() {
+        // docker 实测(openGauss 5.0.0):COMMIT 行多一段 " CSN <n>";解析器用行首匹配,
+        // 天然忽略。这个用例只钉住该容错,防止将来改成严格正则时回归。
+        PgTestDecodingParser.SlotLine commit = parser.parse(
+                "COMMIT 13480 (at 2026-10-28 19:59:42.711244+08) CSN 1055");
+        assertThat(commit.txStart).isFalse();
+        assertThat(commit.txEnd).isTrue();
+        assertThat(commit.xid).isEqualTo(13480L);
+    }
+
+    @Test
     void insertRowParsesColumnAndValuePairs() {
         PgTestDecodingParser.SlotLine line = parser.parse(
                 "table public.orders: INSERT: id[integer]:1 status[text]:'new' total[numeric]:9.99");

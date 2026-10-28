@@ -300,9 +300,21 @@ public final class PgTestDecodingParser {
         return name.substring(1, name.length() - 1).replace("\"\"", "\"");
     }
 
+    /**
+     * Reads the xid from the rest of a BEGIN/COMMIT line. Only the leading token is the
+     * xid — vanilla PostgreSQL appends {@code " (at <timestamp>)"} and openGauss appends
+     * {@code " (at <timestamp>) CSN <n>"}, so parsing the whole remainder returned null
+     * on both (measured on postgres:16 and openGauss 5.0.0).
+     */
     private static Long parseXid(String s) {
+        if (s == null) {
+            return null;
+        }
+        String trimmed = s.trim();
+        int space = trimmed.indexOf(' ');
+        String token = space < 0 ? trimmed : trimmed.substring(0, space);
         try {
-            return Long.parseLong(s.trim());
+            return Long.parseLong(token);
         } catch (NumberFormatException e) {
             return null;
         }
