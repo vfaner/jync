@@ -19,9 +19,13 @@ import lombok.extern.slf4j.Slf4j;
  * remediation text a DBA can act on, not a stack trace. Check order is the report order
  * the connection-test page renders.
  *
- * <p>Scope: literal Oracle only (DM / OceanBase Oracle-compatible dialects are rejected
- * by {@link CdcProbeResult#ORACLE_SOURCE}); 11g and 12c+ are version-adaptive on the
- * mining-role check (⑥).
+ * <p>Scope: the products whose mining behaviour has been measured — literal Oracle (11g and
+ * 12c+ are version-adaptive on the mining-role check ⑥) and, since v1.9.0, DM8. Which one
+ * runs is decided by {@link MiningDialects#detect(Connection)}, the same capability probe
+ * the engine itself uses, so the readiness report cannot disagree with what mining will
+ * actually do. Products that merely <em>answer</em> like Oracle (崖山, OceanBase Oracle
+ * mode) are refused by {@link CdcProbeResult#ORACLE_SOURCE} until they have their own
+ * measurement.
  */
 @Component
 @Slf4j
@@ -45,6 +49,23 @@ public class LogMinerCdcProbe {
      */
     public CdcProbeResult probe(Connection conn, List<String[]> ownerTables,
                                 com.qqmu.jync.model.DatabaseConfig config) {
+        MiningDialect dialect;
+        try {
+            dialect = MiningDialects.detect(conn);
+        } catch (SQLException e) {
+            // Neither redo catalogue answered: not a LogMiner source at all. One failing
+            // check says that; the remaining checks would only repeat the same error.
+            return CdcProbeResult.of(List.of(CdcProbeResult.Check.of(
+                    CdcProbeResult.ORACLE_SOURCE, false, msg(e))));
+        }
+        if (dialect instanceof DmLogMinerDialect) {
+            return probeDm(conn);
+        }
+        return probeOracle(conn, ownerTables, config);
+    }
+
+    private CdcProbeResult probeOracle(Connection conn, List<String[]> ownerTables,
+                                       com.qqmu.jync.model.DatabaseConfig config) {
         List<CdcProbeResult.Check> checks = new ArrayList<>();
         checks.add(checkOracleSource(conn));
         int major = majorVersion(conn);
@@ -61,6 +82,156 @@ public class LogMinerCdcProbe {
             checks.add(cdb);
         }
         return CdcProbeResult.of(checks);
+    }
+
+    /**
+     * DM8 (docs/dm-logminer-spike.md). Same itemized shape, different questions: DM has no
+     * per-table supplemental group (the system parameter does that job), only archived files
+     * can be mined, and there is neither LONG nor a CDB — so the Oracle-only checks are not
+     * reported at all rather than silently passing.
+     */
+    private CdcProbeResult probeDm(Connection conn) {
+        List<CdcProbeResult.Check> checks = new ArrayList<>();
+        checks.add(checkDmSource(conn));
+        checks.add(checkDmVersion(conn));
+        checks.add(checkDmArchMode(conn));
+        checks.add(checkDmLogicRedo(conn));
+        checks.add(checkDmArchivePeriod(conn));
+        checks.add(checkDmMiningPrivileges(conn));
+        return CdcProbeResult.of(checks);
+    }
+
+    // —— v1.9.0 DM ① source ——
+
+    private CdcProbeResult.Check checkDmSource(Connection conn) {
+        try {
+            String product = conn.getMetaData().getDatabaseProductName();
+            if (product == null || !product.toUpperCase(Locale.ROOT).contains("DM")) {
+                return CdcProbeResult.Check.of(CdcProbeResult.ORACLE_SOURCE, false,
+                        "product=" + product + " — answered the DM redo probe (V$RLOGFILE) but"
+                                + " is not a product whose redo has been measured for mining;"
+                                + " verified sources: Oracle and DM8");
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.ORACLE_SOURCE, true,
+                    product + " (DM LogMiner dialect)");
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.ORACLE_SOURCE, false, msg(e));
+        }
+    }
+
+    // —— v1.9.0 DM ② version (reported, not gated: the measured instance is 8.1.2) ——
+
+    private CdcProbeResult.Check checkDmVersion(Connection conn) {
+        String version;
+        try {
+            version = conn.getMetaData().getDatabaseProductVersion();
+        } catch (SQLException e) {
+            version = null;
+        }
+        return CdcProbeResult.Check.of(CdcProbeResult.VERSION, true,
+                version == null ? "version unreadable" : "DM " + version);
+    }
+
+    // —— v1.9.0 DM ③ archiving: V$DATABASE.ARCH_MODE (DM has no LOG_MODE) ——
+
+    private CdcProbeResult.Check checkDmArchMode(Connection conn) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT ARCH_MODE FROM V$DATABASE")) {
+            String mode = rs.next() ? rs.getString(1) : null;
+            boolean ok = "Y".equalsIgnoreCase(mode);
+            return CdcProbeResult.Check.of(CdcProbeResult.ARCHIVELOG, ok,
+                    ok ? "ARCH_MODE=" + mode
+                            : "ARCH_MODE=" + mode + " — enable archiving: add an ARCH_TYPE=LOCAL,"
+                            + " ARCH_DEST=<path> stanza to dmarch.ini, set ARCH_INI=1 in dm.ini,"
+                            + " restart the instance, then run ALTER SYSTEM SWITCH LOGFILE;");
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.ARCHIVELOG, false, msg(e));
+        }
+    }
+
+    // —— v1.9.0 DM ④ full old image in redo: RLOG_APPEND_LOGIC = 2 ——
+
+    private CdcProbeResult.Check checkDmLogicRedo(Connection conn) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT PARA_VALUE FROM V$DM_INI"
+                     + " WHERE PARA_NAME='RLOG_APPEND_LOGIC'")) {
+            String raw = rs.next() ? rs.getString(1) : null;
+            String value = raw == null ? null : raw.trim();
+            boolean ok = "2".equals(value);
+            return CdcProbeResult.Check.of(CdcProbeResult.DM_LOGIC_REDO, ok,
+                    ok ? "RLOG_APPEND_LOGIC=2 (full old image in redo)"
+                            : "RLOG_APPEND_LOGIC=" + raw + " — only 2 writes the full old image;"
+                            + " without it an UPDATE's redo carries just the changed columns and"
+                            + " the upsert cannot apply the row; set it with CALL"
+                            + " SP_SET_PARA_VALUE(1,'RLOG_APPEND_LOGIC',2); then restart the"
+                            + " instance");
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.DM_LOGIC_REDO, false, msg(e));
+        }
+    }
+
+    // —— v1.9.0 DM ⑤ archive span and freshness (the latency floor) ——
+
+    /** Above this age the newest archive is reported as a latency risk, not a failure. */
+    private static final long DM_STALE_ARCHIVE_MS = 10 * 60 * 1000L;
+
+    private CdcProbeResult.Check checkDmArchivePeriod(Connection conn) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(*), MIN(FIRST_CHANGE#),"
+                     + " MAX(NEXT_CHANGE#), MAX(NEXT_TIME) FROM V$ARCHIVED_LOG")) {
+            if (!rs.next() || rs.getLong(1) == 0L) {
+                return CdcProbeResult.Check.of(CdcProbeResult.DM_ARCHIVE_PERIOD, false,
+                        "no archived redo yet — DM can only mine archived files, so nothing is"
+                                + " mineable until a redo file is switched and archived; run"
+                                + " ALTER SYSTEM SWITCH LOGFILE (or schedule a job that does)");
+            }
+            long files = rs.getLong(1);
+            long minScn = rs.getLong(2);
+            long maxScn = rs.getLong(3);
+            java.sql.Timestamp newest = rs.getTimestamp(4);
+            String span = files + " file(s), SCN " + minScn + " .. " + maxScn;
+            if (newest == null) {
+                return CdcProbeResult.Check.of(CdcProbeResult.DM_ARCHIVE_PERIOD, true, span);
+            }
+            long ageMs = Math.max(0L, System.currentTimeMillis() - newest.getTime());
+            String age = ageMs / 60_000L + " min";
+            if (ageMs > DM_STALE_ARCHIVE_MS) {
+                return CdcProbeResult.Check.of(CdcProbeResult.DM_ARCHIVE_PERIOD, true,
+                        span + "; newest archived " + age + " ago — CDC lags behind by up to"
+                                + " this interval, so schedule ALTER SYSTEM SWITCH LOGFILE"
+                                + " (e.g. every minute) to bound it");
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.DM_ARCHIVE_PERIOD, true,
+                    span + "; newest archived " + age + " ago");
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.DM_ARCHIVE_PERIOD, false, msg(e));
+        }
+    }
+
+    // —— v1.9.0 DM ⑥ mining privileges ——
+
+    private CdcProbeResult.Check checkDmMiningPrivileges(Connection conn) {
+        try {
+            // Reading the archived-file catalogue is the permission every mining cycle
+            // leans on; on the measured instance it is granted to PUBLIC by default.
+            count(conn, "SELECT COUNT(*) FROM V$ARCHIVED_LOG");
+            long grants = count(conn, "SELECT COUNT(*) FROM DBA_TAB_PRIVS"
+                    + " WHERE TABLE_NAME='DBMS_LOGMNR' AND PRIVILEGE='EXECUTE'"
+                    + " AND (GRANTEE = USER OR GRANTEE='PUBLIC'"
+                    + " OR GRANTEE IN (SELECT ROLE FROM SESSION_ROLES))");
+            if (grants > 0) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, true,
+                        "V$ARCHIVED_LOG readable and EXECUTE ON SYS.DBMS_LOGMNR granted");
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, false,
+                    "missing EXECUTE ON SYS.DBMS_LOGMNR — GRANT EXECUTE ON"
+                            + " SYS.DBMS_LOGMNR TO <user>;");
+        } catch (SQLException e) {
+            return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, false,
+                    "cannot read the redo catalogue (" + msg(e) + ") — the mining account needs"
+                            + " SELECT on V$ARCHIVED_LOG / V$LOGMNR_CONTENTS and EXECUTE ON"
+                            + " SYS.DBMS_LOGMNR");
+        }
     }
 
     /**
@@ -96,15 +267,17 @@ public class LogMinerCdcProbe {
                         + " username/password (a C## common user) on this connection");
     }
 
-    // —— ① literal Oracle ——
+    // —— ① verified product (v1.9.0: Oracle, or DM through its own probe) ——
 
     private CdcProbeResult.Check checkOracleSource(Connection conn) {
         try {
             String product = conn.getMetaData().getDatabaseProductName();
             if (product == null || !product.toUpperCase(Locale.ROOT).contains("ORACLE")) {
                 return CdcProbeResult.Check.of(CdcProbeResult.ORACLE_SOURCE, false,
-                        "product=" + product + " — LogMiner CDC requires literal Oracle; "
-                                + "dialect-compatible databases (DM / OceanBase Oracle mode) are out of scope");
+                        "product=" + product + " — answered the Oracle redo probe, but only"
+                                + " Oracle and DM8 (which has its own dialect) have measured"
+                                + " mining behaviour; Oracle-mode look-alikes (YashanDB,"
+                                + " OceanBase) are refused until their redo format is measured");
             }
             return CdcProbeResult.Check.of(CdcProbeResult.ORACLE_SOURCE, true, product);
         } catch (SQLException e) {

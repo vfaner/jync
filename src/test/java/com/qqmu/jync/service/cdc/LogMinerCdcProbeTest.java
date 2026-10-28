@@ -131,19 +131,26 @@ class LogMinerCdcProbeTest {
         assertThat(r.getChecks()).hasSize(7);
     }
 
+    /**
+     * v1.9.0: the probe is picked by capability, not by product name, so an Oracle-mode
+     * look-alike that answers CURRENT_SCN is still refused — by name, until its redo format
+     * has been measured. (DM is no longer refused: it answers the Oracle probe with an
+     * error and is then served by its own dialect — see LogMinerCdcProbeDmTest.)
+     */
     @Test
-    void nonOracleProductRejected() throws SQLException {
+    void anOracleModeLookAlikeIsRefusedUntilMeasured() throws SQLException {
         DatabaseMetaData md = mock(DatabaseMetaData.class);
-        when(md.getDatabaseProductName()).thenReturn("DM DBMS");
-        when(md.getDatabaseProductVersion()).thenReturn("8.1.2");
+        when(md.getDatabaseProductName()).thenReturn("OceanBase");
+        when(md.getDatabaseProductVersion()).thenReturn("4.2.1");
         when(conn.getMetaData()).thenReturn(md);
 
-        // Major=8 → 12c branch; stub the 12c mining-role SQL (setUp already does).
         CdcProbeResult r = probe.probe(conn, Collections.emptyList());
         assertThat(r.passed()).isFalse();
         CdcProbeResult.Check c = byName(r, CdcProbeResult.ORACLE_SOURCE);
         assertThat(c.isPassed()).isFalse();
-        assertThat(c.getDetail()).contains("literal Oracle");
+        assertThat(c.getDetail())
+                .contains("product=OceanBase")
+                .contains("refused");
     }
 
     @Test

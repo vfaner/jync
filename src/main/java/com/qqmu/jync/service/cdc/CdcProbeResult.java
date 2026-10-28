@@ -39,9 +39,14 @@ public final class CdcProbeResult {
 
     // —— v1.6.0 Oracle LogMiner checks ——
 
-    /** Source must be literal Oracle (not a look-alike such as DM / OceanBase Oracle mode). */
+    /**
+     * The source answers the redo-catalogue probe <em>and</em> is one of the products whose
+     * mining behaviour has been measured (v1.9.0: Oracle, DM8). A look-alike that answers
+     * like Oracle — 崖山, OceanBase Oracle mode — is refused by name until it has its own
+     * measurement, because "the SQL parses" says nothing about the redo format underneath.
+     */
     public static final String ORACLE_SOURCE = "ORACLE_SOURCE";
-    /** LOG_MODE = ARCHIVELOG — LogMiner needs archived redo. */
+    /** LOG_MODE = ARCHIVELOG — LogMiner needs archived redo (DM: ARCH_MODE = 'Y'). */
     public static final String ARCHIVELOG = "ARCHIVELOG";
     /** SUPPLEMENTAL_LOG_DATA_MIN != NO — database-level minimal supplemental logging. */
     public static final String SUPPLEMENTAL_DB = "SUPPLEMENTAL_DB";
@@ -54,6 +59,22 @@ public final class CdcProbeResult {
 
     /** P0-2: emitted only on a CDB — how mining will reach CDB$ROOT (or why it can't). */
     public static final String CDB_MINING_MODE = "CDB_MINING_MODE";
+
+    // —— v1.9.0 DM8 checks (the DM counterpart of ④ and a DM-only archive-period check) ——
+
+    /**
+     * DM's equivalent of per-table supplemental logging: the system parameter
+     * {@code RLOG_APPEND_LOGIC} must be 2. At 1 the redo carries only the columns an
+     * UPDATE actually changed, so every old image is incomplete and the upsert cannot
+     * apply it — a hard failure, not a warning (docs/dm-logminer-spike.md §1.1).
+     */
+    public static final String DM_LOGIC_REDO = "DM_LOGIC_REDO";
+    /**
+     * How much archived redo there is to mine and how fresh it is. DM cannot mine the
+     * current redo file, so the newest archive's age <em>is</em> the CDC latency floor
+     * (spike §1.2): zero files fail, a stale newest archive passes with the warning.
+     */
+    public static final String DM_ARCHIVE_PERIOD = "DM_ARCHIVE_PERIOD";
 
     /**
      * Target side (not CDC): the configured account may actually create tables in the

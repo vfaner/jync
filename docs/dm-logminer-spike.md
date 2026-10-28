@@ -203,6 +203,7 @@ UPDATE "SYSDBA"."LM_T5" SET "C" = OUT_CLOB, "B" = OUT_BLOB WHERE "ID" = 1;
 | 解析器四处增量（ANSI 时间、`0x`、`OUT_*`） | 已实现，矩阵测试覆盖，Oracle 路径零影响 |
 | 方言缝 `MiningDialect` + `OracleLogMinerDialect` + `DmLogMinerDialect` + 能力探测选择 | 已实现；Oracle 行为由原有 14 个 open 序列测试兜住，全量 2803 测试绿 |
 | 归档发现 / 上界 / 起停 / 游标（含 `>=` 续跑、空归档按空闲处理） | 已实现 |
-| `ARCH_MODE`、`RLOG_APPEND_LOGIC`、归档保留与归档周期的能力探测与修复提示 | **未实现**（下一步） |
-| `LOGMINER_CDC` 的 ORACLE 家族门禁 | **未实现**（下一步） |
-| 崖山复测 | **未做** |
+| `ARCH_MODE`、`RLOG_APPEND_LOGIC`、归档范围与新鲜度的能力探测与修复提示 | 已实现（`LogMinerCdcProbe` 的 DM 分支：①源库 ②版本 ③`ARCH_MODE` ④`DM_LOGIC_REDO` ⑤`DM_ARCHIVE_PERIOD` ⑥挖掘权限；Oracle 专属的表级补充日志 / LONG / CDB 检查在 DM 上不出现） |
+| `LOGMINER_CDC` 的 ORACLE 家族门禁（保存校验、连接测试探测、项目页探测、推荐项、策略卡片） | 已实现，按 `resolvedFamily()` 判；能不能真挖由连上后的能力探测决定 |
+| 基线起点 SCN 改由方言提供（Oracle `CURRENT_SCN` / DM `MAX(NEXT_CHANGE#)`，无归档时给出可执行提示） | 已实现（`CdcBaselineService.readCurrentScn` 走 `MiningDialect.highWaterScn`） |
+| 崖山复测 | **未做**（下一步：不得假定与 DM 相同） |

@@ -117,10 +117,12 @@ public class ConnectionTestService {
                 // 探测只是附加信息:自身炸掉降级为无检查项,绝不阻断连接测试(B2)
                 log.warn("CDC probe failed during connection test; reporting none", e);
             }
-        } else if (config.getType() == DatabaseType.ORACLE) {
+        } else if (config.resolvedFamily() == DatabaseType.DialectFamily.ORACLE) {
             try {
                 // 连接页无项目/表上下文 → ownerTables 空集(跳过表级补充日志检查);
-                // P0-2:config 随行,CDB 挖掘模式检查据此判断挖掘账号是否已配置
+                // P0-2:config 随行,CDB 挖掘模式检查据此判断挖掘账号是否已配置。
+                // v1.9.0: 按方言家族而不是预设判 —— 达梦/崖山也走这里,探测自己
+                // 决定报告 Oracle 还是 DM 的检查项(见 LogMinerCdcProbe)。
                 cdcChecks = logMinerProbe.probe(conn, List.of(), config).getChecks();
             } catch (RuntimeException e) {
                 log.warn("LogMiner probe failed during connection test; reporting none", e);

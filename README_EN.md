@@ -186,16 +186,17 @@ SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 
 ### Log CDC: second-level streaming replay
 
-Four source families can run log CDC per task, reading the source's log and seeing `INSERT / UPDATE / DELETE` directly:
+Five source families can run log CDC per task, reading the source's log and seeing `INSERT / UPDATE / DELETE` directly:
 
 | Engine | Source prerequisites (probed item by item) | Position |
 |---|---|---|
 | MySQL binlog | 5.7+; `log_bin=ON`, `binlog_format=ROW`, `binlog_row_image=FULL`; grants `REPLICATION SLAVE` and `REPLICATION CLIENT`; binlog retained ≥ 24h | binlog file + offset (GTID included) |
 | Oracle LogMiner | 11g+; `ARCHIVELOG` mode; database-level `SUPPLEMENTAL LOG DATA`; table-level `SUPPLEMENTAL LOG DATA (ALL) COLUMNS`; mining privileges; archive retention ≥ 24h | SCN |
+| DM LogMiner | DM8; `ARCH_MODE=Y`; `RLOG_APPEND_LOGIC=2` (full old image in redo); `V$ARCHIVED_LOG` readable and `DBMS_LOGMNR` executable; only archived files can be mined, so the archive-switch interval is the CDC latency floor (schedule `ALTER SYSTEM SWITCH LOGFILE` about every minute) | SCN (`MAX(NEXT_CHANGE#)`) |
 | PostgreSQL logical decoding | PostgreSQL 11+ (position advance uses `pg_replication_slot_advance`), plus PG-family domestic kernels (openGauss, GaussDB, Kingbase, Highgo, Vastbase, Oscar, RaseSQL, SeaBoxSQL); `wal_level=logical`; `REPLICATION` grant (not required by openGauss); table `REPLICA IDENTITY` not `NOTHING`; on openGauss prefer `enable_slot_log=on` or the slot does not survive a restart | LSN |
 | SQL Server CDC | 2012+; database-level `sp_cdc_enable_db`; SQL Server Agent running; `cdc_Admin` / `cdc_reader` membership | LSN |
 
-- **One flow for all four**: record the position → chunked full-load baseline → long-lived replay. The position is written before the baseline, so changes during the baseline cannot be missed.
+- **One flow for all five**: record the position → chunked full-load baseline → long-lived replay. DM shares the Oracle LogMiner pipeline; only the position source, mineable files and package calls go through a per-vendor dialect. The position is written before the baseline, so changes during the baseline cannot be missed.
 - **Low idle latency**: while data exists, the next round starts immediately with no extra wait; only a genuinely empty stream sleeps (1s for LogMiner and SQL Server, 500ms for PostgreSQL, 50ms minimum). MySQL binlog is server-pushed and not polled.
 - **Multi-instance takeover**: the CDC stream for one task is guarded by a database lease; if the owning node dies, another node takes over within 60s.
 - **Consistency contract**: commit to the target, re-check the lease, then advance the position. After a crash the stream replays from the last position, and the overlapping window is absorbed by idempotent upserts.

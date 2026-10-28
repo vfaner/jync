@@ -119,19 +119,45 @@ public class CdcBaselineService {
     }
 
     /**
-     * Oracle LogMiner: current SCN of the source database — the baseline anchor and the
-     * resume watermark ({@code CSCN > scn} from the next mining session).
+     * LogMiner: current SCN of the source database — the baseline anchor and the resume
+     * watermark of the next mining session.
+     *
+     * <p>v1.9.0: the SCN source is dialect-dependent and comes from the dialect itself
+     * ({@link MiningDialect#highWaterScn}) instead of a hardcoded Oracle query. Oracle
+     * reads {@code V$DATABASE.CURRENT_SCN}; DM8 has no such column (measured
+     * {@code [-2111]}) and uses the newest archived file's {@code NEXT_CHANGE#} — the same
+     * value the miner resumes from, so the anchor and the resume point cannot disagree
+     * (docs/dm-logminer-spike.md §2.3.1).
      */
     public long readCurrentScn(DatabaseConfig source) {
-        try (Connection conn = dataSourceManager.getConnection(source);
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery("SELECT CURRENT_SCN FROM V$DATABASE")) {
-            if (!rs.next()) {
-                throw new IllegalStateException("Could not read CURRENT_SCN from V$DATABASE");
+        try (Connection conn = dataSourceManager.getConnection(source)) {
+            MiningDialect dialect;
+            try {
+                dialect = MiningDialects.detect(conn);
+            } catch (SQLException e) {
+                throw new IllegalStateException("Failed to read the source start SCN: "
+                        + e.getMessage(), e);
             }
-            return rs.getLong(1);
+            long scn;
+            try {
+                scn = dialect.highWaterScn(conn);
+            } catch (SQLException e) {
+                throw new IllegalStateException("Failed to read the source start SCN: "
+                        + e.getMessage(), e);
+            }
+            if (scn == DmLogMinerDialect.NO_HIGH_WATER) {
+                // Nothing archived = nothing mineable, and no anchor to start from. Retrying
+                // never helps; the message names the one command that does.
+                throw new IllegalStateException("The source has no archived redo yet, so the"
+                        + " baseline has no start SCN: DM can only mine archived files."
+                        + " Run ALTER SYSTEM SWITCH LOGFILE (or schedule a job that does it"
+                        + " every minute) and retry; also confirm RLOG_APPEND_LOGIC=2 so the"
+                        + " redo carries full old images.");
+            }
+            return scn;
         } catch (SQLException e) {
-            throw new IllegalStateException("Failed to read Oracle SCN: " + e.getMessage(), e);
+            throw new IllegalStateException("Failed to read the source start SCN: "
+                    + e.getMessage(), e);
         }
     }
 

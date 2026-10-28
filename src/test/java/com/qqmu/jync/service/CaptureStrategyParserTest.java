@@ -37,7 +37,7 @@ class CaptureStrategyParserTest {
     }
 
     @Test
-    void binlogFollowsTheMysqlFamilyWhileLogMinerStaysLiteral() {
+    void binlogAndLogMinerFollowTheirFamilies() {
         // v1.9.0: binlog 与 PG 逻辑 CDC 一样改为家族 + 连接时事件探测，MySQL 系兼容库
         // （MariaDB / TiDB / OceanBase …）不再在保存时被品牌名一票否决。
         assertThat(CaptureStrategyParser.parseRequested("BINLOG_CDC", DatabaseType.MARIADB))
@@ -46,8 +46,15 @@ class CaptureStrategyParserTest {
                 CaptureStrategyParser.parseRequested("BINLOG_CDC", DatabaseType.OPENGAUSS))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.cdc.not.mysql");
+        // v1.9.0: LogMiner 同样按方言家族放行。达梦 / 崖山说 ORACLE 家族，能不能真挖由
+        // 连接时的能力探测决定（V$RLOGFILE / ARCH_MODE / RLOG_APPEND_LOGIC，见
+        // LogMinerCdcProbe），这里不再按品牌名一票否决。
+        assertThat(CaptureStrategyParser.parseRequested("LOGMINER_CDC", DatabaseType.DM))
+                .isEqualTo(CaptureStrategy.LOGMINER_CDC);
+        assertThat(CaptureStrategyParser.parseRequested("LOGMINER_CDC", DatabaseType.YASHANDB))
+                .isEqualTo(CaptureStrategy.LOGMINER_CDC);
         assertThatThrownBy(() ->
-                CaptureStrategyParser.parseRequested("LOGMINER_CDC", DatabaseType.DM))
+                CaptureStrategyParser.parseRequested("LOGMINER_CDC", DatabaseType.MYSQL))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.cdc.not.oracle");
     }
@@ -83,18 +90,17 @@ class CaptureStrategyParserTest {
 
     /**
      * Only the engines that verify themselves on the live server accept a declared family.
-     * Binlog and PG logical decoding both do (event-stream probe / slot probe); LogMiner and
-     * SQL Server CDC do not, so they keep their literal preset gate.
+     * Binlog, PG logical decoding and now LogMiner all do (event-stream probe / slot probe /
+     * redo-catalogue probe); SQL Server CDC does not, so it keeps its literal preset gate.
      */
     @Test
-    void aDeclaredFamilyUnlocksOnlyTheCapabilityProbedEngines() {
+    void aDeclaredFamilyUnlocksTheCapabilityProbedEngines() {
         assertThat(CaptureStrategyParser.parseRequested("BINLOG_CDC",
                 DatabaseType.CUSTOM, DatabaseType.DialectFamily.MYSQL))
                 .isEqualTo(CaptureStrategy.BINLOG_CDC);
-        assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("LOGMINER_CDC",
+        assertThat(CaptureStrategyParser.parseRequested("LOGMINER_CDC",
                 DatabaseType.CUSTOM, DatabaseType.DialectFamily.ORACLE))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("error.project.cdc.not.oracle");
+                .isEqualTo(CaptureStrategy.LOGMINER_CDC);
         assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("SQLSERVER_CDC",
                 DatabaseType.CUSTOM, DatabaseType.DialectFamily.SQLSERVER))
                 .isInstanceOf(IllegalArgumentException.class)

@@ -63,11 +63,12 @@ public final class CaptureStrategyParser {
      * <p>A {@code CUSTOM} connection carries the {@code GENERIC} preset family but declares
      * the family it actually speaks ({@link com.qqmu.jync.model.DatabaseConfig#resolvedFamily()});
      * that declared family is what the dialect, type mapping and metadata reader already
-     * follow. The two engines that verify themselves against the live server by capability
-     * — PG logical CDC and MySQL binlog CDC — accept the whole family, so a look-alike
-     * without a preset gets the same treatment as a preset member: it passes the gate and
-     * then has to pass the probe. LogMiner and SQL Server CDC keep checking the preset,
-     * because their compatibility is unverified and a declared family is not evidence.
+     * follow. The engines that verify themselves against the live server by capability —
+     * PG logical CDC, MySQL binlog CDC and, since v1.9.0, LogMiner (DM8 measured) — accept
+     * the whole family, so a look-alike without a preset gets the same treatment as a
+     * preset member: it passes the gate and then has to pass the probe. SQL Server CDC
+     * keeps checking the preset, because its compatibility is unverified and a declared
+     * family is not evidence.
      *
      * @param sourceFamily the source's resolved family, or null when it cannot be resolved
      */
@@ -91,7 +92,11 @@ public final class CaptureStrategyParser {
                 && sourceFamily != DatabaseType.DialectFamily.MYSQL) {
             throw new IllegalArgumentException("error.project.cdc.not.mysql");
         }
-        if (strategy == CaptureStrategy.LOGMINER_CDC && sourceType != DatabaseType.ORACLE) {
+        // v1.9.0: LogMiner 同样改成家族 + 连接时能力探测。DM / 崖山声明 ORACLE 家族，
+        // 达梦已实测（V$RLOGFILE / ARCH_MODE / RLOG_APPEND_LOGIC，见 LogMinerCdcProbe），
+        // 崖山探测不过会被拒，这里不再按品牌名一票否决。
+        if (strategy == CaptureStrategy.LOGMINER_CDC
+                && sourceFamily != DatabaseType.DialectFamily.ORACLE) {
             throw new IllegalArgumentException("error.project.cdc.not.oracle");
         }
         // v1.9.0: PG 家族一律放行到探测。家族成员能否真正使用由连接时的能力探测

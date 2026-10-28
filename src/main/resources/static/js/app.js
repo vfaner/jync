@@ -691,6 +691,10 @@
                     : {
                         MYSQL: 'cdc.probe.title',
                         ORACLE: 'cdc.probe.title.oracle',
+                        // v1.9.0: 达梦/崖山走 Oracle 方言家族的 LogMiner 探测,标题跟着
+                        // 家族走,否则会顶着「MySQL CDC 就绪检查」
+                        DM: 'cdc.probe.title.oracle',
+                        YASHANDB: 'cdc.probe.title.oracle',
                         POSTGRESQL: 'cdc.probe.title.postgres',
                         SQLSERVER: 'cdc.probe.title.sqlserver'
                       }[(typeSel && typeSel.value) || 'MYSQL'] || 'cdc.probe.title';

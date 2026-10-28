@@ -411,10 +411,63 @@ class CdcBaselineServiceTest {
         when(oracle.createStatement()).thenReturn(st);
         when(st.executeQuery("SELECT CURRENT_SCN FROM V$DATABASE"))
                 .thenThrow(new SQLException("ORA-00942: table or view does not exist"));
+        // 能力探测两条都失败(达梦那条在 Oracle 上同样报错),否则探测会退到 DM 分支。
+        when(st.executeQuery("SELECT COUNT(*) FROM V$RLOGFILE"))
+                .thenThrow(new SQLException("ORA-00942: table or view does not exist"));
         when(dataSourceManager.getConnection(any())).thenReturn(oracle);
 
         assertThatThrownBy(() -> service.readCurrentScn(source()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Oracle SCN");
+                .hasMessageContaining("start SCN");
+    }
+
+    /**
+     * v1.9.0 DM: {@code V$DATABASE} has no CURRENT_SCN (measured, {@code [-2111]}), so the
+     * baseline anchor is the newest archived file's boundary — the same value the mining
+     * session uses as its resume point (spike §2.3.1).
+     */
+    @Test
+    void readCurrentScnOnDmUsesTheNewestArchivedFileBoundary() throws SQLException {
+        dmConnection(44_740L, false);
+
+        assertThat(service.readCurrentScn(source())).isEqualTo(44_740L);
+    }
+
+    /**
+     * Nothing archived = nothing mineable, and the anchor would be meaningless: DM only
+     * mines archived files, so the project cannot start until a file has been switched.
+     * The message has to name the fix, because no amount of retrying changes it.
+     */
+    @Test
+    void readCurrentScnOnDmWithoutArchivedRedoSaysWhatToDo() throws SQLException {
+        dmConnection(0L, true);
+
+        assertThatThrownBy(() -> service.readCurrentScn(source()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SWITCH LOGFILE")
+                .hasMessageContaining("RLOG_APPEND_LOGIC");
+    }
+
+    /**
+     * Wire the service's data source manager to a connection that answers the DM probe and
+     * the archive ceiling, and rejects Oracle's.
+     */
+    private void dmConnection(long nextChange, boolean nullCeiling) throws SQLException {
+        Connection dm = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(dm.createStatement()).thenReturn(st);
+        when(st.executeQuery("SELECT CURRENT_SCN FROM V$DATABASE"))
+                .thenThrow(new SQLException("[-2111] Invalid column name [CURRENT_SCN]"));
+
+        ResultSet probe = mock(ResultSet.class);
+        when(probe.next()).thenReturn(true);
+        when(st.executeQuery("SELECT COUNT(*) FROM V$RLOGFILE")).thenReturn(probe);
+
+        ResultSet ceiling = mock(ResultSet.class);
+        when(ceiling.next()).thenReturn(true);
+        when(ceiling.getLong(1)).thenReturn(nextChange);
+        when(ceiling.wasNull()).thenReturn(nullCeiling);
+        when(st.executeQuery("SELECT MAX(NEXT_CHANGE#) FROM V$ARCHIVED_LOG")).thenReturn(ceiling);
+        when(dataSourceManager.getConnection(any())).thenReturn(dm);
     }
 }

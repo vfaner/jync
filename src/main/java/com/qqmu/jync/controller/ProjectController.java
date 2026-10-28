@@ -282,7 +282,10 @@ public class ProjectController {
         // probe's BINLOG_EVENT_READABLE check instead of by product name.
         boolean isMysqlSource = source != null
                 && source.resolvedFamily() == DatabaseType.DialectFamily.MYSQL;
-        boolean isOracleSource = source != null && source.getType() == DatabaseType.ORACLE;
+        // v1.9.0: LogMiner card follows the Oracle family too — DM declares it, the parser
+        // accepts it, and the probe decides whether the source can really be mined.
+        boolean isOracleSource = source != null
+                && source.resolvedFamily() == DatabaseType.DialectFamily.ORACLE;
         // v1.9.0: the PG card follows the same family gate as the backend
         // (CaptureStrategyParser + the capability probe). Keyed on the literal
         // PostgreSQL preset, an openGauss source never rendered the card at all —

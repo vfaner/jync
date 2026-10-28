@@ -114,12 +114,13 @@ public class CdcOperationsService {
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
         // resolvedFamily(), not the preset's family: a CUSTOM connection that declares the
-        // MySQL or PostgreSQL family gets that family's checks (the same family its
-        // dialect, type mapping and metadata reader already get). LogMiner and SQL Server
-        // CDC stay keyed on the preset — their compatibility is unverified.
+        // MySQL, PostgreSQL or Oracle family gets that family's checks (the same family its
+        // dialect, type mapping and metadata reader already get). v1.9.0: LogMiner moved
+        // onto this path too — DM/崖山 declare the Oracle family and the probe itself
+        // decides what to report. SQL Server CDC stays keyed on the preset.
         if (source == null || source.getType() == null
                 || (source.resolvedFamily() != DatabaseType.DialectFamily.MYSQL
-                        && source.getType() != DatabaseType.ORACLE
+                        && source.resolvedFamily() != DatabaseType.DialectFamily.ORACLE
                         && source.resolvedFamily() != DatabaseType.DialectFamily.POSTGRES
                         && source.getType() != DatabaseType.SQLSERVER)) {
             throw new IllegalArgumentException("cdc.probe.unsupported");
@@ -159,7 +160,7 @@ public class CdcOperationsService {
             log.debug("CDC probe could not reach the source of project {}: {}",
                     projectId, e.toString());
             String anchor;
-            if (source.getType() == DatabaseType.ORACLE) {
+            if (source.resolvedFamily() == DatabaseType.DialectFamily.ORACLE) {
                 anchor = CdcProbeResult.ORACLE_SOURCE;
             } else if (source.resolvedFamily()
                     == DatabaseType.DialectFamily.POSTGRES) {
