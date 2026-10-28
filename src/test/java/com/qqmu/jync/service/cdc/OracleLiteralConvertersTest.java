@@ -94,6 +94,49 @@ class OracleLiteralConvertersTest {
         assertThat(v).isEqualTo("12-10月-26 04.29.23.261316 上午 +08:00");
     }
 
+    // —— 达梦 SQL_REDO 的 ANSI 字面量(docs/dm-logminer-spike.md 第 3 节) ——
+    //
+    // DM 不产生 TO_DATE/TO_TIMESTAMP,而是 ANSI 标准形态 DATE'…' / TIMESTAMP'…'。
+    // 内层字符串同样原样透传:目标驱动按 setObject(sqlType, string) 解释。
+    // Oracle 从不产生这两种形态,所以这几个分支对现有 Oracle 路径零影响。
+
+    @Test
+    void ansiDateLiteralSurfacedVerbatim() {
+        assertThat(OracleLiteralConverters.convert("DATE'2026-03-04'", Types.DATE))
+                .isEqualTo("2026-03-04");
+    }
+
+    @Test
+    void ansiTimestampLiteralSurfacedVerbatim() {
+        assertThat(OracleLiteralConverters.convert(
+                "TIMESTAMP'2026-03-04 05:06:07.123456'", Types.TIMESTAMP))
+                .isEqualTo("2026-03-04 05:06:07.123456");
+    }
+
+    @Test
+    void ansiTimestampWithTimeZoneKeepsTheOffset() {
+        // DM 把时区列渲染成同一个 TIMESTAMP'…' 前缀,偏移量在字符串内部。
+        assertThat(OracleLiteralConverters.convert(
+                "TIMESTAMP'2026-03-04 05:06:07.123456 +08:00'", Types.TIMESTAMP_WITH_TIMEZONE))
+                .isEqualTo("2026-03-04 05:06:07.123456 +08:00");
+    }
+
+    @Test
+    void dmHexLiteralToBytes() {
+        // DM 用 0x… 而不是 HEXTORAW('…')。
+        assertThat(OracleLiteralConverters.convert("0xDEADBEEF", Types.VARBINARY))
+                .isEqualTo(new byte[]{(byte) 0xDE, (byte) 0xAD, (byte) 0xBE, (byte) 0xEF});
+        assertThat(OracleLiteralConverters.convert("0x00", Types.BLOB))
+                .isEqualTo(new byte[]{0});
+    }
+
+    @Test
+    void dmEmptyHexIsAnEmptyByteArray() {
+        // 空 BLOB 实测渲染成裸 `0x`。
+        assertThat(OracleLiteralConverters.convert("0x", Types.VARBINARY))
+                .isEqualTo(new byte[0]);
+    }
+
     @Test
     void hextorawToBytes() {
         Object v = OracleLiteralConverters.convert("HEXTORAW('DEADBEEF')", Types.VARBINARY);

@@ -88,6 +88,58 @@ class SqlRedoParserTest {
         assertThat(c.unsupportedReason).contains("CLOB_IN");
     }
 
+    // —— 达梦的行外 LOB 标记:OUT_CLOB / OUT_BLOB(docs/dm-logminer-spike.md §3.1) ——
+    //
+    // DM 不把行外 LOB 列从 SQL_REDO 里删掉,而是留一个占位 token:
+    //   UPDATE "SYSDBA"."LM_T5" SET "C" = OUT_CLOB, "B" = OUT_BLOB WHERE "ID" = 1;
+    // COLUMN_PRESENT 对这两列返回 1、MINE_VALUE 也返回这个字符串 —— 有位置、没内容。
+    // 这与 Oracle「列直接消失」是同一种数据缺失,必须落到 missingColumns 上走 LOB 策略;
+    // 掉进通用 unsupported 分支会被记成解析失败、绕过 missing-lob-policy。
+
+    @Test
+    void dmOutOfLineLobMarkersInSetAreMissingColumnsNotAParseError() {
+        String sql = "UPDATE \"SRC\".\"OG_LOB\" SET \"CLOB_IN\" = OUT_CLOB, \"BLOB_IN\" = OUT_BLOB"
+                + " WHERE \"ID\" = 1;";
+
+        SqlRedoParser.ParsedChange c =
+                parser.parse(SqlRedoParser.Op.UPDATE, sql, lobBinding());
+
+        assertThat(c.op).isNull();
+        assertThat(c.missingColumns).containsExactlyInAnyOrder("CLOB_IN", "BLOB_IN");
+    }
+
+    @Test
+    void dmOutOfLineLobMarkersInInsertAreMissingColumns() {
+        String sql = "INSERT INTO \"SRC\".\"OG_LOB\"(\"ID\", \"CLOB_IN\", \"BLOB_IN\")"
+                + " VALUES(1, OUT_CLOB, OUT_BLOB);";
+
+        SqlRedoParser.ParsedChange c =
+                parser.parse(SqlRedoParser.Op.INSERT, sql, lobBinding());
+
+        assertThat(c.op).isNull();
+        assertThat(c.missingColumns).containsExactlyInAnyOrder("CLOB_IN", "BLOB_IN");
+    }
+
+    /**
+     * The dangerous shape: an <em>unchanged</em> out-of-line LOB shows up in the UPDATE's
+     * WHERE old image. The old-image path deliberately falls back to the raw literal when
+     * conversion fails (so one odd literal cannot poison an otherwise clean UPDATE), which
+     * here would write the string {@code OUT_BLOB} into the target's BLOB column — silent
+     * corruption, worse than refusing. It has to be classified as missing instead.
+     */
+    @Test
+    void dmOutOfLineLobMarkerInOldImageIsMissingNotTheLiteralString() {
+        String sql = "UPDATE \"SRC\".\"OG_LOB\" SET \"CLOB_IN\" = 'new'"
+                + " WHERE \"ID\" = 1 AND \"BLOB_IN\" = OUT_BLOB;";
+
+        SqlRedoParser.ParsedChange c =
+                parser.parse(SqlRedoParser.Op.UPDATE, sql, lobBinding());
+
+        assertThat(c.op).isNull();
+        assertThat(c.row).isNull();
+        assertThat(c.missingColumns).containsExactly("BLOB_IN");
+    }
+
     /**
      * The refusal has to say <em>which</em> columns were missing, not just "unsupported":
      * the CDC pipeline counts and warns about out-of-line LOBs separately from every other

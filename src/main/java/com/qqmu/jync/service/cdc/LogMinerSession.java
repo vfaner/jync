@@ -4,41 +4,38 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * One LogMiner mining session: the ADD_LOGFILE → START_LOGMNR → V$LOGMNR_CONTENTS cursor
- * bundle (v1.6.0).
+ * One LogMiner mining session: the shared half of the pipeline — the
+ * V$LOGMNR_CONTENTS cursor, RS_ID continuation merging, the batch cap, and END_LOGMNR on
+ * close (v1.6.0; dialect seam added for DM in v1.9.0).
  *
- * <p>Open sequence (pinned from the Task 1 spike on gvenzl/oracle-free:23):
- * <ol>
- *   <li>read the logfile list covering {@code (startScn, current_scn]} — archived logs from
- *       V$ARCHIVED_LOG (DEST_ID=1, NEXT_CHANGE# &gt; startScn) plus the CURRENT online
- *       members from V$LOGFILE/V$LOG, one file per thread+sequence (see the dedupe note in
- *       {@link #openDefault});</li>
- *   <li>ADD_LOGFILE each path with DBMS_LOGMNR.NEW on the first, ADD on the rest;</li>
- *   <li>START_LOGMNR with START_SCN, DICT_FROM_ONLINE_CATALOG, COMMITTED_DATA_ONLY;</li>
- *   <li>stream V$LOGMNR_CONTENTS filtered by {@code CSCN > ?} and row-level OPERATION.</li>
- * </ol>
+ * <p>Everything a vendor does differently — how far the redo goes, which files can be mined,
+ * ADD_LOGFILE/START_LOGMNR syntax, start-SCN comparison — lives in {@link MiningDialect}.
+ * {@link #open} runs the sequence: session setup → high-water SCN → log discovery →
+ * ADD_LOGFILE → START_LOGMNR → cursor. On Oracle that sequence is the one pinned in the
+ * v1.6.0 spike on gvenzl/oracle-free:23 (archived files plus the CURRENT online members,
+ * one file per thread+sequence, {@code CSCN > startScn}). On DM it is
+ * {@link DmLogMinerDialect}'s: archived files only, {@code CSCN >= startScn}.
  *
  * <p><b>RS_ID continuation merge</b> (Review Focus 4): SQL_REDO that outgrows LogMiner's
  * per-row buffer is split into multiple V$LOGMNR_CONTENTS rows sharing one RS_ID; only the
  * final fragment ends with ';'. {@link #nextBatch} accumulates them until the terminator and
- * emits a single {@link Row} per logical statement.
+ * emits a single {@link Row} per logical statement. DM's RS_ID is not monotonic across
+ * statements (docs/dm-logminer-spike.md §2.3.2), which is fine here: the key is only used
+ * while a fragment is outstanding.
  *
  * <p>The session does NOT filter by source container: on a CDB the consumer owns that
  * predicate (SRC_CON_ID = the PDB's CON_ID); on a non-CDB every row is in scope. Oracle
- * 11g has no SRC_CON_ID column, so the cursor selects a constant 0 there instead.
+ * 11g and every DM build have no SRC_CON_ID column, so the cursor selects a constant 0
+ * there instead.
  */
 @Slf4j
 public class LogMinerSession implements AutoCloseable {
@@ -56,37 +53,62 @@ public class LogMinerSession implements AutoCloseable {
             // CSCN = commit SCN (populated under COMMITTED_DATA_ONLY); V$LOGMNR_CONTENTS
             // has NO "CSN" column — selecting it dies with ORA-00904 on every real DB.
             "SELECT RS_ID, CSCN, XID, OPERATION, SEG_OWNER, TABLE_NAME, SQL_REDO, TIMESTAMP, ";
-    private static final String Q_CONTENTS_TAIL =
-            " FROM V$LOGMNR_CONTENTS"
-                    + " WHERE CSCN > ? AND OPERATION IN ('INSERT','UPDATE','DELETE','DDL')"
-                    + " ORDER BY CSCN, RS_ID";
+    /**
+     * Split at the comparison so the start-SCN operator is the dialect's choice: Oracle
+     * resumes from the last delivered SCN and needs ">", DM resumes from a file boundary
+     * and needs ">=".
+     */
+    private static final String Q_CONTENTS_FROM = " FROM V$LOGMNR_CONTENTS WHERE CSCN";
+    private static final String Q_CONTENTS_FILTER =
+            " AND OPERATION IN ('INSERT','UPDATE','DELETE','DDL') ORDER BY CSCN, RS_ID";
 
     /** 12c+: SRC_CON_ID exists and carries the row's origin container on a CDB. */
-    static final String Q_CONTENTS = Q_CONTENTS_HEAD + "SRC_CON_ID" + Q_CONTENTS_TAIL;
+    static final String Q_CONTENTS = Q_CONTENTS_HEAD + "SRC_CON_ID" + Q_CONTENTS_FROM
+            + " > ?" + Q_CONTENTS_FILTER;
 
     /**
      * Oracle 11g: V$LOGMNR_CONTENTS has no SRC_CON_ID (verified on 11.2.0.2 — selecting it
      * raises ORA-00904). A literal 0 keeps the result shape and makes the consumer's
      * container filter a no-op, exactly as it is on a non-CDB.
      */
-    static final String Q_CONTENTS_PRE_12C = Q_CONTENTS_HEAD + "0 AS SRC_CON_ID" + Q_CONTENTS_TAIL;
+    static final String Q_CONTENTS_PRE_12C = Q_CONTENTS_HEAD + "0 AS SRC_CON_ID"
+            + Q_CONTENTS_FROM + " > ?" + Q_CONTENTS_FILTER;
 
     private final Connection source;
     private final long startScn;
     private final long currentScnAtOpen;
     private final PreparedStatement cursor;
     private final ResultSet rows;
+    private final MiningDialect dialect;
     /** RS_ID fragments not yet terminated by ';' — RS_ID → accumulated SQL_REDO. */
     private final Map<String, StringBuilder> pending = new LinkedHashMap<>();
     private boolean closed;
 
+    /** Test-only shape: a hand-built session over mocked JDBC, closing through Oracle. */
     LogMinerSession(Connection source, long startScn, long currentScnAtOpen,
                     PreparedStatement cursor, ResultSet rows) {
+        this(source, startScn, currentScnAtOpen, cursor, rows,
+                OracleLogMinerDialect.INSTANCE);
+    }
+
+    LogMinerSession(Connection source, long startScn, long currentScnAtOpen,
+                    PreparedStatement cursor, ResultSet rows, MiningDialect dialect) {
         this.source = source;
         this.startScn = startScn;
         this.currentScnAtOpen = currentScnAtOpen;
         this.cursor = cursor;
         this.rows = rows;
+        this.dialect = dialect;
+    }
+
+    /**
+     * A cycle with nothing to mine (DM before its first archive switch). It idles at the
+     * current position instead of failing: the consumer polls again next cycle and no
+     * APPLY_STRIKE accrues. {@link #nextBatch()} is empty and {@link #close()} issues no
+     * commands, because no mining session was ever started.
+     */
+    static LogMinerSession idle(Connection source, long startScn, MiningDialect dialect) {
+        return new LogMinerSession(source, startScn, startScn, null, null, dialect);
     }
 
     /** SCN this session anchored to — the consumer resumes the next cycle from here. */
@@ -126,6 +148,9 @@ public class LogMinerSession implements AutoCloseable {
      */
     List<Row> nextBatch(int maxRows) throws SQLException {
         List<Row> out = new ArrayList<>();
+        if (rows == null) {
+            return out;                                 // idle session: nothing was mined
+        }
         while (out.size() < maxRows && rows.next()) {
             String rsId = rows.getString(1);
             long csn = rows.getLong(2);
@@ -185,6 +210,9 @@ public class LogMinerSession implements AutoCloseable {
             return;
         }
         closed = true;
+        if (cursor == null) {
+            return;                                     // idle session: nothing was started
+        }
         // P1-8: SQL_REDO fragments that never reached their ';' terminator are dropped
         // here. Under COMMITTED_DATA_ONLY with a complete log range this is close to
         // impossible, so the fix is a diagnostic breadcrumb, not a recovery mechanism —
@@ -198,13 +226,7 @@ public class LogMinerSession implements AutoCloseable {
                     + " log", startScn, pending.size(), pending.keySet());
             pending.clear();
         }
-        try (Statement st = source.createStatement()) {
-            st.execute("BEGIN DBMS_LOGMNR.END_LOGMNR; END;");
-        } catch (SQLException e) {
-            // Ending an already-ended or server-dropped session is benign; the connection
-            // itself returns to the pool via the consumer's finally block.
-            log.debug("END_LOGMNR for SCN {} session quiet-failed: {}", startScn, e.getMessage());
-        }
+        dialect.endMining(source);
         try {
             rows.close();
         } catch (SQLException e) {
@@ -245,140 +267,60 @@ public class LogMinerSession implements AutoCloseable {
 
     // —— package-private factory used by the default Spring-built session below ——
 
-    /**
-     * Default {@link LogMinerSessionFactory}: reads current_scn, the logfile list, runs
-     * ADD_LOGFILE/START_LOGMNR, and returns an open cursor. Extracted as a static so tests
-     * can exercise the open sequence with mocks without going through Spring.
-     */
     /** The cursor query, split solely by whether the server has V$LOGMNR_CONTENTS.SRC_CON_ID. */
     static String contentsQuery(int databaseMajorVersion) {
-        return databaseMajorVersion >= 12 ? Q_CONTENTS : Q_CONTENTS_PRE_12C;
+        return contentsQuery(databaseMajorVersion, false);
     }
 
+    /**
+     * The cursor query with the dialect's start-SCN comparison: {@code >} for Oracle (resume
+     * from the last delivered CSCN), {@code >=} for DM (resume from a file boundary, so the
+     * first commit of the next file may sit exactly on it).
+     */
+    static String contentsQuery(int databaseMajorVersion, boolean inclusiveStartScn) {
+        String container = databaseMajorVersion >= 12 ? "SRC_CON_ID" : "0 AS SRC_CON_ID";
+        return Q_CONTENTS_HEAD + container + Q_CONTENTS_FROM
+                + (inclusiveStartScn ? " >= ?" : " > ?") + Q_CONTENTS_FILTER;
+    }
+
+    /**
+     * Oracle's entry point, kept so every existing caller (and every mocked open-sequence
+     * test) goes through the same dialect the product has always used.
+     */
     static LogMinerSession openDefault(Connection source, long startScn, int batchSize)
             throws SQLException {
-        int majorVersion = source.getMetaData().getDatabaseMajorVersion();
-        pinLocaleIndependentNls(source);
-        long currentScn;
-        try (Statement st = source.createStatement();
-             ResultSet rs = st.executeQuery(Q_CURRENT_SCN)) {
-            if (!rs.next()) {
-                throw new SQLException("Could not read CURRENT_SCN from V$DATABASE");
-            }
-            currentScn = rs.getLong(1);
-        }
+        return open(source, startScn, batchSize, OracleLogMinerDialect.INSTANCE);
+    }
 
-        // LogMiner identifies a log file by thread + sequence number, not by path, and
-        // raises ORA-01289 when the same (thread, sequence) is added twice. Three shapes
-        // produce that duplicate on a live database:
-        //   * V$ARCHIVED_LOG also carries a row for the CURRENT group, and on a FRA
-        //     database that row's NAME is the online member path — same path twice;
-        //   * a multiplexed CURRENT group has several members sharing one sequence;
-        //   * ALTER SYSTEM ARCHIVE LOG CURRENT archives the group without switching it, so
-        //     an archived copy and the still-CURRENT online member share a sequence.
-        // Keep insertion order (archived first, then redo) and add at most one file per
-        // thread+sequence.
-        Set<String> logfiles = new LinkedHashSet<>();
-        Set<String> addedSequences = new HashSet<>();
-        // Use a PreparedStatement for the SCN (numeric bind, no injection) — the string
-        // .replace("?", ...) below worked, but a bind keeps the query plan cache stable.
-        try (PreparedStatement ps = source.prepareStatement(Q_ARCHIVED_LOGS_SINCE)) {
-            ps.setLong(1, startScn);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    if (addedSequences.add(threadSequence(rs.getInt(2), rs.getLong(3)))) {
-                        logfiles.add(rs.getString(1));
-                    }
-                }
-            }
-        }
-        Set<Integer> archivedGroups = new HashSet<>();
-        try (Statement st = source.createStatement();
-             ResultSet rs = st.executeQuery(Q_CURRENT_REDO_MEMBERS)) {
-            while (rs.next()) {
-                int group = rs.getInt(1);
-                String member = rs.getString(2);
-                String sequence = threadSequence(rs.getInt(3), rs.getLong(4));
-                // One member per group: Oracle needs only one copy of a multiplexed group.
-                // A group whose sequence is already archived (ARCHIVE LOG CURRENT) is
-                // already covered, so its online member must not be added again.
-                if (archivedGroups.add(group) && addedSequences.add(sequence)) {
-                    logfiles.add(member);
-                }
-            }
-        }
+    /**
+     * Opens one mining cycle through {@code dialect}: session setup, high-water SCN, log
+     * discovery, ADD_LOGFILE/START_LOGMNR, then the V$LOGMNR_CONTENTS cursor.
+     *
+     * <p>A dialect that {@link MiningDialect#waitsForArchives() waits for archives} and finds
+     * none returns an {@link #idle idle} session instead of throwing: on DM, "the redo has
+     * not been switched yet" is a normal poll, not a misconfiguration.
+     */
+    static LogMinerSession open(Connection source, long startScn, int batchSize,
+                                MiningDialect dialect) throws SQLException {
+        dialect.prepareSession(source);
+        long highWaterScn = dialect.highWaterScn(source);
+        List<String> logfiles = dialect.logfilesCovering(source, startScn);
         if (logfiles.isEmpty()) {
+            if (dialect.waitsForArchives()) {
+                return idle(source, startScn, dialect);
+            }
             throw new SQLException("No archived or online redo logs cover SCN " + startScn
                     + "; the source may not be in ARCHIVELOG mode or logs were purged");
         }
 
-        try (Statement st = source.createStatement()) {
-            boolean first = true;
-            for (String path : logfiles) {
-                String flag = first ? "DBMS_LOGMNR.NEW" : "DBMS_LOGMNR.ADDFILE";
-                // H5: escape single quotes in the logfile path. Oracle-managed / Windows
-                // paths can contain apostrophes (rare, but a single bad path used to
-                // break the whole PL/SQL block with a syntax error).
-                String safePath = path.replace("'", "''");
-                st.execute("BEGIN DBMS_LOGMNR.ADD_LOGFILE(logfilename => '" + safePath + "',"
-                        + " options => " + flag + "); END;");
-                first = false;
-            }
-            // SCNs are numeric; inline substitution is injection-free (setLong would
-            // also work, but BEGIN ...; blocks don't accept binds for scalar args).
-            st.execute("BEGIN DBMS_LOGMNR.START_LOGMNR(startScn => " + startScn + ","
-                    + " endScn => " + currentScn + ","
-                    + " options => DBMS_LOGMNR.DICT_FROM_ONLINE_CATALOG"
-                    + " + DBMS_LOGMNR.COMMITTED_DATA_ONLY); END;");
-        }
+        dialect.startMining(source, logfiles, startScn, highWaterScn);
 
-        PreparedStatement cursor = source.prepareStatement(contentsQuery(majorVersion));
+        PreparedStatement cursor = source.prepareStatement(dialect.contentsQuery(source));
         cursor.setLong(1, startScn);
         if (batchSize > 0) {
             cursor.setFetchSize(batchSize);
         }
         ResultSet rows = cursor.executeQuery();
-        return new LogMinerSession(source, startScn, currentScn, cursor, rows);
-    }
-
-    /** Identity LogMiner deduplicates log files by (thread number + log sequence). */
-    private static String threadSequence(int thread, long sequence) {
-        return thread + ":" + sequence;
-    }
-
-    /**
-     * Pins the mining session's NLS to values that do not depend on the server's locale.
-     *
-     * <p>LogMiner renders {@code V$LOGMNR_CONTENTS.SQL_REDO} — every temporal and numeric
-     * literal in the redo text — using the <em>mining session's</em> NLS settings, not the
-     * settings of the session that wrote the change. On a Chinese-locale server that turns a
-     * TIMESTAMP update into
-     * {@code TO_TIMESTAMP('04-3月 -27 05.06.07.123456 上午')}, which no target outside the same
-     * locale can parse: measured against openGauss 5.0 the apply fails with
-     * {@code invalid input syntax for type timestamp}, and the consumer parks the project in
-     * ERROR — the increment stops permanently on the first temporal column. The numeric
-     * characters matter for the same reason ({@code 1,5} instead of {@code 1.5}).
-     *
-     * <p>The connection comes from the shared source pool, so these settings outlive the
-     * mining session on that physical connection until it is borrowed again. They are
-     * deliberately not restored: restoring needs the previous values from
-     * {@code V$NLS_PARAMETERS} (a privilege the mining account may not have) plus a round
-     * trip on the close path of every poll cycle, and nothing else in the pipeline depends
-     * on session NLS — rows are read through typed JDBC getters and written through binds,
-     * never through locale-formatted string literals. Revisit if a source-side query ever
-     * starts comparing dates or numbers as text on the same pool.
-     */
-    private static void pinLocaleIndependentNls(Connection source) throws SQLException {
-        List<String> settings = List.of(
-                "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'",
-                "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF9'",
-                "ALTER SESSION SET NLS_TIMESTAMP_TZ_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF9 TZH:TZM'",
-                "ALTER SESSION SET NLS_DATE_LANGUAGE = 'AMERICAN'",
-                "ALTER SESSION SET NLS_NUMERIC_CHARACTERS = '.,'");
-        try (Statement st = source.createStatement()) {
-            for (String setting : settings) {
-                st.execute(setting);
-            }
-        }
+        return new LogMinerSession(source, startScn, highWaterScn, cursor, rows, dialect);
     }
 }

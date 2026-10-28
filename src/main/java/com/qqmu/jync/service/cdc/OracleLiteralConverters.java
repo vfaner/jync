@@ -81,6 +81,23 @@ final class OracleLiteralConverters {
             return parseNumber(trimmed);
         }
 
+        // ANSI temporal literal — DM's LogMiner renders DATE'…' / TIMESTAMP'…' (including
+        // the time-zone form, whose offset sits inside the string). Oracle renders
+        // TO_DATE/TO_TIMESTAMP instead, so this branch never fires on an Oracle source.
+        // Same contract as the function-call branch below: the inner text is surfaced
+        // verbatim and the target driver interprets it.
+        String ansiTemporal = ansiTemporalContent(trimmed);
+        if (ansiTemporal != null) {
+            return ansiTemporal;
+        }
+
+        // DM renders binary columns as a 0x… hex literal; Oracle uses HEXTORAW('…').
+        // An empty value arrives as a bare "0x" and decodes to an empty array.
+        if (trimmed.length() >= 2 && trimmed.charAt(0) == '0'
+                && (trimmed.charAt(1) == 'x' || trimmed.charAt(1) == 'X')) {
+            return hexToBytes(trimmed.substring(2));
+        }
+
         // TO_DATE('...','...') — surface the inner date string verbatim; the target JDBC
         // driver interprets it via setObject(sqlType, string).
         if (trimmed.startsWith("TO_DATE(")) {
@@ -126,6 +143,27 @@ final class OracleLiteralConverters {
     }
 
     // —— helpers ——
+
+    /**
+     * Unwrap an ANSI temporal literal — {@code DATE'2026-03-04'} or
+     * {@code TIMESTAMP'2026-03-04 05:06:07.123456[ +08:00]'} — returning the content
+     * between the quotes, or null when {@code literal} is not one.
+     *
+     * <p>Measured on DM8 (see docs/dm-logminer-spike.md): DM always renders temporals this
+     * way, with the time-zone offset inside the string. Oracle never does, so recognising
+     * it cannot change an Oracle-parsed row.
+     */
+    private static String ansiTemporalContent(String literal) {
+        int quote = literal.indexOf('\'');
+        if (quote <= 0 || literal.length() <= quote + 1 || !literal.endsWith("'")) {
+            return null;
+        }
+        String prefix = literal.substring(0, quote).toUpperCase(java.util.Locale.ROOT);
+        if (!"DATE".equals(prefix) && !"TIMESTAMP".equals(prefix)) {
+            return null;
+        }
+        return unquote(literal.substring(quote));
+    }
 
     /** Strip the surrounding quotes and un-double the internal '' escape. */
     private static String unquote(String quoted) {

@@ -136,6 +136,9 @@ public class SqlRedoParser {
             if (sqlType == null) {
                 return ParsedChange.unsupported("insert: column " + col + " not in binding");
             }
+            if (isOutOfLineLobMarker(values.get(i))) {
+                continue;                       // left out of the row → reported as missing
+            }
             row.put(col, OracleLiteralConverters.convert(values.get(i), sqlType));
         }
         ParsedChange incomplete = refuseIfColumnsAreMissing("insert", binding, row);
@@ -178,6 +181,9 @@ public class SqlRedoParser {
             if (sqlType == null) {
                 continue;
             }
+            if (isOutOfLineLobMarker(e.getValue())) {
+                continue;                       // left out of the row → reported as missing
+            }
             try {
                 row.put(col, OracleLiteralConverters.convert(e.getValue(), sqlType));
             } catch (OracleLiteralConverters.UnsupportedLiteralException ule) {
@@ -205,6 +211,9 @@ public class SqlRedoParser {
             if (sqlType == null) {
                 return ParsedChange.unsupported("update: set column " + a.column + " not in binding");
             }
+            if (isOutOfLineLobMarker(a.value)) {
+                continue;                       // left out of the row → reported as missing
+            }
             row.put(a.column, OracleLiteralConverters.convert(a.value, sqlType));
         }
 
@@ -216,6 +225,28 @@ public class SqlRedoParser {
         }
         ParsedChange incomplete = refuseIfColumnsAreMissing("update", binding, row);
         return incomplete != null ? incomplete : ParsedChange.of(Op.UPDATE, row, previousKey);
+    }
+
+    /**
+     * DM keeps an out-of-line LOB column in the statement but replaces the value with the
+     * marker {@code OUT_CLOB} / {@code OUT_BLOB} (measured together with COLUMN_PRESENT
+     * returning 1 for that column — it has a position, not a value). Oracle drops the
+     * column from the redo text instead. Both shapes say the same thing: the redo record
+     * holds no content for that column, so both must reach
+     * {@link #refuseIfColumnsAreMissing} and be reported under the missing-LOB policy.
+     * Letting the marker fall through to the literal converter would classify it as an
+     * ordinary parse failure, bypassing that policy and its counter.
+     */
+    private static boolean isOutOfLineLobMarker(String literal) {
+        if (literal == null) {
+            return false;
+        }
+        String t = literal.trim();
+        // The WHERE clause's last conjunct carries the statement terminator.
+        while (t.endsWith(";")) {
+            t = t.substring(0, t.length() - 1).trim();
+        }
+        return "OUT_CLOB".equalsIgnoreCase(t) || "OUT_BLOB".equalsIgnoreCase(t);
     }
 
     /**
@@ -255,12 +286,14 @@ public class SqlRedoParser {
         }
         return ParsedChange.missingValues(op + ": redo text carries no value for column(s) "
                 + String.join(", ", missing)
-                + " — LogMiner renders only what the redo record holds, and neither out-of-line"
-                + " LOB content nor (under MINIMAL supplemental logging) the unchanged values of"
-                + " an UPDATE are recorded. Applying this change would NULL those target"
-                + " column(s) instead. The whole change is skipped so the target row keeps its"
-                + " previous consistent version; add SUPPLEMENTAL LOG DATA (ALL) COLUMNS on the"
-                + " source table so updates carry the full old image.", missing);
+                + " — LogMiner renders only what the redo record holds. Out-of-line LOB"
+                + " content is never recorded (neither on Oracle nor on DM), and on Oracle an"
+                + " UPDATE under MINIMAL supplemental logging omits the unchanged values."
+                + " Applying this change would NULL those target column(s) instead. The whole"
+                + " change is skipped so the target row keeps its previous consistent version."
+                + " On Oracle, add SUPPLEMENTAL LOG DATA (ALL) COLUMNS to the source table; on"
+                + " DM, set RLOG_APPEND_LOGIC=2. Neither setting helps for an out-of-line LOB,"
+                + " whose content the redo log does not contain at all.", missing);
     }
 
     // —— DELETE ——
