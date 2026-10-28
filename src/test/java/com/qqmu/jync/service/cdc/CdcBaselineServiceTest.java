@@ -330,6 +330,53 @@ class CdcBaselineServiceTest {
                 .hasMessageContaining("is_cdc_enabled=0");
     }
 
+    // —— v1.9.0:PG 家族基线锚点 ——
+
+    /**
+     * openGauss 5.0.0(docker 实测)没有 {@code pg_current_wal_lsn()}——它源自 PG 9.2,只有
+     * {@code pg_current_xlog_location()};产品名仍是 "PostgreSQL",靠 version() 横幅识别。
+     * 基线锚点取错会直接让 PG_LOGICAL_CDC 启动即失败。
+     */
+    @Test
+    void readCurrentLsnPgUsesTheOpenGaussFunctionWhenTheServerIsOpenGauss() throws SQLException {
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(any(String.class))).thenAnswer(inv -> {
+            String sql = inv.getArgument(0);
+            ResultSet rs = mock(ResultSet.class);
+            if (sql.contains("version()")) {
+                when(rs.next()).thenReturn(true, false);
+                when(rs.getString(1)).thenReturn("(openGauss 5.0.0 build ) compiled at"
+                        + " 2023-04-18 10:27:05 commit 0 last mr  on aarch64-unknown-linux-gnu");
+            } else if (sql.contains("pg_current_xlog_location")) {
+                when(rs.next()).thenReturn(true, false);
+                when(rs.getString(1)).thenReturn("0/D890C70");
+            } else {
+                throw new SQLException("function pg_current_wal_lsn() does not exist");
+            }
+            return rs;
+        });
+        when(dataSourceManager.getConnection(any())).thenReturn(conn);
+
+        assertThat(service.readCurrentLsnPg(source())).isEqualTo("0/D890C70");
+        verify(st, never()).executeQuery(contains("pg_current_wal_lsn"));
+    }
+
+    @Test
+    void readCurrentLsnPgKeepsTheWalLsnFunctionOnVanillaPostgres() throws SQLException {
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getString(1)).thenReturn("0/16B3748");
+        when(st.executeQuery(contains("pg_current_wal_lsn"))).thenReturn(rs);
+        when(dataSourceManager.getConnection(any())).thenReturn(conn);
+
+        assertThat(service.readCurrentLsnPg(source())).isEqualTo("0/16B3748");
+    }
+
     @Test
     void readCurrentScnSurfacesSqlExceptionsAsIllegalState() throws SQLException {
         Connection oracle = mock(Connection.class);

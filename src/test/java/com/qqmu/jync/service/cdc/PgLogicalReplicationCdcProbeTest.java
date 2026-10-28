@@ -146,6 +146,34 @@ class PgLogicalReplicationCdcProbeTest {
         assertThat(role.getDetail()).contains("openGauss");
     }
 
+    /** 重新 stub {@code SELECT version()} 的横幅（真库上 openGauss 唯一的识别证据）。 */
+    private void versionBanner(String banner) throws SQLException {
+        when(stmt.executeQuery(contains("version()"))).thenAnswer(inv -> {
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.next()).thenReturn(true, false);
+            when(rs.getString(1)).thenReturn(banner);
+            return rs;
+        });
+    }
+
+    /**
+     * 真库实测(org.opengauss.Driver 6.0.0-og):openGauss 的 {@code productName} 就是
+     * "PostgreSQL",账号 {@code rolsuper/rolreplication} 全为 f。只看产品名会把这种源
+     * 判成"缺 REPLICATION 权限"而拒之门外——必须靠 {@code SELECT version()} 横幅识别。
+     */
+    @Test
+    void openGaussBehindAPostgreSQLProductNameStillPassesTheRoleCheck() throws SQLException {
+        versionBanner("(openGauss 5.0.0 build ) compiled at 2023-04-18 10:27:05 commit 0"
+                + " last mr  on aarch64-unknown-linux-gnu, compiled by g++ (GCC) 7.3.0, 64-bit");
+        stubRole(false, false);
+        CdcProbeResult result = probeOneTable();
+        CdcProbeResult.Check role = check(result, CdcProbeResult.PG_REPLICATION_ROLE);
+        assertThat(role.isPassed()).isTrue();
+        assertThat(role.getDetail()).contains("openGauss");
+        assertThat(check(result, CdcProbeResult.PG_SOURCE).getDetail())
+                .contains("openGauss-compatible");
+    }
+
     @Test
     void vanillaPostgresWithoutReplicationAttributeFailsTheRoleCheck() throws SQLException {
         productName("PostgreSQL 16.4");

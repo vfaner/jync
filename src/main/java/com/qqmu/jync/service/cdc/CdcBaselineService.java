@@ -118,22 +118,31 @@ public class CdcBaselineService {
     }
 
     /**
-     * PostgreSQL: current WAL LSN ({@code pg_current_wal_lsn()}) — the baseline anchor for
-     * the logical-slot consumer. The slot replay resumes from strictly beyond this point
-     * (the full-load overlaps the window; idempotent upsert covers the double-write).
+     * PG family: current WAL LSN — the baseline anchor for the logical-slot consumer. The
+     * slot replay resumes from strictly beyond this point (the full-load overlaps the
+     * window; idempotent upsert covers the double-write).
+     *
+     * <p>v1.9.0: the function name is dialect-dependent. openGauss 5.0.0 forked PG 9.2 and
+     * has no {@code pg_current_wal_lsn()} at all (measured: "function does not exist");
+     * it keeps {@code pg_current_xlog_location()}. Vanilla PostgreSQL keeps the v1.7.0
+     * query byte for byte.
      */
     public String readCurrentLsnPg(DatabaseConfig source) {
-        try (Connection conn = dataSourceManager.getConnection(source);
-             Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery("SELECT pg_current_wal_lsn()::text")) {
-            if (!rs.next()) {
-                throw new IllegalStateException("Could not read pg_current_wal_lsn()");
+        try (Connection conn = dataSourceManager.getConnection(source)) {
+            String sql = PgLogicalDialect.detectLive(conn).currentLsnSql();
+            try (Statement st = conn.createStatement();
+                 ResultSet rs = st.executeQuery(sql)) {
+                if (!rs.next()) {
+                    throw new IllegalStateException("Could not read the current WAL position ("
+                            + sql + ")");
+                }
+                String lsn = rs.getString(1);
+                if (lsn == null || lsn.isBlank()) {
+                    throw new IllegalStateException(
+                            "The current WAL position query returned empty (" + sql + ")");
+                }
+                return lsn.trim();
             }
-            String lsn = rs.getString(1);
-            if (lsn == null || lsn.isBlank()) {
-                throw new IllegalStateException("pg_current_wal_lsn() returned empty");
-            }
-            return lsn.trim();
         } catch (SQLException e) {
             throw new IllegalStateException("Failed to read PostgreSQL LSN: " + e.getMessage(), e);
         }

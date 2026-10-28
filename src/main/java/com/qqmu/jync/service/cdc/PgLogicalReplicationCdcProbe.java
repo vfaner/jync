@@ -38,9 +38,12 @@ public class PgLogicalReplicationCdcProbe {
      */
     public CdcProbeResult probe(Connection conn, List<String[]> ownerTables) {
         List<CdcProbeResult.Check> checks = new ArrayList<>();
-        checks.add(checkPgSource(conn));
+        // Resolved once: identify() may cost a SELECT version() round trip, and ① and ③
+        // read the same answer.
+        PgLogicalDialect dialect = PgLogicalDialect.detectLive(conn);
+        checks.add(checkPgSource(conn, dialect));
         checks.add(checkWalLevel(conn));
-        checks.add(checkReplicationRole(conn));
+        checks.add(checkReplicationRole(conn, dialect));
         checks.add(checkSlotHeadroom(conn));
         checks.add(checkPluginAvailable(conn));
         if (ownerTables != null && !ownerTables.isEmpty()) {
@@ -51,7 +54,7 @@ public class PgLogicalReplicationCdcProbe {
 
     // —— ① PG family (v1.9.0: name no longer decides, capability does) ——
 
-    private CdcProbeResult.Check checkPgSource(Connection conn) {
+    private CdcProbeResult.Check checkPgSource(Connection conn, PgLogicalDialect dialect) {
         try {
             String product = conn.getMetaData().getDatabaseProductName();
             if (product == null || product.isBlank()) {
@@ -59,9 +62,8 @@ public class PgLogicalReplicationCdcProbe {
                         "the server did not report a product name — the PostgreSQL-family"
                                 + " gate cannot be decided; check the JDBC URL and driver");
             }
-            boolean openGauss = PgLogicalDialect.detect(product) == PgLogicalDialect.OPENGAUSS;
             return CdcProbeResult.Check.of(CdcProbeResult.PG_SOURCE, true,
-                    product + (openGauss
+                    product + (dialect == PgLogicalDialect.OPENGAUSS
                             ? " (openGauss-compatible; capabilities are verified by the checks"
                                     + " below, not by the product name)"
                             : ""));
@@ -89,7 +91,8 @@ public class PgLogicalReplicationCdcProbe {
 
     // —— ③ REPLICATION role ——
 
-    private CdcProbeResult.Check checkReplicationRole(Connection conn) {
+    private CdcProbeResult.Check checkReplicationRole(Connection conn,
+                                                      PgLogicalDialect dialect) {
         String sql = "SELECT rolreplication, rolsuper FROM pg_roles"
                 + " WHERE rolname = CURRENT_USER";
         try (Statement st = conn.createStatement();
@@ -107,9 +110,7 @@ public class PgLogicalReplicationCdcProbe {
             // v1.9.0: openGauss 5.0.0 的初始超级用户两个属性都是 f，却照样能建逻辑槽
             // （docker 实测）。该内核不把 REPLICATION 属性当建槽门槛，硬性要求只会
             // 把所有 openGauss 源误判为不可用；真正的权威是 ⑤ 建槽+删槽探测。
-            String product = conn.getMetaData() == null
-                    ? null : conn.getMetaData().getDatabaseProductName();
-            if (PgLogicalDialect.detect(product) == PgLogicalDialect.OPENGAUSS) {
+            if (dialect == PgLogicalDialect.OPENGAUSS) {
                 return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICATION_ROLE, true,
                         detail + " — openGauss does not require the REPLICATION attribute to"
                                 + " create a logical slot; slot creation is verified below");

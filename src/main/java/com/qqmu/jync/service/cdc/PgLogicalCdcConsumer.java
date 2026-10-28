@@ -1,7 +1,6 @@
 package com.qqmu.jync.service.cdc;
 
 import java.sql.Connection;
-import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -341,16 +340,13 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     /**
      * Resolves the server dialect from the live connection. Any metadata failure keeps
      * the vanilla-PostgreSQL behavior, which is exactly the pre-v1.9.0 code path.
+     *
+     * <p>Delegates to {@link PgLogicalDialect#detectLive(Connection)}: openGauss's
+     * official driver reports the product name "PostgreSQL", so the banner from
+     * {@code SELECT version()} is what actually identifies it.
      */
     static PgLogicalDialect dialectOf(Connection conn) {
-        try {
-            DatabaseMetaData md = conn.getMetaData();
-            return PgLogicalDialect.detect(md == null ? null : md.getDatabaseProductName());
-        } catch (SQLException | RuntimeException e) {
-            log.debug("Could not read the source product name; assuming vanilla PostgreSQL:"
-                    + " {}", e.toString());
-            return PgLogicalDialect.POSTGRES;
-        }
+        return PgLogicalDialect.detectLive(conn);
     }
 
     /**
