@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.cdc;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -90,6 +91,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
 
     private volatile boolean running = true;
     private volatile Connection currentSource;
+    /**
+     * Server dialect, decided per connection from the product name the server reports.
+     * Defaults to vanilla PostgreSQL so a failed metadata read can only reproduce the
+     * pre-v1.9.0 behavior.
+     */
+    private volatile PgLogicalDialect dialect = PgLogicalDialect.POSTGRES;
 
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
     private final AtomicInteger parseFailures = new AtomicInteger();
@@ -159,6 +166,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 // 一条不丢。
                 try (Connection slotConn =
                              dataSourceManager.getConnection(ctx.getSourceConfig())) {
+                    dialect = dialectOf(slotConn);
                     ensureSlot(slotConn, slotName);
                 }
                 baselineService.runBaseline(ctx, lock::renew);
@@ -199,6 +207,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 int rowsDrained;
                 try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                     currentSource = conn;
+                    dialect = dialectOf(conn);
                     ensureSlot(conn, slotName);
                     stats.setConnected(true);
                     stats.setLastError(null);
@@ -316,10 +325,8 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
      * only already-decoded transactions are returned (empirically, limit=2 still returned
      * a 7-row transaction). Hence every peeked transaction is flushable as a whole.
      */
-    static final String PEEK_CHANGES_SQL =
-            "SELECT lsn::text, data FROM pg_logical_slot_peek_changes("
-                    + "?::name, NULL::pg_lsn, ?::integer,"
-                    + " VARIADIC ARRAY['include-xids', '1']::text[])";
+    /** Kept under the old name for readability; the string is the POSTGRES dialect's. */
+    static final String PEEK_CHANGES_SQL = PgLogicalDialect.POSTGRES.peekChangesSql();
 
     /**
      * F-11: the slot is confirmed explicitly, one applied transaction at a time. The
@@ -328,9 +335,23 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
      * exclusive, and the next transaction's BEGIN may carry that same LSN and is still
      * delivered.
      */
-    static final String ADVANCE_SLOT_SQL =
-            "SELECT end_lsn::text FROM pg_replication_slot_advance("
-                    + "?::name, ?::pg_lsn)";
+    /** Kept under the old name for readability; the string is the POSTGRES dialect's. */
+    static final String ADVANCE_SLOT_SQL = PgLogicalDialect.POSTGRES.advanceSlotSql();
+
+    /**
+     * Resolves the server dialect from the live connection. Any metadata failure keeps
+     * the vanilla-PostgreSQL behavior, which is exactly the pre-v1.9.0 code path.
+     */
+    static PgLogicalDialect dialectOf(Connection conn) {
+        try {
+            DatabaseMetaData md = conn.getMetaData();
+            return PgLogicalDialect.detect(md == null ? null : md.getDatabaseProductName());
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Could not read the source product name; assuming vanilla PostgreSQL:"
+                    + " {}", e.toString());
+            return PgLogicalDialect.POSTGRES;
+        }
+    }
 
     /**
      * Drain one cycle: PEEK the slot inside ONE explicit source transaction, buffer per
@@ -375,7 +396,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         try {
             while (running && !Thread.currentThread().isInterrupted()) {
                 int rowsThisCall = 0;
-                try (PreparedStatement ps = conn.prepareStatement(PEEK_CHANGES_SQL)) {
+                try (PreparedStatement ps = conn.prepareStatement(dialect.peekChangesSql())) {
                     ps.setString(1, slotName);
                     ps.setLong(2, batchSize);
                     ps.setFetchSize(batchSize);
@@ -618,7 +639,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
      */
     private void advanceSlot(Connection conn, String slotName, String commitLsn)
             throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(ADVANCE_SLOT_SQL)) {
+        try (PreparedStatement ps = conn.prepareStatement(dialect.advanceSlotSql())) {
             ps.setString(1, slotName);
             ps.setString(2, commitLsn);
             try (ResultSet rs = ps.executeQuery()) {
