@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
@@ -118,6 +119,16 @@ public final class CdcRuntimeStats {
 
     /** LSN watermark — populated only for PG_LOGICAL_CDC / SQLSERVER_CDC; null otherwise. */
     private volatile String positionLsn;
+
+    /**
+     * WAL a PostgreSQL logical slot is holding back ({@code pg_current_wal_lsn() -
+     * restart_lsn}) — populated only for PG_LOGICAL_CDC when the server can compute it.
+     * Null means "not measured" (another engine, openGauss without {@code pg_lsn}, the
+     * measurement failed), and the panel hides the row rather than showing a fake zero.
+     */
+    private volatile Long retainedWalBytes;
+    /** Whether {@link #retainedWalBytes} crossed the configured warning threshold. */
+    private volatile boolean retainedWalHigh;
 
     private volatile long lastEventEpochMillis;
     private volatile long startedAtMillis;
@@ -340,6 +351,49 @@ public final class CdcRuntimeStats {
         return positionScn;
     }
 
+    /**
+     * Record how much WAL the slot holds back.
+     *
+     * @param warnBytes threshold above which the panel flags the value; {@code <= 0}
+     *                  disables the flag
+     * @return whether <em>this</em> sample is the one that crossed the threshold — the
+     *         decision lives here rather than in the caller so the once-per-crossing
+     *         throttle is testable without capturing logs (same reason as
+     *         {@link #recordMissingLob}). A panel nobody is watching does not save a
+     *         source disk, so the crossing must also reach the log.
+     */
+    public boolean recordRetainedWal(long bytes, long warnBytes) {
+        boolean wasHigh = this.retainedWalHigh;
+        this.retainedWalBytes = bytes;
+        this.retainedWalHigh = warnBytes > 0 && bytes > warnBytes;
+        return !wasHigh && this.retainedWalHigh;
+    }
+
+    public Long getRetainedWalBytes() {
+        return retainedWalBytes;
+    }
+
+    public boolean isRetainedWalHigh() {
+        return retainedWalHigh;
+    }
+
+    /** Human-readable size for the panel, or null when nothing was measured. */
+    public String getRetainedWalLabel() {
+        Long bytes = retainedWalBytes;
+        return bytes == null ? null : formatBytes(bytes);
+    }
+
+    /** {@link #getRetainedWalLabel} for a bare count — also used for the warning threshold. */
+    static String formatBytes(long bytes) {
+        if (bytes >= 1L << 30) {
+            return String.format(Locale.ROOT, "%.1f GiB", bytes / (double) (1L << 30));
+        }
+        if (bytes >= 1L << 20) {
+            return String.format(Locale.ROOT, "%.1f MiB", bytes / (double) (1L << 20));
+        }
+        return bytes + " B";
+    }
+
     /** PG/SQLServer: record the current LSN watermark shown on the status panel. */
     public void recordPositionLsn(String lsn) {
         this.positionLsn = lsn;
@@ -404,6 +458,9 @@ public final class CdcRuntimeStats {
         snapshot.put("gtidSet", gtidSet);
         snapshot.put("positionScn", positionScn);
         snapshot.put("positionLsn", positionLsn);
+        snapshot.put("retainedWalBytes", retainedWalBytes);
+        snapshot.put("retainedWalLabel", getRetainedWalLabel());
+        snapshot.put("retainedWalHigh", retainedWalHigh);
         snapshot.put("lagSeconds", lagSeconds());
         snapshot.put("eventsPerSecond", eventsPerSecond());
         snapshot.put("rowsApplied", getRowsApplied());

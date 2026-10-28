@@ -44,7 +44,11 @@ public final class CdcFailureClassifier {
                     // error 22054 hits an ESTABLISHED capture instance (start_lsn at or
                     // below the watermark): the CDC cleanup job purged change rows past
                     // it. Same remedy as the binlog purge — re-baseline from snapshot.
-                    || message.contains("sqlserver cdc purge")) {
+                    || message.contains("sqlserver cdc purge")
+                    // PG logical decoding — the mirrored sentinel PgLogicalCdcConsumer
+                    // throws when the slot is gone but a committed position exists (see
+                    // ensureSlot). The WAL in between is unreachable; re-baseline.
+                    || message.contains("pg cdc purge")) {
                 return Kind.PURGED;
             }
             if (message.contains("same server_id") || message.contains("same server_uuid")

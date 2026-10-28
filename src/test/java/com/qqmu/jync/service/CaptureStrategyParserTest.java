@@ -3,6 +3,8 @@ package com.qqmu.jync.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
+
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.DatabaseType;
 import org.junit.jupiter.api.Test;
@@ -114,5 +116,61 @@ class CaptureStrategyParserTest {
                 DatabaseType.CUSTOM))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.cdc.not.postgres");
+    }
+
+    // —— 批量建任务页「按源库自动匹配采集方式」——
+
+    /**
+     * 页面列出的选项永远不能是保存门禁会拒绝的选项 —— 否则用户点了「批量创建」才
+     * 知道选错了。反过来允许页面收窄（例如崖山实测挖不了日志，就不要把 LogMiner
+     * 列出来），所以这条只钉单向：listed ⟹ accepted。
+     */
+    @ParameterizedTest
+    @EnumSource(DatabaseType.class)
+    void everyListedStrategyPassesTheSaveGate(DatabaseType type) {
+        for (CaptureStrategy strategy : CaptureStrategyParser.supportedFor(type, type.getFamily())) {
+            assertThat(CaptureStrategyParser.parseRequested(strategy.name(), type))
+                    .as("%s listed for %s but the save gate refuses it", strategy, type)
+                    .isEqualTo(strategy);
+        }
+    }
+
+    @Test
+    void pollingAndFullCompareComeFirstAndEverySourceHasThem() {
+        // 崖山：实测没有 DBMS_LOGMNR / V$LOGMNR_CONTENTS，日志 CDC 不可用 —— 即使它
+        // 说 ORACLE 家族、保存门禁放行，页面也不该把 LogMiner 当成可选项。
+        assertThat(CaptureStrategyParser.supportedFor(DatabaseType.YASHANDB, DatabaseType.YASHANDB.getFamily()))
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE);
+        assertThat(CaptureStrategyParser.supportedFor(DatabaseType.MYSQL, DatabaseType.MYSQL.getFamily()))
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE,
+                        CaptureStrategy.BINLOG_CDC);
+        assertThat(CaptureStrategyParser.supportedFor(DatabaseType.ORACLE, DatabaseType.ORACLE.getFamily()))
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE,
+                        CaptureStrategy.LOGMINER_CDC);
+        assertThat(CaptureStrategyParser.supportedFor(DatabaseType.DM, DatabaseType.DM.getFamily()))
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE,
+                        CaptureStrategy.LOGMINER_CDC);
+        assertThat(CaptureStrategyParser.supportedFor(DatabaseType.SQLSERVER, DatabaseType.SQLSERVER.getFamily()))
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE,
+                        CaptureStrategy.SQLSERVER_CDC);
+    }
+
+    /** 源连接类型解析不出来时，页面只能给出与类型无关的两种。 */
+    @Test
+    void anUnknownSourceOffersOnlyTheTypeAgnosticStrategies() {
+        assertThat(CaptureStrategyParser.supportedFor(null, null))
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE);
+    }
+
+    /** CUSTOM 连接按它声明的家族算，与保存门禁一致。 */
+    @Test
+    void aCustomSourceUsesItsDeclaredFamily() {
+        assertThat(CaptureStrategyParser.supportedFor(DatabaseType.CUSTOM,
+                DatabaseType.DialectFamily.POSTGRES))
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE,
+                        CaptureStrategy.PG_LOGICAL_CDC);
+        assertThat(CaptureStrategyParser.supportedFor(DatabaseType.CUSTOM,
+                DatabaseType.DialectFamily.SQLSERVER))
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE);
     }
 }

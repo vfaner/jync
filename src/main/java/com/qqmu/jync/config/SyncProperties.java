@@ -359,6 +359,13 @@ public class SyncProperties {
             private long idlePollMs = 500L;
             /** Prefix for the per-project replication slot name; final name is {@code jync_<projectId>}. */
             private String slotPrefix = "jync_";
+            /**
+             * WAL a slot may hold back before the status panel flags it. A slot that stops
+             * advancing pins every WAL segment after its {@code restart_lsn}, and a full
+             * source disk takes the whole database down. {@code 0} disables the flag; the
+             * measured value is still displayed.
+             */
+            private long walRetentionWarnBytes = 4L * 1024 * 1024 * 1024;
         }
 
         @Getter

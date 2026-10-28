@@ -645,6 +645,7 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 | `sync.cdc.logminer.batch-size` | `10000` | LogMiner 单批读取行数 |
 | `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 真空闲时的休眠间隔 |
 | `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL 逻辑解码真空闲时的休眠间隔 |
+| `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | 复制槽滞留 WAL 的面板告警阈值（4 GiB）；`0` 关闭告警，仍显示实测值 |
 | `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲时的休眠间隔 |
 | `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口；`0` 关闭聚合 |
 | `sync.lob.streaming-enabled` | `true` | 大字段流式读写总开关 |

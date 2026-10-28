@@ -35,6 +35,7 @@
                                 <option value="" th:text="#{project.selectDatabase}">-- select --</option>
                                 <option th:each="db : ${sourceDatabases}" th:value="${db.id}"
                                         th:selected="${request != null and db.id == request.sourceDbId()}"
+                                        th:attr="data-strategies=${sourceStrategies[db.id]}"
                                         th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
                             </select>
                             <div class="help" th:if="${#lists.isEmpty(sourceDatabases)}"
@@ -81,22 +82,17 @@
 
                     <div class="field">
                         <label for="captureStrategy" th:text="#{project.bulk.strategy}">Capture strategy</label>
-                        <select class="select" id="captureStrategy" name="captureStrategy">
+                        <!-- 选项跟着源连接走：没选源连接时只剩「默认」并禁用；选了之后由
+                             selectedStrategies（服务端）与页面脚本（切源即时）共同收窄。 -->
+                        <select class="select" id="captureStrategy" name="captureStrategy"
+                                th:disabled="${selectedStrategies == null}">
                             <option value="" th:text="#{project.bulk.strategy.default}">Default (polling)</option>
-                            <option value="POLLING" th:text="#{project.strategy.polling.name}"
-                                    th:selected="${request != null and request.captureStrategy() == 'POLLING'}">Polling</option>
-                            <option value="FULL_COMPARE" th:text="#{project.strategy.fullcompare.name}"
-                                    th:selected="${request != null and request.captureStrategy() == 'FULL_COMPARE'}">Full compare</option>
-                            <option value="BINLOG_CDC" th:text="#{project.strategy.cdc.name}"
-                                    th:selected="${request != null and request.captureStrategy() == 'BINLOG_CDC'}">Binlog CDC</option>
-                            <option value="LOGMINER_CDC" th:text="#{project.strategy.logminer.name}"
-                                    th:selected="${request != null and request.captureStrategy() == 'LOGMINER_CDC'}">LogMiner CDC</option>
-                            <option value="PG_LOGICAL_CDC" th:text="#{project.strategy.pg.name}"
-                                    th:selected="${request != null and request.captureStrategy() == 'PG_LOGICAL_CDC'}">PG Logical CDC</option>
-                            <option value="SQLSERVER_CDC" th:text="#{project.strategy.sqlserver.name}"
-                                    th:selected="${request != null and request.captureStrategy() == 'SQLSERVER_CDC'}">SQL Server CDC</option>
+                            <option th:each="strategy : ${selectedStrategies}"
+                                    th:value="${strategy.name()}"
+                                    th:text="${strategyLabels[strategy.name()]}"
+                                    th:selected="${request != null and request.captureStrategy() == strategy.name()}">strategy</option>
                         </select>
-                        <div class="help" th:text="#{project.bulk.strategy.hint}">A CDC choice the source type does not support is refused.</div>
+                        <div class="help" th:text="#{project.bulk.strategy.hint}">Strategy list follows the source.</div>
                     </div>
 
                     <div class="field">
@@ -213,6 +209,55 @@
     </div>
 </div>
 </th:block>
-<th:block th:fragment="scripts" th:remove="tag"></th:block>
+<th:block th:fragment="scripts" th:remove="tag">
+<script th:inline="javascript">
+(function () {
+  // 采集方式跟着源连接自动匹配：每个源 <option> 上带 data-strategies（服务端用
+  // CaptureStrategyParser.supportedFor 算出来的），切源时据此重建下拉框。默认项
+  // （value=""）就是增量轮询，所以列表中不再重复列出 POLLING。
+  var source = document.getElementById('sourceDbId');
+  var strategy = document.getElementById('captureStrategy');
+  if (!source || !strategy) { return; }
+
+  var defaultLabel = /*[[#{project.bulk.strategy.default}]]*/ 'Default (polling)';
+  // 标签用服务端那一份(与首次渲染下拉框的 strategyLabels 同源),不在脚本里再抄一遍:
+  // 抄一份的话,新增一种采集方式时漏改这里,前端会因为查不到标签把新选项悄悄跳过。
+  var labels = /*[[${strategyLabels}]]*/ {};
+
+  function allowed() {
+    var option = source.options[source.selectedIndex];
+    var csv = option && option.value
+        ? (option.getAttribute('data-strategies') || '') : '';
+    return csv ? csv.split(',') : [];
+  }
+
+  function apply() {
+    var names = allowed();
+    var keep = strategy.value;
+
+    strategy.innerHTML = '';
+    var base = document.createElement('option');
+    base.value = '';
+    base.textContent = defaultLabel;
+    strategy.appendChild(base);
+
+    names.forEach(function (name) {
+      if (name === 'POLLING' || !labels[name]) { return; }
+      var option = document.createElement('option');
+      option.value = name;
+      option.textContent = labels[name];
+      strategy.appendChild(option);
+    });
+
+    // 保留用户已经选好的那一项；它对新源不支持时退回默认轮询。
+    strategy.value = names.indexOf(keep) >= 0 ? keep : '';
+    strategy.disabled = names.length === 0;
+  }
+
+  source.addEventListener('change', apply);
+  if (source.value) { apply(); }
+})();
+</script>
+</th:block>
 </body>
 </html>

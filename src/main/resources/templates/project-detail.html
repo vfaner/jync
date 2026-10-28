@@ -319,6 +319,16 @@
                     <dd th:text="${stats.skippedMissingLob}">0</dd>
                     <dt th:text="#{cdc.status.uncaptured.gaps}">Uncaptured gap warnings</dt>
                     <dd th:text="${stats.uncapturedGaps}">0</dd>
+                    <!--/* PG 逻辑槽把 WAL 滞留在 restart_lsn 之后:消费停滞时源库磁盘会被占满。
+                         测不出(openGauss 没有 pg_lsn)时 retainedWalBytes 为 null,整行不渲染。 */-->
+                    <th:block th:if="${stats.retainedWalBytes != null}">
+                        <dt th:text="#{cdc.status.wal.retained}">WAL held by the slot</dt>
+                        <dd>
+                            <span class="chip mono" th:text="${stats.retainedWalLabel}">0</span>
+                            <span class="badge badge-warn" th:if="${stats.retainedWalHigh}"
+                                  th:text="#{cdc.status.wal.retained.high}">high</span>
+                        </dd>
+                    </th:block>
                 </th:block>
                 <th:block th:if="${lastErrorShort != null}">
                     <dt th:text="#{cdc.status.lastError}">Last error</dt>

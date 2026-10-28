@@ -276,6 +276,11 @@ public class ProjectService {
 
         boolean isNew = project.getId() == null;
         boolean endpointsChanged = false;
+        // Read off the stored row before the merge below overwrites it: these describe the
+        // OLD source, and the old source is where a PG logical slot may be left behind.
+        boolean sourceChanged = false;
+        Long previousSourceDbId = null;
+        CaptureStrategy previousStrategy = null;
         if (isNew) {
             // The create form carries no start switch: projects always start life stopped and
             // are later enabled through the explicit start action. A bound enabled=true from
@@ -294,7 +299,10 @@ public class ProjectService {
                 // nudging the polling cadence. Report success by returning the stored row.
                 return existing;
             }
-            endpointsChanged = !Objects.equals(project.getSourceDbId(), existing.getSourceDbId())
+            sourceChanged = !Objects.equals(project.getSourceDbId(), existing.getSourceDbId());
+            previousSourceDbId = existing.getSourceDbId();
+            previousStrategy = CaptureStrategyParser.parse(existing.getSyncConfig());
+            endpointsChanged = sourceChanged
                     || !Objects.equals(project.getTargetDbId(), existing.getTargetDbId());
             if (endpointsChanged && isRunning(existing)) {
                 // The running cycle (or live CDC consumer) holds the old endpoints; switching
@@ -323,6 +331,14 @@ public class ProjectService {
             positionStore.delete(saved.getId());
             log.info("Project '{}' endpoints changed; sync state cleared for a full reload",
                     saved.getName());
+            // A PG logical slot lives ON the source, not in our metadata database: clearing
+            // the position locally leaves it on the OLD server, where it keeps every WAL
+            // segment after its restart point forever. Only a source change orphans it — a
+            // target-only change keeps the source, and the slot is reused by the next
+            // baseline (which is what keeps the re-baseline gap-free).
+            if (sourceChanged && previousStrategy == CaptureStrategy.PG_LOGICAL_CDC) {
+                releasePgSlot(saved.getId(), previousSourceDbId, "moved to another source");
+            }
         }
         // Inside the same transaction: the audit row commits with the change it describes
         // and rolls back with it, so the trail never claims a save that did not happen.
@@ -512,7 +528,7 @@ public class ProjectService {
             log.info("Project '{}': capture strategy switched, {}", saved.getName(),
                     from + " -> " + to);
             afterCommit(projectId, "capture-strategy-switch",
-                    () -> applyStrategySwitch(saved, to));
+                    () -> applyStrategySwitch(saved, from, to));
         } else {
             if (cron != null && !cron.isBlank() && !Boolean.TRUE.equals(saved.getEnabled())) {
                 // The most common "cron does not work" report: the schedule was saved on a
@@ -554,7 +570,7 @@ public class ProjectService {
      * change itself inside {@link #saveConfig(Long, SyncConfig, String)} (see the comment
      * there — afterCommit writes would ride the completed transaction and vanish).
      */
-    private void applyStrategySwitch(Project project, CaptureStrategy to) {
+    private void applyStrategySwitch(Project project, CaptureStrategy from, CaptureStrategy to) {
         Long projectId = project.getId();
         if (to.isLogCdc()) {
             // BINLOG_CDC 与 LOGMINER_CDC 的切换序列完全一致:删 Quartz、清 cursor、
@@ -585,6 +601,14 @@ public class ProjectService {
             cdcManager.ensureStopped(projectId);
             stateWriter.clearCursor(projectId);
             scheduler.reschedule(project);
+        }
+        if (from == CaptureStrategy.PG_LOGICAL_CDC && to != CaptureStrategy.PG_LOGICAL_CDC) {
+            // Same leak as deleting the project (P0-5), but easier to miss: the row still
+            // exists, so there is still something to look at on our side while the slot
+            // pins WAL on the source. Runs after the stop above — PG refuses to drop a slot
+            // that is still active (55006).
+            releasePgSlot(projectId, project.getSourceDbId(),
+                    "switched away from PG logical CDC");
         }
     }
 
@@ -978,35 +1002,50 @@ public class ProjectService {
     /**
      * P0-5: a PG logical replication slot is a persistent object ON THE SOURCE — deleting
      * the project without dropping it leaves the source retaining WAL for a consumer that
-     * will never come back, until the disk fills. Best-effort on purpose: an unreachable
-     * source must not block the local delete (dropSlotQuietly already swallows and WARNs).
-     *
-     * <p>This is an external side effect inside a @Transactional method: if the local
-     * delete later rolls back, the slot stays gone. Accepted — the consumer's ensureSlot
-     * re-creates it on the next start (at the cost of a re-baseline, not of correctness).
+     * will never come back, until the disk fills.
      */
     private void releasePgSlotIfAny(Project project) {
         if (cdcManager.strategyOf(project) != CaptureStrategy.PG_LOGICAL_CDC) {
             return;
         }
-        Long sourceDbId = project.getSourceDbId();
+        releasePgSlot(project.getId(), project.getSourceDbId(), "deleted");
+    }
+
+    /**
+     * Best-effort drop of the project's PG logical slot on {@code sourceDbId}.
+     *
+     * <p>Every caller leaves the slot with no consumer for good: the project is deleted, its
+     * capture strategy moved away from PG logical decoding, or its source moved to another
+     * server. In all three the slot would pin every WAL segment after its restart point
+     * forever, on a database the running product no longer touches — nobody would think to
+     * look for it again.
+     *
+     * <p>Deliberately never throws: an unreachable source must not block the local change
+     * ({@code dropSlotQuietly} already swallows and WARNs). Called inside a
+     * {@code @Transactional} method, so on a later rollback the slot stays gone — accepted,
+     * because the consumer's {@code ensureSlot} re-creates it on the next start at the cost
+     * of a re-baseline, not of correctness.
+     *
+     * @param because short participle for the log line ({@code deleted},
+     *                {@code switched away from PG logical CDC}, {@code moved to another source})
+     */
+    private void releasePgSlot(Long projectId, Long sourceDbId, String because) {
         if (sourceDbId == null) {
-            log.warn("PG-logical project {} has no source database id; cannot release its"
-                    + " replication slot — drop it by hand on the source", project.getId());
+            log.warn("PG-logical project {} has no source database id ({}); cannot release"
+                    + " its replication slot — drop it by hand on the source", projectId, because);
             return;
         }
         DatabaseConfig source = databaseConfigRepository.findById(sourceDbId).orElse(null);
         if (source == null) {
-            log.warn("Source database {} of deleted PG-logical project {} is gone; cannot"
-                    + " release its replication slot — drop it by hand", sourceDbId,
-                    project.getId());
+            log.warn("Source database {} of PG-logical project {} is gone ({}); cannot release"
+                    + " its replication slot — drop it by hand", sourceDbId, projectId, because);
             return;
         }
         try (Connection conn = dataSourceManager.getConnection(source)) {
-            PgLogicalCdcConsumer.dropSlotQuietly(conn, project.getId(), properties);
+            PgLogicalCdcConsumer.dropSlotQuietly(conn, projectId, properties);
         } catch (SQLException | RuntimeException e) {
-            log.warn("Could not reach the source of deleted PG-logical project {} to release"
-                    + " its replication slot: {}", project.getId(), e.getMessage());
+            log.warn("Could not reach the source of PG-logical project {} ({}) to release its"
+                    + " replication slot: {}", projectId, because, e.getMessage());
         }
     }
 

@@ -644,6 +644,7 @@ Main settings in `application.yml` (the `sync.*` prefix):
 | `sync.cdc.logminer.batch-size` | `10000` | Rows per LogMiner read batch |
 | `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner sleep when the stream is truly idle |
 | `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL logical decoding idle sleep |
+| `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | Panel alert threshold for WAL held by the slot (4 GiB); `0` disables the alert but still shows the value |
 | `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC idle sleep |
 | `sync.cdc.change-window-ms` | `10000` | CDC change-log aggregation window per table; `0` disables aggregation |
 | `sync.lob.streaming-enabled` | `true` | Master switch for streaming large values |

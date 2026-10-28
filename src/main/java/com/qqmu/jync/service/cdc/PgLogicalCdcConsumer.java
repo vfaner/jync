@@ -91,13 +91,23 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     private volatile boolean running = true;
     private volatile Connection currentSource;
     /**
-     * Server dialect, decided per connection from the product name the server reports.
-     * Defaults to vanilla PostgreSQL so a failed metadata read can only reproduce the
+     * Server dialect, decided per connection from what the server's catalog can do (the
+     * product name is only the fallback — see {@link PgLogicalDialect#detectLive}).
+     * Defaults to vanilla PostgreSQL so a failed capability read can only reproduce the
      * pre-v1.9.0 behavior.
      */
     private volatile PgLogicalDialect dialect = PgLogicalDialect.POSTGRES;
 
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
+    /**
+     * Newest LSN whose transaction is committed to the target. Non-null means the source
+     * slot must already exist: a missing slot at that point (see {@code ensureSlot}) means
+     * the log between this position and now is unrecoverable.
+     */
+    private volatile String committedLsn;
+    /** Wall-clock-independent gate for the retained-WAL gauge (one query per 30 s). */
+    private long lastWalSampleNs;
+    private static final long WAL_SAMPLE_INTERVAL_NS = 30_000_000_000L;
     private final AtomicInteger parseFailures = new AtomicInteger();
     // F-10:连续失败周期计数(drain 抛异常的周期 +1,成功 flush 一个事务清零)。
     // 只覆盖解析失败的 parseFailures 拦不住「每周期必然失败的目标端写入」——典型是
@@ -166,7 +176,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 try (Connection slotConn =
                              dataSourceManager.getConnection(ctx.getSourceConfig())) {
                     dialect = dialectOf(slotConn);
-                    ensureSlot(slotConn, slotName);
+                    // No baselineDone position can exist on this branch, so a missing slot
+                    // is expected and gets created; pass null rather than a stale LSN.
+                    ensureSlot(slotConn, slotName, null);
                 }
                 baselineService.runBaseline(ctx, lock::renew);
                 position = positionStore.find(projectId).orElse(null);
@@ -175,7 +187,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 throw new IllegalStateException("PG logical baseline completed without a"
                         + " recorded LSN anchor; refusing to read from an unknown position");
             }
-            String lastLsn = position.getLsn();
+            committedLsn = position.getLsn();
             backoff = new CdcReconnectBackoff(
                     properties.getCdc().getReconnectBackoffMs(),
                     properties.getCdc().getReconnectBackoffMaxMs());
@@ -207,7 +219,8 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                     currentSource = conn;
                     dialect = dialectOf(conn);
-                    ensureSlot(conn, slotName);
+                    ensureSlot(conn, slotName, committedLsn);
+                    sampleRetainedWal(conn, slotName);
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
@@ -656,6 +669,10 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         }
         ctx.requireLease();
         positionStore.advanceLsn(projectId, commitLsn);
+        // Record the anchor only AFTER the target commit and the lease re-check: from this
+        // point the slot must keep existing, so the next cycle's ensureSlot treats a missing
+        // slot as an unrecoverable gap instead of quietly creating one at "now".
+        committedLsn = commitLsn;
         stats.recordPositionLsn(commitLsn);
         parseFailures.set(0);
         // F-10:一个事务完整落库即证明毒事务已消失(DBA 补了列/目标恢复),连续失败
@@ -688,7 +705,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
      * must propagate — swallowing it would spin the consumer on a slot that can
      * never appear.
      */
-    static void ensureSlot(Connection conn, String slotName) throws SQLException {
+    /**
+     * @param committedLsn the position already committed to the target, or null/blank
+     *                     before the first commit; see the purge guard below
+     */
+    static void ensureSlot(Connection conn, String slotName, String committedLsn)
+            throws SQLException {
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
                      "SELECT 1 FROM pg_replication_slots WHERE slot_name = '"
@@ -696,6 +718,22 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             if (rs.next()) {
                 return;
             }
+        }
+        // A slot that vanished while a committed position exists means the WAL between that
+        // position and now is already applied to the source but will never be read: the
+        // replacement slot starts at "now" and the stored LSN gets advanced from the new
+        // stream, so the gap is invisible and permanent. Creating the slot here (the old
+        // behaviour) turned that into a silently lossy project, so it parks instead.
+        // Triggers: operator cleanup, openGauss restart without enable_slot_log, a restored
+        // standby, or a WAL reset. The remedy is the same as every other PURGED case —
+        // rebuild the baseline from a fresh snapshot.
+        if (committedLsn != null && !committedLsn.isBlank()) {
+            throw new SQLException("PG cdc purge: replication slot '" + slotName
+                    + "' no longer exists on the source, but the project already committed"
+                    + " changes up to LSN " + committedLsn.trim()
+                    + ". Every change committed after that position is missing and cannot be"
+                    + " recovered from the log — rebuild the CDC baseline from a fresh"
+                    + " snapshot before capturing again.");
         }
         log.info("Creating PG logical replication slot '{}'", slotName);
         try (Statement st = conn.createStatement()) {
@@ -708,6 +746,78 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 return;
             }
             throw e;
+        }
+    }
+
+    /**
+     * Sample the slot's retained WAL at most once per interval.
+     *
+     * <p>The busy path polls every few milliseconds, and this needs a statement round-trip;
+     * a slow-changing disk-watermark value does not. 30 s keeps the panel current without
+     * measurable overhead on the source.
+     */
+    private void sampleRetainedWal(Connection conn, String slotName) {
+        if (!dialect.canMeasureRetainedWal()) {
+            // openGauss has no pg_lsn type, so the gauge's statement can never succeed
+            // there. Asking anyway would spend one round trip plus one log line every
+            // 30 seconds, forever, on a server we already know cannot answer.
+            return;
+        }
+        long now = System.nanoTime();
+        if (now - lastWalSampleNs < WAL_SAMPLE_INTERVAL_NS) {
+            return;
+        }
+        lastWalSampleNs = now;
+        Long bytes = readRetainedWalBytes(conn, slotName);
+        if (bytes == null) {
+            // Transient (the slot row was just verified on this very connection): leave the
+            // last value alone rather than flicker the row in and out of the panel.
+            return;
+        }
+        long warnBytes = properties.getCdc().getPg().getWalRetentionWarnBytes();
+        boolean crossed = stats.recordRetainedWal(bytes, warnBytes);
+        if (crossed) {
+            // The panel only helps someone looking at it. A slot that stops advancing —
+            // target down, consumer parked, flush slower than the write rate — fills the
+            // source disk, which takes the whole database down rather than just this
+            // project, so the crossing has to reach the log too. Once per crossing, not
+            // per sample: 2880 identical lines a day is noise, not a signal.
+            log.warn("PG slot '{}' of project {} is holding back {} of WAL, over the {} alert"
+                    + " threshold: nothing is consuming it, so the source keeps every WAL"
+                    + " segment after the slot's restart point. Check the target and the"
+                    + " project state; if the consumer cannot resume, rebuild the CDC baseline.",
+                    slotName, project.getId(), stats.getRetainedWalLabel(),
+                    CdcRuntimeStats.formatBytes(warnBytes));
+        }
+    }
+
+    /**
+     * How much WAL the slot is holding back, or null when the server cannot tell us.
+     *
+     * <p>One {@code pg_wal_lsn_diff} query, no writes: the value matters because a slot
+     * that stops advancing (target down, consumer parked, very slow flush) pins every WAL
+     * segment after {@code restart_lsn} and can fill the source disk — which then takes
+     * the whole database down, not just this project.
+     *
+     * <p>Null means "unknown", never zero. openGauss has no {@code pg_lsn} type, so the
+     * statement itself fails (42883 undefined_function) there; so does a missing slot row.
+     * A diagnostic gauge must never fail the replication cycle.
+     */
+    static Long readRetainedWalBytes(Connection conn, String slotName) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)"
+                             + " FROM pg_replication_slots WHERE slot_name = '"
+                             + slotName.replace("'", "''") + "'")) {
+            if (!rs.next()) {
+                return null;
+            }
+            long bytes = rs.getLong(1);
+            return rs.wasNull() ? null : bytes;
+        } catch (SQLException e) {
+            log.debug("Could not read the WAL retained by slot '{}' ({}); the panel will"
+                    + " leave the row out", slotName, e.getMessage());
+            return null;
         }
     }
 
@@ -741,31 +851,33 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
-     * Best-effort slot release for the project-delete path (P0-5). A replication slot
-     * outlives the process that created it: left behind, the source keeps WAL for it
-     * forever and the disk fills on account of a project nobody can see anymore.
+     * Best-effort slot release for every path that leaves the slot with no consumer: the
+     * project is deleted, its capture strategy moves away from PG logical decoding, or its
+     * source moves to another server. A replication slot outlives the process that created
+     * it — left behind, the source keeps WAL for it forever and the disk fills on account
+     * of a project nobody looks at anymore.
      *
-     * <p>Never throws — an unreachable source must not block the local delete; the
-     * failure is a WARN a DBA can act on (drop the slot by hand). Callers own the
-     * connection's lifecycle.
+     * <p>Never throws — an unreachable source must not block the local change; the failure
+     * is a WARN a DBA can act on (drop the slot by hand). Callers own the connection's
+     * lifecycle, and must have stopped the consumer first: PG refuses to drop a slot that
+     * is still active (55006).
      */
     public static void dropSlotQuietly(Connection conn, long projectId, SyncProperties properties) {
         // slotName() inside the try: P2-10 validation throws IllegalStateException for
-        // an off-whitelist prefix, and the "never blocks a project delete" contract
-        // still holds — the WARN names the prefix instead of the slot.
+        // an off-whitelist prefix, and the "never blocks the caller" contract still holds
+        // — the WARN names the prefix instead of the slot.
         String slotName = null;
         try {
             slotName = slotName(projectId, properties);
             try (Statement st = conn.createStatement()) {
                 st.execute("SELECT pg_drop_replication_slot('"
                         + slotName.replace("'", "''") + "')");
-                log.info("Released PG replication slot '{}' of deleted project {}",
-                        slotName, projectId);
+                log.info("Released PG replication slot '{}' of project {}", slotName, projectId);
             }
         } catch (SQLException | RuntimeException e) {
-            log.warn("Could not release PG replication slot '{}' on the source (project {}"
-                    + " deleted anyway): {} — drop it by hand or the source WAL will grow"
-                    + " without bound", slotName, projectId, e.getMessage());
+            log.warn("Could not release PG replication slot '{}' on the source (project {}):"
+                    + " {} — drop it by hand or the source WAL will grow without bound",
+                    slotName, projectId, e.getMessage());
         }
     }
 

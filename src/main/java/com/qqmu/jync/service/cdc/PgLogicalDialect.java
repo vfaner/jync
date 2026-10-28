@@ -61,7 +61,7 @@ enum PgLogicalDialect {
             "SELECT end_lsn::text FROM pg_replication_slot_advance("
                     + "?::name, ?::pg_lsn)",
             "SELECT pg_current_wal_lsn()::text",
-            true),
+            true /* has pg_lsn */),
 
     /**
      * openGauss 5.0.0, measured on {@code opengauss/opengauss:5.0.0}: the slot view
@@ -82,19 +82,24 @@ enum PgLogicalDialect {
             "SELECT end_lsn::text FROM pg_replication_slot_advance(?::name, ?::text)",
             // openGauss forked PG 9.2: the WAL-position function keeps its pre-10 name.
             "SELECT pg_current_xlog_location()::text",
-            false);
+            false /* no pg_lsn type at all */);
 
     private final String peekChangesSql;
     private final String advanceSlotSql;
     private final String currentLsnSql;
-    private final boolean requiresReplicationRole;
+
+    /**
+     * Whether the server has the {@code pg_lsn} type — the single catalog fact that splits
+     * the two dialects, and the one every derived capability below is built on.
+     */
+    private final boolean pgLsnType;
 
     PgLogicalDialect(String peekChangesSql, String advanceSlotSql, String currentLsnSql,
-                     boolean requiresReplicationRole) {
+                     boolean pgLsnType) {
         this.peekChangesSql = peekChangesSql;
         this.advanceSlotSql = advanceSlotSql;
         this.currentLsnSql = currentLsnSql;
-        this.requiresReplicationRole = requiresReplicationRole;
+        this.pgLsnType = pgLsnType;
     }
 
     static PgLogicalDialect detect(String productName) {
@@ -189,7 +194,15 @@ enum PgLogicalDialect {
         return currentLsnSql;
     }
 
-    boolean requiresReplicationRole() {
-        return requiresReplicationRole;
+    /**
+     * Whether this server can report how much WAL a slot holds back — the status panel's
+     * gauge, {@code pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)}. All three names
+     * arrived together with the {@code pg_lsn} type (PostgreSQL 10 renamed them from
+     * {@code pg_current_xlog_location}/{@code pg_xlog_location_diff}); openGauss, a 9.2
+     * fork, has none of them, so the consumer skips the sample there instead of sending a
+     * query that can never succeed every 30 seconds.
+     */
+    boolean canMeasureRetainedWal() {
+        return pgLsnType;
     }
 }

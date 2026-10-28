@@ -225,6 +225,15 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     }
                     lastFailure.compareAndSet(null, e);
                     drained = 0;
+                    // A cycle can commit transactions and then die (stream reset, network
+                    // drop, target hiccup on a later transaction). The successful path below
+                    // is the only place that raises the local anchor, so without this the
+                    // next session re-mines from the cycle's starting SCN: every already
+                    // committed transaction is replayed against the target (idempotent, but
+                    // real write work) and advanceScn's "refusing to rewind" guard logs a
+                    // WARN per transaction for the whole backoff window. The store already
+                    // holds the committed SCN — one query per FAILED cycle is cheap.
+                    lastScn = refreshedAnchor(projectId, lastScn);
                     // The mining loop opens a connection per cycle, so "connected" cannot be
                     // tied to the connection's lifetime: between cycles there is none, and the
                     // panel would show 已断开 for almost the whole run of a healthy consumer.
@@ -675,6 +684,28 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     private boolean applyStrikeOut() {
         return applyFailures.get() > MAX_APPLY_FAILURES;
+    }
+
+    /**
+     * The SCN to mine from after a failed cycle: the stored position when it moved past the
+     * local anchor during that cycle, the anchor otherwise.
+     *
+     * <p>Only moves forward — a store that lags (a node that lost the lease, an older
+     * position row) must never drag the mining window backwards. A lookup failure is not
+     * worth a cycle: the old anchor replays idempotently, which is exactly what happened
+     * before this existed.
+     */
+    private long refreshedAnchor(long projectId, long anchor) {
+        try {
+            return positionStore.find(projectId)
+                    .map(CdcPosition::getScn)
+                    .filter(scn -> scn != null && scn > anchor)
+                    .orElse(anchor);
+        } catch (RuntimeException e) {
+            log.debug("Could not re-read the position for project {} after a failed cycle: {}",
+                    projectId, e.getMessage());
+            return anchor;
+        }
     }
 
     private void fatalStop(long projectId, Throwable failure,

@@ -2,8 +2,11 @@ package com.qqmu.jync.controller;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.HttpHeaders;
@@ -20,8 +23,10 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.dto.bulk.BulkPlan;
 import com.qqmu.jync.dto.bulk.BulkPlanRequest;
+import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.bulk.BulkPlanService;
 
@@ -57,7 +62,7 @@ public class BulkProjectController {
 
     @GetMapping
     public String form(Model model) {
-        addOptions(model);
+        addOptions(model, null);
         return "bulk-plan";
     }
 
@@ -79,7 +84,7 @@ public class BulkProjectController {
             model.addAttribute("error", e.getMessage());
         }
         model.addAttribute("request", request);
-        addOptions(model);
+        addOptions(model, sourceDbId);
         return "bulk-plan";
     }
 
@@ -133,14 +138,73 @@ public class BulkProjectController {
         }
     }
 
-    /** Source/target selectors list only connections classified for that role. */
-    private void addOptions(Model model) {
+    /**
+     * Source/target selectors list only connections classified for that role, and each source
+     * carries the capture strategies it can actually run.
+     *
+     * <p>Two consumers of that list: the page's script narrows the dropdown the moment the
+     * source changes ({@code data-strategies} on each option), and a no-JS submit gets the
+     * same narrowing server-side through {@code selectedStrategies}. Both come from
+     * {@link CaptureStrategyParser#supportedFor}, the same rules the save path enforces, so
+     * the page cannot offer a strategy that creating a task would refuse.
+     *
+     * <p>{@code selectedStrategies} leaves out {@link CaptureStrategy#POLLING} because the
+     * dropdown's default entry <em>is</em> polling; listing it twice would just ask the user
+     * to choose between two identical outcomes.
+     */
+    private void addOptions(Model model, Long sourceDbId) {
         List<DatabaseConfig> sources = new ArrayList<>(
                 databaseConfigService.findByRole(ConnectionRole.SOURCE));
         List<DatabaseConfig> targets = new ArrayList<>(
                 databaseConfigService.findByRole(ConnectionRole.TARGET));
+
+        Map<Long, List<CaptureStrategy>> supported = new LinkedHashMap<>();
+        for (DatabaseConfig db : sources) {
+            supported.put(db.getId(),
+                    CaptureStrategyParser.supportedFor(db.getType(), db.resolvedFamily()));
+        }
+        Map<Long, String> asAttribute = new LinkedHashMap<>();
+        supported.forEach((id, strategies) -> asAttribute.put(id, strategies.stream()
+                .map(Enum::name).collect(Collectors.joining(","))));
+
+        List<CaptureStrategy> selected = null;
+        if (sourceDbId != null) {
+            selected = supported.getOrDefault(sourceDbId, List.of()).stream()
+                    .filter(strategy -> strategy != CaptureStrategy.POLLING)
+                    .collect(Collectors.toList());
+        }
+
+        Locale locale = LocaleContextHolder.getLocale();
+        Map<String, String> labels = new LinkedHashMap<>();
+        for (CaptureStrategy strategy : CaptureStrategy.values()) {
+            labels.put(strategy.name(), messages.get(labelKey(strategy), locale));
+        }
+
         model.addAttribute("sourceDatabases", sources);
         model.addAttribute("targetDatabases", targets);
+        model.addAttribute("sourceStrategies", asAttribute);
+        model.addAttribute("selectedStrategies", selected);
+        model.addAttribute("strategyLabels", labels);
+    }
+
+    /** The i18n key for a strategy's display name (the same keys the detail page uses). */
+    static String labelKey(CaptureStrategy strategy) {
+        switch (strategy) {
+            case POLLING:
+                return "project.strategy.polling.name";
+            case FULL_COMPARE:
+                return "project.strategy.fullcompare.name";
+            case BINLOG_CDC:
+                return "project.strategy.cdc.name";
+            case LOGMINER_CDC:
+                return "project.strategy.logminer.name";
+            case PG_LOGICAL_CDC:
+                return "project.strategy.pg.name";
+            case SQLSERVER_CDC:
+                return "project.strategy.sqlserver.name";
+            default:
+                throw new IllegalStateException("Unlabelled capture strategy: " + strategy);
+        }
     }
 
     private BulkPlanService.CsvLabels csvLabels() {

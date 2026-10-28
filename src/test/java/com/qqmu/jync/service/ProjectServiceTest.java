@@ -12,6 +12,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.sql.Connection;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -31,6 +33,8 @@ import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
+import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
@@ -691,6 +695,45 @@ class ProjectServiceTest {
         verify(syncEngine).resetProject(1L);
         verify(checkpointRepository).deleteByProjectId(1L);
         verify(positionStore).delete(1L);
+    }
+
+    /**
+     * 换源库同样要释放旧源上的 PG 逻辑槽:位点已经就地清空(下一次启动必然重跑基线),
+     * 槽子却会留在旧源上无限保留 WAL —— 而项目从此再也连不到那个库,谁也不会想起它。
+     */
+    @Test
+    void changingTheSourceOfAPgLogicalProjectReleasesTheOldSlot() throws Exception {
+        Project existing = storedProject(1L, false);
+        existing.setSyncConfig("{\"captureStrategy\":\"PG_LOGICAL_CDC\"}");
+        stubExisting(existing);
+        DatabaseConfig oldSource = new DatabaseConfig();
+        oldSource.setId(10L);
+        oldSource.setType(DatabaseType.POSTGRESQL);
+        when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(oldSource));
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(dataSourceManager.getConnection(oldSource)).thenReturn(conn);
+
+        Project incoming = formProject(1L);
+        incoming.setSourceDbId(11L);           // 换了源库,目标不变
+        service.save(incoming);
+
+        verify(st).execute(contains("pg_drop_replication_slot('jync_1')"));
+        verify(conn).close();
+    }
+
+    /** 轮询任务的换源不需要碰任何一台服务器:没有槽可释放。 */
+    @Test
+    void changingTheSourceOfAPollingProjectTouchesNoServer() throws Exception {
+        Project existing = storedProject(1L, false);
+        stubExisting(existing);
+        Project incoming = formProject(1L);
+        incoming.setSourceDbId(11L);
+
+        service.save(incoming);
+
+        verify(dataSourceManager, never()).getConnection(any());
     }
 
     @Test

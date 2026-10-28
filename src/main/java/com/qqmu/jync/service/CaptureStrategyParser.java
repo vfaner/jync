@@ -1,6 +1,8 @@
 package com.qqmu.jync.service;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -112,6 +114,39 @@ public final class CaptureStrategyParser {
             throw new IllegalArgumentException("error.project.cdc.not.sqlserver");
         }
         return strategy;
+    }
+
+    /**
+     * The strategies the bulk-create page may offer for a source, in display order.
+     *
+     * <p>Derived from {@link #parseRequested} by construction — each candidate is run
+     * through the same gate — so the page can never list an option the save path would
+     * refuse. The listing may be <em>narrower</em> than the gate: YashanDB passes the
+     * LogMiner family gate yet has no {@code DBMS_LOGMNR} (measured, see
+     * {@code docs/dm-logminer-spike.md} §7), and offering it would only produce a probe
+     * failure after the user has committed to a batch of tasks.
+     *
+     * <p>The family is a parameter rather than derived from {@code sourceType} on purpose:
+     * a {@code CUSTOM} connection's preset family is {@code GENERIC}, and only
+     * {@link com.qqmu.jync.model.DatabaseConfig#resolvedFamily()} knows the family it
+     * actually declares. A caller that cannot resolve it passes null and gets the
+     * type-agnostic pair, which is the honest answer.
+     */
+    public static List<CaptureStrategy> supportedFor(DatabaseType sourceType,
+                                                     DatabaseType.DialectFamily sourceFamily) {
+        List<CaptureStrategy> supported = new ArrayList<>();
+        for (CaptureStrategy strategy : CaptureStrategy.values()) {
+            if (strategy == CaptureStrategy.LOGMINER_CDC && sourceType == DatabaseType.YASHANDB) {
+                continue;
+            }
+            try {
+                parseRequested(strategy.name(), sourceType, sourceFamily);
+                supported.add(strategy);
+            } catch (IllegalArgumentException e) {
+                // Not supported for this source — simply not offered.
+            }
+        }
+        return List.copyOf(supported);
     }
 
     /** @param projectId when known, only used to make the degrade warning actionable. */

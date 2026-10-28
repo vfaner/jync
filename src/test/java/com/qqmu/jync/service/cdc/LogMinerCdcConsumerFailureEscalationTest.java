@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -27,6 +28,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -335,6 +337,77 @@ class LogMinerCdcConsumerFailureEscalationTest {
 
         verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
         assertThat(targetRowCount()).isEqualTo(1);
+    }
+
+    private static LogMinerSession.Row insertRow(long csn, String name) {
+        String redo = "insert into \"SRC\".\"ORDERS\"(\"ID\",\"NAME\") values ('"
+                + csn + "','" + name + "');";
+        return new LogMinerSession.Row("rs", csn, "INSERT", "SRC", "ORDERS", redo,
+                new Timestamp(System.currentTimeMillis()), 0);
+    }
+
+    /**
+     * 一个周期里先提交了事务、随后源端断流:catch 不刷新 lastScn,下一轮仍从旧锚点
+     * 开挖,重放已经落库的 CSCN —— advanceScn 每次拒绝回退,目标端白做一遍,日志被
+     * WARN 刷满整个退避期。修复:失败周期从位点库读回已提交的 SCN 作为新锚点。
+     */
+    @Test
+    void aCycleThatCommittedBeforeFailingReanchorsFromThePositionStore() throws Exception {
+        AtomicLong stored = new AtomicLong(1_000L);
+        when(positionStore.find(1L)).thenAnswer(inv -> {
+            CdcPosition copy = new CdcPosition();
+            copy.setProjectId(1L);
+            copy.setBaselineDone(true);
+            copy.setScn(stored.get());
+            return java.util.Optional.of(copy);
+        });
+        doAnswer(inv -> {
+            stored.set(inv.getArgument(1));
+            return null;
+        }).when(positionStore).advanceScn(eq(1L), anyLong());
+
+        LogMinerSession committingThenFailing =
+                new LogMinerSession(null, 1_000L, 1_000L, null, null) {
+                    private int call;
+
+                    @Override
+                    public List<LogMinerSession.Row> nextBatch() throws SQLException {
+                        call++;
+                        if (call == 1) {
+                            // Two CSCNs: the change of key flushes 1001 to the target.
+                            return List.of(insertRow(1_001L, "row-1"),
+                                    insertRow(1_002L, "row-2"));
+                        }
+                        throw new SQLException("source stream reset");
+                    }
+
+                    @Override
+                    public long highWaterScn() {
+                        return 1_002L;
+                    }
+
+                    @Override
+                    public void close() {
+                        // real close() runs END_LOGMNR on the super's (null) connection
+                    }
+                };
+        List<Long> anchors = new ArrayList<>();
+        LogMinerSessionFactory factory = (c, startScn, b) -> {
+            anchors.add(startScn);
+            return anchors.size() == 1 ? committingThenFailing : emptySession();
+        };
+
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("lm-1");
+        LogMinerCdcConsumer consumer = new LogMinerCdcConsumer(project, boundedLock(2),
+                stagedTargetContext(true), positionStore, mock(CdcBaselineService.class),
+                taskStore, mock(SyncStateWriter.class), dataSourceManager,
+                new CdcRuntimeStats(), properties, factory);
+
+        consumer.run();
+
+        assertThat(anchors).containsExactly(1_000L, 1_001L);
     }
 
     /** 一个不含任何变更的会话。 */

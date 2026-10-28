@@ -38,6 +38,7 @@ import com.qqmu.jync.dto.bulk.TableEntry;
 import com.qqmu.jync.dto.bulk.TaskPlan;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.bulk.BulkPlanService;
 
@@ -95,6 +96,66 @@ class BulkProjectControllerTest {
                 .andExpect(view().name("bulk-plan"))
                 .andExpect(model().attribute("sourceDatabases", List.of(source)))
                 .andExpect(model().attribute("targetDatabases", List.of(target)));
+    }
+
+    @Test
+    void theFormTellsThePageWhichStrategiesEachSourceSupports() throws Exception {
+        DatabaseConfig oracle = config(1L, "oracle测试");
+        oracle.setType(DatabaseType.ORACLE);
+        DatabaseConfig yashan = config(3L, "崖山");
+        yashan.setType(DatabaseType.YASHANDB);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(oracle, yashan));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET))
+                .thenReturn(List.of());
+
+        mvc.perform(get("/projects/bulk"))
+                .andExpect(status().isOk())
+                // Each source option carries the strategies it can actually run, so the
+                // page can narrow the dropdown the moment the source changes.
+                .andExpect(content().string(containsString(
+                        "data-strategies=\"POLLING,FULL_COMPARE,LOGMINER_CDC\"")))
+                // YashanDB has no LogMiner (measured) — its option promises only the
+                // type-agnostic strategies.
+                .andExpect(content().string(containsString(
+                        "data-strategies=\"POLLING,FULL_COMPARE\"")));
+    }
+
+    /**
+     * 下拉框重建时用的标签必须就是服务端那一份:脚本里再抄一遍枚举→文案的映射,新增一种
+     * 采集方式时漏改一处,前端就会把它当成"没有标签"从下拉框里悄悄扔掉(脚本的解码
+     * 条件是 {@code !labels[name] → 跳过})。这条钉住服务端把整张表内联给页面。
+     */
+    @Test
+    void thePageInlinesTheServerStrategyLabelsInsteadOfItsOwnCopy() throws Exception {
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE)).thenReturn(List.of());
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET)).thenReturn(List.of());
+
+        mvc.perform(get("/projects/bulk"))
+                .andExpect(status().isOk())
+                // 内联后的对象字面量(引号由 Thymeleaf 的 JS 序列化器加上)。
+                .andExpect(content().string(containsString("\"LOGMINER_CDC\":\"")))
+                .andExpect(content().string(containsString("\"PG_LOGICAL_CDC\":\"")));
+    }
+
+    @Test
+    void theStrategyListFollowsTheSelectedSourceOnReRender() throws Exception {        DatabaseConfig oracle = config(1L, "oracle测试");
+        oracle.setType(DatabaseType.ORACLE);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(oracle));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET))
+                .thenReturn(List.of());
+        when(bulkPlanService.plan(any())).thenReturn(samplePlan());
+
+        mvc.perform(post("/projects/bulk/preview").with(csrf())
+                        .param("sourceDbId", "1")
+                        .param("targetDbId", "2")
+                        .param("taskCount", "3")
+                        .param("namePrefix", "批量任务"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("value=\"LOGMINER_CDC\"")))
+                // A no-JS submit must not be shown a binlog option the save path refuses.
+                .andExpect(content().string(not(containsString("value=\"BINLOG_CDC\""))));
     }
 
     @Test

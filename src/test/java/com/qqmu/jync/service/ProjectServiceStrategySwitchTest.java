@@ -7,10 +7,13 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.sql.Connection;
+import java.sql.Statement;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -102,6 +105,23 @@ class ProjectServiceStrategySwitchTest {
         return p;
     }
 
+    /** Same shape as {@link #mysqlProject}, with a PostgreSQL source (PG logical CDC's family). */
+    private Project pgProject(String currentStrategyJson) {
+        Project p = new Project();
+        p.setId(1L);
+        p.setName("proj");
+        p.setSourceDbId(5L);
+        p.setEnabled(true);
+        p.setSyncConfig(currentStrategyJson);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(p));
+        DatabaseConfig source = new DatabaseConfig();
+        source.setType(DatabaseType.POSTGRESQL);
+        when(databaseConfigRepository.findById(5L)).thenReturn(Optional.of(source));
+        lenient().when(contextFactory.serializeConfig(any())).thenReturn("{\"captureStrategy\":\"NEW\"}");
+        lenient().when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        return p;
+    }
+
     @Test
     void switchToCdcOnNonMysqlRejected() {
         mysqlProject("{\"captureStrategy\":\"POLLING\"}");
@@ -172,6 +192,38 @@ class ProjectServiceStrategySwitchTest {
         verify(positionStore, never()).delete(anyLong()); // C2:CDC→轮询保留位点
         verify(auditService).record(eq(AuditAction.PROJECT_CAPTURE_SWITCH),
                 contains("BINLOG_CDC -> POLLING"));
+    }
+
+    /**
+     * PG 逻辑槽是源库上的持久对象:切走策略后没有消费者再来,槽却会让源库无限保留
+     * WAL,直到磁盘写满(整库不可用)。删除任务早已释放(P0-5);「切走」曾经不释放 ——
+     * 槽子留在源库里,页面上再也看不到这个任务,谁也不会去手工 drop。
+     */
+    @Test
+    void switchingAwayFromPgLogicalReleasesTheSlotOnTheSource() throws Exception {
+        pgProject("{\"captureStrategy\":\"PG_LOGICAL_CDC\"}");
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(dataSourceManager.getConnection(any())).thenReturn(conn);
+
+        service.saveConfig(1L, new SyncConfig(), "POLLING");
+
+        // 顺序要紧:槽是 active 时 DROP 会被服务器拒(55006),必须先停消费者。
+        InOrder order = inOrder(cdcManager, st);
+        order.verify(cdcManager).ensureStopped(1L);
+        order.verify(st).execute(contains("pg_drop_replication_slot('jync_1')"));
+        verify(conn).close();                             // 用完即还,不占源库连接
+    }
+
+    /** 非 PG 的策略切换一律不碰源库:一个多余的全新连接也是多余的风险。 */
+    @Test
+    void switchingBinlogAwayNeverTouchesTheSource() throws Exception {
+        mysqlProject("{\"captureStrategy\":\"BINLOG_CDC\"}");
+
+        service.saveConfig(1L, new SyncConfig(), "POLLING");
+
+        verify(dataSourceManager, never()).getConnection(any());
     }
 
     @Test

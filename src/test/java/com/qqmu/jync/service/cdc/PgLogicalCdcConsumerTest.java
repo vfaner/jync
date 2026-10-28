@@ -92,7 +92,7 @@ class PgLogicalCdcConsumerTest {
                 .thenThrow(new SQLException(
                         "replication slot \"jync_1\" already exists", "42710"));
 
-        assertThatCode(() -> PgLogicalCdcConsumer.ensureSlot(conn, "jync_1"))
+        assertThatCode(() -> PgLogicalCdcConsumer.ensureSlot(conn, "jync_1", null))
                 .doesNotThrowAnyException();
     }
 
@@ -110,7 +110,7 @@ class PgLogicalCdcConsumerTest {
                 .thenThrow(new SQLException("permission denied to create replication slot",
                         "42501"));
 
-        assertThatThrownBy(() -> PgLogicalCdcConsumer.ensureSlot(conn, "jync_1"))
+        assertThatThrownBy(() -> PgLogicalCdcConsumer.ensureSlot(conn, "jync_1", null))
                 .isInstanceOf(SQLException.class)
                 .hasMessageContaining("permission denied");
     }

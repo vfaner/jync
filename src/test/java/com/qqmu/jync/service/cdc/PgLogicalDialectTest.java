@@ -147,9 +147,14 @@ class PgLogicalDialectTest {
                 .doesNotContain("::pg_lsn");
     }
 
+    /**
+     * 滞留 WAL 的读数靠 {@code pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)},三个
+     * 名字都建立在 {@code pg_lsn} 类型之上 —— 9.2 血统的 openGauss 一个都没有。对一个
+     * 不可能成功的服务器每 30 秒发一条注定失败的查询(外加一条日志)纯属浪费,直接不问。
+     */
     @Test
-    void onlyVanillaPostgresRequiresTheReplicationAttribute() {
-        assertThat(PgLogicalDialect.POSTGRES.requiresReplicationRole()).isTrue();
-        assertThat(PgLogicalDialect.OPENGAUSS.requiresReplicationRole()).isFalse();
+    void onlyThePostgresDialectCanMeasureTheRetainedWal() {
+        assertThat(PgLogicalDialect.POSTGRES.canMeasureRetainedWal()).isTrue();
+        assertThat(PgLogicalDialect.OPENGAUSS.canMeasureRetainedWal()).isFalse();
     }
 }
