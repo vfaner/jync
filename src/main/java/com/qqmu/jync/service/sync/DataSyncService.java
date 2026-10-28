@@ -619,7 +619,8 @@ public class DataSyncService {
         private final long sourceRows;
         private final long targetRows;
 
-        private RowCountAudit(long sourceRows, long targetRows) {
+        // Package-private so the engine's tests can hand one back from a mocked audit.
+        RowCountAudit(long sourceRows, long targetRows) {
             this.sourceRows = sourceRows;
             this.targetRows = targetRows;
         }

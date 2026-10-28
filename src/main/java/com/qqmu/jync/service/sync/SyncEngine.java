@@ -1039,12 +1039,20 @@ public class SyncEngine {
         // 目标少了就把游标清掉，让下一轮重新全量读一遍。
         // 用审计返回的实例继续：一旦它清了游标，修复是在自己的事务里提交的，
         // 只有返回的那个实例带着新版本号，旧引用再写就会撞乐观锁。
-        progress = auditRowCounts(table, sourceConn, targetConn, strategy, progress, ctx);
+        AuditedProgress audited = auditRowCounts(table, sourceConn, targetConn, strategy,
+                progress, ctx);
+        progress = audited.progress();
+        // The repair this cycle's audit performed, if any. It is reported exactly once: folded
+        // into the entry that reports the reload it triggered, or — when there is no such entry
+        // — on its own. Both paths null it out, which is what keeps one repair off the log twice.
+        AuditRepair repair = audited.repair();
 
         DataSyncService.TableSyncResult tableResult = dataSync.syncTable(
                 sourceConn, targetConn, table, strategy, progress, ctx);
 
         if (tableResult.isSkipped()) {
+            // Nothing will report the reload, so the repair explains the vanished cursor itself.
+            reportAuditRepair(ctx, table, repair);
             // Previously this was a debug-only line: a table silently standing still looked
             // identical to a table with nothing to do. Carry it on the result so the run
             // summary and the sync-now response name the table and the reason.
@@ -1062,6 +1070,9 @@ public class SyncEngine {
         }
 
         if (!tableResult.isSuccess()) {
+            // The failure is filed below; the repair that cleared the cursor needs its own line
+            // or the next cycle's full load would look like it came from nowhere.
+            reportAuditRepair(ctx, table, repair);
             result.addError(table.getName() + ": " + tableResult.getError());
             stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
                     ChangeType.ERROR, tableResult.getError(), false,
@@ -1139,14 +1150,19 @@ public class SyncEngine {
             if (inserted > 0) {
                 result.setRowsInserted(result.getRowsInserted() + inserted);
                 recordDataLog(ctx, table, strategy, tableResult, ChangeType.INSERT, inserted,
-                        durationMs);
+                        durationMs, causeOf(repair));
+                repair = null;
             }
             if (updated > 0) {
                 result.setRowsUpdated(result.getRowsUpdated() + updated);
                 recordDataLog(ctx, table, strategy, tableResult, ChangeType.UPDATE, updated,
-                        durationMs);
+                        durationMs, causeOf(repair));
+                repair = null;
             }
         }
+        // A repair whose reload changed nothing still has to be on the record: it is the only
+        // trace of why the cursor was cleared.
+        reportAuditRepair(ctx, table, repair);
         if (deleted > 0) {
             result.setRowsDeleted(result.getRowsDeleted() + deleted);
             stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
@@ -1192,13 +1208,15 @@ public class SyncEngine {
      *
      * <p>Returns the progress instance the cycle must continue with: a repair commits in its
      * own transaction and bumps the row's version, so the instance handed in here is stale
-     * afterwards whenever the cursor was actually cleared.
+     * afterwards whenever the cursor was actually cleared. The repair itself comes back with it,
+     * unwritten, so the cycle can file it once rather than twice.
      */
-    private SyncProgress auditRowCounts(TableMeta table, Connection sourceConn, Connection targetConn,
-                                        CursorStrategy strategy, SyncProgress progress, SyncContext ctx) {
+    private AuditedProgress auditRowCounts(TableMeta table, Connection sourceConn,
+                                           Connection targetConn, CursorStrategy strategy,
+                                           SyncProgress progress, SyncContext ctx) {
         long interval = properties.getRowCountAuditIntervalMs();
         if (interval <= 0) {
-            return progress;
+            return AuditedProgress.unrepaired(progress);
         }
         // COUNT(*) is a full index scan on InnoDB, and the poll cycle is measured in seconds.
         // Throttling per table keeps the audit's cost proportional to its usefulness.
@@ -1206,7 +1224,7 @@ public class SyncEngine {
         long now = System.currentTimeMillis();
         Long previous = lastRowCountAudit.get(key);
         if (previous != null && now - previous < interval) {
-            return progress;
+            return AuditedProgress.unrepaired(progress);
         }
         try {
             DataSyncService.RowCountAudit audit = dataSync.auditSyncedRowCounts(
@@ -1215,7 +1233,7 @@ public class SyncEngine {
             // away the retry for a whole interval when the check itself errored.
             lastRowCountAudit.put(key, now);
             if (audit == null || !audit.isTargetShort()) {
-                return progress;
+                return AuditedProgress.unrepaired(progress);
             }
             long missing = audit.getSourceRows() - audit.getTargetRows();
             // Read before clearing: clearCursor nulls this field on the same instance.
@@ -1224,18 +1242,70 @@ public class SyncEngine {
                             + " but target has {} — forcing a full reload of this table",
                     table.getName(), audit.getSourceRows(), cursor, audit.getTargetRows());
             progress = stateWriter.clearCursor(progress);
-            stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
-                    ChangeType.INFO,
-                    "Row count audit: target is missing " + missing + " row(s) already marked as"
-                            + " synced (source " + audit.getSourceRows() + " vs target "
-                            + audit.getTargetRows() + " at or below cursor " + cursor
-                            + "). Cursor cleared; the table will be fully reloaded.",
-                    true, 0, (int) Math.min(missing, Integer.MAX_VALUE));
+            // Deliberately not filed here: the reload that follows is this repair's visible
+            // half, and filing both turned one backfilled row into two log lines.
+            return new AuditedProgress(progress, new AuditRepair(missing,
+                    audit.getSourceRows(), audit.getTargetRows(), cursor));
         } catch (SQLException e) {
             // Worth knowing about, but not worth failing the table over.
             log.warn("Row count audit could not run for {}: {}", table.getName(), e.getMessage());
         }
-        return progress;
+        return AuditedProgress.unrepaired(progress);
+    }
+
+    /**
+     * Files a row-count repair for a cycle whose data phase leaves no entry to carry it.
+     *
+     * <p>A repair is one event: normally the reload writes an entry that says what arrived, and
+     * the repair's counts ride along as its cause. This standalone entry covers the cycles where
+     * that entry never comes — the reload changed nothing, was skipped, or failed — so the
+     * cleared cursor always has a reason on the record.
+     */
+    private void reportAuditRepair(SyncContext ctx, TableMeta table, AuditRepair repair) {
+        if (repair == null) {
+            return;
+        }
+        stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
+                ChangeType.INFO, repair.entry(), true, 0,
+                (int) Math.min(repair.missing(), Integer.MAX_VALUE));
+    }
+
+    private static String causeOf(AuditRepair repair) {
+        return repair == null ? null : repair.cause();
+    }
+
+    /** The progress to continue with, plus the repair this cycle's audit performed (if any). */
+    private record AuditedProgress(SyncProgress progress, AuditRepair repair) {
+        static AuditedProgress unrepaired(SyncProgress progress) {
+            return new AuditedProgress(progress, null);
+        }
+    }
+
+    /**
+     * A row-count repair: what the audit found when it cleared the cursor.
+     *
+     * <p>Kept as data rather than written out immediately so the cycle can report the repair once
+     * — as the cause of the entry that reports the reload, or on its own when there is none.
+     */
+    private record AuditRepair(long missing, long sourceRows, long targetRows, String cursor) {
+
+        /** The whole entry, for a cycle whose repair produced no data entry of its own. */
+        String entry() {
+            return "Row count audit: target is missing " + missing + " row(s) already marked as"
+                    + " synced (" + counts() + "). Cursor cleared; the table will be fully"
+                    + " reloaded.";
+        }
+
+        /** The cause, appended to the entry that reports the reload this repair triggered. */
+        String cause() {
+            return " — row count audit: target was missing " + missing + " row(s) already marked"
+                    + " as synced (" + counts() + "); cursor cleared and the table reloaded";
+        }
+
+        private String counts() {
+            return "source " + sourceRows + " vs target " + targetRows
+                    + " at or below cursor " + cursor;
+        }
     }
 
     /**
@@ -1244,10 +1314,13 @@ public class SyncEngine {
      * <p>Full-compare rescans a whole table to find a handful of changes, so the scan size is
      * stated alongside the change count whenever the two differ: "1 row(s) (51 scanned)" says
      * what the cycle achieved and what it cost, where "1 row(s)" alone would hide the latter.
+     *
+     * <p>{@code cause} (nullable) appends the reason this load happened at all, which is how a
+     * row-count repair is reported without a second entry for the same event.
      */
     private void recordDataLog(SyncContext ctx, TableMeta table, CursorStrategy strategy,
                                DataSyncService.TableSyncResult tableResult, ChangeType changeType,
-                               long rows, long durationMs) {
+                               long rows, long durationMs, String cause) {
         String scanned = scanDetail(rows, tableResult.getRowsChanged(),
                 tableResult.getRowsWritten(), tableResult.isInitialLoad());
         String phase = tableResult.isInitialLoad() ? "Initial load: " : "Incremental sync: ";
@@ -1255,7 +1328,8 @@ public class SyncEngine {
         stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(), changeType,
                 phase + rows + " row(s)" + verb + scanned + " via "
                         + strategy.getKind().name().toLowerCase() + " strategy"
-                        + (strategy.getColumn() != null ? " on " + strategy.getColumn() : ""),
+                        + (strategy.getColumn() != null ? " on " + strategy.getColumn() : "")
+                        + (cause != null ? cause : ""),
                 true, durationMs, affectedRows(rows));
     }
 
