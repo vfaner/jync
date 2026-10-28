@@ -107,6 +107,54 @@ class PgLogicalReplicationCdcProbeTest {
         assertThat(check(result, CdcProbeResult.PG_REPLICA_IDENTITY).isPassed()).isTrue();
     }
 
+    // —— v1.9.0:PG 家族（openGauss）——
+
+    /** 重新 stub 产品名:方言判定只看服务器自报的产品名。 */
+    private void productName(String product) throws SQLException {
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(md.getDatabaseProductName()).thenReturn(product);
+        when(conn.getMetaData()).thenReturn(md);
+    }
+
+    /** 重新 stub 角色属性查询（② 的 rolreplication / rolsuper）。 */
+    private void stubRole(boolean replication, boolean superuser) throws SQLException {
+        when(stmt.executeQuery(contains("rolreplication"))).thenAnswer(inv -> {
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.next()).thenReturn(true, false);
+            when(rs.getBoolean(1)).thenReturn(replication);
+            when(rs.getBoolean(2)).thenReturn(superuser);
+            return rs;
+        });
+    }
+
+    @Test
+    void openGaussSourcePassesTheProductCheck() throws SQLException {
+        productName("openGauss 5.0.0");
+        CdcProbeResult.Check source = check(probeOneTable(), CdcProbeResult.PG_SOURCE);
+        assertThat(source.isPassed()).isTrue();
+        assertThat(source.getDetail()).contains("openGauss");
+    }
+
+    @Test
+    void openGaussWithoutReplicationAttributeStillPassesTheRoleCheck() throws SQLException {
+        // docker 实测:openGauss 5.0.0 的 gaussdb 账号 rolsuper/rolreplication 全为 f,
+        // 但 pg_create_logical_replication_slot 照样成功。建槽探测（⑤）才是权威。
+        productName("openGauss 5.0.0");
+        stubRole(false, false);
+        CdcProbeResult.Check role = check(probeOneTable(), CdcProbeResult.PG_REPLICATION_ROLE);
+        assertThat(role.isPassed()).isTrue();
+        assertThat(role.getDetail()).contains("openGauss");
+    }
+
+    @Test
+    void vanillaPostgresWithoutReplicationAttributeFailsTheRoleCheck() throws SQLException {
+        productName("PostgreSQL 16.4");
+        stubRole(false, false);
+        CdcProbeResult.Check role = check(probeOneTable(), CdcProbeResult.PG_REPLICATION_ROLE);
+        assertThat(role.isPassed()).isFalse();
+        assertThat(role.getDetail()).contains("REPLICATION");
+    }
+
     // —— P1-9(I6):max_replication_slots 余量 ——
 
     /** 覆盖 setUp 的 anyString 分发:槽用量/上限由本方法钉死。 */

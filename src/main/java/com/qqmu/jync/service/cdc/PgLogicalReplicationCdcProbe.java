@@ -49,19 +49,22 @@ public class PgLogicalReplicationCdcProbe {
         return CdcProbeResult.of(checks);
     }
 
-    // —— ① literal PostgreSQL ——
+    // —— ① PG family (v1.9.0: name no longer decides, capability does) ——
 
     private CdcProbeResult.Check checkPgSource(Connection conn) {
         try {
             String product = conn.getMetaData().getDatabaseProductName();
-            if (product == null
-                    || !product.toUpperCase(Locale.ROOT).contains("POSTGRESQL")) {
+            if (product == null || product.isBlank()) {
                 return CdcProbeResult.Check.of(CdcProbeResult.PG_SOURCE, false,
-                        "product=" + product + " — PG logical CDC requires literal"
-                                + " PostgreSQL; PG-compatible dialects (openGauss / Kingbase"
-                                + " / Highgo / Vastbase) are out of scope");
+                        "the server did not report a product name — the PostgreSQL-family"
+                                + " gate cannot be decided; check the JDBC URL and driver");
             }
-            return CdcProbeResult.Check.of(CdcProbeResult.PG_SOURCE, true, product);
+            boolean openGauss = PgLogicalDialect.detect(product) == PgLogicalDialect.OPENGAUSS;
+            return CdcProbeResult.Check.of(CdcProbeResult.PG_SOURCE, true,
+                    product + (openGauss
+                            ? " (openGauss-compatible; capabilities are verified by the checks"
+                                    + " below, not by the product name)"
+                            : ""));
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.PG_SOURCE, false, msg(e));
         }
@@ -97,14 +100,44 @@ public class PgLogicalReplicationCdcProbe {
                 repl = rs.getBoolean(1);
                 superuser = rs.getBoolean(2);
             }
-            boolean ok = repl || superuser;
             String detail = "rolreplication=" + repl + ", rolsuper=" + superuser;
-            return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICATION_ROLE, ok,
-                    ok ? detail
-                            : detail + " — grant with: ALTER ROLE <user> REPLICATION LOGIN;");
+            if (repl || superuser) {
+                return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICATION_ROLE, true, detail);
+            }
+            // v1.9.0: openGauss 5.0.0 的初始超级用户两个属性都是 f，却照样能建逻辑槽
+            // （docker 实测）。该内核不把 REPLICATION 属性当建槽门槛，硬性要求只会
+            // 把所有 openGauss 源误判为不可用；真正的权威是 ⑤ 建槽+删槽探测。
+            String product = conn.getMetaData() == null
+                    ? null : conn.getMetaData().getDatabaseProductName();
+            if (PgLogicalDialect.detect(product) == PgLogicalDialect.OPENGAUSS) {
+                return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICATION_ROLE, true,
+                        detail + " — openGauss does not require the REPLICATION attribute to"
+                                + " create a logical slot; slot creation is verified below");
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICATION_ROLE, false,
+                    detail + " — grant with: ALTER ROLE <user> REPLICATION LOGIN;");
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICATION_ROLE, false, msg(e));
         }
+    }
+
+    /**
+     * openGauss-only advisory appended to a passing plugin check: with
+     * {@code enable_slot_log=off} the slot still works (measured), but it does not
+     * survive a server restart. Vanilla PostgreSQL has no such GUC — a failed query
+     * simply yields no hint, and the check's verdict never depends on it.
+     */
+    private static String slotLogHint(Statement st) {
+        try (ResultSet rs = st.executeQuery("SHOW enable_slot_log")) {
+            String value = rs.next() ? rs.getString(1) : null;
+            if (value != null && "off".equalsIgnoreCase(value)) {
+                return "; enable_slot_log=off — enable it so the slot survives a server"
+                        + " restart (after a restart the position is rebuilt from a baseline)";
+            }
+        } catch (SQLException | RuntimeException ignored) {
+            // not openGauss — no hint to give
+        }
+        return "";
     }
 
     // —— ④ max_replication_slots headroom (P1-9/I6) ——
@@ -157,7 +190,8 @@ public class PgLogicalReplicationCdcProbe {
             created = true;
             st.execute("SELECT pg_drop_replication_slot('" + slotName + "')");
             return CdcProbeResult.Check.of(CdcProbeResult.PG_PLUGIN_AVAILABLE, true,
-                    "test_decoding reachable (probe slot created + dropped)");
+                    "test_decoding reachable (probe slot created + dropped)"
+                            + slotLogHint(st));
         } catch (SQLException e) {
             // P1-9(I5): only a slot that WAS created can leak. If the cleanup drop also
             // fails, the slot occupies one max_replication_slots quota and pins WAL until
