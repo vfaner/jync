@@ -296,6 +296,32 @@ class ProjectControllerStrategyTest {
     }
 
     /**
+     * 崖山与达梦都声明 ORACLE 家族,过得了 LogMiner 的家族门禁,但崖山实测没有
+     * {@code DBMS_LOGMNR}(docs/dm-logminer-spike.md §7)。批量建任务页已按
+     * {@link com.qqmu.jync.service.CaptureStrategyParser#supportedFor} 把崖山的
+     * LogMiner 藏起来,详情页仍按家族渲染的话,崖山用户会看到一张点进去必然
+     * 探测失败的卡片 —— 两页必须是同一条规则。
+     */
+    @Test
+    void detailHidesTheLogMinerCardForYashanDbButKeepsItForDm() throws Exception {
+        stubDetail(DatabaseType.YASHANDB);
+
+        String yashan = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(yashan).doesNotContain("value=\"LOGMINER_CDC\"");
+        // 轮询类选项照常渲染,只是没有日志 CDC 卡片。
+        assertThat(yashan).contains("value=\"POLLING\"", "value=\"FULL_COMPARE\"");
+
+        stubDetail(DatabaseType.DM);
+
+        String dm = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(dm).contains("value=\"LOGMINER_CDC\"");
+    }
+
+    /**
      * The card follows the same rule the backend and the rest of the stack use: a CUSTOM
      * connection that declares the PostgreSQL family gets the PG card, because that family
      * is what its dialect, type mapping and metadata reader already get.

@@ -46,9 +46,11 @@ import lombok.extern.slf4j.Slf4j;
  * slot advance re-peeks it verbatim (F-11).
  *
  * <p>Slot ownership: on start, the consumer ensures the per-project slot
- * ({@code jync_<projectId>}) exists; it is NEVER dropped on stop (otherwise WAL would be
- * retained forever anyway by the un-consumed slot, and a drop would lose the resume
- * watermark). Dropping slots is a DBA task.
+ * ({@code jync_<projectId>}) exists. Stopping does NOT drop it — re-enabling would then
+ * need a fresh baseline, and the slot is the resume watermark. The paths that leave it
+ * with no consumer at all (project deleted, strategy switched away, source changed)
+ * release it best-effort through {@link #dropSlotQuietly}: an orphaned slot retains WAL
+ * forever and fills the source disk.
  */
 @Slf4j
 public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
@@ -874,10 +876,29 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                         + slotName.replace("'", "''") + "')");
                 log.info("Released PG replication slot '{}' of project {}", slotName, projectId);
             }
-        } catch (SQLException | RuntimeException e) {
+        } catch (SQLException e) {
+            // 42704 undefined_object: there was nothing to drop — the project never ran
+            // CDC, a DBA cleaned up already, or an earlier release did. Warning here would
+            // train operators to ignore the one line that matters (a slot that still
+            // exists and keeps accumulating WAL).
+            if ("42704".equals(e.getSQLState())) {
+                log.debug("PG replication slot '{}' of project {} is already gone —"
+                        + " nothing to release", slotName, projectId);
+                return;
+            }
+            // 55006 object_in_use: the consumer has not fully exited yet. "Drop it by
+            // hand" is an instruction PG itself refuses to honour for an active slot, so
+            // name the real cause instead.
+            String hint = "55006".equals(e.getSQLState())
+                    ? "the slot is still in use — stop the project's consumer and retry"
+                    : "drop it by hand or the source WAL will grow without bound";
             log.warn("Could not release PG replication slot '{}' on the source (project {}):"
-                    + " {} — drop it by hand or the source WAL will grow without bound",
-                    slotName, projectId, e.getMessage());
+                    + " {} — {}", slotName, projectId, e.getMessage(), hint);
+        } catch (RuntimeException e) {
+            // slotName() validation (P2-10) throws for an off-whitelist prefix; the WARN
+            // then names the prefix problem instead of a slot.
+            log.warn("Could not release the PG replication slot of project {}: {}",
+                    projectId, e.getMessage());
         }
     }
 

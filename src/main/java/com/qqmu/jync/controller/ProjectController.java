@@ -27,9 +27,9 @@ import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
-import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
@@ -270,29 +270,21 @@ public class ProjectController {
 
         // --- capture-strategy cards (C1) ---------------------------------------------------
         // A CDC card renders only when the backend would accept that strategy for this
-        // source: the MySQL and PostgreSQL families (their engines verify themselves
-        // against the live server by capability), and the literal presets for Oracle
-        // LogMiner and SQL Server CDC. Every other type does not render the card at all
-        // (acceptance C①).
+        // source. That test is asked of CaptureStrategyParser.supportedFor — the same call
+        // the save path and the bulk-create page make — instead of re-deriving families
+        // here. The second copy drifted exactly once already: YashanDB declares the ORACLE
+        // family and passes the LogMiner gate, yet has no DBMS_LOGMNR (measured, see
+        // docs/dm-logminer-spike.md §7), so the bulk page hides the option while this page
+        // still offered a card whose probe could only fail.
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigService.findById(project.getSourceDbId()).orElse(null);
-        // v1.9.0: family gate, same as CaptureStrategyParser and the capability probe —
-        // a MariaDB / TiDB / OceanBase source is accepted by the parser, so the page has
-        // to offer the card. A product whose stream cannot be decoded is refused by the
-        // probe's BINLOG_EVENT_READABLE check instead of by product name.
-        boolean isMysqlSource = source != null
-                && source.resolvedFamily() == DatabaseType.DialectFamily.MYSQL;
-        // v1.9.0: LogMiner card follows the Oracle family too — DM declares it, the parser
-        // accepts it, and the probe decides whether the source can really be mined.
-        boolean isOracleSource = source != null
-                && source.resolvedFamily() == DatabaseType.DialectFamily.ORACLE;
-        // v1.9.0: the PG card follows the same family gate as the backend
-        // (CaptureStrategyParser + the capability probe). Keyed on the literal
-        // PostgreSQL preset, an openGauss source never rendered the card at all —
-        // the parser accepted the strategy while the page offered no way to pick it.
-        boolean isPostgresSource = source != null
-                && source.resolvedFamily() == DatabaseType.DialectFamily.POSTGRES;
-        boolean isSqlServerSource = source != null && source.getType() == DatabaseType.SQLSERVER;
+        List<CaptureStrategy> supportedStrategies = source == null
+                ? List.of()
+                : CaptureStrategyParser.supportedFor(source.getType(), source.resolvedFamily());
+        boolean isMysqlSource = supportedStrategies.contains(CaptureStrategy.BINLOG_CDC);
+        boolean isOracleSource = supportedStrategies.contains(CaptureStrategy.LOGMINER_CDC);
+        boolean isPostgresSource = supportedStrategies.contains(CaptureStrategy.PG_LOGICAL_CDC);
+        boolean isSqlServerSource = supportedStrategies.contains(CaptureStrategy.SQLSERVER_CDC);
         model.addAttribute("isMysqlSource", isMysqlSource);
         model.addAttribute("isOracleSource", isOracleSource);
         model.addAttribute("isPostgresSource", isPostgresSource);

@@ -16,6 +16,12 @@ import java.sql.Statement;
 
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.config.SyncProperties;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 /**
  * A replication slot that disappears while a committed position exists is a silent data
  * loss, not a hiccup.
@@ -151,5 +157,57 @@ class PgLogicalCdcSlotGuardTest {
         assertThat(CdcFailureClassifier.classify(new SQLException(
                 "PG cdc purge: replication slot 'jync_1' is gone")))
                 .isEqualTo(CdcFailureClassifier.Kind.PURGED);
+    }
+
+    // —— 释放槽(删除任务 / 切换策略 / 更换源库三条路径共用)——
+
+    /**
+     * 三条释放路径都会在"槽根本不存在"的源上调用:项目从未启动过 CDC、DBA 已经手工
+     * 清理过、或者上一次释放已经做过。PG 抛 42704 undefined_object,那不是需要人工
+     * 处理的状况;打 WARN 只会训练用户忽略这条真正重要的告警(槽还在、WAL 在涨)。
+     */
+    @Test
+    void releasingASlotThatIsAlreadyGoneIsNotAWarning() throws Exception {
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.execute(contains("pg_drop_replication_slot")))
+                .thenThrow(new SQLException("replication slot \"jync_1\" does not exist", "42704"));
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(PgLogicalCdcConsumer.class);
+        try {
+            PgLogicalCdcConsumer.dropSlotQuietly(conn, 1L, new SyncProperties());
+
+            assertThat(LogCapture.messagesAt(Level.WARN, logs)).isEmpty();
+        } finally {
+            LogCapture.detach(PgLogicalCdcConsumer.class, logs);
+        }
+    }
+
+    /**
+     * 55006 object_in_use 表示消费者还没退干净。此时叫用户"手工 drop"是做不到的
+     * —— 活跃槽 PG 拒绝删除。告警必须指向真正的原因和下一步。
+     */
+    @Test
+    void releasingASlotStillInUseSaysWhyItCannotBeDropped() throws Exception {
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.execute(contains("pg_drop_replication_slot")))
+                .thenThrow(new SQLException("replication slot \"jync_1\" is active for PID 42",
+                        "55006"));
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(PgLogicalCdcConsumer.class);
+        try {
+            PgLogicalCdcConsumer.dropSlotQuietly(conn, 1L, new SyncProperties());
+
+            assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                    .singleElement()
+                    .satisfies(message -> assertThat(message)
+                            .contains("still in use")
+                            .doesNotContain("drop it by hand"));
+        } finally {
+            LogCapture.detach(PgLogicalCdcConsumer.class, logs);
+        }
     }
 }
