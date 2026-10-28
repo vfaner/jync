@@ -145,6 +145,22 @@ class CdcOperationsServiceTest {
     }
 
     @Test
+    void probeProjectRunsThePgProbeForEveryPostgresFamilySource() throws SQLException {
+        // v1.9.0:PG 家族成员（openGauss 等）不再被 cdc.probe.unsupported 拒绝，
+        // 统一走 PG 逻辑复制探测；能否使用由探测结果决定。
+        project();
+        source(DatabaseType.OPENGAUSS);
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        CdcProbeResult expected = CdcProbeResult.of(List.of(
+                CdcProbeResult.Check.of(CdcProbeResult.PG_SOURCE, true, "openGauss 5.0.0")));
+        when(pgProbe.probe(any(Connection.class),
+                org.mockito.ArgumentMatchers.anyList())).thenReturn(expected);
+
+        assertThat(service.probeProject(1L)).isSameAs(expected);
+    }
+
+    @Test
     void probeProjectRejectsUnsupportedSource() throws SQLException {
         project();
         source(DatabaseType.DB2);   // DB2 has no CDC integration yet — must be rejected

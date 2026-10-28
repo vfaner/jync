@@ -125,6 +125,53 @@ class ConnectionTestCdcChecksTest {
         return config;
     }
 
+    /** v1.9.0:PG 家族源（openGauss）必须跑 PG 逻辑复制探测，而不是返回"无检查项"。 */
+    @Test
+    void openGaussSourceCarriesThePgProbeChecks() throws SQLException {
+        Connection conn = mock(Connection.class);
+        when(conn.isValid(5)).thenReturn(true);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(md.getDatabaseProductName()).thenReturn("openGauss 5.0.0");
+        when(md.getDatabaseProductVersion()).thenReturn("5.0.0");
+        when(md.getDriverName()).thenReturn("openGauss JDBC Driver");
+        when(md.getDriverVersion()).thenReturn("5.0.0");
+        when(conn.getMetaData()).thenReturn(md);
+        Statement stmt = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(stmt);
+        when(stmt.executeQuery(any(String.class))).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.next()).thenReturn(true, false);
+            if (sql.contains("wal_level")) {
+                when(rs.getString(1)).thenReturn("logical");
+            } else if (sql.contains("rolreplication")) {
+                when(rs.getBoolean(1)).thenReturn(false);
+                when(rs.getBoolean(2)).thenReturn(false);
+            } else if (sql.contains("pg_replication_slots")) {
+                when(rs.getInt(1)).thenReturn(1);
+                when(rs.getInt(2)).thenReturn(10);
+            }
+            return rs;
+        });
+
+        DatabaseConfig config = new DatabaseConfig();
+        config.setId(3L);
+        config.setName("og-src");
+        config.setType(DatabaseType.OPENGAUSS);
+        config.setHost("localhost");
+        config.setPort(5432);
+        config.setDatabaseName("app");
+        config.setUsername("sync");
+
+        ConnectionTestService.TestResult result = serviceReturning(conn).test(config);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getCdcChecks()).isNotNull();
+        assertThat(result.getCdcChecks())
+                .anyMatch(c -> CdcProbeResult.PG_SOURCE.equals(c.getName())
+                        && c.isPassed());
+    }
+
     @Test
     void mysqlTestCarriesCdcChecks() throws SQLException {
         ConnectionTestService service = serviceReturning(healthyMySqlConnection());

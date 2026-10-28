@@ -106,7 +106,7 @@ public class CdcOperationsService {
         if (source == null || source.getType() == null
                 || (source.getType() != DatabaseType.MYSQL
                         && source.getType() != DatabaseType.ORACLE
-                        && source.getType() != DatabaseType.POSTGRESQL
+                        && source.getType().getFamily() != DatabaseType.DialectFamily.POSTGRES
                         && source.getType() != DatabaseType.SQLSERVER)) {
             throw new IllegalArgumentException("cdc.probe.unsupported");
         }
@@ -115,7 +115,7 @@ public class CdcOperationsService {
                 long plannedServerId = clientFactory.serverIdFor(projectId);
                 return probe.probe(conn, plannedServerId);
             }
-            if (source.getType() == DatabaseType.POSTGRESQL) {
+            if (source.getType().getFamily() == DatabaseType.DialectFamily.POSTGRES) {
                 return pgProbe.probe(conn, List.of());
             }
             if (source.getType() == DatabaseType.SQLSERVER) {
@@ -134,7 +134,8 @@ public class CdcOperationsService {
             String anchor;
             if (source.getType() == DatabaseType.ORACLE) {
                 anchor = CdcProbeResult.ORACLE_SOURCE;
-            } else if (source.getType() == DatabaseType.POSTGRESQL) {
+            } else if (source.getType().getFamily()
+                    == DatabaseType.DialectFamily.POSTGRES) {
                 anchor = CdcProbeResult.PG_SOURCE;
             } else if (source.getType() == DatabaseType.SQLSERVER) {
                 anchor = CdcProbeResult.MSSQL_SOURCE;

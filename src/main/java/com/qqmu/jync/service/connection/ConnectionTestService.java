@@ -124,7 +124,8 @@ public class ConnectionTestService {
             } catch (RuntimeException e) {
                 log.warn("LogMiner probe failed during connection test; reporting none", e);
             }
-        } else if (config.getType() == DatabaseType.POSTGRESQL) {
+        } else if (config.getType() != null
+                && config.getType().getFamily() == DatabaseType.DialectFamily.POSTGRES) {
             try {
                 // 连接页无项目/表上下文 → ownerTables 空集(跳过 REPLICA IDENTITY 检查)
                 cdcChecks = pgProbe.probe(conn, List.of()).getChecks();

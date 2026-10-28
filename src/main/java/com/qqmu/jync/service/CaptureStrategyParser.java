@@ -68,7 +68,11 @@ public final class CaptureStrategyParser {
         if (strategy == CaptureStrategy.LOGMINER_CDC && sourceType != DatabaseType.ORACLE) {
             throw new IllegalArgumentException("error.project.cdc.not.oracle");
         }
-        if (strategy == CaptureStrategy.PG_LOGICAL_CDC && sourceType != DatabaseType.POSTGRESQL) {
+        // v1.9.0: PG 家族一律放行到探测。家族成员能否真正使用由连接时的能力探测
+        // 决定（openGauss 5.0 已实测；其余内核探测不过即拒绝），这里不按字面产品名拦。
+        if (strategy == CaptureStrategy.PG_LOGICAL_CDC
+                && (sourceType == null
+                        || sourceType.getFamily() != DatabaseType.DialectFamily.POSTGRES)) {
             throw new IllegalArgumentException("error.project.cdc.not.postgres");
         }
         if (strategy == CaptureStrategy.SQLSERVER_CDC && sourceType != DatabaseType.SQLSERVER) {
