@@ -199,7 +199,11 @@ public class CdcConsumerManager {
         SyncLockService.LockHandle lock;
         synchronized (this) {
             if (registry.containsKey(projectId)) {
-                return;                                          // 幂等:已在本节点运行
+                // 幂等:已在本节点运行。注意这里只回答"有没有消费者在跑",不回答"跑的是
+                // 不是该策略的那个":策略切换必须先经 ensureStopped 把旧消费者 join 掉
+                // (ProjectService.applyStrategySwitch 两条分支都是这样),否则这条早退
+                // 会让新引擎永远起不来,整条流还停在旧策略上。
+                return;
             }
             if (hasErrorHat(projectId)) {
                 if (parkedWarned.add(projectId)) {

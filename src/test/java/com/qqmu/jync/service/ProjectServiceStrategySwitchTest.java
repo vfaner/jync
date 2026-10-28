@@ -143,6 +143,12 @@ class ProjectServiceStrategySwitchTest {
         service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC");
 
         InOrder order = inOrder(scheduler, stateWriter, positionStore, taskStore, cdcManager);
+        // 先 join 再删位点。启用状态下也一样:停用分支早就有这一步(见下一个用例),启用
+        // 分支却直接删——本节点若还残留该项目的消费者(上一个启动的线程正在退场),
+        // 它在停机路径里会把位点重新写回去,刚删的行就又出现了。基线锚点因此是旧的,
+        // 全量不再重跑。日志级策略之间互切时更严重:旧消费者仍注册着,ensureStarted
+        // 的幂等早退会让新引擎永远起不来,整条流还停在旧策略上。
+        order.verify(cdcManager).ensureStopped(1L);
         order.verify(scheduler).unschedule(1L);
         order.verify(stateWriter).clearCursor(1L);
         order.verify(positionStore).delete(1L);

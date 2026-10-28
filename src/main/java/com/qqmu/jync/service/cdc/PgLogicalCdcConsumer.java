@@ -107,9 +107,18 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
      * the log between this position and now is unrecoverable.
      */
     private volatile String committedLsn;
-    /** Wall-clock-independent gate for the retained-WAL gauge (one query per 30 s). */
-    private long lastWalSampleNs;
+    /**
+     * Wall-clock-independent gate for the retained-WAL gauge (one query per 30 s). Volatile
+     * because the baseline-time sampler thread shares it with the drain loop: the two never
+     * overlap by design, but a sampler that overruns its stop join must not corrupt a read.
+     */
+    private volatile long lastWalSampleNs;
     private static final long WAL_SAMPLE_INTERVAL_NS = 30_000_000_000L;
+    /**
+     * Cadence of the baseline-time sampler. `sampleRetainedWal` applies the same 30 s gate
+     * itself, so this only decides how quickly the thread notices an interrupt.
+     */
+    private static final long BASELINE_WAL_SAMPLE_INTERVAL_MS = 30_000L;
     private final AtomicInteger parseFailures = new AtomicInteger();
     // F-10:连续失败周期计数(drain 抛异常的周期 +1,成功 flush 一个事务清零)。
     // 只覆盖解析失败的 parseFailures 拦不住「每周期必然失败的目标端写入」——典型是
@@ -182,7 +191,18 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     // is expected and gets created; pass null rather than a stale LSN.
                     ensureSlot(slotConn, slotName, null);
                 }
-                baselineService.runBaseline(ctx, lock::renew);
+                // The drain loop samples the slot's retained WAL once per cycle, but the
+                // chunked full load below can run for hours without reaching that loop. A
+                // slot that stops advancing during the load pins WAL on the source — the
+                // one failure this gauge exists to surface — so the baseline gets its own
+                // sampler. Always stopped here: after the load the main loop samples again.
+                Thread walSampler = startBaselineWalSampler(slotName,
+                        BASELINE_WAL_SAMPLE_INTERVAL_MS, dialect);
+                try {
+                    baselineService.runBaseline(ctx, lock::renew);
+                } finally {
+                    stopBaselineWalSampler(walSampler);
+                }
                 position = positionStore.find(projectId).orElse(null);
             }
             if (position == null || position.getLsn() == null) {
@@ -222,7 +242,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     currentSource = conn;
                     dialect = dialectOf(conn);
                     ensureSlot(conn, slotName, committedLsn);
-                    sampleRetainedWal(conn, slotName);
+                    sampleRetainedWal(conn, slotName, dialect);
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
@@ -752,14 +772,94 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
+     * Sample the slot's retained WAL at most once per interval from a small daemon thread
+     * that lives only as long as the baseline, or null when nothing can be measured.
+     *
+     * <p>The baseline is a chunked full load that can take hours, during which the consumer
+     * never reaches {@link #sampleRetainedWal}'s drain-loop call site. A slot created before
+     * the load (F-8) keeps every WAL segment from that moment: if nothing consumes it — the
+     * load is aborted, the target is down, writes outpace the copy — the source disk fills,
+     * which takes the whole database down rather than just this project. Without this
+     * thread the panel and the crossing warning stay silent for exactly that window.
+     *
+     * <p>Samples start after one full interval: at baseline start the gauge is near zero,
+     * and sleeping first keeps the sampler's first connection off a source that is still
+     * establishing the load's own connections.
+     *
+     * <p>openGauss (PG 9.2 lineage) has no {@code pg_lsn}, so the gauge's statement can
+     * never succeed there — no thread is started at all, matching
+     * {@link PgLogicalDialect#canMeasureRetainedWal()}.
+     */
+    Thread startBaselineWalSampler(String slotName, long intervalMs,
+                                   PgLogicalDialect serverDialect) {
+        if (!serverDialect.canMeasureRetainedWal()) {
+            return null;
+        }
+        Thread sampler = new Thread(() -> {
+            while (true) {
+                try {
+                    Thread.sleep(intervalMs);
+                } catch (InterruptedException e) {
+                    return;                          // baseline finished: the loop takes over
+                }
+                sampleRetainedWalDuringBaseline(slotName, serverDialect);
+            }
+        }, "jync-pg-wal-" + project.getId());
+        // Daemon: a stuck sample must never hold up JVM exit.
+        sampler.setDaemon(true);
+        sampler.start();
+        return sampler;
+    }
+
+    /** Stops the baseline-time sampler and waits a short, bounded time for it to die. */
+    private void stopBaselineWalSampler(Thread sampler) {
+        if (sampler == null) {
+            return;
+        }
+        sampler.interrupt();
+        try {
+            sampler.join(5_000L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (sampler.isAlive()) {
+            // Its connection may be blocked in getConnection (pool busy with the load);
+            // the thread is a daemon and its next sample is harmless — the gauge and the
+            // once-per-crossing warning are idempotent.
+            log.debug("Baseline-time WAL sampler of project {} did not stop within 5 s;"
+                    + " leaving it to exit on its own", project.getId());
+        }
+    }
+
+    /**
+     * One baseline-time sample on its OWN source connection, so the running full load never
+     * has to share (or wait for) it. Never throws: an unreachable source or an exhausted
+     * pool means "no reading right now", which is exactly what a null gauge says — a
+     * diagnostic must not disturb the load that is the actual job.
+     */
+    void sampleRetainedWalDuringBaseline(String slotName, PgLogicalDialect serverDialect) {
+        Connection conn = null;
+        try {
+            conn = dataSourceManager.getConnection(ctx.getSourceConfig());
+            sampleRetainedWal(conn, slotName, serverDialect);
+        } catch (Throwable e) {
+            log.debug("Baseline-time WAL sample for slot '{}' of project {} failed: {}",
+                    slotName, project.getId(), e.getMessage());
+        } finally {
+            closeQuietly(conn);
+        }
+    }
+
+    /**
      * Sample the slot's retained WAL at most once per interval.
      *
      * <p>The busy path polls every few milliseconds, and this needs a statement round-trip;
      * a slow-changing disk-watermark value does not. 30 s keeps the panel current without
      * measurable overhead on the source.
      */
-    private void sampleRetainedWal(Connection conn, String slotName) {
-        if (!dialect.canMeasureRetainedWal()) {
+    private void sampleRetainedWal(Connection conn, String slotName,
+                                   PgLogicalDialect serverDialect) {
+        if (!serverDialect.canMeasureRetainedWal()) {
             // openGauss has no pg_lsn type, so the gauge's statement can never succeed
             // there. Asking anyway would spend one round trip plus one log line every
             // 30 seconds, forever, on a server we already know cannot answer.

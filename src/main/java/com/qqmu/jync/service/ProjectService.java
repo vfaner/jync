@@ -549,14 +549,15 @@ public class ProjectService {
      * clear the polling cursors; everything else is directional:
      *
      * <ul>
-     *   <li>→ BINLOG_CDC: drop the Quartz job, invalidate the old binlog position (the
-     *       consumer re-baselines with a chunked full load), lift any polling-era ERROR
-     *       hat that would silently block the start (Task 13: ensureStarted skips parked
-     *       projects), then start the consumer — but only when the project is enabled.
-     *       A disabled project (e.g. one just created by the bulk wizard) is reset only;
-     *       any consumer this node still holds is joined first, so its shutdown cannot
-     *       re-persist the position just deleted. Its consumer starts from
-     *       {@link #start(Long)}, which re-baselines anyway because the position is gone.</li>
+     *   <li>→ a log strategy: join any consumer this node still holds FIRST — its shutdown
+     *       re-persists the position, and a log→log switch would otherwise leave the old
+     *       engine registered so the new one never starts. Then drop the Quartz job,
+     *       invalidate the old position (the consumer re-baselines with a chunked full
+     *       load), lift any polling-era ERROR hat that would silently block the start
+     *       (Task 13: ensureStarted skips parked projects), and start the consumer — but
+     *       only when the project is enabled. A disabled project (e.g. one just created by
+     *       the bulk wizard) is reset only; its consumer starts from {@link #start(Long)},
+     *       which re-baselines anyway because the position is gone.</li>
      *   <li>BINLOG_CDC →: stop the consumer FIRST and let the join complete, so the old
      *       stream can no longer write (Review Focus #5); then rebuild the polling
      *       schedule. The cdc_position row is KEPT (C2) as informational history only —
@@ -576,12 +577,14 @@ public class ProjectService {
             // BINLOG_CDC 与 LOGMINER_CDC 的切换序列完全一致:删 Quartz、清 cursor、
             // 删位点(下一个消费者无论哪种都从新锚点重跑基线)、摘 ERROR 帽。
             boolean enabled = Boolean.TRUE.equals(project.getEnabled());
-            if (!enabled) {
-                // 停用任务上可能还残留旧消费者(项目刚被别处停用,巡检最多 10 秒后才收
-                // 拾)。必须先 join 再删位点:消费者停机时会把位点重新写回去,重置就白做
-                // 了。本节点没有消费者时是空操作。
-                cdcManager.ensureStopped(projectId);
-            }
+            // Always join first, enabled or not: a consumer that is still leaving this node
+            // re-persists the position in its shutdown path, so deleting before the join
+            // leaves the freshly deleted row behind (stale anchor, no full reload). A
+            // log→log switch adds a second reason: the old consumer would still be
+            // registered, ensureStarted's idempotence guard would silently skip the new
+            // engine, and the project would keep streaming with the previous strategy.
+            // A no-op when this node holds no consumer for the project.
+            cdcManager.ensureStopped(projectId);
             scheduler.unschedule(projectId);
             stateWriter.clearCursor(projectId);
             positionStore.delete(projectId);

@@ -225,4 +225,167 @@ class PgLogicalCdcConsumerTest {
         // 预建连接必须关闭:不泄漏,也避免占着源端连接池。
         verify(slotConn).close();
     }
+
+    // —— 基线期间量 WAL:分块全量可能跑几个小时,drain 循环的采样一次也不执行 ——
+
+    /**
+     * 基线是分块全量,可能跑几个小时;主线程在 {@code runBaseline} 里出不来,drain
+     * 循环里的采样一次也轮不到。槽在基线期间停住(WAL 写速超过全量、目标端异常、
+     * 加载卡死)时源库会一直攒 WAL 直到磁盘写满 —— 正是这个仪表存在的意义,而基线
+     * 期恰好完全不可见。采样线程必须只在基线期间活着:基线一结束主循环自己就采样,
+     * 留着它等于整个运行期每 30 秒空开一条连接。
+     */
+    @Test
+    void theBaselineSamplerDoesNotOutliveTheBaseline() throws Exception {
+        Project project = new Project();
+        project.setId(77L);
+        project.setName("pg-77");
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(false);      // 进 drain 循环立刻让出
+
+        com.qqmu.jync.service.sync.SyncContext ctx =
+                mock(com.qqmu.jync.service.sync.SyncContext.class);
+        DatabaseConfig sourceConfig = mock(DatabaseConfig.class);
+        when(ctx.getSourceConfig()).thenReturn(sourceConfig);
+        when(ctx.getConfig()).thenReturn(new com.qqmu.jync.dto.SyncConfig());
+
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        CdcPosition anchored = mock(CdcPosition.class);
+        when(anchored.getLsn()).thenReturn("0/16BC000");
+        when(positionStore.find(77L))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(anchored));
+
+        // 版本 banner + pg_lsn 能力探测都成功 → 判定为 vanilla PostgreSQL(会量 WAL)。
+        Connection slotConn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(slotConn.createStatement()).thenReturn(st);
+        ResultSet versionRs = mock(ResultSet.class);
+        when(versionRs.next()).thenReturn(true);
+        when(versionRs.getString(1)).thenReturn("PostgreSQL 16.1");
+        ResultSet capabilityRs = mock(ResultSet.class);
+        when(capabilityRs.next()).thenReturn(true);
+        when(capabilityRs.getLong(1)).thenReturn(1L);
+        ResultSet slotAbsent = mock(ResultSet.class);
+        when(slotAbsent.next()).thenReturn(false);
+        when(st.executeQuery(contains("version()"))).thenReturn(versionRs);
+        when(st.executeQuery(contains("pg_type"))).thenReturn(capabilityRs);
+        when(st.executeQuery(contains("pg_replication_slots"))).thenReturn(slotAbsent);
+
+        DataSourceManager dsm = mock(DataSourceManager.class);
+        when(dsm.getConnection(sourceConfig)).thenReturn(slotConn);
+
+        PgLogicalCdcConsumer consumer = new PgLogicalCdcConsumer(
+                project, lock, ctx, positionStore, mock(CdcBaselineService.class),
+                mock(SyncTaskStore.class), mock(SyncStateWriter.class), dsm,
+                new CdcRuntimeStats(), properties);
+
+        consumer.run();
+
+        awaitNoLiveThread("jync-pg-wal-77");
+    }
+
+    /** 采样用自己的连接、只量一次、用完即还 —— 不占着全量加载的源端连接。 */
+    @Test
+    void theBaselineSamplerMeasuresOnItsOwnConnection() throws Exception {
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        ResultSet rs = mock(ResultSet.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(contains("pg_wal_lsn_diff"))).thenReturn(rs);
+        when(rs.next()).thenReturn(true);
+        when(rs.getLong(1)).thenReturn(8L * 1024 * 1024);
+
+        DataSourceManager dsm = mock(DataSourceManager.class);
+        DatabaseConfig sourceConfig = mock(DatabaseConfig.class);
+        when(dsm.getConnection(sourceConfig)).thenReturn(conn);
+        com.qqmu.jync.service.sync.SyncContext ctx =
+                mock(com.qqmu.jync.service.sync.SyncContext.class);
+        when(ctx.getSourceConfig()).thenReturn(sourceConfig);
+
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        PgLogicalCdcConsumer consumer = new PgLogicalCdcConsumer(
+                projectOf(78L), mock(SyncLockService.LockHandle.class), ctx,
+                mock(CdcPositionStore.class), mock(CdcBaselineService.class),
+                mock(SyncTaskStore.class), mock(SyncStateWriter.class), dsm, stats, properties);
+
+        Thread sampler = consumer.startBaselineWalSampler(
+                "jync_78", 10L, PgLogicalDialect.POSTGRES);
+        try {
+            awaitGauge(stats, 8L * 1024 * 1024);
+        } finally {
+            sampler.interrupt();
+            sampler.join(2_000L);
+        }
+
+        assertThat(sampler.isAlive()).isFalse();
+        verify(conn).close();                       // 用完即还
+    }
+
+    /** 诊断仪表的铁律:取不到值就记 DEBUG,基线的全量一行都不能因此受影响。 */
+    @Test
+    void aFailedBaselineSampleLeavesTheGaugeAlone() throws Exception {
+        DataSourceManager dsm = mock(DataSourceManager.class);
+        DatabaseConfig sourceConfig = mock(DatabaseConfig.class);
+        when(dsm.getConnection(sourceConfig))
+                .thenThrow(new IllegalStateException("connection pool exhausted"));
+        com.qqmu.jync.service.sync.SyncContext ctx =
+                mock(com.qqmu.jync.service.sync.SyncContext.class);
+        when(ctx.getSourceConfig()).thenReturn(sourceConfig);
+
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        PgLogicalCdcConsumer consumer = new PgLogicalCdcConsumer(
+                projectOf(79L), mock(SyncLockService.LockHandle.class), ctx,
+                mock(CdcPositionStore.class), mock(CdcBaselineService.class),
+                mock(SyncTaskStore.class), mock(SyncStateWriter.class), dsm, stats, properties);
+
+        assertThatCode(() -> consumer.sampleRetainedWalDuringBaseline(
+                "jync_79", PgLogicalDialect.POSTGRES))
+                .doesNotThrowAnyException();
+        assertThat(stats.getRetainedWalBytes()).isNull();   // "未知",不是 0
+    }
+
+    /** openGauss 没有 pg_lsn:线程根本不启动,连一次空转都不要。 */
+    @Test
+    void noBaselineSamplerOnAServerWithoutPgLsn() {
+        PgLogicalCdcConsumer consumer = new PgLogicalCdcConsumer(
+                projectOf(80L), mock(SyncLockService.LockHandle.class),
+                mock(com.qqmu.jync.service.sync.SyncContext.class),
+                mock(CdcPositionStore.class), mock(CdcBaselineService.class),
+                mock(SyncTaskStore.class), mock(SyncStateWriter.class),
+                mock(DataSourceManager.class), new CdcRuntimeStats(), properties);
+
+        assertThat(consumer.startBaselineWalSampler("jync_80", 10L,
+                PgLogicalDialect.OPENGAUSS)).isNull();
+    }
+
+    private static Project projectOf(long id) {
+        Project project = new Project();
+        project.setId(id);
+        project.setName("pg-" + id);
+        return project;
+    }
+
+    private static void awaitGauge(CdcRuntimeStats stats, long expected)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 2_000L;
+        while (System.currentTimeMillis() < deadline
+                && !Long.valueOf(expected).equals(stats.getRetainedWalBytes())) {
+            Thread.sleep(10L);
+        }
+        assertThat(stats.getRetainedWalBytes()).isEqualTo(expected);
+    }
+
+    private static void awaitNoLiveThread(String name) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 2_000L;
+        while (System.currentTimeMillis() < deadline && liveThreadNamed(name)) {
+            Thread.sleep(10L);
+        }
+        assertThat(liveThreadNamed(name)).isFalse();
+    }
+
+    private static boolean liveThreadNamed(String name) {
+        return Thread.getAllStackTraces().keySet().stream()
+                .anyMatch(t -> t.isAlive() && name.equals(t.getName()));
+    }
 }
