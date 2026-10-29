@@ -171,6 +171,19 @@ class ExternalAuthSettingsViewTest {
     }
 
     @Test
+    void anEmptySecretFieldDoesNotClaimASecretIsStored() throws Exception {
+        stored.setSecretHeaderValue(null);
+
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // "Already set; leave blank to keep it" is only true when something is stored. Rendered
+        // unconditionally it tells a first-time setup that the secret already exists.
+        assertThat(page).doesNotContain("已设置；留空表示不修改。");
+    }
+
+    @Test
     void savingRedirectsBackAndHandsTheTypedSecretToTheService() throws Exception {
         mvc.perform(post("/external-auth").locale(Locale.SIMPLIFIED_CHINESE)
                         .param("enabled", "true")

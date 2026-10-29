@@ -201,7 +201,7 @@
                                    name="secretHeaderValue" maxlength="1024"
                                    autocomplete="new-password"
                                    th:placeholder="${secretSet} ? #{oa.secretValueSet} : ''">
-                            <div class="help" th:text="#{oa.secretValueSet}">
+                            <div class="help" th:if="${secretSet}" th:text="#{oa.secretValueSet}">
                                 Already set; leave blank to keep it.
                             </div>
                         </div>
