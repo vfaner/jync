@@ -295,6 +295,20 @@ class LogMinerCdcProbeTest {
     }
 
     @Test
+    void remediationTextNamesTheV$ViewsWithoutStrayEscapes() throws SQLException {
+        // 这条 remediation 是给 DBA 照抄的:视图名必须是 V$DATABASE 本身。源码里若把 $
+        // 写成 \\$ (Java 字符串字面量里并不需要转义),页面会渲染出 V_\$DATABASE,
+        // 照抄的 GRANT/SELECT 直接报 ORA-00942。
+        singleLong(stmt, "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN ('LOGMINING','DBA')", 0L);
+
+        CdcProbeResult r = probe.probe(conn, Collections.emptyList());
+        CdcProbeResult.Check c = byName(r, CdcProbeResult.MINING_PRIVILEGES);
+        assertThat(c.getDetail()).doesNotContain("\\");
+        assertThat(c.getDetail()).contains("V$DATABASE");
+        assertThat(c.getDetail()).contains("V$LOGMNR_CONTENTS");
+    }
+
+    @Test
     void longColumnsWarnButPass() throws SQLException {
         when(conn.prepareStatement(anyString())).thenAnswer(inv -> {
             lastPreparedSql = inv.getArgument(0);

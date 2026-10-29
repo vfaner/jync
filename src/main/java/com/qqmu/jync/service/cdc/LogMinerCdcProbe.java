@@ -445,7 +445,7 @@ public class LogMinerCdcProbe {
             return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, false,
                     String.join("; ", missing)
                             + "; plus EXECUTE ON SYS.DBMS_LOGMNR and SELECT on"
-                            + " V_\\$DATABASE / V_\\$LOG / V_\\$LOGFILE / V_\\$ARCHIVED_LOG / V_\\$LOGMNR_CONTENTS");
+                            + " V$DATABASE / V$LOG / V$LOGFILE / V$ARCHIVED_LOG / V$LOGMNR_CONTENTS");
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, false, msg(e));
         }
