@@ -91,6 +91,15 @@ class CdcBaselineServiceTest {
         return SyncContext.builder().project(project).sourceConfig(source()).build();
     }
 
+    private SyncContext ystreamCtx(long projectId) {
+        com.qqmu.jync.model.Project project = new com.qqmu.jync.model.Project();
+        project.setId(projectId);
+        project.setName("ystream-test");
+        com.qqmu.jync.dto.SyncConfig cfg = new com.qqmu.jync.dto.SyncConfig();
+        cfg.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.YSTREAM_CDC);
+        return SyncContext.builder().project(project).sourceConfig(source()).config(cfg).build();
+    }
+
     private SyncContext logMinerCtx(long projectId) {
         com.qqmu.jync.model.Project project = new com.qqmu.jync.model.Project();
         project.setId(projectId);
@@ -301,6 +310,30 @@ class CdcBaselineServiceTest {
                 org.mockito.ArgumentMatchers.anyLong(), any(), anyLong());
         verify(engine).resetProject(12L);
         verify(positionStore).markBaselineDone(12L);
+    }
+
+    // —— v1.9.0 崖山 YStream 锚点 ——
+
+    /**
+     * 崖山没有 {@code SHOW MASTER STATUS}。YStream 的锚点由 {@code YStreamServiceLifecycle}
+     * 在创建服务时从 {@code RESTART_POSITION} 读出并写成 {@code recordBaselineStartLsn},
+     * 基线阶段不需要、也不能再去读 binlog 位点:落进 default 分支就会读到 "Could not read
+     * binary log position",项目一开始就被 park。
+     */
+    @Test
+    void ystreamBaselineReusesTheAnchorTheServiceAlreadyRecorded() throws SQLException {
+        when(dataSourceManager.getConnection(any()))
+                .thenThrow(new IllegalStateException(
+                        "Could not read binary log position — is log_bin enabled?"));
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(new SyncResult());
+
+        service.runBaseline(ystreamCtx(9L), () -> true);
+
+        verify(dataSourceManager, never()).getConnection(any());
+        verify(positionStore, never()).recordBaselineStart(anyLong(), any(), anyLong(), any(),
+                anyLong());
+        verify(engine).resetProject(9L);
+        verify(positionStore).markBaselineDone(9L);
     }
 
     // —— SQL Server LSN 锚点 ——

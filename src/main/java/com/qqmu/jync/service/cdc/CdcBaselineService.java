@@ -283,6 +283,15 @@ public class CdcBaselineService {
                             projectId, lsn);
                     break;
                 }
+                case YSTREAM_CDC: {
+                    // 崖山没有 SHOW MASTER STATUS,锚点也不是这里读的:YStreamServiceLifecycle
+                    // 创建服务时已经从 RESTART_POSITION 读出基线起点并写成 recordBaselineStartLsn。
+                    // 落进 default 会去读 binlog 位点,项目一开始就被 park 在 ERROR。
+                    engine.resetProject(projectId);
+                    log.info("CDC baseline for project {}: full load; YStream replay starts at the"
+                            + " anchor recorded when the service was created", projectId);
+                    break;
+                }
                 case POLLING:
                 case FULL_COMPARE:
                 case BINLOG_CDC:
