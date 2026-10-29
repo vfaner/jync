@@ -319,7 +319,17 @@ public class AiChatClient {
                     }
                     if (!line.startsWith("data:") && !line.startsWith("event:")
                             && !line.startsWith(":")) {
-                        rawBody = new StringBuilder(line).append('\n');
+                        // A buffered reply is one JSON document and nothing else. Any other
+                        // unrecognized line — a standard SSE `id:`/`retry:` field, a
+                        // keep-alive token, a proxy's stray line — used to flip the whole
+                        // stream into this mode, after which the reply was parsed out of a
+                        // fragment that is not JSON and came back empty. Once a delta has
+                        // arrived the body is SSE by proof, not by guess.
+                        String head = line.stripLeading();
+                        if (text.length() == 0
+                                && (head.startsWith("{") || head.startsWith("["))) {
+                            rawBody = new StringBuilder(line).append('\n');
+                        }
                         continue;
                     }
                     if (line.startsWith("event:")) {

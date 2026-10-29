@@ -195,6 +195,45 @@ class AiChatClientStreamTest {
     }
 
     @Test
+    void standardSseIdFieldsDoNotCostTheReply() {
+        // `id:` is part of the SSE grammar (as is `retry:`), and servers that resume streams
+        // emit it per event. Reading it as "this body is not SSE after all" buffered the whole
+        // stream, the JSON parse of "id: 1\ndata: {...}" failed, and the reply came back empty.
+        sseBody = "id: 1\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"SELECT\"}}]}\n\n"
+                + "retry: 3000\n"
+                + "id: 2\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\" 1\"}}]}\n\n"
+                + "data: [DONE]\n\n";
+
+        List<String> deltas = new ArrayList<>();
+        AiChatClient.ChatResult result = client.stream(provider(AiProtocol.OPENAI), "k",
+                null, "USER", 64, deltas::add);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getText()).isEqualTo("SELECT 1");
+        assertThat(deltas).containsExactly("SELECT", " 1");
+    }
+
+    @Test
+    void aStrayLineAfterTheReplyStartedDoesNotReplaceIt() {
+        // An unrecognized line used to switch the whole body to "buffered reply" mode even
+        // though deltas had already streamed: the accumulated text was thrown away and the
+        // parse of the tail — which is not one JSON document — produced an empty reply. Once
+        // a delta has arrived the body is SSE by proof, not by guess.
+        sseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"SELECT\"}}]}\n\n"
+                + "totally-not-sse\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\" 1\"}}]}\n\n"
+                + "data: [DONE]\n\n";
+
+        AiChatClient.ChatResult result = client.stream(provider(AiProtocol.OPENAI), "k",
+                null, "USER", 64, t -> { });
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getText()).isEqualTo("SELECT 1");
+    }
+
+    @Test
     void chunkShapeIsDetectedEvenWhenItDisagreesWithTheConfiguredProtocol() {
         // Gateways are routinely filed under one protocol and answer with the other's events;
         // assuming the configured shape would silently drop every delta.
