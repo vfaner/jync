@@ -1,5 +1,7 @@
 package com.qqmu.jync.controller;
 
+import java.nio.charset.StandardCharsets;
+
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -8,6 +10,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+import org.springframework.web.util.UriUtils;
 
 import com.qqmu.jync.service.ai.ConversionAssistService;
 
@@ -80,7 +83,23 @@ public class ConversionController {
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
         }
-        return "redirect:/projects/" + projectId + "/conversions/" + kind + "/" + name;
+        return redirectToObject(projectId, kind, name);
+    }
+
+    /**
+     * Redirect target for one object's review page.
+     *
+     * <p>Both segments are percent-encoded here because nothing further down the chain does it:
+     * {@code RedirectView} passes the target to {@code sendRedirect} verbatim (it only encodes
+     * when the URL is an expanded template), and Tomcat writes Location headers as ISO-8859-1.
+     * A Chinese-named view would therefore come back from a successful save as a redirect to
+     * {@code ??} — the page 404s immediately after the save. Mirrors Spring's own choice in
+     * {@code RedirectView#replaceUriTemplateVariables}.
+     */
+    private static String redirectToObject(Long projectId, String kind, String name) {
+        return "redirect:/projects/" + projectId + "/conversions/"
+                + UriUtils.encodePathSegment(kind, StandardCharsets.UTF_8)
+                + "/" + UriUtils.encodePathSegment(name, StandardCharsets.UTF_8);
     }
 
     /**
@@ -95,7 +114,7 @@ public class ConversionController {
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
         }
-        return "redirect:/projects/" + projectId + "/conversions/" + kind + "/" + name;
+        return redirectToObject(projectId, kind, name);
     }
 
     /**

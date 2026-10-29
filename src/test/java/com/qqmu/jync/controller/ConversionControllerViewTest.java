@@ -243,6 +243,35 @@ class ConversionControllerViewTest {
     }
 
     @Test
+    void aNonAsciiObjectNameIsPercentEncodedInTheRedirectTarget() throws Exception {
+        // The redirect target is built by string concatenation, and neither RedirectView nor
+        // Tomcat encodes it: the name travels as raw UTF-8 bytes in a Location header that is
+        // written as ISO-8859-1, so a Chinese-named view bounces the browser to "??" and the
+        // object page 404s right after a successful save.
+        mvc.perform(post("/projects/1/conversions/VIEW/视图/save")
+                        .characterEncoding("UTF-8")
+                        .with(csrf())
+                        .param("sql", "CREATE VIEW V AS SELECT 1"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/projects/1/conversions/VIEW/%E8%A7%86%E5%9B%BE"))
+                .andExpect(flash().attribute("message", "msg.override.saved"));
+
+        verify(assistService).saveOverride(1L, "VIEW", "视图", "CREATE VIEW V AS SELECT 1");
+    }
+
+    @Test
+    void aNonAsciiObjectNameIsPercentEncodedWhenDeletingAnOverride() throws Exception {
+        mvc.perform(post("/projects/1/conversions/VIEW/视图/delete-override")
+                        .characterEncoding("UTF-8")
+                        .with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/projects/1/conversions/VIEW/%E8%A7%86%E5%9B%BE"))
+                .andExpect(flash().attribute("message", "msg.override.deleted"));
+
+        verify(assistService).deleteOverride(1L, "VIEW:视图");
+    }
+
+    @Test
     void aRejectedSaveReportsTheReasonInsteadOfSucceedingSilently() throws Exception {
         doThrow(new IllegalArgumentException("error.override.empty"))
                 .when(assistService).saveOverride(anyLong(), anyString(), anyString(), any());
