@@ -436,9 +436,18 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         CdcTransactionBuffer tx = new CdcTransactionBuffer();
         CdcTransactionBudget budget = CdcTransactionBudget.from(properties);
         int applied = 0;
+        // Only a fully drained cursor proves the last buffered transaction is complete:
+        // nextBatch caps at MAX_BATCH_ROWS without aligning to transaction boundaries, so a
+        // stop mid-window leaves the rest of that CSCN's rows unread. Flushing it anyway
+        // commits half a source transaction and advances the watermark to its CSCN; the
+        // restart then mines `CSCN > watermark` and never reads the remainder — silent data
+        // loss. Discarding it re-mines the whole transaction next session (idempotent
+        // upserts absorb the replay), the same rule the PG and SQL Server paths follow.
+        boolean cursorDrained = false;
         while (running && !Thread.currentThread().isInterrupted()) {
             List<LogMinerSession.Row> batch = session.nextBatch();
             if (batch.isEmpty()) {
+                cursorDrained = true;
                 break;
             }
             for (LogMinerSession.Row row : batch) {
@@ -589,7 +598,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 applied++;
             }
         }
-        if (currentCsn >= 0 && !tx.isEmpty()) {
+        if (cursorDrained && currentCsn >= 0 && !tx.isEmpty()) {
             try {
                 flushTransaction(projectId, currentCsn, tx);
             } catch (Exception e) {

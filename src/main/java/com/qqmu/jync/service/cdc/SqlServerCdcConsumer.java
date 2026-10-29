@@ -648,9 +648,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                         continue;
                     }
                     Map<String, Object> row = readRow(rs, binding, availableCols);
-                    if (op == 1 || op == 4) {
-                        // Insert / update-after images reach the target whole. Delete and
-                        // update-before images only supply primary keys to the fold.
+                    if (op == 2 || op == 4) {
+                        // Insert / update-after images reach the target whole. Delete (1) and
+                        // update-before (3) images only supply primary keys to the fold, so
+                        // spilling their payload would write files nobody ever reads — and a
+                        // bulk delete of large rows would fill the spill directory doing it.
                         row = spiller().spill(binding, row);
                     }
                     fold.accept(startLsn, binding, op, row);

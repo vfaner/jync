@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -142,6 +143,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     private final LazyLobSpillStore lobSpillStore = new LazyLobSpillStore();
     /** Owns the current transaction's spilled values; reset on every boundary. */
     private final CdcSpillerHolder spillers = new CdcSpillerHolder();
+    /**
+     * table → the missing-column set last warned about. A table whose every row is narrower
+     * than its binding would otherwise WARN per row; keyed per table so two unhealthy tables
+     * cannot flap one another's single throttle slot (same shape as SqlServerCdcConsumer).
+     */
+    private final Map<String, String> absentColumnWarnings = new ConcurrentHashMap<>();
 
     public PgLogicalCdcConsumer(Project project, SyncLockService.LockHandle lock,
                                 SyncContext ctx, CdcPositionStore positionStore,
@@ -540,6 +547,21 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                             CdcTableBinding binding = resolved.binding;
                             if (binding == null || !binding.isApplicable()) {
                                 stats.addUnsupportedTable(change.qualifiedTable);
+                                continue;
+                            }
+                            List<String> absent = resolved.absentColumns(change);
+                            if (!absent.isEmpty()) {
+                                // The row is narrower than the binding the metadata still
+                                // describes — a tuple committed BEFORE a source ADD COLUMN
+                                // replayed after the baseline cached the new shape (the slot
+                                // predates the baseline, F-8), or any other metadata/stream
+                                // disagreement. Applying it binds NULL for the missing
+                                // columns and silently wipes the target's values, one row at
+                                // a time. Skip the change and count it, exactly like the SQL
+                                // Server consumer does for a capture instance that does not
+                                // carry a binding column.
+                                stats.addSkippedUnsupported(1);
+                                warnAbsentColumns(change.qualifiedTable, absent);
                                 continue;
                             }
                             if (change.op == PgTestDecodingParser.Op.DELETE) {
@@ -1002,6 +1024,26 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         }
     }
 
+    /**
+     * One WARN per (table, missing-column set) for rows the binding cannot apply whole.
+     * The panel's {@code unsupportedTables} set is the persistent signal; this line is the
+     * actionable one — nothing else tells the operator why a table stopped receiving
+     * changes, or which source DDL triggered it.
+     */
+    private void warnAbsentColumns(String table, List<String> absent) {
+        String description = String.join(", ", absent);
+        if (description.equals(absentColumnWarnings.put(table, description))) {
+            return;
+        }
+        stats.addUnsupportedTable(table);
+        log.warn("PG slot rows on {} omit column(s) [{}] that the source metadata still"
+                + " reports — applying them would overwrite the target's values with NULL,"
+                + " so they are being SKIPPED (counted on the panel). This happens when the"
+                + " stream replays a row committed before a source ADD COLUMN; if it"
+                + " persists, rebuild the CDC baseline so the binding and the stream agree",
+                table, description);
+    }
+
     private boolean parseStrikeOut() {
         return parseFailures.get() > MAX_PARSE_FAILURES;
     }
@@ -1160,6 +1202,32 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             return change.op == PgTestDecodingParser.Op.DELETE
                     ? columns.containsAll(change.row.keySet())
                     : columns.equals(change.row.keySet());
+        }
+
+        /**
+         * Columns the applier would have to bind but the row does not carry — binding them
+         * means an explicit NULL, which overwrites whatever the target already holds. A
+         * DELETE only binds its primary keys, so only those have to be present; an
+         * INSERT/UPDATE binds every binding column. Extra columns in the row are harmless
+         * (they are simply not applied) and are not reported here — that direction is what
+         * {@link #describes} handles by triggering the metadata refresh.
+         */
+        List<String> absentColumns(PgTestDecodingParser.ParsedChange change) {
+            if (binding == null) {
+                return List.of();
+            }
+            List<String> required = change.op == PgTestDecodingParser.Op.DELETE
+                    ? binding.pkNames() : binding.columnNames();
+            List<String> absent = null;
+            for (String column : required) {
+                if (!change.row.containsKey(column)) {
+                    if (absent == null) {
+                        absent = new ArrayList<>();
+                    }
+                    absent.add(column);
+                }
+            }
+            return absent == null ? List.of() : absent;
         }
     }
 }

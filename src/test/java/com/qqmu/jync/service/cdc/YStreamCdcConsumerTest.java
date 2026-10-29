@@ -73,6 +73,8 @@ class YStreamCdcConsumerTest {
     private CdcPositionStore positionStore;
     private CdcBaselineService baselineService;
     private SyncTaskStore taskStore;
+    private CdcRuntimeStats stats;
+    private SyncStateWriter stateWriter;
     private YStreamClientFactory clientFactory;
     private YStreamServiceLifecycle lifecycle;
     private SyncContext ctx;
@@ -125,9 +127,11 @@ class YStreamCdcConsumerTest {
                 .connectionProvider(cfg -> DriverManager.getConnection(H2_URL, "sa", ""))
                 .build();
 
+        stats = new CdcRuntimeStats();
+        stateWriter = mock(SyncStateWriter.class);
         consumer = new YStreamCdcConsumer(project(), lock, ctx, positionStore, baselineService,
-                taskStore, mock(SyncStateWriter.class), dataSourceManager,
-                new CdcRuntimeStats(), new SyncProperties(), clientFactory, lifecycle,
+                taskStore, stateWriter, dataSourceManager,
+                stats, new SyncProperties(), clientFactory, lifecycle,
                 conn -> new FakeOps());
     }
 
@@ -137,6 +141,19 @@ class YStreamCdcConsumerTest {
             st.execute("DROP ALL OBJECTS");
         }
         target.close();
+    }
+
+    @Test
+    void aDeliveredEventRefreshesTheLagClock() throws Exception {
+        // project-detail renders stats.lagSeconds, and every other engine touches this
+        // clock as it delivers. A YStream stream that never does shows "—" forever even
+        // while rows are flowing, which reads as "stalled" to whoever is watching.
+        stats.setConnected(true);
+        assertThat(stats.lagSeconds()).isEqualTo(-1L);
+
+        consumer.handle(insert("ORDERS", row(9L, "nine"), pos(3)));
+
+        assertThat(stats.lagSeconds()).isGreaterThanOrEqualTo(0L);
     }
 
     private static Project project() {
@@ -317,6 +334,21 @@ class YStreamCdcConsumerTest {
 
         assertThat(count("1=1")).isZero();
         verify(reader, times(1)).readTable(any(), anyString(), anyString());
+    }
+
+    @Test
+    void aTableWithoutAPrimaryKeyIsReportedAsUnsupported() throws Exception {
+        // Every other engine lists such a table on the status panel ("No-PK tables"), so
+        // the operator sees that its rows are being skipped. On YStream this was a log
+        // line only: the panel showed nothing wrong while every change was dropped.
+        when(reader.readTable(any(), eq("APP"), eq("ORDERS")))
+                .thenReturn(meta("ORDERS", false));
+
+        handle(YStreamEvent.begin(pos(1)),
+                insert("ORDERS", row(1, "a"), pos(1)),
+                YStreamEvent.commit(pos(2)));
+
+        assertThat(stats.unsupportedTables()).contains("APP.ORDERS");
     }
 
     @Test
@@ -536,6 +568,34 @@ class YStreamCdcConsumerTest {
 
         verify(taskStore).recordCdcFailure(eq(PROJECT),
                 contains(CdcFailureClassifier.Kind.YSTREAM_BLOCKED.name()));
+    }
+
+    /**
+     * Every other engine aggregates its applied rows into the per-table change-log windows
+     * and advances the project's last-sync stamp when a window carries rows. YStream never
+     * created the logger, so its change log stayed silent and "last sync" never moved even
+     * while rows landed.
+     */
+    @Test
+    void appliedRowsAreAggregatedIntoTheChangeLogAndAdvanceLastSync() throws Exception {
+        Deque<YStreamEvent> script = new ArrayDeque<>();
+        script.add(YStreamEvent.begin(pos(1)));
+        script.add(insert("ORDERS", row(1, "a"), pos(1)));
+        script.add(YStreamEvent.commit(pos(2)));
+        script.add(YStreamEvent.chunk("APP", "ORDERS", pos(9)));   // ends the run
+
+        when(lifecycle.ensure(eq(PROJECT), anyList(), any()))
+                .thenReturn(new Outcome(SERVICE, ANCHOR, false));
+        when(clientFactory.open(any(), any(), any())).thenReturn(adapter(script));
+
+        consumer.run();
+
+        verify(taskStore).markCdcDataApplied(PROJECT);
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(stateWriter).recordLog(eq(PROJECT), eq(com.qqmu.jync.model.ObjectType.DATA),
+                anyString(), eq(com.qqmu.jync.model.ChangeType.INFO), detail.capture(),
+                eq(true), anyLong(), any());
+        assertThat(detail.getValue()).contains("1 upserts");
     }
 
     private static YStreamClientAdapter adapter(Deque<YStreamEvent> script) {

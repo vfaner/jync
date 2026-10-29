@@ -492,6 +492,50 @@ class PgLogicalCdcConsumerDrainTest {
         verify(reader, times(2)).readTable(any(), anyString(), anyString());
     }
 
+    /**
+     * 刷新之后仍凑不齐 binding 列的行(元数据比行宽):槽里可能重放一条 DDL 之前提交的
+     * 行 —— slot 在基线之前创建,基线期间源库 ADD COLUMN,基线读到的元数据已是新形状,
+     * 而流里先到的是旧元组的行。upsert 会为缺的列绑 NULL,把目标上已有的值(基线的
+     * ADD COLUMN 默认值)静默抹掉,且每一行都这样。SQL Server 侧遇到同类情形整段跳过
+     * 并计数;PG 这里必须同样跳过这一行(不落 NULL),计入 skippedUnsupported,
+     * 位点照常前进(重试同一行只会重复抹一遍)。
+     */
+    @Test
+    void aRowThatOmitsABindingColumnIsSkippedInsteadOfNullingTheTarget() throws Exception {
+        try (Connection c = h2conn(); Statement st = c.createStatement()) {
+            st.execute("ALTER TABLE orders ADD COLUMN note VARCHAR(64)");
+            st.execute("INSERT INTO orders (id, name, note) VALUES (1, 'a', 'keep me')");
+        }
+        // 源端元数据永远是 DDL 之后的三列形状(基线读在 ADD COLUMN 之后)。
+        TableMeta withNote = new TableMeta();
+        withNote.setName("orders");
+        withNote.getColumns().add(column("id", Types.BIGINT, true));
+        withNote.getColumns().add(column("name", Types.VARCHAR, false));
+        withNote.getColumns().add(column("note", Types.VARCHAR, false));
+        withNote.getPrimaryKeys().add("id");
+        when(reader.readTable(any(), anyString(), anyString())).thenReturn(withNote);
+
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", "table public.orders: UPDATE:"
+                        + " id[bigint]:1 name[text]:'renamed'"},
+                new String[]{"0/1002", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        try (Connection c = h2conn();
+             Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT note FROM orders WHERE id = 1")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString(1))
+                    .as("缺列的行不得把目标上已有的值绑成 NULL")
+                    .isEqualTo("keep me");
+        }
+        assertThat(stats.snapshot().get("skippedUnsupported")).isEqualTo(1L);
+        // 跳过不是停滞:行不可能自己补齐,位点照常确认(SQL Server 的同类策略)。
+        verify(advancePs, times(1)).executeQuery();
+    }
+
     /** 未修改的 TOAST 列:test_decoding 打印占位符,真实值不在流里。 */
     private static String toastUpdate(long id, String name) {
         return "table public.orders: UPDATE: id[bigint]:" + id

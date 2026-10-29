@@ -93,6 +93,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
     private final CdcEventApplier applier;
     private final YStreamTransactionAssembler tx = new YStreamTransactionAssembler();
     private final CdcTransactionBudget budget;
+    private final CdcChangeWindowLogger windowLogger;
     private final BindingSupplier bindings = new BindingSupplier();
 
     private volatile boolean running = true;
@@ -147,6 +148,8 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         this.opsFactory = opsFactory;
         this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
         this.budget = CdcTransactionBudget.from(properties);
+        this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
+                taskStore, properties.getCdc().getChangeWindowMs());
     }
 
     @Override
@@ -176,6 +179,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
             long idlePollMs = CdcReconnectBackoff.effectiveIdlePollMs(
                     ctx.getConfig().getCdcIdlePollMs(), ENGINE_IDLE_POLL_MS);
             stats.markStarted();
+            windowLogger.start();
             while (running && !Thread.currentThread().isInterrupted()) {
                 if (!lock.renew()) {
                     log.warn("YStream consumer for project {} stopping: lease lost (another"
@@ -288,6 +292,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                 adapter.close();
             }
             currentAdapter = null;
+            windowLogger.close();
             lock.close();
             stats.setConnected(false);
             try {
@@ -444,6 +449,9 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         }
         if (event.position() != null) {
             lastSeen = event.position();
+            // Every other engine touches this as it delivers; without it the panel's lag
+            // stays "—" even while rows are flowing.
+            stats.touchEvent(System.currentTimeMillis());
         }
         Kind kind = event.kind();
         if (kind == null) {
@@ -770,6 +778,9 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                 TableMeta meta = reader.readTable(conn, schema.toUpperCase(Locale.ROOT),
                         table.toUpperCase(Locale.ROOT));
                 if (meta == null || !meta.hasPrimaryKey()) {
+                    // The panel lists it with the other engines' "No-PK tables"; a WARN
+                    // alone left every change silently dropped with nothing on the page.
+                    stats.addUnsupportedTable(schema + "." + table);
                     log.warn("YStream cannot map source table {}.{} (missing or no PK);"
                             + " skipping its row events", schema, table);
                     cache.put(key, unmappable);
