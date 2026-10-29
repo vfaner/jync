@@ -171,19 +171,74 @@ public class UpgradeService {
      */
     public record RestartSpec(long oldPid, String javaBinary, String jarPath, String backupPath,
                               String workDir, Integer port, String failedPath,
-                              List<String> jvmArgs, List<String> programArgs) {
+                              List<String> jvmArgs, List<String> programArgs, String probeHost) {
 
         public RestartSpec {
             jvmArgs = jvmArgs == null ? List.of() : List.copyOf(jvmArgs);
             programArgs = programArgs == null ? List.of() : List.copyOf(programArgs);
+            // Sanitised here, not only at the call site: this value is spliced into a
+            // generated shell script, so a spec built anywhere must already be safe.
+            probeHost = probeHostFor(probeHost);
         }
 
-        /** A specification with no explicit launch arguments. */
+        /** A specification that probes loopback and carries no explicit launch arguments. */
         public RestartSpec(long oldPid, String javaBinary, String jarPath, String backupPath,
                            String workDir, Integer port, String failedPath) {
             this(oldPid, javaBinary, jarPath, backupPath, workDir, port, failedPath,
-                    List.of(), List.of());
+                    List.of(), List.of(), DEFAULT_PROBE_HOST);
         }
+
+        /** A specification with explicit launch arguments that probes loopback. */
+        public RestartSpec(long oldPid, String javaBinary, String jarPath, String backupPath,
+                           String workDir, Integer port, String failedPath,
+                           List<String> jvmArgs, List<String> programArgs) {
+            this(oldPid, javaBinary, jarPath, backupPath, workDir, port, failedPath,
+                    jvmArgs, programArgs, DEFAULT_PROBE_HOST);
+        }
+    }
+
+    /** The address a same-host readiness probe dials when the install names no bind address. */
+    static final String DEFAULT_PROBE_HOST = "127.0.0.1";
+
+    /**
+     * The host the readiness probe dials, derived from {@code server.address}.
+     *
+     * <p>Blank, a wildcard ({@code 0.0.0.0}, {@code ::}, {@code *}) and anything unusable all
+     * resolve to loopback: wildcards are not portable connect targets, and the default install
+     * binds every interface, so loopback is the address that always reaches it. A concrete
+     * address is used as given — an install bound to one interface is unreachable on loopback,
+     * and probing there anyway killed a healthy new process after 180 seconds and rolled a
+     * successful upgrade back.
+     *
+     * <p>What survives is restricted to address and hostname characters because the value is
+     * spliced into a generated shell script; the configured value is operator-controlled, but
+     * this is not a reason to let it become script text.
+     */
+    static String probeHostFor(String configured) {
+        if (configured == null) {
+            return DEFAULT_PROBE_HOST;
+        }
+        String value = configured.trim();
+        if (value.length() > 1 && value.startsWith("[") && value.endsWith("]")) {
+            // URL notation for IPv6; neither /dev/tcp nor TcpClient.Connect accepts it.
+            value = value.substring(1, value.length() - 1).trim();
+        }
+        if (value.isEmpty() || "*".equals(value) || "0.0.0.0".equals(value)
+                || "::".equals(value) || "0:0:0:0:0:0:0:0".equals(value)) {
+            return DEFAULT_PROBE_HOST;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            boolean usable = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_'
+                    || c == ':' || c == '%';
+            if (!usable) {
+                log.warn("Upgrade: server.address '{}' is not a usable probe target;"
+                        + " the readiness probe will use {}", configured, DEFAULT_PROBE_HOST);
+                return DEFAULT_PROBE_HOST;
+            }
+        }
+        return value;
     }
 
     private final Supplier<String> currentVersion;
@@ -194,6 +249,8 @@ public class UpgradeService {
     private final Supplier<Path> jarLocation;
     private final Supplier<Path> workDir;
     private final String port;
+    /** {@code server.address}: the interface the restarted process will bind, may be null. */
+    private final String bindAddress;
     /** JVM options the current process was started with ({@code -Xmx}, {@code -D...}). */
     private final Supplier<List<String>> jvmArgs;
     /** Program arguments after the jar ({@code --spring.profiles.active=...}). */
@@ -222,6 +279,18 @@ public class UpgradeService {
                           ArtifactComparison artifactComparison,
                           Supplier<List<String>> jvmArgs,
                           Supplier<List<String>> programArgs) {
+        this(currentVersion, feed, downloader, launcher, shutdown, jarLocation, workDir, port,
+                messages, artifactComparison, jvmArgs, programArgs, null);
+    }
+
+    public UpgradeService(Supplier<String> currentVersion, SourceAwareFeed feed,
+                          JarDownloader downloader, RestartLauncher launcher, Shutdown shutdown,
+                          Supplier<Path> jarLocation, Supplier<Path> workDir, String port,
+                          I18nConfig.MessageSourceAccessorHolder messages,
+                          ArtifactComparison artifactComparison,
+                          Supplier<List<String>> jvmArgs,
+                          Supplier<List<String>> programArgs,
+                          String bindAddress) {
         this.currentVersion = currentVersion;
         this.feed = feed;
         this.downloader = downloader;
@@ -234,6 +303,7 @@ public class UpgradeService {
         this.artifactComparison = artifactComparison;
         this.jvmArgs = jvmArgs;
         this.programArgs = programArgs;
+        this.bindAddress = bindAddress;
         restoreReadyFromMarker();
     }
 
@@ -359,7 +429,8 @@ public class UpgradeService {
                     jar + ".failed-" + LocalDateTime.now()
                             .format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")),
                     launchableJvmArgs(jvmArgs.get()),
-                    programArgs.get());
+                    programArgs.get(),
+                    bindAddress);
             String content = isWindows() ? buildPowerShellScript(spec) : buildShellScript(spec);
             writeRestartScript(script, content);
             launcher.launch(script, workDir.get());
@@ -802,7 +873,8 @@ public class UpgradeService {
             sb.append("READY=0\n");
             sb.append("for i in $(seq 1 180); do\n");
             sb.append("  if ! kill -0 \"$NEW_PID\" 2>/dev/null; then break; fi\n");
-            sb.append("  if (exec 3<>/dev/tcp/127.0.0.1/").append(spec.port())
+            sb.append("  if (exec 3<>/dev/tcp/").append(spec.probeHost()).append('/')
+                    .append(spec.port())
                     .append(") 2>/dev/null; then READY=1; exec 3>&- 2>/dev/null; break; fi\n");
             sb.append("  sleep 1\n");
             sb.append("done\n");
@@ -867,7 +939,8 @@ public class UpgradeService {
             sb.append("for ($i = 0; $i -lt 180; $i++) {\n");
             sb.append("  if ($proc.HasExited) { break }\n");
             sb.append("  $client = New-Object System.Net.Sockets.TcpClient\n");
-            sb.append("  try { $client.Connect('127.0.0.1', ").append(spec.port())
+            sb.append("  try { $client.Connect('").append(spec.probeHost()).append("', ")
+                    .append(spec.port())
                     .append("); $ready = $true; break } catch { } finally { $client.Close() }\n");
             sb.append("  Start-Sleep -Seconds 1\n");
             sb.append("}\n");
@@ -1099,6 +1172,7 @@ public class UpgradeService {
         @Autowired
         public Bean(ObjectProvider<BuildProperties> buildProperties, SourceAwareFeed feed,
                     @Value("${server.port:8080}") String port,
+                    @Value("${server.address:}") String bindAddress,
                     I18nConfig.MessageSourceAccessorHolder messages,
                     ArtifactComparison artifactComparison,
                     ApplicationArguments applicationArguments) {
@@ -1117,7 +1191,8 @@ public class UpgradeService {
                     messages,
                     artifactComparison,
                     () -> ManagementFactory.getRuntimeMXBean().getInputArguments(),
-                    () -> Arrays.asList(applicationArguments.getSourceArgs()));
+                    () -> Arrays.asList(applicationArguments.getSourceArgs()),
+                    bindAddress);
         }
 
         @EventListener(ApplicationReadyEvent.class)

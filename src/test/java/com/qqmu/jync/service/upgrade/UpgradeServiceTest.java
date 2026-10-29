@@ -706,6 +706,71 @@ class UpgradeServiceTest {
     }
 
     @Test
+    void readinessProbeDialsTheConfiguredBindAddress() {
+        // The probe used to be hard-wired to 127.0.0.1. An installation that sets
+        // server.address=10.1.2.3 listens only on that interface, so a perfectly healthy new
+        // process was unreachable for 180 seconds and then killed and rolled back.
+        RestartSpec spec = new RestartSpec(12345L, "/usr/bin/java",
+                "/opt/jync/jync.jar", "/opt/jync/jync.jar.bak", "/opt/jync", 8081,
+                "/opt/jync/jync.jar.failed-x", List.of(), List.of(), "10.1.2.3");
+        String script = UpgradeService.buildShellScript(spec);
+
+        assertThat(script).contains("/dev/tcp/10.1.2.3/8081");
+        assertThat(script).doesNotContain("/dev/tcp/127.0.0.1/8081");
+    }
+
+    @Test
+    void powerShellReadinessProbeDialsTheConfiguredBindAddress() {
+        RestartSpec spec = new RestartSpec(999L, "C:\\Java\\bin\\java.exe",
+                "C:\\app\\jync.jar", "C:\\app\\jync.jar.bak", "C:\\app", 8080,
+                "C:\\app\\jync.jar.failed-x", List.of(), List.of(), "10.1.2.3");
+        String script = UpgradeService.buildPowerShellScript(spec);
+
+        assertThat(script).contains("Connect('10.1.2.3', 8080)");
+    }
+
+    @Test
+    void aWildcardBindAddressStillProbesLoopback() {
+        // 0.0.0.0 / :: mean "every interface", but connecting to them is not portable and
+        // meaningless for a same-host probe; loopback is the address that always works.
+        assertThat(UpgradeService.probeHostFor(null)).isEqualTo("127.0.0.1");
+        assertThat(UpgradeService.probeHostFor("  ")).isEqualTo("127.0.0.1");
+        assertThat(UpgradeService.probeHostFor("0.0.0.0")).isEqualTo("127.0.0.1");
+        assertThat(UpgradeService.probeHostFor("::")).isEqualTo("127.0.0.1");
+        assertThat(UpgradeService.probeHostFor("[::]")).isEqualTo("127.0.0.1");
+        assertThat(UpgradeService.probeHostFor("*")).isEqualTo("127.0.0.1");
+    }
+
+    @Test
+    void aSpecificBindAddressIsProbedAsConfigured() {
+        assertThat(UpgradeService.probeHostFor("10.1.2.3")).isEqualTo("10.1.2.3");
+        assertThat(UpgradeService.probeHostFor(" jync.internal ")).isEqualTo("jync.internal");
+        // Brackets are a URL notation; both bash's /dev/tcp and TcpClient.Connect take the
+        // bare literal, and "[::1]" is rejected by both.
+        assertThat(UpgradeService.probeHostFor("[::1]")).isEqualTo("::1");
+        assertThat(UpgradeService.probeHostFor("fe80::1%eth0")).isEqualTo("fe80::1%eth0");
+    }
+
+    @Test
+    void anUnusableBindAddressFallsBackToLoopbackInsteadOfReachingTheScript() {
+        // The value is spliced into a generated shell script, so anything that is not an
+        // address or hostname must never get there.
+        assertThat(UpgradeService.probeHostFor("127.0.0.1/8080; rm -rf /")).isEqualTo("127.0.0.1");
+        assertThat(UpgradeService.probeHostFor("$(id)")).isEqualTo("127.0.0.1");
+        assertThat(UpgradeService.probeHostFor("host x")).isEqualTo("127.0.0.1");
+    }
+
+    @Test
+    void aSpecWithoutAProbeHostKeepsProbingLoopback() {
+        RestartSpec spec = new RestartSpec(1L, "/usr/bin/java", "/opt/jync/jync.jar",
+                "/opt/jync/jync.jar.bak", "/opt/jync", 8081, "/opt/jync/failed");
+
+        assertThat(spec.probeHost()).isEqualTo("127.0.0.1");
+        assertThat(UpgradeService.buildShellScript(spec))
+                .contains("/dev/tcp/127.0.0.1/8081");
+    }
+
+    @Test
     void powershellScriptWaitsLaunchesAndRollsBack() {
         RestartSpec spec = new RestartSpec(999L, "C:\\Program Files\\Java\\bin\\java.exe",
                 "C:\\app\\jync.jar", "C:\\app\\jync.jar.bak", "C:\\app", 8080,
