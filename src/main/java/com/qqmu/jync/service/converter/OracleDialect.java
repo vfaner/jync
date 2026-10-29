@@ -473,11 +473,23 @@ public class OracleDialect extends AbstractSqlDialect {
         return s.endsWith(";") ? s.substring(0, s.length() - 1) : s;
     }
 
-    /** Removes the SQL*Plus terminator, which JDBC does not accept. */
+    /**
+     * Removes the SQL*Plus terminator, which JDBC does not accept.
+     *
+     * <p>A terminator is a {@code /} alone on the last line, and only that. Stripping a bare
+     * trailing slash instead also ate the closing delimiter of a body that ends in a block
+     * comment, submitting an unterminated comment that Oracle rejects — the routine then never
+     * gets created.
+     */
     private String stripTrailingSlash(String sql) {
         String s = sql.trim();
-        while (s.endsWith("/")) {
-            s = s.substring(0, s.length() - 1).trim();
+        while (!s.isEmpty()) {
+            int lastBreak = s.lastIndexOf('\n');
+            String lastLine = (lastBreak < 0 ? s : s.substring(lastBreak + 1)).trim();
+            if (!"/".equals(lastLine)) {
+                break;
+            }
+            s = lastBreak < 0 ? "" : s.substring(0, lastBreak).trim();
         }
         return s;
     }
