@@ -1,6 +1,8 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -312,6 +314,29 @@ class LogMinerSessionTest {
         } catch (SQLException e) {
             assertThat(e.getMessage()).contains("ARCHIVELOG");
         }
+    }
+
+    @Test
+    void aFailureAfterStartLogmnrEndsTheMiningSessionOnTheSameConnection() throws SQLException {
+        // docs/dm-logminer-spike.md: ADD_LOGFILE → START_LOGMNR → 读游标 → END_LOGMNR 必须
+        // 全程在同一条连接上,异常路径也要 END_LOGMNR。open 在 START_LOGMNR 之后还有
+        // 建语句/执行查询两步,任一步失败都会抛异常;消费方(LogMinerCdcConsumer)只在 open
+        // 正常返回后才给 currentSession 赋值,它 finally 里的 close() 到不了这里。于是
+        // 一个仍在运行的 LogMiner 会话跟着池化的物理连接回到连接池,下一轮 ADD_LOGFILE /
+        // START_LOGMNR 撞在残留会话上。
+        Connection conn = mock(Connection.class);
+        MiningDialect dialect = mock(MiningDialect.class);
+        when(dialect.highWaterScn(conn)).thenReturn(2000L);
+        when(dialect.logfilesCovering(conn, 1000L)).thenReturn(List.of("/arch/1.log"));
+        when(dialect.contentsQuery(conn)).thenReturn("SELECT 1 FROM V$LOGMNR_CONTENTS");
+        when(conn.prepareStatement(anyString())).thenThrow(new SQLException("ORA-01034"));
+
+        assertThatThrownBy(() -> LogMinerSession.open(conn, 1000L, 100, dialect))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("ORA-01034");
+
+        verify(dialect).startMining(conn, List.of("/arch/1.log"), 1000L, 2000L);
+        verify(dialect).endMining(conn);
     }
 
     @Test

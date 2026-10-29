@@ -315,12 +315,32 @@ public class LogMinerSession implements AutoCloseable {
 
         dialect.startMining(source, logfiles, startScn, highWaterScn);
 
-        PreparedStatement cursor = source.prepareStatement(dialect.contentsQuery(source));
-        cursor.setLong(1, startScn);
-        if (batchSize > 0) {
-            cursor.setFetchSize(batchSize);
+        // From here on the mining session is RUNNING. Anything that fails before the caller
+        // gets the LogMinerSession object would otherwise leave it running on a connection
+        // that returns to the pool (the consumer only assigns currentSession after open()
+        // returns, so its finally-block close() never sees this one) — and a pooled physical
+        // session still holding a LogMiner context is exactly what docs/dm-logminer-spike.md
+        // forbids: ADD_LOGFILE → START_LOGMNR → cursor → END_LOGMNR on ONE connection,
+        // END_LOGMNR included on the exception path.
+        PreparedStatement cursor = null;
+        try {
+            cursor = source.prepareStatement(dialect.contentsQuery(source));
+            cursor.setLong(1, startScn);
+            if (batchSize > 0) {
+                cursor.setFetchSize(batchSize);
+            }
+            ResultSet rows = cursor.executeQuery();
+            return new LogMinerSession(source, startScn, highWaterScn, cursor, rows, dialect);
+        } catch (SQLException | RuntimeException e) {
+            if (cursor != null) {
+                try {
+                    cursor.close();
+                } catch (SQLException ignored) {
+                    // the connection is either still usable or about to be discarded
+                }
+            }
+            dialect.endMining(source);
+            throw e;
         }
-        ResultSet rows = cursor.executeQuery();
-        return new LogMinerSession(source, startScn, highWaterScn, cursor, rows, dialect);
     }
 }
