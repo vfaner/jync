@@ -876,10 +876,14 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 [data-theme="dark"] .alert-danger { color: #f87171; }
 [data-theme="dark"] .alert-info   { color: #38bdf8; }
 
-/* 连接测试里的 CDC 就绪探测行:行样式对齐 .small,通过/未过用固定色 */
+/* 连接测试里的 CDC 就绪探测行:行样式对齐 .small,通过/未过用固定色。
+   这两行是页面底色上的普通文字,不是自绘底色的徽章,所以深色主题必须给浅一档的
+   覆盖 —— 否则 #b42318 压在 #0b1120 上只有 2.9:1,读不清(DarkThemeTextContrastTest)。 */
 .test-line { font-size: 12.5px; }
 .cdc-ok { color: #1a7f37; }
 .cdc-fail { color: #b42318; }
+[data-theme="dark"] .cdc-ok { color: #34d399; }
+[data-theme="dark"] .cdc-fail { color: #f87171; }
 
 /* ─── 统一居中弹窗（JyncDialog，B9） ─────────────────────────────────
    取代旧的右上角 toast：confirm/choose/alert 阻塞式，auto 约 2.6s 自消。
