@@ -124,6 +124,26 @@ class HeaderSsoAuthenticationFilterTest {
     }
 
     @Test
+    void anAuthenticatedRequestNeverTouchesTheMetadataStore() throws Exception {
+        // The filter runs on every page and every API call. It has nothing to do for a request
+        // that already carries a principal, so reading the SSO configuration first charged a
+        // metadata-store query to every authenticated request just to learn it could stand
+        // down. The already-authenticated check must come before the load.
+        SyncUserDetails local = SyncUserDetails.forExternalUser("local", UserRole.VIEWER);
+        org.springframework.security.authentication.UsernamePasswordAuthenticationToken auth =
+                new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                        local, null, local.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(auth);
+
+        MockHttpServletRequest request = request("/projects", "127.0.0.1");
+        session(request);
+
+        filter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+        verify(configService, never()).load();
+    }
+
+    @Test
     void aWrongSharedSecretIsRefused() throws Exception {
         config.setSecretHeaderName("X-Auth-Secret");
         config.setSecretHeaderValue(crypto.encrypt("s3cr3t"));

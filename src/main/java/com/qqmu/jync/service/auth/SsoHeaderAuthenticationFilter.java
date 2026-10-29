@@ -61,15 +61,19 @@ public class SsoHeaderAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        OaAuthConfig config = configService.load();
-        if (!config.isEnabled() || config.modeOrDefault() != OaAuthConfig.Mode.HEADER) {
+        // Standing down for a request that already carries a principal must come first: this
+        // filter runs on every page and API call, and the configuration read below is a query
+        // against the metadata store. Checking the principal after the read charged that query
+        // to every authenticated request purely to learn the filter had nothing to do.
+        Authentication existing = SecurityContextHolder.getContext().getAuthentication();
+        if (existing != null && existing.isAuthenticated()
+                && !(existing instanceof AnonymousAuthenticationToken)) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        Authentication existing = SecurityContextHolder.getContext().getAuthentication();
-        if (existing != null && existing.isAuthenticated()
-                && !(existing instanceof AnonymousAuthenticationToken)) {
+        OaAuthConfig config = configService.load();
+        if (!config.isEnabled() || config.modeOrDefault() != OaAuthConfig.Mode.HEADER) {
             filterChain.doFilter(request, response);
             return;
         }
