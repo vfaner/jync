@@ -3,6 +3,7 @@ package com.qqmu.jync.dto;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
+import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
 
@@ -41,6 +42,25 @@ class TableNameMappingValidationTest {
         SyncConfig config = configWith("A", "x", "B", "X");
 
         assertThat(config.tableMappingConflicts(null)).hasSize(1);
+    }
+
+    /**
+     * Case-insensitivity is a property of the guard, not of the machine it runs on. On a
+     * Turkish-locale JVM {@code "items".toUpperCase()} is {@code "İTEMS"} while
+     * {@code "ITEMS".toUpperCase()} stays {@code "ITEMS"}, so folding with the default locale
+     * would let two sources write one target — the exact corruption this check exists to stop.
+     */
+    @Test
+    void duplicateTargetsAreCaughtOnATurkishLocaleToo() {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(new Locale("tr", "TR"));
+        try {
+            SyncConfig config = configWith("A", "items", "B", "ITEMS");
+
+            assertThat(config.tableMappingConflicts(null)).hasSize(1);
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 
     @Test

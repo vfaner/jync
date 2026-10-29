@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -227,7 +228,7 @@ public class SyncConfig {
         LinkedHashMap<String, List<String>> sourcesByTarget = new LinkedHashMap<>();
         for (Map.Entry<String, String> e : targetBySource.entrySet()) {
             sourcesByTarget
-                    .computeIfAbsent(e.getValue().toUpperCase(), k -> new ArrayList<>())
+                    .computeIfAbsent(e.getValue().toUpperCase(Locale.ROOT), k -> new ArrayList<>())
                     .add(e.getKey());
         }
 
