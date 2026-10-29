@@ -500,6 +500,101 @@ class DataSyncServiceReplaySafetyTest {
                 .isInstanceOf(SQLException.class);
     }
 
+    /**
+     * 一条被改过的行会停在游标窗口的最上沿（它的游标值就是水位线），安全余量又让水位线每轮
+     * 回退，于是它每一轮都会被重发。通用（模拟 upsert）目标没有原生 upsert，写入是
+     * UPDATE 再 INSERT，而 UPDATE 遇到值已经完全相同的行照样报 1 影响行 —— 每一轮都被记成
+     * 一次更新，变更日志就把同一次修改反复记下去。现场复现的动作是「改主键 + 改更新时间」。
+     */
+    @Test
+    void aReplayedRowOnAnEmulatedTargetIsNotCountedAgain() throws SQLException {
+        CursorStrategy timestamp =
+                CursorStrategy.timestamp("UPDATED_AT", Types.TIMESTAMP, "update time");
+
+        exec(source, "CREATE TABLE ORDERS (ID BIGINT PRIMARY KEY, NOTE VARCHAR(20),"
+                + " UPDATED_AT TIMESTAMP)");
+        exec(target, "CREATE TABLE ORDERS (ID BIGINT PRIMARY KEY, NOTE VARCHAR(20),"
+                + " UPDATED_AT TIMESTAMP)");
+        exec(source, "INSERT INTO ORDERS VALUES (1, 'a', TIMESTAMP '2026-01-01 00:00:00')");
+
+        TableMeta table = new TableMeta();
+        table.setName("ORDERS");
+        table.setPrimaryKeys(List.of("ID"));
+
+        SyncProgress progress = new SyncProgress();
+        DataSyncService.TableSyncResult seed =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(seed.getNewCursorValue());
+
+        // The reported edit: the key and the cursor column both move to the newest values, so
+        // the row becomes the one every later window starts with.
+        exec(source, "UPDATE ORDERS SET ID = 2,"
+                + " UPDATED_AT = TIMESTAMP '2026-02-01 00:00:00' WHERE ID = 1");
+
+        DataSyncService.TableSyncResult first =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(first.getRowsInserted()).isEqualTo(1);
+        progress.setLastSyncValue(first.getNewCursorValue());
+
+        // Nothing changed since. Before the fix each idle cycle reported "1 updated" and filed
+        // a fresh change-log entry; the count must stay at zero while the row is replayed.
+        for (int cycle = 0; cycle < 3; cycle++) {
+            DataSyncService.TableSyncResult replay =
+                    service.syncTable(source, target, table, timestamp, progress, ctx);
+            assertThat(replay.getRowsChanged()).as("idle cycle %d", cycle).isZero();
+            assertThat(count("ORDERS")).isEqualTo(2);
+            progress.setLastSyncValue(replay.getNewCursorValue());
+        }
+
+        // An edit that really changes a value is still a change — the guard must not swallow
+        // it, and it must survive the replay of the following cycle without repeating.
+        exec(source, "UPDATE ORDERS SET NOTE = 'b',"
+                + " UPDATED_AT = TIMESTAMP '2026-03-01 00:00:00' WHERE ID = 2");
+        DataSyncService.TableSyncResult edited =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(edited.getRowsChanged()).isEqualTo(1);
+        progress.setLastSyncValue(edited.getNewCursorValue());
+
+        DataSyncService.TableSyncResult afterEdit =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(afterEdit.getRowsChanged()).isZero();
+    }
+
+    /**
+     * 目标表有一列没法比较（CLOB）时，"值真的变了"这个条件必须整表退让，与原生 upsert 的规则
+     * 一致：只守一半列会静默跳过"只有那一列变了"的行，而拿 CLOB 去比在多数产品上直接报错。
+     * 退让的代价是重放行仍记一次更新——这是既有边界；同一张表必须照常同步、不报错。
+     */
+    @Test
+    void aTableWithAnUncomparableColumnKeepsTheUnguardedFallback() throws SQLException {
+        CursorStrategy timestamp =
+                CursorStrategy.timestamp("UPDATED_AT", Types.TIMESTAMP, "update time");
+        exec(source, "CREATE TABLE DOCS (ID BIGINT PRIMARY KEY, BODY CLOB,"
+                + " UPDATED_AT TIMESTAMP)");
+        exec(target, "CREATE TABLE DOCS (ID BIGINT PRIMARY KEY, BODY CLOB,"
+                + " UPDATED_AT TIMESTAMP)");
+        exec(source, "INSERT INTO DOCS VALUES (1, 'hello', TIMESTAMP '2026-01-01 00:00:00')");
+
+        TableMeta table = new TableMeta();
+        table.setName("DOCS");
+        table.setPrimaryKeys(List.of("ID"));
+
+        SyncProgress progress = new SyncProgress();
+        DataSyncService.TableSyncResult seed =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(seed.getRowsInserted()).isEqualTo(1);
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(seed.getNewCursorValue());
+
+        // The row sits at the window's top, so each cycle replays it. The guard stood down, so
+        // the replay is still booked as a write — but it must be a write, not a failure.
+        DataSyncService.TableSyncResult replay =
+                service.syncTable(source, target, table, timestamp, progress, ctx);
+        assertThat(replay.getRowsChanged()).isEqualTo(1);
+        assertThat(count("DOCS")).isEqualTo(1);
+    }
+
     private long count(String tableName) throws SQLException {
         try (Statement st = target.createStatement();
              ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + tableName)) {

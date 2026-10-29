@@ -448,7 +448,12 @@ public class DataSyncService {
         params.add(lastCursor);
         params.add(upperBound);
 
-        WriteStats stats = copyRows(sourceConn, targetConn, selectSql, params, table, targetTable, ctx);
+        // This window IS replayed: the safety margin rewinds the stored watermark, so the
+        // newest rows come back every cycle. On an emulated-upsert target the writer must
+        // therefore skip rows that already hold these values, or each idle cycle files the
+        // same edit in the change log again.
+        WriteStats stats = copyRows(sourceConn, targetConn, selectSql, params, table, targetTable,
+                ctx, null, null, ctx.getBatchSize(), properties.getFetchSize(), false, true);
         result.rowsWritten = stats.read;
         applyStats(result, stats);
 
@@ -1212,6 +1217,22 @@ public class DataSyncService {
                                 SyncContext ctx, List<String> pkTrack, PkCursor sink,
                                 int batchSize, int fetchSize, boolean insertFirst)
             throws SQLException {
+        return copyRows(sourceConn, targetConn, selectSql, params, table, targetTable, ctx,
+                pkTrack, sink, batchSize, fetchSize, insertFirst, false);
+    }
+
+    /**
+     * As above, with the caller saying whether the rows are a cursor window that the safety
+     * margin will replay. On an emulated-upsert target that is what turns on the "only write a
+     * row that really differs" condition; a full load never needs it, and would pay one extra
+     * existence probe per inserted row for the privilege.
+     */
+    private WriteStats copyRows(Connection sourceConn, Connection targetConn, String selectSql,
+                                List<Object> params, TableMeta table, String targetTable,
+                                SyncContext ctx, List<String> pkTrack, PkCursor sink,
+                                int batchSize, int fetchSize, boolean insertFirst,
+                                boolean guardReplayedRows)
+            throws SQLException {
         SqlDialect targetDialect = ctx.getTargetDialect();
         List<String> pkColumns = table.getPrimaryKeys();
 
@@ -1278,9 +1299,12 @@ public class DataSyncService {
                 // An INSERT has no match clause, so the key columns only decide that shape —
                 // the cursor and replay logic above keeps using the real key list.
                 List<String> statementKeys = insertFirst ? List.of() : pkColumns;
+                // One dictionary read per table per pass; the native upsert and the emulated
+                // fallback take the same answer for the same reason (see the method's javadoc).
+                boolean canGuard = canGuardUnchangedRows(targetConn, ctx, targetTable, columns,
+                        pkColumns);
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
-                        columns, statementKeys, typeByColumn,
-                        canGuardUnchangedRows(targetConn, ctx, targetTable, columns, pkColumns));
+                        columns, statementKeys, typeByColumn, canGuard);
                 List<String> bindOrder = targetDialect.upsertBindOrder(columns, statementKeys);
 
                 boolean emulateUpsert = pkColumns.isEmpty()
@@ -1313,10 +1337,16 @@ public class DataSyncService {
                 RowReadPlan readPlan = RowReadPlan.of(
                         columns, jdbcTypes, typeNames, lobPolicy);
                 try {
+                    // The same comparability rule the native guard follows: a target column
+                    // whose values cannot be compared would make the conditioned UPDATE fail
+                    // on every row, so such a table keeps the plain update-then-insert (and
+                    // its extra log line for a replayed row) instead.
+                    boolean guardEmulated = guardReplayedRows && canGuard;
                     total = emulated
                             ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
                                     typeByColumn, rs, readPlan, ctx, cleanser, pkTrack,
-                                    sink, throughput, batchSize, lobPolicy, spillSession)
+                                    sink, throughput, batchSize, lobPolicy, spillSession,
+                                    guardEmulated)
                             : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
                                     rs, readPlan, ctx, cleanser, pkTrack,
                                     sink, throughput, batchSize, lobPolicy, spillSession);
@@ -1746,14 +1776,16 @@ public class DataSyncService {
                                                List<String> pkTrack, PkCursor sink,
                                                ThroughputMeter throughput, int batchSize,
                                                LobReadPolicy lobPolicy,
-                                               LobSpillSession spillSession)
+                                               LobSpillSession spillSession,
+                                               boolean guardUnchanged)
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
         GenericSqlDialect generic = dialect instanceof GenericSqlDialect
                 ? (GenericSqlDialect) dialect : null;
 
         String updateSql = generic != null
-                ? generic.getUpdateByPkSql(ctx.getTargetSchema(), targetTable, columns, pkColumns)
+                ? generic.getUpdateByPkSql(ctx.getTargetSchema(), targetTable, columns,
+                        pkColumns, guardUnchanged)
                 : null;
         String insertSql = dialect.getUpsertSql(ctx.getTargetSchema(), targetTable, columns,
                 List.of(), typeByColumn);
@@ -1761,12 +1793,25 @@ public class DataSyncService {
         List<String> updateBindOrder = new ArrayList<>();
         if (updateSql != null) {
             // SET clause values first, then the WHERE key values.
+            List<String> updatable = new ArrayList<>();
             for (String c : columns) {
                 if (!CollectionUtil.containsIgnoreCase(pkColumns, c)) {
+                    updatable.add(c);
+                }
+            }
+            updateBindOrder.addAll(updatable);
+            // The key precedes the condition in the statement ("WHERE key = ? AND (differs)"),
+            // so it binds before the condition's placeholders, not after.
+            updateBindOrder.addAll(pkColumns);
+            if (guardUnchanged) {
+                // The "really differs" condition compares each incoming value three times
+                // (see GenericSqlDialect#getUpdateByPkSql), so each column binds three times.
+                for (String c : updatable) {
+                    updateBindOrder.add(c);
+                    updateBindOrder.add(c);
                     updateBindOrder.add(c);
                 }
             }
-            updateBindOrder.addAll(pkColumns);
         }
 
         WriteStats stats = new WriteStats();
@@ -1824,7 +1869,17 @@ public class DataSyncService {
                                 ctx.getTargetDialect(), lobTracker);
                         updated = update.executeUpdate();
                     }
-                    if (updated == 0) {
+                    // With the guard on, zero affected rows is ambiguous: the key may be
+                    // absent, or the row may already hold these exact values — the cursor's
+                    // safety margin replays a window's newest rows every cycle. Only an absent
+                    // key needs the INSERT; the replay must stay a no-op, or the change log
+                    // files the same edit again on every poll.
+                    if (updated == 0 && guardUnchanged
+                            && rowExists(targetConn, generic, targetTable, pkColumns, row,
+                                    typeByColumn, ctx)) {
+                        log.debug("Row already holds these values in {}; replayed, not written",
+                                targetTable);
+                    } else if (updated == 0) {
                         JdbcRowMapper.bind(insert, row, columns, typeByColumn,
                                 ctx.getTargetDialect(), lobTracker);
                         try {
@@ -1838,15 +1893,23 @@ public class DataSyncService {
                             if (UniqueViolations.isUniqueViolation(e) && update != null) {
                                 // A concurrent writer may have inserted the same key between
                                 // our UPDATE and INSERT. Retrying the update converges without
-                                // failing — but only if it actually reaches a row. Zero
-                                // affected rows means the conflicting row carries a DIFFERENT
-                                // key (another unique index, or a vendor 23000 that was not a
-                                // duplicate at all); swallowing it would drop the row with no
-                                // error and no statistic.
+                                // failing — but only if it actually reaches a row. Otherwise
+                                // the conflicting row carries a DIFFERENT key (another unique
+                                // index, or a vendor 23000 that was not a duplicate at all);
+                                // swallowing it would drop the row with no error and no
+                                // statistic.
+                                // With the guard on, zero is again ambiguous: the concurrent
+                                // row may hold these exact values, in which case the replay is
+                                // a no-op rather than a failure. The existence probe separates
+                                // that from a conflict on some other key.
                                 JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn,
                                         ctx.getTargetDialect(), lobTracker);
                                 if (update.executeUpdate() != 0) {
                                     stats.updated++;
+                                } else if (guardUnchanged && rowExists(targetConn, generic,
+                                        targetTable, pkColumns, row, typeByColumn, ctx)) {
+                                    log.debug("Row already holds these values in {};"
+                                            + " replayed, not written", targetTable);
                                 } else {
                                     throw e;
                                 }

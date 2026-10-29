@@ -143,6 +143,26 @@ public class GenericSqlDialect extends AbstractSqlDialect {
     /** Update statement used by the update-then-insert fallback. */
     public String getUpdateByPkSql(String schema, String table, List<String> columns,
                                    List<String> pkColumns) {
+        return getUpdateByPkSql(schema, table, columns, pkColumns, false);
+    }
+
+    /**
+     * Update statement used by the update-then-insert fallback.
+     *
+     * <p>With {@code guardUnchanged} the statement also requires at least one non-key column to
+     * actually differ, so a row already holding these exact values reports zero affected rows
+     * instead of being counted as an update. The engine needs that on incremental windows: the
+     * cursor's safety margin replays the newest rows every cycle, and without the condition
+     * every replay became a fresh "1 row updated" in the change log. The condition is NULL-safe
+     * for the same reason {@link UpsertChangeGuard} is: a value appearing or disappearing must
+     * count as a difference, not vanish into SQL's three-valued logic.
+     *
+     * <p>The caller then binds, in order: the SET values, the key, then this condition's
+     * placeholders (three per non-key column, since the same incoming value is compared three
+     * times) — the key stands first in the WHERE clause.
+     */
+    public String getUpdateByPkSql(String schema, String table, List<String> columns,
+                                   List<String> pkColumns, boolean guardUnchanged) {
         List<String> updatable = nonKeyColumns(columns, pkColumns);
         if (updatable.isEmpty()) {
             return null;
@@ -155,7 +175,21 @@ public class GenericSqlDialect extends AbstractSqlDialect {
                 .map(c -> quoteIdentifier(c) + " = ?")
                 .reduce((a, b) -> a + " AND " + b)
                 .orElseThrow();
+        if (guardUnchanged) {
+            String guard = updatable.stream()
+                    .map(this::differsFromBoundValue)
+                    .reduce((a, b) -> a + " OR " + b)
+                    .orElseThrow();
+            where = where + " AND (" + guard + ")";
+        }
         return "UPDATE " + qualify(schema, table) + " SET " + sets + " WHERE " + where;
+    }
+
+    /** NULL-safe "this column differs from the incoming value" over the next three placeholders. */
+    private String differsFromBoundValue(String column) {
+        String ref = quoteIdentifier(column);
+        return "(" + ref + " <> ? OR (" + ref + " IS NULL AND ? IS NOT NULL)"
+                + " OR (" + ref + " IS NOT NULL AND ? IS NULL))";
     }
 
     /**
