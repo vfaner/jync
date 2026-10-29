@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URL;
+import java.util.List;
 import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -74,6 +75,24 @@ class DriverLoaderCleanupTest {
         loader.shutdown();
     }
 
+    @Test
+    void aDriverClassThatPrefixesAnotherKeepsItsOwnRegistration() throws Exception {
+        // Registration keys are class name + separator + jar path, and reloading one class
+        // deregisters its stale shims by prefix. With an empty separator that prefix also
+        // matched every longer class name, so loading probe.Driver silently dropped
+        // probe.DriverX's shim and its connections lost their driver. The separator is a
+        // literal U+0001 for exactly this reason; this test pins the behaviour, not the byte.
+        File jar = jarWithPrefixDrivers();
+        DriverLoader loader = new DriverLoader();
+
+        loader.ensureDriverLoaded("probe.DriverX", jar.getAbsolutePath());
+        loader.ensureDriverLoaded("probe.Driver", jar.getAbsolutePath());
+
+        assertThat(findDelegate(loader, "probe.Driver")).isNotNull();
+        assertThat(findDelegate(loader, "probe.DriverX")).isNotNull();
+        loader.shutdown();
+    }
+
     // --- fixtures ----------------------------------------------------------------------
 
     private Object findDelegate(DriverLoader loader, String driverClassName) throws Exception {
@@ -99,6 +118,52 @@ class DriverLoaderCleanupTest {
         File jar = new File(temp, name);
         try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
             out.flush();
+        }
+        return jar;
+    }
+
+    /**
+     * Two drivers whose class names prefix each other, compiled at runtime and jarred: only
+     * the child loader can supply them, so registration bookkeeping is the only thing under
+     * test.
+     */
+    private File jarWithPrefixDrivers() throws IOException {
+        // Fully qualified names throughout: a class named Driver cannot resolve the short
+        // name Driver to java.sql.Driver — it would find itself.
+        String template = "package probe;\n"
+                + "public class %s implements java.sql.Driver {\n"
+                + "  public java.sql.Connection connect(String url, java.util.Properties info)"
+                + " { return null; }\n"
+                + "  public boolean acceptsURL(String url) { return false; }\n"
+                + "  public java.sql.DriverPropertyInfo[] getPropertyInfo(String url,"
+                + " java.util.Properties info) { return new java.sql.DriverPropertyInfo[0]; }\n"
+                + "  public int getMajorVersion() { return 0; }\n"
+                + "  public int getMinorVersion() { return 0; }\n"
+                + "  public boolean jdbcCompliant() { return false; }\n"
+                + "  public java.util.logging.Logger getParentLogger() { return null; }\n"
+                + "}\n";
+        for (String name : List.of("Driver", "DriverX")) {
+            java.nio.file.Files.writeString(
+                    new File(temp, name + ".java").toPath(), String.format(template, name));
+        }
+
+        String[] args = {"-d", temp.getAbsolutePath(),
+                new File(temp, "Driver.java").getAbsolutePath(),
+                new File(temp, "DriverX.java").getAbsolutePath()};
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        assertThat(compiler.run(null, null, null, args))
+                .as("runtime compilation failed").isEqualTo(0);
+
+        File jar = new File(temp, "prefix-drivers.jar");
+        try (JarOutputStream out = new JarOutputStream(new FileOutputStream(jar))) {
+            for (String name : List.of("Driver", "DriverX")) {
+                File compiled = new File(temp, "probe/" + name + ".class");
+                assertThat(compiled).exists();
+                JarEntry entry = new JarEntry("probe/" + name + ".class");
+                out.putNextEntry(entry);
+                out.write(java.nio.file.Files.readAllBytes(compiled.toPath()));
+                out.closeEntry();
+            }
         }
         return jar;
     }

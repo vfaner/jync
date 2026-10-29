@@ -39,7 +39,7 @@ public class DriverLoader {
      * Separates the driver class name from the canonical jar path inside a registration
      * key. U+0001 cannot appear in either part (a class name or file path).
      */
-    private static final String KEY_SEPARATOR = "";
+    private static final String KEY_SEPARATOR = "\u0001";
 
     /**
      * Driver class name + a U+0001 separator + canonical jar path -> shim registered with
