@@ -185,6 +185,7 @@ class TablePreviewServiceTest {
         when(familyDialect.family()).thenReturn(DatabaseType.DialectFamily.ORACLE);
         when(familyDialect.explicitType()).thenReturn(null);
         when(familyDialect.withServerMajorVersion(null)).thenReturn(familyDialect);
+        when(familyDialect.forProduct(any())).thenReturn(familyDialect);
         when(familyDialect.qualify("PUBLIC", "ORDERS"))
                 .thenReturn("\"PUBLIC\".\"ORDERS\"");
 
@@ -256,6 +257,7 @@ class TablePreviewServiceTest {
         when(familyDialect.family()).thenReturn(DatabaseType.DialectFamily.ORACLE);
         when(familyDialect.explicitType()).thenReturn(null);
         when(familyDialect.withServerMajorVersion(null)).thenReturn(familyDialect);
+        when(familyDialect.forProduct(any())).thenReturn(familyDialect);
         when(familyDialect.qualify("PUBLIC", "ORDERS")).thenReturn("\"PUBLIC\".\"ORDERS\"");
         service = new TablePreviewService(projectRepository, databaseConfigRepository,
                 dataSourceManager, new MetadataReaderFactory(List.of(familyReader)),
@@ -355,6 +357,7 @@ class TablePreviewServiceTest {
         when(familyDialect.family()).thenReturn(DatabaseType.DialectFamily.ORACLE);
         when(familyDialect.explicitType()).thenReturn(null);
         when(familyDialect.withServerMajorVersion(null)).thenReturn(familyDialect);
+        when(familyDialect.forProduct(any())).thenReturn(familyDialect);
         when(familyDialect.qualify("PUBLIC", "ORDERS")).thenReturn("\"PUBLIC\".\"ORDERS\"");
         service = new TablePreviewService(projectRepository, databaseConfigRepository,
                 dataSourceManager, new MetadataReaderFactory(List.of(familyReader)),

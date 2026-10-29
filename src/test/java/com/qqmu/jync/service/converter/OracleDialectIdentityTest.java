@@ -84,6 +84,56 @@ class OracleDialectIdentityTest {
     }
 
     @Test
+    void aGeneratedIdentityNameStaysWithinOracleElevenBytes() {
+        // 11g caps identifiers at 30 BYTES. "SEQ_客户订单明细_客户编号" is 15 characters — well
+        // under the character cap — but 35 bytes, so the table itself was created and every
+        // CREATE SEQUENCE / CREATE TRIGGER behind it failed with ORA-00972, cycle after cycle,
+        // for a name neither the preflight nor the operator ever reported.
+        TableMeta table = cjkTableWithIdentity();
+        List<String> extra = oracle11.getPostCreateTableDdl(table, null, "客户订单明细",
+                DatabaseType.MYSQL);
+
+        assertThat(extra).hasSize(2);
+        for (String stmt : extra) {
+            assertThat(utf8Length(firstQuotedName(stmt)))
+                    .as("generated name must fit 30 bytes: %s", stmt)
+                    .isLessThanOrEqualTo(30);
+        }
+    }
+
+    @Test
+    void aDmTargetKeepsTheLongerNameItGeneratesToday() {
+        // DM and YashanDB share this dialect, and its version number is pinned to 11 for the
+        // identity grammar alone. Their own identifier limits are far above 30 bytes, so
+        // applying Oracle's byte cap to them would rename sequences and triggers of tables
+        // that work today — a change with nothing behind it.
+        SqlDialectFactory factory = new SqlDialectFactory(
+                List.of(new OracleDialect(), new GenericSqlDialect()),
+                new GenericSqlDialect());
+        TableMeta table = cjkTableWithIdentity();
+
+        List<String> extra = factory.forType(DatabaseType.DM, 11)
+                .getPostCreateTableDdl(table, null, "客户订单明细", DatabaseType.MYSQL);
+
+        assertThat(firstQuotedName(extra.get(0))).isEqualTo("SEQ_客户订单明细_客户编号");
+        assertThat(firstQuotedName(extra.get(1))).isEqualTo("TRG_客户订单明细_客户编号");
+    }
+
+    @Test
+    void theFactoryGivesOracleItsByteCappedNames() {
+        SqlDialectFactory factory = new SqlDialectFactory(
+                List.of(new OracleDialect(), new GenericSqlDialect()),
+                new GenericSqlDialect());
+        TableMeta table = cjkTableWithIdentity();
+
+        List<String> extra = factory.forType(DatabaseType.ORACLE, 11)
+                .getPostCreateTableDdl(table, null, "客户订单明细", DatabaseType.MYSQL);
+
+        assertThat(utf8Length(firstQuotedName(extra.get(0)))).isLessThanOrEqualTo(30);
+        assertThat(utf8Length(firstQuotedName(extra.get(1)))).isLessThanOrEqualTo(30);
+    }
+
+    @Test
     void modifyColumnKeepsIdentityOnModernOracleAndEmitsFallbackOnOld() {
         ColumnMeta id = identityId();
         String modern = oracle12.getModifyColumnSql(null, "orders", id, DatabaseType.MYSQL);
@@ -119,8 +169,7 @@ class OracleDialectIdentityTest {
                 .isEqualTo("SELECT MAX(\"ID\") FROM \"ORDERS\"");
     }
 
-    private static TableMeta tableWithIdentity() {
-        ColumnMeta id = identityId();
+    private static TableMeta tableWithIdentity() {        ColumnMeta id = identityId();
         ColumnMeta name = new ColumnMeta();
         name.setName("cust_name");
         name.setJdbcType(Types.VARCHAR);
@@ -133,6 +182,36 @@ class OracleDialectIdentityTest {
         table.setColumns(new ArrayList<>(List.of(id, name)));
         table.setPrimaryKeys(List.of("id"));
         return table;
+    }
+
+    /** CJK names that are each legal on their own; the names they generate are not. */
+    private static TableMeta cjkTableWithIdentity() {
+        ColumnMeta id = identityId();
+        id.setName("客户编号");
+        ColumnMeta name = new ColumnMeta();
+        name.setName("客户名称");
+        name.setJdbcType(Types.VARCHAR);
+        name.setTypeName("VARCHAR");
+        name.setSize(50);
+        name.setNullable(true);
+        name.setOrdinalPosition(2);
+        TableMeta table = new TableMeta();
+        table.setName("客户订单明细");
+        table.setColumns(new ArrayList<>(List.of(id, name)));
+        table.setPrimaryKeys(List.of("客户编号"));
+        return table;
+    }
+
+    /** The first double-quoted identifier of a statement — the name its CREATE declares. */
+    private static String firstQuotedName(String sql) {
+        java.util.regex.Matcher m =
+                java.util.regex.Pattern.compile("\"([^\"]+)\"").matcher(sql);
+        assertThat(m.find()).as("statement declares a quoted name: %s", sql).isTrue();
+        return m.group(1);
+    }
+
+    private static int utf8Length(String name) {
+        return name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
     }
 
     private static ColumnMeta identityId() {

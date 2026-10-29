@@ -447,6 +447,17 @@ public interface SqlDialect {
         return true;
     }
 
+    /**
+     * The same dialect, told which product it serves.
+     *
+     * <p>Only a dialect shared by several products with different limits has anything to say
+     * here: the Oracle dialect also speaks 达梦 and 崖山, whose identifier limits are not
+     * Oracle's. Everything else returns itself.
+     */
+    default SqlDialect forProduct(DatabaseType type) {
+        return this;
+    }
+
     String getTruncateSql(String schema, String table);
 
     /** Renders a literal for a DEFAULT clause, quoting only when the type needs it. */

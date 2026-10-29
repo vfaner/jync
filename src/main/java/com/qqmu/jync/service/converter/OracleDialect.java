@@ -32,27 +32,58 @@ public class OracleDialect extends AbstractSqlDialect {
      */
     private final boolean emptyStringAsLob;
 
+    /**
+     * Whether this instance serves Oracle itself rather than another product that speaks its
+     * grammar (达梦, 崖山). Those share the dialect — and the version number the factory pins
+     * them to for the identity branch — but not Oracle's 30-byte identifier cap. Defaults to
+     * true: the class models Oracle, and only the factory knows the configured product.
+     */
+    private final boolean oracleProduct;
+
     public OracleDialect() {
         this(null);
     }
 
     public OracleDialect(Integer majorVersion) {
-        this(majorVersion, true);
+        this(majorVersion, true, true);
     }
 
-    private OracleDialect(Integer majorVersion, boolean emptyStringAsLob) {
+    private OracleDialect(Integer majorVersion, boolean emptyStringAsLob, boolean oracleProduct) {
         this.majorVersion = majorVersion;
         this.emptyStringAsLob = emptyStringAsLob;
+        this.oracleProduct = oracleProduct;
     }
 
     @Override
     public SqlDialect withServerMajorVersion(Integer majorVersion) {
-        return new OracleDialect(majorVersion, emptyStringAsLob);
+        return new OracleDialect(majorVersion, emptyStringAsLob, oracleProduct);
     }
 
     @Override
     public SqlDialect withEmptyStringAsLob(boolean enabled) {
-        return new OracleDialect(majorVersion, enabled);
+        return new OracleDialect(majorVersion, enabled, oracleProduct);
+    }
+
+    @Override
+    public SqlDialect forProduct(DatabaseType type) {
+        return new OracleDialect(majorVersion, emptyStringAsLob, type == DatabaseType.ORACLE);
+    }
+
+    /**
+     * Oracle's pre-12.2 identifier cap is 30 <em>bytes</em>, so the byte budget is what keeps a
+     * generated sequence or trigger name legal: {@code SEQ_客户订单明细_客户编号} is 15
+     * characters — under the character cap — but 35 bytes, and every CREATE for it failed with
+     * ORA-00972 after the table itself had been created.
+     *
+     * <p>Only the real product gets the byte budget. DM and YashanDB accept far longer names,
+     * and shortening theirs would rename the sequences of tables that work today; the 12c+
+     * limit (128) never binds under the 30-character cap, so modern Oracle is unchanged too.
+     */
+    @Override
+    protected String truncateIdentifier(String name) {
+        return oracleProduct
+                ? truncateIdentifier(name, maxIdentifierLength(), maxIdentifierBytes())
+                : super.truncateIdentifier(name);
     }
 
     /**

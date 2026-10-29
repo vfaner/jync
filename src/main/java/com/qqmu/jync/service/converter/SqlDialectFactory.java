@@ -53,7 +53,7 @@ public class SqlDialectFactory {
                     ? targetMajorVersion : null;
             for (SqlDialect dialect : dialects) {
                 if (dialect.explicitType() == null && dialect.family() == familyOverride) {
-                    return dialect.withServerMajorVersion(oracleVersion);
+                    return dialect.withServerMajorVersion(oracleVersion).forProduct(type);
                 }
             }
             return fallback;
@@ -68,7 +68,7 @@ public class SqlDialectFactory {
         // diverges from plain PostgreSQL only on the upsert form).
         for (SqlDialect dialect : dialects) {
             if (type.equals(dialect.explicitType())) {
-                return dialect.withServerMajorVersion(oracleVersion);
+                return dialect.withServerMajorVersion(oracleVersion).forProduct(type);
             }
         }
         DatabaseType.DialectFamily family = type.getFamily();
@@ -77,7 +77,7 @@ public class SqlDialectFactory {
         }
         for (SqlDialect dialect : dialects) {
             if (dialect.explicitType() == null && dialect.family() == family) {
-                return dialect.withServerMajorVersion(oracleVersion);
+                return dialect.withServerMajorVersion(oracleVersion).forProduct(type);
             }
         }
         return fallback;

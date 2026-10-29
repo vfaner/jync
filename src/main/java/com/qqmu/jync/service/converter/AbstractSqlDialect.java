@@ -792,13 +792,66 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     }
 
     protected String truncateIdentifier(String name) {
-        int max = maxIdentifierLength();
-        if (name == null || name.length() <= max) {
+        return truncateIdentifier(name, maxIdentifierLength(), 0);
+    }
+
+    /**
+     * Shortens a generated name to a character budget and, when the product counts bytes, to a
+     * UTF-8 byte budget too (0 = no byte budget).
+     *
+     * <p>Both budgets are needed because they are different limits: Oracle's pre-12.2 cap is 30
+     * <em>bytes</em>, so a 15-character CJK name measured only in characters went through at 35
+     * bytes and every CREATE behind it failed with ORA-00972.
+     *
+     * <p>The suffix is a hash of the whole name, so two names sharing a prefix stay distinct.
+     */
+    protected String truncateIdentifier(String name, int maxChars, int maxBytes) {
+        if (name == null) {
+            return null;
+        }
+        if ((maxChars <= 0 || name.codePointCount(0, name.length()) <= maxChars)
+                && (maxBytes <= 0 || utf8Length(name) <= maxBytes)) {
             return name;
         }
-        // Keep a hash suffix so two truncated names do not collide.
         String hash = Integer.toHexString(name.hashCode());
-        return name.substring(0, max - hash.length() - 1) + "_" + hash;
+        int suffix = hash.length() + 1; // "_" + hash
+        int charsLeft = maxChars > 0 ? maxChars - suffix : Integer.MAX_VALUE;
+        int bytesLeft = maxBytes > 0 ? maxBytes - suffix : Integer.MAX_VALUE;
+        if (charsLeft <= 0 || bytesLeft <= 0) {
+            // A budget below the suffix length cannot be met with a hash; leave the name alone
+            // rather than emit a bare, collision-prone suffix nobody can map back.
+            return name;
+        }
+        StringBuilder kept = new StringBuilder();
+        int chars = 0;
+        int bytes = 0;
+        for (int i = 0; i < name.length(); ) {
+            int cp = name.codePointAt(i);
+            int width = utf8Width(cp);
+            if (chars + 1 > charsLeft || bytes + width > bytesLeft) {
+                break;
+            }
+            kept.appendCodePoint(cp);
+            chars++;
+            bytes += width;
+            i += Character.charCount(cp);
+        }
+        return kept + "_" + hash;
+    }
+
+    private static int utf8Length(String name) {
+        return name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    }
+
+    /** UTF-8 length of one code point. */
+    private static int utf8Width(int cp) {
+        if (cp < 0x80) {
+            return 1;
+        }
+        if (cp < 0x800) {
+            return 2;
+        }
+        return cp < 0x10000 ? 3 : 4;
     }
 
     protected int maxIdentifierLength() {
