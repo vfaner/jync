@@ -99,7 +99,7 @@
                         <td>
                             <div class="wrap-detail" th:classappend="${!log.success} ? '' : 'muted'"
                                  th:style="${!log.success} ? 'color:var(--danger)' : ''"
-                                 th:text="${log.details ?: ''}">details</div>
+                                 th:text="${@changeLogDetailsLocalizer.localize(log.details) ?: ''}">details</div>
                         </td>
                     </tr>
                     </tbody>

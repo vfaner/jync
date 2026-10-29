@@ -164,7 +164,8 @@
                                 <span class="badge badge-mute"
                                       th:text="#{'changeType.' + ${log.changeType}}">Create</span>
                             </div>
-                            <div class="feed-detail" th:if="${log.details}" th:text="${log.details}">details</div>
+                            <div class="feed-detail" th:if="${log.details}"
+                                 th:text="${@changeLogDetailsLocalizer.localize(log.details)}">details</div>
                         </div>
                         <div class="feed-side">
                             <div th:text="${#temporals.format(log.occurredAt, 'MM-dd HH:mm')}">time</div>

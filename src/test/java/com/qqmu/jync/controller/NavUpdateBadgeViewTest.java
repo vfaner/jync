@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.DashboardService;
+import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 
 /**
@@ -30,7 +31,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
  * get neither the dot nor the request behind it.
  */
 @WebMvcTest(DashboardController.class)
-@Import(GlobalModelAdvice.class)
+@Import({GlobalModelAdvice.class, ChangeLogDetailsLocalizer.class})
 @TestPropertySource(properties = "app.github-url=https://github.com/vfaner/jync")
 class NavUpdateBadgeViewTest {
 

@@ -31,6 +31,7 @@ import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.ChangeLogService;
+import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 
@@ -49,7 +50,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
  * </ul>
  */
 @WebMvcTest(ChangeLogController.class)
-@Import(GlobalModelAdvice.class)
+@Import({GlobalModelAdvice.class, ChangeLogDetailsLocalizer.class})
 @TestPropertySource(properties = "app.github-url=https://example.com/repo")
 class ChangeLogRefreshViewTest {
 
