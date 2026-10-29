@@ -31,8 +31,15 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 public class YStreamClientFactory {
 
-    /** How long one {@code next()} blocks before reporting an idle poll. */
-    static final int POLL_TIMEOUT_MS = 1_000;
+    /**
+     * How long one {@code next()} blocks before reporting an idle poll, in SECONDS.
+     *
+     * <p>The library hands this value straight to
+     * {@code ArrayBlockingQueue.poll(n, TimeUnit.SECONDS)} — a millisecond value of 1000
+     * parked a blocked {@code next()} for over sixteen minutes, so a stream whose fetch
+     * thread died went unnoticed for that long.
+     */
+    static final int POLL_TIMEOUT_SECONDS = 1;
     /** LCRs the client may buffer internally before applying back-pressure. */
     static final int QUEUE_SIZE = 1_000;
 
@@ -95,7 +102,7 @@ public class YStreamClientFactory {
                 .setStartMode(StartMode.RECOVER)
                 .setRecoverPosition(toClientPosition(recoverFrom))
                 .setDeserializer(new DefaultDeserializer())
-                .setPollTimeout(POLL_TIMEOUT_MS)
+                .setPollTimeout(POLL_TIMEOUT_SECONDS)
                 .setQueueSize(QUEUE_SIZE)
                 .build();
     }

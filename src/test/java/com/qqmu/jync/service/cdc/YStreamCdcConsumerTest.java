@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
@@ -244,6 +246,42 @@ class YStreamCdcConsumerTest {
         assertThat(count("id=2")).isEqualTo(1);
     }
 
+    /**
+     * Measured on YashanDB 23.4.7.100: an UPDATE LCR's new image carries only the columns the
+     * statement changed ({@code UPDATE ... SET name=...} delivers just NAME), while the old
+     * image is the whole pre-update row. Requiring the key in the new image therefore dropped
+     * every ordinary update: the target kept the pre-update values forever and the panel only
+     * showed a "no primary-key image" warning.
+     */
+    @Test
+    void anUpdateThatCarriesOnlyTheChangedColumnsStillApplies() throws Exception {
+        seedTarget(1, "old");
+
+        Map<String, Object> changed = new LinkedHashMap<>();
+        changed.put("NAME", "new");
+
+        handle(YStreamEvent.begin(pos(1)),
+                update("ORDERS", changed, row(1, "old"), pos(1)),
+                YStreamEvent.commit(pos(2)));
+
+        assertThat(count("id=1 AND name='new'")).isEqualTo(1);
+    }
+
+    @Test
+    void anUpdateWithoutAKeyInEitherImageIsStillSkipped() throws Exception {
+        seedTarget(1, "old");
+
+        Map<String, Object> changed = new LinkedHashMap<>();
+        changed.put("NAME", "new");
+
+        handle(YStreamEvent.begin(pos(1)),
+                update("ORDERS", changed, changed, pos(1)),
+                YStreamEvent.commit(pos(2)));
+
+        // 两张镜像都没有主键:这一行没有身份,只能跳过,不能猜。
+        assertThat(count("id=1 AND name='old'")).isEqualTo(1);
+    }
+
     @Test
     void aDeleteIsAppliedFromTheOldImage() throws Exception {
         seedTarget(1, "gone");
@@ -400,6 +438,68 @@ class YStreamCdcConsumerTest {
 
     // —— the loop itself ——
 
+    /**
+     * The library returns null for every check point packet — several times a minute on a
+     * healthy stream — as well as on an idle poll. Treating the first null as "this cycle is
+     * over" made the consumer close and reopen the YStream service on every check point;
+     * the immediate re-attach then failed with {@code YAS-02731 YStream server status is
+     * invalid, current status: RUNNING} and the project never applied a row.
+     */
+    @Test
+    void aNullFromTheStreamIsACheckPointTickNotTheEndOfTheCycle() throws Exception {
+        // LinkedList, not ArrayDeque: null is the event under test.
+        Deque<YStreamEvent> script = new java.util.LinkedList<>();
+        script.add(null);                        // the first check point every stream sends
+        script.add(YStreamEvent.begin(pos(1)));
+        script.add(null);
+        script.add(insert("ORDERS", row(1, "a"), pos(1)));
+        script.add(YStreamEvent.commit(pos(2)));
+        script.add(null);
+        script.add(YStreamEvent.begin(pos(3)));
+        script.add(null);
+        script.add(insert("ORDERS", row(2, "b"), pos(3)));
+        script.add(YStreamEvent.commit(pos(4)));
+        script.add(YStreamEvent.chunk("APP", "ORDERS", pos(9)));   // ends the run
+
+        when(lifecycle.ensure(eq(PROJECT), anyList(), any()))
+                .thenReturn(new Outcome(SERVICE, ANCHOR, false));
+        // Any anchor: the point of the test is that only ONE open happens at all.
+        when(clientFactory.open(any(), any(), any())).thenReturn(adapter(script));
+
+        consumer.run();
+
+        // Both rows land, and the client was never reopened: nulls are ticks, not cycle ends.
+        assertThat(count("id=1")).isEqualTo(1);
+        assertThat(count("id=2")).isEqualTo(1);
+        verify(clientFactory, times(1)).open(any(), any(), any());
+    }
+
+    /**
+     * The client library forwards its applied position to the source in every check point.
+     * Nothing in Jync ever called {@code setAppliedPosition}, so the source kept reporting
+     * the position the stream was opened at — the panel's APPLIED_POSITION froze forever
+     * while rows were landing in the target, and the source never learned it could prune.
+     */
+    @Test
+    void theStreamIsToldThePositionOnlyAfterTheTargetHasIt() throws Exception {
+        YStreamClientAdapter adapter = mock(YStreamClientAdapter.class);
+        when(adapter.next()).thenReturn(
+                YStreamEvent.begin(pos(1)),
+                insert("ORDERS", row(1, "a"), pos(1)),
+                YStreamEvent.commit(pos(2)),
+                YStreamEvent.chunk("APP", "ORDERS", pos(9)));   // ends the run
+        when(lifecycle.ensure(eq(PROJECT), anyList(), any()))
+                .thenReturn(new Outcome(SERVICE, ANCHOR, false));
+        when(clientFactory.open(any(), any(), any())).thenReturn(adapter);
+
+        consumer.run();
+
+        // Data first, acknowledgement second — and nothing in between.
+        InOrder inOrder = inOrder(positionStore, adapter);
+        inOrder.verify(positionStore).advanceLsn(PROJECT, YStreamPositionCodec.encode(pos(2)));
+        inOrder.verify(adapter).setAppliedPosition(pos(2));
+    }
+
     @Test
     void aFatalStreamFailureParksTheProjectInsteadOfReconnecting() throws Exception {
         Deque<YStreamEvent> script = new ArrayDeque<>();
@@ -420,6 +520,11 @@ class YStreamCdcConsumerTest {
             @Override
             public YStreamEvent next() {
                 return script.poll();
+            }
+
+            @Override
+            public void setAppliedPosition(YStreamPosition position) {
+                // the source's acknowledgement is not under test here
             }
 
             @Override

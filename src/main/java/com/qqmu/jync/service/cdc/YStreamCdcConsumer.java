@@ -69,9 +69,10 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
     static final int MAX_APPLY_FAILURES = 5;
 
     /**
-     * Extra idle pause. Zero by default: the client's own {@code next()} blocks for
-     * {@code POLL_TIMEOUT_MS} and returns null on an empty poll, which already paces the
-     * loop. A project-level {@code cdcIdlePollMs} override is honored as an extra pause.
+     * Extra idle pause between cycles. Zero by default: a healthy stream stays open across
+     * its check points, so the loop only circles after a failure, where the reconnect
+     * backoff already paces it. A project-level {@code cdcIdlePollMs} override is honored
+     * as an extra pause.
      */
     private static final long ENGINE_IDLE_POLL_MS = 0L;
 
@@ -109,6 +110,8 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
     private YStreamPosition attachFrom;
     /** Last position seen on any LCR — a COMMIT without one still checkpoints here. */
     private YStreamPosition lastSeen;
+    /** The last position reported to the open stream; never ahead of {@link #attachFrom}. */
+    private YStreamPosition acknowledged;
 
     public YStreamCdcConsumer(Project project, SyncLockService.LockHandle lock,
                               SyncContext ctx, CdcPositionStore positionStore,
@@ -190,6 +193,8 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                     adapter = clientFactory.open(ctx.getSourceConfig(),
                             outcome.serviceName(), attachFrom);
                     currentAdapter = adapter;
+                    // The stream opens AT this position: telling it so again is a no-op.
+                    acknowledged = attachFrom;
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
@@ -380,17 +385,51 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         return script.toString();
     }
 
-    /** Drains the open stream until a poll timeout, a stop request or a failure. */
+    /**
+     * Drains the open stream until a stop request or a failure.
+     *
+     * <p>A null is a check point packet — the source sends one several times a minute on a
+     * healthy stream — not the end of the cycle. Breaking on it tore the stream down and
+     * re-attached about once a second; the source refuses an immediate re-attach
+     * ({@code YAS-02731 YStream server status is invalid, current status: RUNNING}), so the
+     * consumer spent its life in the reconnect backoff and never applied a row. The lease
+     * keeps renewing itself meanwhile (daemon handle watchdog), so a long-lived stream
+     * holds it exactly like a short-lived cycle did.
+     */
     private int drain(YStreamClientAdapter adapter) throws Exception {
         int applied = 0;
         while (running && !Thread.currentThread().isInterrupted()) {
             YStreamEvent event = adapter.next();
             if (event == null) {
-                break;   // poll timeout: an idle source, not an error
+                continue;   // a check point tick, not a reason to close the stream
             }
             applied += handle(event);
+            acknowledgeApplied(adapter);
         }
         return applied;
+    }
+
+    /**
+     * Reports the committed position back to the stream, once per advance.
+     *
+     * <p>The library sends its applied position to the source in every check point; without
+     * this call the source kept seeing the position the stream was opened at, so the
+     * project's progress looked frozen on the source side (and redo was held longer than
+     * needed). A failure here is only ever cosmetic — the stored position, not the source's
+     * view of it, is what a restart resumes from — so it must not break the cycle.
+     */
+    private void acknowledgeApplied(YStreamClientAdapter adapter) {
+        YStreamPosition position = attachFrom;
+        if (position == null || position.equals(acknowledged)) {
+            return;
+        }
+        try {
+            adapter.setAppliedPosition(position);
+            acknowledged = position;
+        } catch (RuntimeException e) {
+            log.debug("Project {}: the stream refused applied position {}: {}", project.getId(),
+                    position.text(), e.toString());
+        }
     }
 
     /**
@@ -479,20 +518,22 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
             case INSERT:
                 buffer(binding, after, operation);
                 return;
-            case UPDATE:
-                if (after == null || !hasKey(after, binding)) {
+            case UPDATE: {
+                Map<String, Object> image = postImage(before, after);
+                if (!hasKey(image, binding)) {
                     skipWithoutKey(binding, operation);
                     return;
                 }
                 // A key move is a delete of the old key plus an upsert of the new image;
                 // an upsert alone would leave the old row behind forever.
                 if (before != null && hasKey(before, binding)
-                        && CdcPrimaryKey.changed(before, after, binding)) {
+                        && CdcPrimaryKey.changed(before, image, binding)) {
                     budget.add(before);
                     tx.delete(binding, before);
                 }
-                buffer(binding, after, operation);
+                buffer(binding, image, operation);
                 return;
+            }
             case DELETE:
                 if (before == null || !hasKey(before, binding)) {
                     skipWithoutKey(binding, operation);
@@ -503,6 +544,30 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                 return;
             default:
         }
+    }
+
+    /**
+     * The whole row after an UPDATE: the pre-update image with the post-update columns laid
+     * over it.
+     *
+     * <p>Measured on YashanDB 23.4.7.100: an UPDATE LCR's new image carries only the columns
+     * the statement changed ({@code UPDATE ... SET name=?} delivers just NAME), while the old
+     * image — thanks to (ALL) COLUMNS supplemental logging — is the entire pre-update row.
+     * Upserting the new image alone therefore had no primary key and no unchanged columns;
+     * every ordinary update of a live table was skipped with a "no primary-key image"
+     * warning and the target kept the old values.
+     */
+    private static Map<String, Object> postImage(Map<String, Object> before,
+                                                 Map<String, Object> after) {
+        if (before == null || before.isEmpty()) {
+            return after == null ? Map.of() : after;
+        }
+        if (after == null || after.isEmpty()) {
+            return before;
+        }
+        Map<String, Object> image = new LinkedHashMap<>(before);
+        image.putAll(after);
+        return image;
     }
 
     private void buffer(CdcTableBinding binding, Map<String, Object> row,

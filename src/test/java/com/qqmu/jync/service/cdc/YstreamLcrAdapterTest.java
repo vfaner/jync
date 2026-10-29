@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import com.qqmu.jync.service.cdc.YStreamEvent.Kind;
 import com.qqmu.jync.service.cdc.YStreamEvent.Operation;
 import com.qqmu.jync.service.cdc.YStreamPositionCodec.YStreamPosition;
+import com.sics.ystream.exception.YstreamUnsupportedOperationException;
 import com.sics.ystream.metadata.Column;
 import com.sics.ystream.metadata.ColumnType;
 import com.sics.ystream.metadata.TableId;
@@ -217,5 +218,36 @@ class YstreamLcrAdapterTest {
         YstreamXactInterface lcr = xact(XactType.BEGIN, null);
 
         assertThat(YstreamLcrAdapter.toEvent(lcr).position()).isNull();
+    }
+
+    /**
+     * Measured on YashanDB 23.4.7.100: every stream opens with a metadata LCR, and a real
+     * one throws from {@code getPosition()} instead of returning null. (The mock above
+     * returns null by default, which is why this looked safe.)
+     */
+    @Test
+    void aMetadataLcrThatRefusesItsPositionIsStillIgnored() {
+        YstreamLcrInterface lcr = mock(YstreamLcrInterface.class);
+        when(lcr.getLcrType()).thenReturn(LcrType.YSTREAM_METADATA);
+        when(lcr.getPosition()).thenThrow(new YstreamUnsupportedOperationException(
+                "Ystream-0102 UnsupportedOperation: YstreamMetadata does not have a position"));
+
+        YStreamEvent event = YstreamLcrAdapter.toEvent(lcr);
+
+        assertThat(event.kind()).isEqualTo(Kind.IGNORED);
+        assertThat(event.position()).isNull();
+    }
+
+    /** The BEGIN of every real transaction refuses a position the same way. */
+    @Test
+    void aTransactionBeginThatRefusesItsPositionKeepsItsBoundary() {
+        YstreamXactInterface lcr = xact(XactType.BEGIN, null);
+        when(lcr.getPosition()).thenThrow(new YstreamUnsupportedOperationException(
+                "Ystream-0102 UnsupportedOperation: YstreamXactBegin does not have a position"));
+
+        YStreamEvent event = YstreamLcrAdapter.toEvent(lcr);
+
+        assertThat(event.kind()).isEqualTo(Kind.XACT_BEGIN);
+        assertThat(event.position()).isNull();
     }
 }

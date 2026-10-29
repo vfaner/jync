@@ -9,6 +9,7 @@ import com.qqmu.jync.service.cdc.YStreamEvent.Operation;
 import com.qqmu.jync.service.cdc.YStreamPositionCodec.YStreamPosition;
 import com.sics.ystream.YstreamClientBoot;
 import com.sics.ystream.exception.YstreamSqlException;
+import com.sics.ystream.exception.YstreamUnsupportedOperationException;
 import com.sics.ystream.metadata.TableId;
 import com.sics.ystream.result.DmlType;
 import com.sics.ystream.result.LcrType;
@@ -47,6 +48,11 @@ final class YstreamLcrAdapter implements YStreamClientAdapter {
     }
 
     @Override
+    public void setAppliedPosition(YStreamPosition position) {
+        client.setAppliedPosition(YStreamClientFactory.toClientPosition(position));
+    }
+
+    @Override
     public void close() {
         try {
             client.close();
@@ -77,7 +83,7 @@ final class YstreamLcrAdapter implements YStreamClientAdapter {
     }
 
     private static YStreamEvent translate(YstreamLcrInterface lcr) throws YstreamSqlException {
-        YStreamPosition position = YStreamClientFactory.fromClientPosition(lcr.getPosition());
+        YStreamPosition position = positionOf(lcr);
         LcrType type = lcr.getLcrType();
         if (type == null) {
             return new YStreamEvent(Kind.IGNORED, null, null, null, null, null, false, position);
@@ -105,6 +111,23 @@ final class YstreamLcrAdapter implements YStreamClientAdapter {
                 // row to apply.
                 return new YStreamEvent(Kind.IGNORED, null, null, null, null, null, false,
                         position);
+        }
+    }
+
+    /**
+     * The LCR's position, or null when the library refuses to give one.
+     *
+     * <p>Measured on YashanDB 23.4.7.100: a real metadata LCR (the first thing every stream
+     * delivers) and every transaction's BEGIN throw {@link YstreamUnsupportedOperationException}
+     * from {@code getPosition()} instead of returning null. Letting that escape killed the
+     * stream during the first {@code next()} — before a single change was ever delivered —
+     * and the consumer reconnected at the same anchor forever.
+     */
+    private static YStreamPosition positionOf(YstreamLcrInterface lcr) {
+        try {
+            return YStreamClientFactory.fromClientPosition(lcr.getPosition());
+        } catch (YstreamUnsupportedOperationException e) {
+            return null;
         }
     }
 

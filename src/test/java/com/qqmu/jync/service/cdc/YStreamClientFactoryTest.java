@@ -42,6 +42,22 @@ class YStreamClientFactoryTest {
         return new YStreamClientFactory(cryptoUtil);
     }
 
+    /**
+     * The library reads {@code pollTimeout} in SECONDS (measured: it is passed straight to
+     * {@code ArrayBlockingQueue.poll(n, TimeUnit.SECONDS)}). A millisecond value of 1000
+     * therefore parks a blocked {@code next()} for over sixteen minutes, and a consumer
+     * whose fetch thread died cannot notice for that long.
+     */
+    @Test
+    void thePollTimeoutIsGivenToTheLibraryInSeconds() {
+        YstreamConfig<YstreamLcrInterface> config = factory().buildConfig(
+                yashanSource(), "JYNC_7_1A2B3C4D", new YStreamPosition(1L, 0, 2L, 3, 4));
+
+        assertThat(config.getPollTimeout())
+                .as("a blocked next() must come back in seconds, not minutes")
+                .isBetween(1, 60);
+    }
+
     @Test
     void theConfigCarriesTheSourceAndTheRecoverPosition() {
         YStreamPosition recoverFrom = new YStreamPosition(882304965853585408L, 3, 6806L, 5, 7);
