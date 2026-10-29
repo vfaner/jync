@@ -339,12 +339,17 @@ public class ConversionAssistService {
 
     /** Null when no provider is enabled — the assistant reports that case as it always has. */
     private String draftCacheKey(Long projectId, Detail detail, String name) {
-        Long providerId = providerService.activeProvider().map(AiProvider::getId).orElse(null);
-        if (providerId == null) {
+        AiProvider provider = providerService.activeProvider().orElse(null);
+        if (provider == null || provider.getId() == null) {
             return null;
         }
-        return projectId + "|" + detail.kind + "|" + name + "|" + providerId + "|"
-                + detail.sourceSql.hashCode() + "|" + detail.mechanicalSql.hashCode();
+        // The whole endpoint, not just the row id: editing an existing provider keeps its id,
+        // and AiProviderService clears the probe badge for a model/base-url/protocol change.
+        // Keying on the id alone would keep serving the old endpoint's draft for the rest of
+        // the TTL after such an edit.
+        return projectId + "|" + detail.kind + "|" + name + "|" + provider.getId() + "|"
+                + provider.getProtocol() + "|" + provider.getModel() + "|" + provider.getBaseUrl()
+                + "|" + detail.sourceSql.hashCode() + "|" + detail.mechanicalSql.hashCode();
     }
 
     private void putDraftCache(String key, Detail detail, AiSqlAssistant.Candidate candidate) {

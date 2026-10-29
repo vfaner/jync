@@ -21,6 +21,8 @@ import org.mockito.ArgumentCaptor;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ViewMeta;
+import com.qqmu.jync.model.AiProtocol;
+import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
@@ -476,5 +478,50 @@ class ConversionAssistServiceTest {
         verify(validator).validate(captor.capture(), any(), any());
         // Creating a check object on the source would write to the system of record.
         assertThat(captor.getValue().getId()).isEqualTo(20L);
+    }
+
+    @Test
+    @DisplayName("editing the provider's model does not serve the old model's draft")
+    void aModelChangeInvalidatesTheDraftCache() throws Exception {
+        ViewMeta view = new ViewMeta();
+        view.setName("V_SALES");
+        view.setDefinition("CREATE VIEW V_SALES AS SELECT 1 FROM DUAL");
+        when(reader.readView(any(), any(), eq("V_SALES"))).thenReturn(view);
+
+        AiSqlAssistant assistant = mock(AiSqlAssistant.class);
+        AiSqlAssistant.Candidate fromModelA =
+                AiSqlAssistant.Candidate.success("SELECT 1 FROM DUAL", List.of(), "model-a", 5);
+        AiSqlAssistant.Candidate fromModelB =
+                AiSqlAssistant.Candidate.success("SELECT 1", List.of(), "model-b", 5);
+        when(assistant.draft(any(), any(), any(), any(), any(), any()))
+                .thenReturn(fromModelA, fromModelB);
+        SqlDialectFactory dialectFactory = mock(SqlDialectFactory.class);
+        SqlDialect dialect = mock(SqlDialect.class);
+        when(dialectFactory.forType(any())).thenReturn(dialect);
+        when(dialectFactory.forType(any(), any())).thenReturn(dialect);
+        when(dialectFactory.forType(any(), any(), any())).thenReturn(dialect);
+        service = new ConversionAssistService(projectRepository, databaseConfigRepository,
+                projectService, dataSourceManager, readerFactory, dialectFactory,
+                mock(SqlBodyConverter.class), assistant, validator, providerService);
+
+        AiProvider provider = new AiProvider();
+        provider.setId(7L);
+        provider.setModel("model-a");
+        provider.setProtocol(AiProtocol.OPENAI);
+        provider.setBaseUrl("https://api.example.com");
+        when(providerService.activeProvider()).thenReturn(Optional.of(provider));
+
+        assertThat(service.draft(1L, "VIEW", "V_SALES").getSql())
+                .isEqualTo("SELECT 1 FROM DUAL");
+        // Same provider, same body: the short cache answers without paying for a second call.
+        assertThat(service.draft(1L, "VIEW", "V_SALES").isCached()).isTrue();
+
+        // The user edits the model on the same provider row. AiProviderService treats that as
+        // invalidating the probe; the draft cache must agree, or the next ten minutes of
+        // clicks keep serving a statement the new model never produced.
+        provider.setModel("model-b");
+        AiSqlAssistant.Candidate afterEdit = service.draft(1L, "VIEW", "V_SALES");
+        assertThat(afterEdit.isCached()).isFalse();
+        assertThat(afterEdit.getSql()).isEqualTo("SELECT 1");
     }
 }
