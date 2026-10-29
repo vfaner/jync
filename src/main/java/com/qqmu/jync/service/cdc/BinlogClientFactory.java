@@ -101,10 +101,20 @@ public class BinlogClientFactory {
         return client;
     }
 
+    /**
+     * The port the binlog connection uses: the configured one, else the type's default —
+     * the same rule {@code DataSourceManager.buildJdbcUrl} applies, so binlog and JDBC never
+     * talk to different ports. {@code BinaryLogClient} keeps its port private, so this is the
+     * only place the fallback can be asserted directly.
+     */
+    static int resolvePort(DatabaseConfig source) {
+        return source.getPort() != null ? source.getPort() : source.getType().getDefaultPort();
+    }
+
     private BinaryLogClient newClient(DatabaseConfig source) {
         String host = source.getHost() == null || source.getHost().trim().isEmpty()
                 ? "localhost" : source.getHost().trim();
-        int port = source.getPort() != null ? source.getPort() : source.getType().getDefaultPort();
+        int port = resolvePort(source);
         BinaryLogClient client = new BinaryLogClient(host, port,
                 source.getUsername(), cryptoUtil.decrypt(source.getPassword()));
         client.setEventDeserializer(deserializer());

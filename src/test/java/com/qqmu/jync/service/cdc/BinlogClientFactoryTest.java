@@ -89,8 +89,18 @@ class BinlogClientFactoryTest {
     void nullPortFallsBackToTypeDefault() {
         DatabaseConfig config = mysqlSource();
         config.setPort(null);
-        // 不抛异常即可;端口回退逻辑与 DataSourceManager.buildJdbcUrl 一致(:156)
+
+        // BinaryLogClient 不暴露端口,所以回退值本身必须能直接断言 —— 只断言"没抛"
+        // 的话,把回退写死成别的端口测试照样绿。回退规则与 DataSourceManager 一致。
+        assertThat(BinlogClientFactory.resolvePort(config))
+                .isEqualTo(DatabaseType.MYSQL.getDefaultPort());
+
         BinaryLogClient client = factory.createClient(config, 1L, null);
         assertThat(client).isNotNull();
+    }
+
+    @Test
+    void anExplicitPortWinsOverTheTypeDefault() {
+        assertThat(BinlogClientFactory.resolvePort(mysqlSource())).isEqualTo(3307);
     }
 }
