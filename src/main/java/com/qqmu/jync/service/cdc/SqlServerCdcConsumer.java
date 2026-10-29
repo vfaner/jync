@@ -123,6 +123,8 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private final Map<String, String> missingColumnWarnings = new java.util.concurrent.ConcurrentHashMap<>();
     /** #4: throttle for the "CDC disabled at DB level" warning (see drain()). */
     private long lastCdcOffWarnMs;
+    /** Throttle for the "no capture instance for any selected table" warning. */
+    private long lastNoInstanceWarnMs;
 
     private volatile boolean running = true;
     private volatile Connection currentSource;
@@ -439,11 +441,13 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         lastDiscoveryAtMs = System.currentTimeMillis();
         List<CaptureInstance> instances = discoverCaptureInstances(conn);
         if (instances.isEmpty()) {
-            stats.addSkippedUnsupported(1);
-            // No capture instance means nothing will ever show up past fromLsn without
-            // DBA action: do NOT advance the watermark — that would hide the gap. Advance
-            // to maxLsn only when at least one tracked instance exists, so the next poll
-            // starts from the current position when the DBA enables CDC mid-stream.
+            // Nothing will ever show up past fromLsn without DBA action: do NOT advance the
+            // watermark — that would hide the gap. Advance to maxLsn only when at least one
+            // tracked instance exists, so the next poll starts from the current position
+            // when the DBA enables CDC mid-stream. This is a configuration state, not a
+            // skipped change, so it must not touch the skippedUnsupported counter (which
+            // used to climb by one on every poll while nothing was being skipped at all).
+            warnNoCaptureInstances();
             return out;
         }
         // P0-6: fold rows per transaction in SOURCE ORDER (the SQL guarantees
@@ -841,23 +845,64 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             }
         }
         List<CaptureInstance> found = new ArrayList<>(byTable.values());
-        noteNewCaptureInstances(found);
+        noteCaptureInstanceChanges(found);
         return found;
     }
 
     /**
      * P1-6: log the capture instances this consumer has not seen before — the moment a
      * DBA-enabled CI becomes visible instead of silence until its first DML moves the
-     * watermark. Add-only set: a dropped CI keeps its name (logged once per lifetime).
+     * watermark — and the ones that disappear.
+     *
+     * <p>A vanished instance is a table that silently stops capturing: {@code
+     * sp_cdc_disable_table} (or dropping the table) removes the row from {@code
+     * cdc.change_tables}, and from then on the consumer has nothing to read for it while
+     * every other instance keeps the watermark moving. Nothing else in the product says so,
+     * so say it here. Forgetting the name lets a re-created instance be reported as new.
      */
-    private void noteNewCaptureInstances(List<CaptureInstance> instances) {
+    private void noteCaptureInstanceChanges(List<CaptureInstance> instances) {
+        Set<String> found = new HashSet<>();
         for (CaptureInstance ci : instances) {
+            found.add(ci.captureInstance);
             if (knownCaptureInstances.add(ci.captureInstance)) {
                 log.info("SQLServer CDC for project {} picked up capture instance {}"
                         + " ({}.{}); its changes will be synced",
                         project.getId(), ci.captureInstance, ci.schema, ci.table);
             }
         }
+        for (java.util.Iterator<String> it = knownCaptureInstances.iterator(); it.hasNext(); ) {
+            String name = it.next();
+            if (!found.contains(name)) {
+                it.remove();
+                log.warn("SQLServer CDC for project {} no longer sees capture instance {} in"
+                        + " cdc.change_tables — CDC was disabled for that table, or the table"
+                        + " was dropped, mid-stream. Changes made to it from now on are NOT"
+                        + " captured: re-enable CDC on the table and re-baseline it",
+                        project.getId(), name);
+            }
+        }
+    }
+
+    /**
+     * Throttled once per {@link #DISCOVERY_REFRESH_MS}: every selected table has no capture
+     * instance, so the project captures nothing. Silent before, which made a CDC project that
+     * had never been enabled on the source look identical to one that was simply idle.
+     */
+    private void warnNoCaptureInstances() {
+        if (!knownCaptureInstances.isEmpty()) {
+            // Discovery already named each instance as it vanished; a second, vaguer line
+            // every minute would only bury it.
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastNoInstanceWarnMs < DISCOVERY_REFRESH_MS) {
+            return;
+        }
+        lastNoInstanceWarnMs = now;
+        log.warn("SQLServer CDC for project {} sees no capture instance for any selected table,"
+                + " so nothing will be captured until a DBA runs sys.sp_cdc_enable_table on"
+                + " them. The consumer keeps polling and picks the instance up as soon as it"
+                + " appears.", project.getId());
     }
 
     private boolean matchesProjectTable(String schema, String table) {

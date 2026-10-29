@@ -15,6 +15,10 @@ import java.sql.SQLException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -39,6 +43,8 @@ class SqlServerCdcConsumerDrainTest {
     private Connection conn;
     private PreparedStatement maxPs;
     private PreparedStatement discoveryPs;
+    private SyncContext ctx;
+    private CdcRuntimeStats stats;
     private SqlServerCdcConsumer consumer;
 
     @BeforeEach
@@ -61,11 +67,14 @@ class SqlServerCdcConsumerDrainTest {
         Project project = new Project();
         project.setId(1L);
         project.setName("mssql-1");
+        ctx = mock(SyncContext.class);
+        when(ctx.getConfig()).thenReturn(new com.qqmu.jync.dto.SyncConfig());
+        stats = new CdcRuntimeStats();
         consumer = new SqlServerCdcConsumer(project,
-                mock(SyncLockService.LockHandle.class), mock(SyncContext.class),
+                mock(SyncLockService.LockHandle.class), ctx,
                 mock(CdcPositionStore.class), mock(CdcBaselineService.class),
                 mock(SyncTaskStore.class), mock(SyncStateWriter.class),
-                mock(DataSourceManager.class), new CdcRuntimeStats(), new SyncProperties());
+                mock(DataSourceManager.class), stats, new SyncProperties());
     }
 
     @Test
@@ -93,5 +102,51 @@ class SqlServerCdcConsumerDrainTest {
         SqlServerCdcConsumer.DrainResult result = consumer.drain(conn, LSN);
         assertThat(result.rows).isZero();
         assertThat(result.nextLsn).isNull();
+    }
+
+    @Test
+    void anEmptyCaptureInstanceDrainCountsNoSkippedChange() throws Exception {
+        // No capture instance is a configuration state, not a change that was skipped: the
+        // old code added 1 to "skippedUnsupported" on every poll, so an idle project with no
+        // CI yet (or one waiting for the DBA) made the user-visible counter climb forever
+        // while nothing was actually being skipped.
+        consumer.drain(conn, "0x00000000000000000000");
+
+        assertThat(stats.snapshot().get("skippedUnsupported")).isEqualTo(0L);
+    }
+
+    @Test
+    void aCaptureInstanceDroppedMidStreamIsWarnedAbout() throws Exception {
+        // A DBA running sp_cdc_disable_table takes the instance out of cdc.change_tables.
+        // The consumer holds its watermark — correctly — but used to say nothing at all, so
+        // the project simply stopped capturing with no signal anywhere in the log.
+        ResultSet withCi = mock(ResultSet.class);
+        when(withCi.next()).thenReturn(true, false);
+        when(withCi.getString(1)).thenReturn("dbo");
+        when(withCi.getString(2)).thenReturn("orders");
+        when(withCi.getString(3)).thenReturn("dbo_orders");
+        when(withCi.getString(4)).thenReturn("0x00000029000000000000");
+        ResultSet empty = mock(ResultSet.class);
+        when(empty.next()).thenReturn(false);
+        when(discoveryPs.executeQuery()).thenReturn(withCi, empty);
+
+        PreparedStatement changes = mock(PreparedStatement.class);
+        ResultSet noRows = mock(ResultSet.class);
+        when(noRows.next()).thenReturn(false);
+        when(changes.executeQuery()).thenReturn(noRows);
+        when(conn.prepareStatement(contains("fn_cdc_get_all_changes"))).thenReturn(changes);
+
+        String from = "0x00000000000000000000";
+        consumer.drain(conn, from); // picks up dbo_orders
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(SqlServerCdcConsumer.class);
+        try {
+            consumer.drain(conn, from); // the instance is gone
+        } finally {
+            LogCapture.detach(SqlServerCdcConsumer.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.WARN, logs)).anySatisfy(message ->
+                assertThat(message).contains("dbo_orders").contains("no longer"));
     }
 }
