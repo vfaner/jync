@@ -78,6 +78,16 @@ public final class ColumnCleanser {
                             table, rule.getColumn(), arg);
                     continue;
                 }
+                // Matcher parses the replacement lazily, at the first match, so an invalid one
+                // would compile cleanly here and then throw out of apply() on the first row
+                // that matches — stopping the table. Rules saved before the wizard validated
+                // this, or written straight into the metadata store, get skipped like a bad
+                // pattern instead.
+                if (!isValidReplacement(pattern, rule.getReplacement())) {
+                    log.warn("Ignoring column rule for {}.{}: invalid replacement '{}'",
+                            table, rule.getColumn(), rule.getReplacement());
+                    continue;
+                }
             }
             rules.add(new Rule(rule.getColumn(), rule.getType(), arg, rule.getReplacement(),
                     pattern));
@@ -118,6 +128,98 @@ public final class ColumnCleanser {
             row.put(key, rule.apply((String) value));
         }
         return row;
+    }
+
+    /**
+     * Mirrors the parts of {@link java.util.regex.Matcher#appendReplacement} that can fail:
+     * a trailing backslash, a {@code $} without a group reference, and a reference to a group
+     * the pattern does not define. Escaped characters ({@code \$}, {@code \\}) are literal.
+     */
+    public static boolean isValidReplacement(Pattern pattern, String replacement) {
+        if (replacement == null) {
+            return true;
+        }
+        int groupCount = pattern.matcher("").groupCount();
+        java.util.Set<String> namedGroups = namedGroups(pattern);
+        for (int i = 0; i < replacement.length(); i++) {
+            char c = replacement.charAt(i);
+            if (c == '\\') {
+                if (++i >= replacement.length()) {
+                    return false;
+                }
+                continue;
+            }
+            if (c != '$') {
+                continue;
+            }
+            if (++i >= replacement.length()) {
+                return false;
+            }
+            char next = replacement.charAt(i);
+            if (next == '{') {
+                int close = replacement.indexOf('}', i);
+                if (close < 0) {
+                    return false;
+                }
+                // Java reads ${...} as a NAMED group only; even ${1} is an error.
+                if (!namedGroups.contains(replacement.substring(i + 1, close))) {
+                    return false;
+                }
+                i = close;
+            } else if (Character.isDigit(next)) {
+                int end = i;
+                while (end + 1 < replacement.length()
+                        && Character.isDigit(replacement.charAt(end + 1))) {
+                    end++;
+                }
+                if (!hasValidGroupPrefix(replacement, i, end, groupCount)) {
+                    return false;
+                }
+                i = end;
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether the digit run contains a group reference Java accepts.
+     *
+     * <p>Java consumes the whole run and, when that number exceeds the group count, backs off
+     * one digit at a time until the remaining prefix is a valid group; the dropped digits are
+     * literal ("$12" with one group is group 1 followed by "2"). Parsed without an int to
+     * keep an overlong run ({@code $99999999999999999999}) a validation error, not a 500.
+     */
+    private static boolean hasValidGroupPrefix(String replacement, int from, int to,
+                                               int groupCount) {
+        for (int end = to; end >= from; end--) {
+            long value = 0;
+            boolean overflow = false;
+            for (int i = from; i <= end; i++) {
+                value = value * 10 + (replacement.charAt(i) - '0');
+                if (value > Integer.MAX_VALUE) {
+                    overflow = true;
+                    break;
+                }
+            }
+            if (!overflow && value <= groupCount) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Named groups the pattern defines; lookbehind's {@code (?<=}/{@code (?<!} is excluded. */
+    private static java.util.Set<String> namedGroups(Pattern pattern) {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        java.util.regex.Matcher m = Pattern
+                .compile("\\(\\?<([a-zA-Z][a-zA-Z0-9]*)>")
+                .matcher(pattern.pattern());
+        while (m.find()) {
+            names.add(m.group(1));
+        }
+        return names;
     }
 
     private static String findKey(Map<String, Object> row, String column) {

@@ -148,6 +148,28 @@ class ColumnCleanserTest {
     }
 
     @Test
+    void aReplacementNamingAMissingGroupIsIgnoredInsteadOfBreakingTheSync() {
+        // Matcher parses the replacement lazily, at the first match. The save path validates
+        // it, but a rule stored before that validation existed (or written straight into the
+        // metadata store) reaches the sync loop unchecked — and every row that matches then
+        // throws "Illegal group reference" out of apply(), stopping the whole table.
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "name", ColumnRuleType.REGEX_REPLACE, "(a)", "$2")),
+                "users");
+
+        assertThat(cleanser.apply(row("name", "alice")).get("name")).isEqualTo("alice");
+    }
+
+    @Test
+    void aReplacementEndingInABackslashIsIgnoredInsteadOfBreakingTheSync() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "name", ColumnRuleType.REGEX_REPLACE, "a", "x\\")),
+                "users");
+
+        assertThat(cleanser.apply(row("name", "alice")).get("name")).isEqualTo("alice");
+    }
+
+    @Test
     void aRuleMissingItsArgumentIsIgnored() {
         ColumnCleanser cleanser = ColumnCleanser.forTable(config(
                 rule("users", "name", ColumnRuleType.STRIP_PREFIX, " ", null),
