@@ -41,6 +41,51 @@ class SqlServerCdcConsumerTest {
                 .startsWith("SELECT CONVERT(varchar(32), __$start_lsn, 1), __$operation, *");
     }
 
+    /**
+     * 源端当前捕获 LSN 落在已持久化水位「之后」—— 源库被还原/回滚到更早的时间点,或项目
+     * 改指向另一台源库。此时水位之上的变更在源端根本不存在,{@code fn_cdc_get_all_changes_*}
+     * 对倒置区间抛 Msg 313,重试永远是同一个错误:必须判定为「不可恢复」而不是无限重试。
+     */
+    @Test
+    void aSourceWatermarkBehindTheStoredPositionIsDetected() {
+        String watermark = "0x0000002857ae0258000a";
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(
+                watermark, "0x00000000000000000000")).isTrue();
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(
+                watermark, "0x0000002857ae02580009")).isTrue();
+    }
+
+    @Test
+    void aSourceWatermarkAtOrAheadOfTheStoredPositionIsNormal() {
+        String watermark = "0x0000002857ae0258000a";
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(watermark, watermark)).isFalse();
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(
+                watermark, "0x0000002857ae0258000b")).isFalse();
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(
+                watermark, "0x00000030000000000000")).isFalse();
+    }
+
+    /**
+     * 无法识别的持久化水位形态不得被读成「时间线倒退」—— 它必须照常送到 SQL Server 上
+     * 显式失败(Msg 8114),而不是被静默改写或误判成 PURGED。
+     */
+    @Test
+    void anUnrecognisedStoredWatermarkYieldsNoVerdict() {
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(
+                "not-an-lsn", "0x00000000000000000000")).isFalse();
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(
+                null, "0x00000000000000000000")).isFalse();
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(
+                "0x0000002857ae0258", "0x00000000000000000000")).isFalse();
+    }
+
+    /** 大小写/前缀不同但形态合法(20 位十六进制)—— 归一化后照常比较。 */
+    @Test
+    void legacyUppercaseWatermarksAreNormalisedBeforeComparing() {
+        assertThat(SqlServerCdcConsumer.watermarkBeyondSource(
+                "0000002857AE0258000A", "0x00000000000000000000")).isTrue();
+    }
+
     @Test
     void captureInstanceNamesAreWhitelisted() {
         assertThat(SqlServerCdcConsumer.isSafeCaptureInstanceName("dbo_orders_CT")).isTrue();

@@ -366,6 +366,49 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
+     * Whether the source's current capture LSN sits BEHIND the stored watermark: the source
+     * database was restored (or rolled back) to an earlier point in time, or the project now
+     * points at a different server whose capture LSNs are lower.
+     *
+     * <p>Nothing above the watermark exists in that source's change tables, and
+     * {@code fn_cdc_get_all_changes_*} rejects the inverted range {@code (from, max]} with
+     * Msg 313 on every attempt. The failure is not raised around {@code flushTransaction},
+     * so {@code applyFailedThisCycle} stays false, the cycle is classified TRANSIENT, and the
+     * consumer used to retry the same impossible range forever — never advancing, never
+     * parking, never saying why. Retrying cannot recover the missing window, so the caller
+     * parks the project with the PURGED ("re-baseline from a snapshot") remedy instead.
+     *
+     * <p>Both sides must be canonical LSNs ({@link #canonicalLsn}: {@code 0x} + 20 lowercase
+     * hex — fixed width, so string order IS LSN order). An unrecognised stored shape yields
+     * "no verdict": it must still reach SQL Server and fail visibly (Msg 8114) rather than be
+     * misread as a backwards timeline and park a healthy project.
+     */
+    static boolean watermarkBeyondSource(String fromLsn, String maxLsn) {
+        String from = canonicalLsn(fromLsn);
+        String max = canonicalLsn(maxLsn);
+        if (!isCanonicalLsn(from) || !isCanonicalLsn(max)) {
+            return false;
+        }
+        return max.compareTo(from) < 0;
+    }
+
+    private static boolean isCanonicalLsn(String lsn) {
+        if (lsn == null || lsn.length() != 2 + LSN_HEX_DIGITS) {
+            return false;
+        }
+        if (lsn.charAt(0) != '0' || lsn.charAt(1) != 'x') {
+            return false;
+        }
+        for (int i = 2; i < lsn.length(); i++) {
+            char c = lsn.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Read the current {@code fn_cdc_get_max_lsn()}, then pull every change between
      * (fromLsn, maxLsn] across all tracked capture instances. Rows are grouped by
      * {@code __$start_lsn} — each group is one committed transaction — and flushed.
@@ -425,6 +468,23 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 }
             }
             return out;
+        }
+        if (watermarkBeyondSource(fromLsn, maxLsn)) {
+            // The timeline moved backwards under us. Say so loudly first: the message names
+            // both LSNs (a log-only fix is useless if the DBA cannot see what the source now
+            // reports), then hand the classifier the "SQLServer CDC purge" sentinel → PURGED
+            // → the consumer parks with the re-baseline remedy instead of hot-looping.
+            log.error("SQLServer CDC for project {} is BEHIND its stored watermark: the source"
+                    + " now reports fn_cdc_get_max_lsn() = {} while the project already"
+                    + " applied up to {} — the source was restored/rolled back to an earlier"
+                    + " point in time, or the project now points at a different source. Changes"
+                    + " above the watermark no longer exist in this source's change tables.",
+                    projectId, maxLsn, fromLsn);
+            throw new SQLException("SQLServer CDC purge: the source's current capture LSN "
+                    + maxLsn + " is BEHIND the stored watermark " + fromLsn
+                    + " — the source database was restored or rolled back to an earlier point"
+                    + " in time (or the project now points at a different source). The changes"
+                    + " in between are gone; re-baseline the project from a fresh snapshot.");
         }
         if (maxLsn.equalsIgnoreCase(fromLsn)) {
             // P1-6: the idle early return must not starve discovery — re-read

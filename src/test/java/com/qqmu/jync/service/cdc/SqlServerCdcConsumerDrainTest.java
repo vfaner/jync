@@ -1,8 +1,10 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -102,6 +104,29 @@ class SqlServerCdcConsumerDrainTest {
         SqlServerCdcConsumer.DrainResult result = consumer.drain(conn, LSN);
         assertThat(result.rows).isZero();
         assertThat(result.nextLsn).isNull();
+    }
+
+    /**
+     * 源库被还原/回滚到更早的时间点(或项目改指向另一台源库)时,源端当前的
+     * {@code fn_cdc_get_max_lsn()} 会落在持久化水位「之后」。过去没有任何分支处理这种情形:
+     * 倒置区间 (from, max] 被 SQL Server 以 Msg 313 拒绝,而 applyFailed 标记只在
+     * flushTransaction 里置位,于是它被归为 TRANSIENT —— 每轮重试同一个注定失败的区间,
+     * 永远不 park、也永远不推进水位(水位之上的行在源端已不存在,不重基线不可能补回)。
+     */
+    @Test
+    void aSourceBehindTheStoredWatermarkParksAsPurged() throws Exception {
+        ResultSet behindRs = mock(ResultSet.class);
+        when(behindRs.next()).thenReturn(true);
+        when(behindRs.getString(1)).thenReturn("0x00000000000000000001");
+        when(maxPs.executeQuery()).thenReturn(behindRs);
+
+        Throwable thrown = catchThrowable(() -> consumer.drain(conn, LSN));
+
+        assertThat(thrown).isInstanceOf(SQLException.class);
+        assertThat(CdcFailureClassifier.classify(thrown))
+                .isEqualTo(CdcFailureClassifier.Kind.PURGED);
+        // 判定就在读 max LSN 之后,不需要再问 cdc.change_tables(也没必要再拉变更)。
+        verify(discoveryPs, never()).executeQuery();
     }
 
     @Test
