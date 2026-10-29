@@ -238,7 +238,13 @@ public final class TargetTableVerifier {
                 if (reportedTable == null || !reportedTable.equalsIgnoreCase(tableName)) {
                     continue;
                 }
+                // COLUMN_NAME 在 JDBC 规范里可空：字典视图残缺的驱动会回一行无名列，直接
+                // toUpperCase 会抛 NPE —— 它不是 SQLException，会穿出同步主循环的异常处理。
+                // 与 GenericMetadataReader.readTable 同一修法：跳过这一行。
                 String columnName = rs.getString("COLUMN_NAME");
+                if (columnName == null) {
+                    continue;
+                }
                 columns.put(columnName.toUpperCase(Locale.ROOT),
                         new TargetColumn(columnName, rs.getInt("DATA_TYPE"),
                                 rs.getInt("COLUMN_SIZE"), rs.getString("TYPE_NAME"),

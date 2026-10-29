@@ -99,6 +99,32 @@ class TargetTableVerifierTest {
         assertThat(missing).extracting(ColumnMeta::getName).containsExactly("EXTRA");
     }
 
+    /**
+     * COLUMN_NAME 在 JDBC 规范里可空。驱动偶尔会回一行无名列(权限过滤、字典视图残缺)，过去
+     * 这里直接 {@code columnName.toUpperCase(...)} 抛 NPE —— 它不是 SQLException，会从
+     * verify/missingColumns 一路穿出同步主循环的异常处理。与 GenericMetadataReader.readTable
+     * 同一修法：跳过这一行，而不是让整张表的读取作废。
+     */
+    @Test
+    void aColumnRowWithoutANameIsSkippedInsteadOfFailingTheWholeRead() throws SQLException {
+        Connection connection = mock(Connection.class);
+        DatabaseMetaData metaData = mock(DatabaseMetaData.class);
+        ResultSet columns = mock(ResultSet.class);
+        when(connection.getMetaData()).thenReturn(metaData);
+        when(metaData.getColumns(any(), any(), any(), any())).thenReturn(columns);
+        when(columns.next()).thenReturn(true, true, false);
+        when(columns.getString("TABLE_NAME")).thenReturn("T", "T");
+        when(columns.getString("COLUMN_NAME")).thenReturn("ID", (String) null);
+        when(columns.getInt("DATA_TYPE")).thenReturn(Types.BIGINT);
+        when(columns.getInt("COLUMN_SIZE")).thenReturn(19);
+        when(columns.getString("TYPE_NAME")).thenReturn("BIGINT");
+
+        String reason = TargetTableVerifier.verify(connection, null, "T",
+                source(col("ID", Types.BIGINT)));
+
+        assertThat(reason).isNull();
+    }
+
     @Test
     void safeWideningWithinTheNumericFamilyPasses() throws SQLException {
         createTarget("CREATE TABLE T (ID BIGINT)");
