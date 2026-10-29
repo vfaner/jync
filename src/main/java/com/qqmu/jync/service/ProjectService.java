@@ -1059,6 +1059,12 @@ public class ProjectService {
             cdcManager.ensureStopped(projectId);
             releasePgSlotIfAny(project);
             releaseYStreamIfAny(project);
+            // The sync_task row carries the lease acquired above and is deleted by this
+            // transaction. Telling the handle now keeps its close() from issuing a release
+            // UPDATE against the row this transaction is deleting: a second connection would
+            // block on that row's lock for H2's whole timeout, adding seconds to a delete and
+            // logging a release failure for a row that is going away anyway.
+            lock.leaseRowDeletedByCaller();
             taskStore.deleteForProject(projectId);
             syncEngine.evictProjectCaches(projectId);
             lockService.evictProject(projectId);

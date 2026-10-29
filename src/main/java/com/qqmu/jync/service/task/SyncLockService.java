@@ -290,6 +290,8 @@ public class SyncLockService {
         private volatile Instant lastProgressAt;
         /** One wedge warning per cycle, however many renewal ticks follow it. */
         private final AtomicBoolean stallWarned = new AtomicBoolean();
+        /** Set when the caller's own transaction deletes the lease row; see close(). */
+        private final AtomicBoolean leaseRowDeletedByCaller = new AtomicBoolean();
 
         LockHandle(Long projectId, Semaphore jvmLock, long ttlMs, int maxRenewals) {
             this.projectId = projectId;
@@ -406,6 +408,23 @@ public class SyncLockService {
             return maxRenewals;
         }
 
+        /**
+         * Declares that the caller's own transaction deletes the lease row, so {@link #close()}
+         * must not try to release it over a second connection.
+         *
+         * <p>Only project deletion does this: the {@code sync_task} row both carries the lease
+         * and is one of the rows the delete removes. Releasing it from another connection
+         * would block on the deleting transaction's lock until H2 gives up (2 s by default),
+         * turning every project deletion into a multi-second stall with a bogus warning.
+         *
+         * <p>Call it before the row is deleted and before the handle is closed. If the
+         * deleting transaction later rolls back, the row survives with this lease still set
+         * and expires by its TTL, exactly as a holder that disappeared would.
+         */
+        public void leaseRowDeletedByCaller() {
+            leaseRowDeletedByCaller.set(true);
+        }
+
         @Override
         public void close() {
             if (!closed.compareAndSet(false, true)) {
@@ -414,7 +433,14 @@ public class SyncLockService {
             watchdogTask.cancel(false);
             activePolling.remove(projectId, this);
             try {
-                store.release(projectId, ownerId);
+                // Skipped when the caller's own (uncommitted) transaction deletes the lease
+                // row — project deletion: the sync_task row IS the lease. A second
+                // connection's UPDATE would block on that row's table lock until H2's 2 s
+                // timeout and fail, stalling the delete for seconds and logging a warning
+                // about a release that was pointless: the row is being removed anyway.
+                if (!leaseRowDeletedByCaller.get()) {
+                    store.release(projectId, ownerId);
+                }
             } catch (RuntimeException e) {
                 // A failed release is not fatal; the lease expires on its own.
                 log.warn("Could not release the database sync lock for project {}: {}",
