@@ -80,6 +80,24 @@ class DefaultCryptoKeyBannerViewTest {
         assertThat(html).doesNotContain("??");
     }
 
+    /**
+     * Every asset the layout loads has to be stamped with {@code ?v=}: after an in-app upgrade
+     * the browser keeps whatever it cached, and an unversioned script keeps running the code of
+     * the jar that was replaced. {@code theme.js} was the one that slipped through — it runs the
+     * theme and locale migration on each load, so a stale copy silently undoes both.
+     *
+     * <p>The assertion asks for the parameter, not a value: this slice has no
+     * {@code BuildProperties}, so {@code appVersion} is empty here and the link renders
+     * {@code ?v=}. The full-context login tests pin the populated form.
+     */
+    @Test
+    void theLayoutServesEveryScriptVersionedSoAnUpgradeIsNotCachedAway() throws Exception {
+        String html = render("/ai");
+
+        assertThat(html).contains("href=\"/css/app.css?v=", "src=\"/js/app.js?v=",
+                "src=\"/js/sql-highlight.js?v=", "src=\"/js/theme.js?v=");
+    }
+
     @Test
     void overridingThePasswordAloneDoesNotRemoveTheBanner() throws Exception {
         // Salt is still the shipped default, so the OR keeps warning.

@@ -16,7 +16,7 @@
     <script th:replace="~{fragments/theme-bootstrap :: script}"></script>
 
     <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
-    <link rel="stylesheet" th:href="@{/css/app.css}">
+    <link rel="stylesheet" th:href="@{/css/app.css(v=${appVersion})}">
 </head>
 <body class="login-body">
 
@@ -166,7 +166,7 @@
 
 <!--/* theme.js 给上面 data-theme-btn 按钮绑定切换、跑旧键迁移和时区上报；
        此前登录页漏引了它，主题按钮点了没反应。 */-->
-<script th:src="@{/js/theme.js}"></script>
+<script th:src="@{/js/theme.js(v=${appVersion})}"></script>
 <!--/* app.js 的文案只从 window.JyncMessages 取；登录页不套 layout，而升级重启后的
        自动刷新会落到这里，由 app.js 弹出「更新成功」提示，所以单独挂上这一个键。 */-->
 <script th:inline="javascript">
@@ -174,6 +174,6 @@
         'msg.upgrade.success': /*[[#{msg.upgrade.success}]]*/ ''
     };
 </script>
-<script th:src="@{/js/app.js}"></script>
+<script th:src="@{/js/app.js(v=${appVersion})}"></script>
 </body>
 </html>

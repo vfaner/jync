@@ -79,6 +79,21 @@ class LoginPageModeViewTest {
     }
 
     @Test
+    void thePortalPromptPageVersionsItsAssetsToo() throws Exception {
+        config.setEnabled(true);
+        config.setMode(OaAuthConfig.Mode.HEADER);
+
+        String html = page("/login");
+
+        // Same reason as the local form: outside the layout, an unversioned app.js survives the
+        // upgrade in the browser cache. This page is reached right after a restart, which is
+        // exactly when the stale copy does its damage. theme.js ships on the same pages and is
+        // just as stale-prone.
+        assertThat(html).contains("href=\"/css/app.css?v=v", "src=\"/js/app.js?v=v",
+                "src=\"/js/theme.js?v=v");
+    }
+
+    @Test
     void headerModeWithAnEntryUrlRedirectsThere() throws Exception {
         config.setEnabled(true);
         config.setMode(OaAuthConfig.Mode.HEADER);

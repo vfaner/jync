@@ -49,4 +49,18 @@ class LoginPageUpgradeNoticeViewTest {
         assertThat(page).contains("'msg.upgrade.success'");
         assertThat(page).contains("Upgrade successful");
     }
+
+    @Test
+    void theLoginPageServesVersionedAssetsSoAnUpgradeIsNotCachedAway() throws Exception {
+        String page = mvc.perform(get("/login/local").locale(Locale.ENGLISH))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // layout.html stamps app.js/app.css with ?v=<version> for a reason: an unversioned
+        // app.js left in the browser cache keeps calling endpoints the new jar renamed away.
+        // The login pages are outside the layout, so they have to opt in themselves — theme.js
+        // included: it runs the theme/locale migration on every page load.
+        assertThat(page).contains("href=\"/css/app.css?v=v", "src=\"/js/app.js?v=v",
+                "src=\"/js/theme.js?v=v");
+    }
 }

@@ -105,6 +105,30 @@ class JsMessageMapCoverageTest {
                 .isEmpty();
     }
 
+    /**
+     * Probe labels are resolved with a key <em>built at runtime</em>: {@code t('cdc.check.' +
+     * check.name)} in app.js. The checks above only see literal keys, so a probe check whose
+     * label never reached the map is invisible to them and lands on the connection page's test
+     * panel as the raw key. That is how YashanDB's YStream checks shipped: every line of a
+     * 崖山 source test read "cdc.check.YSTREAM_SOURCE — …" instead of its sentence.
+     */
+    @Test
+    @DisplayName("every CDC probe check has a label in the browser map")
+    void everyCdcProbeCheckLabelIsInTheMap() throws Exception {
+        Set<String> checkKeys = new TreeSet<>();
+        for (String key : I18nBundleParityTest.keysOf("i18n/messages.properties")) {
+            if (key.startsWith("cdc.check.")) {
+                checkKeys.add(key);
+            }
+        }
+
+        assertThat(checkKeys).as("sanity: the bundles do define the probe labels").isNotEmpty();
+        assertThat(missing(checkKeys, mapKeys()))
+                .as("app.js resolves these at runtime (t('cdc.check.' + name)); a missing one "
+                        + "renders as the raw key in the connection test panel")
+                .isEmpty();
+    }
+
     private static Set<String> mapKeys() throws Exception {
         Matcher key = Pattern.compile("'([^']+)'\\s*:").matcher(mapBlock());
         Set<String> keys = new TreeSet<>();
