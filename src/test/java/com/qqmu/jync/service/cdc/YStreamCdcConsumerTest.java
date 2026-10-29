@@ -424,6 +424,29 @@ class YStreamCdcConsumerTest {
         verify(lifecycle, never()).ensure(anyLong(), anyList(), any());
     }
 
+    /**
+     * Measured on YashanDB 23.4.7.100: the database-wide setting
+     * ({@code ALTER DATABASE ... SUPPLEMENTAL LOG DATA (ALL) COLUMNS}, i.e.
+     * {@code V$DATABASE.SUPPLEMENTAL_LOG_DATA_ALL=YES}) does <em>not</em> stand in for a
+     * table-level group. A table covered only by the database-wide setting keeps its DML
+     * out of the stream exactly like an unlogged one — the service stays RUNNING, nothing
+     * is captured, and the rows are lost for good. So the gate must read the table-level
+     * view alone; "fixing" it to accept the database-wide flag silently drops changes.
+     */
+    @Test
+    void databaseWideAllColumnsLoggingDoesNotCoverATable() throws Exception {
+        try (Statement st = target.createStatement()) {
+            st.execute("DELETE FROM all_log_groups");
+            st.execute("CREATE TABLE \"V$DATABASE\""
+                    + " (SUPPLEMENTAL_LOG_DATA_ALL VARCHAR(3))");
+            st.execute("INSERT INTO \"V$DATABASE\" VALUES ('YES')");
+        }
+
+        assertThat(YStreamCdcConsumer.missingSupplementalLogging(target,
+                List.of("app.orders", "app.items")))
+                .containsExactly("app.orders", "app.items");
+    }
+
     @Test
     void missingSupplementalLoggingComparesNamesCaseInsensitively() throws Exception {
         try (Statement st = target.createStatement()) {

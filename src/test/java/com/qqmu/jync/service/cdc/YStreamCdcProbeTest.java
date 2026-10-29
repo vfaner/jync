@@ -47,6 +47,7 @@ class YStreamCdcProbeTest {
     private final Set<String> userRoles = new LinkedHashSet<>();
     private final Set<String> allLoggedTables = new LinkedHashSet<>();
     private final Set<String> primaryKeyTables = new LinkedHashSet<>();
+    private boolean databaseAllLogged;
     private int serviceCount;
 
     @BeforeEach
@@ -69,6 +70,9 @@ class YStreamCdcProbeTest {
                 }
                 when(rs.next()).thenReturn(true);
                 when(rs.getInt(1)).thenReturn(serviceCount);
+            } else if (sql.contains("SUPPLEMENTAL_LOG_DATA_ALL")) {
+                when(rs.next()).thenReturn(true);
+                when(rs.getString(1)).thenReturn(databaseAllLogged ? "YES" : "NO");
             } else if (sql.contains("V$DATABASE")) {
                 when(rs.next()).thenReturn(true);
                 when(rs.getString(1)).thenReturn(logMode);
@@ -258,6 +262,22 @@ class YStreamCdcProbeTest {
         assertThat(detail).contains("SYS.T1").contains("SYS.T5");
         assertThat(detail).doesNotContain("SYS.T6");
         assertThat(detail).contains("and 2 more");
+    }
+
+    @Test
+    void databaseWideAllColumnsLoggingDoesNotCoverATable() {
+        // Measured on 23.4.7.100: with ALTER DATABASE ... SUPPLEMENTAL LOG DATA (ALL)
+        // COLUMNS on and no table-level group, the table's DML never enters the stream
+        // (the service stays RUNNING and nothing is captured), so the database-wide flag
+        // must not satisfy this check.
+        databaseAllLogged = true;
+        primaryKeyTables.addAll(List.of("SYS.T1", "SYS.T2"));
+
+        CdcProbeResult result = probe.probe(conn, TWO_TABLES);
+
+        assertThat(failure(result, CdcProbeResult.YSTREAM_TABLE_LOGGING))
+                .contains("SYS.T1").contains("SYS.T2")
+                .contains("ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS");
     }
 
     @Test
