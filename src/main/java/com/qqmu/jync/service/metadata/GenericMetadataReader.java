@@ -275,16 +275,11 @@ public class GenericMetadataReader implements MetadataReader {
 
         String catalog = catalogFor(conn, schema);
 
-        // Table comment.
-        try (ResultSet rs = md.getTables(catalog, schemaPattern(schema), tableName, new String[]{"TABLE"})) {
-            while (rs.next()) {
-                if (isRequestedObject(rs.getString("TABLE_NAME"), tableName,
-                        rs.getString("TABLE_SCHEM"), schema)) {
-                    table.setRemarks(rs.getString("REMARKS"));
-                    break;
-                }
-            }
-        }
+        // Table comment. Same type list as the listing, not a hardcoded "TABLE": a reader that
+        // widened it (PostgreSQL reports partitioned parents as "PARTITIONED TABLE") otherwise
+        // lists a table it cannot then read the comment of — silently, since a missing REMARKS
+        // row is indistinguishable from a table without a comment.
+        readTableComment(md, catalog, schema, tableName, table);
 
         // Primary key first, so columns can be flagged as they are read.
         // Sorted by KEY_SEQ: composite key order is significant for upsert predicates.
@@ -356,6 +351,43 @@ public class GenericMetadataReader implements MetadataReader {
             table.setForeignKeys(readForeignKeys(conn, schema, tableName));
         }
         return table;
+    }
+
+    /**
+     * Reads the table comment, asking for the same types the listing does.
+     *
+     * <p>A widened list can be rejected outright by a pgjdbc-derived fork (OpenGauss, KingBase,
+     * Oscar, …) that does not know the extra type names — {@code PostgresMetadataReader}
+     * retries for exactly that reason when listing. Here the failure would sink the whole table
+     * read, columns and all, so the classic type answers instead; a comment that is only
+     * unreachable for the extra types is the lesser loss.
+     */
+    private void readTableComment(DatabaseMetaData md, String catalog, String schema,
+                                  String tableName, TableMeta table) throws SQLException {
+        try {
+            readTableComment(md, catalog, schema, tableName, table, tableTypes());
+        } catch (SQLException e) {
+            if (tableTypes().length == 1) {
+                throw e;
+            }
+            log.debug("Widened table-comment lookup failed for {} ({}); asking for plain tables",
+                    tableName, e.getMessage());
+            readTableComment(md, catalog, schema, tableName, table, new String[]{"TABLE"});
+        }
+    }
+
+    private void readTableComment(DatabaseMetaData md, String catalog, String schema,
+                                  String tableName, TableMeta table, String[] types)
+            throws SQLException {
+        try (ResultSet rs = md.getTables(catalog, schemaPattern(schema), tableName, types)) {
+            while (rs.next()) {
+                if (isRequestedObject(rs.getString("TABLE_NAME"), tableName,
+                        rs.getString("TABLE_SCHEM"), schema)) {
+                    table.setRemarks(rs.getString("REMARKS"));
+                    break;
+                }
+            }
+        }
     }
 
     /**
