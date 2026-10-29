@@ -209,12 +209,13 @@ public class SqlServerDialect extends AbstractSqlDialect {
     public List<String> getCreateViewSql(ViewMeta view, String schema, DatabaseType sourceType) {
         List<String> stmts = new ArrayList<>();
         String def = view.getDefinition();
+        String drop = dropIfPresent(qualify(schema, view.getName()), "V", "VIEW");
         if (def != null && def.trim().toUpperCase().startsWith("CREATE")) {
             // sys.sql_modules returns the whole CREATE VIEW; rewrite it to ALTER-safe form.
-            stmts.add("DROP VIEW IF EXISTS " + qualify(schema, view.getName()));
+            stmts.add(drop);
             stmts.add(def.trim());
         } else {
-            stmts.add("DROP VIEW IF EXISTS " + qualify(schema, view.getName()));
+            stmts.add(drop);
             stmts.add("CREATE VIEW " + qualify(schema, view.getName()) + " AS " + def);
         }
         return stmts;
@@ -229,8 +230,10 @@ public class SqlServerDialect extends AbstractSqlDialect {
         }
         boolean isFunction = procedure.isFunction();
         List<String> stmts = new ArrayList<>();
-        stmts.add("DROP " + (isFunction ? "FUNCTION" : "PROCEDURE") + " IF EXISTS "
-                + qualify(schema, procedure.getName()));
+        // No type code: a routine may be a procedure, a scalar function or either table-valued
+        // kind, and OBJECT_ID without one matches any object of that name.
+        stmts.add(dropIfPresent(qualify(schema, procedure.getName()), null,
+                isFunction ? "FUNCTION" : "PROCEDURE"));
         String trimmed = body.trim();
         if (trimmed.toUpperCase().startsWith("CREATE")) {
             stmts.add(trimmed);
@@ -244,6 +247,24 @@ public class SqlServerDialect extends AbstractSqlDialect {
                     + qualify(schema, procedure.getName()) + " (" + params + ")\nAS\n" + trimmed);
         }
         return stmts;
+    }
+
+    /**
+     * A drop that only runs when the object exists, in syntax every release accepts.
+     *
+     * <p>{@code DROP ... IF EXISTS} is SQL Server 2016+; on 2012/2014 the batch fails to
+     * parse and the CREATE behind it never runs, so views and routines could not sync there.
+     * {@code OBJECT_ID} takes a delimited name as a string literal (a quote is doubled) and
+     * the {@code IF} guard is part of the same batch, so no version detection is needed.
+     *
+     * @param objectType OBJECT_ID's type code, or null to match any object type
+     */
+    private static String dropIfPresent(String qualified, String objectType, String kind) {
+        String literal = qualified.replace("'", "''");
+        String objectId = objectType == null
+                ? "OBJECT_ID(N'" + literal + "')"
+                : "OBJECT_ID(N'" + literal + "', N'" + objectType + "')";
+        return "IF " + objectId + " IS NOT NULL DROP " + kind + " " + qualified;
     }
 
     private String stripAt(String name) {
