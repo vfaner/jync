@@ -45,6 +45,46 @@ final class CdcTransactionBuffer {
         buffered.put(key, row);
     }
 
+    /**
+     * Moves this transaction's buffered DELETES from a table's stale binding to its refreshed
+     * one — PostgreSQL's mid-transaction metadata refresh.
+     *
+     * <p>Bindings are keyed by object identity, and a refresh builds a new one; without this
+     * a transaction that deletes a key before the refresh and re-inserts it after would hold
+     * the same primary key in two buckets. The fold then never sees them as one key, and
+     * because upserts are applied before deletes the stale delete runs last: the row the
+     * source still has disappears from the target, silently.
+     *
+     * <p>Only deletes move. They bind primary keys alone, so the refreshed column list
+     * changes nothing about how they are applied, while the upserts already buffered were
+     * built against the old column set and are left as they were. A destination entry for the
+     * same key always post-dates the refresh, so it wins and the moved copy is dropped.
+     */
+    void rebindDeletes(CdcTableBinding from, CdcTableBinding to) {
+        if (from == null || to == null || from == to) {
+            return;
+        }
+        Map<List<Object>, Map<String, Object>> moved = deletes.get(from);
+        if (moved == null || moved.isEmpty()) {
+            return;
+        }
+        deletes.remove(from);
+        Map<List<Object>, Map<String, Object>> destination =
+                deletes.computeIfAbsent(to, k -> new LinkedHashMap<>());
+        Map<List<Object>, Map<String, Object>> destinationUpserts = upserts.get(to);
+        for (Map.Entry<List<Object>, Map<String, Object>> entry : moved.entrySet()) {
+            if (destination.containsKey(entry.getKey())
+                    || (destinationUpserts != null
+                            && destinationUpserts.containsKey(entry.getKey()))) {
+                continue;   // a later image under the new binding already settled this key
+            }
+            destination.put(entry.getKey(), entry.getValue());
+        }
+        if (destination.isEmpty()) {
+            deletes.remove(to);
+        }
+    }
+
     /** Removes one key, dropping the binding's map once it holds nothing — {@link #isEmpty}
      * and {@link #upserts()}/{@link #deletes()} must not report a table the transaction no
      * longer touches. */

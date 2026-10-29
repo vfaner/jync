@@ -542,7 +542,15 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 log.info("PG binding for {} no longer matches the change row"
                                         + " shape (source DDL?); re-reading metadata",
                                         change.qualifiedTable);
+                                CdcTableBinding stale = resolved.binding;
                                 resolved = supplier.refresh(change.qualifiedTable);
+                                // The refreshed binding is a NEW object, and the buffer keys
+                                // by binding identity: a DELETE of this key buffered earlier
+                                // in the same transaction would sit in its own bucket, the
+                                // fold would miss the pair, and — upserts applied before
+                                // deletes — that stale delete would run after the upsert and
+                                // remove a row the source still has. Re-key it first.
+                                tx.rebindDeletes(stale, resolved.binding);
                             }
                             CdcTableBinding binding = resolved.binding;
                             if (binding == null || !binding.isApplicable()) {

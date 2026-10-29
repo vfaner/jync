@@ -254,6 +254,42 @@ class PgLogicalCdcConsumerDrainTest {
     }
 
     @Test
+    void aDeleteBeforeAMetadataRefreshStillFoldsAgainstTheReinsertedRow() throws Exception {
+        // 源端 ADD COLUMN 之后,一个事务里 DELETE 1 → INSERT 1(REPLACE 语义的手写版):
+        // DELETE 的键集只有主键,旧的缓存绑定仍然"描述"它;INSERT 带着新列,不等于旧绑定的
+        // 列集,于是触发 refresh,拿到一个新的 CdcTableBinding 对象。缓冲按 binding 对象
+        // 身份分桶,这一删一插就落到两个桶里,折叠失效 —— flush 先 upsert 再 delete,
+        // 源端仍然存在的行在目标端被删掉,而且没有任何日志。refresh 时必须把已缓冲的
+        // DELETE 迁到新绑定上,折叠才看得见它们是同一个主键。
+        try (Connection c = h2conn(); Statement st = c.createStatement()) {
+            st.execute("ALTER TABLE orders ADD COLUMN note VARCHAR(64)");
+        }
+        TableMeta stale = new TableMeta();
+        stale.setName("orders");
+        stale.getColumns().add(column("id", Types.BIGINT, true));
+        stale.getColumns().add(column("name", Types.VARCHAR, false));
+        stale.getPrimaryKeys().add("id");
+        TableMeta widened = new TableMeta();
+        widened.setName("orders");
+        widened.getColumns().add(column("id", Types.BIGINT, true));
+        widened.getColumns().add(column("name", Types.VARCHAR, false));
+        widened.getColumns().add(column("note", Types.VARCHAR, false));
+        widened.getPrimaryKeys().add("id");
+        when(reader.readTable(any(), anyString(), anyString())).thenReturn(stale, widened);
+
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", delete(1)},
+                new String[]{"0/1002", "table public.orders: INSERT: id[bigint]:1"
+                        + " name[text]:'back' note[text]:'n'"},
+                new String[]{"0/1003", COMMIT});
+
+        consumer.drain(source, "jync_1");
+
+        assertThat(targetIds()).containsExactly(1L);
+    }
+
+    @Test
     void insertThenDeleteOfTheSameKeyWithinOneTransactionLeavesNoRow() throws Exception {
         // 反方向:INSERT 1 → DELETE 1,净效果是行不存在(折叠后只剩 delete)。
         scriptCall(
