@@ -679,6 +679,33 @@ class UpgradeServiceTest {
     }
 
     @Test
+    void theRollbackRelaunchRecordsTheJavaPidNotASubshells() {
+        RestartSpec spec = new RestartSpec(12345L, "/usr/bin/java",
+                "/opt/jync/jync.jar", "/opt/jync/jync.jar.bak", "/opt/jync", 8081,
+                "/opt/jync/jync.jar.failed-x");
+        String script = UpgradeService.buildShellScript(spec);
+
+        // `cd "$WORKDIR" && nohup java ... &` backgrounds the whole and-list: bash runs it in
+        // a subshell, so $! is that subshell's pid — already gone by the time the next line
+        // reads it. The log then names a dead process, and anyone who stops the restarted
+        // instance from it kills nothing. The relaunch has to be a standalone background
+        // command with the `cd` on its own line.
+        assertThat(shellFunctionBody(script, "rollback"))
+                .doesNotContain("&& nohup")
+                .contains("nohup \"$JAVA\" -jar \"$JAR\" >> \"$WORKDIR/logs/jync.log\" 2>&1 &\n");
+    }
+
+    /** The text between {@code name() {} and its closing brace at column 0. */
+    private static String shellFunctionBody(String script, String name) {
+        String header = name + "() {\n";
+        int start = script.indexOf(header);
+        assertThat(start).as("function %s exists", name).isNotNegative();
+        int end = script.indexOf("\n}\n", start);
+        assertThat(end).as("function %s is closed", name).isPositive();
+        return script.substring(start + header.length(), end);
+    }
+
+    @Test
     void powershellScriptWaitsLaunchesAndRollsBack() {
         RestartSpec spec = new RestartSpec(999L, "C:\\Program Files\\Java\\bin\\java.exe",
                 "C:\\app\\jync.jar", "C:\\app\\jync.jar.bak", "C:\\app", 8080,

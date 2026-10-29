@@ -777,7 +777,11 @@ public class UpgradeService {
         sb.append("  log \"$1\"\n");
         sb.append("  mv \"$JAR\" \"$FAILED\" 2>/dev/null\n");
         sb.append("  mv \"$BACKUP\" \"$JAR\"\n");
-        sb.append("  cd \"$WORKDIR\" && ").append(shellLaunch(spec)).append('\n');
+        // The `cd` must not share a line with the launch: `cd x && nohup ... &` backgrounds
+        // the whole and-list in a subshell, so $! is that subshell's pid — dead by the time
+        // the log line reads it, which would name a process nobody can stop.
+        sb.append("  cd \"$WORKDIR\" || { log \"cannot enter $WORKDIR; previous jar restored, not relaunched\"; return 1; }\n");
+        sb.append("  ").append(shellLaunch(spec)).append('\n');
         sb.append("  log \"rolled back to previous jar, pid $!\"\n");
         sb.append("}\n");
         sb.append("log \"waiting for old process $OLD_PID to exit\"\n");
