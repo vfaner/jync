@@ -275,7 +275,11 @@
            注意：Thymeleaf 的 #strings.substringBefore 在「找不到分隔符」时返回 null
            （与 commons-lang 不同），而 msgOrNull(null) 会直接抛异常导致整页渲染失败，
            所以这里先用 indexOf 判位再截取。 */-->
-    <div th:if="${error != null}" class="alert alert-danger">
+    <!--/* Spring 的错误派发也会往模型里塞 error(英文原因短语,如 "Internal Server
+            Error"),它不是 i18n key,取不到译文就原样显示;app.js 还会把这条横幅提成
+            居中弹窗,于是中文错误页上压了一个英文弹窗。错误页自己的空状态块已经说明
+            了情况(status 只有错误派发才有),这里跳过它。 */-->
+    <div th:if="${error != null and status == null}" class="alert alert-danger">
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
         <div class="alert-body"
              th:with="err=${error.toString()},

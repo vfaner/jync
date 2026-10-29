@@ -91,4 +91,21 @@ class ErrorPageViewTest {
         assertThat(html).contains("Something went wrong");
         assertThat(html).contains("HTTP 404");
     }
+
+    /**
+     * Spring puts its own English reason phrase in the {@code error} model attribute of every
+     * error dispatch. The layout treats {@code error} as a flash message and renders it as a
+     * dismissible banner; app.js turns any {@code main.shell > .alert-danger} into a blocking
+     * dialog. So a Chinese user got an English "Internal Server Error" modal stacked on top of
+     * the (already Chinese) error page — the page says it twice, once in the wrong language.
+     */
+    @Test
+    void theServerReasonPhraseIsNotRenderedAsASecondErrorMessage() throws Exception {
+        String html = renderError(500, "zh-CN");
+
+        assertThat(html).contains("页面出了点问题");
+        assertThat(html).doesNotContain("Internal Server Error");
+        // No flash banner for app.js to lift into a dialog; the page's empty-state block is it.
+        assertThat(html).doesNotContain("alert alert-danger");
+    }
 }
