@@ -356,4 +356,30 @@ class PgTestDecodingParserTest {
 
         assertThat(line.change.qualifiedTable).isEqualTo("public.we\"ird");
     }
+
+    @Test
+    void aQuotedTableNameContainingAColonIsNotSplitAtTheWrongColon() {
+        // PG 允许标识符里带 ':'；quote_qualified_identifier 会输出
+        // table public."audit:2026": INSERT: ...。旧实现用行内第一个 ':' 切表名，
+        // 撞上引号里的那个，op 变成 2026"，整行按「未知 op」跳过——该表所有变更静默丢失。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.\"audit:2026\": INSERT: id[integer]:1 note[text]:'x'");
+
+        assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.qualifiedTable).isEqualTo("public.audit:2026");
+        assertThat(line.change.row).containsOnlyKeys("id", "note");
+        assertThat(line.change.row.get("id")).isEqualTo(1);
+    }
+
+    @Test
+    void aQuotedColumnNameContainingABracketKeepsItsWholeName() {
+        // 引号里的 '[' 会让旧的 indexOf('[') 在名字中间截断：列名变成 "\"a"，类型串
+        // 变成 b"[integer，绑定阶段对不上元数据，该列静默写成 NULL。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: INSERT: \"a[b\"[integer]:1");
+
+        assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.row).containsOnlyKeys("a[b");
+        assertThat(line.change.row.get("a[b")).isEqualTo(1);
+    }
 }

@@ -195,8 +195,12 @@ public final class PgTestDecodingParser {
         if (!trimmed.startsWith("table ")) {
             return SlotLine.row(ParsedChange.ignorable("not a row event: " + trimmed));
         }
-        // Format: "table <schema>.<table>: <OP>: <payload>"
-        int colonIdx = trimmed.indexOf(':');
+        // Format: "table <schema>.<table>: <OP>: <payload>". A quoted identifier may
+        // itself contain ':' (PG allows any character inside quotes and
+        // quote_qualified_identifier prints it verbatim), so the separator is the first
+        // colon OUTSIDE double quotes — a plain indexOf(':') split public."audit:2026"
+        // in the middle of the name and the whole row was dropped as an unknown op.
+        int colonIdx = indexOfOutsideDoubleQuotes(trimmed, ':');
         if (colonIdx < 0) {
             return SlotLine.row(ParsedChange.decodeFailure("missing colon after table ref: " + trimmed));
         }
@@ -291,6 +295,43 @@ public final class PgTestDecodingParser {
         return unquoteIdentifier(qualified);
     }
 
+    /**
+     * Index of the first {@code target} outside double quotes, or -1. A doubled quote
+     * ({@code ""}) toggles twice and stays inside the identifier — the same scan
+     * {@link #unquoteQualified} runs.
+     */
+    private static int indexOfOutsideDoubleQuotes(String text, char target) {
+        boolean inQuote = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '"') {
+                inQuote = !inQuote;
+            } else if (c == target && !inQuote) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Index just past the closing quote of the identifier opening at {@code open}
+     * ({@code ""} counts as an escaped quote), or the string length when it never closes.
+     */
+    private static int endOfQuotedIdentifier(String body, int open) {
+        int i = open + 1;
+        while (i < body.length()) {
+            if (body.charAt(i) == '"') {
+                if (i + 1 < body.length() && body.charAt(i + 1) == '"') {
+                    i += 2;
+                    continue;
+                }
+                return i + 1;
+            }
+            i++;
+        }
+        return body.length();
+    }
+
     /** A single quoted identifier with its {@code ""} escapes resolved, or the input as-is. */
     static String unquoteIdentifier(String identifier) {
         String name = identifier.trim();
@@ -334,8 +375,13 @@ public final class PgTestDecodingParser {
             // skip whitespace
             while (i < n && Character.isWhitespace(body.charAt(i))) i++;
             if (i >= n) break;
-            // read column name up to '['
-            int nameEnd = body.indexOf('[', i);
+            // read column name up to '['; a quoted identifier is skipped as one unit
+            // because the name itself may contain '[' (PG allows it inside quotes) and a
+            // plain indexOf('[') truncated such a name mid-way, leaving the type tag
+            // garbled and the column unmatched at bind time.
+            int nameEnd = body.charAt(i) == '"'
+                    ? body.indexOf('[', endOfQuotedIdentifier(body, i))
+                    : body.indexOf('[', i);
             if (nameEnd < 0) return null;
             String name = unquoteIdentifier(body.substring(i, nameEnd).trim());
             // read type up to ']'
