@@ -409,9 +409,19 @@ public class UpgradeService {
     /**
      * Launches the detached restart helper and schedules this JVM's exit. Only valid from
      * {@link Phase#READY} — before an upgrade is installed there is nothing to restart into.
+     *
+     * <p>Synchronized so the phase check and the hand-off are one step. READY survives a page
+     * reload (it is restored from the marker), so two open pages can both sit on the button:
+     * two helpers would each wait for the old JVM, each relaunch it, and the one that loses
+     * {@code server.port} would roll the just-installed jar back over the backup while the
+     * browser reported success. The second caller now waits for the first to flip the phase
+     * and is then refused by the same check that guards the first.
      */
-    public void restart() {
+    public synchronized void restart() {
         Status s = status;
+        if (s.phase() == Phase.RESTARTING) {
+            throw new IllegalStateException(text("error.upgrade.pendingRestart"));
+        }
         if (s.phase() != Phase.READY) {
             throw new IllegalStateException(text("error.upgrade.notReady"));
         }

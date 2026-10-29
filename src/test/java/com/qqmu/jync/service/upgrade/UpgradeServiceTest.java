@@ -12,11 +12,15 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -89,11 +93,20 @@ class UpgradeServiceTest {
     final class RecordingLauncher implements UpgradeService.RestartLauncher {
         Path script;
         Path launchedFrom;
+        final AtomicInteger launches = new AtomicInteger();
+        /** Holding the launch open lets a test start a second request mid-restart. */
+        volatile CountDownLatch entered;
+        volatile CountDownLatch release;
 
         @Override
-        public void launch(Path script, Path workDir) {
+        public void launch(Path script, Path workDir) throws Exception {
             this.script = script;
             this.launchedFrom = workDir;
+            launches.incrementAndGet();
+            if (entered != null) {
+                entered.countDown();
+                release.await(10, TimeUnit.SECONDS);
+            }
         }
     }
 
@@ -648,6 +661,51 @@ class UpgradeServiceTest {
     void restartIsRejectedBeforeAnUpgradeIsReady() {
         UpgradeService svc = service("1.7.2", new ScriptedDownloader());
         assertThatThrownBy(svc::restart).isInstanceOf(IllegalStateException.class);
+    }
+
+    /**
+     * READY 从 marker 恢复，所以「已安装、未重启」的窗口里可以同时开着两个页面（两个标签页，
+     * 或者点完刷新一次）。两边各自 POST /restart 会各写一份 helper、各拉起一个新 JVM：抢不到
+     * server.port 的那个按「没就绪」回滚，把刚装好的 jar 用 .bak 覆盖回去 —— 页面报升级成功，
+     * 磁盘上却是旧版。阶段检查与写脚本之间必须有排他。
+     */
+    @Test
+    void aConcurrentRestartRequestIsRefusedInsteadOfLaunchingASecondHelper() throws Exception {
+        byte[] nextJar = makeFatJar("new");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = release(Source.GITEE, "v1.8.0", null);
+        UpgradeService svc = service("1.7.2", downloader);
+        runToReady(svc);
+
+        launcher.entered = new CountDownLatch(1);
+        launcher.release = new CountDownLatch(1);
+        List<Throwable> failures = Collections.synchronizedList(new java.util.ArrayList<>());
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            pool.submit(() -> runQuietly(svc::restart, failures));
+            assertThat(launcher.entered.await(5, TimeUnit.SECONDS)).isTrue();
+            // The second request arrives while the first one is still handing off to the helper.
+            pool.submit(() -> runQuietly(svc::restart, failures));
+            Thread.sleep(300); // let it get as far as it can before the first one finishes
+            launcher.release.countDown();
+        } finally {
+            pool.shutdown();
+            assertThat(pool.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+
+        assertThat(launcher.launches.get()).isEqualTo(1);
+        assertThat(failures).hasSize(1);
+        assertThat(failures.get(0)).isInstanceOf(IllegalStateException.class);
+        assertThat(svc.status().phase()).isEqualTo(UpgradeService.Phase.RESTARTING);
+    }
+
+    private static void runQuietly(Runnable action, List<Throwable> failures) {
+        try {
+            action.run();
+        } catch (Throwable t) {
+            failures.add(t);
+        }
     }
 
     // ── script content (pure builders, platform-specific) ─────────────────────────────
