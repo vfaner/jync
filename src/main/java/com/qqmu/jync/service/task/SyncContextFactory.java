@@ -146,9 +146,6 @@ public class SyncContextFactory {
     /** Hard ceiling on a full-load batch: a statement must stay small whatever is configured. */
     private static final int MAX_FULL_LOAD_BATCH = 20_000;
 
-    /** Hard ceiling on full-load parallelism, matching the capacity plan. */
-    private static final int MAX_FULL_LOAD_PARALLELISM = 8;
-
     /**
      * Effective rows per full-load batch: the project's own setting, clamped to 1..20000, or
      * the global full-load default when it is absent/non-positive.
@@ -177,33 +174,21 @@ public class SyncContextFactory {
 
     /**
      * Effective full-load parallelism: the project's value when set, else the global one;
-     * never above 8, and never more workers than the pool can seat.
-     *
-     * <p>Distinct endpoints give each side its own pool: the main cycle holds one connection
-     * per side for the whole load, so a pool of {@code P} seats {@code P-1} workers. When both
-     * sides point at the same {@link DatabaseConfig} they share one pool, the main cycle holds
-     * two connections, and every worker borrows one of each — {@code (P-2)/2} workers.
+     * never above {@link FullLoadCapacity#MAX_PARALLELISM}, and never more workers than the
+     * pool can seat (see {@link FullLoadCapacity#poolBound}).
      */
     int resolveFullLoadParallelism(SyncConfig config, DatabaseConfig source,
                                    DatabaseConfig target) {
         int requested = config.getFullLoadParallelism() != null
                 && config.getFullLoadParallelism() > 0
                 ? config.getFullLoadParallelism() : properties.getFullLoadParallelism();
-        int capped = Math.min(Math.max(requested, 1), MAX_FULL_LOAD_PARALLELISM);
-        int effective = Math.max(1, Math.min(capped, poolBound(source, target)));
+        int effective = Math.max(1, Math.min(Math.max(requested, 1),
+                FullLoadCapacity.effectiveCap(properties, source, target)));
         if (effective != requested) {
             log.info("Full-load parallelism {} capped to {} by the {} connection pool",
                     requested, effective, Math.max(2, properties.getMaxPoolSize()));
         }
         return effective;
-    }
-
-    /** Workers the pool can seat next to the main cycle's connections. */
-    private int poolBound(DatabaseConfig source, DatabaseConfig target) {
-        int pool = Math.max(2, properties.getMaxPoolSize());
-        boolean sameDatabase = source != null && target != null && source.getId() != null
-                && source.getId().equals(target.getId());
-        return sameDatabase ? Math.max(1, (pool - 2) / 2) : Math.max(1, pool - 1);
     }
 
     /** Uses the configured schema, or asks the database what the connection's default is. */

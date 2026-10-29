@@ -194,6 +194,41 @@ class ProjectControllerFullLoadPerformanceTest {
     }
 
     /**
+     * "实际值受连接池上限约束" tells the user a cap exists but not what it is, so a value
+     * like 8 looks inert: saved, then silently run as 4. The card must show the number the
+     * worker count will actually be clamped to.
+     */
+    @Test
+    void theParallelismFieldShowsHowManyWorkersThePoolCanSeat() throws Exception {
+        stubDetail(CaptureStrategy.POLLING);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Default pool of 5; source and target are distinct connections, and the main cycle
+        // holds one connection per side for the whole load: 5 - 1 = 4 workers.
+        assertThat(textOf(page, "fullLoadParallelismCap")).contains("5").contains("4");
+    }
+
+    /**
+     * Both sides pointing at one connection share a single pool: the main cycle holds two
+     * connections and each worker borrows one of each, so the same pool of 5 seats one
+     * worker — not four. A hard-coded "4" would pass the test above and fail here.
+     */
+    @Test
+    void theShownCapFollowsTheSharedPoolWhenBothSidesAreTheSameConnection() throws Exception {
+        Project project = stubDetail(CaptureStrategy.POLLING);
+        project.setTargetDbId(5L);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(textOf(page, "fullLoadParallelismCap")).contains("5").contains("1");
+    }
+
+    /**
      * Bigger is not simply better, and neither field wears that on its face: the batch size
      * trades speed for undo/redo and rollback time, the worker count trades speed for database
      * load. The recommendation has to be reachable from the field itself, without a manual.

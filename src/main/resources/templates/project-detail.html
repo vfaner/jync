@@ -848,6 +848,10 @@
                                    th:placeholder="${fullLoadParallelismDefault}">
                             <div class="help"
                                  th:text="#{option.fullLoadParallelismHelp(${fullLoadParallelismDefault})}">help</div>
+                            <!-- 生效上限:引擎按连接池座位数钳制并行度,不给数字的话
+                                 存 8 看起来就是 8,实际可能只跑 4。 -->
+                            <div class="help" id="fullLoadParallelismCap"
+                                 th:text="#{option.fullLoadParallelismCap(${fullLoadPoolSize}, ${fullLoadParallelismCap})}">cap</div>
                         </div>
                     </div>
                 </div>

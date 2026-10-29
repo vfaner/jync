@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.config.I18nConfig;
+import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.ColumnRule;
 import com.qqmu.jync.dto.ColumnRuleType;
 import com.qqmu.jync.dto.Pager;
@@ -39,6 +40,7 @@ import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.cdc.CdcReconnectBackoff;
 import com.qqmu.jync.service.cdc.CdcRuntimeStats;
+import com.qqmu.jync.service.task.FullLoadCapacity;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -57,19 +59,22 @@ public class ProjectController {
     private final CdcConsumerManager cdcConsumerManager;
     private final CdcPositionStore cdcPositionStore;
     private final I18nConfig.MessageSourceAccessorHolder messages;
+    private final SyncProperties properties;
 
     public ProjectController(ProjectService projectService,
                             DatabaseConfigService databaseConfigService,
                             CdcOperationsService cdcOperationsService,
                             CdcConsumerManager cdcConsumerManager,
                             CdcPositionStore cdcPositionStore,
-                            I18nConfig.MessageSourceAccessorHolder messages) {
+                            I18nConfig.MessageSourceAccessorHolder messages,
+                            SyncProperties properties) {
         this.projectService = projectService;
         this.databaseConfigService = databaseConfigService;
         this.cdcOperationsService = cdcOperationsService;
         this.cdcConsumerManager = cdcConsumerManager;
         this.cdcPositionStore = cdcPositionStore;
         this.messages = messages;
+        this.properties = properties;
     }
 
     @GetMapping
@@ -292,6 +297,15 @@ public class ProjectController {
         model.addAttribute("isPostgresSource", isPostgresSource);
         model.addAttribute("isSqlServerSource", isSqlServerSource);
         model.addAttribute("isYashanSource", isYashanSource);
+
+        // The worker count is clamped by the connection pools (FullLoadCapacity), so the card
+        // shows what the saved value will actually run as: "受连接池上限约束" alone leaves a
+        // saved 8 looking effective when the pool seats 4.
+        DatabaseConfig target = project.getTargetDbId() == null ? null
+                : databaseConfigService.findById(project.getTargetDbId()).orElse(null);
+        model.addAttribute("fullLoadPoolSize", Math.max(2, properties.getMaxPoolSize()));
+        model.addAttribute("fullLoadParallelismCap",
+                FullLoadCapacity.effectiveCap(properties, source, target));
 
         CaptureStrategy current = config.getCaptureStrategyOrDefault();
         CdcProbeResult cdcProbe = null;
@@ -608,8 +622,6 @@ public class ProjectController {
     /** Server-side bounds for the full-load knobs; the form's min/max is only a hint. */
     private static final int MAX_FULL_LOAD_BATCH = 20_000;
 
-    private static final int MAX_FULL_LOAD_PARALLELISM = 8;
-
     /**
      * Null stays null ("use the global default"); out-of-range values are pulled to the
      * nearest bound rather than rejected, so an old form or a direct POST cannot make the
@@ -631,7 +643,7 @@ public class ProjectController {
         if (value == null) {
             return null;
         }
-        int clamped = Math.max(1, Math.min(value, MAX_FULL_LOAD_PARALLELISM));
+        int clamped = Math.max(1, Math.min(value, FullLoadCapacity.MAX_PARALLELISM));
         if (clamped != value) {
             log.info("Full-load parallelism {} out of range; storing {}", value, clamped);
         }
