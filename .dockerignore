@@ -1,4 +1,4 @@
-# 构建上下文只留构建所需(pom.xml、src、RELEASE_NOTES_v*.md),其余不进镜像
+# 构建上下文只留构建所需(pom.xml、src、docs/release-notes),其余不进镜像
 .git
 .idea
 .vscode
@@ -6,15 +6,18 @@ target
 data
 logs
 docs
+# 唯独发布说明要进上下文:copy-release-notes 会把当前版本那份打进 jar(设置页
+# 「本版本更新内容」用)。Docker 的规则是「最后一条匹配的规则生效」,所以这行
+# 必须排在 docs 之后;父目录被排除时子目录仍可被显式放回。
+# 漏掉它构建不会失败,只是 jar 里静默没有 release-notes/(见 ContainerBuildReleaseNotesTest)。
+!docs/release-notes
 deploy
 *.png
 *.py
 docker-compose.yml
 Dockerfile
 .dockerignore
-# 根目录文档不进上下文;但 RELEASE_NOTES_v*.md 必须保留——
-# copy-release-notes 会把当前版本的那份打进 jar(设置页「本版本更新内容」用),
-# 且文件名随版本号变,不做排除以免升版本时静默失效
+# 根目录文档不进上下文(发布说明已挪到 docs/release-notes,由上面的 ! 规则放回)
 README.md
 README_EN.md
 THIRD_PARTY_LICENSES.md

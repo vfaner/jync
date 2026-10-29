@@ -1,7 +1,7 @@
 # ============================================================================
 # Jync 捷同 · 容器镜像(多阶段构建)
-#   docker build -t jync:1.7.7 .
-#   docker run -d -p 8080:8080 -v jync-data:/app/data -v jync-logs:/app/logs jync:1.7.7
+#   docker build -t jync:1.8.1 .
+#   docker run -d -p 8080:8080 -v jync-data:/app/data -v jync-logs:/app/logs jync:1.8.1
 # 元数据(H2 库文件)在 /app/data,日志在 /app/logs,升级镜像不丢数据。
 # 详细部署说明见 docs/deploy-container.md。
 # ============================================================================
@@ -13,9 +13,12 @@ WORKDIR /build
 COPY pom.xml .
 RUN mvn -q -B dependency:go-offline
 COPY src ./src
+# 设置页「本版本更新内容」靠 maven-resources-plugin 把当前版本的发布说明打进 jar;
+# 说明文件在 docs/release-notes/ 下,必须显式拷进构建阶段 —— .dockerignore 排除了
+# 整个 docs/ 只把它放回上下文。漏了这一步构建照样成功,jar 里只是静默没有
+# release-notes/ 条目(ContainerBuildReleaseNotesTest 守着这条)。
+COPY docs/release-notes ./docs/release-notes
 # 容器内构建跳过测试(测试在 CI / 本地跑);finalName 固定为 jync,产物即 target/jync.jar。
-# 注意:构建需要仓库根目录的 RELEASE_NOTES_v<版本>.md(copy-release-notes 会打进 jar,
-# 供设置页「本版本更新内容」使用),.dockerignore 不能把它排掉。
 RUN mvn -q -B clean package -DskipTests
 
 # ---------- 运行阶段 ----------
