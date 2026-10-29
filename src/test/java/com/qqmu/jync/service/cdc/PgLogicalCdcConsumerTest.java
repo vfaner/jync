@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import org.mockito.InOrder;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -17,6 +18,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
@@ -296,9 +298,20 @@ class PgLogicalCdcConsumerTest {
         when(rs.next()).thenReturn(true);
         when(rs.getLong(1)).thenReturn(8L * 1024 * 1024);
 
+        // 采样线程每 10 ms 一轮，中断落下之前跑了几轮取决于调度。所以数「借了几次、还了几次」，
+        // 而不是假定只借一次：轮数多少都行，但每次借出都必须还回来。
+        AtomicInteger checkouts = new AtomicInteger();
+        AtomicInteger closes = new AtomicInteger();
         DataSourceManager dsm = mock(DataSourceManager.class);
         DatabaseConfig sourceConfig = mock(DatabaseConfig.class);
-        when(dsm.getConnection(sourceConfig)).thenReturn(conn);
+        when(dsm.getConnection(sourceConfig)).thenAnswer(inv -> {
+            checkouts.incrementAndGet();
+            return conn;
+        });
+        doAnswer(inv -> {
+            closes.incrementAndGet();
+            return null;
+        }).when(conn).close();
         com.qqmu.jync.service.sync.SyncContext ctx =
                 mock(com.qqmu.jync.service.sync.SyncContext.class);
         when(ctx.getSourceConfig()).thenReturn(sourceConfig);
@@ -319,7 +332,8 @@ class PgLogicalCdcConsumerTest {
         }
 
         assertThat(sampler.isAlive()).isFalse();
-        verify(conn).close();                       // 用完即还
+        assertThat(checkouts.get()).isPositive();              // 确实借过连接
+        assertThat(closes.get()).isEqualTo(checkouts.get());   // 用完即还,一次不漏
     }
 
     /** 诊断仪表的铁律:取不到值就记 DEBUG,基线的全量一行都不能因此受影响。 */
