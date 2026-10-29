@@ -32,6 +32,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
+import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
 import com.qqmu.jync.service.monitor.ChangeDetector;
@@ -118,6 +119,26 @@ class SyncEngineDropVisibilityTest {
     }
 
     @Test
+    void aTableRefusedByTheIdentifierPreflightIsNotDropped() throws Exception {
+        // The preflight takes the table out of this cycle's metadata because the target
+        // cannot store its name. That is a refusal, not a source-side drop: read as one with
+        // allowDrop on, the engine would DROP the target table and delete its snapshot — and
+        // nothing recreates it, because the name is still too long on the next cycle.
+        String tooLong = "T".repeat(65); // MySQL allows 64 characters
+        DatabaseMeta meta = new DatabaseMeta();
+        meta.setTables(List.of(table(tooLong), table("OTHER")));
+        stubSourceListing(meta);
+        when(snapshotService.loadAll(PROJECT_ID, ObjectType.TABLE, TableMeta.class))
+                .thenReturn(Map.of(tooLong, table(tooLong), "OTHER", table("OTHER")));
+        when(sourceReader.schemaListingIsComplete(sourceConn, SCHEMA)).thenReturn(true);
+
+        engine.runCycle(ctxAgainstMySql());
+
+        verify(structureSync, never()).apply(any(),
+                argThat(event -> event.getChangeType() == ChangeType.DROP), any());
+    }
+
+    @Test
     void aHealthyCycleNeverProbesTheSource() throws Exception {
         DatabaseMeta healthy = new DatabaseMeta();
         healthy.setTables(List.of(table("ORDERS")));
@@ -158,6 +179,18 @@ class SyncEngineDropVisibilityTest {
     }
 
     private SyncContext ctx() {
+        return ctxAgainst(new GenericSqlDialect());
+    }
+
+    /**
+     * A MySQL target, so the identifier preflight has a real limit to apply (64 characters):
+     * the generic dialect reports no limit and would leave the check switched off.
+     */
+    private SyncContext ctxAgainstMySql() {
+        return ctxAgainst(new MySqlDialect());
+    }
+
+    private SyncContext ctxAgainst(com.qqmu.jync.service.converter.SqlDialect targetDialect) {
         SyncConfig config = new SyncConfig();
         config.setSyncStructure(true);
         config.setSyncData(false);
@@ -175,7 +208,7 @@ class SyncEngineDropVisibilityTest {
                 .sourceReader(sourceReader)
                 .targetReader(mock(MetadataReader.class))
                 .sourceDialect(new GenericSqlDialect())
-                .targetDialect(new GenericSqlDialect())
+                .targetDialect(targetDialect)
                 .batchSize(50)
                 .deferSecondaryIndexes(true)
                 .build();

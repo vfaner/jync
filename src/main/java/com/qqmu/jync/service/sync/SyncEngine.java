@@ -171,6 +171,13 @@ public class SyncEngine {
                             violation.getTableName(), ChangeType.ERROR, violation.getMessage(),
                             false, 0);
                     offendingNames.add(violation.getTableName());
+                    // The table is being taken out of this cycle's metadata, and change
+                    // detection reads "snapshotted but no longer listed" as a source-side
+                    // drop: with allowDrop on, the target table was DROPped and its snapshot
+                    // deleted in the same cycle that reported the name too long — and since
+                    // the name stays too long, nothing ever recreated it. "Refused, not
+                    // gone" is exactly what the unreadable set records.
+                    sourceMeta.addUnreadableTable(violation.getTableName());
                 }
                 sourceMeta.setTables(sourceMeta.getTables().stream()
                         .filter(t -> !offendingNames.contains(t.getName()))
