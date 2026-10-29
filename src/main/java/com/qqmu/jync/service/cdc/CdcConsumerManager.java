@@ -96,6 +96,8 @@ public class CdcConsumerManager {
     private final SyncProperties properties;
     private final ConsumerStarter starter;
     private final LogMinerSessionFactory logMinerSessionFactory;
+    private final YStreamClientFactory yStreamClientFactory;
+    private final YStreamServiceLifecycle yStreamLifecycle;
 
     /** projectId -> live consumer of THIS node. Absent = not owned here (other node or stopped). */
     private final Map<Long, Registration> registry = new ConcurrentHashMap<>();
@@ -132,10 +134,13 @@ public class CdcConsumerManager {
                               SyncStateWriter stateWriter,
                               DataSourceManager dataSourceManager,
                               SyncProperties properties,
-                              LogMinerSessionFactory logMinerSessionFactory) {
+                              LogMinerSessionFactory logMinerSessionFactory,
+                              YStreamClientFactory yStreamClientFactory,
+                              YStreamServiceLifecycle yStreamLifecycle) {
         this(projectRepository, taskRepository, lockService, contextFactory, clientFactory,
                 positionStore, baselineService, taskStore, stateWriter, dataSourceManager,
-                properties, DEFAULT_STARTER, logMinerSessionFactory);
+                properties, DEFAULT_STARTER, logMinerSessionFactory, yStreamClientFactory,
+                yStreamLifecycle);
     }
 
     public CdcConsumerManager(ProjectRepository projectRepository,
@@ -150,7 +155,9 @@ public class CdcConsumerManager {
                               DataSourceManager dataSourceManager,
                               SyncProperties properties,
                               ConsumerStarter starter,
-                              LogMinerSessionFactory logMinerSessionFactory) {
+                              LogMinerSessionFactory logMinerSessionFactory,
+                              YStreamClientFactory yStreamClientFactory,
+                              YStreamServiceLifecycle yStreamLifecycle) {
         this.projectRepository = projectRepository;
         this.taskRepository = taskRepository;
         this.lockService = lockService;
@@ -164,6 +171,8 @@ public class CdcConsumerManager {
         this.properties = properties;
         this.starter = starter;
         this.logMinerSessionFactory = logMinerSessionFactory;
+        this.yStreamClientFactory = yStreamClientFactory;
+        this.yStreamLifecycle = yStreamLifecycle;
     }
 
     /**
@@ -304,6 +313,11 @@ public class CdcConsumerManager {
             return new SqlServerCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
                     stats, properties);
+        }
+        if (strategy == CaptureStrategy.YSTREAM_CDC) {
+            return new YStreamCdcConsumer(project, lock, ctx, positionStore,
+                    baselineService, taskStore, stateWriter, dataSourceManager,
+                    stats, properties, yStreamClientFactory, yStreamLifecycle);
         }
         return new CdcConsumer(project, lock, ctx, clientFactory,
                 positionStore, baselineService, taskStore, stateWriter,

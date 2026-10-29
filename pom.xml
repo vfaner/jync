@@ -218,8 +218,15 @@
         <dependency>
             <groupId>com.yashandb</groupId>
             <artifactId>yashandb-jdbc</artifactId>
-            <version>1.7.10</version>
+            <version>1.9.27</version>
             <scope>runtime</scope>
+        </dependency>
+        <!-- v1.9.0 YStream CDC: the LCR stream client. It links against the 1.9.27 JDBC
+             driver (read: same release train), which is why both move together. -->
+        <dependency>
+            <groupId>com.yashandb</groupId>
+            <artifactId>Ystream</artifactId>
+            <version>1.9.27</version>
         </dependency>
 
         <!-- Renders the current version's release notes on the settings page. -->

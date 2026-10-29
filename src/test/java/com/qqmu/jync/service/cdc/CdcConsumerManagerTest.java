@@ -53,6 +53,8 @@ class CdcConsumerManagerTest {
     private SyncTaskStore taskStore;
     private SyncStateWriter stateWriter;
     private DataSourceManager dataSourceManager;
+    private YStreamClientFactory yStreamClientFactory;
+    private YStreamServiceLifecycle yStreamLifecycle;
     private CdcConsumerManager manager;
     private SyncLockService.LockHandle lock;
     private RecordingStarter starter;
@@ -104,6 +106,8 @@ class CdcConsumerManagerTest {
         taskStore = mock(SyncTaskStore.class);
         stateWriter = mock(SyncStateWriter.class);
         dataSourceManager = mock(DataSourceManager.class);
+        yStreamClientFactory = mock(YStreamClientFactory.class);
+        yStreamLifecycle = mock(YStreamServiceLifecycle.class);
         lock = mock(SyncLockService.LockHandle.class);
         when(lock.owner()).thenReturn("host:1:feed");
         // R1(控制器裁定):消费者在重连循环顶部先 renew()——false 即安静退出。测试里
@@ -119,7 +123,30 @@ class CdcConsumerManagerTest {
         };
         manager = new CdcConsumerManager(projectRepository, taskRepository, lockService,
                 contextFactory, clientFactory, positionStore, baselineService, taskStore,
-                stateWriter, dataSourceManager, new SyncProperties(), starter, sessionFactory);
+                stateWriter, dataSourceManager, new SyncProperties(), starter, sessionFactory,
+                yStreamClientFactory, yStreamLifecycle);
+    }
+
+    @Test
+    void theYStreamStrategyGetsItsOwnConsumer() {
+        java.util.concurrent.atomic.AtomicReference<Runnable> built =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        CdcConsumerManager ystream = new CdcConsumerManager(projectRepository, taskRepository,
+                lockService, contextFactory, clientFactory, positionStore, baselineService,
+                taskStore, stateWriter, dataSourceManager, new SyncProperties(),
+                (consumer, name) -> {
+                    built.set(consumer);
+                    return new Thread(consumer, name);
+                }, (source, startScn, batchSize) -> {
+                    throw new UnsupportedOperationException();
+                }, yStreamClientFactory, yStreamLifecycle);
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+
+        ystream.ensureStarted(projectWithStrategy(9L, true, CaptureStrategy.YSTREAM_CDC));
+
+        // 落到 binlog 消费者会拿 MySQL 客户端去连崖山:策略与引擎必须一一对应。
+        assertThat(built.get()).isInstanceOf(YStreamCdcConsumer.class);
+        ystream.ensureStopped(9L);
     }
 
     @Test
@@ -413,7 +440,7 @@ class CdcConsumerManagerTest {
                 (consumer, threadName) -> new Thread(consumer, threadName),
                 (source, startScn, batchSize) -> {
                     throw new UnsupportedOperationException();
-                }); // 从不 start → isAlive()==false
+                }, yStreamClientFactory, yStreamLifecycle); // 从不 start → isAlive()==false
         when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
         when(taskRepository.findByProjectId(9L)).thenReturn(Optional.empty());
         Project project = cdcProject(9L, true);

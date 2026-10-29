@@ -66,6 +66,7 @@ class CdcOperationsServiceTest {
     @Mock private LogMinerCdcProbe logMinerProbe;
     @Mock private PgLogicalReplicationCdcProbe pgProbe;
     @Mock private SqlServerCdcProbe mssqlProbe;
+    @Mock private YStreamCdcProbe yStreamProbe;
     @Mock private BinlogClientFactory clientFactory;
     @Mock private CdcConsumerManager cdcManager;
     @Mock private CdcPositionStore positionStore;
@@ -81,7 +82,7 @@ class CdcOperationsServiceTest {
     void setUp() {
         service = new CdcOperationsService(projectRepository, databaseConfigRepository,
                 dataSourceManager, contextFactory, probe, logMinerProbe, pgProbe, mssqlProbe,
-                clientFactory, cdcManager, positionStore, stateWriter, taskStore,
+                yStreamProbe, clientFactory, cdcManager, positionStore, stateWriter, taskStore,
                 auditService, changeLogRepository, lockService);
     }
 
@@ -147,6 +148,25 @@ class CdcOperationsServiceTest {
         assertThat(plannedServerId.getValue()).isEqualTo(612001L);
         assertThat(plannedServerId.getValue()).isEqualTo(clientFactory.serverIdFor(1L));
         assertThat(source.getType()).isEqualTo(DatabaseType.MYSQL);
+    }
+
+    /**
+     * 崖山说 ORACLE 家族,但不能走 LogMiner 探测(它没有 DBMS_LOGMNR)。按产品名精确分派
+     * 到 YStream 探测,和保存门禁、页面列出的采集方式保持一致。
+     */
+    @Test
+    void probeProjectRunsTheYStreamProbeForAYashanSource() throws SQLException {
+        project();
+        source(DatabaseType.YASHANDB);
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        CdcProbeResult expected = CdcProbeResult.of(List.of(
+                CdcProbeResult.Check.of(CdcProbeResult.YSTREAM_SOURCE, true, "YashanDB")));
+        when(yStreamProbe.probe(any(Connection.class), anyList())).thenReturn(expected);
+
+        assertThat(service.probeProject(1L)).isSameAs(expected);
+
+        verify(logMinerProbe, never()).probe(any(), anyList(), any());
     }
 
     @Test

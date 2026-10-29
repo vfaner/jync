@@ -2438,7 +2438,7 @@
      服务端分叉：PG/SQLServer CDC 项目加载后轮询死配置卡被翻回可见、
      立即同步帮助文案错位，切到这些策略也不弹二次确认。 */
   var LOG_CDC_STRATEGIES = {
-    BINLOG_CDC: 1, LOGMINER_CDC: 1, PG_LOGICAL_CDC: 1, SQLSERVER_CDC: 1
+    BINLOG_CDC: 1, LOGMINER_CDC: 1, PG_LOGICAL_CDC: 1, SQLSERVER_CDC: 1, YSTREAM_CDC: 1
   };
   function isLogCdcStrategy(value) {
     return !!(value && LOG_CDC_STRATEGIES[value]);
@@ -2631,9 +2631,11 @@
       document.querySelectorAll('[data-cdc-visibility="cdc"]').forEach(function (el) {
         el.classList.toggle('is-hidden', !isCdc);
       });
-      // 空闲轮询间隔只属于三个轮询式日志 CDC 引擎(LogMiner/PG/SQLServer);
+      // 空闲轮询间隔只属于轮询式日志 CDC 引擎(LogMiner/PG/SQLServer/YStream);
       // binlog 推送不走轮询。隐藏时内部输入同时 disable,杜绝陈旧值随表单提交。
-      var POLLING_CDC = { LOGMINER_CDC: 1, PG_LOGICAL_CDC: 1, SQLSERVER_CDC: 1 };
+      var POLLING_CDC = {
+        LOGMINER_CDC: 1, PG_LOGICAL_CDC: 1, SQLSERVER_CDC: 1, YSTREAM_CDC: 1
+      };
       var isPollingCdc = picked && POLLING_CDC[picked.value];
       document.querySelectorAll('[data-cdc-visibility="polling-cdc"]').forEach(function (el) {
         el.classList.toggle('is-hidden', !isPollingCdc);

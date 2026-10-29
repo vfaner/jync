@@ -80,7 +80,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 |---|---|
 | Full load | Keyset chunking + in-table parallelism + streamed reads + per-chunk checkpoints; INSERT-first into empty targets, deferred secondary indexes; hundreds of thousands of rows/s |
 | Incremental sync | Timestamp, row SCN, identity column or full comparison, selected automatically; one cursor-range query; safety-lagged watermark; cursor advances only after commit |
-| Log CDC | MySQL binlog, Oracle LogMiner, PostgreSQL logical decoding, SQL Server CDC; long-lived streaming replay with second-level latency |
+| Log CDC | MySQL binlog, Oracle LogMiner, PostgreSQL logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency |
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
 | Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
 | Reliability | Idempotent upsert, checkpoint resume, database leases, at-least-once delivery, automatic catch-up after downtime |
@@ -195,9 +195,10 @@ Five source families can run log CDC per task, reading the source's log and seei
 | DM LogMiner | DM8; `ARCH_MODE=Y`; `RLOG_APPEND_LOGIC=2` (full old image in redo); `V$ARCHIVED_LOG` readable and `DBMS_LOGMNR` executable; only archived files can be mined, so the archive-switch interval is the CDC latency floor (schedule `ALTER SYSTEM SWITCH LOGFILE` about every minute) | SCN (`MAX(NEXT_CHANGE#)`) |
 | PostgreSQL logical decoding | PostgreSQL 11+ (position advance uses `pg_replication_slot_advance`), plus PG-family domestic kernels (openGauss, GaussDB, Kingbase, Highgo, Vastbase, Oscar, RaseSQL, SeaBoxSQL); `wal_level=logical`; `REPLICATION` grant (not required by openGauss); table `REPLICA IDENTITY` not `NOTHING`; on openGauss prefer `enable_slot_log=on` or the slot does not survive a restart | LSN |
 | SQL Server CDC | 2012+; database-level `sp_cdc_enable_db`; SQL Server Agent running; `cdc_Admin` / `cdc_reader` membership | LSN |
+| YashanDB YStream | YashanDB 23.4+; `ARCHIVELOG` and connected to the primary; account holds `CREATE SESSION`, `SELECT ANY TABLE`, `YSTREAM_CAPTURE` and `SELECT ANY DICTIONARY`; every selected table needs a one-time `ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS`; the table list must be explicit; at most 32 YStream services per instance | Five-part tuple (`commitScn` / instance / `groupLsn` / `groupOffset` / row) |
 
-- **Except YashanDB**: 23.4.7.100 was measured and ships no `DBMS_LOGMNR`, so log CDC is unavailable on that product (see [docs/dm-logminer-spike.md](docs/dm-logminer-spike.md) §7); use polling or full comparison for a YashanDB source.
-- **One flow for all five**: record the position → chunked full-load baseline → long-lived replay. DM shares the Oracle LogMiner pipeline; only the position source, mineable files and package calls go through a per-vendor dialect. The position is written before the baseline, so changes during the baseline cannot be missed.
+- **YashanDB uses YStream, not LogMiner**: 23.4.7.100 was measured and ships no `DBMS_LOGMNR` (see [docs/dm-logminer-spike.md](docs/dm-logminer-spike.md) §7); its own logical-log engine is YStream (`DBMS_YSTREAM_ADM`), wired since v1.9.0 as the "YStream real-time" strategy — no triggers, no table changes. A table without supplemental logging has its DML **silently kept out of the stream**, so both the probe and the consumer check every table and print a ready-to-paste ALTER script; if the prerequisites cannot be met, fall back to polling or full comparison.
+- **One flow for every engine**: record the position → chunked full-load baseline → long-lived replay. DM shares the Oracle LogMiner pipeline; only the position source, mineable files and package calls go through a per-vendor dialect. The position is written before the baseline, so changes during the baseline cannot be missed.
 - **Low idle latency**: while data exists, the next round starts immediately with no extra wait; only a genuinely empty stream sleeps (1s for LogMiner and SQL Server, 500ms for PostgreSQL, 50ms minimum). MySQL binlog is server-pushed and not polled.
 - **Multi-instance takeover**: the CDC stream for one task is guarded by a database lease; if the owning node dies, another node takes over within 60s.
 - **Consistency contract**: commit to the target, re-check the lease, then advance the position. After a crash the stream replays from the last position, and the overlapping window is absorbed by idempotent upserts.
@@ -723,7 +724,7 @@ Procedural control flow in stored procedures cannot be translated reliably by te
 | Deployment | **One jar** | Kafka + Connect + ZK | Client-side jobs | Desktop + repository | Desktop client |
 | Configuration | **Web UI** | YAML / REST + consumer code | JSON jobs | Graphical ETL | Wizards |
 | Time to first sync | **Minutes**: download, start, click | Days: stand up the Kafka stack | Hours: write JSON jobs | Days: learn the transform model | Minutes, one-off only |
-| Continuous incremental | Polling / Cron + log CDC (MySQL binlog, Oracle LogMiner, PostgreSQL, SQL Server) | Log-based | Not applicable (one-shot) | Partial (self-built schedule) | Partial (scheduled jobs / full-table compare) |
+| Continuous incremental | Polling / Cron + log CDC (MySQL binlog, Oracle LogMiner, PostgreSQL, SQL Server, YashanDB YStream) | Log-based | Not applicable (one-shot) | Partial (self-built schedule) | Partial (scheduled jobs / full-table compare) |
 | Full load | **Keyset chunks + in-table parallelism + streaming + checkpoints** | Initial / incremental snapshots supported; loading into a heterogeneous target is your consumer code | Sharded jobs | Implement inside the job | One-off wizard |
 | Structure sync | **Tables, indexes, views, procedures created** | Partial; loading is your code | Pre-create tables | Partial | One-off only |
 | Dialect conversion | **Types, functions, quoting, pagination, procedures** | No | Partial | Partial, manual | Partial |
@@ -762,7 +763,7 @@ com.qqmu.jync
 │   ├── monitor      ChangeDetector, CursorStrategyResolver
 │   ├── converter    SqlDialect, type mapping, SQL body conversion
 │   ├── sync         SyncEngine, DataSyncService, StructureSyncService, DdlExecutor
-│   ├── cdc          binlog / LogMiner / PG / SQL Server consumers
+│   ├── cdc          binlog / LogMiner / PG / SQL Server / YStream consumers
 │   ├── task         Quartz scheduling, three-layer locks, context assembly, startup recovery
 │   ├── lob          streamed large-value reads, binding and spilling
 │   └── ai           provider settings, shared HTTP layer, drafting and review
@@ -796,7 +797,7 @@ Coverage highlights:
 - **Dialects and SQL**: idempotent upserts per dialect, type limits, SQL body rewriting that never touches literals or comments.
 - **Full load and resume**: keyset chunking, disjoint parallel ranges, keyless OFFSET resume, checkpoints, column cleansing and primary-key boundaries.
 - **Security**: password and AI-key encryption, every viewer POST refused, missing-CSRF refused, SSO mode isolation.
-- **CDC**: prerequisite probes for all four engines, position discipline, lease exclusivity, failure summaries.
+- **CDC**: prerequisite probes for all five engines, position discipline, lease exclusivity, failure summaries.
 - **Pages and i18n**: every conditional branch renders without `??`, no Chinese leaks in the English UI, identical key sets in both bundles.
 - **Upgrades**: GitHub → Gitee fallback, download verification, replacement, backup and rollback.
 

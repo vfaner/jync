@@ -50,6 +50,7 @@ import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.PgLogicalCdcConsumer;
+import com.qqmu.jync.service.cdc.YStreamServiceAdmin;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
@@ -339,6 +340,10 @@ public class ProjectService {
             if (sourceChanged && previousStrategy == CaptureStrategy.PG_LOGICAL_CDC) {
                 releasePgSlot(saved.getId(), previousSourceDbId, "moved to another source");
             }
+            // YStream 服务同为源库上的持久对象:新源会建新服务,旧服务没人再来停。
+            if (sourceChanged && previousStrategy == CaptureStrategy.YSTREAM_CDC) {
+                releaseYStream(saved.getId(), previousSourceDbId, "moved to another source");
+            }
         }
         // Inside the same transaction: the audit row commits with the change it describes
         // and rolls back with it, so the trail never claims a save that did not happen.
@@ -499,12 +504,22 @@ public class ProjectService {
         if (requested != null) {
             config.setCaptureStrategy(requested);
         }
+        // YStream's ADD_TABLES takes an explicit list; there is no "capture the whole schema"
+        // mode to fall back on. A legacy empty selection (never went through the picker) reads
+        // as "all tables", which the service cannot honour — and silently capturing nothing is
+        // the one failure mode this whole feature exists to avoid.
+        if (config.getCaptureStrategyOrDefault() == CaptureStrategy.YSTREAM_CDC
+                && (!config.isObjectSelectionExplicit() || config.getTables().isEmpty())) {
+            throw new IllegalArgumentException("error.project.cdc.tables.required");
+        }
         // Table selection and name mapping are topology: changing them under a running
         // cycle makes it copy tables the old schedule never promised, and per-table cursors
         // are keyed by the OLD name. A strategy switch is exempt — that flow stops the
         // engine and clears its cursors in both directions by design.
         boolean switching = requested != null && requested != oldStrategy;
-        if (!switching && mappingChanged(parseConfigLenient(project.getSyncConfig()), config)
+        SyncConfig previousConfig = parseConfigLenient(project.getSyncConfig());
+        boolean tablesChanged = tableSelectionChanged(previousConfig, config);
+        if (!switching && mappingChanged(previousConfig, config)
                 && isRunning(project)) {
             throw new IllegalStateException(stoppedButRunningKey(project,
                     "error.project.mapping.running"));
@@ -540,6 +555,16 @@ public class ProjectService {
             }
             // Interval or cron may have changed, so rebuild the trigger.
             afterCommit(saved.getId(), "reschedule", () -> scheduler.reschedule(saved));
+            // In this branch the strategy never changed, so the stored one is still effective
+            // (a form that omits captureStrategy keeps it — the pre-v1.5.0 behavior).
+            if (oldStrategy == CaptureStrategy.YSTREAM_CDC && tablesChanged) {
+                // A YStream service captures the table set it was built with. A table added
+                // now has history before the current position that the stream will never
+                // replay, and nothing reports the gap — so the position is dropped and the
+                // next start re-baselines (with the new ADD_TABLES membership).
+                afterCommit(saved.getId(), "ystream-tables-changed",
+                        () -> resetYStreamForNewTables(saved));
+            }
         }
         return saved;
     }
@@ -605,6 +630,12 @@ public class ProjectService {
             stateWriter.clearCursor(projectId);
             scheduler.reschedule(project);
         }
+        if (from == CaptureStrategy.YSTREAM_CDC && to != CaptureStrategy.YSTREAM_CDC) {
+            // YStream 服务同样活在源库上:换走之后它既不会被沿用(新服务名带新 token),
+            // 也不会被 grep 到,只会在实例的 32 个席位里一直占一个。
+            releaseYStream(projectId, project.getSourceDbId(),
+                    "switched away from YStream CDC");
+        }
         if (from == CaptureStrategy.PG_LOGICAL_CDC && to != CaptureStrategy.PG_LOGICAL_CDC) {
             // Same leak as deleting the project (P0-5), but easier to miss: the row still
             // exists, so there is still something to look at on our side while the slot
@@ -612,6 +643,31 @@ public class ProjectService {
             // that is still active (55006).
             releasePgSlot(projectId, project.getSourceDbId(),
                     "switched away from PG logical CDC");
+        }
+    }
+
+    /**
+     * Drops the YStream position so the changed table selection gets a full baseline.
+     *
+     * <p>Runs after commit, like {@link #applyStrategySwitch}: the join must complete before
+     * the delete (a consumer still leaving re-persists its position on shutdown), and a
+     * rolled-back save must not have touched the running consumer at all.
+     */
+    private void resetYStreamForNewTables(Project project) {
+        Long projectId = project.getId();
+        cdcManager.ensureStopped(projectId);
+        positionStore.delete(projectId);
+        if (Boolean.TRUE.equals(project.getEnabled())) {
+            taskStore.markCdcRunning(projectId);
+            cdcManager.ensureStarted(project);
+            log.info("Project '{}': table selection changed; YStream re-baselines from the"
+                    + " new table set", project.getName());
+        } else {
+            // Disabled: nothing to start. The missing position is what makes the next
+            // start() re-baseline, so only the panel state is reset here.
+            taskStore.markStoppedClearingResult(projectId);
+            log.info("Project '{}': table selection changed while stopped; the next start"
+                    + " re-baselines the YStream capture", project.getName());
         }
     }
 
@@ -702,6 +758,23 @@ public class ProjectService {
             normalized.put(source, target);
         }
         return normalized;
+    }
+
+    /**
+     * The set of captured table names differs from what the row last persisted.
+     *
+     * <p>Name mappings are deliberately ignored: renaming a target table does not change
+     * what the source captures, so it must not cost a re-baseline. The legacy "empty means
+     * all" rule is shared with {@link #mappingChanged}.
+     */
+    private static boolean tableSelectionChanged(SyncConfig previous, SyncConfig next) {
+        Set<String> oldTables = previous == null || previous.getTables() == null
+                ? Set.of() : previous.getTables();
+        Set<String> newTables = next.getTables() == null ? Set.of() : next.getTables();
+        if (previous != null && !previous.isObjectSelectionExplicit() && oldTables.isEmpty()) {
+            return false;
+        }
+        return !oldTables.equals(newTables);
     }
 
     /** Table selection or name mapping differs from what the row last persisted. */
@@ -985,6 +1058,7 @@ public class ProjectService {
             // live cycle of any kind would re-create state rows right after the purge.
             cdcManager.ensureStopped(projectId);
             releasePgSlotIfAny(project);
+            releaseYStreamIfAny(project);
             taskStore.deleteForProject(projectId);
             syncEngine.evictProjectCaches(projectId);
             lockService.evictProject(projectId);
@@ -1012,6 +1086,47 @@ public class ProjectService {
             return;
         }
         releasePgSlot(project.getId(), project.getSourceDbId(), "deleted");
+    }
+
+    /** The YStream counterpart of {@link #releasePgSlotIfAny}: services live on the source. */
+    private void releaseYStreamIfAny(Project project) {
+        if (cdcManager.strategyOf(project) != CaptureStrategy.YSTREAM_CDC) {
+            return;
+        }
+        releaseYStream(project.getId(), project.getSourceDbId(), "deleted");
+    }
+
+    /**
+     * Best-effort drop of every YStream service the project owns on {@code sourceDbId}.
+     *
+     * <p>Same leak, same three callers as {@link #releasePgSlot}: a service behind a deleted
+     * project, a strategy switched away from YStream, or a project moved to another source
+     * keeps one of the instance's 32 seats and its capture scope forever, on a database the
+     * running product no longer touches.
+     *
+     * <p>Deliberately never throws: an unreachable source must not block the local change
+     * ({@code releaseQuietly} already swallows and WARNs). A rollback after the release
+     * leaves the service gone; the lifecycle recreates it on the next start at the cost of
+     * a re-baseline, not of correctness.
+     */
+    private void releaseYStream(Long projectId, Long sourceDbId, String because) {
+        if (sourceDbId == null) {
+            log.warn("YStream project {} has no source database id ({}); cannot release its"
+                    + " services — drop them by hand on the source", projectId, because);
+            return;
+        }
+        DatabaseConfig source = databaseConfigRepository.findById(sourceDbId).orElse(null);
+        if (source == null) {
+            log.warn("Source database {} of YStream project {} is gone ({}); cannot release"
+                    + " its services — drop them by hand", sourceDbId, projectId, because);
+            return;
+        }
+        try (Connection conn = dataSourceManager.getConnection(source)) {
+            YStreamServiceAdmin.releaseQuietly(conn, projectId);
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not reach the source of YStream project {} ({}) to release its"
+                    + " services: {}", projectId, because, e.getMessage());
+        }
     }
 
     /**

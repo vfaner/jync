@@ -82,6 +82,36 @@ final class CdcTransactionBuffer {
         deletes.clear();
     }
 
+    /**
+     * An independent copy of this buffer — the YStream engine's SAVEPOINT snapshot.
+     *
+     * <p>Oracle and PostgreSQL never need one: their streams carry no savepoints. YStream
+     * does, and a folded buffer cannot "unfold" the image it overwrote, so the only honest
+     * {@code ROLLBACK TO SAVEPOINT} is restoring a copy taken at that savepoint. Row maps
+     * are treated as immutable once buffered (every producer builds a fresh map per row),
+     * so the copy duplicates the maps and lists, never the rows.
+     */
+    CdcTransactionBuffer copy() {
+        CdcTransactionBuffer copy = new CdcTransactionBuffer();
+        copyInto(upserts, copy.upserts);
+        copyInto(deletes, copy.deletes);
+        return copy;
+    }
+
+    /** Replaces this buffer's contents with {@code snapshot}'s (which stays untouched). */
+    void restoreFrom(CdcTransactionBuffer snapshot) {
+        clear();
+        copyInto(snapshot.upserts, upserts);
+        copyInto(snapshot.deletes, deletes);
+    }
+
+    private static void copyInto(
+            Map<CdcTableBinding, Map<List<Object>, Map<String, Object>>> source,
+            Map<CdcTableBinding, Map<List<Object>, Map<String, Object>>> destination) {
+        source.forEach((binding, rows) ->
+                destination.put(binding, new LinkedHashMap<>(rows)));
+    }
+
     /** Net upserts per binding, ready to apply; a fresh map with fresh lists per call. */
     Map<CdcTableBinding, List<Map<String, Object>>> upserts() {
         return materialize(upserts);

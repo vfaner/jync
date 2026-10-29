@@ -120,6 +120,38 @@ public final class CdcProbeResult {
     /** Per-table CDC capture instance exists in cdc.change_tables. */
     public static final String MSSQL_CAPTURE_INSTANCE = "MSSQL_CAPTURE_INSTANCE";
 
+    // —— v1.9.0 YashanDB YStream checks (docs/dm-logminer-spike.md §7, §8.1) ——
+
+    /**
+     * The admin view {@code V$YSTREAM_SERVER} is readable. Not the product name alone:
+     * without {@code SELECT ANY DICTIONARY} the view reports "does not exist" while the
+     * YStream client still connects, so a name-only check would pass a source that cannot
+     * be managed. {@code DBMS_YSTREAM_ADM} itself is a built-in package absent from the
+     * dictionary, so it cannot be used as the test.
+     */
+    public static final String YSTREAM_SOURCE = "YSTREAM_SOURCE";
+    /** {@code V$DATABASE.LOG_MODE = 'ARCHIVELOG'} — YStream reads the logical log of archives. */
+    public static final String YSTREAM_ARCHIVELOG = "YSTREAM_ARCHIVELOG";
+    /** A service can only be created on a primary. */
+    public static final String YSTREAM_PRIMARY = "YSTREAM_PRIMARY";
+    /**
+     * The user holds {@code YSTREAM_CAPTURE} and {@code SELECT ANY DICTIONARY}, directly or
+     * through a role it actually holds. Yashan has no {@code SESSION_PRIVS}/{@code
+     * SESSION_ROLES}, so the lookup is {@code USER_SYS_PRIVS} plus {@code ROLE_SYS_PRIVS}
+     * joined to {@code USER_ROLE_PRIVS}.
+     */
+    public static final String YSTREAM_PRIVILEGES = "YSTREAM_PRIVILEGES";
+    /**
+     * Every selected table carries an {@code (ALL) COLUMNS} supplemental group. Without it
+     * its DML never enters the stream — no error, no warning, the service just stays
+     * {@code RUNNING}. Measured, including for tables created after the service exists.
+     */
+    public static final String YSTREAM_TABLE_LOGGING = "YSTREAM_TABLE_LOGGING";
+    /** Every selected table has a primary key — the only way to locate a DELETE/UPDATE row. */
+    public static final String YSTREAM_PRIMARY_KEY = "YSTREAM_PRIMARY_KEY";
+    /** Fewer than {@code MAX_SERVICES} (32) services exist on the instance. */
+    public static final String YSTREAM_SERVICE_CAPACITY = "YSTREAM_SERVICE_CAPACITY";
+
     public static final class Check {
         private final String name;
         private final boolean passed;

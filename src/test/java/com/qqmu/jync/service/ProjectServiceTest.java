@@ -381,6 +381,133 @@ class ProjectServiceTest {
         verify(projectRepository).deleteById(1L);
     }
 
+    /**
+     * YStream 服务也是源库上的持久对象:项目删掉后没人再去停它,它却还在消耗实例上
+     * 32 个席位之一并持续抓取变更日志 —— 与 PG 逻辑槽同类的泄漏。
+     */
+    @Test
+    void deleteOfYStreamProjectReleasesItsServices() throws Exception {
+        Project p = project(42L);
+        p.setSourceDbId(7L);
+        when(projectRepository.findById(42L)).thenReturn(Optional.of(p));
+        when(cdcManager.strategyOf(p))
+                .thenReturn(com.qqmu.jync.model.CaptureStrategy.YSTREAM_CDC);
+        com.qqmu.jync.model.DatabaseConfig source = new com.qqmu.jync.model.DatabaseConfig();
+        when(databaseConfigRepository.findById(7L)).thenReturn(Optional.of(source));
+
+        java.sql.Connection conn = mock(java.sql.Connection.class);
+        java.sql.Statement st = mock(java.sql.Statement.class);
+        java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+        java.sql.CallableStatement cs = mock(java.sql.CallableStatement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(any(String.class))).thenReturn(rs);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getLong("SERVER_ID")).thenReturn(7L);
+        when(rs.getString("SERVER_NAME")).thenReturn("JYNC_42_0BADF00D");
+        when(rs.getString("STATUS")).thenReturn("RUNNING");
+        when(conn.prepareCall(any(String.class))).thenReturn(cs);
+        when(dataSourceManager.getConnection(source)).thenReturn(conn);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lockService.tryAcquire(42L)).thenReturn(lock);
+
+        service.delete(42L);
+
+        // 服务处于 STARTED/RUNNING 时 DROP 直接报错,必须先 STOP。
+        verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.STOP(?)}");
+        verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.DROP(?)}");
+        verify(cs, org.mockito.Mockito.atLeastOnce()).setString(1, "JYNC_42_0BADF00D");
+        verify(conn).close();
+        verify(positionStore).delete(42L);
+    }
+
+    /** 换走 YStream 之后没人再连这个服务,留在源上只会白占席位并继续抓日志。 */
+    @Test
+    void switchingAwayFromYStreamCdcReleasesItsServices() throws Exception {
+        Project p = project(42L);
+        p.setSourceDbId(7L);
+        p.setSyncConfig("{\"captureStrategy\":\"YSTREAM_CDC\"}");
+        p.setEnabled(false);
+        when(projectRepository.findById(42L)).thenReturn(Optional.of(p));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        com.qqmu.jync.model.DatabaseConfig source = new com.qqmu.jync.model.DatabaseConfig();
+        source.setId(7L);
+        source.setType(DatabaseType.YASHANDB);
+        when(databaseConfigRepository.findById(7L)).thenReturn(Optional.of(source));
+
+        java.sql.Connection conn = mock(java.sql.Connection.class);
+        java.sql.Statement st = mock(java.sql.Statement.class);
+        java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+        java.sql.CallableStatement cs = mock(java.sql.CallableStatement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(any(String.class))).thenReturn(rs);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getLong("SERVER_ID")).thenReturn(7L);
+        when(rs.getString("SERVER_NAME")).thenReturn("JYNC_42_0BADF00D");
+        when(rs.getString("STATUS")).thenReturn("STARTED");
+        when(conn.prepareCall(any(String.class))).thenReturn(cs);
+        when(dataSourceManager.getConnection(source)).thenReturn(conn);
+
+        service.saveConfig(42L, new SyncConfig(), "POLLING");
+
+        verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.STOP(?)}");
+        verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.DROP(?)}");
+        verify(conn).close();
+    }
+
+    /**
+     * YStream 的 ADD_TABLES 只吃表名清单。整库"自动发现"在崖山没有可用的等价物:
+     * 服务建好之后新建的表不会进捕获范围,用户却以为全库都在同步 —— 静默漏采。
+     */
+    @Test
+    void yStreamCdcRefusesAProjectThatDidNotSelectItsTables() {
+        Project p = project(42L);
+        p.setSourceDbId(7L);
+        when(projectRepository.findById(42L)).thenReturn(Optional.of(p));
+        DatabaseConfig source = new DatabaseConfig();
+        source.setId(7L);
+        source.setType(DatabaseType.YASHANDB);
+        when(databaseConfigRepository.findById(7L)).thenReturn(Optional.of(source));
+
+        SyncConfig allTables = new SyncConfig();   // 未显式选表 = 整库
+
+        assertThatThrownBy(() -> service.saveConfig(42L, allTables, "YSTREAM_CDC"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.tables.required");
+        verify(projectRepository, never()).save(any());
+    }
+
+    /**
+     * 改选表之后必须重新基线:新加的表在旧位点之前的历史变更已经不在流里了,只从当前位置
+     * 续放会让它们缺一段数据 —— 而且没有任何报错。
+     */
+    @Test
+    void changingTheTableSelectionOfAYStreamProjectForcesARebaseline() {
+        Project p = project(42L);
+        p.setSourceDbId(7L);
+        p.setEnabled(false);
+        p.setSyncConfig("{\"captureStrategy\":\"YSTREAM_CDC\",\"tables\":[\"A\"],"
+                + "\"objectSelectionExplicit\":true}");
+        when(projectRepository.findById(42L)).thenReturn(Optional.of(p));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+
+        SyncConfig config = new SyncConfig();
+        config.getTables().add("A");
+        config.getTables().add("B");
+        config.setObjectSelectionExplicit(true);
+
+        TransactionSynchronizationManager.initSynchronization();
+        service.saveConfig(42L, config, null);
+        for (TransactionSynchronization synchronization
+                : TransactionSynchronizationManager.getSynchronizations()) {
+            synchronization.afterCommit();
+        }
+
+        verify(positionStore).delete(42L);
+        verify(cdcManager).ensureStopped(42L);
+    }
+
     @Test
     void sourcePickersUseTheCustomConnectionsDeclaredFamily() throws Exception {
         // A CUSTOM connection carries GENERIC on its type. The picker must read through the
@@ -720,6 +847,41 @@ class ProjectServiceTest {
         service.save(incoming);
 
         verify(st).execute(contains("pg_drop_replication_slot('jync_1')"));
+        verify(conn).close();
+    }
+
+    /**
+     * 换源时 YStream 服务留在旧源上:位点已经清空(下次启动重新基线),新源会建新服务,
+     * 旧服务却再也不会有人连 —— 和 PG 逻辑槽一样的泄漏,只是换了个引擎。
+     */
+    @Test
+    void changingTheSourceOfAYStreamProjectReleasesTheOldServices() throws Exception {
+        Project existing = storedProject(1L, false);
+        existing.setSyncConfig("{\"captureStrategy\":\"YSTREAM_CDC\"}");
+        stubExisting(existing);
+        DatabaseConfig oldSource = new DatabaseConfig();
+        oldSource.setId(10L);
+        oldSource.setType(DatabaseType.YASHANDB);
+        when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(oldSource));
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+        java.sql.CallableStatement cs = mock(java.sql.CallableStatement.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(any(String.class))).thenReturn(rs);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getLong("SERVER_ID")).thenReturn(7L);
+        when(rs.getString("SERVER_NAME")).thenReturn("JYNC_1_0BADF00D");
+        when(rs.getString("STATUS")).thenReturn("STARTED");
+        when(conn.prepareCall(any(String.class))).thenReturn(cs);
+        when(dataSourceManager.getConnection(oldSource)).thenReturn(conn);
+
+        Project incoming = formProject(1L);
+        incoming.setSourceDbId(11L);           // 换了源库,目标不变
+        service.save(incoming);
+
+        verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.STOP(?)}");
+        verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.DROP(?)}");
         verify(conn).close();
     }
 

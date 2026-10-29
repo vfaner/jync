@@ -285,10 +285,12 @@ public class ProjectController {
         boolean isOracleSource = supportedStrategies.contains(CaptureStrategy.LOGMINER_CDC);
         boolean isPostgresSource = supportedStrategies.contains(CaptureStrategy.PG_LOGICAL_CDC);
         boolean isSqlServerSource = supportedStrategies.contains(CaptureStrategy.SQLSERVER_CDC);
+        boolean isYashanSource = supportedStrategies.contains(CaptureStrategy.YSTREAM_CDC);
         model.addAttribute("isMysqlSource", isMysqlSource);
         model.addAttribute("isOracleSource", isOracleSource);
         model.addAttribute("isPostgresSource", isPostgresSource);
         model.addAttribute("isSqlServerSource", isSqlServerSource);
+        model.addAttribute("isYashanSource", isYashanSource);
 
         CaptureStrategy current = config.getCaptureStrategyOrDefault();
         CdcProbeResult cdcProbe = null;
@@ -298,7 +300,8 @@ public class ProjectController {
         // configured (raw field absent). Gating on current==POLLING is wrong: getCaptureStrategyOrDefault()
         // maps both "field absent" and "user saved POLLING" to POLLING, so a saved polling project would
         // be re-overridden back to CDC on every render (it could never stay polling).
-        if ((isMysqlSource || isOracleSource || isPostgresSource || isSqlServerSource)
+        if ((isYashanSource || isMysqlSource || isOracleSource || isPostgresSource
+                || isSqlServerSource)
                 && config.getCaptureStrategy() == null && progressList.isEmpty()) {
             // A brand-new MySQL/Oracle/PG/SQLServer project that never synced: probe live
             // and preselect the CDC card when it passes. A failing probe must never block
@@ -307,7 +310,11 @@ public class ProjectController {
                 cdcProbe = cdcOperationsService.probeProject(id);
                 cdcRecommended = cdcProbe != null && cdcProbe.passed();
                 if (cdcRecommended) {
-                    if (isMysqlSource) {
+                    if (isYashanSource) {
+                        // The only log engine a YashanDB instance has; isOracleSource is false
+                        // here because supportedFor hides LogMiner for this product.
+                        recommendedStrategy = CaptureStrategy.YSTREAM_CDC;
+                    } else if (isMysqlSource) {
                         recommendedStrategy = CaptureStrategy.BINLOG_CDC;
                     } else if (isOracleSource) {
                         recommendedStrategy = CaptureStrategy.LOGMINER_CDC;

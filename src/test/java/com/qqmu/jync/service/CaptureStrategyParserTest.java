@@ -61,6 +61,31 @@ class CaptureStrategyParserTest {
                 .hasMessage("error.project.cdc.not.oracle");
     }
 
+    // —— v1.9.0: 崖山走自己的 YStream，不借 LogMiner ——
+
+    /**
+     * YStream 只在崖山上有；门禁按产品名精确判，不按 ORACLE 家族放行 —— 达梦同样说
+     * ORACLE 家族却没有 {@code DBMS_YSTREAM_ADM}，放行只会在探测阶段白失败一次。
+     */
+    @Test
+    void onlyYashanAcceptsYStreamCdc() {
+        assertThat(CaptureStrategyParser.parseRequested("YSTREAM_CDC", DatabaseType.YASHANDB))
+                .isEqualTo(CaptureStrategy.YSTREAM_CDC);
+        assertThatThrownBy(() ->
+                CaptureStrategyParser.parseRequested("YSTREAM_CDC", DatabaseType.ORACLE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.yashan");
+        assertThatThrownBy(() ->
+                CaptureStrategyParser.parseRequested("YSTREAM_CDC", DatabaseType.DM))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.yashan");
+        // 声明 ORACLE 家族的 CUSTOM 连接也不行：这个引擎不放给家族成员。
+        assertThatThrownBy(() -> CaptureStrategyParser.parseRequested("YSTREAM_CDC",
+                DatabaseType.CUSTOM, DatabaseType.DialectFamily.ORACLE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.not.yashan");
+    }
+
     @Test
     void blankRequestLeavesTheStrategyAlone() {
         assertThat(CaptureStrategyParser.parseRequested("  ", DatabaseType.MYSQL)).isNull();
@@ -137,10 +162,11 @@ class CaptureStrategyParserTest {
 
     @Test
     void pollingAndFullCompareComeFirstAndEverySourceHasThem() {
-        // 崖山：实测没有 DBMS_LOGMNR / V$LOGMNR_CONTENTS，日志 CDC 不可用 —— 即使它
-        // 说 ORACLE 家族、保存门禁放行，页面也不该把 LogMiner 当成可选项。
+        // 崖山：实测没有 DBMS_LOGMNR / V$LOGMNR_CONTENTS，所以不列 LogMiner；它自己的
+        // 逻辑日志引擎 YStream（DBMS_YSTREAM_ADM）才是崖山的日志 CDC。
         assertThat(CaptureStrategyParser.supportedFor(DatabaseType.YASHANDB, DatabaseType.YASHANDB.getFamily()))
-                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE);
+                .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE,
+                        CaptureStrategy.YSTREAM_CDC);
         assertThat(CaptureStrategyParser.supportedFor(DatabaseType.MYSQL, DatabaseType.MYSQL.getFamily()))
                 .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE,
                         CaptureStrategy.BINLOG_CDC);

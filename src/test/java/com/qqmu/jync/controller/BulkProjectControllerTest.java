@@ -115,10 +115,10 @@ class BulkProjectControllerTest {
                 // page can narrow the dropdown the moment the source changes.
                 .andExpect(content().string(containsString(
                         "data-strategies=\"POLLING,FULL_COMPARE,LOGMINER_CDC\"")))
-                // YashanDB has no LogMiner (measured) — its option promises only the
-                // type-agnostic strategies.
+                // YashanDB has no LogMiner (measured); it runs its own YStream engine
+                // instead, and that one is refused to every other source.
                 .andExpect(content().string(containsString(
-                        "data-strategies=\"POLLING,FULL_COMPARE\"")));
+                        "data-strategies=\"POLLING,FULL_COMPARE,YSTREAM_CDC\"")));
     }
 
     /**
@@ -327,6 +327,17 @@ class BulkProjectControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(
                         containsString("No connection is classified as a source yet")));
+    }
+
+    @Test
+    void everyCaptureStrategyHasALabelOnTheForm() throws Exception {
+        // The label map covers CaptureStrategy.values() wholesale, so a strategy added
+        // later without a label would break the whole wizard for every source, not just
+        // the one that could pick it.
+        mvc.perform(get("/projects/bulk").param("lang", "en"))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("strategyLabels",
+                        org.hamcrest.Matchers.hasKey("YSTREAM_CDC")));
     }
 
     @Test

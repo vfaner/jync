@@ -127,4 +127,68 @@ class CdcTransactionBufferTest {
         assertThat(tx.deletes()).doesNotContainKey(orders);
         assertThat(tx.upserts().get(orders)).isInstanceOf(List.class);
     }
+
+    // —— v1.9.0 YStream: SAVEPOINT / ROLLBACK TO SAVEPOINT ——
+
+    @Test
+    void aCopyIsIndependentOfTheBufferItWasTakenFrom() {
+        // YStream 是唯一携带 SAVEPOINT 的流:回滚到保存点要把缓冲退回到快照时刻。
+        // 折叠缓冲无法"撤销"最后一次覆盖,只能整份快照。
+        CdcTableBinding orders = binding("orders");
+        CdcTransactionBuffer tx = new CdcTransactionBuffer();
+        tx.upsert(orders, row(1L, "before"));
+
+        CdcTransactionBuffer snapshot = tx.copy();
+        tx.upsert(orders, row(1L, "after"));
+        tx.upsert(orders, row(2L, "new"));
+
+        assertThat(snapshot.upserts().get(orders)).hasSize(1);
+        assertThat(snapshot.upserts().get(orders).get(0)).containsEntry("name", "before");
+        assertThat(snapshot.size()).isEqualTo(1);
+        assertThat(tx.size()).isEqualTo(2);
+    }
+
+    @Test
+    void restoringFromASnapshotDiscardsEverythingBufferedAfterIt() {
+        CdcTableBinding orders = binding("orders");
+        CdcTransactionBuffer tx = new CdcTransactionBuffer();
+        tx.upsert(orders, row(1L, "before"));
+        CdcTransactionBuffer snapshot = tx.copy();
+
+        tx.upsert(orders, row(1L, "after"));
+        tx.delete(orders, row(2L, "gone"));
+        tx.restoreFrom(snapshot);
+
+        assertThat(tx.size()).isEqualTo(1);
+        assertThat(tx.upserts().get(orders).get(0)).containsEntry("name", "before");
+        assertThat(tx.deletes()).isEmpty();
+    }
+
+    @Test
+    void restoringFromAnEmptySnapshotEmptiesTheBuffer() {
+        CdcTableBinding orders = binding("orders");
+        CdcTransactionBuffer snapshot = new CdcTransactionBuffer();
+        CdcTransactionBuffer tx = new CdcTransactionBuffer();
+        tx.upsert(orders, row(1L, "after"));
+
+        tx.restoreFrom(snapshot);
+
+        assertThat(tx.isEmpty()).isTrue();
+    }
+
+    @Test
+    void theSnapshotItselfSurvivesTheRestore() {
+        // ROLLBACK TO SAVEPOINT 不弹出保存点:同一个保存点可以再回滚一次。
+        CdcTableBinding orders = binding("orders");
+        CdcTransactionBuffer tx = new CdcTransactionBuffer();
+        tx.upsert(orders, row(1L, "before"));
+        CdcTransactionBuffer snapshot = tx.copy();
+
+        tx.upsert(orders, row(1L, "after-1"));
+        tx.restoreFrom(snapshot);
+        tx.upsert(orders, row(1L, "after-2"));
+        tx.restoreFrom(snapshot);
+
+        assertThat(tx.upserts().get(orders).get(0)).containsEntry("name", "before");
+    }
 }

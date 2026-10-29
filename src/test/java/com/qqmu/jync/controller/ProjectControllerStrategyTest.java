@@ -322,6 +322,47 @@ class ProjectControllerStrategyTest {
     }
 
     /**
+     * v1.9.0:崖山有 YStream 而没有 DBMS_LOGMNR,所以它得到且只得到 YStream 卡;
+     * 达梦反过来 —— 有 LogMiner 但没有 YStream 引擎。
+     */
+    @Test
+    void detailShowsTheYStreamCardForYashanDbAndOnlyThat() throws Exception {
+        stubDetail(DatabaseType.YASHANDB);
+
+        String yashan = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(yashan).contains("value=\"YSTREAM_CDC\"");
+        assertThat(yashan).doesNotContain("value=\"LOGMINER_CDC\"")
+                .doesNotContain("value=\"BINLOG_CDC\"")
+                .doesNotContain("value=\"PG_LOGICAL_CDC\"");
+
+        stubDetail(DatabaseType.DM);
+
+        String dm = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(dm).doesNotContain("value=\"YSTREAM_CDC\"");
+    }
+
+    /** 崖山的推荐卡是 YStream:它是这台机器上唯一存在的日志 CDC 引擎。 */
+    @Test
+    void newYashanProjectWithPassingProbePreselectsYStream() throws Exception {
+        stubDetail(DatabaseType.YASHANDB);
+        CdcProbeResult passing = CdcProbeResult.of(List.of(
+                CdcProbeResult.Check.of(CdcProbeResult.YSTREAM_SOURCE, true,
+                        "YashanDB — V$YSTREAM_SERVER readable, 0 service(s)")));
+        when(cdcOperationsService.probeProject(1L)).thenReturn(passing);
+
+        String page = mvc.perform(get("/projects/1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(cardOf(page, "YSTREAM_CDC")).contains("picked").contains("checked");
+        assertThat(page).contains("badge-recommend");
+    }
+
+    /**
      * The card follows the same rule the backend and the rest of the stack use: a CUSTOM
      * connection that declares the PostgreSQL family gets the PG card, because that family
      * is what its dialect, type mapping and metadata reader already get.

@@ -202,6 +202,8 @@ public class BulkProjectController {
                 return "project.strategy.pg.name";
             case SQLSERVER_CDC:
                 return "project.strategy.sqlserver.name";
+            case YSTREAM_CDC:
+                return "project.strategy.ystream.name";
             default:
                 throw new IllegalStateException("Unlabelled capture strategy: " + strategy);
         }

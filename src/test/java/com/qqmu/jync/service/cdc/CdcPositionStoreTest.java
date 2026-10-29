@@ -63,6 +63,18 @@ class CdcPositionStoreTest {
     }
 
     @Test
+    void compareLsnHandlesThePackedYStreamFormByItsFixedWidth() {
+        // YStream 位点是定长打包 hex,写序与字典序一致,所以这里只需按文本比。
+        String earlier = YStreamPositionCodec.encode(
+                new YStreamPositionCodec.YStreamPosition(10L, 0, 100L, 0, 1));
+        String later = YStreamPositionCodec.encode(
+                new YStreamPositionCodec.YStreamPosition(10L, 0, 100L, 0, 2));
+        assertThat(CdcPositionStore.compareLsn(later, earlier)).isPositive();
+        assertThat(CdcPositionStore.compareLsn(earlier, later)).isNegative();
+        assertThat(CdcPositionStore.compareLsn(earlier, earlier)).isZero();
+    }
+
+    @Test
     void compareLsnOnUnknownFormatIsConservative() {
         // null 参与、无法解析的格式:不给出「回退」结论(误拒会卡死位点推进)。
         assertThat(CdcPositionStore.compareLsn(null, "0/1")).isZero();

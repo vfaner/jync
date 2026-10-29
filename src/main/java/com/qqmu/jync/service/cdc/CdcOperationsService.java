@@ -49,6 +49,7 @@ public class CdcOperationsService {
     private final LogMinerCdcProbe logMinerProbe;
     private final PgLogicalReplicationCdcProbe pgProbe;
     private final SqlServerCdcProbe mssqlProbe;
+    private final YStreamCdcProbe yStreamProbe;
     private final BinlogClientFactory clientFactory;
     private final CdcConsumerManager cdcManager;
     private final CdcPositionStore positionStore;
@@ -66,6 +67,7 @@ public class CdcOperationsService {
                                 LogMinerCdcProbe logMinerProbe,
                                 PgLogicalReplicationCdcProbe pgProbe,
                                 SqlServerCdcProbe mssqlProbe,
+                                YStreamCdcProbe yStreamProbe,
                                 BinlogClientFactory clientFactory,
                                 CdcConsumerManager cdcManager,
                                 CdcPositionStore positionStore,
@@ -82,6 +84,7 @@ public class CdcOperationsService {
         this.logMinerProbe = logMinerProbe;
         this.pgProbe = pgProbe;
         this.mssqlProbe = mssqlProbe;
+        this.yStreamProbe = yStreamProbe;
         this.clientFactory = clientFactory;
         this.cdcManager = cdcManager;
         this.positionStore = positionStore;
@@ -143,6 +146,13 @@ public class CdcOperationsService {
                 return pgProbe.probe(conn, ownerTables(
                         contextFactory.parseConfig(project), source, conn));
             }
+            if (source.getType() == DatabaseType.YASHANDB) {
+                // 崖山 declares the ORACLE family but has no DBMS_LOGMNR (measured); its own
+                // logical log engine is YStream. Dispatch by product, exactly like the save
+                // gate and the page's strategy list.
+                return yStreamProbe.probe(conn, ownerTables(
+                        contextFactory.parseConfig(project), source, conn));
+            }
             if (source.getType() == DatabaseType.SQLSERVER) {
                 // SQL Server's table-level checks are not wired here either — same gap as
                 // Oracle below, out of this release's scope.
@@ -160,7 +170,9 @@ public class CdcOperationsService {
             log.debug("CDC probe could not reach the source of project {}: {}",
                     projectId, e.toString());
             String anchor;
-            if (source.resolvedFamily() == DatabaseType.DialectFamily.ORACLE) {
+            if (source.getType() == DatabaseType.YASHANDB) {
+                anchor = CdcProbeResult.YSTREAM_SOURCE;
+            } else if (source.resolvedFamily() == DatabaseType.DialectFamily.ORACLE) {
                 anchor = CdcProbeResult.ORACLE_SOURCE;
             } else if (source.resolvedFamily()
                     == DatabaseType.DialectFamily.POSTGRES) {

@@ -194,7 +194,7 @@ UPDATE "SYSDBA"."LM_T5" SET "C" = OUT_CLOB, "B" = OUT_BLOB WHERE "ID" = 1;
 - 字面量：补齐 ANSI `DATE`/`TIMESTAMP`、`0x` 十六进制；`OUT_CLOB`/`OUT_BLOB` → 缺列。
 - 位点：存 `CSCN`，与 Oracle 引擎同构。
 - 前提探测：连上后检查 `ARCH_MODE`（`V$DATABASE` / `V$INSTANCE`）、`RLOG_APPEND_LOGIC`（`V$DM_INI`），任一不满足就在能力探测里给出可执行的修复语句，而不是等到挖不出数据再报错。
-- 崖山（YashanDB）：**已复测，结论是不支持**（第 7 节）。它接受 Oracle 式的归档与补充日志 DDL，却没有 `SYS.DBMS_LOGMNR` 与 `V$LOGMNR_CONTENTS`，因此不存在"配置对了就能挖"的路径——崖山源库请用轮询或全表比对。
+- 崖山（YashanDB）：**LogMiner 这条路已复测，结论是不支持**（第 7 节）。它接受 Oracle 式的归档与补充日志 DDL，却没有 `SYS.DBMS_LOGMNR` 与 `V$LOGMNR_CONTENTS`，因此不存在"配置对了就能挖"的路径。崖山有自己的逻辑日志通道 YStream（第 8 节，实测可用），但那不是 LogMiner，方言缝与 `SqlRedoParser` 都用不上；在 YStream 接线之前，崖山源库仍用轮询或全表比对。
 
 ### 6.1 落地进度
 
@@ -206,7 +206,8 @@ UPDATE "SYSDBA"."LM_T5" SET "C" = OUT_CLOB, "B" = OUT_BLOB WHERE "ID" = 1;
 | `ARCH_MODE`、`RLOG_APPEND_LOGIC`、归档范围与新鲜度的能力探测与修复提示 | 已实现（`LogMinerCdcProbe` 的 DM 分支：①源库 ②版本 ③`ARCH_MODE` ④`DM_LOGIC_REDO` ⑤`DM_ARCHIVE_PERIOD` ⑥挖掘权限；Oracle 专属的表级补充日志 / LONG / CDB 检查在 DM 上不出现） |
 | `LOGMINER_CDC` 的 ORACLE 家族门禁（保存校验、连接测试探测、项目页探测、推荐项、策略卡片） | 已实现，按 `resolvedFamily()` 判；能不能真挖由连上后的能力探测决定 |
 | 基线起点 SCN 改由方言提供（Oracle `CURRENT_SCN` / DM `MAX(NEXT_CHANGE#)`，无归档时给出可执行提示） | 已实现（`CdcBaselineService.readCurrentScn` 走 `MiningDialect.highWaterScn`） |
-| 崖山复测 | **已做（2026-10-29）**：崖山没有 `DBMS_LOGMNR`，日志 CDC 在该产品上不可用，探测改为在 ①源库 一项上直接给出结论——见第 7 节 |
+| 崖山复测 | **已做（2026-10-29）**：崖山没有 `DBMS_LOGMNR`，LogMiner 在该产品上不可用，探测改为在 ①源库 一项上直接给出结论——见第 7 节 |
+| 崖山 YStream 调研 | **已做（2026-10-29）**：崖山自研的逻辑日志引擎，Docker 23.4.7.100 实测端到端出 DML/DDL，客户端 jar 在 Maven 中央仓；v1.9.0 起以 `YSTREAM_CDC` 策略接入——见第 8 节 |
 
 ---
 
@@ -236,3 +237,73 @@ UPDATE "SYSDBA"."LM_T5" SET "C" = OUT_CLOB, "B" = OUT_BLOB WHERE "ID" = 1;
 2. **"未实测"这个措辞不能再用了。** 之前拒绝崖山的文案是"实测前拒绝"，暗示配置对了就能放开。实测结果是产品根本没有这个能力，文案改成实测事实 + 明确给出替代路径（时间戳/数值键轮询、全表比对）。
 
 崖山作为 Jync 的**源库**仍然可用，只是走轮询或全表比对；`OracleMetadataReader` 也已按 `isOracleProduct()` 把 `ORA_ROWSCN` 探测排除在外，与本次实测一致。
+
+> 第 7 节说的是"没有 LogMiner"，不是"没有日志解析"。崖山有自己的引擎 **YStream**，见第 8 节。
+
+## 8. 崖山 YStream 专项实测（2026-10-29）
+
+结论：崖山有自研的逻辑日志解析引擎 **YStream**，23.4.7.100 单机 Docker 实测**端到端可用**——不需要 LogMiner，也不需要触发器。
+
+环境同第 7 节（`yasdb/yashandb:23.4.7.100`，aarch64，端口 1688）。
+
+| 步骤 | 动作 | 实测结果 |
+|---|---|---|
+| ① 管理包 | `DBMS_YSTREAM_ADM` | **存在且可用**。它是内置包：`DBA_OBJECTS` / `DBA_PROCEDURES` 里查不到同名记录（对照：`DBMS_OUTPUT` 在 `DBA_PROCEDURES` 里有 7 行，`DBMS_AUDIT_MGMT` 0 行）——"字典里没有"不等于"产品没有"，第一版复测就是在这里判错的 |
+| ② 运行时视图 | `V$YSTREAM_SERVER` / `V$YSTREAM_STAT` / `DBA_YSTREAM_TABLES` / `DBA_YSTREAM_PARAMETERS` | 都在，背后是 7 张 `YSTREAM_*$` 表 |
+| ③ 建服务 | `DBMS_YSTREAM_ADM.CREATE('probe')` | 成功，`STATUS=CREATED`，`START_SCN` 落在建服务那一刻 |
+| ④ 加表 | `ADD_TABLES(server, 'SCHEMA.TABLE', schemas)`（三个字符串参数） | 成功；第二参是 `schema.table` 清单，第三参是**整库** schema 清单（传了就会捕获该 schema 下所有表，`DBA_YSTREAM_TABLES` 里表现为一行表名为空）。只加指定表时第三参传 `''` |
+| ⑤ 起服务 | `DBMS_YSTREAM_ADM.START('probe')` | `STARTED`；客户端连上后变 `RUNNING` |
+| ⑥ 客户端 | `com.yashandb:Ystream:1.9.27`（Maven 中央仓，Apache-2.0，214 KB） | 连 `jdbc:yasdb://host:1688`，`serverName` 填服务名 |
+| ⑦ 取 LCR | `client.next()` | Metadata / XactBegin / DDL / DML / XactCommit 五类全出 |
+
+实测输出（节选）：
+
+```
+YSTREAM_DML INSERT YS_SPIKE.T1 sql=< INSERT INTO "YS_SPIKE"."T1"("ID","V") VALUES (20,'p')>
+YSTREAM_DML UPDATE YS_SPIKE.T1 sql=< UPDATE "YS_SPIKE"."T1" SET "V" = 'q' WHERE "ID" = 20 AND "V" = 'p'>
+YSTREAM_DML DELETE YS_SPIKE.T1 sql=< DELETE FROM "YS_SPIKE"."T1" WHERE "ID" = 20 AND "V" = 'q'>
+YSTREAM_DDL ddl=<CREATE TABLE YS_SPIKE.t2 (id INT PRIMARY KEY, v VARCHAR(50))>
+Position{commitScn=882267680494608384, logPosition=LogPosition{instanceId=0, groupLsn=6456, groupOffset=220, batchRowId=0}}
+```
+
+要点：
+
+1. **行事件带全列镜像**，三类 DML 齐全，`LcrType` 另分 `YSTREAM_XACT`（提交，带 `commitScn`）与 `YSTREAM_DDL`（DDL 原文）。`getStatement()` 直接给可读 SQL，但那是**源端**方言，回放仍要走 Jync 自己的方言层。
+2. **DDL 原生支持**：`CREATE TABLE`、`ALTER TABLE` 的 `ddlText` 是原文，不需要 LogMiner 的 `ddl` 选项和二次查视图。
+3. **位点是可序列化的五元组**：`Position{commitScn, instanceId, groupLsn, groupOffset, batchRowId}` 全是整数，`SystemChangeNumber` 还能给出提交时间戳。
+4. **表元数据随流下发**（`YSTREAM_METADATA` + `TableMetadata`：列类型/可空/长度/主键），不必另查字典。
+5. **前提条件**：`LOG_MODE=ARCHIVELOG`（镜像默认已是）；连接用户需 `CREATE SESSION` + `SELECT ANY TABLE` + `YSTREAM_CAPTURE` + **`SELECT ANY DICTIONARY`**（第二轮实测：没有字典权限时 `V$YSTREAM_SERVER` / `DBA_YSTREAM_TABLES` 直接报"视图不存在"，而客户端仍能连——只看客户端连没连是查不出来的；另：崖山**没有** `SESSION_PRIVS` / `SESSION_ROLES`，权限判断要用 `USER_SYS_PRIVS` + `ROLE_SYS_PRIVS` + `USER_ROLE_PRIVS`）。崖山也没有 `V$PARAMETER.SUPPLEMENTAL_LOG_DATA_MIN` 这个开关，补充日志是**逐表**的（见第 6 条）。
+6. **表级补充日志是硬前提，对每一张要捕获的表都成立**：没有 `ALTER TABLE ... ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS` 的表，DML **悄无声息地不进流**——不报错、不告警，服务照常 RUNNING。这一条在第二轮补测里用新建表（`NEW_T`）复现：建表后插入行、`ADD_TABLES` 之后仍然收不到；执行 ALTER 后下一次插入立刻出现（`[probe3] YSTREAM_DML INSERT YS_T.NEW_T ...`）。**第一版"新表不加也能出 DML"的结论是误判**（当时那批 DML 其实来自已 ALTER 过的 `t1`），已推翻。是否已加可逐表查：`ALL_LOG_GROUPS.LOG_GROUP_TYPE = 'ALL'`（系统生成的组名形如 `SYS_C_36`）。这是一次可逆的表参数 DDL，不新增对象、不写触发器，但**要求 DBA 执行**——Jync 只检测、只生成脚本，不代为执行。
+7. **一对一**：同一服务第二个客户端被拒（`YAS-02731 YStream server status is invalid, current status: RUNNING`）；每实例最多 32 个服务；存算一体分布式集群**没有**此功能。
+8. 客户端正常 `close()` 后服务停在 `RUNNING`，数十秒后才回 `STARTED`，期间连不上（`YAS-02731`）；`STOP` + `START` 可立即复位，且**不改变 `START_SCN` / `RESTART_POSITION`**（第二轮实测：`STOP` 再 `START` 前后两者完全一致），所以这是一条安全的"复位"路径。异常退出的客户端会在 `ERROR` 列留下 `YAS-02094 current session has been killed or canceled`，下一次 `START` 会清空。`DROP` 要求服务先 `STOP`，否则同样报 `YAS-02731`。
+9. **`RECOVER` 必须显式给位点，且按"严格晚于该位点"续放**：`StartMode.RECOVER` 不带 `setRecoverPosition` 会在 `build()` 阶段直接抛 `Ystream-0101 recoverPosition cannot be null`；带一个真实提交位点则从它的下一条开始（第二轮实测：从第 6 行插入的位点起，回放正好从第 7 行开始）。**第一版"服务被复位后中间位点会静默空转"的结论不成立**——那次传的是命令行临时拼的、服务日志里并不存在的位点。仍建议留"长时间无进展"看门狗兜底。
+10. **`setAppliedPosition` 不是持久化手段**：服务端 `RESTART_POSITION` 只随客户端的周期 checkpoint 前进，而且 checkpoint 里带的是**服务端自己**的读取位置；客户端在 `close()` 前才调一次 `setAppliedPosition`，下一轮 checkpoint 根本不会发生，`RESTART_POSITION` 原地不动（第二轮实测，两次）。**续放位点必须由 Jync 自己落库**，不能指望服务端记住。
+11. **捕获起点由 `START` 钉住，不是 `CREATE`**：`CREATE` 后 `START_SCN=882300491771490304`、`START_POINT=0-3-800-3365`（占位）；`START` 之后两者一起推进到起服务那一刻（实测 `START_SCN=882300565265162240`）。所以**基线必须在 `START` 之后跑**，否则基线期间的变化落在 `START_SCN` 之前，永远不会被回放。
+10. **jar 版本要配对**：`Ystream` 1.9.27 依赖 `yashandb-jdbc` 的 `SOFTWARE_VERSION` 字段，而 Jync 当前钉的 1.7.10 会 `NoSuchFieldError`；实测 `yashandb-jdbc` 1.9.27 / 1.10.7 都能连 23.4.7.100。
+
+### 8.1 运行时对象、状态与调用约定（第二轮补测，2026-10-29）
+
+| 对象 | 内容 |
+|---|---|
+| `V$YSTREAM_SERVER` | `SERVER_NAME`、`STATUS`、`START_SCN`、`START_POINT`、`RESTART_POSITION`、`APPLIED_POSITION`、`CAPTURE_POSITION`、`ERROR`、`CREATE_TIME`、`CONNECT_USER` |
+| `V$YSTREAM_STAT` | 每服务计数器：`CAPTURE_SCN`、`SEND_COUNT`/`SEND_SIZE`、`SPILL_SIZE`、`RECORD_FETCH_COUNT`、各阶段耗时、`XACT_MEMORY_USED` 等 |
+| `DBA_YSTREAM_TABLES` | 服务 → 表成员（`SERVER_ID`、`SCHEMA`、`TABLE_NAME`），可用来判断"这张表是否已在捕获范围里" |
+| `DBA_YSTREAM_PARAMETERS` | 服务参数（`PARAM_NAME`/`PARAM_VALUE`/`PARAM_DEFAULT`） |
+
+- `STATUS` 取值实测三种：`CREATED`（建好未起）、`STARTED`（服务在跑、无客户端）、`RUNNING`（有客户端连着）。
+- 生命周期：`CREATE` → `ADD_TABLES` → `START` → 客户端 attach；释放：先 `STOP` 再 `DROP`。`DROP` 在 `STARTED` 状态下直接报 `YAS-02731`。
+- `ADD_TABLES` 的第二个参数是**一个字符串里的表清单**，大表集要分批调用（单表约 30~40 字符，建议每 50 张一批）。
+- 位点的文本形就是五元组：`<scn>-<instanceId>-<groupLsn>-<groupOffset>-<batchRowId>`，例如 `882301780458180608-0-6744-220-0`。
+- 客户端配置项：`host` / `port` / `serverName`(服务名) / `user` / `password` / `database` / `deserializer` / `pollTimeout` / `startMode` / `recoverPosition`；`startMode=START` 只取"从现在起"的新事件，历史补放必须 `RECOVER`。
+- LCR 形态：每事务 `YSTREAM_XACT(BEGIN)` → 若干 `YSTREAM_DML` → `YSTREAM_XACT(COMMIT)`，提交 LCR 带 `commitScn` 与完整位点；`YSTREAM_METADATA` / `BEGIN` 的 `getPosition()` 会抛 `YstreamUnsupportedOperationException`，取位点必须 try/catch。
+- 列值：`getNewValues()` / `getOldValues()` 返回 `YstreamColumns`，逐列 `YstreamColumn.getColumn().getColumnName()` + `getData()` + `isNull()`；`getColumnsWithoutDeleted()` 剔除本行未涉及的列（UPDATE 的老值里只含被改列与键）。`hasChunkData()` 为 true 时该行的大字段走后续 `YSTREAM_CHUNK` LCR。
+- 每实例 ≤32 个服务；服务只在主库可建；客户端 1:1（同一服务第二个客户端 `YAS-02731`）。
+
+### 8.2 对 Jync 的意义
+
+- 这是崖山**唯一不侵入原库的实时通道**：不建触发器、不建对象；代价是**每张要捕获的表**都要一次可逆的补充日志 DDL（`ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS`，由 DBA 执行，Jync 只检测并生成脚本）。
+- 它**不是 LogMiner**：`MiningDialect`、`SqlRedoParser` 这层方言缝用不上。需要新策略 `YSTREAM_CDC` + 新消费者（客户端库接入、LCR 分派、位点 = `Position` 五元组、Txn 边界 = `YSTREAM_XACT`），租约、暂停/恢复、连续失败 park、基线锚点等骨架可以照用现有 CDC 骨架。
+- 产品约束要写进页面与文档：≤32 个任务/源实例、客户端 1:1、源端必须归档 + 补充日志、服务只能在主库建、客户端必须连"跑着该服务的那个节点"。
+- 依赖成本：`Ystream` 214 KB + `yashandb-jdbc` 502 KB，Apache-2.0，都在 Maven 中央仓。
+
+判定：**可行**，工作量与 DM LogMiner 适配相当（一个消费者 + 一个策略值 + 家族门禁 + 能力探测），收益是把崖山从"只能轮询（看不到 DELETE）"提升到真正的实时 CDC。

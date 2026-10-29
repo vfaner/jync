@@ -259,6 +259,31 @@ class CdcFailureClassifierTest {
     }
 
     @Test
+    void everyYStreamBlockedConditionParksInsteadOfRetrying() {
+        // 这几种都是"重连还是同一堵墙":分块 LOB 行、32 个服务上限、缺表级补充日志、
+        // 续放位点已超出日志保留、服务被外部替换。退避热重连只会把停机拖长,
+        // 必须一次性停到 ERROR 等人处置。
+        for (String detail : java.util.List.of(
+                "the transaction contains chunked LOB rows that cannot be assembled",
+                "the source already runs 32 YStream services (maximum)",
+                "table APP.ORDERS has no table-level supplemental logging",
+                "the recover position is outside the retained log",
+                "the YStream service was replaced outside Jync")) {
+            assertThat(CdcFailureClassifier.classify(YStreamFatalException.blocked(detail)))
+                    .as("detail: %s", detail)
+                    .isEqualTo(CdcFailureClassifier.Kind.YSTREAM_BLOCKED);
+        }
+    }
+
+    @Test
+    void aYStreamNetworkFailureStillRetries() {
+        // 只有带标记的"墙"才 park;同一条流上的网络中断照旧退避重连。
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "An I/O error occurred while sending to the backend")))
+                .isEqualTo(CdcFailureClassifier.Kind.TRANSIENT);
+    }
+
+    @Test
     void sqlServerLoginAndPermissionDeniedPark() {
         // 18456 login failed(mssql-jdbc 给 SQLState 28000)/ 229,230 权限拒绝。
         assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(

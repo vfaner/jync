@@ -239,6 +239,11 @@ public class CdcPositionStore {
             return new BigInteger(x.substring(2), 16)
                     .compareTo(new BigInteger(y.substring(2), 16));
         }
+        // YStream packs its five-tuple at fixed width in commit order, so text order is
+        // commit order; this is the only form where a plain string compare is correct.
+        if (YStreamPositionCodec.isPacked(x) && YStreamPositionCodec.isPacked(y)) {
+            return x.compareTo(y);
+        }
         return 0;
     }
 

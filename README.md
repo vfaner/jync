@@ -80,7 +80,7 @@
 |---|---|
 | 全量加载 | 主键 keyset 分块 + 单表内并行 + 结果集流式读取 + 逐块检查点；空表 INSERT-first、延迟二级索引；单表 20 万行/秒量级 |
 | 增量同步 | 时间戳 / 行级 SCN / 自增列 / 全表比对自动选策略；一条游标区间查询；水位线安全回退；游标提交后推进 |
-| 日志 CDC | MySQL binlog、Oracle LogMiner、PostgreSQL 系逻辑解码（含 openGauss 等国产内核）、SQL Server CDC；长驻线程流式回放，秒级延迟 |
+| 日志 CDC | MySQL binlog、Oracle LogMiner、PostgreSQL 系逻辑解码（含 openGauss 等国产内核）、SQL Server CDC、崖山 YStream；长驻线程流式回放，秒级延迟 |
 | 结构同步 | 表、索引、视图、存储过程/函数；类型映射、函数转换、标识符引号、分页语法、DDL 覆盖 |
 | 数据加工 | 列清洗（7 种规则）、表名映射、只读数据预览、按需行数核对、任务克隆、批量建任务（按表大小分箱） |
 | 可靠性 | 幂等 upsert、检查点续传、数据库租约锁、at-least-once、停机变更自动补齐 |
@@ -195,8 +195,9 @@ SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 | 达梦 LogMiner | DM8；`ARCH_MODE=Y` 归档模式；`RLOG_APPEND_LOGIC=2`（redo 含完整旧镜像）；`V$ARCHIVED_LOG` 可读且 `DBMS_LOGMNR` 可执行；只能挖已归档文件，归档切换周期就是 CDC 延迟下限（建议定时 `ALTER SYSTEM SWITCH LOGFILE`，≤ 1 分钟） | SCN（`MAX(NEXT_CHANGE#)`） |
 | PostgreSQL 逻辑解码 | PostgreSQL 11+（推进位点依赖 `pg_replication_slot_advance`）及 PG 系国产内核（openGauss、GaussDB、Kingbase、Highgo、Vastbase、Oscar、RaseSQL、SeaBoxSQL）；`wal_level=logical`；账号具备 `REPLICATION`（openGauss 不要求该属性）；表 `REPLICA IDENTITY` 非 `NOTHING`；openGauss 建议 `enable_slot_log=on`，否则重启后逻辑槽失效 | LSN |
 | SQL Server CDC | 2012+；库级 `sp_cdc_enable_db`；SQL Server Agent 运行中；账号在 `cdc_Admin` / `cdc_reader` | LSN |
+| 崖山 YStream | YashanDB 23.4+；`ARCHIVELOG` 且连的是主库；账号具备 `CREATE SESSION`、`SELECT ANY TABLE`、`YSTREAM_CAPTURE`、`SELECT ANY DICTIONARY`；**每张选表**执行一次 `ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS`；必须显式选表；每个实例最多 32 个 YStream 服务 | 五元组（`commitScn` / 实例号 / `groupLsn` / `groupOffset` / 行号） |
 
-- **崖山（YashanDB）除外**：23.4.7.100 实测没有 `DBMS_LOGMNR`，日志 CDC 在该产品上不可用（见 [docs/dm-logminer-spike.md](docs/dm-logminer-spike.md) 第 7 节）；崖山源库请用轮询或全表比对。
+- **崖山（YashanDB）走 YStream，不走 LogMiner**：23.4.7.100 实测没有 `DBMS_LOGMNR`（见 [docs/dm-logminer-spike.md](docs/dm-logminer-spike.md) 第 7 节），它自带的逻辑日志引擎是 YStream（`DBMS_YSTREAM_ADM`），v1.9.0 起由「YStream 实时日志」策略接入，不建触发器、不改表结构。缺补充日志的表 DML 会**静默不进流**，所以探测与启动都会逐表检查并给出可复制的 ALTER 语句；仍不满足前提时可退回轮询或全表比对。
 - **统一流程**：先记位点 → 分块全量基线 → 长驻线程连续回放。达梦与 Oracle 共用同一套 LogMiner 流水线，只有取位点、可挖文件与调用方式走各自的方言适配层。位点在基线之前写入，所以基线期间的变更不会漏。
 - **低空闲延迟**：有数据时本轮捞完立即开下一轮，0 额外等待；只有真空闲才休眠（LogMiner / SQL Server 默认 1s、PostgreSQL 500ms，最低 50ms）。MySQL binlog 是服务端推送，不做轮询。
 - **多实例接管**：同一任务的 CDC 流用数据库租约互斥，持锁节点宕机后 ≤ 60s 由其他节点接管续传。
@@ -724,7 +725,7 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 | 部署形态 | **单个 jar** | Kafka + Connect + ZK | 客户端脚本 | 桌面 + 资源库 | 桌面客户端 |
 | 配置方式 | **Web 点选** | YAML / REST + 消费端代码 | JSON 作业 | 图形 ETL | 向导 |
 | 上手速度 | **分钟级**：下载 jar、启动、点选 | 天级：先搭 Kafka 全家桶 | 小时级：手写 JSON 作业 | 天级：理解转换与作业模型 | 分钟级，但仅一次性迁移 |
-| 持续增量 | 轮询 / Cron + 日志 CDC（MySQL binlog、Oracle LogMiner、PostgreSQL、SQL Server） | 日志级 | 不适用（一次性） | 部分（自建定时） | 部分（计划任务 / 全表比对） |
+| 持续增量 | 轮询 / Cron + 日志 CDC（MySQL binlog、Oracle LogMiner、PostgreSQL、SQL Server、崖山 YStream） | 日志级 | 不适用（一次性） | 部分（自建定时） | 部分（计划任务 / 全表比对） |
 | 全量加载 | **keyset 分块 + 表内并行 + 流式读取 + 检查点** | 支持初始 / 增量快照；异构目标落库需自写消费端 | 分片作业 | 作业内实现 | 一次性向导 |
 | 结构同步 | **自动建表 / 索引 / 视图 / 过程** | 部分，落库需自写 | 需预建表 | 部分 | 仅一次性 |
 | 异构方言转换 | **类型 / 函数 / 引号 / 分页 / 过程** | 不支持 | 部分 | 部分，需手工 | 部分 |
@@ -763,7 +764,7 @@ com.qqmu.jync
 │   ├── monitor      ChangeDetector、CursorStrategyResolver
 │   ├── converter    SqlDialect、类型映射、SQL 体转换
 │   ├── sync         SyncEngine、DataSyncService、StructureSyncService、DdlExecutor
-│   ├── cdc          binlog / LogMiner / PG / SQL Server 消费者
+│   ├── cdc          binlog / LogMiner / PG / SQL Server / YStream 消费者
 │   ├── task         Quartz 调度、三层锁、上下文装配、启动恢复
 │   ├── lob          大字段流式读取、绑定与落盘
 │   └── ai           供应商配置、共享 HTTP 层、候选起草与审阅
@@ -797,7 +798,7 @@ mvn test
 - **方言与 SQL**：各方言幂等 upsert、类型上限、SQL 正文改写不碰字面量与注释。
 - **全量与续传**：keyset 分块、并行区间不相交、无主键 OFFSET 续传、检查点、列清洗与主键边界。
 - **安全**：密码与 AI 密钥加密、访客 POST 全拒、CSRF 缺失即拒、外部认证模式隔离。
-- **CDC**：四类引擎的前提探测、位点纪律、租约互斥、故障摘要。
+- **CDC**：五类引擎的前提探测、位点纪律、租约互斥、故障摘要。
 - **页面与国际化**：全条件分支渲染无 `??`、英文界面无中文泄漏、中英 bundle 键集一致。
 - **升级**：GitHub → Gitee 双通道兜底、下载校验、替换备份与回滚。
 

@@ -115,7 +115,7 @@ class ConnectionTestCdcChecksTest {
         return new ConnectionTestService(dsm, new BinlogCdcProbe(streamReader),
                 new LogMinerCdcProbe(),
                 new PgLogicalReplicationCdcProbe(), new SqlServerCdcProbe(),
-                new TargetDdlProbe(), new SyncProperties());
+                new YStreamCdcProbe(), new TargetDdlProbe(), new SyncProperties());
     }
 
     private DatabaseConfig savedMysql() {
@@ -175,6 +175,60 @@ class ConnectionTestCdcChecksTest {
         assertThat(result.getCdcChecks())
                 .anyMatch(c -> CdcProbeResult.PG_SOURCE.equals(c.getName())
                         && c.isPassed());
+    }
+
+    /**
+     * 崖山说 ORACLE 家族,但它没有 DBMS_LOGMNR,连接页以前跑的是 LogMiner 探测,报的是
+     * "不是一个可挖掘的库"。v1.9.0 起崖山走自己的 YStream 探测。
+     */
+    @Test
+    void aYashanSourceCarriesTheYStreamChecksNotTheLogMinerOnes() throws SQLException {
+        Connection conn = mock(Connection.class);
+        when(conn.isValid(5)).thenReturn(true);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(md.getDatabaseProductName()).thenReturn("YashanDB");
+        when(md.getDatabaseProductVersion()).thenReturn("Enterprise Edition Release 23.4.7.100");
+        when(md.getDriverName()).thenReturn("YashanDB JDBC Driver");
+        when(md.getDriverVersion()).thenReturn("1.9.27");
+        when(conn.getMetaData()).thenReturn(md);
+        Statement stmt = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(stmt);
+        when(stmt.executeQuery(any(String.class))).thenAnswer(invocation -> {
+            String sql = invocation.getArgument(0);
+            ResultSet rs = mock(ResultSet.class);
+            if (sql.contains("V$YSTREAM_SERVER")) {
+                when(rs.next()).thenReturn(true);
+                when(rs.getLong(1)).thenReturn(1L);
+            } else if (sql.contains("V$DATABASE")) {
+                when(rs.next()).thenReturn(true);
+                when(rs.getString(1)).thenReturn("ARCHIVELOG");
+                when(rs.getString(2)).thenReturn("PRIMARY");
+            } else if (sql.contains("USER_SYS_PRIVS")) {
+                when(rs.next()).thenReturn(true, true, false);
+                when(rs.getString(1)).thenReturn("YSTREAM_CAPTURE", "SELECT ANY DICTIONARY");
+            } else {
+                when(rs.next()).thenReturn(false);
+            }
+            return rs;
+        });
+
+        DatabaseConfig config = new DatabaseConfig();
+        config.setId(4L);
+        config.setName("ys-src");
+        config.setType(DatabaseType.YASHANDB);
+        config.setHost("localhost");
+        config.setPort(1688);
+        config.setDatabaseName("YASDB");
+        config.setUsername("sync");
+
+        ConnectionTestService.TestResult result = serviceReturning(conn).test(config);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getCdcChecks()).isNotNull();
+        assertThat(result.getCdcChecks())
+                .anyMatch(c -> CdcProbeResult.YSTREAM_SOURCE.equals(c.getName()) && c.isPassed());
+        assertThat(result.getCdcChecks())
+                .noneMatch(c -> CdcProbeResult.ORACLE_SOURCE.equals(c.getName()));
     }
 
     @Test

@@ -17,6 +17,7 @@ import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.cdc.LogMinerCdcProbe;
 import com.qqmu.jync.service.cdc.PgLogicalReplicationCdcProbe;
 import com.qqmu.jync.service.cdc.SqlServerCdcProbe;
+import com.qqmu.jync.service.cdc.YStreamCdcProbe;
 import com.zaxxer.hikari.HikariDataSource;
 
 import lombok.Getter;
@@ -32,6 +33,7 @@ public class ConnectionTestService {
     private final LogMinerCdcProbe logMinerProbe;
     private final PgLogicalReplicationCdcProbe pgProbe;
     private final SqlServerCdcProbe mssqlProbe;
+    private final YStreamCdcProbe yStreamProbe;
     private final TargetDdlProbe targetDdlProbe;
     private final SyncProperties properties;
 
@@ -39,6 +41,7 @@ public class ConnectionTestService {
                                  LogMinerCdcProbe logMinerProbe,
                                  PgLogicalReplicationCdcProbe pgProbe,
                                  SqlServerCdcProbe mssqlProbe,
+                                 YStreamCdcProbe yStreamProbe,
                                  TargetDdlProbe targetDdlProbe,
                                  SyncProperties properties) {
         this.dataSourceManager = dataSourceManager;
@@ -46,6 +49,7 @@ public class ConnectionTestService {
         this.logMinerProbe = logMinerProbe;
         this.pgProbe = pgProbe;
         this.mssqlProbe = mssqlProbe;
+        this.yStreamProbe = yStreamProbe;
         this.targetDdlProbe = targetDdlProbe;
         this.properties = properties;
     }
@@ -116,6 +120,15 @@ public class ConnectionTestService {
             } catch (RuntimeException e) {
                 // 探测只是附加信息:自身炸掉降级为无检查项,绝不阻断连接测试(B2)
                 log.warn("CDC probe failed during connection test; reporting none", e);
+            }
+        } else if (config.getType() == DatabaseType.YASHANDB) {
+            try {
+                // 崖山 declares the ORACLE family but has no DBMS_LOGMNR (measured on
+                // 23.4.7.100); it ships its own logical log engine, YStream. The connection
+                // page has no table selection, so the table-level checks are skipped.
+                cdcChecks = yStreamProbe.probe(conn, List.of()).getChecks();
+            } catch (RuntimeException e) {
+                log.warn("YStream probe failed during connection test; reporting none", e);
             }
         } else if (config.resolvedFamily() == DatabaseType.DialectFamily.ORACLE) {
             try {

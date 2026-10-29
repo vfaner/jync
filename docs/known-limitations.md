@@ -84,11 +84,11 @@ Jync 的 README 只讲它能做什么。这份文档讲清楚它在哪些输入�
 
 ### 4.1 源库前提是硬门槛
 
-四种引擎都需要在源库开启相应能力并授予额外权限，详见 README 的 CDC 前提表。几个容易忽略的点：
+五种引擎都需要在源库开启相应能力并授予额外权限，详见 README 的 CDC 前提表。几个容易忽略的点：
 
 - **MySQL 系**：`binlog_row_image=FULL` 才能拿到完整行；`REPLICATION SLAVE`（8.0.22+ 名 `REPLICATION REPLICA`）与 `REPLICATION CLIENT` 两个权限都要有——MariaDB 10.5 起 `REPLICATION CLIENT` 在 `SHOW GRANTS` 里显示为 `BINLOG MONITOR`，探测两种名字都认；binlog 保留时间必须覆盖最长停机窗口。v1.9.0 起 binlog CDC 不再按产品名拒绝，MariaDB / TiDB / OceanBase 等 MySQL 协议产品都可以选，**能否真正使用由连接时的能力探测决定**：对非原厂 MySQL 的源，探测会真的开一条一次性复制流（server_id 取 4294967294，不占用也不踢掉任何任务），从**上一份** binlog 文件开头读事件，解出一条行事件（TableMap / WriteRows / UpdateRows / DeleteRows）才判通过；解不出就把解码器的原始报错写进检查项。之所以读上一份文件：刚轮转出的当前文件只有 FormatDescription / GTID / CHECKPOINT 事件，没有任何行事件（实测 MariaDB 11.8）。原厂 MySQL 跳过这条流探测——生产里每条 CDC 任务都在持续验证它的线格式。
 - **Oracle**：`ARCHIVELOG`、库级补充日志、表级 `(ALL) COLUMNS` 缺一不可；归档保留同样要覆盖停机窗口。
-- **崖山（YashanDB）**：不接受日志 CDC。23.4.7.100 实测没有 `DBMS_LOGMNR` 包与 `V$LOGMNR_CONTENTS`（文档 [dm-logminer-spike.md](dm-logminer-spike.md) 第 7 节），它虽会接受 Oracle 式的归档与补充日志 DDL，却没有挖掘过程可调用，连接测试的探测会直接给出这个结论。崖山源库请用时间戳/数值键轮询或全表比对。同理它没有 `ORA_ROWSCN`，「行级 SCN」游标也不会对它开放。
+- **崖山（YashanDB）**：没有 LogMiner（23.4.7.100 实测无 `DBMS_LOGMNR` 包与 `V$LOGMNR_CONTENTS`，见 [dm-logminer-spike.md](dm-logminer-spike.md) 第 7 节），也没有 `ORA_ROWSCN`，所以「行级 SCN」游标对它不开放。v1.9.0 起它有了自己的日志 CDC——**YStream 实时日志**（`YSTREAM_CDC`）：用崖山自带的 YStream 引擎，不建触发器、不改表。四个硬门槛：① 源库必须 `ARCHIVELOG` 且连的是主库；② 连接用户需 `CREATE SESSION`、`SELECT ANY TABLE`、`YSTREAM_CAPTURE`、`SELECT ANY DICTIONARY`（缺后两者连 `V$YSTREAM_SERVER` 都看不见）；③ **每张被捕获的表**都要执行一次 `ALTER TABLE ... ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS`——缺了 DML 会静默不进流，所以启动前会再查一遍，缺一张即报错并给出可复制的 ALTER 语句；④ 必须**显式选表**，崖山没有整库自动发现，建服务之后新建的表不会自动进入捕获范围。此外：每个崖山实例最多 32 个 YStream 服务，一个任务占一个，达上限要先删别的任务；服务和 PG 复制槽一样**活在源库上**，删除任务/切走策略/换源连接时会尽力 `STOP`+`DROP`，源不可达则只记 WARN，需人工清理；**停用**的任务不释放服务，仍会让源端继续保留日志。LOB 分块行不支持，遇到即整事务报错、绝不写半行。若不满足以上前提，仍可退回时间戳/数值键轮询或全表比对。
 - **PostgreSQL 系**：PostgreSQL 11+（推进位点依赖 `pg_replication_slot_advance`，9.4–10 的探测会失败）；`wal_level=logical`；Jync 会用 `test_decoding` 创建逻辑复制槽，因此该插件必须可用；表的 `REPLICA IDENTITY` 不能是 `NOTHING`。v1.9.0 起 PG 家族（openGauss、翰高、Vastbase、Kingbase 等）也能选 PG 逻辑 CDC，但**能否真正使用由连接时的能力探测决定**：openGauss 5.0 已实测通过（另建议 `enable_slot_log=on`，否则服务器重启后槽不保留，需要重建基线），其余内核需在目标环境自检。探测不是「按品牌猜」：它会建一个一次性逻辑槽，在上面**真跑**消费端要用的 peek 与位点推进语句，再逐表检查 `REPLICA IDENTITY`，任何一条语句不被该内核接受即判不可用，并把服务器原始报错写进检查项 —— 所以「自检」不需要人工拼 SQL，点一次探测即可。
 - **SQL Server**：库级 CDC 已启用，且 **SQL Server Agent 必须持续运行**；Agent 停止后 CDC 捕获表不再增长，Jync 看起来"没有变更"。
 
@@ -98,7 +98,7 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 
 ### 4.3 DDL 不会同步
 
-- CDC 流里的 DDL 会被**跳过并记录 WARN**（MySQL、Oracle 明确如此；PostgreSQL 的逻辑解码流本身不携带 DDL；SQL Server CDC 只捕获行变更）。
+- CDC 流里的 DDL 会被**跳过并记录 WARN**（MySQL、Oracle、YStream 明确如此；PostgreSQL 的逻辑解码流本身不携带 DDL；SQL Server CDC 只捕获行变更）。
 - 源表加列、改类型、删列之后，目标表不会自动跟进。绑定缓存会在遇到 DDL 时失效并自愈，但**结构本身需要你另行变更**。
 - 结构变更后如果新列必须立即同步，最稳妥的做法是：改完两端结构，停止并重建 CDC 基线。
 

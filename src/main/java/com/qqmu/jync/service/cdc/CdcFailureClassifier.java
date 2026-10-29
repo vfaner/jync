@@ -20,7 +20,15 @@ public final class CdcFailureClassifier {
 
     public enum Kind {
         PURGED, SERVER_ID_CONFLICT, AUTH_FAILURE, SCHEMA_CONFLICT, XA_ORDERING,
-        TRANSACTION_TOO_LARGE, TRANSIENT
+        TRANSACTION_TOO_LARGE,
+        /**
+         * YStream only (v1.9.0): a source-side wall — chunked LOB rows, the 32-service
+         * budget, missing table-level supplemental logging, a resume position outside the
+         * retained log, or a service replaced outside Jync. Reconnecting meets the same
+         * wall, so the project is parked for a human.
+         */
+        YSTREAM_BLOCKED,
+        TRANSIENT
     }
 
     private CdcFailureClassifier() { }
@@ -101,6 +109,12 @@ public final class CdcFailureClassifier {
             // cannot help. Park it with a verdict naming the limits and the remedies.
             if (message.contains("cdc transaction exceeds the configured buffer limit")) {
                 return Kind.TRANSACTION_TOO_LARGE;
+            }
+            // v1.9.0 YStream: the consumer/lifecycle mark every "retrying meets the same
+            // wall" condition with YStreamFatalException's fixed prefix. Matched on the
+            // message (not the type) so a driver wrapping the exception still classifies.
+            if (message.contains("ystream cdc blocked")) {
+                return Kind.YSTREAM_BLOCKED;
             }
             // P2-5: ORA-01555 (snapshot too old — the undo backing the consistent read
             // was overwritten under load; a fresh mining session gets a fresh snapshot)

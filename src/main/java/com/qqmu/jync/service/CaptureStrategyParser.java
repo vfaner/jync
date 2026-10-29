@@ -113,6 +113,12 @@ public final class CaptureStrategyParser {
         if (strategy == CaptureStrategy.SQLSERVER_CDC && sourceType != DatabaseType.SQLSERVER) {
             throw new IllegalArgumentException("error.project.cdc.not.sqlserver");
         }
+        // v1.9.0: YStream 是崖山自带的逻辑日志引擎（DBMS_YSTREAM_ADM），别的产品没有这个
+        // 包 —— 达梦同样声明 ORACLE 家族但与之无关。所以这里按产品名精确判，不跟着家族
+        // 放行，也不接受 CUSTOM 声明的家族：家族内部没有能力自证的空间。
+        if (strategy == CaptureStrategy.YSTREAM_CDC && sourceType != DatabaseType.YASHANDB) {
+            throw new IllegalArgumentException("error.project.cdc.not.yashan");
+        }
         return strategy;
     }
 

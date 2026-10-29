@@ -406,6 +406,26 @@
                                 <span class="strategy-name" th:text="#{project.strategy.fullcompare.name}">Full compare</span>
                                 <span class="strategy-desc" th:text="#{project.strategy.fullcompare.desc}">desc</span>
                             </label>
+                            <label class="strategy-card" th:if="${isYashanSource}"
+                                   th:classappend="${sel == 'YSTREAM_CDC'} ? 'picked'">
+                                <input type="radio" name="captureStrategy" value="YSTREAM_CDC"
+                                       th:checked="${sel == 'YSTREAM_CDC'}">
+                                <span class="strategy-name">
+                                    <span th:text="#{project.strategy.ystream.name}">YStream CDC</span>
+                                    <em class="badge-recommend" th:if="${cdcProbePassed and sel == 'YSTREAM_CDC'}"
+                                        th:text="#{project.strategy.cdc.recommended}">recommended</em>
+                                </span>
+                                <span class="strategy-desc" th:text="#{project.strategy.ystream.desc}">desc</span>
+                                <span class="strategy-missing" th:if="${cdcProbe != null and !cdcProbePassed and sel == 'YSTREAM_CDC'}">
+                                    <span th:text="#{project.strategy.cdc.missing}">missing</span>
+                                    <ul>
+                                        <li th:each="chk : ${cdcMissingChecks}">✗ <span
+                                                th:text="#{'cdc.check.' + ${chk.name}}">check</span> — <span
+                                                th:text="${chk.detail}">detail</span></li>
+                                    </ul>
+                                    <a th:href="@{/databases}" th:text="#{project.strategy.cdc.missing.link}">Open connection test</a>
+                                </span>
+                            </label>
                             <label class="strategy-card" th:if="${isMysqlSource}"
                                    th:classappend="${sel == 'BINLOG_CDC'} ? 'picked'">
                                 <input type="radio" name="captureStrategy" value="BINLOG_CDC"
@@ -840,7 +860,8 @@
                 <div class="card" data-cdc-visibility="polling-cdc"
                      th:classappend="${selectedStrategy == 'LOGMINER_CDC'
                             or selectedStrategy == 'PG_LOGICAL_CDC'
-                            or selectedStrategy == 'SQLSERVER_CDC'} ? '' : 'is-hidden'">
+                            or selectedStrategy == 'SQLSERVER_CDC'
+                            or selectedStrategy == 'YSTREAM_CDC'} ? '' : 'is-hidden'">
                     <div class="card-head">
                         <h2><svg class="ico"><use href="#clock"/></svg> <span th:text="#{option.cdcIdlePoll}">CDC idle poll interval</span></h2>
                     </div>
@@ -851,7 +872,8 @@
                                    min="50" step="1" th:value="${config.cdcIdlePollMs}"
                                    th:disabled="${selectedStrategy != 'LOGMINER_CDC'
                                        and selectedStrategy != 'PG_LOGICAL_CDC'
-                                       and selectedStrategy != 'SQLSERVER_CDC'}">
+                                       and selectedStrategy != 'SQLSERVER_CDC'
+                                       and selectedStrategy != 'YSTREAM_CDC'}">
                             <div class="help" th:text="#{option.cdcIdlePollHelp}">help</div>
                         </div>
                     </div>

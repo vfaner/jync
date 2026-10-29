@@ -37,16 +37,25 @@ public enum CaptureStrategy {
      * Only offered when the source {@code DatabaseType == SQLSERVER} and the probe
      * passes (requires SQL Server Agent running and per-table CDC enabled).
      */
-    SQLSERVER_CDC;
+    SQLSERVER_CDC,
+    /**
+     * YashanDB YStream CDC: a long-running consumer replays the logical log through a
+     * source-side YStream service managed by {@code DBMS_YSTREAM_ADM}. Only offered when
+     * the source is a YashanDB preset (the package exists on no other product, so the
+     * gate is by exact type, not by the ORACLE family) and the probe passes.
+     */
+    YSTREAM_CDC;
 
     /**
      * Whether this strategy replays changes from a source-native log stream (binlog /
-     * LogMiner / PG logical slot / SQL Server CDC tables) — as opposed to row-query
-     * polling or a full-table compare. Used to gate long-running consumer threads,
-     * skip Quartz scheduling, and drive the CDC-specific operations (probe / rebaseline).
+     * LogMiner / PG logical slot / SQL Server CDC tables / Yashan YStream) — as opposed
+     * to row-query polling or a full-table compare. Used to gate long-running consumer
+     * threads, skip Quartz scheduling, and drive the CDC-specific operations
+     * (probe / rebaseline).
      */
     public boolean isLogCdc() {
         return this == BINLOG_CDC || this == LOGMINER_CDC
-                || this == PG_LOGICAL_CDC || this == SQLSERVER_CDC;
+                || this == PG_LOGICAL_CDC || this == SQLSERVER_CDC
+                || this == YSTREAM_CDC;
     }
 }
