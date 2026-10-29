@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.sync;
 
+import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -448,8 +449,36 @@ public final class JdbcRowMapper {
             } else {
                 ps.setTimestamp(idx, parsed);
             }
+        } else if (value instanceof CharSequence && isNumericType(targetType)) {
+            // Oracle/DM redo text carries every numeric column as a literal string
+            // (OracleLiteralConverters keeps the server's text verbatim), so a CDC row
+            // arrives here with e.g. "42" for a NUMBER column. Bound as a String, pgjdbc
+            // sends VARCHAR(oid type) and PostgreSQL refuses the assignment — "column ...
+            // is of type integer but expression is of type character varying" — where a
+            // numeric actually binds. Parsing keeps the text's own scale (12.50 stays
+            // 12.50) and a literal that is not a plain decimal — BINARY_DOUBLE's
+            // "Infinity"/"NaN" — still binds verbatim, exactly as it did before.
+            BigDecimal numeric = parseDecimal((String) value);
+            if (numeric == null) {
+                ps.setObject(idx, value);
+            } else {
+                ps.setObject(idx, numeric);
+            }
         } else {
             ps.setObject(idx, value);
+        }
+    }
+
+    /** The literal as a {@code BigDecimal}, or null when it is not a plain decimal. */
+    private static BigDecimal parseDecimal(String text) {
+        String t = text.trim();
+        if (t.isEmpty()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(t);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
