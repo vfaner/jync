@@ -161,6 +161,29 @@ class YStreamTransactionAssemblerTest {
         assertThat(assembler.take().upserts().get(binding)).hasSize(1);
     }
 
+    /**
+     * The snapshot cost is the whole folded buffer, not one row: the caller has to know how
+     * much it just duplicated so it can charge the transaction budget for the memory it now
+     * holds.
+     */
+    @Test
+    void aSavepointReportsHowManyRowsItSnapshotted() {
+        assembler.begin();
+        assembler.upsert(binding, row(1, "a"));
+        assembler.upsert(binding, row(2, "b"));
+
+        assertThat(assembler.savepoint()).isEqualTo(2);
+
+        assembler.upsert(binding, row(3, "c"));
+        assertThat(assembler.savepoint()).isEqualTo(3);
+    }
+
+    @Test
+    void aSavepointOnAnEmptyBufferReportsNothing() {
+        assembler.begin();
+        assertThat(assembler.savepoint()).isZero();
+    }
+
     @Test
     void savepointsDoNotSurviveTheCommit() {
         assembler.begin();

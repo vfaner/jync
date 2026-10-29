@@ -52,6 +52,32 @@ class CdcTransactionBudgetTest {
                 .hasMessageContaining("byte(s)");
     }
 
+    /**
+     * A savepoint copies the whole folded buffer, so a savepoint-per-row batch holds
+     * O(depth x rows) snapshots. Those copies are live heap for as long as the transaction
+     * runs and must count against the same cap, otherwise the guard misses exactly the
+     * transactions that blow the heap up.
+     */
+    @Test
+    void aSavepointSnapshotCountsTowardTheRowCap() {
+        CdcTransactionBudget budget = new CdcTransactionBudget(3, 0);
+        budget.add(row("id", 1));
+        budget.add(row("id", 2));
+
+        assertThatThrownBy(() -> budget.addSavepointSnapshot(2))
+                .isInstanceOf(CdcTransactionBudget.CdcTransactionTooLargeException.class)
+                .hasMessageContaining(CdcTransactionBudget.TOO_LARGE_MARKER)
+                .hasMessageContaining("4 row(s)")
+                .hasMessageContaining("savepoint")
+                .hasMessageContaining("sync.cdc.max-transaction-rows");
+    }
+
+    @Test
+    void aZeroRowLimitAlsoDisablesTheSavepointDimension() {
+        CdcTransactionBudget budget = new CdcTransactionBudget(0, 0);
+        assertThatCode(() -> budget.addSavepointSnapshot(10_000)).doesNotThrowAnyException();
+    }
+
     @Test
     void resetStartsTheNextTransactionFromZero() {
         CdcTransactionBudget budget = new CdcTransactionBudget(1, 0);

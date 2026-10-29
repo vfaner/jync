@@ -315,6 +315,35 @@ class YStreamCdcConsumerTest {
                 .hasMessageContaining(YStreamFatalException.MARKER);
     }
 
+    /**
+     * A savepoint copies the whole folded buffer, and the copy lives until the commit. A
+     * source that sets a savepoint per row therefore grows the heap by everything buffered so
+     * far on every savepoint; the budget has to see that growth, or the project OOMs,
+     * reconnects, replays the same transaction and OOMs again.
+     */
+    @Test
+    void aSavepointSnapshotCountsAgainstTheTransactionBudget() throws Exception {
+        SyncProperties small = new SyncProperties();
+        small.getCdc().setMaxTransactionRows(2);
+        YStreamCdcConsumer budgeted = new YStreamCdcConsumer(project(), lock, ctx,
+                positionStore, baselineService, taskStore, mock(SyncStateWriter.class),
+                dataSourceManager, new CdcRuntimeStats(), small, clientFactory, lifecycle,
+                conn -> new FakeOps());
+
+        budgeted.handle(YStreamEvent.begin(pos(1)));
+        budgeted.handle(insert("ORDERS", row(1, "a"), pos(1)));
+        budgeted.handle(insert("ORDERS", row(2, "b"), pos(2)));
+
+        // Two rows fold fine; the savepoint then duplicates both of them.
+        assertThatThrownBy(() -> budgeted.handle(YStreamEvent.savepoint(pos(3))))
+                .isInstanceOf(CdcTransactionBudget.CdcTransactionTooLargeException.class)
+                .hasMessageContaining(CdcTransactionBudget.TOO_LARGE_MARKER)
+                .hasMessageContaining("savepoint");
+
+        assertThat(count("1=1")).isZero();
+        verify(positionStore, never()).advanceLsn(any(), anyString());
+    }
+
     @Test
     void anEmptyCommitStillAdvancesThePosition() throws Exception {
         handle(YStreamEvent.begin(pos(1)));

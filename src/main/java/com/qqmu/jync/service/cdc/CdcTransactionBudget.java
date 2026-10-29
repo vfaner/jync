@@ -27,6 +27,9 @@ final class CdcTransactionBudget {
      */
     static final String TOO_LARGE_MARKER = "CDC transaction exceeds the configured buffer limit";
 
+    /** Per-entry heap of a savepoint snapshot: map entry overhead plus the copied node. */
+    private static final long SNAPSHOT_BYTES_PER_ROW = 48L;
+
     private final long maxRows;
     private final long maxBytes;
     private long rows;
@@ -63,6 +66,31 @@ final class CdcTransactionBudget {
         }
     }
 
+    /**
+     * Counts the rows a savepoint just duplicated into a snapshot.
+     *
+     * <p>A savepoint has to copy the whole folded buffer, and the copies stay on the heap
+     * until the transaction ends. A source transaction that sets a savepoint per row
+     * therefore holds O(depth x rows) entries — everything the caller buffered, multiplied
+     * by the number of open savepoints — while the row counter alone would still see a
+     * modest transaction. Charging those copies here keeps the memory guard honest.
+     *
+     * @param heldRows entries the snapshot copied; nothing is charged for zero
+     */
+    void addSavepointSnapshot(long heldRows) {
+        if ((maxRows == 0 && maxBytes == 0) || heldRows <= 0) {
+            return;
+        }
+        rows += heldRows;
+        // The snapshot copies the map/list layers but shares the row objects themselves, so
+        // only the per-entry overhead is new heap.
+        bytes += heldRows * SNAPSHOT_BYTES_PER_ROW;
+        if ((maxRows > 0 && rows > maxRows) || (maxBytes > 0 && bytes > maxBytes)) {
+            throw new CdcTransactionTooLargeException(rows, bytes, maxRows, maxBytes,
+                    "a savepoint snapshot duplicated " + heldRows + " buffered row(s)");
+        }
+    }
+
     /** Starts accounting for the next source transaction. */
     void reset() {
         rows = 0;
@@ -90,8 +118,15 @@ final class CdcTransactionBudget {
     /** Fatal, non-transient: retrying replays the same transaction and cannot succeed. */
     static final class CdcTransactionTooLargeException extends IllegalStateException {
         CdcTransactionTooLargeException(long rows, long bytes, long maxRows, long maxBytes) {
+            this(rows, bytes, maxRows, maxBytes, null);
+        }
+
+        CdcTransactionTooLargeException(long rows, long bytes, long maxRows, long maxBytes,
+                                        String detail) {
             super(TOO_LARGE_MARKER + ": " + rows + " row(s), about " + bytes
-                    + " byte(s) buffered for one source transaction (limits: "
+                    + " byte(s) buffered for one source transaction"
+                    + (detail == null ? "" : "; " + detail)
+                    + " (limits: "
                     + describe(maxRows, "rows") + ", " + describe(maxBytes, "bytes")
                     + "). Apply the source transaction in smaller batches, raise"
                     + " sync.cdc.max-transaction-rows / sync.cdc.max-transaction-bytes,"

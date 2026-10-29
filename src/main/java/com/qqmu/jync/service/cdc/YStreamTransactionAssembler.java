@@ -43,8 +43,16 @@ final class YStreamTransactionAssembler {
         buffer.delete(binding, row);
     }
 
-    void savepoint() {
+    /**
+     * Pushes a savepoint holding the current folded state.
+     *
+     * @return how many entries the snapshot copied — the caller charges that to the
+     *         transaction budget, because the copies live on the heap until the commit
+     */
+    int savepoint() {
+        int heldRows = buffer.size();
         savepoints.push(buffer.copy());
+        return heldRows;
     }
 
     /** Restores the innermost savepoint; a stray rollback (no savepoint) is a no-op. */
