@@ -994,6 +994,15 @@ public class DataSyncService {
                 Timestamp stamp = Timestamp.valueOf(
                         ((java.time.LocalDate) value).atStartOfDay());
                 sb.append(instantKey(stamp.toInstant(), stamp.getNanos()));
+            } else if (value instanceof java.time.LocalTime) {
+                // java.sql.Time carries a wall clock the same way: as 1970-01-01 in the default
+                // zone, which is what the java.util.Date branch below renders for it. Without
+                // this branch LocalTime fell through to its toString and the two spellings of
+                // one TIME key never matched.
+                java.time.LocalTime time = (java.time.LocalTime) value;
+                Instant instant = time.atDate(java.time.LocalDate.of(1970, 1, 1))
+                        .atZone(java.time.ZoneId.systemDefault()).toInstant();
+                sb.append(instantKey(instant, time.getNano()));
             } else if (value instanceof java.util.Date) {
                 // java.sql.Date / java.sql.Time land here: they carry no sub-millisecond part.
                 long millis = ((java.util.Date) value).getTime();
@@ -3542,11 +3551,20 @@ public class DataSyncService {
         if (value instanceof java.time.ZonedDateTime) {
             return Long.toString(((java.time.ZonedDateTime) value).toInstant().toEpochMilli());
         }
+        // Date-only and time-only values are rendered as epoch milliseconds, the same space as
+        // java.sql.Date and java.sql.Time (both extend java.util.Date and are handled above).
+        // Epoch day / nano-of-day would be a fine canonical form by itself, but it disagrees
+        // with the legacy types: a DATE key read as LocalDate by one driver and as java.sql.Date
+        // by the other would then compare unequal, painting every target row as deleted at
+        // source. Same reasoning as the LocalDateTime branch, which agrees with Timestamp.
         if (value instanceof java.time.LocalDate) {
-            return Long.toString(((java.time.LocalDate) value).toEpochDay());
+            return Long.toString(((java.time.LocalDate) value)
+                    .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
         if (value instanceof java.time.LocalTime) {
-            return Long.toString(((java.time.LocalTime) value).toNanoOfDay());
+            return Long.toString(((java.time.LocalTime) value)
+                    .atDate(java.time.LocalDate.of(1970, 1, 1))
+                    .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
         return String.valueOf(value);
     }

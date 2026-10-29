@@ -227,6 +227,19 @@ class DataSyncServiceRowDriftRepairTest {
                 .isEqualTo(DataSyncService.normalizedKey(java.util.List.of(date)));
     }
 
+    @Test
+    void aTimeKeyNormalizesAcrossSqlAndJavaTimeTypes() {
+        // The TIME counterpart of the DATE case above: one driver returns java.sql.Time, the
+        // other java.time.LocalTime. LocalTime had no branch, so it fell through to its
+        // toString while java.sql.Time normalized as an instant — every shared key then looked
+        // missing and the repair re-copied rows that were never absent.
+        java.sql.Time time = java.sql.Time.valueOf("10:00:00");
+
+        assertThat(DataSyncService.normalizedKey(
+                java.util.List.of(java.time.LocalTime.of(10, 0))))
+                .isEqualTo(DataSyncService.normalizedKey(java.util.List.of(time)));
+    }
+
     // --- helpers ---------------------------------------------------------------------
 
     private SyncProperties propertiesWithCeiling(int maxRows) {

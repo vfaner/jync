@@ -11,7 +11,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -369,6 +371,26 @@ class DataSyncServiceDeletionsTest {
 
         assertThat(DataSyncService.keyPartOf(null)).isEmpty();
         assertThat(DataSyncService.keyPartOf("abc")).isEqualTo("abc");
+    }
+
+    /**
+     * A DATE key surfaces as {@code java.sql.Date} on one driver and as
+     * {@code java.time.LocalDate} on another (the {@code java.time} classes exist here for
+     * exactly that reason), and a TIME key likewise comes as {@code java.sql.Time} or
+     * {@code LocalTime}. The date-only and time-only branches rendered those two spellings of
+     * the same value into different text, so a cross-family pair whose drivers disagree reads
+     * every target row as "deleted at source": the exact catastrophic case this canonical form
+     * exists to prevent.
+     */
+    @Test
+    void aDateOrTimeKeyRendersTheSameWhicheverJavaTypeTheDriverReturns() {
+        assertThat(DataSyncService.keyPartOf(LocalDate.of(2024, 1, 1)))
+                .as("LocalDate must agree with java.sql.Date, not with epoch-day")
+                .isEqualTo(DataSyncService.keyPartOf(java.sql.Date.valueOf("2024-01-01")));
+
+        assertThat(DataSyncService.keyPartOf(LocalTime.of(10, 0)))
+                .as("LocalTime must agree with java.sql.Time")
+                .isEqualTo(DataSyncService.keyPartOf(java.sql.Time.valueOf("10:00:00")));
     }
 
     private TableMeta table(String name, String pk, long approximateRows) {
