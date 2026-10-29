@@ -428,7 +428,6 @@ public final class KeysetChunker {
                 + " WHERE jync_rn = 1 ORDER BY " + order;
     }
 
-    /** Serializes one chunk's boundary (its last row's PK values) for the checkpoint table. */
     /**
      * SQL reference to a strategy's cursor: the quoted identifier for a real column, the
      * bare name for a pseudo-column like {@code ORA_ROWSCN} (quoting a pseudo-column is a
@@ -440,6 +439,7 @@ public final class KeysetChunker {
                 : dialect.quoteIdentifier(strategy.getColumn());
     }
 
+    /** Serializes one chunk's boundary (its last row's PK values) for the checkpoint table. */
     public static String encodePk(List<Object> values) {
         try {
             return JSON.writeValueAsString(values == null ? null : portableValues(values));
