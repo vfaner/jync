@@ -188,6 +188,25 @@ class KeysetChunkerTest {
     }
 
     @Test
+    void aLiteralNullCheckpointMeansNoBoundaryInsteadOfThrowing() {
+        // encodePk(null) 写的是字面量 "null"(「本页没有边界值」)。resume 时必须还原成
+        // 「无边界」并从头读该范围,而不是在 values.size() 上 NPE 掉整个断点续传。
+        assertThat(KeysetChunker.decodePk(KeysetChunker.encodePk(null),
+                List.of(Types.TIMESTAMP))).isNull();
+    }
+
+    @Test
+    void subMillisecondTemporalBoundariesKeepTheirNanosAcrossTheJsonRoundTrip() {
+        // Oracle TIMESTAMP / PG timestamptz / SQL Server datetime2 的键有微秒甚至 100ns
+        // 精度。JSON 只存 epoch millis 会把边界向下截断,重启续传时把已同步的行再读一遍;
+        // 解回时必须保住亚毫秒部分。
+        Timestamp boundary = Timestamp.valueOf("2026-10-20 12:34:56.789123");
+
+        assertThat(KeysetChunker.decodePk(KeysetChunker.encodePk(List.of(boundary)),
+                List.of(Types.TIMESTAMP))).containsExactly(boundary);
+    }
+
+    @Test
     void binaryBoundariesComeBackAsBytesSoAResumedPageSeeksWithTheRealValue() {
         List<Object> pk = List.of(new byte[] {1, 2, 3}, "tail");
 

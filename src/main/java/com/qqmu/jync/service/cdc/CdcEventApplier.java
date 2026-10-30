@@ -266,13 +266,4 @@ public final class CdcEventApplier {
             }
         }
     }
-
-    /**
-     * Whether the rejected INSERT may have collided with an existing key. 23505 is the
-     * standard unique-violation state (DB2, H2, PostgreSQL); 23000 is what MySQL (1062),
-     * SQL Server (2627/2601) and Oracle (ORA-00001) use — but the same state also carries
-     * their foreign-key, CHECK and NOT NULL failures, so this is only a CANDIDATE test.
-     * The callers decide by evidence: the retried UPDATE's row count, or a primary-key
-     * existence probe for key-only tables. Anything that fails those checks is rethrown.
-     */
 }

@@ -346,6 +346,17 @@ public class CdcBaselineService {
                         e.toString());
                 throw e;
             }
+            if (!lockRenewer.getAsBoolean()) {
+                // The lease is gone, so another node may already own the position row — the
+                // same ruling as the failed-result path above. Deleting the row (or raising
+                // the ERROR hat, which freezes every node's supervise) would clobber that
+                // node's fresh anchor. Exit as a lease loss and let the owner redo it.
+                log.info("CDC baseline for project {} failed after losing its lease ({});"
+                        + " leaving the position row to the instance that took over",
+                        projectId, e.toString());
+                throw new LockLostException("CDC baseline for project " + projectId
+                        + " lost its lease mid-load: " + e);
+            }
             positionStore.delete(projectId);
             taskStore.recordCdcFailure(projectId, CdcFailureClassifier.describe(e));
             throw e;

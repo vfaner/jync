@@ -1,7 +1,9 @@
 package com.qqmu.jync.service.sync;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,6 +34,15 @@ public final class KeysetChunker {
      */
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+
+    /**
+     * Key of the marker that carries a temporal boundary's sub-millisecond part. Jackson writes
+     * a {@link java.sql.Timestamp} as epoch millis, which floors microseconds (Oracle,
+     * PostgreSQL) and 100 ns ticks (SQL Server) — the restored boundary would then re-read rows
+     * the previous chunk already wrote after every restart. Millisecond-aligned values keep the
+     * plain number, so old checkpoints and new ones decode through the same path.
+     */
+    private static final String TIME_MARKER = "$jyncTime";
 
     private KeysetChunker() {
     }
@@ -467,22 +478,28 @@ public final class KeysetChunker {
     }
 
     private static Object portableValue(Object value) {
+        Object portable = value;
         if (value instanceof java.time.OffsetDateTime) {
-            return java.sql.Timestamp.from(((java.time.OffsetDateTime) value).toInstant());
+            portable = java.sql.Timestamp.from(((java.time.OffsetDateTime) value).toInstant());
+        } else if (value instanceof java.time.ZonedDateTime) {
+            portable = java.sql.Timestamp.from(((java.time.ZonedDateTime) value).toInstant());
+        } else if (value instanceof java.time.Instant) {
+            portable = java.sql.Timestamp.from((java.time.Instant) value);
+        } else if (value instanceof java.time.LocalDateTime) {
+            portable = java.sql.Timestamp.valueOf((java.time.LocalDateTime) value);
+        } else if (value instanceof java.time.LocalDate) {
+            portable = java.sql.Date.valueOf((java.time.LocalDate) value);
         }
-        if (value instanceof java.time.ZonedDateTime) {
-            return java.sql.Timestamp.from(((java.time.ZonedDateTime) value).toInstant());
+        if (portable instanceof java.sql.Timestamp) {
+            java.sql.Timestamp timestamp = (java.sql.Timestamp) portable;
+            if (timestamp.getNanos() % 1_000_000 != 0) {
+                Map<String, Object> marker = new LinkedHashMap<>();
+                marker.put(TIME_MARKER, timestamp.getTime());
+                marker.put("nanos", timestamp.getNanos());
+                return marker;
+            }
         }
-        if (value instanceof java.time.Instant) {
-            return java.sql.Timestamp.from((java.time.Instant) value);
-        }
-        if (value instanceof java.time.LocalDateTime) {
-            return java.sql.Timestamp.valueOf((java.time.LocalDateTime) value);
-        }
-        if (value instanceof java.time.LocalDate) {
-            return java.sql.Date.valueOf((java.time.LocalDate) value);
-        }
-        return value;
+        return portable;
     }
 
     /** Inverse of {@link #encodePk}; see the note on {@link #JSON} about numeric widths. */
@@ -510,6 +527,17 @@ public final class KeysetChunker {
             values = JSON.readValue(json, List.class);
         } catch (Exception e) {
             throw new IllegalStateException("Cannot parse stored keyset boundary: " + json, e);
+        }
+        // encodePk(null) writes the literal "null" for "this page carried no boundary value";
+        // the inverse is "no boundary" (re-read the range from its start), not an NPE below.
+        if (values == null) {
+            return null;
+        }
+        for (int i = 0; i < values.size(); i++) {
+            java.sql.Timestamp restored = restoreTimeMarker(values.get(i));
+            if (restored != null) {
+                values.set(i, restored);
+            }
         }
         if (pkJdbcTypes == null) {
             return values;
@@ -541,6 +569,24 @@ public final class KeysetChunker {
             }
         }
         return values;
+    }
+
+    /** Rebuilds a {@link #TIME_MARKER} boundary; returns null for any other value. */
+    private static java.sql.Timestamp restoreTimeMarker(Object value) {
+        if (!(value instanceof Map)) {
+            return null;
+        }
+        Map<?, ?> marker = (Map<?, ?>) value;
+        Object millis = marker.get(TIME_MARKER);
+        if (!(millis instanceof Number)) {
+            return null;
+        }
+        java.sql.Timestamp timestamp = new java.sql.Timestamp(((Number) millis).longValue());
+        Object nanos = marker.get("nanos");
+        if (nanos instanceof Number) {
+            timestamp.setNanos(((Number) nanos).intValue());
+        }
+        return timestamp;
     }
 
     /** The JDBC types Jackson writes as Base64 text and a key column can carry. */

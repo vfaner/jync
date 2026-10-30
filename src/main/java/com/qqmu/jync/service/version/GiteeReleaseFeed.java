@@ -153,7 +153,15 @@ public class GiteeReleaseFeed implements ReleaseFeed {
         Instant publishedAt = null;
         String created = json.path("created_at").asText(null);
         if (created != null && !created.isBlank()) {
-            publishedAt = OffsetDateTime.parse(created).toInstant();
+            try {
+                publishedAt = OffsetDateTime.parse(created).toInstant();
+            } catch (java.time.format.DateTimeParseException e) {
+                // created_at is display metadata only. Letting an unexpected format propagate
+                // would discard the whole release and degrade the update check to UNKNOWN for
+                // a full TTL; the version itself is still usable without a date.
+                log.warn("Gitee release {} carries an unparseable created_at '{}';"
+                        + " showing it without a date", tag, created);
+            }
         }
         return new Release(tag, htmlUrl, publishedAt, json.path("body").asText(""),
                 List.copyOf(assets), Source.GITEE);

@@ -82,6 +82,18 @@ class GiteeReleaseFeedTest {
     }
 
     @Test
+    void aMalformedCreatedTimestampLeavesTheDateUnknownInsteadOfDroppingTheRelease() throws Exception {
+        // created_at 是展示用元数据:格式一变(或出现时区以外的写法)时,整条 release 不应
+        // 作废——那会让更新检查退化成 UNKNOWN 一个 TTL。日期留空,版本信息照常返回。
+        ReleaseFeed.Release release = GiteeReleaseFeed.parse(
+                "{\"tag_name\":\"v1.0.0\",\"created_at\":\"2026/10/14 12:00\",\"body\":\"notes\"}",
+                "o", "r");
+
+        assertThat(release.tag()).isEqualTo("v1.0.0");
+        assertThat(release.publishedAt()).isNull();
+    }
+
+    @Test
     void misconfiguredUrlDisablesChecksInsteadOfFailingConstruction() {
         GiteeReleaseFeed feed = new GiteeReleaseFeed("https://gitlab.example.com/a/b");
         assertThatThrownBy(feed::latest).isInstanceOf(IllegalStateException.class);

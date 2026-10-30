@@ -260,6 +260,26 @@ class CdcBaselineServiceTest {
     }
 
     /**
+     * 异常路径同样必须先确认租约。runCycle 直接外抛(而不是把失败折进 result)时,
+     * 旧代码在 catch 里无条件删位点行 + 摘 ERROR 帽子:租约已被接管的话,删掉的可能是
+     * 接管节点刚写的基线锚点,ERROR 帽子还会冻结所有节点的 supervise —— 与成功路径
+     * 的 lease-lost 处理同理,本节点无权收尾。
+     */
+    @Test
+    void leaseLostOnTheExceptionPathLeavesThePositionRowAndSkipsTheErrorHat() throws SQLException {
+        Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+        doThrow(new IllegalStateException("full load exploded"))
+                .when(engine).runCycle(any(SyncContext.class));
+
+        assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> false))  // renew 返回 false
+                .isInstanceOf(LockLostException.class);
+        verify(positionStore, never()).delete(anyLong());        // 不砸接管节点的锚点
+        verify(taskStore, never()).recordCdcFailure(anyLong(), any());  // 绝不 ERROR 帽子
+        verify(positionStore, never()).markBaselineDone(anyLong());     // 基线绝不算完成
+    }
+
+    /**
      * 终审 FIX 2:stop-requested 中止 ≠ 失败。分块全量在 chunk 边界被 interrupt 中止后,
      * SyncEngine 把它折成【失败 result】(runBaseline 看到的世界与真失败相同)——唯一的
      * 区分依据是顺序循环刻意保留的中断位。中止时:不摘 ERROR 帽子(recordCdcFailure 会把
