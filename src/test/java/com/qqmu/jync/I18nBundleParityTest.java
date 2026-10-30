@@ -74,6 +74,41 @@ class I18nBundleParityTest {
         assertThat(missing(en, en)).isEmpty();
     }
 
+    /**
+     * A hint that ends with a full stop in one language and stops mid-air in the other reads as
+     * an unfinished sentence next to a finished one — the two bundles are shown side by side in
+     * translation review, and the odd one out is usually a sentence whose tail was dropped.
+     *
+     * <p>Ellipses are not sentence ends: {@code …} and {@code ...} are both how each language
+     * writes "still working", so a trailing run of them is stripped before comparing.
+     */
+    @Test
+    @DisplayName("a sentence ends the way its translation ends")
+    void sentencesEndTheWayTheirTranslationDoes() throws Exception {
+        Map<String, String> en = valuesOf(EN);
+        Map<String, String> zh = valuesOf(ZH);
+
+        Map<String, String> mismatched = new TreeMap<>();
+        for (Map.Entry<String, String> entry : en.entrySet()) {
+            String translated = zh.get(entry.getKey());
+            if (translated != null && endsSentence(entry.getValue()) != endsSentence(translated)) {
+                mismatched.put(entry.getKey(), translated + "   ‖   " + entry.getValue());
+            }
+        }
+
+        assertThat(mismatched)
+                .as("one language writes the closing full stop, the other does not")
+                .isEmpty();
+    }
+
+    /** Whether {@code text} is closed off at all — a full stop or the "and so on" ellipsis. */
+    private static boolean endsSentence(String text) {
+        String tail = text.strip();
+        return tail.endsWith(".") || tail.endsWith("!") || tail.endsWith("?")
+                || tail.endsWith("…")
+                || tail.endsWith("。") || tail.endsWith("！") || tail.endsWith("？");
+    }
+
     /** The keys defined in {@code body}: one per non-comment line of the form {@code key=value}. */
     static Set<String> keysOf(String classpathResource) throws Exception {
         byte[] bytes = new ClassPathResource(classpathResource).getInputStream().readAllBytes();
@@ -89,6 +124,23 @@ class I18nBundleParityTest {
             }
         }
         return keys;
+    }
+
+    /** The {@code key=value} pairs of {@code classpathResource}, same line format as {@link #keysOf}. */
+    static Map<String, String> valuesOf(String classpathResource) throws Exception {
+        byte[] bytes = new ClassPathResource(classpathResource).getInputStream().readAllBytes();
+        Map<String, String> values = new TreeMap<>();
+        for (String line : new String(bytes, StandardCharsets.UTF_8).split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("!")) {
+                continue;
+            }
+            int eq = trimmed.indexOf('=');
+            if (eq > 0) {
+                values.put(trimmed.substring(0, eq).trim(), trimmed.substring(eq + 1).trim());
+            }
+        }
+        return values;
     }
 
     /** Keys defined more than once in {@code body}, from the same line format as {@link #keysOf}. */
