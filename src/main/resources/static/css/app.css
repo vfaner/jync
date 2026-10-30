@@ -344,8 +344,18 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
    .page-actions/.btn-row 末尾的负 margin 抵消换行时多出的下边距。 */
 .page-actions { display: flex; flex-wrap: wrap; margin-bottom: -9px; }
 .page-actions > * { margin: 0 9px 9px 0; }
+/* 间距加在每条子项上（而不是 > * + * 的左边距）：折行后每行首项才不会自带一段缩进。
+   桌面仍是单行 —— .select/.input 是 width:100%，不折行时靠 flex-shrink 挤满一行。 */
 .inline-form { display: flex; align-items: center; }
-.inline-form > * + * { margin-left: 10px; }
+.inline-form > * { margin-right: 10px; }
+
+/* 手机宽度折行。系统日志的筛选行（日志文件 + 级别 + 关键词 + 搜索）不折行时宽过卡片，
+   被卡片的 overflow:hidden 整段裁掉，搜索按钮连滚都滚不到。折行后每个控件独占一行、
+   铺满可用宽度；负的下边距抵消多出来的那一行间距。 */
+@media (max-width: 640px) {
+  .inline-form { flex-wrap: wrap; margin-bottom: -9px; }
+  .inline-form > * { margin-bottom: 9px; }
+}
 .check-inline { display: inline-flex; align-items: center; font-size: 13px; white-space: nowrap; cursor: pointer; }
 .check-inline input { width: 15px; height: 15px; margin-right: 7px; accent-color: var(--brand); cursor: pointer; }
 .btn-row { display: flex; flex-wrap: wrap; margin-bottom: -9px; }
@@ -965,7 +975,9 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .dl { display: grid; grid-template-columns: minmax(140px, auto) 1fr; gap: 11px 18px; font-size: 13.5px; margin: 0; }
 .dl dt { color: var(--ink-mute); font-weight: 600; }
 .dl dd { margin: 0; }
-.dl dd .help { font-size: 12px; color: var(--ink-mute); margin-top: 3px; line-height: 1.5; max-width: 480px; }
+/* 说明文字里会出现 pg_logical_slot_get_changes 这类长标识符：不限制的话它会撑出栏宽，
+   在手机上一整段被卡片的 overflow:hidden 裁掉，句子后半截直接看不见。 */
+.dl dd .help { font-size: 12px; color: var(--ink-mute); margin-top: 3px; line-height: 1.5; max-width: 480px; overflow-wrap: anywhere; }
 /* 上一条选择器比 .text-danger 更具体，卡死提示单加 .text-danger 会保持灰色。 */
 .dl dd .help.text-danger { color: var(--danger); }
 /* 系统信息页：dt/dd 用 .kv 成对包裹后双列排布，卡片高度减半，
@@ -985,7 +997,8 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* 通栏行：值与说明并排成一条长行跨满双列，不再挤在右半栏的窄格子里 */
 .dl.pairs .kv.wide { grid-column: 1 / -1; }
 .dl.pairs .kv.wide dd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.dl.pairs .kv.wide dd .help { margin-top: 0; max-width: none; }
+/* flex 子项的 min-width 是 auto，不置 0 就永远缩不到最宽那个词以下，断行也就无从发生。 */
+.dl.pairs .kv.wide dd .help { margin-top: 0; max-width: none; min-width: 0; }
 
 /* ─── 活动流 ────────────────────────────────────────────── */
 .feed { list-style: none; margin: 0; padding: 0; }
@@ -1244,6 +1257,27 @@ table.tbl a.truncate { display: block; }
 }
 
 /* ─── 响应式 ────────────────────────────────────────────── */
+/* 导航条是一整行：logo + 六个入口 + 语言/主题/赞赏/用户。英文界面下这一行要 1300px 左右
+   （光 logo 下那行副标题就占 250px），1280、1024 的笔记本上右端的用户菜单被挤出屏幕，
+   整页还会跟着横向滚动。900px 以下已经是抽屉，所以这一段（901–1330）先把装饰性的
+   分量卸掉：副标题退场，间距和左右留白收窄。只动导航条，页面其余布局不变。 */
+@media (max-width: 1330px) and (min-width: 901px) {
+  .logo-text small { display: none; }
+  .nav-inner { gap: 16px; padding: 0 20px; }
+  .nav-links a, .nav-links .nav-link-trigger { padding: 8px 10px; }
+  .nav-right { gap: 7px; }
+}
+/* 901–1040 这一档英文界面仍差几十像素，继续收：字号降一档、角色小标退场。
+   角色在用户菜单里点开还能看到，这一行省下的位置刚好把用户菜单留在屏幕内。 */
+@media (max-width: 1040px) and (min-width: 901px) {
+  .nav-inner { gap: 12px; }
+  .nav-links a, .nav-links .nav-link-trigger { font-size: 13px; padding: 8px 8px; }
+  .user-chip .role { display: none; }
+}
+/* 再窄就只剩一行字的空间：品牌名退场，只留左侧的图标块。这一档离抽屉只有一步。 */
+@media (max-width: 960px) and (min-width: 901px) {
+  .logo-text { display: none; }
+}
 @media (max-width: 1100px) {
   .split, .split-wide { grid-template-columns: 1fr; }
   /* 单列时左 wrapper 与右卡是相邻 grid item，18px 的 grid gap 已经隔开它们；
