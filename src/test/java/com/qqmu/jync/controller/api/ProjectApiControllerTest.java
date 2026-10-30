@@ -95,6 +95,27 @@ class ProjectApiControllerTest {
                 .andExpect(jsonPath("$.errors").doesNotExist());
     }
 
+    /**
+     * A run deferred because another task holds the pool is neither a completion nor a
+     * failure: the user pressed the button and nothing was read, so the toast must say it
+     * will retry rather than claim 「同步已完成」.
+     */
+    @Test
+    void aDeferredRunSaysItWillRetryInsteadOfClaimingCompletion() throws Exception {
+        SyncResult result = new SyncResult();
+        result.setDeferred(true);
+        SyncTaskRunner.Outcome outcome = ReflectionTestUtils.invokeMethod(
+                SyncTaskRunner.Outcome.class, "executed", result);
+        when(projectService.syncNow(1L)).thenReturn(outcome);
+
+        mvc.perform(post("/api/projects/1/sync-now").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("msg.sync.deferred"))
+                .andExpect(jsonPath("$.toastKind").value("warn"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.summary").doesNotExist());
+    }
+
     @Test
     void syncNowCarriesSkippedTablesForTheToastLoop() throws Exception {
         SyncResult result = new SyncResult();

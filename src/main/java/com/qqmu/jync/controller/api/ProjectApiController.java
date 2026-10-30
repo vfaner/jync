@@ -69,11 +69,12 @@ public class ProjectApiController {
         }
         SyncResult result = outcome.result().orElseGet(SyncResult::new);
         Map<String, Object> body = ok(result.isStopped() ? "msg.sync.stopped"
+                : result.isDeferred() ? "msg.sync.deferred"
                 : result.isSuccess() ? "msg.sync.completed" : "msg.sync.completed.errors");
-        if (result.isStopped()) {
-            // A round the user stopped mid-way is neither a success nor a failure: yellow
-            // instead of red, and no summary/errors — the abort sentence would only repeat
-            // "stopped" in English, and "明细见变更日志" points at nothing to fix.
+        if (result.isStopped() || result.isDeferred()) {
+            // Neither a success nor a failure: yellow instead of green or red, and no
+            // summary/errors — the sentence is the whole story for a stopped or deferred
+            // round, and "明细见变更日志" points at nothing to fix.
             body.put("toastKind", "warn");
         } else {
             body.put("summary", result.summary());
