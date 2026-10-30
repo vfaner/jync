@@ -18,6 +18,7 @@ import com.qqmu.jync.service.connection.OracleVersionResolver;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
+import com.qqmu.jync.service.sync.ConnectionProvider;
 import com.qqmu.jync.service.sync.SyncContext;
 
 import lombok.extern.slf4j.Slf4j;
@@ -139,7 +140,19 @@ public class SyncContextFactory {
                 .lockOwner(lockOwner)
                 .lockRenewer(lockRenewer)
                 .stopRequested(stopRequested)
-                .connectionProvider(dataSourceManager::getConnection)
+                .connectionProvider(new ConnectionProvider() {
+                    @Override
+                    public Connection open(DatabaseConfig config) throws SQLException {
+                        return dataSourceManager.getConnection(config);
+                    }
+
+                    @Override
+                    public Connection openWaiting(DatabaseConfig config) throws SQLException {
+                        // Chunk workers share the pool with every task on this configuration;
+                        // they queue for a seat and defer the run instead of failing it.
+                        return dataSourceManager.getConnectionOrDefer(config);
+                    }
+                })
                 .build();
     }
 
@@ -196,7 +209,7 @@ public class SyncContextFactory {
         if (config.getSchemaName() != null && !config.getSchemaName().isBlank()) {
             return normalizeConfiguredSchema(config, config.getSchemaName().trim());
         }
-        try (Connection conn = dataSourceManager.getConnection(config)) {
+        try (Connection conn = dataSourceManager.getConnectionOrDefer(config)) {
             String schema = reader.resolveDefaultSchema(conn);
             log.debug("Resolved default schema for '{}' to '{}'", config.getName(), schema);
             return schema;

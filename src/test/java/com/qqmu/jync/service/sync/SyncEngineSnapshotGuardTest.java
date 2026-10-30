@@ -90,8 +90,8 @@ class SyncEngineSnapshotGuardTest {
         targetConn = DriverManager.getConnection("jdbc:h2:mem:eng_tgt;DB_CLOSE_DELAY=-1", "sa", "");
         DatabaseConfig sourceCfg = new DatabaseConfig();
         DatabaseConfig targetCfg = new DatabaseConfig();
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(targetConn);
 
         orders = new TableMeta();
         orders.setName("ORDERS");

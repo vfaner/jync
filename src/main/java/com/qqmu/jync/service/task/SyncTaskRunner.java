@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.connection.PoolContentionException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
 
@@ -328,6 +329,13 @@ public class SyncTaskRunner {
             log.error("Cannot run sync for project '{}': {}", project.getName(), e.getMessage());
             result = new SyncResult();
             result.addError(e.getMessage());
+        } catch (PoolContentionException e) {
+            // The shared pool was still held by another task's workers. Nothing was
+            // attempted, so this round is deferred: no failure, and no outcome recorded
+            // (below) — the task row must not claim "No changes" for a look never taken.
+            log.info("Sync of '{}' deferred: {}", project.getName(), e.getMessage());
+            result = new SyncResult();
+            result.setDeferred(true);
         } catch (RuntimeException e) {
             log.error("Unexpected failure syncing project '{}'", project.getName(), e);
             result = new SyncResult();
@@ -338,23 +346,28 @@ public class SyncTaskRunner {
         // Outcome recording must not escape execute() either: a failure here previously
         // skipped startQueuedRerun, leaving the coalesced request stuck in the queue.
         try {
-            // A run the user stopped is not a failed attempt: recording it through the
-            // failure ladder would show "FAILED" for a deliberate action and push a healthy
-            // project towards the max-retries ERROR hat after a few ordinary stops.
-            boolean stopped = ctx != null && ctx.isStopRequested() && !result.isSuccess();
-            if (stopped) {
-                // Also visible to callers: syncNow's HTTP response must say 「已停止」 rather
-                // than 「有失败项」 for a round the user ended themselves.
-                result.setStopped(true);
-                taskStore.recordStoppedOutcome(project.getId(), result);
-            } else {
-                taskStore.recordOutcome(project.getId(), result);
+            // A deferred run read nothing, so nothing may be written to the task row:
+            // recordOutcome would stamp "No changes" and reset the failure ladder of a task
+            // that has not actually recovered. The next fire tries again.
+            if (!result.isDeferred()) {
+                // A run the user stopped is not a failed attempt: recording it through the
+                // failure ladder would show "FAILED" for a deliberate action and push a healthy
+                // project towards the max-retries ERROR hat after a few ordinary stops.
+                boolean stopped = ctx != null && ctx.isStopRequested() && !result.isSuccess();
+                if (stopped) {
+                    // Also visible to callers: syncNow's HTTP response must say 「已停止」 rather
+                    // than 「有失败项」 for a round the user ended themselves.
+                    result.setStopped(true);
+                    taskStore.recordStoppedOutcome(project.getId(), result);
+                } else {
+                    taskStore.recordOutcome(project.getId(), result);
+                }
             }
         } catch (RuntimeException e) {
             log.error("Failed to record sync outcome for project '{}'",
                     project.getName(), e);
         }
-        if (result.hasChanges() || !result.isSuccess()) {
+        if (result.hasChanges() || !result.isSuccess() || result.isDeferred()) {
             log.info("Sync of '{}' finished: {}", project.getName(), result.summary());
         }
         return result;

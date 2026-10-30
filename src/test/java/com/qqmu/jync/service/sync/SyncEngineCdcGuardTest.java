@@ -84,8 +84,8 @@ class SyncEngineCdcGuardTest {
 
         sourceCfg = new DatabaseConfig();
         targetCfg = new DatabaseConfig();
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(source);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(target);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(source);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(target);
         when(structureSync.sortByDependency(any())).thenAnswer(inv -> inv.getArgument(0));
         when(stateWriter.loadOrCreateProgress(anyLong(), anyString()))
                 .thenReturn(new SyncProgress());

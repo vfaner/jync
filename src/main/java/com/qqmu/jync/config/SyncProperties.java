@@ -142,6 +142,19 @@ public class SyncProperties {
      */
     private int maxPoolSize = 5;
 
+    /**
+     * How long a cycle waits for a shared pool to free a seat before deferring to its next
+     * fire.
+     *
+     * <p>Two tasks on one connection configuration share one pool. A parallelism-4 full load
+     * holds every seat at each chunk boundary, so the second task's borrow used to block for
+     * Hikari's fifteen-second timeout and fail the whole cycle with an ERROR row. Waiting a
+     * little turns that into a queue; if the seat still does not come, the round is deferred
+     * — nothing attempted, no failure recorded, retried on the next fire. 0 defers at once
+     * when the pool is already full.
+     */
+    private long poolWaitMs = 10_000L;
+
     /** Lifetime of a per-project sync lock, after which a crashed owner's lock is stealable. */
     private long lockTtlMs = 300_000L;
 

@@ -55,8 +55,8 @@ class SyncEngineMetadataOnDemandTest {
                 mock(DataSyncService.class), mock(SyncStateWriter.class), new SyncProperties());
 
         sourceConn = mock(Connection.class);
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(mock(Connection.class));
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(mock(Connection.class));
         when(reader.readAll(any(), any(), any(), any(), any(), anyBoolean(), anyBoolean()))
                 .thenReturn(new DatabaseMeta());
         when(reader.readAllForData(any(), any(), any(), any(), any(), anyBoolean(), anyBoolean()))

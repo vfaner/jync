@@ -153,8 +153,13 @@ sync:
   # benchmark measured ~117k rows/s at 1, ~184k at 2 and ~216k at 4 (+18% for the last step).
   # Set 1 on databases that are shared with live traffic.
   full-load-parallelism: 2
-  # Maximum connections in each per-database pool; a cycle borrows one connection per side
+  # Maximum connections in each per-database pool; a cycle borrows one connection per side.
+  # 多个任务共用同一连接配置时, 需满足: max-pool-size ≥ 1 + Σ 各任务并行度 + 1~2 余量。
+  # 若小于实际需求, 争抢的轮次会排队(pool-wait-ms)后退让, 不再直接报错。
   max-pool-size: 5
+  # 同一连接配置被两个任务共用时, 池被一个并行满载的加载占满, 另一个任务等这么久再退让:
+  # 本轮不记失败也不记结果, 到下一个调度周期重试。0 = 池一满就退让。
+  pool-wait-ms: 10000
   # Subtracted from the timestamp high-watermark so in-flight source transactions
   # that commit slightly out of clock order are not skipped. See SyncProperties.
   safety-lag-ms: 1000

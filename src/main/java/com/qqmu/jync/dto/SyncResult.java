@@ -26,6 +26,13 @@ public class SyncResult {
      */
     private boolean stopped;
 
+    /**
+     * Whether the run gave up its turn because another task's workers held the shared
+     * connection pool. Nothing was attempted, so this is neither a success nor a failure:
+     * the task row keeps its previous state and the next scheduled fire tries again.
+     */
+    private boolean deferred;
+
     private int structureChanges;
 
     // long, not int: a full baseline of one table can exceed 2^31 rows, and an int counter
@@ -71,6 +78,10 @@ public class SyncResult {
             // A stop is not a failure: the same sentence the task row gets, so a scheduled
             // fire's log line does not read as "FAILED" for the user's own button press.
             return "Stopped before finishing";
+        }
+        if (deferred) {
+            // Not "No changes": the data was never read, and the next fire will read it.
+            return "Deferred: connection pool busy with another task, will retry";
         }
         if (!success) {
             // 只给一句人话:失败了几项、什么原因、哪些表。原文(full DDL)在变更日志里,

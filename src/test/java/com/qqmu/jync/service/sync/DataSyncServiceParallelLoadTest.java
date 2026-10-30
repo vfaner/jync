@@ -45,6 +45,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.service.cdc.LogCapture;
+import com.qqmu.jync.service.connection.PoolContentionException;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
@@ -213,6 +214,37 @@ class DataSyncServiceParallelLoadTest {
         assertThat(result.getRowsWritten()).isEqualTo(10);
         assertThat(count(target, "ITEMS")).isEqualTo(10);
         verify(checkpoints, atLeastOnce()).deleteByProjectIdAndTableName(7L, "ITEMS");
+    }
+
+    /**
+     * A range worker that cannot borrow a seat because another task holds the pool defers
+     * the whole load: it must surface as a deferral, not as "this table failed" — the rows
+     * were never attempted, and the next fire retries the unfinished ranges.
+     */
+    @Test
+    void aWorkerThatCannotGetASeatDefersTheWholeLoad() throws SQLException {
+        createItems(10);
+        SyncContext contended = ctx.toBuilder()
+                .connectionProvider(new ConnectionProvider() {
+                    @Override
+                    public Connection open(DatabaseConfig cfg) throws SQLException {
+                        return DriverManager.getConnection(
+                                cfg == sourceCfg ? SRC_URL : TGT_URL, "sa", "");
+                    }
+
+                    @Override
+                    public Connection openWaiting(DatabaseConfig cfg) {
+                        throw new PoolContentionException(
+                                "Connection pool for 'orders' is fully in use by another task");
+                    }
+                })
+                .build();
+
+        Throwable thrown = catchThrowable(() -> service(3, 2).syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), contended));
+
+        assertThat(thrown).isInstanceOf(PoolContentionException.class);
+        assertThat(count(target, "ITEMS")).isZero();
     }
 
     @Test

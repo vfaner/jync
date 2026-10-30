@@ -82,8 +82,8 @@ class SyncEngineForeignKeyOrderingTest {
         // connections close in tearDown.
         sourceConn = DriverManager.getConnection("jdbc:h2:mem:fkorder_src", "sa", "");
         targetConn = DriverManager.getConnection("jdbc:h2:mem:fkorder_tgt", "sa", "");
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(targetConn);
 
         try (java.sql.Statement st = targetConn.createStatement()) {
             st.execute("CREATE TABLE ORDERS (ID BIGINT PRIMARY KEY)");

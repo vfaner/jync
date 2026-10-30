@@ -85,8 +85,8 @@ class SyncEngineTableFailureIsolationTest {
         targetConn = DriverManager.getConnection("jdbc:h2:mem:failiso_tgt;DB_CLOSE_DELAY=-1", "sa", "");
         sourceCfg = new DatabaseConfig();
         targetCfg = new DatabaseConfig();
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(targetConn);
 
         first = table("T1");
         second = table("T2");

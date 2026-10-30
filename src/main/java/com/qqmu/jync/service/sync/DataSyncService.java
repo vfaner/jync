@@ -34,6 +34,7 @@ import com.qqmu.jync.model.ChunkCheckpoint;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
+import com.qqmu.jync.service.connection.PoolContentionException;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.VendorTypeMap;
@@ -2536,6 +2537,7 @@ public class DataSyncService {
         LockLostException leaseLost = null;
         SQLException failure = null;
         StopRequestedException stopped = null;
+        PoolContentionException deferred = null;
         for (Future<WriteStats> future : futures) {
             try {
                 WriteStats w = future.get();
@@ -2562,6 +2564,12 @@ public class DataSyncService {
                     if (stopped == null) {
                         stopped = (StopRequestedException) cause;
                     }
+                } else if (cause instanceof PoolContentionException) {
+                    // A worker that could not get a seat defers the whole run; folding it
+                    // into a SQLException would mark this table failed instead.
+                    if (deferred == null) {
+                        deferred = (PoolContentionException) cause;
+                    }
                 } else if (failure == null) {
                     failure = cause instanceof SQLException ? (SQLException) cause
                             : new SQLException("Parallel full load failed: "
@@ -2580,8 +2588,15 @@ public class DataSyncService {
         }
         if (failure != null) {
             // Same contract as a failed sequential load: checkpoints stay, the cursor is
-            // not advanced, and the next cycle resumes where the ranges left off.
+            // not advanced, and the next cycle resumes where the ranges left off. A real
+            // failure outranks a sibling's deferral: it must be reported, not queued.
             throw failure;
+        }
+        if (deferred != null) {
+            // Every range whose worker could get a seat finished; the ones that could not
+            // defer the whole cycle (no failure row, retried on the next fire). Finished
+            // checkpoints stay and are skipped by the retry.
+            throw deferred;
         }
         return total;
     }
@@ -2649,8 +2664,8 @@ public class DataSyncService {
             WriteStats stats;
             // Borrow per chunk, not per range: a worker never holds pooled connections while
             // queued, so parallelism above the pool size degrades to waiting in line.
-            try (Connection src = ctx.getConnectionProvider().open(ctx.getSourceConfig());
-                 Connection tgt = ctx.getConnectionProvider().open(ctx.getTargetConfig())) {
+            try (Connection src = ctx.getConnectionProvider().openWaiting(ctx.getSourceConfig());
+                 Connection tgt = ctx.getConnectionProvider().openWaiting(ctx.getTargetConfig())) {
                 stats = copyRows(src, tgt, pageSql, params, table, targetTable, ctx,
                         pkColumns, sink, fullLoadBatchSize(ctx), fullLoadFetchSize(ctx),
                         insertFirst);

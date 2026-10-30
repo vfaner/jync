@@ -81,8 +81,8 @@ class SyncEngineRowEstimateDemandTest {
 
         sourceConn = DriverManager.getConnection("jdbc:h2:mem:row_estimate_src", "sa", "");
         targetConn = DriverManager.getConnection("jdbc:h2:mem:row_estimate_tgt", "sa", "");
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(targetConn);
 
         project = new Project();
         project.setId(PROJECT_ID);

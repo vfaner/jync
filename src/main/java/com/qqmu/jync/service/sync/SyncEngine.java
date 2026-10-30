@@ -27,6 +27,7 @@ import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.connection.PoolContentionException;
 import com.qqmu.jync.service.monitor.ChangeDetector;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 import com.qqmu.jync.service.monitor.CursorStrategyResolver;
@@ -131,8 +132,8 @@ public class SyncEngine {
     public SyncResult runCycle(SyncContext ctx) {
         SyncResult result = new SyncResult();
 
-        try (Connection sourceConn = dataSourceManager.getConnection(ctx.getSourceConfig());
-             Connection targetConn = dataSourceManager.getConnection(ctx.getTargetConfig())) {
+        try (Connection sourceConn = dataSourceManager.getConnectionOrDefer(ctx.getSourceConfig());
+             Connection targetConn = dataSourceManager.getConnectionOrDefer(ctx.getTargetConfig())) {
 
             DatabaseMeta sourceMeta = readSourceMetadata(sourceConn, ctx);
 
@@ -207,6 +208,12 @@ public class SyncEngine {
                 syncData(sourceMeta, sourceConn, targetConn, ctx, result, blockedTables);
             }
 
+        } catch (PoolContentionException e) {
+            // Another task's workers hold every seat of the shared pool. Nothing was
+            // attempted: defer to the next fire without an ERROR row and without counting
+            // a failure, so a busy neighbour does not put the task on the failure ladder.
+            log.info("Sync cycle for project '{}' deferred: {}", ctx.projectName(), e.getMessage());
+            result.setDeferred(true);
         } catch (SQLException e) {
             log.error("Sync cycle failed for project '{}': {}", ctx.projectName(), e.getMessage());
             result.addError("Connection or query failure: " + e.getMessage());
@@ -922,8 +929,9 @@ public class SyncEngine {
                 try {
                     syncOneTable(table, sourceConn, targetConn, ctx, result, blockedTables,
                             knownTargetTables);
-                } catch (StopRequestedException | LockLostException e) {
-                    // Not a table failure: the whole cycle must stop here.
+                } catch (StopRequestedException | LockLostException | PoolContentionException e) {
+                    // Not a table failure: the whole cycle must stop here (a pool that ran
+                    // dry mid-table defers the run, it does not fail the table).
                     throw e;
                 } catch (RuntimeException e) {
                     // A mapping or dialect defect on one table must not stop every table after

@@ -79,8 +79,8 @@ class SyncEngineIdentifierPreflightTest {
         targetConn = DriverManager.getConnection("jdbc:h2:mem:preflight_tgt;DB_CLOSE_DELAY=-1", "sa", "");
         sourceCfg = new DatabaseConfig();
         targetCfg = new DatabaseConfig();
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(targetConn);
 
         try (java.sql.Statement st = targetConn.createStatement()) {
             st.execute("CREATE TABLE ORDERS (ID BIGINT)");

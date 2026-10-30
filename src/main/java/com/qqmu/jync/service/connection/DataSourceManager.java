@@ -41,6 +41,9 @@ public class DataSourceManager {
     /** Health dots give up quickly: the page is watching a dozen databases at once. */
     private static final long PROBE_CONNECT_TIMEOUT_MS = 3_000;
 
+    /** How often a deferred borrow re-checks a full pool; a seat frees at a chunk boundary. */
+    private static final long SEAT_POLL_INTERVAL_MS = 200L;
+
     private final DriverLoader driverLoader;
     private final CryptoUtil cryptoUtil;
     private final SyncProperties properties;
@@ -96,6 +99,89 @@ public class DataSourceManager {
      */
     public Connection getConnection(DatabaseConfig config) throws SQLException {
         return getDataSource(config).getConnection();
+    }
+
+    /**
+     * Opens a connection for a sync cycle, waiting for a seat on a pool that another task
+     * has fully checked out and deferring to the next fire if none frees in time.
+     *
+     * <p>Workers borrow per chunk, so a parallelism-4 full load takes every seat of a
+     * five-connection pool at each boundary; a second task on the same configuration then
+     * blocks for Hikari's fifteen-second timeout and fails its whole cycle. Waiting here
+     * turns that error into a queue. The database actually being unreachable surfaces as a
+     * {@link SQLException} either way — only a pool whose own counters show every seat in
+     * use is contention, so a real failure is never downgraded.
+     *
+     * @throws PoolContentionException when no seat frees within {@code sync.pool-wait-ms}
+     */
+    public Connection getConnectionOrDefer(DatabaseConfig config) throws SQLException {
+        long deadline = System.currentTimeMillis() + Math.max(0L, properties.getPoolWaitMs());
+        while (true) {
+            if (isPoolSaturated(config)) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0L) {
+                    throw new PoolContentionException(poolBusyMessage(config));
+                }
+                if (!sleepForSeat(Math.min(SEAT_POLL_INTERVAL_MS, remaining))) {
+                    // Being interrupted here is a stop or a shutdown, not a fault: restore
+                    // the flag and let the run be deferred rather than turning it into an
+                    // ERROR row. The caller's stop checks run on the next boundary anyway.
+                    Thread.currentThread().interrupt();
+                    throw new PoolContentionException(poolBusyMessage(config));
+                }
+                continue;
+            }
+            try {
+                return getConnection(config);
+            } catch (SQLException e) {
+                // The seat held at check time went away before the borrow: the pool is
+                // full again, so this is still contention, not a broken database.
+                if (isPoolSaturated(config)) {
+                    throw new PoolContentionException(poolBusyMessage(config));
+                }
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * Whether every connection of the cached pool for {@code config} is checked out. An
+     * unsaved or never-opened configuration has no pool yet and therefore no contention;
+     * the borrow itself will create one.
+     */
+    public boolean isPoolSaturated(DatabaseConfig config) {
+        if (config == null || config.getId() == null) {
+            return false;
+        }
+        CachedDataSource cached = cache.get(config.getId());
+        return cached != null && isSaturated(cached.dataSource);
+    }
+
+    /** Reads saturation from the pool's own counters — never guessed from error messages. */
+    static boolean isSaturated(HikariDataSource pool) {
+        if (pool == null) {
+            return false;
+        }
+        com.zaxxer.hikari.HikariPoolMXBean bean = pool.getHikariPoolMXBean();
+        int max = pool.getMaximumPoolSize();
+        if (bean == null || max <= 0) {
+            return false;
+        }
+        return bean.getActiveConnections() >= max;
+    }
+
+    private static boolean sleepForSeat(long millis) {
+        try {
+            Thread.sleep(millis);
+            return true;
+        } catch (InterruptedException e) {
+            return false;
+        }
+    }
+
+    private String poolBusyMessage(DatabaseConfig config) {
+        return "Connection pool for '" + (config.getName() == null ? config.getId() : config.getName())
+                + "' is fully in use by another task";
     }
 
     /**

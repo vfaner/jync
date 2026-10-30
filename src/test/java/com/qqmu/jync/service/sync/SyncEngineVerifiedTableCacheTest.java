@@ -86,9 +86,9 @@ class SyncEngineVerifiedTableCacheTest {
         // and the database itself stays alive thanks to DB_CLOSE_DELAY=-1.
         sourceCfg = new DatabaseConfig();
         targetCfg = new DatabaseConfig();
-        when(dataSourceManager.getConnection(sourceCfg))
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg))
                 .thenAnswer(inv -> DriverManager.getConnection(SOURCE_URL, "sa", ""));
-        when(dataSourceManager.getConnection(targetCfg))
+        when(dataSourceManager.getConnectionOrDefer(targetCfg))
                 .thenAnswer(inv -> DriverManager.getConnection(TARGET_URL, "sa", ""));
 
         adminConn = DriverManager.getConnection(TARGET_URL, "sa", "");

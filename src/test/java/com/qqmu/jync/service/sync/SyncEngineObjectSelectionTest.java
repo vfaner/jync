@@ -66,8 +66,8 @@ class SyncEngineObjectSelectionTest {
 
         sourceConn = DriverManager.getConnection("jdbc:h2:mem:objsel_src;DB_CLOSE_DELAY=-1", "sa", "");
         targetConn = DriverManager.getConnection("jdbc:h2:mem:objsel_tgt;DB_CLOSE_DELAY=-1", "sa", "");
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(targetConn);
         when(reader.readAll(any(), any(), any(), any(), any(), anyBoolean(), anyBoolean()))
                 .thenReturn(new DatabaseMeta());
         when(reader.readAllForData(any(), any(), any(), any(), any(), anyBoolean(), anyBoolean()))

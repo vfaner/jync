@@ -93,8 +93,8 @@ class SyncEngineRowCountAuditLogTest {
         try (Statement st = targetConn.createStatement()) {
             st.execute("CREATE TABLE ORDERS (ID BIGINT NOT NULL PRIMARY KEY)");
         }
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(targetConn);
 
         project = new Project();
         project.setId(PROJECT_ID);

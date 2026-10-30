@@ -81,8 +81,8 @@ class SyncEngineConstraintToggleIsolationTest {
         targetConn = constrainedTarget(h2Target);
         sourceCfg = new DatabaseConfig();
         targetCfg = new DatabaseConfig();
-        when(dataSourceManager.getConnection(sourceCfg)).thenReturn(sourceConn);
-        when(dataSourceManager.getConnection(targetCfg)).thenReturn(targetConn);
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenReturn(sourceConn);
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenReturn(targetConn);
 
         try (Statement st = h2Target.createStatement()) {
             st.execute("DROP TABLE IF EXISTS T1");

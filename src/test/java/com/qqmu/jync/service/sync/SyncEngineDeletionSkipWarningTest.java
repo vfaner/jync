@@ -93,9 +93,9 @@ class SyncEngineDeletionSkipWarningTest {
         targetCfg = new DatabaseConfig();
         // A fresh handle per call: runCycle closes what it borrows, and this test drives
         // more than one cycle through the same mocked manager.
-        when(dataSourceManager.getConnection(sourceCfg)).thenAnswer(
+        when(dataSourceManager.getConnectionOrDefer(sourceCfg)).thenAnswer(
                 inv -> DriverManager.getConnection(SOURCE_URL, "sa", ""));
-        when(dataSourceManager.getConnection(targetCfg)).thenAnswer(
+        when(dataSourceManager.getConnectionOrDefer(targetCfg)).thenAnswer(
                 inv -> DriverManager.getConnection(TARGET_URL, "sa", ""));
         when(structureSync.sortByDependency(any())).thenAnswer(inv -> inv.getArgument(0));
         when(stateWriter.loadOrCreateProgress(anyLong(), anyString()))
