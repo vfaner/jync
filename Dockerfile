@@ -1,7 +1,7 @@
 # ============================================================================
 # Jync 捷同 · 容器镜像(多阶段构建)
-#   docker build -t jync:1.8.1 .
-#   docker run -d -p 8080:8080 -v jync-data:/app/data -v jync-logs:/app/logs jync:1.8.1
+#   docker build -t jync:1.8.2 .
+#   docker run -d -p 8080:8080 -v jync-data:/app/data -v jync-logs:/app/logs jync:1.8.2
 # 元数据(H2 库文件)在 /app/data,日志在 /app/logs,升级镜像不丢数据。
 # 详细部署说明见 docs/deploy-container.md。
 # ============================================================================

@@ -542,12 +542,12 @@ sudo systemctl status jync
 ### 6. Docker 与 Compose
 
 ```bash
-docker build -t jync:1.8.1 .
+docker build -t jync:1.8.2 .
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
   -e TZ=Asia/Shanghai \
-  --restart unless-stopped jync:1.8.1
+  --restart unless-stopped jync:1.8.2
 ```
 
 或使用 Compose：
@@ -563,13 +563,13 @@ docker compose up -d --build
 ### 7. Kubernetes
 
 ```bash
-docker build -t registry.example.com/qqmu/jync:1.8.1 .
-docker push registry.example.com/qqmu/jync:1.8.1
+docker build -t registry.example.com/qqmu/jync:1.8.2 .
+docker push registry.example.com/qqmu/jync:1.8.2
 kubectl apply -k deploy/k8s/
 kubectl -n jync get pods
 ```
 
-- 清单默认镜像 `jync:1.8.1`，可用 `kustomization.yaml` 的 `images` 变换改成自己的仓库与新 tag。
+- 清单默认镜像 `jync:1.8.2`，可用 `kustomization.yaml` 的 `images` 变换改成自己的仓库与新 tag。
 - Service 为 `ClusterIP`，集群外访问用 `kubectl -n jync port-forward svc/jync 8080:80` 或配置 Ingress。
 - H2 元数据库是 `ReadWriteOnce` PVC，**副本数必须为 1**。需要多副本时先把元数据库换成外部 MySQL / PostgreSQL（`SPRING_DATASOURCE_*` 环境变量），再调大 `replicas`。
 
