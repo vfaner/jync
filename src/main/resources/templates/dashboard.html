@@ -110,7 +110,9 @@
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
         <div class="alert-body">
             <strong th:text="${stats.errorTaskCount}">0</strong>
-            <span th:text="#{dashboard.errors}">failing tasks</span>
+            <!--/* 数字单独渲染，名词得跟着数走：英文 1 用单数，其余用复数；
+                   中文两档同一个词，两条键都指向它。 */-->
+            <span th:text="${stats.errorTaskCount == 1} ? #{dashboard.errors.one} : #{dashboard.errors.other}">failing tasks</span>
         </div>
     </div>
 
