@@ -579,7 +579,11 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .field:last-child { margin-bottom: 0; }
 .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--ink); }
 .field .req { color: var(--danger); margin-left: 2px; }
-.field .help { font-size: 12px; color: var(--ink-mute); margin-top: 5px; line-height: 1.5; }
+/* .help 的基线样式：绝大多数说明写在 .field / .dl dd / .switch 里，那几处各有规则。
+   直接挂在卡片正文里的说明（批量创建、外部认证、系统信息等）没有这些祖先，
+   就会按 15px 正文黑字渲染 —— 同一张卡片里一行 12px 灰、下一行 15px 黑。
+   上下文规则的特异性都比这里高，照旧覆盖。 */
+.help { font-size: 12px; color: var(--ink-mute); margin-top: 5px; line-height: 1.5; }
 
 /* 标签行的问号提示：大不是越好，两个旋钮都要说清取舍。卡片是 overflow:hidden，
    提示向下或向上展开会撞到下一条 field 或被裁掉，所以从图标右侧展开——仍在卡片

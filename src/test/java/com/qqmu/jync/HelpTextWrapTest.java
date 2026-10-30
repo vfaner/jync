@@ -41,6 +41,36 @@ class HelpTextWrapTest {
                 .contains("min-width: 0");
     }
 
+    @Test
+    @DisplayName("说明文字有一条不依赖字段上下文的基线样式")
+    void helpTextHasABaselineStyle() throws Exception {
+        String css = Files.readString(CSS, StandardCharsets.UTF_8);
+        String body = topLevelRule(css, ".help");
+
+        assertThat(body)
+                .as("只写在 .field / .dl dd 下面时，直接挂在卡片里的说明会按 15px 正文渲染，"
+                        + "和同卡片里 12px 灰字的说明并排就像漏了排版")
+                .isNotNull();
+        assertThat(body).contains("font-size: 12px");
+        assertThat(body).contains("var(--ink-mute)");
+    }
+
+    /** The body of a rule whose selector is exactly {@code selector} at the start of a line. */
+    private static String topLevelRule(String css, String selector) {
+        int from = 0;
+        while (true) {
+            int at = css.indexOf(selector + " {", from);
+            if (at < 0) {
+                return null;
+            }
+            int lineStart = css.lastIndexOf('\n', at) + 1;
+            if (css.substring(lineStart, at).isBlank()) {
+                return ruleBody(css, css.substring(at, at + selector.length() + 2));
+            }
+            from = at + selector.length();
+        }
+    }
+
     /** Balanced braces starting at the {@code {} that follows {@code marker}, or null. */
     private static String ruleBody(String text, String marker) {
         int at = text.indexOf(marker);
