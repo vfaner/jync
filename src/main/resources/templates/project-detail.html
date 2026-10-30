@@ -1192,6 +1192,9 @@
                 <h3 th:text="#{rowcount.title}">Row counts</h3>
                 <p id="row-count-summary" class="small muted"
                    th:text="#{rowcount.notChecked}">Not checked</p>
+                <p class="small muted"
+                   th:text="#{rowcount.scopeHint}">Only tables that already have a sync
+                    record are listed; the rest appear after the next sync.</p>
             </div>
             <div id="row-count-body" class="preview-body">
                 <table class="tbl dense">

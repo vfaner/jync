@@ -181,6 +181,18 @@ class TablePreviewViewTest {
         assertThat(html).doesNotContain("??rowcount");
     }
 
+    /**
+     * 清单只列「已有同步记录」的表,不解释会被读成「其余表已经同步完了」。用户选了
+     * 1000 张却只看到一百来行,正是这个误会。
+     */
+    @Test
+    void theRowCountModalExplainsThatOnlyTablesWithSyncRecordsAreListed() throws Exception {
+        String html = render();
+
+        assertThat(html).contains("Only tables that already have a sync record are listed");
+        assertThat(html).doesNotContain("??rowcount.scopeHint");
+    }
+
     @Test
     void aViewerGetsNeitherTheRowCountButtonNorTheModal() throws Exception {
         String html = render(asViewer());
