@@ -34,9 +34,16 @@ class JsMessageMapCoverageTest {
 
     private static final Path LAYOUT = Path.of("src/main/resources/templates/layout.html");
 
+    /*
+     * UpgradeApiController is here for the two keys its ok() bodies carry. Its refusals are
+     * not: UpgradeService resolves them with their arguments before throwing
+     * (text("error.upgrade.alreadyLatest", current)), so the 409 body already holds a finished
+     * sentence and app.js's t() passes it through untouched.
+     */
     private static final List<Path> JSON_CONTROLLERS = List.of(
             Path.of("src/main/java/com/qqmu/jync/controller/api/ProjectApiController.java"),
-            Path.of("src/main/java/com/qqmu/jync/controller/CdcApiController.java"));
+            Path.of("src/main/java/com/qqmu/jync/controller/CdcApiController.java"),
+            Path.of("src/main/java/com/qqmu/jync/controller/api/UpgradeApiController.java"));
 
     /**
      * Refusals reachable from the buttons backed by the two controllers above.
