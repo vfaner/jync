@@ -154,6 +154,32 @@ public final class CdcFailureClassifier {
         return Kind.TRANSIENT;
     }
 
+    /**
+     * Adds the two numbers a PURGED report needs to be actionable: the SCN the consumer was
+     * resuming from and the oldest SCN the source can still mine. The raw Oracle text
+     * ("ORA-01291: missing logfile") names neither, so an operator cannot tell whether the
+     * gap is minutes or days wide, or whether the archive retention is simply too short —
+     * both of which decide whether re-baselining will work at all.
+     *
+     * <p>Pure formatting: the caller probes the source (best effort) and passes nulls when
+     * it could not read a value, so the wording never depends on a live database here.
+     */
+    public static String withPurgeHint(String detail, Long anchorScn, Long oldestMineableScn) {
+        if (anchorScn == null && oldestMineableScn == null) {
+            return detail;
+        }
+        StringBuilder text = new StringBuilder(detail)
+                .append(" [resume SCN ").append(anchorScn == null ? "unknown" : anchorScn);
+        if (oldestMineableScn != null) {
+            text.append("; oldest redo still on the source starts at SCN ")
+                    .append(oldestMineableScn);
+        }
+        text.append("; the logs covering the resume point are gone, so retrying cannot work")
+                .append(" — rebuild the baseline from a fresh snapshot, and raise the")
+                .append(" source's archive retention first if the full load outlasted it]");
+        return text.toString();
+    }
+
     /** Root-cause message, capped for storage in sync_task.last_sync_result and UI display. */
     public static String describe(Throwable t) {
         Throwable root = t;

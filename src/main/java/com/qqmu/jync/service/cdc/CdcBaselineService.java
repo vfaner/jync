@@ -257,10 +257,14 @@ public class CdcBaselineService {
         com.qqmu.jync.model.CaptureStrategy strategy = ctx.getConfig() == null
                 ? com.qqmu.jync.model.CaptureStrategy.POLLING
                 : ctx.getConfig().getCaptureStrategyOrDefault();
+        // LogMiner only: the SCN the full load anchored at, checked against the source's
+        // archive floor once the load finishes (see assertArchiveStillCovers).
+        Long logMinerAnchorScn = null;
         try {
             switch (strategy) {
                 case LOGMINER_CDC: {
                     long scn = readCurrentScn(ctx.getSourceConfig());
+                    logMinerAnchorScn = scn;
                     positionStore.recordBaselineStartScn(projectId, scn);
                     engine.resetProject(projectId);
                     log.info("CDC baseline for project {}: full load from SCN {} (LogMiner)",
@@ -326,6 +330,9 @@ public class CdcBaselineService {
                 throw new IllegalStateException("CDC baseline full load failed: "
                         + (result == null ? "no result" : result.summary()));
             }
+            if (logMinerAnchorScn != null) {
+                assertArchiveStillCovers(ctx.getSourceConfig(), logMinerAnchorScn);
+            }
             positionStore.markBaselineDone(projectId);
             log.info("CDC baseline for project {} completed", projectId);
         } catch (RuntimeException | Error e) {
@@ -363,6 +370,40 @@ public class CdcBaselineService {
             positionStore.delete(projectId);
             taskStore.recordCdcFailure(projectId, CdcFailureClassifier.describe(e));
             throw e;
+        }
+    }
+
+    /**
+     * A LogMiner baseline anchors at CURRENT_SCN before the full load and only starts
+     * mining after it. Everything written in between has to still be in the archived redo
+     * at that moment, so a full load that outlasts the source's archive retention leaves a
+     * hole that can never be mined — the first START_LOGMNR then dies on a bare ORA-01291
+     * that names no SCN and no cause.
+     *
+     * <p>Checking here turns that into one actionable message at the moment it happens:
+     * the anchor, the source's current redo floor, and the remedy. Only a DEFINITE gap
+     * fails the baseline (floor strictly above the anchor); an unreadable floor — no
+     * privilege on V$ views, a PDB connection, a DM source — is just a missing diagnostic
+     * and must not undo a full load that already completed.
+     */
+    void assertArchiveStillCovers(DatabaseConfig source, long anchorScn) {
+        Long floor;
+        try (Connection conn = dataSourceManager.getConnection(source)) {
+            floor = MiningDialects.detect(conn).oldestMineableScn(conn);
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not read the source's oldest mineable SCN for project's LogMiner"
+                    + " baseline anchor {} ({}); the first mining session will check again",
+                    anchorScn, e.getMessage());
+            return;
+        }
+        if (floor != null && floor > anchorScn) {
+            throw new IllegalStateException("The full load finished at SCN " + anchorScn
+                    + " but the oldest redo still on the source now starts at SCN " + floor
+                    + " — the archive stream was purged while the baseline ran, so the"
+                    + " changes made after the anchor can never be mined and the stream"
+                    + " cannot resume. Increase the source's archive retention (FRA space,"
+                    + " RMAN ARCHIVELOG DELETION POLICY) so it covers the whole full-load"
+                    + " window, then rebuild the baseline.");
         }
     }
 }

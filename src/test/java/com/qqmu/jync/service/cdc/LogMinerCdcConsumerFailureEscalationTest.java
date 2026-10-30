@@ -325,6 +325,46 @@ class LogMinerCdcConsumerFailureEscalationTest {
         verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
     }
 
+    /**
+     * 现场只看到 "PURGED: ORA-01291: 缺少日志文件":没说是哪个 SCN 区间缺、源端还剩多旧的日志。
+     * 这两个数字是判断"重试有没有意义、该把归档保留期调到多大"的全部依据,必须写进详情。
+     */
+    @Test
+    void aPurgedLogMinerFailureNamesTheResumeAnchorAndTheSourceRedoFloor() throws Exception {
+        long anchor = 1_000L;
+        long floor = 7_106_400L;
+        Statement probe = mock(Statement.class);
+        ResultSet empty = mock(ResultSet.class);
+        when(empty.next()).thenReturn(false);
+        ResultSet floorRs = mock(ResultSet.class);
+        when(floorRs.next()).thenReturn(true);
+        when(floorRs.getLong(1)).thenReturn(floor);
+        when(probe.executeQuery(anyString())).thenReturn(empty);
+        when(probe.executeQuery(contains("MIN(FIRST_CHANGE#)"))).thenReturn(floorRs);
+        when(source.createStatement()).thenReturn(probe);
+
+        // 挖掘会话在 open 里就撞上 ORA-01291(锚点之后的归档日志已被清掉)。
+        LogMinerSessionFactory factory = (c, s, b) -> {
+            throw new SQLException("ORA-01291: missing log file");
+        };
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("lm-1");
+        LogMinerCdcConsumer consumer = new LogMinerCdcConsumer(project, boundedLock(5),
+                stagedTargetContext(true), positionStore, mock(CdcBaselineService.class),
+                taskStore, mock(com.qqmu.jync.service.sync.SyncStateWriter.class),
+                dataSourceManager, new CdcRuntimeStats(), properties, factory);
+
+        consumer.run();
+
+        org.mockito.ArgumentCaptor<String> detail = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(taskStore).recordCdcFailure(eq(1L), detail.capture());
+        assertThat(detail.getValue())
+                .startsWith("PURGED: ORA-01291")
+                .contains("resume SCN " + anchor)
+                .contains("oldest redo still on the source starts at SCN " + floor);
+    }
+
     @Test
     void aSuccessfulTransactionResetsTheFailureEscalation() throws Exception {
         // 3 败 → 1 成 → 3 败(之后保持失败):任一连续段都不到阈值,lock 到期安静

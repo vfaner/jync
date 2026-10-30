@@ -88,6 +88,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     /** P0-2: second connection to CDB$ROOT when mining via a common user; null otherwise. */
     private volatile Connection currentMining;
     private volatile LogMinerSession currentSession;
+    /**
+     * Oldest still-mineable SCN, sampled on a PURGED cycle while the source connection is
+     * still open, for the fatal-stop detail. Null when the cycle was not a purge or the
+     * probe could not read it.
+     */
+    private volatile Long purgeFloorScn;
     /** P0-2: decided once per consumer lifetime; see {@link #decideMiningPlan}. */
     private volatile MiningPlan miningPlan;
     /** P0-2: CDB name (= root service name), resolved with the plan when ROOT. */
@@ -187,6 +193,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     break;
                 }
                 lastFailure.set(null);
+                purgeFloorScn = null;
                 connectedAtNs.set(0L);
                 // F-12 counts APPLY failures only. drain marks this when a target flush
                 // fails; a source read/stream failure mid-mining leaves it false, so it
@@ -224,6 +231,13 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                         applyFailures.incrementAndGet();
                     }
                     lastFailure.compareAndSet(null, e);
+                    // Sample the source's redo floor here, not in fatalStop: the finally
+                    // below closes and nulls the mining connection before the loop classifies
+                    // this failure. Only a PURGED failure uses it, so a transient blip costs
+                    // no extra round trip.
+                    if (CdcFailureClassifier.classify(e) == CdcFailureClassifier.Kind.PURGED) {
+                        purgeFloorScn = probeOldestMineableScn();
+                    }
                     drained = 0;
                     // A cycle can commit transactions and then die (stream reset, network
                     // drop, target hiccup on a later transaction). The successful path below
@@ -266,7 +280,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                         : CdcFailureClassifier.classify(failure);
                 if (kind != CdcFailureClassifier.Kind.TRANSIENT
                         || parseStrikeOut() || applyStrikeOut()) {
-                    fatalStop(projectId, failure, kind);
+                    fatalStop(projectId, failure, kind, lastScn);
                     break;
                 }
                 // R3b mirror: reset the backoff only when the session demonstrably lived.
@@ -718,7 +732,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     }
 
     private void fatalStop(long projectId, Throwable failure,
-                           CdcFailureClassifier.Kind kind) {
+                           CdcFailureClassifier.Kind kind, long anchorScn) {
         String label;
         if (kind != CdcFailureClassifier.Kind.TRANSIENT) {
             label = kind.name();
@@ -731,11 +745,40 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         String detail = label + ": " + (failure == null
                 ? "repeated LogMiner failures"
                 : CdcFailureClassifier.describe(failure));
+        if (kind == CdcFailureClassifier.Kind.PURGED) {
+            // The vendor text names neither the SCN the stream was resuming from nor how
+            // old the source's redo still goes; without both, "missing logfile" cannot be
+            // told apart from "archive retention is one hour too short". The floor was
+            // read on the failing cycle itself (purgeFloorScn) — by the time this runs the
+            // cycle's finally block has already closed and nulled the source connection.
+            detail = CdcFailureClassifier.withPurgeHint(detail, anchorScn, purgeFloorScn);
+        }
         stats.setLastError(detail);
         taskStore.recordCdcFailure(projectId, detail);
         stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
                 ChangeType.ERROR, detail, false, 0L);
         log.error("LogMiner consumer for project {} parking in ERROR — {}", projectId, detail);
+    }
+
+    /**
+     * The source's oldest still-mineable SCN for the PURGED detail, best effort. The
+     * mining connection is the right one to ask (a CDB source mines from CDB$ROOT): the
+     * configured PDB connection cannot read V$ARCHIVED_LOG. Any failure — DM, missing
+     * privilege, connection already closed by the failure — just drops that half of the
+     * hint; it must never replace the real error with a diagnostic error.
+     */
+    private Long probeOldestMineableScn() {
+        Connection conn = currentMining != null ? currentMining : currentSource;
+        if (conn == null) {
+            return null;
+        }
+        try {
+            return OracleLogMinerDialect.INSTANCE.oldestMineableScn(conn);
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Could not read the source's oldest mineable SCN for the PURGED"
+                    + " detail: {}", e.getMessage());
+            return null;
+        }
     }
 
     private static String truncate(String s, int max) {

@@ -55,6 +55,20 @@ public interface MiningDialect {
     String contentsQuery(Connection source) throws SQLException;
 
     /**
+     * The lowest SCN the source can still mine from, or null when this dialect cannot say.
+     *
+     * <p>Diagnostics only — nothing here decides whether to mine. Oracle answers with the
+     * smallest {@code FIRST_CHANGE#} across archived logs and the CURRENT online group; that
+     * number is the boundary below which every SCN is gone for good. DM returns null: it
+     * mines archived files only and treats "none yet" as a normal poll (see
+     * {@link #waitsForArchives()}), so an empty/nonexistent floor there means "not yet",
+     * not "purged".
+     */
+    default Long oldestMineableScn(Connection source) throws SQLException {
+        return null;
+    }
+
+    /**
      * Whether an empty log list is a normal state to wait in rather than a
      * misconfiguration. False on Oracle (an ARCHIVELOG database always has files covering
      * the current SCN, so an empty list means purged logs or ARCHIVELOG off). True on DM,

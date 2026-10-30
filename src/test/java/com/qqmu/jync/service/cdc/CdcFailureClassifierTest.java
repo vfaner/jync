@@ -185,6 +185,39 @@ class CdcFailureClassifierTest {
         assertThat(described.length()).isLessThanOrEqualTo(520); // 500 + 省略标记
     }
 
+    // —— PURGED 详情:把锚点 SCN 与源端最早可用 redo 一并写进错误文本 ——
+    // 用户在现场只看到 "PURGED: ORA-01291: 缺少日志文件",没有任何线索说明缺的是哪个
+    // SCN 区间、源端还剩多旧的日志。这两个数字就是判断"能不能重试"的全部依据。
+
+    @Test
+    void purgedDetailNamesTheResumeAnchorAndTheOldestRedoStillOnTheSource() {
+        String detail = CdcFailureClassifier.withPurgeHint(
+                "PURGED: ORA-01291: missing logfile", 7_095_423L, 7_106_400L);
+
+        assertThat(detail)
+                .startsWith("PURGED: ORA-01291: missing logfile")
+                .contains("resume SCN 7095423")
+                .contains("oldest redo still on the source starts at SCN 7106400")
+                .contains("rebuild the baseline");
+    }
+
+    @Test
+    void purgedHintOmitsTheSourceFloorWhenTheProbeCouldNotReadIt() {
+        String detail = CdcFailureClassifier.withPurgeHint(
+                "PURGED: ORA-01291: missing logfile", 7_095_423L, null);
+
+        assertThat(detail)
+                .contains("resume SCN 7095423")
+                .doesNotContain("oldest redo still on the source")
+                .contains("rebuild the baseline");
+    }
+
+    @Test
+    void purgedHintWithoutAnyScnLeavesTheDetailUntouched() {
+        assertThat(CdcFailureClassifier.withPurgeHint("PURGED: ORA-01291", null, null))
+                .isEqualTo("PURGED: ORA-01291");
+    }
+
     @Test
     void backoffDoublesAndCaps() {
         CdcReconnectBackoff backoff = new CdcReconnectBackoff(1000L, 60_000L);

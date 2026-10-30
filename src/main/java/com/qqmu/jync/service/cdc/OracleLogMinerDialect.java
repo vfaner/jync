@@ -62,6 +62,33 @@ public final class OracleLogMinerDialect implements MiningDialect {
         }
     }
 
+    /**
+     * Floor of what this source can still mine: the smallest FIRST_CHANGE# over the
+     * archived logs (DEST_ID 1, the ones {@link #logfilesCovering} discovers) and the
+     * CURRENT online group, which has not been archived yet. Each source alone is wrong:
+     * archived files miss the group still being written, and the online group alone misses
+     * every older archive. NULL (no rows, or every FIRST_CHANGE# NULL) stays null — the
+     * caller must not read it as SCN 0, which would look like "everything is covered".
+     */
+    private static final String Q_OLDEST_MINEABLE_SCN =
+            "SELECT MIN(FIRST_CHANGE#) FROM ("
+                    + "SELECT FIRST_CHANGE# FROM V$ARCHIVED_LOG"
+                    + " WHERE DEST_ID = 1 AND NAME IS NOT NULL"
+                    + " UNION ALL"
+                    + " SELECT FIRST_CHANGE# FROM V$LOG WHERE STATUS = 'CURRENT')";
+
+    @Override
+    public Long oldestMineableScn(Connection source) throws SQLException {
+        try (Statement st = source.createStatement();
+             ResultSet rs = st.executeQuery(Q_OLDEST_MINEABLE_SCN)) {
+            if (!rs.next()) {
+                return null;
+            }
+            long floor = rs.getLong(1);
+            return rs.wasNull() ? null : floor;
+        }
+    }
+
     @Override
     public List<String> logfilesCovering(Connection source, long startScn) throws SQLException {
         // LogMiner identifies a log file by thread + sequence number, not by path, and

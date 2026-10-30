@@ -350,6 +350,79 @@ class CdcBaselineServiceTest {
         verify(positionStore).markBaselineDone(12L);
     }
 
+    /** Oracle 源:V$DATABASE.CURRENT_SCN 返回锚点,聚合查询返回源端最早可挖的 SCN。 */
+    private Connection oracleWithFloor(long currentScn, Long floor) throws SQLException {
+        Connection oracle = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(oracle.createStatement()).thenReturn(st);
+        ResultSet scnRs = mock(ResultSet.class);
+        when(st.executeQuery("SELECT CURRENT_SCN FROM V$DATABASE")).thenReturn(scnRs);
+        when(scnRs.next()).thenReturn(true);
+        when(scnRs.getLong(1)).thenReturn(currentScn);
+        ResultSet floorRs = mock(ResultSet.class);
+        when(st.executeQuery(contains("MIN(FIRST_CHANGE#)"))).thenReturn(floorRs);
+        when(floorRs.next()).thenReturn(true);
+        when(floorRs.getLong(1)).thenReturn(floor == null ? 0L : floor);
+        when(floorRs.wasNull()).thenReturn(floor == null);
+        return oracle;
+    }
+
+    /**
+     * 全量跑完后源端最早可挖的 SCN 已经越过锚点:锚点之后的归档日志在基线期间被清掉了,
+     * 这一段永远挖不回来。必须在标 baseline_done 之前失败并说清原因,而不是让第一次
+     * START_LOGMNR 抛一句用户看不懂的 ORA-01291。
+     */
+    @Test
+    void logMinerBaselineFailsWhenTheArchiveStoppedCoveringTheAnchorDuringTheLoad()
+            throws SQLException {
+        // oracleWithFloor 自己也在打桩,必须先求值再传进 thenReturn(嵌套打桩会 UnfinishedStubbing)。
+        Connection oracle = oracleWithFloor(77_777L, 80_000L);
+        when(dataSourceManager.getConnection(any())).thenReturn(oracle);
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(new SyncResult());
+
+        assertThatThrownBy(() -> service.runBaseline(logMinerCtx(12L), () -> true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SCN 77777")
+                .hasMessageContaining("SCN 80000")
+                .hasMessageContaining("archive retention");
+
+        verify(positionStore, never()).markBaselineDone(12L);
+    }
+
+    @Test
+    void logMinerBaselineCompletesWhileTheAnchorIsStillCovered() throws SQLException {
+        Connection oracle = oracleWithFloor(77_777L, 70_000L);
+        when(dataSourceManager.getConnection(any())).thenReturn(oracle);
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(new SyncResult());
+
+        service.runBaseline(logMinerCtx(12L), () -> true);
+
+        verify(positionStore).markBaselineDone(12L);
+    }
+
+    /**
+     * 探测查询本身失败(权限不足、在 PDB 连接上查不到 V$ 视图)只是少了一条诊断,不能让一次
+     * 已经成功的全量白跑;第一次挖掘会话反正会再撞上一次。
+     */
+    @Test
+    void logMinerBaselineIgnoresACoverageProbeFailure() throws SQLException {
+        Connection oracle = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(oracle.createStatement()).thenReturn(st);
+        ResultSet scnRs = mock(ResultSet.class);
+        when(st.executeQuery("SELECT CURRENT_SCN FROM V$DATABASE")).thenReturn(scnRs);
+        when(scnRs.next()).thenReturn(true);
+        when(scnRs.getLong(1)).thenReturn(77_777L);
+        when(st.executeQuery(contains("MIN(FIRST_CHANGE#)")))
+                .thenThrow(new SQLException("ORA-00942: table or view does not exist"));
+        when(dataSourceManager.getConnection(any())).thenReturn(oracle);
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(new SyncResult());
+
+        service.runBaseline(logMinerCtx(12L), () -> true);
+
+        verify(positionStore).markBaselineDone(12L);
+    }
+
     // —— v1.9.0 崖山 YStream 锚点 ——
 
     /**
