@@ -20,6 +20,7 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.connection.ConnectionTestService;
+import com.qqmu.jync.service.connection.DatabaseHealthService;
 import com.qqmu.jync.service.connection.DriverLoader;
 import com.qqmu.jync.service.connection.DriverPresence;
 
@@ -28,12 +29,80 @@ import com.qqmu.jync.service.connection.DriverPresence;
 @RequestMapping("/api/databases")
 public class DatabaseApiController {
 
+    /** Upper bound on one health request, so a crafted id list cannot become a scan. */
+    private static final int MAX_HEALTH_IDS = 40;
+
     private final DatabaseConfigService service;
     private final DriverLoader driverLoader;
+    private final DatabaseHealthService healthService;
 
-    public DatabaseApiController(DatabaseConfigService service, DriverLoader driverLoader) {
+    public DatabaseApiController(DatabaseConfigService service, DriverLoader driverLoader,
+                                 DatabaseHealthService healthService) {
         this.service = service;
         this.driverLoader = driverLoader;
+        this.healthService = healthService;
+    }
+
+    /**
+     * Health dots for the rows currently on the connections page.
+     *
+     * <p>Takes ids rather than checking everything: the page shows ten rows at a time, and
+     * opening it must not dial every database the installation knows about. Unknown ids are
+     * skipped — a row deleted in another tab is not an error.
+     */
+    @GetMapping("/health")
+    public ResponseEntity<List<Map<String, Object>>> health(
+            @RequestParam(defaultValue = "") String ids,
+            @RequestParam(defaultValue = "false") boolean refresh) {
+        List<DatabaseConfig> configs = new ArrayList<>();
+        for (Long id : parseIds(ids)) {
+            service.findById(id).ifPresent(configs::add);
+        }
+        List<Map<String, Object>> body = new ArrayList<>();
+        if (configs.isEmpty()) {
+            // Nothing listed, nothing to dial: an empty page must not start a health service
+            // round trip just to be told so.
+            return ResponseEntity.ok(body);
+        }
+        for (DatabaseHealthService.Health health : healthService.check(configs, refresh)) {
+            if (health == null) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", health.id());
+            item.put("ok", health.ok());
+            item.put("elapsedMs", health.elapsedMs());
+            if (health.message() != null) {
+                item.put("message", health.message());
+            }
+            body.add(item);
+        }
+        return ResponseEntity.ok(body);
+    }
+
+    private static List<Long> parseIds(String raw) {
+        List<Long> ids = new ArrayList<>();
+        if (raw == null || raw.isEmpty()) {
+            return ids;
+        }
+        for (String part : raw.split(",")) {
+            if (ids.size() >= MAX_HEALTH_IDS) {
+                break;
+            }
+            String trimmed = part.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            try {
+                Long id = Long.valueOf(trimmed);
+                if (!ids.contains(id)) {
+                    ids.add(id);
+                }
+            } catch (NumberFormatException ignored) {
+                // A stale or hand-edited query string is not worth an error page.
+            }
+        }
+        return ids;
     }
 
     /** Tests a saved connection. */

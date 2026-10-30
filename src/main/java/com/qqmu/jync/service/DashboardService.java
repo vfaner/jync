@@ -1,10 +1,16 @@
 package com.qqmu.jync.service;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.data.domain.Sort;
@@ -33,6 +39,12 @@ public class DashboardService {
 
     /** Row ceiling for the two dashboard lists, so growing data never stretches the page. */
     private static final int OVERVIEW_ROWS = 5;
+
+    /** Hours the trend chart covers, including the one in progress. */
+    static final int SERIES_HOURS = 24;
+
+    private static final DateTimeFormatter HOUR_LABEL =
+            DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT);
 
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
@@ -94,7 +106,7 @@ public class DashboardService {
         stats.setRowsToday(changeLogRepository.sumAffectedRowsSince(dayAgo));
 
         stats.setErrorTaskCount(taskStore.findByStatus(TaskStatus.ERROR).size());
-        stats.setRecentChanges(changeLogRepository.findTop5ByOrderByOccurredAtDesc());
+        stats.setRecentChanges(recentChanges());
 
         // Only the rows actually shown (the first five) need per-project data, so slice first
         // and batch-fetch their tasks and row totals — the old code built every project's row
@@ -127,6 +139,82 @@ public class DashboardService {
         // how many projects exist; the card header links to the paged full list.
         stats.setProjectSummaries(summaries);
         return stats;
+    }
+
+    /**
+     * The few newest entries, for the dashboard feed. Split out of {@link #collect()} so the
+     * feed's 10s poll costs one indexed query instead of recomputing every tile.
+     */
+    @Transactional(readOnly = true)
+    public List<ChangeLog> recentChanges() {
+        return changeLogRepository.findTop10ByOrderByOccurredAtDesc();
+    }
+
+    /**
+     * The trend chart's 24 hourly buckets, oldest first, ending with the hour in progress.
+     *
+     * <p>Quiet hours are zeros rather than gaps: dropping them would let the newest point sit
+     * days back while the axis still claimed "the last 24 hours".
+     */
+    @Transactional(readOnly = true)
+    public ActivitySeries activitySeries() {
+        return activitySeries(Instant.now());
+    }
+
+    ActivitySeries activitySeries(Instant now) {
+        Instant currentHour = now.truncatedTo(ChronoUnit.HOURS);
+        Instant start = currentHour.minus(SERIES_HOURS - 1, ChronoUnit.HOURS);
+
+        Map<Instant, long[]> byHour = new HashMap<>();
+        for (Object[] row : changeLogRepository.hourlySeriesSince(
+                new java.sql.Timestamp(start.toEpochMilli()))) {
+            Instant hour = hourOf(row[0]);
+            if (hour != null) {
+                byHour.put(hour, new long[] {
+                        ((Number) row[1]).longValue(), ((Number) row[2]).longValue()});
+            }
+        }
+
+        ZoneId zone = ZoneId.systemDefault();
+        List<SeriesPoint> points = new ArrayList<>(SERIES_HOURS);
+        long totalChanges = 0;
+        long totalRows = 0;
+        for (int i = 0; i < SERIES_HOURS; i++) {
+            Instant hour = start.plus(i, ChronoUnit.HOURS);
+            long[] bucket = byHour.get(hour);
+            long changes = bucket == null ? 0 : bucket[0];
+            long rows = bucket == null ? 0 : bucket[1];
+            points.add(new SeriesPoint(HOUR_LABEL.format(hour.atZone(zone)), changes, rows));
+            totalChanges += changes;
+            totalRows += rows;
+        }
+        return new ActivitySeries(points, totalChanges, totalRows);
+    }
+
+    /** The hour boundary as an instant, whichever temporal type the driver handed back. */
+    private static Instant hourOf(Object value) {
+        if (value instanceof Instant instant) {
+            return instant;
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toInstant();
+        }
+        if (value instanceof LocalDateTime local) {
+            // The session time zone is UTC (application.yml), so the wall clock is UTC.
+            return local.toInstant(ZoneOffset.UTC);
+        }
+        if (value instanceof OffsetDateTime offset) {
+            return offset.toInstant();
+        }
+        return null;
+    }
+
+    /** One hour of the trend chart, labelled in the server's zone. */
+    public record SeriesPoint(String label, long changes, long rows) {
+    }
+
+    /** The whole trend window plus its totals, for the chart header. */
+    public record ActivitySeries(List<SeriesPoint> points, long totalChanges, long totalRows) {
     }
 
     /** Dashboard figures. */

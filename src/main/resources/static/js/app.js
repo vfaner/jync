@@ -2311,6 +2311,584 @@
     apply();
   }
 
+  var RESOURCE_REFRESH_INTERVAL = 5000;
+
+  /**
+   * 看板 #resource-gauges（资源使用四联环）的 5 秒自动刷新，照抄 bindCdcRefresh 的片段替换
+   * 模式：端点 /dashboard/resource-gauges 只渲染这一行（每次采样几项系统计数，macOS 上多读
+   * 一次 vm_stat），不查库、不跑统计，所以每个打开的标签页 5 秒一发也只是几毫秒的工作量。
+   * 页面隐藏时暂停（visibilitychange，同款），回到前台先补一次；上一轮未返回时跳过本轮。
+   * 环怎么画仍然只有 Thymeleaf 一份，这里不复制任何渲染逻辑。
+   */
+  function bindResourceRefresh() {
+    var row = document.getElementById('resource-gauges');
+    if (!row) return;
+
+    var timer = null;
+    var inFlight = false;
+    // URL 以服务端渲染的 data-refresh-url 为准（含 context path）
+    var refreshUrl = row.getAttribute('data-refresh-url') || '/dashboard/resource-gauges';
+
+    function refresh() {
+      if (inFlight) return;
+      inFlight = true;
+      fetch(refreshUrl, { cache: 'no-store' })
+        .then(function (response) {
+          // 服务端报错时不解析更不清空：保留正在看的数字，下一轮再试
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
+        .then(function (html) {
+          var fresh = new DOMParser().parseFromString(html, 'text/html');
+          var freshRow = fresh.getElementById('resource-gauges');
+          // 片段里没有这一行 = 会话过期被换成登录页，整页重载交给安全层处理
+          if (!freshRow) {
+            window.location.reload();
+            return;
+          }
+          row.innerHTML = freshRow.innerHTML;
+        })
+        .catch(function () {
+          // 网络抖一下不值得清空面板，保留原样，下一轮再试
+        })
+        .then(function () { inFlight = false; });
+    }
+
+    function apply() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      if (!document.hidden) {
+        timer = setInterval(refresh, RESOURCE_REFRESH_INTERVAL);
+      }
+    }
+
+    document.addEventListener('visibilitychange', function () {
+      var wasOn = timer !== null;
+      apply();
+      if (!document.hidden && !wasOn) refresh();
+    });
+
+    apply();
+  }
+
+  var LIVE_REFRESH_INTERVAL = 10000;
+  var SERIES_REFRESH_INTERVAL = 15000;
+  var FEED_ROTATE_INTERVAL = 4000;
+
+  function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  /**
+   * 看板统计卡的 10 秒刷新：只换四块卡的内容，不重跑整页。数字变了的格子跳一下，
+   * 让「这是活的」看得出来；容器里没有 stat-grid 时（登录页、改密弹窗）直接不启动。
+   */
+  function bindLiveStats() {
+    var grid = document.getElementById('stat-grid');
+    if (!grid) return;
+    var url = grid.getAttribute('data-refresh-url') || '/dashboard/live-stats';
+    var timer = null;
+    var inFlight = false;
+
+    function refresh() {
+      if (inFlight) return;
+      inFlight = true;
+      fetch(url, { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
+        .then(function (html) {
+          var fresh = new DOMParser().parseFromString(html, 'text/html');
+          var freshGrid = fresh.getElementById('stat-grid');
+          // 片段里没有统计块 = 会话过期换成登录页，整页重载交给安全层
+          if (!freshGrid) {
+            window.location.reload();
+            return;
+          }
+          var before = grid.querySelectorAll('.stat-n');
+          var after = freshGrid.querySelectorAll('.stat-n');
+          for (var i = 0; i < after.length; i++) {
+            if (before[i] && before[i].textContent !== after[i].textContent) {
+              after[i].className += ' is-bump';
+            }
+          }
+          grid.innerHTML = freshGrid.innerHTML;
+        })
+        .catch(function () {
+          // 网络抖一下保留旧数字，下一轮再试
+        })
+        .then(function () { inFlight = false; });
+    }
+
+    function apply() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      if (!document.hidden) {
+        timer = setInterval(refresh, LIVE_REFRESH_INTERVAL);
+      }
+    }
+
+    document.addEventListener('visibilitychange', function () {
+      var wasOn = timer !== null;
+      apply();
+      if (!document.hidden && !wasOn) refresh();
+    });
+
+    apply();
+  }
+
+  /**
+   * 看板趋势图：取 /dashboard/activity-series 的 24 个钟点，用 SVG 画面积折线。
+   *
+   * <p>不引图表库（内网离线、老内核），配色取 CSS 变量，深浅主题自动跟随；换指标只重画
+   * 已取到的数据，不再打一次接口。窗口宽度变了或主题切换时重画，保证坐标始终按真实像素算，
+   * 文字不会被等比缩放拉变形。
+   */
+  function bindActivityChart() {
+    var card = document.getElementById('activity-chart');
+    if (!card) return;
+    var slot = card.querySelector('.chart-slot');
+    if (!slot) return;
+    var totalEl = card.querySelector('.chart-total');
+    var emptyEl = card.querySelector('.chart-empty');
+    var url = card.getAttribute('data-series-url') || '/dashboard/activity-series';
+    var legend = {
+      changes: card.getAttribute('data-changes-label') || 'Changes',
+      rows: card.getAttribute('data-rows-label') || 'Rows'
+    };
+    var metric = 'changes';
+    var data = null;
+    var tip = null;
+
+    function cssVar(name, fallback) {
+      var value = getComputedStyle(document.documentElement).getPropertyValue(name);
+      return (value && value.replace(/^\s+|\s+$/g, '')) || fallback;
+    }
+
+    function group3(n) {
+      var text = String(n);
+      return text.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    function el(tag, attrs) {
+      var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (var key in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, key)) {
+          node.setAttribute(key, attrs[key]);
+        }
+      }
+      return node;
+    }
+
+    // 轴顶取整齐的刻度：先把最大值除以四格，再向上取到 1/2/5 × 10^n，
+    // 这样四条刻度线是 0/10/20/30/40，而不是 13/25/38 这种除不尽的值。
+    function niceTop(value) {
+      if (value <= 0) return 0;
+      var raw = value / 4;
+      var exp = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+      var steps = [1, 2, 5, 10];
+      for (var i = 0; i < steps.length; i++) {
+        if (steps[i] * exp >= raw) return steps[i] * exp * 4;
+      }
+      return 10 * exp * 4;
+    }
+
+    function clearChart() {
+      var svg = slot.querySelector('svg');
+      if (svg) slot.removeChild(svg);
+    }
+
+    function draw() {
+      if (!data) return;
+      var points = data.points || [];
+      var values = [];
+      var max = 0;
+      for (var i = 0; i < points.length; i++) {
+        var v = Number(points[i][metric]) || 0;
+        values.push(v);
+        if (v > max) max = v;
+      }
+      var total = metric === 'changes'
+        ? Number(data.totalChanges) || 0 : Number(data.totalRows) || 0;
+      if (totalEl) totalEl.textContent = group3(total);
+
+      clearChart();
+      if (!points.length || max <= 0) {
+        if (emptyEl) emptyEl.hidden = false;
+        return;
+      }
+      if (emptyEl) emptyEl.hidden = true;
+
+      var width = slot.clientWidth || 720;
+      var height = slot.clientHeight || 232;
+      var top = niceTop(max);
+      var tickStep = top / 4;
+      // 左边距跟着最宽的那条刻度走：同步行数到十万级时，"100,000" 比默认的 46px 还宽，
+      // 写死就会把开头的数字切掉。
+      var padL = Math.max(46, 14 + group3(top).length * 6.6);
+      var padR = 12;
+      var padT = 12;
+      var padB = 26;
+      var plotW = Math.max(1, width - padL - padR);
+      var plotH = Math.max(1, height - padT - padB);
+      var scale = plotH / top;
+
+      var brand = cssVar('--brand', '#4f46e5');
+      var accent = cssVar('--accent', '#ec4899');
+      var ok = cssVar('--ok', '#10b981');
+      var line = cssVar('--line', '#e2e8f0');
+      var muted = cssVar('--ink-mute', '#94a3b8');
+      var from = metric === 'changes' ? brand : ok;
+      var to = metric === 'changes' ? accent : '#34d399';
+
+      var svg = el('svg', { width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
+      var defs = el('defs', {});
+      var gradient = el('linearGradient', { id: 'jync-chart-fill', x1: '0', y1: '0', x2: '0', y2: '1' });
+      gradient.appendChild(el('stop', { offset: '0%', 'stop-color': from, 'stop-opacity': '0.28' }));
+      gradient.appendChild(el('stop', { offset: '100%', 'stop-color': from, 'stop-opacity': '0' }));
+      defs.appendChild(gradient);
+      svg.appendChild(defs);
+
+      // 横向网格与纵轴刻度
+      for (var g = 0; g <= 4; g++) {
+        var gy = padT + (plotH / 4) * g;
+        svg.appendChild(el('line', {
+          x1: padL, y1: gy, x2: padL + plotW, y2: gy,
+          stroke: line, 'stroke-width': 1, 'stroke-dasharray': g === 4 ? '' : '3 5'
+        }));
+        var label = el('text', {
+          x: padL - 8, y: gy + 4, 'text-anchor': 'end',
+          'font-size': '11', fill: muted
+        });
+        label.textContent = group3(top - tickStep * g);
+        svg.appendChild(label);
+      }
+
+      var step = points.length > 1 ? plotW / (points.length - 1) : plotW;
+      var coords = [];
+      for (var p = 0; p < values.length; p++) {
+        coords.push({
+          x: padL + step * p,
+          y: padT + plotH - values[p] * scale
+        });
+      }
+
+      // 平滑曲线：Catmull-Rom 转三次贝塞尔；点少时退化成直线，不会画飞
+      var d = 'M' + coords[0].x + ' ' + coords[0].y;
+      for (var c = 0; c < coords.length - 1; c++) {
+        var p0 = coords[c - 1] || coords[c];
+        var p1 = coords[c];
+        var p2 = coords[c + 1];
+        var p3 = coords[c + 2] || p2;
+        var c1x = p1.x + (p2.x - p0.x) / 6;
+        var c1y = p1.y + (p2.y - p0.y) / 6;
+        var c2x = p2.x - (p3.x - p1.x) / 6;
+        var c2y = p2.y - (p3.y - p1.y) / 6;
+        d += ' C' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
+      }
+      var baseY = padT + plotH;
+      svg.appendChild(el('path', {
+        d: d + ' L' + coords[coords.length - 1].x + ' ' + baseY
+          + ' L' + coords[0].x + ' ' + baseY + ' Z',
+        fill: 'url(#jync-chart-fill)', stroke: 'none'
+      }));
+      svg.appendChild(el('path', {
+        d: d, fill: 'none', stroke: from, 'stroke-width': 2.4,
+        'stroke-linecap': 'round', 'stroke-linejoin': 'round'
+      }));
+
+      // 横轴时间：每 4 个小时一个刻度 + 最后一个
+      for (var x = 0; x < points.length; x += 4) {
+        addLabel(points[x].label, coords[x].x, 'middle');
+      }
+      if ((points.length - 1) % 4 !== 0) {
+        addLabel(points[points.length - 1].label,
+          coords[coords.length - 1].x, 'end');
+      }
+      function addLabel(text, cx, anchor) {
+        var t = el('text', {
+          x: cx, y: padT + plotH + 17, 'text-anchor': anchor,
+          'font-size': '11', fill: muted
+        });
+        t.textContent = text;
+        svg.appendChild(t);
+      }
+
+      // 悬停：竖向指示线 + 圆点 + 气泡
+      var guide = el('line', {
+        x1: 0, y1: padT, x2: 0, y2: baseY,
+        stroke: from, 'stroke-width': 1, 'stroke-dasharray': '3 4', opacity: 0
+      });
+      var dot = el('circle', {
+        r: 4, fill: from, stroke: cssVar('--bg', '#fff'), 'stroke-width': 2, opacity: 0
+      });
+      svg.appendChild(guide);
+      svg.appendChild(dot);
+
+      var overlay = el('rect', {
+        x: padL, y: padT, width: plotW, height: plotH,
+        fill: 'transparent', style: 'cursor: crosshair'
+      });
+      svg.appendChild(overlay);
+      slot.appendChild(svg);
+
+      function hideTip() {
+        guide.setAttribute('opacity', 0);
+        dot.setAttribute('opacity', 0);
+        if (tip) tip.className = 'chart-tip';
+      }
+
+      overlay.addEventListener('mousemove', function (event) {
+        if (!tip) {
+          tip = document.createElement('div');
+          tip.className = 'chart-tip';
+          slot.appendChild(tip);
+        }
+        var box = slot.getBoundingClientRect();
+        var at = event.clientX - box.left - padL;
+        var index = Math.round(at / step);
+        if (index < 0) index = 0;
+        if (index > coords.length - 1) index = coords.length - 1;
+        var point = coords[index];
+        guide.setAttribute('x1', point.x);
+        guide.setAttribute('x2', point.x);
+        guide.setAttribute('opacity', 1);
+        dot.setAttribute('cx', point.x);
+        dot.setAttribute('cy', point.y);
+        dot.setAttribute('opacity', 1);
+        tip.innerHTML = '<b>' + group3(values[index]) + '</b> ' + legend[metric];
+        tip.appendChild(document.createTextNode(' · ' + points[index].label));
+        tip.style.left = point.x + 'px';
+        tip.style.top = (point.y - 12) + 'px';
+        tip.className = 'chart-tip is-on';
+      });
+      overlay.addEventListener('mouseleave', hideTip);
+    }
+
+    var segButtons = card.querySelectorAll('.seg-btn');
+    for (var b = 0; b < segButtons.length; b++) {
+      (function (button) {
+        button.addEventListener('click', function () {
+          var next = button.getAttribute('data-series');
+          if (!next || next === metric) return;
+          metric = next;
+          for (var i = 0; i < segButtons.length; i++) {
+            segButtons[i].classList.toggle('is-active', segButtons[i] === button);
+          }
+          draw();
+        });
+      })(segButtons[b]);
+    }
+
+    var inFlight = false;
+    function load() {
+      if (inFlight) return;
+      inFlight = true;
+      fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        })
+        .then(function (json) {
+          data = json;
+          draw();
+        })
+        .catch(function () {
+          // 图表留上一帧：一次网络抖动不该把看板清空
+        })
+        .then(function () { inFlight = false; });
+    }
+
+    var resizeTimer = null;
+    window.addEventListener('resize', function () {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(draw, 150);
+    });
+    if (window.MutationObserver) {
+      new MutationObserver(draw).observe(document.documentElement, {
+        attributes: true, attributeFilter: ['data-theme']
+      });
+    }
+
+    var timer = null;
+    function apply() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      if (!document.hidden) {
+        timer = setInterval(load, SERIES_REFRESH_INTERVAL);
+      }
+    }
+    document.addEventListener('visibilitychange', function () {
+      var wasOn = timer !== null;
+      apply();
+      if (!document.hidden && !wasOn) load();
+    });
+
+    apply();
+    load();
+  }
+
+  /**
+   * 看板实时活动流：10 秒换一次条目，新出现的条目滑入；条目超出视口时每 4 秒自己往上走
+   * 一行，悬停/聚焦即停，滚到底回到顶部。尊重系统「减少动态效果」偏好。
+   */
+  function bindActivityFeed() {
+    var card = document.getElementById('activity-feed');
+    if (!card) return;
+    var body = card.querySelector('.feed-body');
+    if (!body) return;
+    var url = card.getAttribute('data-refresh-url') || '/dashboard/activity-feed';
+    var inFlight = false;
+    var paused = false;
+    // 轮播一次约半秒；与 10 秒的片段刷新互斥，避免刷新在行移到一半时把整段换掉
+    var rotating = false;
+    var ROTATE_MS = 520;
+
+    function visibleIds() {
+      var ids = {};
+      var nodes = body.querySelectorAll('.feed-live li[data-log-id]');
+      for (var i = 0; i < nodes.length; i++) {
+        ids[nodes[i].getAttribute('data-log-id')] = 1;
+      }
+      return ids;
+    }
+
+    /** 片段里的条目与当前列表完全一致（没有新条目、也没有旧条目掉出前 N 条）。 */
+    function nothingNew(known, freshIds) {
+      var seen = 0;
+      for (var i = 0; i < freshIds.length; i++) {
+        if (!known[freshIds[i]]) return false;
+        seen++;
+      }
+      var have = 0;
+      for (var key in known) {
+        if (Object.prototype.hasOwnProperty.call(known, key)) have++;
+      }
+      return have === seen;
+    }
+
+    function refresh() {
+      if (inFlight || rotating) return;
+      inFlight = true;
+      var known = visibleIds();
+      fetch(url, { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
+        .then(function (html) {
+          // 请求在途时轮播才开始：整段 innerHTML 会把带 transform 的 ul 一起换掉，
+          // 行会当场跳回顶部。这一轮的结果直接丢，10 秒后再取。
+          if (rotating) return;
+          var fresh = new DOMParser().parseFromString(html, 'text/html');
+          var freshBody = fresh.getElementById('activity-feed-list');
+          // 片段里没有列表 = 会话过期换成登录页
+          if (!freshBody) {
+            window.location.reload();
+            return;
+          }
+          var nodes = freshBody.querySelectorAll('.feed-live li[data-log-id]');
+          var freshIds = [];
+          for (var i = 0; i < nodes.length; i++) {
+            freshIds.push(nodes[i].getAttribute('data-log-id'));
+          }
+          // 内容没变就不换：轮播已经把顺序转开了，整段 innerHTML 会把它打回服务端顺序，
+          // 每 10 秒跳一次。只有真来了新条目（或有条目掉出前 N 条）才值得换。
+          if (nothingNew(known, freshIds)) return;
+          for (i = 0; i < nodes.length; i++) {
+            if (!known[nodes[i].getAttribute('data-log-id')]) {
+              nodes[i].className += ' is-new';
+            }
+          }
+          body.innerHTML = freshBody.innerHTML;
+        })
+        .catch(function () {
+          // 保留当前列表，下一轮再试
+        })
+        .then(function () { inFlight = false; });
+    }
+
+    /**
+     * 跑马灯：首行淡出、整列上移一行，过渡结束后把首行挪到列表末尾并瞬时归位。
+     *
+     * <p>不用 scrollTop 累加再滚回顶部：那一下会让整列倒退一屏，读起来像刷新失败。
+     * 也不用 CSS 无限动画：列表每 10 秒会被整段替换，动画会跟着重来一次。
+     */
+    function tick() {
+      if (paused || document.hidden || prefersReducedMotion() || rotating) return;
+      var list = body.querySelector('.feed-live');
+      // 一条活动谈不上轮播；两条起就一直转，条目全都装得下时也只是换个顺序
+      if (!list || list.children.length < 2) return;
+      var first = list.children[0];
+      var step = first.offsetHeight;
+      if (!step) return;
+
+      rotating = true;
+      // 底部垫一份首行的副本：露在窗口外的部分不足一行时，整列上移会在最后一行
+      // 下面空出白底，副本正好补上；移完连副本一起撤，列表行数不变。
+      var tail = first.cloneNode(true);
+      tail.setAttribute('aria-hidden', 'true');
+      tail.removeAttribute('data-log-id');
+      list.appendChild(tail);
+      list.style.transition = 'transform ' + ROTATE_MS + 'ms cubic-bezier(.4, 0, .2, 1)';
+      list.style.transform = 'translateY(-' + step + 'px)';
+      first.classList.add('is-leaving');
+
+      var settled = false;
+      function settle() {
+        if (settled) return;
+        settled = true;
+        list.removeEventListener('transitionend', onEnd);
+        rotating = false;
+        // 片段刷新已经把列表换掉了：这一行连同旧列表一起作废，别再往游离节点上挪
+        if (!list.isConnected) return;
+        list.style.transition = 'none';
+        list.style.transform = 'none';
+        if (tail.parentNode === list) list.removeChild(tail);
+        // 挪到末尾后取消淡出：借着 li 上的过渡淡回一行的位置，循环接着走
+        list.appendChild(first);
+        first.classList.remove('is-leaving');
+      }
+      function onEnd(event) {
+        if (event.target === list && event.propertyName === 'transform') settle();
+      }
+      list.addEventListener('transitionend', onEnd);
+      // 兜底：标签页切到后台时过渡结束事件可能不到，rotating 不能就这么卡住
+      setTimeout(settle, ROTATE_MS + 150);
+    }
+
+    card.addEventListener('mouseenter', function () { paused = true; });
+    card.addEventListener('mouseleave', function () { paused = false; });
+    card.addEventListener('focusin', function () { paused = true; });
+    card.addEventListener('focusout', function () { paused = false; });
+
+    var feedTimer = null;
+    function apply() {
+      if (feedTimer) {
+        clearInterval(feedTimer);
+        feedTimer = null;
+      }
+      if (!document.hidden) {
+        feedTimer = setInterval(refresh, LIVE_REFRESH_INTERVAL);
+      }
+    }
+    document.addEventListener('visibilitychange', function () {
+      var wasOn = feedTimer !== null;
+      apply();
+      if (!document.hidden && !wasOn) refresh();
+    });
+
+    apply();
+    setInterval(tick, FEED_ROTATE_INTERVAL);
+  }
+
   /**
    * 通用弹窗：[data-open-modal=id] 打开、[data-close-modal=id] 关闭、Esc 关当前开着的。
    * 赞赏弹窗的触发属性名不同、还带收款码切换，事件绑定留在 bindDonate 里，
@@ -2400,6 +2978,105 @@
     }
   }
 
+  /* ─── 连接健康点（数据库连接页，仅管理员） ──────────────────
+     页面渲染完后每个分组各问一次，不进轮询。服务端缓存 60 秒，所以来回翻页、
+     多人同时打开都不会叠加探测；「检测全部」带 refresh=true 强制重测。
+     探测失败只在单元格里显示，不影响页面上任何其他操作。 */
+  function bindDatabaseHealth() {
+    var cfg = document.getElementById('db-health');
+    if (!cfg) return;
+    var url = cfg.getAttribute('data-health-url');
+    if (!url) return;
+    var labels = {
+      ok: cfg.getAttribute('data-ok') || 'OK',
+      fail: cfg.getAttribute('data-fail') || 'Unreachable',
+      checking: cfg.getAttribute('data-checking') || 'Checking',
+      timeout: cfg.getAttribute('data-timeout') || 'Timed out'
+    };
+
+    // 一个分组 = 一张连接卡片；按钮属于哪张卡就只测哪张卡的可见行。
+    var groups = [];
+    document.querySelectorAll('[data-health-id]').forEach(function (cell) {
+      var card = cell.closest('.card');
+      if (!card) return;
+      if (groups.indexOf(card) < 0) groups.push(card);
+    });
+    if (!groups.length) return;
+
+    function paint(cell, state, text, latency) {
+      var box = cell.querySelector('.health');
+      if (!box) return;
+      box.className = 'health is-' + state;
+      var label = box.querySelector('.health-text');
+      if (label) label.textContent = text;
+      var extra = box.querySelector('.health-latency');
+      if (latency) {
+        if (!extra) {
+          extra = document.createElement('span');
+          extra.className = 'health-latency';
+          box.appendChild(extra);
+        }
+        extra.textContent = latency;
+      } else if (extra) {
+        extra.parentNode.removeChild(extra);
+      }
+    }
+
+    function load(card, force) {
+      var cells = card.querySelectorAll('[data-health-id]');
+      if (!cells.length) return;
+      // 连点「检测全部」不排队：同一张卡同时只允许一次在途请求。
+      if (card.getAttribute('data-health-busy') === '1') return;
+      card.setAttribute('data-health-busy', '1');
+      var ids = [];
+      for (var i = 0; i < cells.length; i++) {
+        var id = cells[i].getAttribute('data-health-id');
+        if (ids.indexOf(id) < 0) ids.push(id);
+      }
+      cells.forEach(function (cell) {
+        paint(cell, 'checking', labels.checking, null);
+        cell.removeAttribute('title');
+      });
+
+      var query = url + '?ids=' + encodeURIComponent(ids.join(','));
+      if (force) query += '&refresh=true';
+      fetch(query, { headers: { 'Accept': 'application/json' } })
+        .then(function (response) {
+          if (!response.ok) throw new Error('health ' + response.status);
+          return response.json();
+        })
+        .then(function (list) {
+          var byId = {};
+          (list || []).forEach(function (item) { byId[String(item.id)] = item; });
+          cells.forEach(function (cell) {
+            var item = byId[cell.getAttribute('data-health-id')];
+            if (!item) return;
+            if (item.ok) {
+              paint(cell, 'ok', labels.ok, item.elapsedMs >= 0 ? item.elapsedMs + ' ms' : null);
+            } else {
+              paint(cell, 'fail', labels.fail, null);
+              var reason = item.message === 'error.db.health.timeout'
+                ? labels.timeout : (item.message || '');
+              if (reason) cell.setAttribute('title', reason);
+            }
+          });
+          card.removeAttribute('data-health-busy');
+        })
+        .catch(function () {
+          // 网络或会话问题：保持「检测中」比谎报异常诚实，也不影响行上的其他按钮。
+          card.removeAttribute('data-health-busy');
+        });
+    }
+
+    groups.forEach(function (card) {
+      load(card, false);
+      var button = card.querySelector('[data-health-refresh]');
+      if (button) {
+        button.addEventListener('click', function () { load(card, true); });
+      }
+    });
+  }
+
   /* ─── 分页条 ──────────────────────────────────────────────
      页码和省略号都是服务端渲染好的链接，这里只接两个拼 URL 的控件：
      每页条数下拉（改条数回到第 1 页）和跳页输入（回车或失焦跳转，越界夹住）。 */
@@ -2468,6 +3145,11 @@
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindCdcRefresh();
+    bindResourceRefresh();
+    bindLiveStats();
+    bindActivityChart();
+    bindActivityFeed();
+    bindDatabaseHealth();
     bindDonate();
     bindGenericModals();
     bindNavUpdateBadge();

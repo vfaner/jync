@@ -13,6 +13,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.connection.DatabaseHealthService;
 import com.qqmu.jync.service.connection.DriverLoader;
 
 /**
@@ -33,6 +34,10 @@ class DatabaseTypeDefaultsApiTest {
 
     @MockBean
     private DriverLoader driverLoader;
+
+    /** The slice builds every constructor argument of the controller, health included. */
+    @MockBean
+    private DatabaseHealthService healthService;
 
     @Test
     @DisplayName("达梦驱动已内置:bundled=true 且不要求 custom")

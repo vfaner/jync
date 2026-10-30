@@ -35,6 +35,12 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class DataSourceManager {
 
+    /** Connect timeout for ordinary pools; also the transient one the test button uses. */
+    private static final long DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
+
+    /** Health dots give up quickly: the page is watching a dozen databases at once. */
+    private static final long PROBE_CONNECT_TIMEOUT_MS = 3_000;
+
     private final DriverLoader driverLoader;
     private final CryptoUtil cryptoUtil;
     private final SyncProperties properties;
@@ -102,7 +108,25 @@ public class DataSourceManager {
         return createDataSource(config, 2);
     }
 
+    /**
+     * A one-connection pool for the connections page's health dot.
+     *
+     * <p>Deliberately smaller and shorter than any other pool: the health check must never be
+     * the reason a source database has one more idle session, and an unreachable host has to
+     * give up in seconds instead of the test button's fifteen. Never cached; the caller closes
+     * it with try-with-resources.
+     */
+    public HikariDataSource createProbeDataSource(DatabaseConfig config) {
+        Objects.requireNonNull(config, "config");
+        return createDataSource(config, 1, PROBE_CONNECT_TIMEOUT_MS);
+    }
+
     private HikariDataSource createDataSource(DatabaseConfig config, int poolSize) {
+        return createDataSource(config, poolSize, DEFAULT_CONNECT_TIMEOUT_MS);
+    }
+
+    private HikariDataSource createDataSource(DatabaseConfig config, int poolSize,
+                                              long connectTimeoutMs) {
         String driverClass = resolveDriverClass(config);
         String jdbcUrl = buildJdbcUrl(config);
 
@@ -129,8 +153,8 @@ public class DataSourceManager {
             hikari.setPoolName("jync-" + (config.getName() == null ? "adhoc" : config.getName()));
             hikari.setMaximumPoolSize(poolSize);
             hikari.setMinimumIdle(1);
-            hikari.setConnectionTimeout(15_000);
-            hikari.setValidationTimeout(5_000);
+            hikari.setConnectionTimeout(connectTimeoutMs);
+            hikari.setValidationTimeout(Math.min(5_000, connectTimeoutMs));
             hikari.setIdleTimeout(300_000);
             hikari.setMaxLifetime(1_800_000);
             // Fail fast on a bad connection instead of blocking the sync job for minutes.

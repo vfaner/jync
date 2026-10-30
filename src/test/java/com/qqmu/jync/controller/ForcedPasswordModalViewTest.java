@@ -22,6 +22,7 @@ import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.DashboardService;
 import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
+import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 
 /**
@@ -33,7 +34,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
  * the public default password cannot be used to read project statistics either.
  */
 @WebMvcTest(DashboardController.class)
-@Import({GlobalModelAdvice.class, ChangeLogDetailsLocalizer.class})
+@Import({GlobalModelAdvice.class, ChangeLogDetailsLocalizer.class, SystemMetrics.class})
 @TestPropertySource(properties = "app.github-url=https://example.com/repo")
 class ForcedPasswordModalViewTest {
 

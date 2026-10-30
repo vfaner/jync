@@ -19,8 +19,29 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
 
     Page<ChangeLog> findAllByOrderByOccurredAtDesc(Pageable pageable);
 
-    /** The dashboard is a glance, not a report: five rows, the full list lives at /change-logs. */
-    List<ChangeLog> findTop5ByOrderByOccurredAtDesc();
+    /** The dashboard feed is a glance, not a report: ten rows; the full list lives at /change-logs. */
+    List<ChangeLog> findTop10ByOrderByOccurredAtDesc();
+
+    /**
+     * Per-hour totals for the dashboard trend chart, grouped in the database.
+     *
+     * <p>Bucketing in Java would mean loading a day of traffic into memory first, on the very
+     * metadata store the page exists to watch. The store is always H2, whose
+     * {@code date_trunc('hour', …)} cuts the bucket; the session time zone is pinned to UTC in
+     * application.yml, so the returned timestamp is the UTC hour boundary. Hours with no traffic
+     * are absent — the caller fills them, because a chart must not compress a quiet night.
+     *
+     * <p>Native rather than JPQL: Hibernate cannot resolve the return type of a
+     * {@code function(...)} call in the select list, and the timestamp parameter is bound as
+     * {@link java.sql.Timestamp} so no driver-side {@code Instant} conversion is involved.
+     */
+    @Query(value = "select date_trunc('hour', occurred_at), count(*), "
+            + "coalesce(sum(affected_rows), 0) "
+            + "from change_log where occurred_at >= :since "
+            + "group by date_trunc('hour', occurred_at) "
+            + "order by date_trunc('hour', occurred_at)",
+            nativeQuery = true)
+    List<Object[]> hourlySeriesSince(@Param("since") java.sql.Timestamp since);
 
     long countByProjectId(Long projectId);
 

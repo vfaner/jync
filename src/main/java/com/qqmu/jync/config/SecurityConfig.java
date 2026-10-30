@@ -78,6 +78,10 @@ public class SecurityConfig {
             "/external-auth",
             "/oa/settings",
             "/api/databases/discover-drivers",
+            // Health dots open one connection per listed database. Read-only in the HTTP
+            // sense, but it dials production sources, exactly like the probes below; the
+            // column is admin-only in the page for the same reason.
+            "/api/databases/health",
             // The audit trail is about what admins did; a viewer has no use for it, and
             // showing one would advertise that their own actions are never in it.
             "/audits",

@@ -31,6 +31,14 @@
                             <dd><span class="chip" th:text="${javaVersion}">17</span></dd>
                         </div>
                         <div class="kv">
+                            <dt th:text="#{settings.os}">OS</dt>
+                            <dd><span class="chip" th:text="${osName}">Linux</span></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{settings.startedAt}">Started</dt>
+                            <dd><span class="chip" th:text="${startedAt}">2026-10-30 09:00:00</span></dd>
+                        </div>
+                        <div class="kv">
                             <dt th:text="#{settings.scheduledProjects}">Scheduled</dt>
                             <dd>
                                 <span class="muted" th:if="${#lists.isEmpty(scheduledProjectIds)}"

@@ -1020,6 +1020,27 @@ table.tbl td .btn-row > * { margin: 0 0 0 6px; }
 table.tbl td .btn-row > *:first-child { margin-left: 0; }
 table.tbl a.truncate { display: block; }
 .wrap-detail { max-width: 420px; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+
+/* ─── 同步任务列表：手机布局 ─────────────────────────────
+   五列塞进 390px 时，「详情」的 chip 会被压成一字一行 —— .chip 的
+   word-break: break-all 允许在任意字符处断行，自动布局于是把这一列
+   收到最窄，整行跟着长到一屏高，「上次同步」也被拉成悬空的一行。
+   窄屏不再排表：隐藏表头，一行一个任务，名称独占首行，状态/上次同步/
+   详情并排在次行，操作靠右；摘要按字段换行，不在字段中间断开。 */
+@media (max-width: 640px) {
+  table.tbl.tbl-projects thead { display: none; }
+  table.tbl.tbl-projects, table.tbl.tbl-projects tbody { display: block; width: 100%; }
+  /* 元素选择器 + 两个类，才能压过 table.tbl td 的内边距与边框 */
+  table.tbl.tbl-projects tr {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 7px 12px; padding: 12px 14px; border-bottom: 1px solid var(--line);
+  }
+  table.tbl.tbl-projects tr:last-child { border-bottom: none; }
+  table.tbl.tbl-projects td { display: block; padding: 0; border-bottom: none; }
+  table.tbl.tbl-projects td:first-child { flex: 1 1 100%; }
+  table.tbl.tbl-projects td:last-child { margin-left: auto; }
+  .tbl-projects td .chip { word-break: normal; }
+}
 .spin {
   display: inline-block; width: 13px; height: 13px;
   border: 2px solid currentColor; border-right-color: transparent;
@@ -1520,4 +1541,201 @@ table.tbl a.truncate { display: block; }
 .log-panel mark {
   background: #ffd60a; color: #111;
   border-radius: 2px; padding: 0 1px;
+}
+
+/* ==========================================================================
+   看板 · 资源使用四联环（不套卡片，直接跟在统计块下面）
+   纯 CSS 圆环：conic-gradient 画进度，内圈盖一块背景色当镂空，
+   不引 SVG / canvas / 脚本 —— 老内核（360/奇安信常见的旧 Chromium 壳）
+   也认 conic-gradient。--pct 由模板按采样值内联给出，缺省 0。
+   颜色分档：<75 正常、<90 偏高、≥90 危险；取不到值（tone-none）走灰色轨道。
+   列宽与 gap 跟 .stat-grid 一致，四环正好落在四块统计卡下面。
+   ========================================================================== */
+.gauges {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
+}
+/* 中等宽度下四块统计卡会自动折成三列，第四块孤零零挂在下一行；
+   四环跟着折成三列虽然对齐，但同样难看。两行一起改成两列，保持 2×2 对齐。 */
+@media (max-width: 1000px) {
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.gauge {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  text-align: center;
+}
+.gauge-ring {
+  --gauge: var(--ok);
+  width: 92px; height: 92px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: conic-gradient(var(--gauge) calc(var(--pct, 0) * 1%), var(--bg-tint) 0);
+  transition: background .2s;
+}
+.gauge-ring > span {
+  width: 72px; height: 72px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--bg);
+  font-size: 19px; font-weight: 700; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+.gauge-ring.tone-warn   { --gauge: var(--warn); }
+.gauge-ring.tone-danger { --gauge: var(--danger); }
+.gauge-ring.tone-none   { --gauge: var(--line); }
+.gauge-ring.tone-none > span { color: var(--ink-mute); font-weight: 600; }
+.gauge-label { font-size: 13px; font-weight: 600; color: var(--ink); }
+.gauge-sub   { font-size: 12px; color: var(--ink-mute); font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   看板 · 实时布局
+   顶部让位给一块「实时」徽标；左列是趋势图 + 任务概览，右列是整列高的活动流。
+   没有第三方图表库：折线由 app.js 用 SVG 画，配色全部取 CSS 变量，深浅主题同一份。
+   ========================================================================== */
+.dash-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 18px;
+}
+.live-pill {
+  display: inline-flex; align-items: center; padding: 6px 13px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
+}
+.live-pill > * + * { margin-left: 8px; }
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--ok);
+  animation: live-pulse 2s infinite;
+}
+.live-sep { color: var(--ink-mute); }
+.live-hint { color: var(--ink-mute); font-weight: 500; }
+@keyframes live-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--fb-ok-28); }
+  70%  { box-shadow: 0 0 0 7px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+.dash-grid {
+  display: grid; grid-template-columns: 1.62fr 1fr; gap: 18px;
+  align-items: stretch; margin-top: 18px;
+}
+.dash-main { display: flex; flex-direction: column; min-width: 0; }
+.dash-main > .card + .card { margin-top: 18px; }
+
+/* 趋势图 */
+.chart-card { display: flex; flex-direction: column; }
+.chart-body { display: flex; flex-direction: column; }
+.chart-meta { display: flex; align-items: baseline; }
+.chart-meta > * + * { margin-left: 10px; }
+.chart-total {
+  font-size: 26px; font-weight: 800; letter-spacing: -.8px;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, var(--brand), var(--accent));
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.chart-window { font-size: 12.5px; color: var(--ink-mute); }
+.chart-slot { position: relative; height: 232px; margin-top: 10px; }
+.chart-slot svg { display: block; width: 100%; height: 100%; }
+.chart-empty {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; inset: 0;
+  display: grid; place-items: center; font-size: 13px; color: var(--ink-mute);
+}
+.chart-tip {
+  position: absolute; z-index: 3; pointer-events: none;
+  padding: 7px 10px; border-radius: 9px; border: 1px solid var(--line);
+  background: var(--bg); box-shadow: var(--shadow);
+  font-size: 12px; color: var(--ink); white-space: nowrap;
+  transform: translate(-50%, -100%); opacity: 0; transition: opacity .12s;
+}
+.chart-tip.is-on { opacity: 1; }
+.chart-tip b { font-variant-numeric: tabular-nums; }
+
+/* 指标切换 */
+.seg {
+  display: inline-flex; padding: 3px; border-radius: 10px;
+  background: var(--bg-tint); border: 1px solid var(--line);
+}
+.seg-btn {
+  border: 0; background: transparent; cursor: pointer;
+  padding: 5px 12px; border-radius: 8px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
+}
+.seg-btn.is-active { background: var(--bg); color: var(--brand); box-shadow: var(--shadow-sm); }
+
+/* 实时活动流：固定高度，超出的条目靠轮播循环；上下边缘做淡出，切边不显得生硬。
+   align-self:start 是关键 —— 默认按整行拉伸时，卡片高度由最高的一列决定，而活动流
+   条目越多卡片越高，列表于是永远正好铺满自己撑出来的高度，底下没有任何一行是
+   「看不见」的，轮播就永远不启动。改成按内容收缩后，可视高度由 .feed-body 的
+   max-height 定，多出来的条目自然被裁掉，轮播接手。 */
+.feed-card { display: flex; flex-direction: column; height: auto; align-self: start; }
+.feed-body {
+  flex: 1; min-height: 0; max-height: 520px; overflow: hidden;
+  scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 18px), transparent 100%);
+}
+.feed-body .empty { padding: 40px 20px; }
+/* 跑马灯：整列上移一行由脚本写 transform，时长与 app.js 的 ROTATE_MS 对齐；
+   离场的那一行同时淡出，移完后脚本把它挪到末尾、瞬时归位，于是接着循环。
+   淡出只做 opacity —— 行高变了的话，上移的距离和实际错位会对不上。 */
+.feed-live { transition: transform .52s cubic-bezier(.4, 0, .2, 1); }
+.feed-live li { transition: opacity .45s ease; }
+.feed-live li.is-leaving { opacity: 0; }
+.feed-live li.is-new { animation: feed-in .55s ease both; }
+@keyframes feed-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 数字变化时轻轻一跳，提醒「这里是活的」 */
+.stat-n.is-bump { animation: stat-bump .7s ease; }
+@keyframes stat-bump {
+  0%   { transform: none; }
+  35%  { transform: scale(1.12); }
+  100% { transform: none; }
+}
+
+@media (max-width: 1100px) {
+  .dash-grid { grid-template-columns: 1fr; }
+  .feed-card { height: auto; max-height: 560px; }
+  .feed-body { max-height: 460px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot, .feed-live li.is-new, .stat-n.is-bump { animation: none; }
+  .feed-body { scroll-behavior: auto; }
+  .feed-live, .feed-live li { transition: none; }
+}
+
+/* ==========================================================================
+   连接健康点：名称旁一枚小圆点，检测中轻呼吸，结果出来才定色。
+   只用 CSS 变量取色，深色主题自动跟随。
+   ========================================================================== */
+.health-cell { white-space: nowrap; }
+.health {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
+}
+.health-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--ink-mute); box-shadow: 0 0 0 3px transparent;
+}
+.health.is-ok { color: var(--ok); }
+.health.is-ok .health-dot {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, .18);
+}
+.health.is-fail { color: var(--danger); }
+.health.is-fail .health-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, .18);
+}
+.health.is-checking { color: var(--ink-mute); }
+.health.is-checking .health-dot { animation: health-pulse 1.15s ease-in-out infinite; }
+@keyframes health-pulse {
+  0%, 100% { opacity: .35; transform: scale(.82); }
+  50%      { opacity: 1; transform: scale(1); }
+}
+.health-latency { color: var(--ink-mute); font-weight: 500; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  .health.is-checking .health-dot { animation: none; opacity: 1; }
 }

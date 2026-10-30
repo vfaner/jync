@@ -361,6 +361,19 @@ class SecurityConfigTest {
     }
 
     /**
+     * The health dots open one connection per listed database. Same rule as the other
+     * endpoints that dial a configured database: the page's column is admin-only, so the
+     * endpoint behind it must be too.
+     */
+    @Test
+    void theDatabaseHealthEndpointIsAdminOnly() throws Exception {
+        assertThat(statusOf(get("/api/databases/health?ids=1").with(asViewer())))
+                .isEqualTo(403);
+        assertThat(statusOf(get("/api/databases/health?ids=1").with(asAdmin())))
+                .isEqualTo(200);
+    }
+
+    /**
      * Table preview returns row data straight out of the configured databases, and the two
      * lookup endpoints expose an arbitrary table's schema. They exist to support the
      * admin-only detail-page controls, so a viewer must not be able to call them directly.

@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.connection.ConnectionTestService;
+import com.qqmu.jync.service.connection.DatabaseHealthService;
 import com.qqmu.jync.service.connection.DriverLoader;
 
 /**
@@ -39,6 +40,10 @@ class DatabaseTransientTestApiTest {
 
     @MockBean
     private DriverLoader driverLoader;
+
+    /** The slice builds every constructor argument of the controller, health included. */
+    @MockBean
+    private DatabaseHealthService healthService;
 
     private void stubTransientTest() {
         ConnectionTestService.TestResult result = mock(ConnectionTestService.TestResult.class);

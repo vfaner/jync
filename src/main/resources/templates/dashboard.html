@@ -7,10 +7,13 @@
        这里就什么都不渲染，弹窗后面不会露出项目统计。 */-->
 <div th:remove="tag" th:if="${stats != null}">
 
-    <div class="page-head">
-        <div>
-            <h1 th:text="#{dashboard.title}">Dashboard</h1>
-            <p class="sub" th:text="#{app.subtitle}">Real-time database synchronization</p>
+    <!--/* 顶部不再放大标题：一块实时徽标交代刷新节奏，右侧仍是原来的操作按钮。 */-->
+    <div class="dash-bar">
+        <div class="live-pill">
+            <span class="live-dot"></span>
+            <span th:text="#{dashboard.live}">Live</span>
+            <span class="live-sep">·</span>
+            <span class="live-hint" th:text="#{dashboard.liveHint(10)}">Every 10s</span>
         </div>
         <div class="page-actions">
             <a class="btn btn-ghost btn-sm" th:href="@{/dashboard}">
@@ -23,7 +26,8 @@
     </div>
 
     <!-- 指标卡 -->
-    <div class="stat-grid">
+    <div class="stat-grid" id="stat-grid" th:fragment="statGrid"
+         th:attr="data-refresh-url=@{/dashboard/live-stats}">
         <div class="stat">
             <span class="stat-ico"><svg class="ico"><use href="#diagram-3-fill"/></svg></span>
             <div class="stat-body">
@@ -61,6 +65,46 @@
         </div>
     </div>
 
+    <!--/* 资源使用四联环：跟着统计块走，不套卡片。整页渲染时取一次快照，之后由 app.js
+           bindResourceRefresh 每 5 秒取 /dashboard/resource-gauges —— 该端点只渲染这一行，
+           不查库、不跑统计。一次采样只是几个系统调用（macOS 上多读一次 vm_stat）。
+           每格各自兜底：Windows 没有负载、老 JVM 没有 com.sun 计数器、磁盘统计失败，
+           都只让那一格显示「—」。默认口令账号看不到统计块，也就不会轮询。 */-->
+    <div class="gauges" id="resource-gauges" th:fragment="resourceGauges"
+         th:attr="data-refresh-url=@{/dashboard/resource-gauges}">
+        <div class="gauge">
+            <div class="gauge-ring" th:classappend="'tone-' + ${metrics.loadTone()}"
+                 th:style="'--pct:' + ${metrics.loadPercent() < 0 ? 0 : metrics.loadPercent()}">
+                <span th:text="${metrics.loadText()}">—</span>
+            </div>
+            <div class="gauge-label" th:text="#{dashboard.load}">Load</div>
+            <div class="gauge-sub" th:text="#{dashboard.loadCores(${metrics.cores()})}">2</div>
+        </div>
+        <div class="gauge">
+            <div class="gauge-ring" th:classappend="'tone-' + ${metrics.cpuTone()}"
+                 th:style="'--pct:' + ${metrics.cpuPercent() < 0 ? 0 : metrics.cpuPercent()}">
+                <span th:text="${metrics.cpuText()}">—</span>
+            </div>
+            <div class="gauge-label" th:text="#{dashboard.cpu}">CPU</div>
+        </div>
+        <div class="gauge">
+            <div class="gauge-ring" th:classappend="'tone-' + ${metrics.memoryTone()}"
+                 th:style="'--pct:' + ${metrics.memoryPercent() < 0 ? 0 : metrics.memoryPercent()}">
+                <span th:text="${metrics.memoryPercentText()}">—</span>
+            </div>
+            <div class="gauge-label" th:text="#{dashboard.memory}">Memory</div>
+            <div class="gauge-sub" th:text="${metrics.memoryText()}">—</div>
+        </div>
+        <div class="gauge">
+            <div class="gauge-ring" th:classappend="'tone-' + ${metrics.diskTone()}"
+                 th:style="'--pct:' + ${metrics.diskPercent() < 0 ? 0 : metrics.diskPercent()}">
+                <span th:text="${metrics.diskPercentText()}">—</span>
+            </div>
+            <div class="gauge-label" th:text="#{dashboard.disk}">Disk</div>
+            <div class="gauge-sub" th:text="${metrics.diskText()}">—</div>
+        </div>
+    </div>
+
     <!-- 仅在真的有任务失败时出现，保证这条提示始终有意义 -->
     <div th:if="${stats.errorTaskCount > 0}" class="alert alert-warn">
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
@@ -70,89 +114,122 @@
         </div>
     </div>
 
-    <div class="split">
-        <!-- 项目概览 -->
-        <div class="card">
-            <div class="card-head">
-                <h2 th:text="#{dashboard.projectOverview}">Project overview</h2>
-                <a class="btn btn-ghost btn-xs" th:href="@{/projects}">
-                    <span th:text="#{common.all}">All</span><svg class="ico"><use href="#chevron-right"/></svg>
-                </a>
+    <div class="dash-grid">
+        <div class="dash-main">
+
+            <!--/* 趋势图：空容器 + data-* 里的地址与文案，由 app.js bindActivityChart 用
+                   SVG 画；换指标只重画，不再取数。24 个点由服务端补齐，空的钟点记 0。 */-->
+            <div class="card chart-card" id="activity-chart"
+                 th:attr="data-series-url=@{/dashboard/activity-series},
+                          data-changes-label=#{dashboard.changesSeries},
+                          data-rows-label=#{dashboard.rowsSeries}">
+                <div class="card-head">
+                    <h2 th:text="#{dashboard.trend}">Sync trend</h2>
+                    <div class="card-head-tools">
+                        <div class="seg" role="group" th:attr="aria-label=#{dashboard.trend}">
+                            <button type="button" class="seg-btn is-active" data-series="changes"
+                                    th:text="#{dashboard.changesSeries}">Changes</button>
+                            <button type="button" class="seg-btn" data-series="rows"
+                                    th:text="#{dashboard.rowsSeries}">Rows</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body chart-body">
+                    <div class="chart-meta">
+                        <strong class="chart-total">—</strong>
+                        <span class="chart-window" th:text="#{dashboard.trendHint}">Last 24 hours</span>
+                    </div>
+                    <div class="chart-slot">
+                        <div class="chart-empty" th:text="#{dashboard.noTrend}">No changes in the last 24 hours.</div>
+                    </div>
+                </div>
             </div>
-            <div class="card-body tight">
-                <div th:if="${#lists.isEmpty(stats.projectSummaries)}" class="empty">
-                    <div class="empty-ico"><svg class="ico"><use href="#inbox"/></svg></div>
-                    <h3 th:text="#{dashboard.noProjects}">No projects yet.</h3>
-                    <p th:text="#{project.createHint}">Create one to begin.</p>
-                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/projects/new}">
-                        <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
+
+            <!-- 项目概览 -->
+            <div class="card" id="project-overview">
+                <div class="card-head">
+                    <h2 th:text="#{dashboard.projectOverview}">Project overview</h2>
+                    <a class="btn btn-ghost btn-xs" th:href="@{/projects}">
+                        <span th:text="#{common.all}">All</span><svg class="ico"><use href="#chevron-right"/></svg>
                     </a>
                 </div>
-                <div th:unless="${#lists.isEmpty(stats.projectSummaries)}" class="tbl-wrap">
-                    <!--/* 固定列宽：自动列宽在只有一两行数据时会被内容牵着走，
-                           状态列被空白撑得很宽、数字列悬在中间，表头与值看着就错位。 */-->
-                    <table class="tbl" style="table-layout:fixed">
-                        <colgroup>
-                            <col style="width:26%">
-                            <col style="width:18%">
-                            <col style="width:14%">
-                            <col style="width:18%">
-                            <col style="width:24%">
-                        </colgroup>
-                        <thead>
-                        <tr>
-                            <th th:text="#{common.name}">Name</th>
-                            <th th:text="#{common.status}">Status</th>
-                            <th class="num" th:text="#{dashboard.trackedTables}">Tables</th>
-                            <th class="num" th:text="#{dashboard.rowsSynced}">Rows</th>
-                            <th th:text="#{dashboard.lastSync}">Last sync</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <tr th:each="s : ${stats.projectSummaries}">
-                            <td>
-                                <a style="font-weight:600"
-                                   th:href="@{/projects/{id}(id=${s.project.id})}"
-                                   th:text="${s.project.name}">Project</a>
-                                <div class="small muted truncate" th:if="${s.project.description}"
-                                     th:text="${s.project.description}">desc</div>
-                            </td>
-                            <td th:with="st=${s.statusName()}">
-                                <span class="badge"
-                                      th:classappend="${st == 'RUNNING'} ? 'badge-ok'
-                                                    : (${st == 'ERROR'} ? 'badge-danger' : 'badge-mute')">
-                                    <span class="dot" th:classappend="${st == 'RUNNING'} ? 'dot-live' : ''"></span>
-                                    <span th:text="#{'status.' + ${st}}">Stopped</span>
-                                </span>
-                            </td>
-                            <td class="num" th:text="${s.trackedTableCount}">0</td>
-                            <td class="num" th:text="${s.totalRowsSynced}">0</td>
-                            <td class="small muted"
-                                th:text="${s.task != null and s.task.lastSyncTime != null}
-                                         ? ${#temporals.format(s.task.lastSyncTime, 'MM-dd HH:mm:ss')}
-                                         : #{common.never}">Never</td>
-                        </tr>
-                        </tbody>
-                    </table>
+                <div class="card-body tight">
+                    <div th:if="${#lists.isEmpty(stats.projectSummaries)}" class="empty">
+                        <div class="empty-ico"><svg class="ico"><use href="#inbox"/></svg></div>
+                        <h3 th:text="#{dashboard.noProjects}">No projects yet.</h3>
+                        <p th:text="#{project.createHint}">Create one to begin.</p>
+                        <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/projects/new}">
+                            <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
+                        </a>
+                    </div>
+                    <div th:unless="${#lists.isEmpty(stats.projectSummaries)}" class="tbl-wrap">
+                        <!--/* 固定列宽：自动列宽在只有一两行数据时会被内容牵着走，
+                               状态列被空白撑得很宽、数字列悬在中间，表头与值看着就错位。 */-->
+                        <table class="tbl" style="table-layout:fixed">
+                            <colgroup>
+                                <col style="width:26%">
+                                <col style="width:18%">
+                                <col style="width:14%">
+                                <col style="width:18%">
+                                <col style="width:24%">
+                            </colgroup>
+                            <thead>
+                            <tr>
+                                <th th:text="#{common.name}">Name</th>
+                                <th th:text="#{common.status}">Status</th>
+                                <th class="num" th:text="#{dashboard.trackedTables}">Tables</th>
+                                <th class="num" th:text="#{dashboard.rowsSynced}">Rows</th>
+                                <th th:text="#{dashboard.lastSync}">Last sync</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <tr th:each="s : ${stats.projectSummaries}">
+                                <td>
+                                    <a style="font-weight:600"
+                                       th:href="@{/projects/{id}(id=${s.project.id})}"
+                                       th:text="${s.project.name}">Project</a>
+                                    <div class="small muted truncate" th:if="${s.project.description}"
+                                         th:text="${s.project.description}">desc</div>
+                                </td>
+                                <td th:with="st=${s.statusName()}">
+                                    <span class="badge"
+                                          th:classappend="${st == 'RUNNING'} ? 'badge-ok'
+                                                        : (${st == 'ERROR'} ? 'badge-danger' : 'badge-mute')">
+                                        <span class="dot" th:classappend="${st == 'RUNNING'} ? 'dot-live' : ''"></span>
+                                        <span th:text="#{'status.' + ${st}}">Stopped</span>
+                                    </span>
+                                </td>
+                                <td class="num" th:text="${s.trackedTableCount}">0</td>
+                                <td class="num" th:text="${s.totalRowsSynced}">0</td>
+                                <td class="small muted"
+                                    th:text="${s.task != null and s.task.lastSyncTime != null}
+                                             ? ${#temporals.format(s.task.lastSyncTime, 'MM-dd HH:mm:ss')}
+                                             : #{common.never}">Never</td>
+                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- 最近活动 -->
-        <div class="card">
+        <!--/* 实时活动流：10 秒换一次内容，新条目滑入；条目多到超出视口时按行轮播——
+               首行淡出、下一行升上来，循环往复，悬停即停，尊重系统「减少动态效果」偏好。 */-->
+        <div class="card feed-card" id="activity-feed"
+             th:attr="data-refresh-url=@{/dashboard/activity-feed}">
             <div class="card-head">
                 <h2 th:text="#{dashboard.recentActivity}">Recent activity</h2>
                 <a class="btn btn-ghost btn-xs" th:href="@{/change-logs}">
                     <span th:text="#{project.viewAllLogs}">Full log</span><svg class="ico"><use href="#chevron-right"/></svg>
                 </a>
             </div>
-            <div class="card-body tight">
-                <div th:if="${#lists.isEmpty(stats.recentChanges)}" class="empty">
+            <div class="feed-body" id="activity-feed-list" th:fragment="activityFeedList">
+                <div th:if="${#lists.isEmpty(recentChanges)}" class="empty">
                     <div class="empty-ico"><svg class="ico"><use href="#clock-history"/></svg></div>
                     <h3 th:text="#{dashboard.noActivity}">No activity yet.</h3>
                 </div>
-                <ul th:unless="${#lists.isEmpty(stats.recentChanges)}" class="feed">
-                    <li th:each="log : ${stats.recentChanges}">
+                <ul class="feed feed-live" th:unless="${#lists.isEmpty(recentChanges)}">
+                    <li th:each="log : ${recentChanges}" th:attr="data-log-id=${log.id}">
                         <span class="feed-ico" th:classappend="${log.success} ? 'ok' : 'bad'">
                             <svg class="ico"><use th:attr="href=${log.success} ? '#check-lg' : '#x-lg'"/></svg>
                         </span>

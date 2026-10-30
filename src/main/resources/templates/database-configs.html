@@ -12,6 +12,15 @@
         </div>
     </div>
 
+    <!--/* 健康点的接口地址与本地化文案：脚本按这张表取，取不到(查看者)就整列都不存在 */-->
+    <div th:if="${isAdmin}" id="db-health" hidden
+         th:attr="data-health-url=@{/api/databases/health},
+                  data-ok=#{db.health.ok},
+                  data-fail=#{db.health.fail},
+                  data-checking=#{db.health.checking},
+                  data-unknown=#{db.health.unknown},
+                  data-timeout=#{db.health.timeout}"></div>
+
     <!--/* 源连接卡片：独立分页，翻页参数 sourcePage；链接同时回传 targetPage，避免另一张表被重置 */-->
     <div class="card">
         <div class="card-head">
@@ -20,9 +29,16 @@
                 <span th:text="#{db.section.sources}">Source connections</span>
                 <span class="hint" th:text="'(' + ${sources.totalElements} + ')'">(0)</span>
             </h2>
-            <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new(role='SOURCE')}">
-                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newSource}">New source</span>
-            </a>
+            <div class="card-head-tools" th:if="${isAdmin}">
+                <button type="button" class="btn btn-ghost btn-sm" th:if="${!sources.empty}"
+                        data-health-refresh>
+                    <svg class="ico"><use href="#arrow-clockwise"/></svg>
+                    <span th:text="#{db.health.recheck}">Check all</span>
+                </button>
+                <a class="btn btn-primary btn-sm" th:href="@{/databases/new(role='SOURCE')}">
+                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newSource}">New source</span>
+                </a>
+            </div>
         </div>
         <div class="card-body tight">
             <div th:if="${sources.empty}" class="empty">
@@ -38,6 +54,7 @@
                     <thead>
                     <tr>
                         <th th:text="#{common.name}">Name</th>
+                        <th th:if="${isAdmin}" th:text="#{db.health}">Status</th>
                         <th th:text="#{common.type}">Type</th>
                         <th th:text="#{db.host}">Host</th>
                         <th th:text="#{db.databaseName}">Database</th>
@@ -48,6 +65,13 @@
                     <tbody>
                     <tr th:each="config : ${sources.content}">
                         <td style="font-weight:600" th:text="${config.name}">name</td>
+                        <td th:if="${isAdmin}" class="health-cell"
+                            th:attr="data-health-id=${config.id}">
+                            <span class="health is-unknown">
+                                <span class="health-dot"></span>
+                                <span class="health-text" th:text="#{db.health.unknown}">Not checked</span>
+                            </span>
+                        </td>
                         <td>
                             <span class="badge badge-brand"
                                   th:text="#{${'db.type.' + config.type.name()}}">MySQL</span>
@@ -107,9 +131,16 @@
                 <span th:text="#{db.section.targets}">Target connections</span>
                 <span class="hint" th:text="'(' + ${targets.totalElements} + ')'">(0)</span>
             </h2>
-            <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new(role='TARGET')}">
-                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newTarget}">New target</span>
-            </a>
+            <div class="card-head-tools" th:if="${isAdmin}">
+                <button type="button" class="btn btn-ghost btn-sm" th:if="${!targets.empty}"
+                        data-health-refresh>
+                    <svg class="ico"><use href="#arrow-clockwise"/></svg>
+                    <span th:text="#{db.health.recheck}">Check all</span>
+                </button>
+                <a class="btn btn-primary btn-sm" th:href="@{/databases/new(role='TARGET')}">
+                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newTarget}">New target</span>
+                </a>
+            </div>
         </div>
         <div class="card-body tight">
             <div th:if="${targets.empty}" class="empty">
@@ -125,6 +156,7 @@
                     <thead>
                     <tr>
                         <th th:text="#{common.name}">Name</th>
+                        <th th:if="${isAdmin}" th:text="#{db.health}">Status</th>
                         <th th:text="#{common.type}">Type</th>
                         <th th:text="#{db.host}">Host</th>
                         <th th:text="#{db.databaseName}">Database</th>
@@ -135,6 +167,13 @@
                     <tbody>
                     <tr th:each="config : ${targets.content}">
                         <td style="font-weight:600" th:text="${config.name}">name</td>
+                        <td th:if="${isAdmin}" class="health-cell"
+                            th:attr="data-health-id=${config.id}">
+                            <span class="health is-unknown">
+                                <span class="health-dot"></span>
+                                <span class="health-text" th:text="#{db.health.unknown}">Not checked</span>
+                            </span>
+                        </td>
                         <td>
                             <span class="badge badge-brand"
                                   th:text="#{${'db.type.' + config.type.name()}}">MySQL</span>

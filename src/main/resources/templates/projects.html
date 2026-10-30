@@ -32,7 +32,8 @@
             </div>
 
             <div th:unless="${#lists.isEmpty(projects)}" class="tbl-wrap">
-                <table class="tbl">
+                <!--/* tbl-projects：手机断点下这张表改成行内换行，见 app.css 的同名规则 */-->
+                <table class="tbl tbl-projects">
                     <thead>
                     <tr>
                         <th th:text="#{common.name}">Name</th>

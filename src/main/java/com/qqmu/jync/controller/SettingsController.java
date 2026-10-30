@@ -1,7 +1,13 @@
 package com.qqmu.jync.controller;
 
+import java.lang.management.ManagementFactory;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
@@ -72,6 +78,8 @@ public class SettingsController {
         model.addAttribute("scheduledProjectIds", scheduler.scheduledProjectIds());
         model.addAttribute("instanceId", lockService.getOwnerId());
         model.addAttribute("javaVersion", System.getProperty("java.version"));
+        model.addAttribute("osName", osName());
+        model.addAttribute("startedAt", startedAt());
         model.addAttribute("versionInfo", versionService.snapshot());
         model.addAttribute("giteeUrl", giteeUrl);
         model.addAttribute("siteUrl", siteUrl);
@@ -80,5 +88,23 @@ public class SettingsController {
         model.addAttribute("contactEmail", contactEmail);
         model.addAttribute("contactWechat", contactWechat);
         return "settings";
+    }
+
+    /** "Linux 6.8.0-45-generic (aarch64)" — the machine this page describes. */
+    private static String osName() {
+        return System.getProperty("os.name") + " " + System.getProperty("os.version")
+                + " (" + System.getProperty("os.arch") + ")";
+    }
+
+    /**
+     * When this JVM started, in the server's own zone.
+     *
+     * <p>Preformatted rather than handed to {@code #temporals}: a timestamp is a fact about
+     * this machine, and it reads the same in both interface languages.
+     */
+    private static String startedAt() {
+        long millis = ManagementFactory.getRuntimeMXBean().getStartTime();
+        return LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT));
     }
 }
