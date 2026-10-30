@@ -43,6 +43,7 @@ public class SyncTaskRunner {
     private final SyncEngine syncEngine;
     private final SyncLockService lockService;
     private final SyncTaskStore taskStore;
+    private final PoolActivity poolActivity;
 
     /** Projects whose in-flight cycle should be followed by exactly one more cycle. */
     private final Set<Long> queuedReruns = ConcurrentHashMap.newKeySet();
@@ -93,12 +94,14 @@ public class SyncTaskRunner {
                           SyncContextFactory contextFactory,
                           SyncEngine syncEngine,
                           SyncLockService lockService,
-                          SyncTaskStore taskStore) {
+                          SyncTaskStore taskStore,
+                          PoolActivity poolActivity) {
         this.projectRepository = projectRepository;
         this.contextFactory = contextFactory;
         this.syncEngine = syncEngine;
         this.lockService = lockService;
         this.taskStore = taskStore;
+        this.poolActivity = poolActivity;
     }
 
     /**
@@ -308,6 +311,24 @@ public class SyncTaskRunner {
     }
 
     private SyncResult execute(Project project, SyncLockService.LockHandle lock) {
+        if (!poolActivity.tryEnter(project.getSourceDbId(), project.getTargetDbId())) {
+            // The configuration already seats as many cycles as its pool can hold. Refusing
+            // here costs nothing — no connection, no task row — and the next fire tries
+            // again; admitting it would only make every worker on that pool wait.
+            log.info("Sync of '{}' deferred: connection configuration is at its concurrent"
+                    + " cycle ceiling", project.getName());
+            SyncResult deferred = new SyncResult();
+            deferred.setDeferred(true);
+            return deferred;
+        }
+        try {
+            return runAdmittedCycle(project, lock);
+        } finally {
+            poolActivity.leave(project.getSourceDbId(), project.getTargetDbId());
+        }
+    }
+
+    private SyncResult runAdmittedCycle(Project project, SyncLockService.LockHandle lock) {
         long start = System.currentTimeMillis();
         // Snapshot BEFORE the cycle does any work: a stop that lands after this point aborts
         // this run, while one that landed before it belongs to whatever ran previously.

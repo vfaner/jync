@@ -55,7 +55,7 @@ class SyncTaskRunnerRerunTest {
         taskStore = mock(SyncTaskStore.class);
         SyncLockService lockService = new SyncLockService(lockStore, new SyncProperties(), 8080);
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
-                lockService, taskStore);
+                lockService, taskStore, new PoolActivity(new SyncProperties()));
 
         when(lockStore.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
         when(lockStore.renew(eq(1L), anyString(), anyLong())).thenReturn(true);
@@ -173,7 +173,8 @@ class SyncTaskRunnerRerunTest {
             return new SyncResult();
         });
         SyncTaskRunner local = new SyncTaskRunner(projectRepository,
-                mock(SyncContextFactory.class), engine, lockService, taskStore);
+                mock(SyncContextFactory.class), engine, lockService, taskStore,
+                new PoolActivity(new SyncProperties()));
         try {
             queuedReruns(local).add(9L);
             Method runClaimed = SyncTaskRunner.class.getDeclaredMethod(

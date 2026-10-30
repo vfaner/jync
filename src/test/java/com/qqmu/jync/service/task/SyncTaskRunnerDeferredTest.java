@@ -46,7 +46,8 @@ class SyncTaskRunnerDeferredTest {
         taskStore = mock(SyncTaskStore.class);
         SyncLockStore lockStore = mock(SyncLockStore.class);
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
-                new SyncLockService(lockStore, new SyncProperties(), 8080), taskStore);
+                new SyncLockService(lockStore, new SyncProperties(), 8080), taskStore,
+                new PoolActivity(new SyncProperties()));
 
         when(lockStore.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
         when(lockStore.renew(eq(1L), anyString(), anyLong())).thenReturn(true);

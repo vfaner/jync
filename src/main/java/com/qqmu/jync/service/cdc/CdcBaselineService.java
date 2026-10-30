@@ -309,7 +309,10 @@ public class CdcBaselineService {
             // runCycle 把 SQLException/LockLost/RuntimeException 折进 result 而不外抛:
             // 失败的全量必须在这里转成异常,否则残缺快照会被标成 baseline_done,流从
             // 记下的位点回放,漏掉的行永久丢失(任务书 B4:全量失败整体重来)。
-            if (result == null || !result.isSuccess()) {
+            // A deferred round is not a failure, but it read nothing either: marking it done
+            // would ship a half snapshot as complete and lose every row the stream resumes
+            // past. Same ruling as a failed load — the baseline stays not-done.
+            if (result == null || !result.isSuccess() || result.isDeferred()) {
                 if (!lockRenewer.getAsBoolean()) {
                     // R1: the lease is gone — another node may already be running its own
                     // baseline against the same position row. Deleting the row or raising

@@ -18,8 +18,9 @@ import com.qqmu.jync.model.DatabaseConfig;
 class SyncContextFactoryParallelismTest {
 
     private final SyncProperties properties = new SyncProperties();
+    private final PoolActivity poolActivity = new PoolActivity(properties);
     private final SyncContextFactory factory =
-            new SyncContextFactory(null, null, null, null, null, properties, null);
+            new SyncContextFactory(null, null, null, null, null, properties, null, poolActivity);
 
     @Test
     void projectValueOverridesTheGlobalDefault() {
@@ -67,6 +68,22 @@ class SyncContextFactoryParallelismTest {
         config.setFullLoadParallelism(4);
 
         assertThat(factory.resolveFullLoadParallelism(config, db(7L), db(7L))).isEqualTo(1);
+    }
+
+    /**
+     * The project asks for 4 workers, but another cycle already holds a connection on the
+     * source: the two cycles share the pool's spare seats, so each gets 1 — the old static
+     * cap kept handing out 4 and let the workers fight over what was left.
+     */
+    @Test
+    void aSecondCycleOnTheSameConfigurationSplitsTheSpareSeats() {
+        properties.setMaxPoolSize(5);
+        SyncConfig config = new SyncConfig();
+        config.setFullLoadParallelism(4);
+        poolActivity.tryEnter(1L, 99L);
+        poolActivity.tryEnter(1L, 98L);
+
+        assertThat(factory.resolveFullLoadParallelism(config, db(1L), db(2L))).isEqualTo(1);
     }
 
     @Test

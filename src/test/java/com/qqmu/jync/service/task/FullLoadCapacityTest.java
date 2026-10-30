@@ -58,4 +58,32 @@ class FullLoadCapacityTest {
         assertThat(FullLoadCapacity.effectiveCap(properties, db(1L), db(2L))).isEqualTo(2);
         assertThat(FullLoadCapacity.effectiveCap(properties, db(1L), db(1L))).isEqualTo(1);
     }
+
+    /**
+     * The bound above assumes the pool serves one cycle. Once a second cycle is admitted on
+     * the same configuration, each holds its own main connection, and the spare seats are
+     * split between them: two workers in total, not four each.
+     */
+    @Test
+    void cyclesSharingAConfigurationSplitItsSpareSeats() {
+        assertThat(FullLoadCapacity.effectiveCap(properties, db(1L), db(2L), 2, 2))
+                .isEqualTo(1);
+        assertThat(FullLoadCapacity.effectiveCap(properties, db(1L), db(2L), 1, 2))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void aLoneCycleKeepsTheStaticBound() {
+        assertThat(FullLoadCapacity.effectiveCap(properties, db(1L), db(2L), 1, 1))
+                .isEqualTo(4);
+        // Shared pool: the cycle's two connections are both seats of the same configuration.
+        assertThat(FullLoadCapacity.effectiveCap(properties, db(1L), db(1L), 2, 2))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void anUntrackedConfigurationCountsAsOneSeat() {
+        assertThat(FullLoadCapacity.effectiveCap(properties, db(1L), db(2L), 0, 0))
+                .isEqualTo(4);
+    }
 }

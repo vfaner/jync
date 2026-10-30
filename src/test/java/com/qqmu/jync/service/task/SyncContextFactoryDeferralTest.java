@@ -61,7 +61,8 @@ class SyncContextFactoryDeferralTest {
         when(dialectFactory.forType(any(), any(), any())).thenReturn(mock(SqlDialect.class));
 
         factory = new SyncContextFactory(repository, dataSourceManager, readerFactory,
-                dialectFactory, null, new SyncProperties(), null);
+                dialectFactory, null, new SyncProperties(), null,
+                new PoolActivity(new SyncProperties()));
     }
 
     @Test

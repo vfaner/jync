@@ -81,7 +81,7 @@ public class SyncResult {
         }
         if (deferred) {
             // Not "No changes": the data was never read, and the next fire will read it.
-            return "Deferred: connection pool busy with another task, will retry";
+            return "Deferred: connection is at its concurrency limit, will retry";
         }
         if (!success) {
             // 只给一句人话:失败了几项、什么原因、哪些表。原文(full DDL)在变更日志里,

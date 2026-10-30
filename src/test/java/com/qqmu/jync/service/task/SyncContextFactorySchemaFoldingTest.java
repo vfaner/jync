@@ -17,7 +17,8 @@ class SyncContextFactorySchemaFoldingTest {
 
     // Only the schema folding is under test; every collaborator stays null.
     private final SyncContextFactory factory =
-            new SyncContextFactory(null, null, null, null, null, new SyncProperties(), null);
+            new SyncContextFactory(null, null, null, null, null, new SyncProperties(), null,
+                    new PoolActivity(new SyncProperties()));
 
     private static DatabaseConfig db(DatabaseType type, DatabaseType.DialectFamily family) {
         DatabaseConfig config = new DatabaseConfig();

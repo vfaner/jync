@@ -35,6 +35,7 @@ public class SyncContextFactory {
     private final OracleVersionResolver oracleVersionResolver;
     private final SyncProperties properties;
     private final ObjectMapper objectMapper;
+    private final PoolActivity poolActivity;
 
     public SyncContextFactory(DatabaseConfigRepository databaseConfigRepository,
                               DataSourceManager dataSourceManager,
@@ -42,7 +43,8 @@ public class SyncContextFactory {
                               SqlDialectFactory dialectFactory,
                               OracleVersionResolver oracleVersionResolver,
                               SyncProperties properties,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper,
+                              PoolActivity poolActivity) {
         this.databaseConfigRepository = databaseConfigRepository;
         this.dataSourceManager = dataSourceManager;
         this.readerFactory = readerFactory;
@@ -50,6 +52,7 @@ public class SyncContextFactory {
         this.oracleVersionResolver = oracleVersionResolver;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.poolActivity = poolActivity;
     }
 
     /**
@@ -188,18 +191,23 @@ public class SyncContextFactory {
     /**
      * Effective full-load parallelism: the project's value when set, else the global one;
      * never above {@link FullLoadCapacity#MAX_PARALLELISM}, and never more workers than the
-     * pool can seat (see {@link FullLoadCapacity#poolBound}).
+     * pool leaves free for the cycles that hold seats on it right now.
      */
     int resolveFullLoadParallelism(SyncConfig config, DatabaseConfig source,
                                    DatabaseConfig target) {
         int requested = config.getFullLoadParallelism() != null
                 && config.getFullLoadParallelism() > 0
                 ? config.getFullLoadParallelism() : properties.getFullLoadParallelism();
+        int sourceSeats = poolActivity.activeOn(source == null ? null : source.getId());
+        int targetSeats = poolActivity.activeOn(target == null ? null : target.getId());
         int effective = Math.max(1, Math.min(Math.max(requested, 1),
-                FullLoadCapacity.effectiveCap(properties, source, target)));
+                FullLoadCapacity.effectiveCap(properties, source, target,
+                        sourceSeats, targetSeats)));
         if (effective != requested) {
-            log.info("Full-load parallelism {} capped to {} by the {} connection pool",
-                    requested, effective, Math.max(2, properties.getMaxPoolSize()));
+            log.info("Full-load parallelism {} capped to {} by the {} connection pool"
+                            + " (seats held: source {}, target {})",
+                    requested, effective, Math.max(2, properties.getMaxPoolSize()),
+                    sourceSeats, targetSeats);
         }
         return effective;
     }

@@ -148,7 +148,8 @@ sync:
   # key (MIN/MAX range split); other tables stay sequential. Workers borrow their own
   # connections per chunk, so parallelism above max-pool-size just queues on the pool. Clamped
   # to 8, and further capped by the pool: max-pool-size - 1 for distinct endpoints,
-  # (max-pool-size - 2) / 2 when source and target share one database config. A project may
+  # (max-pool-size - 2) / 2 when source and target share one database config. 同一连接配置上
+  # 有多个任务同时跑时按活跃任务数均分剩余席位(见 PoolActivity), 保证总连接数不超池。 A project may
   # override it (full-load performance card). Default 2 is balanced: the 500k-row Oracle
   # benchmark measured ~117k rows/s at 1, ~184k at 2 and ~216k at 4 (+18% for the last step).
   # Set 1 on databases that are shared with live traffic.

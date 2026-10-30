@@ -239,6 +239,24 @@ class CdcBaselineServiceTest {
     }
 
     /**
+     * 退让轮不是失败,却也没有读过一行:被占满的连接让本轮什么都没做。若按 isSuccess
+     * 处理,残缺快照会被标成 baseline_done,流从记下的位点回放,漏掉的行永久丢失 ——
+     * 与上面失败轮的后果完全一样,所以这里同样必须拒绝收尾。
+     */
+    @Test
+    void aDeferredBaselineIsNotMarkedDone() throws SQLException {
+        Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+        SyncResult deferred = new SyncResult();
+        deferred.setDeferred(true);
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(deferred);
+
+        assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> true))
+                .isInstanceOf(IllegalStateException.class);
+        verify(positionStore, never()).markBaselineDone(anyLong());     // 基线绝不算完成
+    }
+
+    /**
      * R1(租约丢失):基线全量期间租约被他节点接管时,引擎把 {@link LockLostException}
      * 折进失败 result。旧代码按普通失败处理 —— 删掉位点行(可能正砸掉接管节点刚写的
      * 基线锚点)并按 ERROR 帽子停摆(所有节点的 supervise 因 ERROR-skip 冻结)。租约

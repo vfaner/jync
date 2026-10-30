@@ -57,7 +57,7 @@ class SyncTaskRunnerStopTest {
         SyncLockStore lockStore = mock(SyncLockStore.class);
         SyncLockService lockService = new SyncLockService(lockStore, new SyncProperties(), 8080);
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
-                lockService, taskStore);
+                lockService, taskStore, new PoolActivity(new SyncProperties()));
 
         when(lockStore.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
         when(lockStore.renew(eq(1L), anyString(), anyLong())).thenReturn(true);
