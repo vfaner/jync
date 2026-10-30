@@ -379,8 +379,8 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 
 /* ─── 分页条 ──────────────────────────────────────────────
    页码窗口 + 省略号展开；整条复用 card-foot 的底边与底色。
-   单行居右、禁止换行：一旦允许 wrap，窄一点的窗口就会把页码挤到第二行、
-   把"前往"竖着拆成两个字。极窄屏幕靠横向滚动兜底，不折行。 */
+   桌面单行居右、禁止换行：一旦允许 wrap，窄一点的窗口就会把页码挤到第二行、
+   把"前往"竖着拆成两个字。手机宽度下另见下方的折行规则。 */
 .pager-bar {
   display: flex; justify-content: flex-end; align-items: center;
   gap: 14px; flex-wrap: nowrap; padding: 9px 20px; overflow-x: auto;
@@ -404,6 +404,13 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 }
 .pager-jump { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; white-space: nowrap; }
 .pager-jump-input { width: 56px; height: 28px; padding: 0 8px; font-size: 12.5px; }
+
+/* 手机宽度改折行。靠右对齐 + 禁止换行时，比容器宽出来的那一截会从左边溢出，
+   而 overflow-x 的滚动范围只算右侧，左边那段永远滚不到——英文界面 390px 下
+   "3 in total" 只剩 "tal" 就是这么丢的。折行后每个元素都留在视野内。 */
+@media (max-width: 640px) {
+  .pager-bar { flex-wrap: wrap; justify-content: center; row-gap: 8px; }
+}
 
 /* ─── 看板统计卡 ────────────────────────────────────────── */
 .stat-grid {
