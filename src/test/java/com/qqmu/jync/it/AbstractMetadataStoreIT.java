@@ -126,7 +126,8 @@ abstract class AbstractMetadataStoreIT {
             assertThat(((Number) row[0]).longValue()).isEqualTo(project.getId());
             assertThat(((Number) row[1]).longValue()).isEqualTo(7L);
         });
-        assertThat(changeLogs.sumAffectedRowsSince(Instant.now().minusSeconds(60))).isEqualTo(7L);
+        assertThat(changeLogs.sumAffectedRowsBetween(
+                Instant.now().minusSeconds(60), Instant.now().plusSeconds(60))).isEqualTo(7L);
 
         SyncTask task = new SyncTask();
         task.setProjectId(project.getId());

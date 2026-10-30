@@ -35,7 +35,7 @@ class DashboardServiceSeriesTest {
     @Test
     void theSeriesIsTwentyFourConsecutiveHourlyBucketsEndingWithTheCurrentHour() {
         Instant now = Instant.parse("2026-01-01T10:25:00Z");
-        when(changeLogRepository.hourlySeriesSince(any())).thenReturn(List.of(
+        when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.of(
                 new Object[] {Timestamp.from(Instant.parse("2026-01-01T10:00:00Z")), 3L, 12L},
                 new Object[] {Timestamp.from(Instant.parse("2025-12-31T20:00:00Z")), 1L, 4L}));
 
@@ -52,7 +52,7 @@ class DashboardServiceSeriesTest {
     @Test
     void quietHoursAreFilledWithZeroRatherThanSkipped() {
         Instant now = Instant.parse("2026-01-01T10:25:00Z");
-        when(changeLogRepository.hourlySeriesSince(any())).thenReturn(List.of());
+        when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.of());
 
         DashboardService.ActivitySeries series = service.activitySeries(now);
 
@@ -68,7 +68,7 @@ class DashboardServiceSeriesTest {
     @Test
     void theTotalsSumTheWholeWindow() {
         Instant now = Instant.parse("2026-01-01T10:25:00Z");
-        when(changeLogRepository.hourlySeriesSince(any())).thenReturn(List.of(
+        when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.of(
                 new Object[] {Timestamp.from(Instant.parse("2026-01-01T10:00:00Z")), 3L, 12L},
                 new Object[] {Timestamp.from(Instant.parse("2025-12-31T20:00:00Z")), 1L, 4L}));
 
@@ -85,13 +85,44 @@ class DashboardServiceSeriesTest {
         service.activitySeries(now);
 
         org.mockito.Mockito.verify(changeLogRepository)
-                .hourlySeriesSince(java.sql.Timestamp.from(Instant.parse("2025-12-31T11:00:00Z")));
+                .hourlySeriesBetween(java.sql.Timestamp.from(Instant.parse("2025-12-31T11:00:00Z")),
+                        java.sql.Timestamp.from(now));
+    }
+
+    /**
+     * The tile says "Changes (24h)" and the chart says "Last 24 hours" — a reader will add up the
+     * bars and compare. They used to be two different windows: the tile counted from exactly
+     * 24 hours ago with no upper bound, the chart from the top of the hour 23 hours back. Any
+     * change logged in the first hour of the tile's window (or with a clock-skewed future
+     * timestamp) appeared in the tile and in none of the bars.
+     */
+    @Test
+    void theTileCountsExactlyTheWindowTheChartDraws() {
+        Instant now = Instant.parse("2026-01-01T10:25:00Z");
+        Instant windowStart = Instant.parse("2025-12-31T11:00:00Z");
+        when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.of(
+                new Object[] {Timestamp.from(Instant.parse("2026-01-01T10:00:00Z")), 3L, 12L},
+                new Object[] {Timestamp.from(Instant.parse("2025-12-31T20:00:00Z")), 1L, 4L}));
+        when(changeLogRepository.countByOccurredAtBetween(any(), any())).thenReturn(4L);
+        when(changeLogRepository.sumAffectedRowsBetween(any(), any())).thenReturn(16L);
+
+        DashboardService.Stats stats = service.collect(now);
+        DashboardService.ActivitySeries series = service.activitySeries(now);
+
+        assertThat(stats.getChangesToday()).isEqualTo(series.totalChanges());
+        assertThat(stats.getRowsToday()).isEqualTo(series.totalRows());
+        org.mockito.Mockito.verify(changeLogRepository)
+                .countByOccurredAtBetween(windowStart, now);
+        org.mockito.Mockito.verify(changeLogRepository)
+                .sumAffectedRowsBetween(windowStart, now);
+        org.mockito.Mockito.verify(changeLogRepository)
+                .hourlySeriesBetween(Timestamp.from(windowStart), Timestamp.from(now));
     }
 
     @Test
     void everyPointCarriesAnHourLabel() {
         Instant now = Instant.parse("2026-01-01T10:25:00Z");
-        when(changeLogRepository.hourlySeriesSince(any())).thenReturn(List.of());
+        when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.of());
 
         DashboardService.ActivitySeries series = service.activitySeries(now);
 

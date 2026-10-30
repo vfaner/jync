@@ -69,6 +69,10 @@ public class DashboardService {
 
     @Transactional(readOnly = true)
     public Stats collect() {
+        return collect(Instant.now());
+    }
+
+    Stats collect(Instant now) {
         Stats stats = new Stats();
         stats.setProjectCount(projectRepository.count());
         stats.setEnabledProjectCount(projectRepository.countByEnabledTrue());
@@ -101,9 +105,11 @@ public class DashboardService {
         }
         stats.setSyncedTableCount(selectedTables);
 
-        Instant dayAgo = Instant.now().minus(1, ChronoUnit.DAYS);
-        stats.setChangesToday(changeLogRepository.countByOccurredAtAfter(dayAgo));
-        stats.setRowsToday(changeLogRepository.sumAffectedRowsSince(dayAgo));
+        // The tile and the trend chart both say "the last 24 hours", so they must count the same
+        // window: the chart's 24 hourly buckets, the last of which is the hour in progress.
+        Instant windowStart = seriesStart(now);
+        stats.setChangesToday(changeLogRepository.countByOccurredAtBetween(windowStart, now));
+        stats.setRowsToday(changeLogRepository.sumAffectedRowsBetween(windowStart, now));
 
         stats.setErrorTaskCount(taskStore.findByStatus(TaskStatus.ERROR).size());
         stats.setRecentChanges(recentChanges());
@@ -161,13 +167,18 @@ public class DashboardService {
         return activitySeries(Instant.now());
     }
 
+    /** The first hour of the window both the trend chart and the "Changes (24h)" tile cover. */
+    static Instant seriesStart(Instant now) {
+        return now.truncatedTo(ChronoUnit.HOURS).minus(SERIES_HOURS - 1, ChronoUnit.HOURS);
+    }
+
     ActivitySeries activitySeries(Instant now) {
-        Instant currentHour = now.truncatedTo(ChronoUnit.HOURS);
-        Instant start = currentHour.minus(SERIES_HOURS - 1, ChronoUnit.HOURS);
+        Instant start = seriesStart(now);
 
         Map<Instant, long[]> byHour = new HashMap<>();
-        for (Object[] row : changeLogRepository.hourlySeriesSince(
-                new java.sql.Timestamp(start.toEpochMilli()))) {
+        for (Object[] row : changeLogRepository.hourlySeriesBetween(
+                new java.sql.Timestamp(start.toEpochMilli()),
+                new java.sql.Timestamp(now.toEpochMilli()))) {
             Instant hour = hourOf(row[0]);
             if (hour != null) {
                 byHour.put(hour, new long[] {

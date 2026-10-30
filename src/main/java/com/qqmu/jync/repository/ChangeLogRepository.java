@@ -37,11 +37,12 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      */
     @Query(value = "select date_trunc('hour', occurred_at), count(*), "
             + "coalesce(sum(affected_rows), 0) "
-            + "from change_log where occurred_at >= :since "
+            + "from change_log where occurred_at >= :since and occurred_at <= :until "
             + "group by date_trunc('hour', occurred_at) "
             + "order by date_trunc('hour', occurred_at)",
             nativeQuery = true)
-    List<Object[]> hourlySeriesSince(@Param("since") java.sql.Timestamp since);
+    List<Object[]> hourlySeriesBetween(@Param("since") java.sql.Timestamp since,
+                                       @Param("until") java.sql.Timestamp until);
 
     long countByProjectId(Long projectId);
 
@@ -56,10 +57,16 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
 
     long countBySuccessFalse();
 
-    long countByOccurredAtAfter(Instant after);
+    /**
+     * The dashboard tile's counts, over the very same window the trend chart draws. Both ends
+     * are real: a change stamped in the future (a node whose clock runs ahead) must not sit in
+     * a "last 24 hours" total that the chart can never show.
+     */
+    long countByOccurredAtBetween(Instant from, Instant to);
 
-    @Query("select coalesce(sum(c.affectedRows), 0) from ChangeLog c where c.occurredAt > :after")
-    long sumAffectedRowsSince(@Param("after") Instant after);
+    @Query("select coalesce(sum(c.affectedRows), 0) from ChangeLog c "
+            + "where c.occurredAt >= :from and c.occurredAt <= :to")
+    long sumAffectedRowsBetween(@Param("from") Instant from, @Param("to") Instant to);
 
     /** Per-project row totals in one query, instead of one query per project on the dashboard. */
     @Query("select c.projectId, coalesce(sum(c.affectedRows), 0) "

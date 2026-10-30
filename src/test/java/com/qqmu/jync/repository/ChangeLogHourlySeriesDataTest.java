@@ -48,7 +48,9 @@ class ChangeLogHourlySeriesDataTest {
         entry(Instant.parse("2026-01-01T09:30:00Z"), 2);
         entry(Instant.parse("2026-01-01T07:59:59Z"), 100);
 
-        List<Object[]> rows = repository.hourlySeriesSince(java.sql.Timestamp.from(since));
+        List<Object[]> rows = repository.hourlySeriesBetween(
+                java.sql.Timestamp.from(since),
+                java.sql.Timestamp.from(Instant.parse("2026-01-01T11:00:00Z")));
 
         Map<Instant, Object[]> byHour = new TreeMap<>();
         for (Object[] row : rows) {
@@ -63,5 +65,32 @@ class ChangeLogHourlySeriesDataTest {
                 .isEqualTo(12L);
         assertThat(((Number) byHour.get(Instant.parse("2026-01-01T09:00:00Z"))[1]).longValue())
                 .isEqualTo(1L);
+    }
+
+    /**
+     * Both ends of the window are real. Without the upper bound a change logged with a
+     * clock-skewed future timestamp — the metadata store takes whatever the node's clock says —
+     * sat in the 24-hour tile forever and in no bar of the chart.
+     */
+    @Test
+    void rowsOutsideEitherEndOfTheWindowAreExcluded() {
+        Instant since = Instant.parse("2026-01-01T08:00:00Z");
+        Instant until = Instant.parse("2026-01-01T10:30:00Z");
+        entry(Instant.parse("2026-01-01T09:00:00Z"), 2);    // in
+        entry(Instant.parse("2026-01-01T10:00:00Z"), 5);    // in
+        entry(Instant.parse("2026-01-01T07:59:59Z"), 100);  // before
+        entry(Instant.parse("2026-01-01T10:45:00Z"), 200);  // after
+
+        List<Object[]> rows = repository.hourlySeriesBetween(
+                java.sql.Timestamp.from(since), java.sql.Timestamp.from(until));
+
+        long changes = 0;
+        long affected = 0;
+        for (Object[] row : rows) {
+            changes += ((Number) row[1]).longValue();
+            affected += ((Number) row[2]).longValue();
+        }
+        assertThat(changes).isEqualTo(2L);
+        assertThat(affected).isEqualTo(7L);
     }
 }
