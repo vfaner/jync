@@ -50,4 +50,10 @@ public class VersionInfo {
     private final State state;
     /** Rendered release notes for the CURRENT version (safe HTML), or null when unavailable. */
     private final String currentNotesHtml;
+    /**
+     * Whether those notes are written in Chinese. They are authored in one language only, so an
+     * English reader gets a pointer to the release page instead of a screenful of prose they
+     * cannot read.
+     */
+    private final boolean currentNotesChinese;
 }

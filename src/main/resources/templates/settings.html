@@ -552,10 +552,24 @@
                 </dd>
             </dl>
 
-            <h3 class="release-notes-title" th:if="${versionInfo.currentNotesHtml}"
-                th:text="#{settings.releaseNotes}">What's new in this version</h3>
-            <div class="release-notes" th:if="${versionInfo.currentNotesHtml}"
-                 th:utext="${versionInfo.currentNotesHtml}">notes</div>
+            <!--/* 更新说明是单语散文。非中文界面摊开一整屏中文说明，等于让人读不下去；
+                  版本号与发布页仍在，改成一句指过去。按「不是中文」判断而不是「等于英文」：
+                  只发了两套文案，?lang=fr 这类值会落到英文兜底文本上。 */-->
+            <th:block th:with="notesInChinese=${versionInfo.currentNotesChinese
+                    and #locale.language != 'zh'}">
+                <h3 class="release-notes-title" th:if="${versionInfo.currentNotesHtml != null and !notesInChinese}"
+                    th:text="#{settings.releaseNotes}">What's new in this version</h3>
+                <div class="release-notes" th:if="${versionInfo.currentNotesHtml != null and !notesInChinese}"
+                     th:utext="${versionInfo.currentNotesHtml}">notes</div>
+                <p class="small soft" th:if="${versionInfo.currentNotesHtml != null and notesInChinese}">
+                    <span th:text="#{settings.notesChinese}">Release notes for this version are in Chinese.</span>
+                    <!--/* 更新检查关掉时没有 releaseUrl，退到仓库的发布列表，别让这句话没有去处。 */-->
+                    <a th:if="${versionInfo.releaseUrl != null or not #strings.isEmpty(githubUrl)}"
+                       th:href="${versionInfo.releaseUrl != null
+                               ? versionInfo.releaseUrl : githubUrl + '/releases'}"
+                       target="_blank" rel="noopener noreferrer" th:text="#{settings.releasePage}">Release page</a>
+                </p>
+            </th:block>
             <p class="small soft" th:if="${versionInfo.currentNotesHtml != null and isAdmin}"
                th:text="#{settings.updateHelp}">upgrade help</p>
             <p class="small soft" th:if="${versionInfo.currentNotesHtml != null and !isAdmin}"

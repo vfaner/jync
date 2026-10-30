@@ -66,7 +66,7 @@ public class VersionService {
 
     private volatile Cached cached;
     /** Lazily rendered notes for the running version, memoized (including the null case). */
-    private volatile String notesCache;
+    private volatile Notes notesCache;
     private volatile boolean notesLoaded;
     /**
      * Separate from {@code this} on purpose: {@link #refresh} holds the service monitor across
@@ -172,10 +172,12 @@ public class VersionService {
         String current = currentVersionSupplier.get();
 
         if (!enabled) {
+            Notes notes = currentNotes(current);
             return VersionInfo.builder()
                     .currentVersion(current)
                     .state(VersionInfo.State.DISABLED)
-                    .currentNotesHtml(currentNotes(current))
+                    .currentNotesHtml(notes.html())
+                    .currentNotesChinese(notes.chinese())
                     .build();
         }
 
@@ -187,9 +189,11 @@ public class VersionService {
             c = cached;
         }
 
+        Notes notes = currentNotes(current);
         VersionInfo.VersionInfoBuilder builder = VersionInfo.builder()
                 .currentVersion(current)
-                .currentNotesHtml(currentNotes(current));
+                .currentNotesHtml(notes.html())
+                .currentNotesChinese(notes.chinese());
         if (c == null) {
             return builder.state(VersionInfo.State.CHECKING).build();
         }
@@ -380,13 +384,23 @@ public class VersionService {
         return jar == null || jar.updatedAt() == null ? null : DATE.format(jar.updatedAt());
     }
 
+    /** Rendered notes plus whether they were written in Chinese; {@code NONE} when absent. */
+    private record Notes(String html, boolean chinese) {
+        static final Notes NONE = new Notes(null, false);
+    }
+
+    /** Any Han character at all: the notes are single-language prose, not mixed labels. */
+    private static boolean isChinese(String text) {
+        return text.codePoints().anyMatch(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HAN);
+    }
+
     /**
      * Release notes for the running version as safe HTML. Prefer the markdown bundled at
      * build time (works on offline hosts); fall back to the tagged GitHub release body.
      */
-    private String currentNotes(String current) {
+    private Notes currentNotes(String current) {
         if (!StringUtils.hasText(current)) {
-            return null;
+            return Notes.NONE;
         }
         if (notesLoaded) {
             return notesCache;
@@ -414,8 +428,9 @@ public class VersionService {
                 }
             }
             notesCache = StringUtils.hasText(markdown)
-                    ? htmlRenderer.render(markdownParser.parse(markdown))
-                    : null;
+                    ? new Notes(htmlRenderer.render(markdownParser.parse(markdown)),
+                            isChinese(markdown))
+                    : Notes.NONE;
             notesLoaded = true;
             return notesCache;
         }

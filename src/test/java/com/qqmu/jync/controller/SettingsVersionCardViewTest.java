@@ -70,10 +70,14 @@ class SettingsVersionCardViewTest {
     }
 
     private String renderAs(UserRole role, VersionInfo info) throws Exception {
+        return renderIn(Locale.SIMPLIFIED_CHINESE, role, info);
+    }
+
+    private String renderIn(Locale locale, UserRole role, VersionInfo info) throws Exception {
         when(scheduler.scheduledProjectIds()).thenReturn(List.of());
         when(lockService.getOwnerId()).thenReturn("testhost:123");
         when(versionService.snapshot()).thenReturn(info);
-        return mvc.perform(get("/settings").locale(Locale.SIMPLIFIED_CHINESE)
+        return mvc.perform(get("/settings").locale(locale)
                         .with(as(role)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -120,6 +124,90 @@ class SettingsVersionCardViewTest {
         assertThat(page).contains("<h1>Jync v1.1.1</h1>");
         assertThat(page).contains("当前版本更新内容");
         assertThat(page).doesNotContain("??settings.");
+    }
+
+    /**
+     * The bundled notes are prose written in Chinese. Dumping them under the English heading
+     * "What's new in this version" gives an English reader a screenful of Chinese; the version
+     * and the release page still say everything that matters.
+     */
+    @Test
+    void englishUiReplacesTheChineseNotesWithAPointerToTheReleasePage() throws Exception {
+        VersionInfo info = base()
+                .state(VersionInfo.State.UP_TO_DATE)
+                .latestVersion("1.1.1").latestTag("v1.1.1")
+                .releaseUrl("https://github.com/vfaner/jync/releases/tag/v1.1.1")
+                .currentNotesChinese(true)
+                .build();
+
+        String en = renderIn(Locale.ENGLISH, UserRole.ADMIN, info);
+
+        assertThat(en).doesNotContain("<h1>Jync v1.1.1</h1>");
+        assertThat(en).doesNotContain("变更日志页自动刷新");
+        assertThat(en).contains("Release notes for this version are in Chinese.");
+        assertThat(en).contains("https://github.com/vfaner/jync/releases/tag/v1.1.1");
+
+        assertThat(renderAs(UserRole.ADMIN, info))
+                .as("中文界面照旧显示全文")
+                .contains("<h1>Jync v1.1.1</h1>");
+    }
+
+    /**
+     * {@code ?lang=fr} is applied straight to the resolver by {@code LocaleChangeInterceptor},
+     * skipping the narrowing that turns every detected language into English or Chinese. Only
+     * two bundles ship, so that request renders English fallback text — and the notes must
+     * follow the text, not the locale tag.
+     */
+    @Test
+    void aLocaleWithNoBundleIsTreatedLikeEnglish() throws Exception {
+        VersionInfo info = base()
+                .state(VersionInfo.State.UP_TO_DATE)
+                .latestVersion("1.1.1").latestTag("v1.1.1")
+                .releaseUrl("https://github.com/vfaner/jync/releases/tag/v1.1.1")
+                .currentNotesChinese(true)
+                .build();
+
+        when(scheduler.scheduledProjectIds()).thenReturn(List.of());
+        when(lockService.getOwnerId()).thenReturn("testhost:123");
+        when(versionService.snapshot()).thenReturn(info);
+        String fr = mvc.perform(get("/settings").param("lang", "fr").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(fr).doesNotContain("<h1>Jync v1.1.1</h1>");
+        assertThat(fr).contains("Release notes for this version are in Chinese.");
+    }
+
+    /**
+     * Update checks can be switched off, and then no release was ever fetched — but the pointer
+     * still has to lead somewhere, or the English reader gets a sentence and a dead end.
+     */
+    @Test
+    void theChineseNotesPointerReachesTheReleasesPageWithoutACheckedRelease() throws Exception {
+        VersionInfo info = base()
+                .state(VersionInfo.State.DISABLED)
+                .currentNotesChinese(true)
+                .build();
+
+        String en = renderIn(Locale.ENGLISH, UserRole.ADMIN, info);
+
+        assertThat(en).contains("Release notes for this version are in Chinese.");
+        assertThat(en).contains("href=\"https://github.com/vfaner/jync/releases\"");
+    }
+
+    @Test
+    void englishNotesAreShownInTheEnglishUi() throws Exception {
+        VersionInfo info = base()
+                .state(VersionInfo.State.UP_TO_DATE)
+                .latestVersion("1.1.1").latestTag("v1.1.1")
+                .currentNotesHtml("<h1>Jync v1.1.1</h1><ul><li>Auto-refresh on the change log</li></ul>")
+                .currentNotesChinese(false)
+                .build();
+
+        String en = renderIn(Locale.ENGLISH, UserRole.ADMIN, info);
+
+        assertThat(en).contains("<h1>Jync v1.1.1</h1>");
+        assertThat(en).doesNotContain("Release notes for this version are in Chinese.");
     }
 
     @Test
