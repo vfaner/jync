@@ -3058,7 +3058,8 @@
       ok: cfg.getAttribute('data-ok') || 'OK',
       fail: cfg.getAttribute('data-fail') || 'Unreachable',
       checking: cfg.getAttribute('data-checking') || 'Checking',
-      timeout: cfg.getAttribute('data-timeout') || 'Timed out'
+      timeout: cfg.getAttribute('data-timeout') || 'Timed out',
+      invalid: cfg.getAttribute('data-invalid') || 'Connection no longer valid'
     };
 
     // 一个分组 = 一张连接卡片；按钮属于哪张卡就只测哪张卡的可见行。
@@ -3122,8 +3123,9 @@
               paint(cell, 'ok', labels.ok, item.elapsedMs >= 0 ? item.elapsedMs + ' ms' : null);
             } else {
               paint(cell, 'fail', labels.fail, null);
-              var reason = item.message === 'error.db.health.timeout'
-                ? labels.timeout : (item.message || '');
+              var reason = item.message === 'error.db.health.timeout' ? labels.timeout
+                : item.message === 'error.db.health.invalid' ? labels.invalid
+                : (item.message || '');
               if (reason) cell.setAttribute('title', reason);
             }
           });

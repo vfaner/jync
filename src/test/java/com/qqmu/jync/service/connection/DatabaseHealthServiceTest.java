@@ -95,6 +95,8 @@ class DatabaseHealthServiceTest {
         List<DatabaseHealthService.Health> health = service.check(List.of(config), false);
 
         assertThat(health.get(0).ok()).isFalse();
+        // The page swaps this exact key for a label; driver text is passed through instead.
+        assertThat(health.get(0).message()).isEqualTo(DatabaseHealthService.INVALID_MESSAGE);
     }
 
     @Test

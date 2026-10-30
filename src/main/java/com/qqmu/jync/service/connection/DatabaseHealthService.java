@@ -55,6 +55,8 @@ public class DatabaseHealthService {
 
     /** Message key the page localises; driver text is shown verbatim instead. */
     static final String TIMEOUT_MESSAGE = "error.db.health.timeout";
+    /** The driver accepted the connection but {@code isValid} rejected it. */
+    static final String INVALID_MESSAGE = "error.db.health.invalid";
 
     private final DataSourceManager dataSourceManager;
     private final Duration budget;
@@ -168,7 +170,7 @@ public class DatabaseHealthService {
         try (HikariDataSource pool = dataSourceManager.createProbeDataSource(config);
              Connection connection = pool.getConnection()) {
             if (!connection.isValid(VALIDATION_SECONDS)) {
-                return new Health(config.getId(), false, elapsed(start), "error.db.health.invalid");
+                return new Health(config.getId(), false, elapsed(start), INVALID_MESSAGE);
             }
             return new Health(config.getId(), true, elapsed(start), null);
         } catch (SQLException e) {

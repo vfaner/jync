@@ -107,6 +107,23 @@ class DatabaseHealthViewTest {
                 .doesNotContain("data-health-refresh");
     }
 
+    /**
+     * The API answers with a sentinel key; the page swaps it for a label. Only the timeout
+     * sentinel had a label, so a connection the driver rejected after checkout — {@code isValid}
+     * returned false — showed the raw {@code error.db.health.invalid} in the tooltip.
+     */
+    @Test
+    void theInvalidConnectionSentinelGetsALabelToo() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE, UserRole.ADMIN);
+        String js = java.nio.file.Files.readString(
+                java.nio.file.Path.of("src/main/resources/static/js/app.js"),
+                java.nio.charset.StandardCharsets.UTF_8);
+
+        assertThat(html).as("模板要把文案交给前端").contains("data-invalid=\"连接已失效\"");
+        assertThat(js).as("前端要把哨兵换成文案，否则 title 上挂的是 error.db.health.invalid")
+                .contains("'error.db.health.invalid'");
+    }
+
     @Test
     void englishRendersTheEnglishWording() throws Exception {
         String html = render(Locale.ENGLISH, UserRole.ADMIN);
