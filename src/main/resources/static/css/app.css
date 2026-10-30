@@ -1537,7 +1537,8 @@ table.tbl a.truncate { display: block; }
   .stat-grid { grid-template-columns: 1fr 1fr; gap: 11px; }
   .stat { padding: 14px; flex-direction: column; align-items: flex-start; gap: 9px; }
   .stat-n { font-size: 22px; }
-  /* 五个按钮在窄屏上会挤出导航栏：收紧尺寸和间距，并让标题可省略号截断 */
+  /* 五个按钮在窄屏上会挤出导航栏：收紧尺寸和间距；品牌名挤不下时用省略号兜底
+     （再窄到 430px 连省略号都省不下，下面那一档直接让品牌名退场） */
   .nav-right { gap: 6px; }
   .icon-btn, .donate-btn { width: 34px; height: 34px; }
   .lang-btn { padding: 0 9px; }
@@ -1550,6 +1551,12 @@ table.tbl a.truncate { display: block; }
   .modal { padding: 14px; }
   .modal-dialog { padding: 20px 18px; }
   .qr-shell img { width: 176px; height: 176px; }
+}
+/* 更窄时品牌名已经挤不出完整的一个词：中文 425px 以下开始截断，390px 只剩「Jy…」，
+   360px 连省略号都快放不下 —— 截断的牌子既认不出是谁，又白占着导航的位置。
+   和 901–960 那档同一个处理：品牌名退场，只留左侧图标块。 */
+@media (max-width: 430px) {
+  .logo-text { display: none; }
 }
 
 /* 尊重系统的减少动效设置 */

@@ -57,6 +57,17 @@ class NavOverflowTest {
         assertThat(block).contains(".logo-text { display: none; }");
     }
 
+    @Test
+    @DisplayName("手机宽度下品牌名退场：只剩「Jy…」时不如不显示")
+    void theWordmarkLeavesWhenItCannotBeRead() throws Exception {
+        String css = Files.readString(CSS, StandardCharsets.UTF_8);
+        String block = mediaBlock(css, "@media (max-width: 430px)", ".logo-text");
+
+        assertThat(block).as("这一档要有自己的规则").isNotNull();
+        assertThat(block).as("430px 以下品牌名截成「Jy…」，360px 只剩省略号")
+                .contains(".logo-text { display: none; }");
+    }
+
     /** The body of the media block that also mentions {@code marker}, or null when none does. */
     private static String mediaBlock(String css, String header, String marker) {
         int from = 0;
