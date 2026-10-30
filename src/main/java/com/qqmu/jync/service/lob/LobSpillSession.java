@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Reader;
 import java.io.Writer;
+import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,10 +43,11 @@ public final class LobSpillSession implements AutoCloseable {
             while ((n = source.read(buffer)) != -1) {
                 out.write(buffer, 0, n);
                 chars += n;
-                // Three bytes per char is the UTF-8 worst case for the BMP; exact file
-                // size is unavailable until the writer flushes, and a cap that is only
-                // enforced after the disk is full is no cap at all.
-                estimatedBytes += (long) n * 3;
+                // Exact UTF-8 size of what has been read so far, so the cap means the real
+                // disk usage. Counting a flat three bytes per char (the BMP worst case)
+                // made an ASCII value trip at a third of the configured limit; the file
+                // size itself cannot be used because the writer buffers.
+                estimatedBytes += LobBinder.utf8ByteLength(CharBuffer.wrap(buffer, 0, n));
                 checkCap(estimatedBytes, file);
             }
         } catch (IOException | RuntimeException e) {

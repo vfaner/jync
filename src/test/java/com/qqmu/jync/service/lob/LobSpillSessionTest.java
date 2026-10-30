@@ -82,6 +82,45 @@ class LobSpillSessionTest {
                 .hasMessageContaining(dir.toString());
     }
 
+    /**
+     * The session cap is a disk cap, so a text value counts by the bytes it occupies in the
+     * spill file. Counting every char as three bytes (the UTF-8 worst case) made an ASCII
+     * value trip at a third of the configured size and fail the table with a message that
+     * blamed a value which in fact fit.
+     */
+    @Test
+    void theTextCapCountsTheBytesOnDiskNotAWorstCaseEstimate() throws IOException {
+        LobSpillSession session = LobSpillStore.of(dir, 1_000).open();
+
+        LobValue value = session.spillText(new StringReader("a".repeat(500)));
+
+        assertThat(value.length()).isEqualTo(500);
+        assertThat(session.spilledBytes()).isEqualTo(500);
+        session.close();
+    }
+
+    /** The cap is not off either: two bytes per CJK char still has to count. */
+    @Test
+    void aTextValueThatReallyExceedsTheCapIsStillRejected() {
+        LobSpillSession session = LobSpillStore.of(dir, 1_000).open();
+
+        assertThatThrownBy(() -> session.spillText(new StringReader("中".repeat(400))))
+                .isInstanceOf(LobLimitExceededException.class)
+                .hasMessageContaining("sync.lob.spill-max-bytes");
+    }
+
+    /** A surrogate pair is one 4-byte character, not two 3-byte ones. */
+    @Test
+    void aSurrogatePairCountsAsFourBytes() throws IOException {
+        LobSpillSession session = LobSpillStore.of(dir, 40).open();
+
+        LobValue value = session.spillText(new StringReader("😀".repeat(10)));
+
+        assertThat(value.length()).isEqualTo(20);
+        assertThat(session.spilledBytes()).isEqualTo(40);
+        session.close();
+    }
+
     @Test
     void sessionCloseIsIdempotent() throws IOException {
         LobSpillSession session = LobSpillStore.of(dir, 1 << 20).open();
