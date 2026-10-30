@@ -46,6 +46,14 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
+            <exclusions>
+                <!-- No WebSocket endpoint anywhere (checked: no @ServerEndpoint / SockJS / WebSocket
+                     usage); it is only a default of the Tomcat starter. -->
+                <exclusion>
+                    <groupId>org.apache.tomcat.embed</groupId>
+                    <artifactId>tomcat-embed-websocket</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -54,14 +62,31 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
+            <exclusions>
+                <!-- @Transactional and the repository proxies are spring-aop proxies; AspectJ
+                     weaving is never used (no @Aspect / @Configurable / spring-aspects), so the
+                     2 MB weaver stays out of the fat jar. -->
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-aop</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.springframework</groupId>
+                    <artifactId>spring-aspects</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-quartz</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-validation</artifactId>
+            <exclusions>
+                <!-- Quartz only needs mchange-commons when it opens its own c3p0 pool; this app
+                     uses the memory job store and Spring's SchedulerFactoryBean. -->
+                <exclusion>
+                    <groupId>com.mchange</groupId>
+                    <artifactId>mchange-commons-java</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Password encryption for stored DB credentials -->
