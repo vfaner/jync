@@ -152,6 +152,16 @@ public class DataSyncService {
             return rowsInserted + rowsUpdated + rowsChangedUnclassified;
         }
 
+        /**
+         * Records the rows deletion detection removed from the target. Package-private: the
+         * counts are filled by the engine as it copies, never by callers. It matters because
+         * {@code SyncStateWriter.advanceCursor} counts a delete as a delivered change, so a
+         * delete-only cycle still moves the table's 上次同步.
+         */
+        void countDeletes(long rows) {
+            rowsDeleted += rows;
+        }
+
         public boolean isSuccess() {
             return error == null;
         }

@@ -1108,6 +1108,12 @@ public class SyncEngine {
                 log.warn("Deletion sync failed for {}: {}", table.getName(), e.getMessage());
                 result.addError(table.getName() + " (deletes): " + e.getMessage());
             }
+            if (deleted > 0) {
+                // The per-table result is what advanceCursor reads, and its "deletes count as
+                // a delivered change" branch is the only way a delete-only cycle moves the
+                // table's 上次同步. The aggregate below cannot stand in for it.
+                tableResult.countDeletes(deleted);
+            }
         }
 
         // Build the secondary indexes that were held back while the rows arrived. Repeated
