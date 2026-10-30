@@ -40,7 +40,7 @@ class DashboardGaugesViewTest {
     private static final long GIB = 1024L * 1024 * 1024;
 
     private static final SystemMetrics.Snapshot SAMPLE = new SystemMetrics.Snapshot(
-            50.0, 8, 63.0, 14 * GIB, 16 * GIB, 95 * GIB, 100 * GIB);
+            50.0, 4.0, 8, 63.0, 14 * GIB, 16 * GIB, 95 * GIB, 100 * GIB, "./data");
 
     @Autowired
     private MockMvc mvc;
@@ -82,11 +82,39 @@ class DashboardGaugesViewTest {
                 .doesNotContain("负载").doesNotContain("内存");
     }
 
+    /**
+     * 磁盘那格量的到底是哪块盘，页面上必须自己说清楚：JDBC URL 落在 ./data/jync 时，
+     * 数字来自该目录所在卷，不是「/」。写法跟配置里一致，够短，不需要悬浮提示；
+     * 再长的路径由样式截断。
+     */
+    @Test
+    void theDiskGaugeNamesTheVolumeItMeasures() throws Exception {
+        String html = render(SAMPLE, Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains("95.0 GB / 100.0 GB · ./data")
+                .doesNotContain("title=\"./data\"");
+    }
+
+    /**
+     * 核数属于 CPU 那格；负载那格让位给 1 分钟平均负载本身——环上已经是「占几核的
+     * 百分之多少」，下面再写一遍核数就是同一个数字说两遍。
+     */
+    @Test
+    void theLoadGaugeShowsTheAverageAndTheCpuGaugeTheCoreCount() throws Exception {
+        String html = render(SAMPLE, Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains(">4.00<");
+        assertThat(html.indexOf("8 核心")).isGreaterThan(html.indexOf(">CPU<"));
+    }
+
     @Test
     void aJvmWithoutTheCountersStillRendersTheGauges() throws Exception {
         String html = render(SystemMetrics.Snapshot.UNKNOWN, Locale.SIMPLIFIED_CHINESE);
 
-        assertThat(html).contains("id=\"resource-gauges\"").contains("—");
+        // 没有卷路径时只留「—」，不能把 null 写到页面上
+        assertThat(html).contains("id=\"resource-gauges\"").contains("—")
+                .doesNotContain("— · ")
+                .doesNotContain("null");
     }
 
     @Test

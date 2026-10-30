@@ -58,11 +58,18 @@ public class DashboardController {
         return "dashboard :: resourceGauges";
     }
 
-    /** The four stat tiles alone, for the dashboard's 10s auto-refresh. */
+    /**
+     * The stat tiles and the project overview together, for the dashboard's 10s auto-refresh.
+     *
+     * <p>Both come from one {@link DashboardService#collect()} — the overview only exists in
+     * the statistics it already counts — so the poll costs exactly what the tiles alone did.
+     * The overview is here because it has no refresh address of its own: the toolbar's manual
+     * refresh button was its only update path.
+     */
     @GetMapping("/dashboard/live-stats")
     public String liveStatsFragment(Model model) {
         model.addAttribute("stats", dashboardService.collect());
-        return "dashboard :: statGrid";
+        return "dashboard :: liveStats";
     }
 
     /** The activity feed alone, for the dashboard's 10s auto-refresh — one indexed query. */

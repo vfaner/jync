@@ -63,6 +63,7 @@ public class SystemMetrics {
      */
     Snapshot snapshot(OperatingSystemMXBean os, FileStore store, long availableBytes) {
         double loadPercent = -1;
+        double loadAverage = -1;
         double cpuPercent = -1;
         long memoryUsed = -1;
         long memoryTotal = -1;
@@ -71,6 +72,7 @@ public class SystemMetrics {
         try {
             double load = os.getSystemLoadAverage();
             cores = Math.max(1, os.getAvailableProcessors());
+            loadAverage = load;
             loadPercent = load < 0 ? -1 : load / cores * 100.0;
         } catch (RuntimeException e) {
             loadPercent = -1;
@@ -112,8 +114,29 @@ public class SystemMetrics {
             }
         }
 
-        return new Snapshot(loadPercent, cores,
-                cpuPercent, memoryUsed, memoryTotal, diskUsed, diskTotal);
+        return new Snapshot(loadPercent, loadAverage, cores,
+                cpuPercent, memoryUsed, memoryTotal, diskUsed, diskTotal, volumePath());
+    }
+
+    /**
+     * The directory whose volume the disk gauge measures, for the caption under the number.
+     *
+     * <p>Without it "311.6 GB / 926.3 GB" says nothing about which disk is filling up — the
+     * figure describes the metadata volume, not {@code /} and not the synced data.
+     *
+     * <p>Spelled the way the JDBC URL spells it ({@code ./data}, not the absolute path of the
+     * working directory): the long prefix carries no information the reader did not type
+     * themselves, and once the caption is truncated it pushes the one useful part out of
+     * view. A datasource with no local file — remote, in-memory, unset — has no volume to
+     * name, so it gets no label rather than a misleading one.
+     */
+    public String volumePath() {
+        String file = h2File(datasourceUrl);
+        if (file == null) {
+            return null;
+        }
+        int slash = Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'));
+        return slash < 0 ? "./" : file.substring(0, slash);
     }
 
     /**
@@ -121,16 +144,8 @@ public class SystemMetrics {
      * datasource, an in-memory store, a blank value) falls back to the working directory.
      */
     static Path dataRoot(String datasourceUrl, Path workingDir) {
-        String prefix = "jdbc:h2:file:";
-        if (datasourceUrl == null || !datasourceUrl.startsWith(prefix)) {
-            return workingDir;
-        }
-        String file = datasourceUrl.substring(prefix.length());
-        int parameters = file.indexOf(';');
-        if (parameters >= 0) {
-            file = file.substring(0, parameters);
-        }
-        if (file.isBlank()) {
+        String file = h2File(datasourceUrl);
+        if (file == null) {
             return workingDir;
         }
         try {
@@ -139,6 +154,20 @@ public class SystemMetrics {
         } catch (InvalidPathException e) {
             return workingDir;
         }
+    }
+
+    /** The H2 file path in the URL without its parameters, or null for anything else. */
+    private static String h2File(String datasourceUrl) {
+        String prefix = "jdbc:h2:file:";
+        if (datasourceUrl == null || !datasourceUrl.startsWith(prefix)) {
+            return null;
+        }
+        String file = datasourceUrl.substring(prefix.length());
+        int parameters = file.indexOf(';');
+        if (parameters >= 0) {
+            file = file.substring(0, parameters);
+        }
+        return file.isBlank() ? null : file;
     }
 
     /**
@@ -273,15 +302,26 @@ public class SystemMetrics {
     /**
      * One rendered reading. Percentages below zero mean the platform did not report the
      * metric, and the card shows 未知 instead of a made-up number.
+     *
+     * <p>{@code loadAverage} is the raw one-minute figure the ring's percentage is derived
+     * from — uptime's number, which is what an operator compares against the core count.
+     * {@code volumePath} names the volume the disk figures came from, spelled as configured,
+     * so the page never leaves the reader guessing between {@code /}, a data directory and a
+     * separate disk.
      */
-    public record Snapshot(double loadPercent, int cores, double cpuPercent,
+    public record Snapshot(double loadPercent, double loadAverage, int cores, double cpuPercent,
                            long memoryUsedBytes, long memoryTotalBytes,
-                           long diskUsedBytes, long diskTotalBytes) {
+                           long diskUsedBytes, long diskTotalBytes, String volumePath) {
 
-        public static final Snapshot UNKNOWN = new Snapshot(-1, 0, -1, -1, -1, -1, -1);
+        public static final Snapshot UNKNOWN = new Snapshot(-1, -1, 0, -1, -1, -1, -1, -1, null);
 
         public String loadText() {
             return percentText(loadPercent);
+        }
+
+        /** The one-minute average, or 未知 where the platform reports no load at all. */
+        public String loadAverageText() {
+            return loadAverage < 0 ? UNKNOWN_TEXT : String.format(Locale.ROOT, "%.2f", loadAverage);
         }
 
         public String cpuText() {
@@ -293,7 +333,8 @@ public class SystemMetrics {
         }
 
         public String diskText() {
-            return bytesText(diskUsedBytes, diskTotalBytes);
+            String usage = bytesText(diskUsedBytes, diskTotalBytes);
+            return volumePath == null || volumePath.isBlank() ? usage : usage + " · " + volumePath;
         }
 
         /** Used share of memory, for the ring; negative when the platform did not report it. */

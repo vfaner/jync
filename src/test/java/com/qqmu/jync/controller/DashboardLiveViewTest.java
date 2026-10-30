@@ -108,9 +108,28 @@ class DashboardLiveViewTest {
         assertThat(table).isGreaterThan(chart);
     }
 
-    /** The 10s poll swaps only the tiles: no card wrapper, no table, no chart. */
+    /**
+     * 每一块都在自己轮询之后，顶上那个刷新整页的按钮就没有存在意义了：它只是把本来就
+     * 自动更新的内容再画一遍。主操作「新建同步任务」留下。
+     */
     @Test
-    void theStatFragmentRendersOnlyTheTiles() throws Exception {
+    void theToolbarNoLongerOffersAManualRefresh() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE);
+
+        // 只看顶部操作区：页脚那条反馈链接同样是 ghost 小按钮，与这次的改动无关
+        int at = html.indexOf("class=\"page-actions\"");
+        String actions = html.substring(at, html.indexOf("</div>", at));
+        assertThat(actions).contains("新建同步任务")
+                .doesNotContain("arrow-clockwise")
+                .doesNotContain("href=\"/dashboard\"");
+    }
+
+    /**
+     * 10 秒的轮询一次换两块：四块统计卡和任务概览表。概览原本只能靠顶部那个刷新按钮
+     * 更新，按钮删掉后它必须跟着同一个响应走——一次 collect() 同时喂两块。
+     */
+    @Test
+    void theLiveStatsFragmentCarriesTheTilesAndTheProjectOverview() throws Exception {
         when(dashboardService.collect()).thenReturn(stats());
 
         String fragment = mvc.perform(get("/dashboard/live-stats")
@@ -119,9 +138,40 @@ class DashboardLiveViewTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(fragment).contains("id=\"stat-grid\"").contains("同步表数")
-                .doesNotContain("class=\"card\"")
+                .contains("id=\"project-overview\"")
                 .doesNotContain("id=\"activity-chart\"")
-                .doesNotContain("id=\"project-overview\"");
+                .doesNotContain("id=\"activity-feed\"");
+    }
+
+    /**
+     * liveStats 片段定义在 content 之外，就是为了整页渲染时不多出第二套统计卡和概览表；
+     * 这两块在同一页上只能出现一次。
+     */
+    @Test
+    void theComposedFragmentDoesNotRenderTwiceOnThePage() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(countOccurrences(html, "id=\"stat-grid\"")).isEqualTo(1);
+        assertThat(countOccurrences(html, "id=\"project-overview\"")).isEqualTo(1);
+    }
+
+    /**
+     * 六个数字格子（四块大数 + 正在运行 + 今日行数）都标了 data-count，app.js 才知道该
+     * 让哪些数字滚动。少标一个，那个格子就永远是硬切过去的。
+     */
+    @Test
+    void everyCounterIsMarkedForTheCountUp() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(countOccurrences(html, "data-count")).isEqualTo(6);
+    }
+
+    private static int countOccurrences(String text, String needle) {
+        int count = 0;
+        for (int at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length())) {
+            count++;
+        }
+        return count;
     }
 
     /** The feed poll swaps only the rows, and the empty state travels with them. */

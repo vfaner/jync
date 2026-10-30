@@ -1638,7 +1638,11 @@ table.tbl a.truncate { display: block; }
 .gauge-ring.tone-none   { --gauge: var(--line); }
 .gauge-ring.tone-none > span { color: var(--ink-mute); font-weight: 600; }
 .gauge-label { font-size: 13px; font-weight: 600; color: var(--ink); }
-.gauge-sub   { font-size: 12px; color: var(--ink-mute); font-variant-numeric: tabular-nums; }
+/* 磁盘那格的说明后面跟着卷路径，可能很长：单行截断，完整路径在 title 里 */
+.gauge-sub   {
+  font-size: 12px; color: var(--ink-mute); font-variant-numeric: tabular-nums;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* ==========================================================================
    看板 · 实时布局

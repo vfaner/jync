@@ -2381,16 +2381,75 @@
     return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
 
+  var COUNTUP_DURATION = 600;
+
+  /**
+   * 让 el 里的数字从 from 滚到 to：读数的格子一帧一跳，看着像仪表在走。
+   *
+   * 用 requestAnimationFrame 而不是定时器——掉帧、标签页隐藏时浏览器自己降频，最后
+   * 一帧正好落在目标值上；开了「减少动态效果」的系统直接落定，不做中间态。
+   */
+  function countUp(el, from, to) {
+    if (from === to || prefersReducedMotion() || !window.requestAnimationFrame) {
+      el.textContent = String(to);
+      return;
+    }
+    var startedAt = null;
+    el.textContent = String(from);
+    function frame(now) {
+      if (startedAt === null) startedAt = now;
+      var progress = Math.min(1, (now - startedAt) / COUNTUP_DURATION);
+      // ease-out：开头快、末尾稳稳停在目标值，读的时候不用等
+      var eased = 1 - Math.pow(1 - progress, 3);
+      el.textContent = String(Math.round(from + (to - from) * eased));
+      if (progress < 1) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  /** 读数格子当前的数字；不是纯数字（还没渲染出来）返回 null。 */
+  function counterNumber(el) {
+    var digits = (el.textContent || '').replace(/[^0-9]/g, '');
+    return digits === '' ? null : parseInt(digits, 10);
+  }
+
+  /** 按文档顺序记下容器里每个 data-count 格子当前的数字，作为下一次滚动的起点。 */
+  function counterValues(root) {
+    var nodes = root.querySelectorAll('[data-count]');
+    var values = [];
+    for (var i = 0; i < nodes.length; i++) values.push(counterNumber(nodes[i]));
+    return values;
+  }
+
+  /** 让容器里的计数格滚到服务端刚渲染的值；previousValues 为空时从 0 起步。 */
+  function animateCounters(root, previousValues) {
+    var nodes = root.querySelectorAll('[data-count]');
+    for (var i = 0; i < nodes.length; i++) {
+      var to = counterNumber(nodes[i]);
+      if (to === null) continue;
+      var from = previousValues && previousValues[i] !== null
+          && previousValues[i] !== undefined ? previousValues[i] : 0;
+      countUp(nodes[i], from, to);
+    }
+  }
+
   /**
    * 看板统计卡的 10 秒刷新：只换四块卡的内容，不重跑整页。数字变了的格子跳一下，
    * 让「这是活的」看得出来；容器里没有 stat-grid 时（登录页、改密弹窗）直接不启动。
+   *
+   * 同一个响应里还带着任务概览表：概览没有自己的刷新地址，原本只能靠顶部的刷新按钮
+   * 整页重画，按钮删掉后就跟着这里一起换。两块来自同一次 collect()，不多打一次库。
    */
   function bindLiveStats() {
     var grid = document.getElementById('stat-grid');
     if (!grid) return;
+    var overview = document.getElementById('project-overview');
     var url = grid.getAttribute('data-refresh-url') || '/dashboard/live-stats';
     var timer = null;
     var inFlight = false;
+
+    // 首屏：服务端已经把真实值写进 HTML，这里再把它们从 0 滚上去
+    animateCounters(grid, null);
 
     function refresh() {
       if (inFlight) return;
@@ -2408,6 +2467,8 @@
             window.location.reload();
             return;
           }
+          // 屏幕上的数字要在换掉 innerHTML 之前读：换完就只能拿到新值，滚动起点就丢了
+          var previousValues = counterValues(grid);
           var before = grid.querySelectorAll('.stat-n');
           var after = freshGrid.querySelectorAll('.stat-n');
           for (var i = 0; i < after.length; i++) {
@@ -2416,6 +2477,12 @@
             }
           }
           grid.innerHTML = freshGrid.innerHTML;
+          animateCounters(grid, previousValues);
+
+          var freshOverview = fresh.getElementById('project-overview');
+          if (overview && freshOverview) {
+            overview.innerHTML = freshOverview.innerHTML;
+          }
         })
         .catch(function () {
           // 网络抖一下保留旧数字，下一轮再试

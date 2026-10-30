@@ -183,10 +183,59 @@ class SystemMetricsTest {
         assertThat(SystemMetrics.dataRoot(null, cwd)).isEqualTo(cwd);
     }
 
+    /**
+     * 环上是「占几核的百分之多少」，下面的说明给 1 分钟平均负载本身：运维看的是
+     * uptime 那个数，光有百分比既不知道一台几核的机器现在有多忙，也不知道绝对负载。
+     */
+    @Test
+    void theLoadAverageIsReportedNextToItsPercentage() {
+        OperatingSystemMXBean os = mock(OperatingSystemMXBean.class);
+        when(os.getSystemLoadAverage()).thenReturn(4.0);
+        when(os.getAvailableProcessors()).thenReturn(8);
+
+        SystemMetrics.Snapshot snapshot = new SystemMetrics("jdbc:h2:file:./data/jync", Paths.get("."))
+                .snapshot(os, null);
+
+        assertThat(snapshot.loadAverage()).isEqualTo(4.0);
+        assertThat(snapshot.loadAverageText()).isEqualTo("4.00");
+        assertThat(SystemMetrics.Snapshot.UNKNOWN.loadAverageText()).isEqualTo("—");
+    }
+
+    /**
+     * 磁盘那格必须说清楚量的是哪块卷：H2 元数据库在 ./data 下时，数字来自该目录所在
+     * 卷，而不是「/」或某个数据目录。
+     *
+     * <p>说明里写配置里的那个写法（./data），不写解析后的绝对路径：工作目录那一长串
+     * 前缀对读的人没有信息量，截断后反而把有意义的 ./data 挤没了。
+     */
+    @Test
+    void theSnapshotNamesTheVolumeTheDiskFiguresComeFrom() throws Exception {
+        FileStore store = Files.getFileStore(Paths.get(".").toAbsolutePath());
+        OperatingSystemMXBean os = mock(OperatingSystemMXBean.class);
+
+        SystemMetrics.Snapshot snapshot = new SystemMetrics("jdbc:h2:file:./data/jync", Paths.get("."))
+                .snapshot(os, store);
+
+        assertThat(snapshot.volumePath()).isEqualTo("./data");
+        assertThat(snapshot.diskText()).endsWith(" · ./data");
+    }
+
+    /** 绝对路径按配置原样显示；没有本地卷可说的数据源（远程 HTTP/MySQL）不编一个出来。 */
+    @Test
+    void theVolumeLabelKeepsTheConfiguredSpelling() {
+        Path cwd = Paths.get("/opt/jync");
+
+        assertThat(new SystemMetrics("jdbc:h2:file:/srv/jync/data/jync;AUTO_SERVER=TRUE", cwd)
+                .volumePath()).isEqualTo("/srv/jync/data");
+        assertThat(new SystemMetrics("jdbc:mysql://db:3306/jync", cwd).volumePath()).isNull();
+        assertThat(new SystemMetrics("jdbc:h2:mem:test", cwd).volumePath()).isNull();
+        assertThat(new SystemMetrics("", cwd).volumePath()).isNull();
+    }
+
     @Test
     void textAndToneFormatForTheCard() {
         SystemMetrics.Snapshot snapshot = new SystemMetrics.Snapshot(
-                50.0, 8, 63.0, 2 * GIB, 4 * GIB, 95 * GIB, 100 * GIB);
+                50.0, 4.0, 8, 63.0, 2 * GIB, 4 * GIB, 95 * GIB, 100 * GIB, null);
 
         assertThat(snapshot.loadText()).isEqualTo("50%");
         assertThat(snapshot.cpuText()).isEqualTo("63%");

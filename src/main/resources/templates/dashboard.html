@@ -7,7 +7,7 @@
        这里就什么都不渲染，弹窗后面不会露出项目统计。 */-->
 <div th:remove="tag" th:if="${stats != null}">
 
-    <!--/* 顶部不再放大标题：一块实时徽标交代刷新节奏，右侧仍是原来的操作按钮。 */-->
+    <!--/* 顶部不再放大标题：一块实时徽标交代刷新节奏，右侧只留主操作「新建同步任务」。 */-->
     <div class="dash-bar">
         <div class="live-pill">
             <span class="live-dot"></span>
@@ -15,11 +15,10 @@
             <span class="live-sep">·</span>
             <span class="live-hint" th:text="#{dashboard.liveHint(10)}">Every 10s</span>
         </div>
-        <div class="page-actions">
-            <a class="btn btn-ghost btn-sm" th:href="@{/dashboard}">
-                <svg class="ico"><use href="#arrow-clockwise"/></svg><span th:text="#{common.refresh}">Refresh</span>
-            </a>
-            <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/projects/new}">
+        <!--/* 没有刷新按钮：统计卡、概览表、趋势图、活动流各自按自己的节奏轮询，整页
+               重画一遍只是把它们刚拿到的数字再画一次。 */-->
+        <div class="page-actions" th:if="${isAdmin}">
+            <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
             </a>
         </div>
@@ -31,34 +30,36 @@
         <div class="stat">
             <span class="stat-ico"><svg class="ico"><use href="#diagram-3-fill"/></svg></span>
             <div class="stat-body">
-                <div class="stat-n" th:text="${stats.projectCount}">0</div>
+                <div class="stat-n" data-count th:text="${stats.projectCount}">0</div>
                 <div class="stat-l" th:text="#{dashboard.projects}">Projects</div>
-                <div class="stat-x" th:text="#{dashboard.projectsEnabled(${stats.enabledProjectCount})}">
-                    0 running
+                <!--/* 数字单独成格：app.js 的 countUp 只换这一格的文本，单位跟着语言走 */-->
+                <div class="stat-x">
+                    <span data-count th:text="${stats.enabledProjectCount}">0</span>
+                    <span th:text="#{dashboard.running}">running</span>
                 </div>
             </div>
         </div>
         <div class="stat is-info">
             <span class="stat-ico"><svg class="ico"><use href="#hdd-network-fill"/></svg></span>
             <div class="stat-body">
-                <div class="stat-n" th:text="${stats.databaseCount}">0</div>
+                <div class="stat-n" data-count th:text="${stats.databaseCount}">0</div>
                 <div class="stat-l" th:text="#{dashboard.databases}">Connections</div>
             </div>
         </div>
         <div class="stat is-ok">
             <span class="stat-ico"><svg class="ico"><use href="#table"/></svg></span>
             <div class="stat-body">
-                <div class="stat-n" th:text="${stats.syncedTableCount}">0</div>
+                <div class="stat-n" data-count th:text="${stats.syncedTableCount}">0</div>
                 <div class="stat-l" th:text="#{dashboard.tables}">Synced tables</div>
             </div>
         </div>
         <div class="stat" th:classappend="${stats.errorTaskCount > 0} ? 'is-danger' : 'is-warn'">
             <span class="stat-ico"><svg class="ico"><use href="#activity"/></svg></span>
             <div class="stat-body">
-                <div class="stat-n" th:text="${stats.changesToday}">0</div>
+                <div class="stat-n" data-count th:text="${stats.changesToday}">0</div>
                 <div class="stat-l" th:text="#{dashboard.changesToday}">Changes (24h)</div>
                 <div class="stat-x">
-                    <span th:text="${stats.rowsToday}">0</span>
+                    <span data-count th:text="${stats.rowsToday}">0</span>
                     <span th:text="#{common.rows}">rows</span>
                 </div>
             </div>
@@ -78,7 +79,8 @@
                 <span th:text="${metrics.loadText()}">—</span>
             </div>
             <div class="gauge-label" th:text="#{dashboard.load}">Load</div>
-            <div class="gauge-sub" th:text="#{dashboard.loadCores(${metrics.cores()})}">2</div>
+            <!--/* 环上是「占几核的百分之多少」，下面补 1 分钟平均负载本身（uptime 那个数） */-->
+            <div class="gauge-sub" th:text="${metrics.loadAverageText()}">—</div>
         </div>
         <div class="gauge">
             <div class="gauge-ring" th:classappend="'tone-' + ${metrics.cpuTone()}"
@@ -86,6 +88,7 @@
                 <span th:text="${metrics.cpuText()}">—</span>
             </div>
             <div class="gauge-label" th:text="#{dashboard.cpu}">CPU</div>
+            <div class="gauge-sub" th:text="#{dashboard.loadCores(${metrics.cores()})}">2</div>
         </div>
         <div class="gauge">
             <div class="gauge-ring" th:classappend="'tone-' + ${metrics.memoryTone()}"
@@ -101,6 +104,8 @@
                 <span th:text="${metrics.diskPercentText()}">—</span>
             </div>
             <div class="gauge-label" th:text="#{dashboard.disk}">Disk</div>
+            <!--/* 数字后面跟着量的是哪块卷（H2 元数据库所在目录），写法与配置里一致；
+                  实在过长时按列宽截断 */-->
             <div class="gauge-sub" th:text="${metrics.diskText()}">—</div>
         </div>
     </div>
@@ -148,7 +153,7 @@
             </div>
 
             <!-- 项目概览 -->
-            <div class="card" id="project-overview">
+            <div class="card" id="project-overview" th:fragment="projectOverview">
                 <div class="card-head">
                     <h2 th:text="#{dashboard.projectOverview}">Project overview</h2>
                     <a class="btn btn-ghost btn-xs" th:href="@{/projects}">
@@ -261,5 +266,14 @@
 </th:block>
 
 <th:block th:fragment="scripts" th:remove="tag"></th:block>
+
+<!--/* 10 秒一次的轮询取两块内容：统计卡 + 任务概览。两块在页面上不在同一层，包不进
+       一个共同容器，所以由这个片段按顺序把两者拼进同一个响应，app.js 再分别替换各自
+       的 innerHTML —— 一次 collect() 喂两块，不在页面上多打一次库。
+       定义在 content 之外：整页渲染时 layout 只取 content 与 scripts，这里不会被多渲一份。 */-->
+<div th:fragment="liveStats" th:remove="tag">
+    <div th:replace="~{this :: statGrid}"></div>
+    <div th:replace="~{this :: projectOverview}"></div>
+</div>
 </body>
 </html>
