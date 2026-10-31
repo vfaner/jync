@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import com.qqmu.jync.model.AppUser;
+import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
@@ -32,9 +34,11 @@ import com.qqmu.jync.service.etl.EtlTaskService;
 /**
  * The ETL form's two connection selects do not offer the same list.
  *
- * <p>Elasticsearch and MongoDB answer {@code SELECT} only, so a task that names one of them
- * as its target saves cleanly and dies on the first write. The server refuses that save, but
- * the operator should never be offered the choice in the first place.
+ * <p>The split has two rules. First, only connections classified for the role appear: sources
+ * are read-only by intent, targets writable. Second, Elasticsearch and MongoDB answer
+ * {@code SELECT} only, so a task that names one of them as its target saves cleanly and dies
+ * on the first write. The server refuses that save, but the operator should never be offered
+ * the choice in the first place.
  */
 @WebMvcTest(EtlController.class)
 @Import(GlobalModelAdvice.class)
@@ -61,11 +65,13 @@ class EtlFormTargetOptionsViewTest {
                 principal, null, principal.getAuthorities()));
     }
 
-    private static DatabaseConfig connection(long id, String name, DatabaseType type) {
+    private static DatabaseConfig connection(long id, String name, DatabaseType type,
+                                             ConnectionRole role) {
         DatabaseConfig config = new DatabaseConfig();
         config.setId(id);
         config.setName(name);
         config.setType(type);
+        config.setRole(role);
         return config;
     }
 
@@ -83,20 +89,22 @@ class EtlFormTargetOptionsViewTest {
     }
 
     @Test
-    void readOnlyConnectionsAreNotOfferedAsTargetsButRemainSources() throws Exception {
+    void selectorsAreFilteredByRoleAndReadOnlyConnectionsAreNeverTargets() throws Exception {
         when(etlTaskService.connections()).thenReturn(List.of(
-                connection(1L, "mysql-src", DatabaseType.MYSQL),
-                connection(2L, "mongo-src", DatabaseType.MONGODB),
-                connection(3L, "es-src", DatabaseType.ELASTICSEARCH)));
+                connection(1L, "mysql-src", DatabaseType.MYSQL, ConnectionRole.SOURCE),
+                connection(2L, "mongo-src", DatabaseType.MONGODB, ConnectionRole.SOURCE),
+                connection(3L, "es-src", DatabaseType.ELASTICSEARCH, ConnectionRole.SOURCE),
+                connection(4L, "mysql-dst", DatabaseType.MYSQL, ConnectionRole.TARGET)));
 
         String page = html(mvc.perform(get("/etl/new").with(asAdmin()))
                 .andExpect(status().isOk()));
 
         assertThat(select(page, "sourceDbId"))
-                .contains("mysql-src", "mongo-src", "es-src");
+                .contains("mysql-src", "mongo-src", "es-src")
+                .doesNotContain("mysql-dst");
         assertThat(select(page, "targetDbId"))
-                .contains("mysql-src")
-                .doesNotContain("mongo-src", "es-src");
+                .contains("mysql-dst")
+                .doesNotContain("mysql-src", "mongo-src", "es-src");
     }
 
     /**
@@ -114,14 +122,65 @@ class EtlFormTargetOptionsViewTest {
         task.setWriteMode(EtlWriteMode.OVERWRITE);
         when(etlTaskService.findById(5L)).thenReturn(Optional.of(task));
         when(etlTaskService.connections()).thenReturn(List.of(
-                connection(1L, "mysql-src", DatabaseType.MYSQL),
-                connection(2L, "mongo-src", DatabaseType.MONGODB)));
+                connection(1L, "mysql-src", DatabaseType.MYSQL, ConnectionRole.SOURCE),
+                connection(2L, "mongo-src", DatabaseType.MONGODB, ConnectionRole.SOURCE)));
 
         String page = html(mvc.perform(get("/etl/5/edit").with(asAdmin()))
                 .andExpect(status().isOk()));
 
         assertThat(select(page, "targetDbId"))
-                .contains("mysql-src", "mongo-src")
+                .contains("mongo-src")
+                .doesNotContain("mysql-src")
                 .containsPattern("value=\"2\"[^>]*selected");
+    }
+
+    /**
+     * The target table is typed free-hand, but the form also offers what the chosen target
+     * connection actually contains: the field publishes the listing endpoint and the status
+     * copy, and carries a listbox element for the picker app.js fills in.
+     */
+    @Test
+    void theTargetTableFieldPublishesTheListingEndpointAndItsStatusCopy() throws Exception {
+        when(etlTaskService.connections()).thenReturn(List.of(
+                connection(1L, "mysql-dst", DatabaseType.MYSQL, ConnectionRole.TARGET)));
+
+        String page = html(mvc.perform(get("/etl/new")
+                        .locale(Locale.SIMPLIFIED_CHINESE).with(asAdmin()))
+                .andExpect(status().isOk()));
+
+        assertThat(page).contains("data-role=\"target-table\"")
+                .contains("data-role=\"target-table-panel\"")
+                .contains("data-tables-url=\"/api/databases\"")
+                .contains("data-loading-text=\"正在读取目标表…\"")
+                .contains("data-loaded-text=\"已读取 {0} 张表，可输入关键字筛选\"")
+                .contains("data-failed-text=\"目标表读取失败，可手动输入表名\"")
+                .contains("data-empty-text=\"该连接下没有表\"")
+                .contains("data-no-match-text=\"没有匹配的表\"");
+    }
+
+    /**
+     * The same legacy value must stay visible when it is the source: a connection reclassified
+     * to TARGET after the task was saved would otherwise vanish from the edit page.
+     */
+    @Test
+    void anExistingSourceWhoseRoleNoLongerMatchesStillRendersOnTheEditPage() throws Exception {
+        EtlTask task = new EtlTask();
+        task.setId(6L);
+        task.setName("legacy-pair");
+        task.setSourceDbId(2L);
+        task.setTargetDbId(1L);
+        task.setWriteMode(EtlWriteMode.OVERWRITE);
+        when(etlTaskService.findById(6L)).thenReturn(Optional.of(task));
+        when(etlTaskService.connections()).thenReturn(List.of(
+                connection(1L, "mysql-dst", DatabaseType.MYSQL, ConnectionRole.TARGET),
+                connection(2L, "misfiled", DatabaseType.MYSQL, ConnectionRole.TARGET)));
+
+        String page = html(mvc.perform(get("/etl/6/edit").with(asAdmin()))
+                .andExpect(status().isOk()));
+
+        assertThat(select(page, "sourceDbId"))
+                .contains("misfiled")
+                .containsPattern("value=\"2\"[^>]*selected")
+                .doesNotContain("mysql-dst");
     }
 }

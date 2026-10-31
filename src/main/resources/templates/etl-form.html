@@ -57,6 +57,7 @@
                                 <option value="" th:text="#{project.selectDatabase}">-- select --</option>
                                 <option th:each="db : ${connections}" th:value="${db.id}"
                                         th:selected="${task.sourceDbId != null and db.id == task.sourceDbId}"
+                                        th:data-type="${db.type.name()}"
                                         th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
                             </select>
                             <div class="help" th:text="#{etl.source.readOnlyHint}">Read-only SQL interfaces can only be a source.</div>
@@ -75,14 +76,24 @@
                         </div>
                     </div>
 
-                    <div class="field">
-                        <label for="sourceSql" th:text="#{etl.sourceSql}">Extraction SQL</label>
-                        <textarea class="input" id="sourceSql" name="sourceSql" rows="8"
+                    <div class="field" data-role="source-sql-group" th:hidden="${sourceMongo}">
+                        <div class="label-row" style="justify-content:space-between">
+                            <label for="sourceSql" th:text="#{etl.sourceSql}">Extraction SQL</label>
+                            <label class="btn btn-ghost btn-sm" for="sourceSqlFile">
+                                <svg class="ico" aria-hidden="true"><use href="#code-square"/></svg>
+                                <span th:text="#{etl.sourceSql.loadFile}">Load .sql file</span>
+                            </label>
+                            <!-- Read in the browser into the textarea; posted nowhere, because the
+                                 form is a urlencoded POST the controller never parses as multipart. -->
+                            <input type="file" id="sourceSqlFile" accept=".sql,.txt,text/plain" hidden>
+                        </div>
+                        <textarea class="input mono sql-edit" id="sourceSql" name="sourceSql" rows="8"
+                                  wrap="off" spellcheck="false"
                                   th:text="${task.sourceSql}"></textarea>
-                        <div class="help" th:text="#{etl.sourceSql.hint}">The result columns become the target column list; alias expressions.</div>
+                        <div class="help" th:text="#{etl.sourceSql.hint}">The last SELECT supplies the rows.</div>
                     </div>
 
-                    <div class="grid-2">
+                    <div class="grid-2" data-role="source-mongo-group" th:hidden="${!sourceMongo}">
                         <div class="field">
                             <label for="sourceCollection" th:text="#{etl.sourceCollection}">Collection</label>
                             <input type="text" class="input" id="sourceCollection" name="sourceCollection"
@@ -98,11 +109,25 @@
                     </div>
 
                     <div class="grid-2">
-                        <div class="field">
+                        <div class="field" data-role="target-table"
+                             th:attr="data-tables-url=@{/api/databases},
+                                      data-loading-text=#{etl.targetTable.loading},
+                                      data-loaded-text=#{etl.targetTable.loaded},
+                                      data-failed-text=#{etl.targetTable.loadFailed},
+                                      data-empty-text=#{etl.targetTable.noTables},
+                                      data-no-match-text=#{etl.targetTable.noMatch}">
                             <label for="targetTable" th:text="#{etl.targetTable}">Target table</label>
-                            <input type="text" class="input" id="targetTable" name="targetTable"
-                                   maxlength="256" required th:value="${task.targetTable}">
-                            <div class="help" th:text="#{etl.targetTable.hint}">Plain or schema-qualified name. Created once when missing, never altered.</div>
+                            <div class="table-picker">
+                                <input type="text" class="input" id="targetTable" name="targetTable"
+                                       maxlength="256" required autocomplete="off"
+                                       role="combobox" aria-expanded="false" aria-autocomplete="list"
+                                       aria-controls="targetTablePanel"
+                                       th:value="${task.targetTable}">
+                                <div class="table-picker-panel" id="targetTablePanel"
+                                     data-role="target-table-panel" role="listbox" hidden></div>
+                            </div>
+                            <div class="help" data-role="target-table-status" hidden></div>
+                            <div class="help" th:text="#{etl.targetTable.hint}">Plain or schema-qualified name — pick from the list or type it. Created once when missing, never altered.</div>
                         </div>
                         <div class="field">
                             <label for="writeMode" th:text="#{etl.writeMode}">Write mode</label>
@@ -117,14 +142,16 @@
 
                     <div class="field">
                         <label for="preSql" th:text="#{etl.preSql}">Pre-sql (before load)</label>
-                        <textarea class="input" id="preSql" name="preSql" rows="2"
+                        <textarea class="input mono sql-edit" id="preSql" name="preSql" rows="2"
+                                  wrap="off" spellcheck="false"
                                   th:text="${task.preSql}"></textarea>
                         <div class="help" th:text="#{etl.preSql.hint}">Optional: executed before extraction, e.g. DELETE FROM target WHERE dt &lt; '2026-01-01'.</div>
                     </div>
 
                     <div class="field">
                         <label for="postSql" th:text="#{etl.postSql}">Post-sql (after load)</label>
-                        <textarea class="input" id="postSql" name="postSql" rows="2"
+                        <textarea class="input mono sql-edit" id="postSql" name="postSql" rows="2"
+                                  wrap="off" spellcheck="false"
                                   th:text="${task.postSql}"></textarea>
                         <div class="help" th:text="#{etl.postSql.hint}">Optional: executed after load, e.g. UPDATE target SET total = amount + tax.</div>
                     </div>

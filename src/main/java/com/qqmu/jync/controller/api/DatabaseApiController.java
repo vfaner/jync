@@ -23,6 +23,7 @@ import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DatabaseHealthService;
 import com.qqmu.jync.service.connection.DriverLoader;
 import com.qqmu.jync.service.connection.DriverPresence;
+import com.qqmu.jync.service.metadata.ConnectionCatalogService;
 
 /** REST endpoints for connection testing and driver discovery. */
 @RestController
@@ -35,12 +36,15 @@ public class DatabaseApiController {
     private final DatabaseConfigService service;
     private final DriverLoader driverLoader;
     private final DatabaseHealthService healthService;
+    private final ConnectionCatalogService catalogService;
 
     public DatabaseApiController(DatabaseConfigService service, DriverLoader driverLoader,
-                                 DatabaseHealthService healthService) {
+                                 DatabaseHealthService healthService,
+                                 ConnectionCatalogService catalogService) {
         this.service = service;
         this.driverLoader = driverLoader;
         this.healthService = healthService;
+        this.catalogService = catalogService;
     }
 
     /**
@@ -140,6 +144,29 @@ public class DatabaseApiController {
         if (drivers.isEmpty()) {
             // A jar without the service descriptor is still usable; the class must be typed in.
             body.put("message", "msg.no.drivers.declared");
+        }
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Tables of one saved connection, for the ETL form's target-table picker.
+     *
+     * <p>Advisory by design: the form still accepts a hand-typed name (ETL creates missing
+     * tables), so an unknown or unreachable connection answers 200 with {@code success=false}
+     * and a message key instead of an HTTP error.
+     */
+    @GetMapping("/{id}/tables")
+    public ResponseEntity<Map<String, Object>> tables(@PathVariable Long id) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        try {
+            ConnectionCatalogService.Tables tables = catalogService.listTables(id);
+            body.put("success", true);
+            body.put("schema", tables.schema());
+            body.put("count", tables.tables().size());
+            body.put("tables", tables.tables());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            body.put("success", false);
+            body.put("message", e.getMessage());
         }
         return ResponseEntity.ok(body);
     }

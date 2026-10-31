@@ -21,6 +21,7 @@ import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DatabaseHealthService;
 import com.qqmu.jync.service.connection.DriverLoader;
+import com.qqmu.jync.service.metadata.ConnectionCatalogService;
 
 /**
  * The form's "Test" button posts every field it shows, including the mining password. The
@@ -44,6 +45,9 @@ class DatabaseTransientTestApiTest {
     /** The slice builds every constructor argument of the controller, health included. */
     @MockBean
     private DatabaseHealthService healthService;
+
+    @MockBean
+    private ConnectionCatalogService catalogService;
 
     private void stubTransientTest() {
         ConnectionTestService.TestResult result = mock(ConnectionTestService.TestResult.class);

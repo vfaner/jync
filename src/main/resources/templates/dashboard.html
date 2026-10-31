@@ -40,17 +40,25 @@
             </div>
         </div>
         <div class="stat is-info">
+            <span class="stat-ico"><svg class="ico"><use href="#arrow-left-right"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" data-count th:text="${stats.etlTaskCount}">0</div>
+                <div class="stat-l" th:text="#{dashboard.etlTasks}">ETL tasks</div>
+                <div class="stat-x">
+                    <span data-count th:text="${stats.enabledEtlTaskCount}">0</span>
+                    <span th:text="#{dashboard.enabled}">enabled</span>
+                </div>
+            </div>
+        </div>
+        <div class="stat is-ok">
             <span class="stat-ico"><svg class="ico"><use href="#hdd-network-fill"/></svg></span>
             <div class="stat-body">
                 <div class="stat-n" data-count th:text="${stats.databaseCount}">0</div>
                 <div class="stat-l" th:text="#{dashboard.databases}">Connections</div>
-            </div>
-        </div>
-        <div class="stat is-ok">
-            <span class="stat-ico"><svg class="ico"><use href="#table"/></svg></span>
-            <div class="stat-body">
-                <div class="stat-n" data-count th:text="${stats.syncedTableCount}">0</div>
-                <div class="stat-l" th:text="#{dashboard.tables}">Synced tables</div>
+                <div class="stat-x">
+                    <span data-count th:text="${stats.syncedTableCount}">0</span>
+                    <span th:text="#{dashboard.tablesUnit}">synced tables</span>
+                </div>
             </div>
         </div>
         <div class="stat" th:classappend="${stats.errorTaskCount > 0} ? 'is-danger' : 'is-warn'">

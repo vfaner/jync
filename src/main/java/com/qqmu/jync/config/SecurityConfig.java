@@ -85,6 +85,10 @@ public class SecurityConfig {
             // sense, but it dials production sources, exactly like the probes below; the
             // column is admin-only in the page for the same reason.
             "/api/databases/health",
+            // The ETL form's target-table picker opens a connection to the freshly chosen
+            // target to list its tables. Advisory for the form, but still a dial into a
+            // production database, so it is admin-only like the probe above.
+            "/api/databases/*/tables",
             // The audit trail is about what admins did; a viewer has no use for it, and
             // showing one would advertise that their own actions are never in it.
             "/audits",

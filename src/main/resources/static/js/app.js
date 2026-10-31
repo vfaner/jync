@@ -911,7 +911,178 @@
     });
   }
 
+  /**
+   * 把类型下拉升级成可搜索的分组选择器。原生 <select> 仍是表单控件（hidden 只影响显示，
+   * 值照常提交），分类和选项文本都从它读，服务端只渲染 <optgroup>，JS 不再维护第二份
+   * 类型清单。选中后写回 select.value 并派发 change，端口预填、驱动卡片等既有逻辑不变。
+   */
+  function enhanceTypePicker(select) {
+    var groupEls = select.querySelectorAll('optgroup');
+    if (!groupEls.length) return;
+
+    var groups = [];
+    var entries = [];
+    var wrap = document.createElement('div');
+    wrap.className = 'type-picker';
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'input type-picker-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    var value = document.createElement('span');
+    value.className = 'type-picker-value';
+    var caret = document.createElement('span');
+    caret.className = 'type-picker-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    caret.textContent = '▾';
+    trigger.appendChild(value);
+    trigger.appendChild(caret);
+
+    var panel = document.createElement('div');
+    panel.className = 'type-picker-panel';
+    panel.hidden = true;
+
+    var search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'input type-picker-search';
+    search.placeholder = select.dataset.searchPlaceholder || '';
+    search.setAttribute('aria-label', select.dataset.searchPlaceholder || '');
+    panel.appendChild(search);
+
+    var list = document.createElement('div');
+    list.className = 'type-picker-list';
+    list.setAttribute('role', 'listbox');
+    panel.appendChild(list);
+
+    var empty = document.createElement('div');
+    empty.className = 'type-picker-empty small muted';
+    empty.textContent = select.dataset.searchEmpty || '';
+    empty.hidden = true;
+    panel.appendChild(empty);
+
+    groupEls.forEach(function (optgroup) {
+      var root = document.createElement('div');
+      root.className = 'type-picker-group';
+      var head = document.createElement('button');
+      head.type = 'button';
+      head.className = 'type-picker-group-head';
+      head.setAttribute('aria-expanded', 'false');
+      head.textContent = optgroup.label;
+      var items = document.createElement('div');
+      items.className = 'type-picker-items';
+      items.hidden = true;
+      var group = { root: root, head: head, items: items, open: false, entries: [] };
+
+      optgroup.querySelectorAll('option').forEach(function (option) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'type-picker-option';
+        button.setAttribute('role', 'option');
+        button.textContent = option.text;
+        var entry = { button: button, option: option, text: option.text, group: group };
+        button.addEventListener('click', function () { choose(entry); });
+        items.appendChild(button);
+        group.entries.push(entry);
+        entries.push(entry);
+      });
+
+      head.addEventListener('click', function () {
+        group.open = !group.open;
+        items.hidden = !group.open;
+        head.setAttribute('aria-expanded', group.open ? 'true' : 'false');
+      });
+
+      root.appendChild(head);
+      root.appendChild(items);
+      list.appendChild(root);
+      groups.push(group);
+    });
+
+    function currentEntry() {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].option.value === select.value) return entries[i];
+      }
+      return null;
+    }
+
+    // 勾选标记与分组展开状态：始终把当前类型所在分组展开，别让用户先找自己选了什么。
+    function paint() {
+      var current = currentEntry();
+      value.textContent = current ? current.text : '';
+      entries.forEach(function (entry) {
+        entry.button.setAttribute('aria-selected', entry === current ? 'true' : 'false');
+      });
+      groups.forEach(function (group) {
+        group.open = !!current && group === current.group;
+        group.items.hidden = !group.open;
+        group.head.setAttribute('aria-expanded', group.open ? 'true' : 'false');
+      });
+    }
+
+    function filter() {
+      var q = search.value.trim().toLowerCase();
+      var visible = 0;
+      groups.forEach(function (group) {
+        var matched = 0;
+        group.entries.forEach(function (entry) {
+          var hit = !q || entry.text.toLowerCase().indexOf(q) >= 0
+              || entry.option.value.toLowerCase().indexOf(q) >= 0;
+          entry.button.hidden = !hit;
+          if (hit) matched++;
+        });
+        group.root.hidden = matched === 0;
+        group.items.hidden = q ? matched === 0 : !group.open;
+        group.head.setAttribute('aria-expanded',
+            (q ? matched > 0 : group.open) ? 'true' : 'false');
+        visible += matched;
+      });
+      empty.hidden = visible > 0;
+    }
+
+    function setOpen(open) {
+      panel.hidden = !open;
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        search.value = '';
+        filter();
+        search.focus();
+      }
+    }
+
+    function choose(entry) {
+      select.value = entry.option.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      paint();
+      setOpen(false);
+      trigger.focus();
+    }
+
+    trigger.addEventListener('click', function () { setOpen(panel.hidden); });
+    search.addEventListener('input', filter);
+    panel.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') {
+        setOpen(false);
+        trigger.focus();
+      }
+    });
+    document.addEventListener('click', function (ev) {
+      if (!panel.hidden && !wrap.contains(ev.target)) setOpen(false);
+    });
+
+    // 先包一层再隐藏原生 select：hidden 只影响显示，值仍随表单提交。
+    wrap.appendChild(trigger);
+    wrap.appendChild(panel);
+    select.parentNode.insertBefore(wrap, select);
+    wrap.appendChild(select);
+    select.hidden = true;
+    select.setAttribute('aria-hidden', 'true');
+
+    paint();
+  }
+
   function bindTypeSelect(select) {
+    enhanceTypePicker(select);
     // 用途单选变化不触发类型默认值接口,只重算挖掘账号区。
     var form = select.closest('form');
     if (form) {
@@ -3518,6 +3689,203 @@
     return !!(value && LOG_CDC_STRATEGIES[value]);
   }
 
+  /* 取数脚本：选中 .sql 文件后把内容填进文本框。文件本身不随表单提交 ——
+     表单是普通 urlencoded POST，服务端不会按 multipart 解析。 */
+  function bindSourceSqlFile() {
+    var input = document.getElementById('sourceSqlFile');
+    var textarea = document.getElementById('sourceSql');
+    if (!input || !textarea || !window.FileReader) { return; }
+    input.addEventListener('change', function () {
+      var file = input.files && input.files[0];
+      if (!file) { return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        textarea.value = String(reader.result == null ? '' : reader.result);
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        // 清空后再次选同一个文件仍会触发 change。
+        input.value = '';
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  /* 目标表选择器：选好目标连接后读一次它的表清单，输入框里按关键字（空格分隔、
+     不区分大小写）筛选，点一项即填入。输入框始终是可编辑的自由文本 —— ETL 会在
+     表不存在时建表，所以清单只是帮手；读取失败也只是提示「手动输入」，绝不拦表单。 */
+  function bindTargetTablePicker(root) {
+    var input = root.querySelector('input[name="targetTable"]');
+    var panel = root.querySelector('[data-role="target-table-panel"]');
+    var status = root.querySelector('[data-role="target-table-status"]');
+    var select = document.getElementById('targetDbId');
+    if (!input || !panel || !status || !select) { return; }
+
+    var url = (root.getAttribute('data-tables-url') || '').replace(/\/$/, '');
+    var text = {
+      loading: root.getAttribute('data-loading-text') || '',
+      loaded: root.getAttribute('data-loaded-text') || '',
+      failed: root.getAttribute('data-failed-text') || '',
+      empty: root.getAttribute('data-empty-text') || '',
+      noMatch: root.getAttribute('data-no-match-text') || ''
+    };
+    var cache = {};   // 连接 id → 表名数组；一次表单生命周期内每个连接只读一次
+    var tables = null;  // null = 还没读到（不弹面板），[] = 读到了但没有表
+    var options = [];   // 面板里当前可选的表名，下标与键盘高亮位置一致
+    var active = -1;
+
+    function say(message) {
+      status.textContent = message;
+      status.hidden = !message;
+    }
+
+    function loadedLabel(count) {
+      return text.loaded.replace('{0}', String(count));
+    }
+
+    function hidePanel() {
+      panel.hidden = true;
+      panel.innerHTML = '';
+      options = [];
+      active = -1;
+      input.setAttribute('aria-expanded', 'false');
+    }
+
+    function choose(name) {
+      input.value = name;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      hidePanel();
+      input.focus();
+    }
+
+    function highlight(index) {
+      var items = panel.querySelectorAll('.table-picker-option');
+      if (!items.length) { return; }
+      if (index >= items.length) { index = 0; }
+      if (index < 0) { index = items.length - 1; }
+      for (var i = 0; i < items.length; i++) {
+        items[i].setAttribute('aria-selected', i === index ? 'true' : 'false');
+      }
+      active = index;
+      if (items[index].scrollIntoView) { items[index].scrollIntoView({ block: 'nearest' }); }
+    }
+
+    function paint() {
+      panel.innerHTML = '';
+      options = [];
+      active = -1;
+      if (!tables) { return; }
+      var tokens = String(input.value || '').toLowerCase().split(/\s+/).filter(Boolean);
+      var matches = tables.filter(function (name) {
+        var lower = String(name).toLowerCase();
+        for (var i = 0; i < tokens.length; i++) {
+          if (lower.indexOf(tokens[i]) < 0) { return false; }
+        }
+        return true;
+      });
+      if (!matches.length) {
+        var empty = document.createElement('div');
+        empty.className = 'table-picker-empty muted';
+        empty.textContent = tokens.length ? text.noMatch : text.empty;
+        panel.appendChild(empty);
+      } else {
+        matches.forEach(function (name) {
+          var option = document.createElement('button');
+          option.type = 'button';   // 面板在表单里：不能让点击变成提交
+          option.className = 'table-picker-option';
+          option.setAttribute('role', 'option');
+          option.setAttribute('aria-selected', 'false');
+          option.textContent = name;
+          // mousedown + preventDefault：保住输入框焦点，避免 blur 先一步收起面板。
+          option.addEventListener('mousedown', function (event) {
+            event.preventDefault();
+            choose(name);
+          });
+          panel.appendChild(option);
+          options.push(name);
+        });
+      }
+      panel.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    }
+
+    function load(id) {
+      tables = null;
+      hidePanel();
+      if (!id) { say(''); return; }
+      if (cache[id]) {
+        tables = cache[id];
+        say(tables.length ? loadedLabel(tables.length) : text.empty);
+        return;
+      }
+      say(text.loading);
+      getJson(url + '/' + encodeURIComponent(id) + '/tables').then(function (payload) {
+        // 连接在请求返回前又换了：这份清单已经和下拉框对不上，丢弃。
+        if (select.value !== id) { return; }
+        if (!payload || !payload.success) { say(text.failed); return; }
+        tables = payload.tables || [];
+        cache[id] = tables;
+        say(tables.length ? loadedLabel(tables.length) : text.empty);
+      });
+    }
+
+    input.addEventListener('focus', function () {
+      if (tables) { paint(); }
+    });
+    input.addEventListener('input', function () {
+      if (tables) { paint(); }
+    });
+    input.addEventListener('blur', function () { hidePanel(); });
+    input.addEventListener('keydown', function (event) {
+      if (panel.hidden) {
+        if (event.key === 'ArrowDown' && tables) {
+          event.preventDefault();
+          paint();
+        }
+        return;
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        highlight(active + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        highlight(active - 1);
+      } else if (event.key === 'Enter') {
+        if (active >= 0 && options[active]) {
+          event.preventDefault();   // 有高亮项时回车是「选表」，不是「提交」
+          choose(options[active]);
+        } else {
+          hidePanel();
+        }
+      } else if (event.key === 'Escape') {
+        hidePanel();
+      }
+    });
+    select.addEventListener('change', function () { load(select.value); });
+
+    // 编辑页会带上已保存的目标连接：进页面就读一次，省掉一次手动重选。
+    if (select.value) { load(select.value); }
+  }
+
+  /* ETL 表单只显示当前源类型用得上的字段：原生 MongoDB 源用集合 + 过滤条件，
+     其余 SQL 源用取数 SQL。服务端已按已保存的任务渲染正确的半边，这里只负责
+     跟着源下拉走；隐藏的一侧照样随表单提交，由服务端按源类型清空，所以来回
+     切换不会把已填的 SQL 或集合静默丢掉。 */
+  function bindEtlSourceKind() {
+    var select = document.getElementById('sourceDbId');
+    var sqlGroup = document.querySelector('[data-role="source-sql-group"]');
+    var mongoGroup = document.querySelector('[data-role="source-mongo-group"]');
+    if (!select || !sqlGroup || !mongoGroup) { return; }
+
+    function apply() {
+      var option = select.options[select.selectedIndex];
+      var mongo = !!option && option.getAttribute('data-type') === 'MONGODB_NATIVE';
+      sqlGroup.hidden = mongo;
+      mongoGroup.hidden = !mongo;
+    }
+
+    select.addEventListener('change', apply);
+    apply();
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -3554,6 +3922,9 @@
     bindArtifactDismiss();
     bindUpgrade();
     bindUserMenu();
+    bindSourceSqlFile();
+    bindEtlSourceKind();
+    document.querySelectorAll('[data-role="target-table"]').forEach(bindTargetTablePicker);
     initConfigDirtyTracking();
 
     // B9：顶部 Flash 横幅统一转成居中弹窗 —— 成功用自动消失的轻卡片，

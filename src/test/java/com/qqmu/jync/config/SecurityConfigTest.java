@@ -375,6 +375,17 @@ class SecurityConfigTest {
     }
 
     /**
+     * The ETL form's target-table picker dials the chosen target connection to list its
+     * tables. It backs an admin-only form, exactly like the health dots, so a viewer must not
+     * be able to make the server open arbitrary production connections.
+     */
+    @Test
+    void theTargetTableListingEndpointIsAdminOnly() throws Exception {
+        assertThat(statusOf(get("/api/databases/1/tables").with(asViewer()))).isEqualTo(403);
+        assertThat(statusOf(get("/api/databases/1/tables").with(asAdmin()))).isEqualTo(200);
+    }
+
+    /**
      * Table preview returns row data straight out of the configured databases, and the two
      * lookup endpoints expose an arbitrary table's schema. They exist to support the
      * admin-only detail-page controls, so a viewer must not be able to call them directly.

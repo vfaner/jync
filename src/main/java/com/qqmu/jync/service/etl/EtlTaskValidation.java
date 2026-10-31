@@ -42,8 +42,13 @@ final class EtlTaskValidation {
         }
         if (isNativeMongo(source)) {
             validateMongoExtraction(task);
-        } else if (task.getSourceSql() == null || task.getSourceSql().isBlank()) {
-            throw new IllegalArgumentException("error.etl.sql.required");
+        } else {
+            if (task.getSourceSql() == null || task.getSourceSql().isBlank()) {
+                throw new IllegalArgumentException("error.etl.sql.required");
+            }
+            // Refuse a script that cannot run while the operator is still on the form, rather
+            // than repeating the same failure on every scheduled run.
+            EtlSqlScript.validate(task.getSourceSql());
         }
         if (task.getTargetTable() == null || task.getTargetTable().isBlank()) {
             throw new IllegalArgumentException("error.etl.targetTable.required");

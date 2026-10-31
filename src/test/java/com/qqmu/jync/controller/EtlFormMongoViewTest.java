@@ -20,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import com.qqmu.jync.model.AppUser;
+import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
@@ -64,6 +65,13 @@ class EtlFormMongoViewTest {
         config.setId(id);
         config.setName(name);
         config.setType(type);
+        return config;
+    }
+
+    private static DatabaseConfig connection(long id, String name, DatabaseType type,
+                                             ConnectionRole role) {
+        DatabaseConfig config = connection(id, name, type);
+        config.setRole(role);
         return config;
     }
 
@@ -129,15 +137,15 @@ class EtlFormMongoViewTest {
     @Test
     void aNativeMongoConnectionIsOfferedAsASourceButNeverAsATarget() throws Exception {
         when(etlTaskService.connections()).thenReturn(List.of(
-                connection(1L, "mysql-src", DatabaseType.MYSQL),
-                connection(2L, "mongo-src", DatabaseType.MONGODB_NATIVE)));
+                connection(1L, "mysql-dst", DatabaseType.MYSQL, ConnectionRole.TARGET),
+                connection(2L, "mongo-src", DatabaseType.MONGODB_NATIVE, ConnectionRole.SOURCE)));
 
         String page = html(mvc.perform(get("/etl/new").with(asAdmin()))
                 .andExpect(status().isOk()));
 
         assertThat(select(page, "sourceDbId")).contains("mongo-src");
         assertThat(select(page, "targetDbId"))
-                .contains("mysql-src")
+                .contains("mysql-dst")
                 .doesNotContain("mongo-src");
     }
 

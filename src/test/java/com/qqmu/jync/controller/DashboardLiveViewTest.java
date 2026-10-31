@@ -145,7 +145,8 @@ class DashboardLiveViewTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertThat(fragment).contains("id=\"stat-grid\"").contains("同步表数")
+        assertThat(fragment).contains("id=\"stat-grid\"").contains("ETL 任务")
+                .contains("张同步表")
                 .contains("id=\"project-overview\"")
                 .doesNotContain("id=\"activity-chart\"")
                 .doesNotContain("id=\"activity-feed\"");
@@ -164,14 +165,33 @@ class DashboardLiveViewTest {
     }
 
     /**
-     * 六个数字格子（四块大数 + 正在运行 + 今日行数）都标了 data-count，app.js 才知道该
-     * 让哪些数字滚动。少标一个，那个格子就永远是硬切过去的。
+     * 八个数字格子（四块大数 + 正在运行 + 已启用 ETL + 同步表 + 今日行数）都标了
+     * data-count，app.js 才知道该让哪些数字滚动。少标一个，那个格子就永远是硬切过去的。
      */
     @Test
     void everyCounterIsMarkedForTheCountUp() throws Exception {
         String html = dashboard(Locale.SIMPLIFIED_CHINESE);
 
-        assertThat(countOccurrences(html, "data-count")).isEqualTo(6);
+        assertThat(countOccurrences(html, "data-count")).isEqualTo(8);
+    }
+
+    /**
+     * 四块统计卡要覆盖两种任务族：第一块只管实时同步，第二块单独说 ETL——原先第一块写
+     * 「同步任务总数」，ETL 任务在那个数里根本不存在。数据库连接块顺带给出同步表数，免得
+     * 为了多放一块 ETL 卡把四环对不齐。
+     */
+    @Test
+    void theTilesSplitRealTimeFromEtlAndKeepTheTableCountOnTheConnectionsTile() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains("实时同步任务", "ETL 任务", "个已启用")
+                .contains("数据库连接", "张同步表");
+        // The ETL tile's big number is the task total, its sub-line the enabled share.
+        assertThat(html).containsPattern(">5</div>\\s*<div class=\"stat-l\">ETL 任务</div>");
+        assertThat(html).containsPattern(">2</span>\\s*<span>个已启用</span>");
+        // The connections tile keeps the connection total, with the table count underneath.
+        assertThat(html).containsPattern(">4</div>\\s*<div class=\"stat-l\">数据库连接</div>");
+        assertThat(html).containsPattern(">128</span>\\s*<span>张同步表</span>");
     }
 
     private static int countOccurrences(String text, String needle) {
@@ -245,6 +265,8 @@ class DashboardLiveViewTest {
         stats.setProjectCount(3);
         stats.setDatabaseCount(4);
         stats.setSyncedTableCount(128);
+        stats.setEtlTaskCount(5);
+        stats.setEnabledEtlTaskCount(2);
         ChangeLog log = new ChangeLog();
         log.setId(9L);
         log.setProjectId(1L);

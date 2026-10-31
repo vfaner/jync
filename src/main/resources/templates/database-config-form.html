@@ -61,10 +61,17 @@
                             <label for="type">
                                 <span th:text="#{common.type}">Type</span><span class="req">*</span>
                             </label>
+                            <!--/* 平铺 30 多个预设难以扫读：按分类分组渲染，浏览器端再叠一个
+                                   可搜索的选择器；分组后的 <select> 仍是表单控件和无 JS 时的回退。 */-->
                             <select class="select" id="type" th:field="*{type}" data-role="type-select"
-                                    th:attr="data-action=@{/api/databases/type-defaults}">
-                                <option th:each="t : ${types}" th:value="${t.name()}"
-                                        th:text="#{${'db.type.' + t.name()}}">MySQL</option>
+                                    th:attr="data-action=@{/api/databases/type-defaults},
+                                             data-search-placeholder=#{db.type.search},
+                                             data-search-empty=#{db.type.search.empty}">
+                                <optgroup th:each="group : ${typeGroups}"
+                                          th:label="#{${group.messageKey}}">
+                                    <option th:each="t : ${group.types}" th:value="${t.name()}"
+                                            th:text="#{${'db.type.' + t.name()}}">MySQL</option>
+                                </optgroup>
                             </select>
                             <div class="help mono" id="url-hint"
                                  th:text="${config.type != null ? config.type.urlTemplate : ''}"></div>

@@ -159,6 +159,22 @@ class EtlRunnerTest {
     }
 
     @Test
+    void aScriptPreparesTheSourceBeforeTheLastSelect() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a'), (2, 'b')");
+
+        EtlRunResult result = runner.run(task(
+                "CREATE TEMP TABLE picked (id INT, name VARCHAR(20));"
+                        + " INSERT INTO picked SELECT id, name FROM src WHERE id > 1;"
+                        + " SELECT id, name FROM picked",
+                "dst", EtlWriteMode.OVERWRITE), source, target, connections);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.rowsRead()).isEqualTo(1);
+        assertThat(rows("SELECT id, name FROM dst")).containsExactly("2|b");
+    }
+
+    @Test
     void aBrokenSourceSqlIsAttributedToTheSource() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)");
 

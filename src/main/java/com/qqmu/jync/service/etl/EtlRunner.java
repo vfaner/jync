@@ -225,6 +225,14 @@ public class EtlRunner {
             validateMongoSource(task);
         } else if (!notBlank(task.getSourceSql())) {
             throw new EtlProgramException("extraction SQL is empty");
+        } else {
+            // Refuse a script that cannot run before any connection opens; the refusal is a
+            // program error whose message is the i18n key.
+            try {
+                EtlSqlScript.validate(task.getSourceSql());
+            } catch (IllegalArgumentException e) {
+                throw new EtlProgramException(e.getMessage());
+            }
         }
     }
 

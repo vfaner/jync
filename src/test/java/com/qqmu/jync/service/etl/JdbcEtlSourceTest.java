@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -220,6 +221,92 @@ class JdbcEtlSourceTest {
         assertThat(cursor.getString(1)).isEqualTo("42");
         assertThat(cursor.next()).isFalse();
         cursor.close();
+    }
+
+    @Test
+    void aScriptRunsItsLeadingStatementsBeforeTheResumableQuery() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+        EtlTask task = task(EtlWriteMode.APPEND, "id");
+        task.setSourceSql("CREATE TEMP TABLE t (id INT); SELECT id FROM t");
+
+        EtlSourceCursor cursor = source.query(task, null);
+
+        // PostgreSQL refuses CREATE TEMP TABLE inside a read-only transaction, so a script
+        // drops the hint; the source account's grants remain the guard.
+        verify(connection).setReadOnly(false);
+        verify(statement).execute("CREATE TEMP TABLE t (id INT)");
+        verify(connection).prepareStatement(
+                "SELECT * FROM (SELECT id FROM t) jync_etl_src ORDER BY id",
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+        cursor.close();
+    }
+
+    @Test
+    void aScriptOverwriteRunsTheLastStatementUnwrapped() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+        EtlTask task = task(EtlWriteMode.OVERWRITE, null);
+        task.setSourceSql("SET @x = 1; SELECT id FROM t");
+
+        EtlSourceCursor cursor = source.query(task, null);
+
+        verify(statement).execute("SET @x = 1");
+        verify(connection).prepareStatement("SELECT id FROM t",
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+        cursor.close();
+    }
+
+    @Test
+    void aScriptResumeWrapsOnlyTheLastStatementAndBindsTheCheckpoint() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+        EtlTask task = task(EtlWriteMode.APPEND, "id");
+        task.setSourceSql("CREATE TEMP TABLE t (id INT); SELECT id FROM t");
+
+        EtlSourceCursor cursor = source.query(task, new EtlCheckpointValue(Types.INTEGER, "3"));
+
+        verify(statement).execute("CREATE TEMP TABLE t (id INT)");
+        verify(connection).prepareStatement(
+                "SELECT * FROM (SELECT id FROM t) jync_etl_src WHERE id > ? ORDER BY id",
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+        verify(statement).setLong(1, 3L);
+        cursor.close();
+    }
+
+    @Test
+    void probeRunsTheLeadingStatementsAndReportsTheScript() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+        EtlTask task = task(EtlWriteMode.APPEND, "id");
+        task.setSourceSql("CREATE TEMP TABLE t (id INT); SELECT id FROM t");
+
+        EtlSourceProbe probe = source.probe(task, 15);
+
+        verify(statement).execute("CREATE TEMP TABLE t (id INT)");
+        verify(statement).executeQuery(
+                "SELECT * FROM (SELECT id FROM t) jync_etl_src WHERE 1 = 0");
+        assertThat(probe.issues()).extracting(EtlSourceIssue::code)
+                .contains("etl.precheck.script.ok", "etl.precheck.source.ok");
+    }
+
+    @Test
+    void aScriptProbeRollsBackWhatItPrepared() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+        EtlTask task = task(EtlWriteMode.APPEND, "id");
+        task.setSourceSql("DELETE FROM staging; SELECT id FROM staging");
+
+        source.probe(task, 15);
+
+        // A precheck must not leave the source changed by the script it ran.
+        verify(connection).setAutoCommit(false);
+        verify(connection).rollback();
+    }
+
+    @Test
+    void aSingleStatementProbeKeepsTheConnectionAsBefore() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        source.probe(task(EtlWriteMode.APPEND, "id"), 15);
+
+        verify(connection, never()).setAutoCommit(false);
+        verify(connection, never()).rollback();
     }
 
     private JdbcEtlSource source(DatabaseType type) {

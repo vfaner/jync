@@ -15,6 +15,7 @@ import com.qqmu.jync.model.EtlRun;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.EtlRunRepository;
+import com.qqmu.jync.repository.EtlTaskRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.task.SyncContextFactory;
@@ -37,7 +38,7 @@ class DashboardServiceSeriesTest {
     private final DashboardService service = new DashboardService(
             mock(ProjectRepository.class), mock(DatabaseConfigRepository.class),
             mock(SyncProgressRepository.class), changeLogRepository, etlRunRepository,
-            mock(SyncContextFactory.class), mock(SyncTaskStore.class));
+            mock(EtlTaskRepository.class), mock(SyncContextFactory.class), mock(SyncTaskStore.class));
 
     @Test
     void theSeriesIsTwentyFourConsecutiveHourlyBucketsEndingWithTheCurrentHour() {

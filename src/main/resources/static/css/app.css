@@ -590,6 +590,9 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
    内，且不挡住正在填的输入框。hover 与键盘 focus 都能展开。 */
 .label-row { display: flex; align-items: center; margin-bottom: 6px; }
 .label-row label { margin-bottom: 0; }
+/* 标签行里的「载入 .sql 文件」是个 label：.field label 的块级规则会压掉 .btn 的
+   inline-flex，把按钮撑成整行。提高一级选择器把按钮交还给 .btn。 */
+.field .label-row label.btn { display: inline-flex; margin-bottom: 0; cursor: pointer; }
 .tip-icon { position: relative; display: inline-flex; align-items: center;
   margin-left: 5px; color: var(--ink-mute); cursor: help; outline: none;
   border-radius: 50%; }
@@ -635,6 +638,66 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 .input-group { display: flex; gap: 8px; }
 .input-group .input { flex: 1; }
+
+/* 数据库类型选择器：分组 + 关键字搜索。原生 select 由 JS 隐藏，这里只画升级后的
+   触发按钮和浮层；没有 JS 时 select 仍是普通下拉，样式不受影响。 */
+.type-picker { position: relative; }
+.type-picker-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  text-align: left; cursor: pointer;
+}
+.type-picker-caret { color: var(--ink-mute); font-size: 12px; }
+.type-picker-panel {
+  position: absolute; z-index: 1040; left: 0; right: 0; top: calc(100% + 6px);
+  padding: 8px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+}
+.type-picker-search { margin-bottom: 8px; }
+.type-picker-list { max-height: 300px; overflow-y: auto; overscroll-behavior: contain; }
+.type-picker-group + .type-picker-group { margin-top: 2px; }
+.type-picker-group-head {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 8px;
+  border: 0; border-radius: 8px; background: var(--bg-soft); color: var(--ink-soft);
+  font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; cursor: pointer;
+}
+.type-picker-group-head::before {
+  content: '▸'; color: var(--ink-mute); font-size: 11px; transition: transform .15s ease;
+}
+.type-picker-group-head[aria-expanded="true"]::before { transform: rotate(90deg); }
+.type-picker-option {
+  display: block; width: 100%; padding: 6px 10px 6px 24px; border: 0; border-radius: 8px;
+  background: none; color: var(--ink); font: inherit; font-size: 13.5px;
+  text-align: left; cursor: pointer;
+}
+.type-picker-option:hover { background: var(--bg-tint); }
+.type-picker-option[aria-selected="true"] {
+  background: var(--fb-brand-10);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+  color: var(--brand-dark); font-weight: 600;
+}
+.type-picker-empty { padding: 10px 8px; }
+
+/* 目标表选择器：输入框下方浮出可筛选的表清单，输入框本身仍是自由文本 */
+.table-picker { position: relative; }
+.table-picker-panel {
+  position: absolute; z-index: 1040; left: 0; right: 0; top: calc(100% + 6px);
+  max-height: 280px; overflow-y: auto; overscroll-behavior: contain;
+  padding: 6px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+}
+.table-picker-option {
+  display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px;
+  background: none; color: var(--ink); font: inherit; font-size: 13.5px;
+  text-align: left; cursor: pointer;
+}
+.table-picker-option:hover { background: var(--bg-tint); }
+.table-picker-option[aria-selected="true"] {
+  background: var(--fb-brand-10);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+  color: var(--brand-dark); font-weight: 600;
+}
+.table-picker-empty { padding: 10px 8px; font-size: 13px; }
+
 
 /* 开关 */
 .switch {

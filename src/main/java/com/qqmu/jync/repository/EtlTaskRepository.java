@@ -11,4 +11,6 @@ public interface EtlTaskRepository extends JpaRepository<EtlTask, Long> {
     List<EtlTask> findAllByOrderByIdDesc();
 
     List<EtlTask> findByEnabledTrue();
+
+    long countByEnabledTrue();
 }

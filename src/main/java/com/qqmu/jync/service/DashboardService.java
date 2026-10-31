@@ -29,6 +29,7 @@ import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.EtlRunRepository;
+import com.qqmu.jync.repository.EtlTaskRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.task.SyncContextFactory;
@@ -66,6 +67,7 @@ public class DashboardService {
     private final DatabaseConfigRepository databaseConfigRepository;
     private final SyncProgressRepository progressRepository;
     private final EtlRunRepository etlRunRepository;
+    private final EtlTaskRepository etlTaskRepository;
     private final SyncContextFactory contextFactory;
     private final SyncTaskStore taskStore;
 
@@ -74,6 +76,7 @@ public class DashboardService {
                             SyncProgressRepository progressRepository,
                             ChangeLogRepository changeLogRepository,
                             EtlRunRepository etlRunRepository,
+                            EtlTaskRepository etlTaskRepository,
                             SyncContextFactory contextFactory,
                             SyncTaskStore taskStore) {
         this.projectRepository = projectRepository;
@@ -81,6 +84,7 @@ public class DashboardService {
         this.progressRepository = progressRepository;
         this.changeLogRepository = changeLogRepository;
         this.etlRunRepository = etlRunRepository;
+        this.etlTaskRepository = etlTaskRepository;
         this.contextFactory = contextFactory;
         this.taskStore = taskStore;
     }
@@ -94,6 +98,10 @@ public class DashboardService {
         Stats stats = new Stats();
         stats.setProjectCount(projectRepository.count());
         stats.setEnabledProjectCount(projectRepository.countByEnabledTrue());
+        // The second job family: ETL runs from its own table and must not hide behind the
+        // real-time count.
+        stats.setEtlTaskCount(etlTaskRepository.count());
+        stats.setEnabledEtlTaskCount(etlTaskRepository.countByEnabledTrue());
         stats.setDatabaseCount(databaseConfigRepository.count());
 
         // Ordered by id: both the selected-table counting and the first-five overview
@@ -339,6 +347,8 @@ public class DashboardService {
     public static class Stats {
         private long projectCount;
         private long enabledProjectCount;
+        private long etlTaskCount;
+        private long enabledEtlTaskCount;
         private long databaseCount;
         private long syncedTableCount;
         private long changesToday;

@@ -15,7 +15,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.etl.EtlPrecheckResult;
@@ -153,29 +155,70 @@ public class EtlController {
 
     private void addFormOptions(Model model, EtlTask task) {
         List<DatabaseConfig> connections = etlTaskService.connections();
-        model.addAttribute("connections", connections);
+        List<DatabaseConfig> sources = sourceOptions(connections, task);
+        model.addAttribute("connections", sources);
         model.addAttribute("targetConnections", targetOptions(connections, task));
         model.addAttribute("writeModes", EtlWriteMode.values());
+        // The form shows the SQL box or the Mongo fields, never both. Render the half the
+        // task actually uses on the first paint rather than letting app.js correct it, which
+        // would flash an empty extraction box at a Mongo operator.
+        model.addAttribute("sourceMongo",
+                isNativeMongo(sources, task == null ? null : task.getSourceDbId()));
+    }
+
+    /** True when the chosen source is a native MongoDB connection (collection + filter). */
+    private static boolean isNativeMongo(List<DatabaseConfig> sources, Long sourceDbId) {
+        if (sourceDbId == null) {
+            return false;
+        }
+        return sources.stream().anyMatch(source -> sourceDbId.equals(source.getId())
+                && source.effectiveType() == DatabaseType.MONGODB_NATIVE);
     }
 
     /**
-     * Connections a task may write to. Elasticsearch and MongoDB expose a read-only SQL
-     * interface, so they stay in the source list only. A task saved before that restriction
-     * still shows its current target — the save path refuses it with a message, but hiding
-     * the value would make the error impossible to understand.
+     * The two selects are split by the connection's declared purpose, exactly like the
+     * real-time project form: a connection classified as a source is not offered as a target
+     * and the other way around. A task's current pick is still appended when its role no
+     * longer matches — a reclassified connection must render the saved value instead of
+     * silently falling back to a different one.
+     */
+    private static List<DatabaseConfig> sourceOptions(List<DatabaseConfig> connections, EtlTask task) {
+        List<DatabaseConfig> options = connections.stream()
+                .filter(c -> roleOf(c) == ConnectionRole.SOURCE)
+                .collect(Collectors.toCollection(ArrayList::new));
+        appendSelected(connections, options, task == null ? null : task.getSourceDbId());
+        return options;
+    }
+
+    /**
+     * Connections a task may write to: classified as a target and able to take a write.
+     * Elasticsearch and MongoDB expose a read-only SQL interface, so they stay in the source
+     * list only. A task saved before either restriction still shows its current target — the
+     * save path refuses it with a message, but hiding the value would make the error
+     * impossible to understand.
      */
     private static List<DatabaseConfig> targetOptions(List<DatabaseConfig> connections, EtlTask task) {
         List<DatabaseConfig> options = connections.stream()
+                .filter(c -> roleOf(c) == ConnectionRole.TARGET)
                 .filter(DatabaseConfig::supportsEtlTarget)
                 .collect(Collectors.toCollection(ArrayList::new));
-        if (task != null && task.getTargetDbId() != null
-                && options.stream().noneMatch(c -> task.getTargetDbId().equals(c.getId()))) {
+        appendSelected(connections, options, task == null ? null : task.getTargetDbId());
+        return options;
+    }
+
+    /** Rows created before the role column existed are treated as sources, like the backfill. */
+    private static ConnectionRole roleOf(DatabaseConfig config) {
+        return config.getRole() == null ? ConnectionRole.SOURCE : config.getRole();
+    }
+
+    private static void appendSelected(List<DatabaseConfig> connections,
+                                       List<DatabaseConfig> options, Long selectedId) {
+        if (selectedId != null && options.stream().noneMatch(c -> selectedId.equals(c.getId()))) {
             connections.stream()
-                    .filter(c -> task.getTargetDbId().equals(c.getId()))
+                    .filter(c -> selectedId.equals(c.getId()))
                     .findFirst()
                     .ifPresent(options::add);
         }
-        return options;
     }
 
     private Map<Long, String> connectionNames() {

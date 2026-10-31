@@ -42,12 +42,29 @@ final class JdbcEtlSource implements EtlSource {
 
     @Override
     public EtlSourceCursor query(EtlTask task, EtlCheckpointValue checkpoint) throws SQLException {
+        List<String> statements = EtlSqlScript.split(task.getSourceSql());
+        if (statements.isEmpty()) {
+            throw new IllegalArgumentException("error.etl.script.empty");
+        }
+        String select = statements.get(statements.size() - 1);
+        List<String> leading = statements.subList(0, statements.size() - 1);
+        boolean script = !leading.isEmpty();
+        if (script) {
+            // PostgreSQL refuses CREATE TEMP TABLE inside a read-only transaction; the source
+            // account's own grants remain the guard against writes.
+            allowSessionObjects();
+        }
+
         // PostgreSQL needs a transaction for a cursor to stream; a read-only transaction is
         // harmless everywhere.
         connection.setAutoCommit(false);
 
+        if (script) {
+            runLeadingStatements(leading, task);
+        }
+
         boolean resumable = resumable(task);
-        String sql = sourceQuery(task, checkpoint, resumable);
+        String sql = sourceQuery(select, task, checkpoint, resumable);
         PreparedStatement statement = connection.prepareStatement(
                 sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
         try {
@@ -69,13 +86,45 @@ final class JdbcEtlSource implements EtlSource {
 
     @Override
     public EtlSourceProbe probe(EtlTask task, int timeoutSeconds) throws SQLException {
+        List<String> statements = EtlSqlScript.split(task.getSourceSql());
+        String select = statements.isEmpty()
+                ? EtlSqlSupport.stripTrailingSemicolon(task.getSourceSql())
+                : statements.get(statements.size() - 1);
+        boolean script = statements.size() > 1;
+        if (script) {
+            allowSessionObjects();
+            // A precheck must not leave the source changed by the script it just prepared.
+            connection.setAutoCommit(false);
+        }
         try (Statement statement = connection.createStatement()) {
             // Keep the runner's timeout convention: the service always passes a positive value.
             statement.setQueryTimeout(timeoutSeconds);
-            try (ResultSet resultSet = statement.executeQuery(
-                    EtlSqlSupport.zeroRowProbe(task.getSourceSql()))) {
-                return probe(resultSet, task);
+            if (script) {
+                runLeading(statement, statements.subList(0, statements.size() - 1));
             }
+            try (ResultSet resultSet = statement.executeQuery(
+                    EtlSqlSupport.zeroRowProbe(select))) {
+                EtlSourceProbe probe = probe(resultSet, task);
+                if (!script) {
+                    return probe;
+                }
+                List<EtlSourceIssue> issues = new ArrayList<>(probe.issues());
+                issues.add(0, new EtlSourceIssue(EtlPrecheckResult.Level.OK,
+                        "etl.precheck.script.ok", String.valueOf(statements.size())));
+                return new EtlSourceProbe(probe.columns(), probe.resumeKeyIndex(), issues);
+            }
+        } finally {
+            if (script) {
+                rollbackQuietly();
+            }
+        }
+    }
+
+    private void rollbackQuietly() {
+        try {
+            connection.rollback();
+        } catch (SQLException ignored) {
+            // The connection is about to be closed; nothing useful to do here.
         }
     }
 
@@ -138,6 +187,37 @@ final class JdbcEtlSource implements EtlSource {
         }
     }
 
+    // --- script ---------------------------------------------------------------------------
+
+    private void allowSessionObjects() {
+        try {
+            connection.setReadOnly(false);
+        } catch (SQLException ignored) {
+            // Not every driver lets the mode change at this point; the source account's grants
+            // still decide what the script can do.
+        }
+    }
+
+    private void runLeadingStatements(List<String> leading, EtlTask task) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            Integer timeout = task.getTimeoutSeconds();
+            if (timeout != null && timeout > 0) {
+                statement.setQueryTimeout(timeout);
+            }
+            runLeading(statement, leading);
+        }
+    }
+
+    private static void runLeading(Statement statement, List<String> leading) throws SQLException {
+        for (String sql : leading) {
+            if (statement.execute(sql)) {
+                try (ResultSet rows = statement.getResultSet()) {
+                    // A leading statement may return rows; nothing reads them.
+                }
+            }
+        }
+    }
+
     // --- query shape ----------------------------------------------------------------------
 
     private static boolean resumable(EtlTask task) {
@@ -145,9 +225,9 @@ final class JdbcEtlSource implements EtlSource {
         return task.getWriteMode() != EtlWriteMode.OVERWRITE && key != null && !key.isBlank();
     }
 
-    private static String sourceQuery(EtlTask task, EtlCheckpointValue checkpoint,
+    private static String sourceQuery(String select, EtlTask task, EtlCheckpointValue checkpoint,
                                       boolean resumable) {
-        String sql = EtlSqlSupport.stripTrailingSemicolon(task.getSourceSql());
+        String sql = select;
         String key = task.getResumeKeyColumn() == null
                 ? null : task.getResumeKeyColumn().trim();
         if (resumable) {

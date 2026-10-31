@@ -94,12 +94,12 @@ class NavMenuGroupsViewTest {
 
         // The menu entry is the job family, not the old "Project" wording; each workflow is a
         // child, so the real-time engine and ETL no longer compete for one top-level slot.
-        assertThat(page).contains("同步任务", "实时同步", "ETL");
+        assertThat(page).contains("同步任务", "实时同步", "ETL 任务");
         // Match the menu labels, not the logo tagline ("数据库实时同步") that happens to
         // contain the same word.
         assertThat(page.indexOf(">同步任务<")).isLessThan(page.indexOf(">实时同步<"));
         assertThat(page).containsPattern("href=\"/projects\"[\\s\\S]{0,200}>实时同步<");
-        assertThat(page).containsPattern("href=\"/etl\"[\\s\\S]{0,200}>ETL<");
+        assertThat(page).containsPattern("href=\"/etl\"[\\s\\S]{0,200}>ETL 任务<");
         assertThat(page).doesNotContainPattern("href=\"/projects\"[\\s\\S]{0,200}>项目<");
     }
 
@@ -113,9 +113,9 @@ class NavMenuGroupsViewTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertThat(page).contains("Sync tasks", "Real-time sync", "ETL");
+        assertThat(page).contains("Sync tasks", "Real-time sync", "ETL tasks");
         assertThat(page).containsPattern("href=\"/projects\"[\\s\\S]{0,200}>Real-time sync<");
-        assertThat(page).containsPattern("href=\"/etl\"[\\s\\S]{0,200}>ETL<");
+        assertThat(page).containsPattern("href=\"/etl\"[\\s\\S]{0,200}>ETL tasks<");
     }
 
     @Test

@@ -29,6 +29,7 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.connection.DatabaseHealthService;
 import com.qqmu.jync.service.connection.DriverLoader;
+import com.qqmu.jync.service.metadata.ConnectionCatalogService;
 
 /**
  * The connections page asks for health only for the rows it is showing, so the endpoint takes
@@ -43,6 +44,7 @@ class DatabaseHealthApiTest {
     @MockBean private DatabaseConfigService service;
     @MockBean private DatabaseHealthService healthService;
     @MockBean private DriverLoader driverLoader;
+    @MockBean private ConnectionCatalogService catalogService;
 
     private DatabaseConfig config(long id) {
         DatabaseConfig config = new DatabaseConfig();

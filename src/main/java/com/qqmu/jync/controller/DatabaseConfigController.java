@@ -15,6 +15,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.dto.DatabaseConfigForm;
 import com.qqmu.jync.model.ConnectionRole;
+import com.qqmu.jync.model.DatabaseCategory;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.DatabaseConfigService;
@@ -55,7 +56,7 @@ public class DatabaseConfigController {
         config.setHost("localhost");
         config.setPort(DatabaseType.MYSQL.getDefaultPort());
         model.addAttribute("config", config);
-        model.addAttribute("types", DatabaseType.values());
+        model.addAttribute("typeGroups", DatabaseCategory.values());
         model.addAttribute("families", FAMILIES);
         addDriverCardAttributes(model, config);
         return "database-config-form";
@@ -65,7 +66,7 @@ public class DatabaseConfigController {
     public String editForm(@PathVariable Long id, Model model, RedirectAttributes flash) {
         return service.findById(id).map(config -> {
             model.addAttribute("config", config);
-            model.addAttribute("types", DatabaseType.values());
+            model.addAttribute("typeGroups", DatabaseCategory.values());
             model.addAttribute("families", FAMILIES);
             addDriverCardAttributes(model, config);
             return "database-config-form";
