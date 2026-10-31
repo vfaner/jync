@@ -93,6 +93,17 @@ class EtlFormStructureViewTest {
     }
 
     @Test
+    void bothHintsShareTheLineUnderTheTitle() throws Exception {
+        String page = newForm();
+
+        // Two grey paragraphs under "New ETL task" read as two separate instructions. The
+        // batch advice continues the first sentence, so it shares that line.
+        assertThat(page).containsPattern("(?s)<p class=\"sub\">\\s*<span[^>]*>[^<]*</span>\\s*"
+                + "<span[^>]*data-role=\"batch-hint\"[^>]*>[^<]*</span>\\s*</p>");
+        assertThat(page).doesNotContain("class=\"help mb-12\" data-role=\"batch-hint\"");
+    }
+
+    @Test
     void everyDivIsClosedSoTheFormCannotEndEarly() throws Exception {
         String page = newForm();
 

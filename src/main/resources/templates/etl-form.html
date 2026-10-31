@@ -8,7 +8,13 @@
     <div class="page-head">
         <div>
             <h1 th:text="${task.id != null} ? #{etl.form.edit} : #{etl.form.new}">ETL task</h1>
-            <p class="sub" th:text="#{etl.form.hint}">Jync copies the result rows; the query and the target table are yours.</p>
+            <!-- 两句说明同占标题下的一行：第二句是批次建议，只有独立任务显示（成员表单
+                 不显示，它的批次横幅已经说明了归属）。 -->
+            <p class="sub">
+                <span th:text="#{etl.form.hint}">Jync copies the result rows; the query and the target table are yours.</span>
+                <span data-role="batch-hint" th:if="${batch == null}"
+                      th:text="#{etl.form.batchHint}">Tables that share one source and one target belong in a single batch.</span>
+            </p>
         </div>
         <div class="page-actions">
             <a class="btn btn-ghost btn-sm" th:href="@{/etl}">
@@ -30,12 +36,6 @@
                 </a>
             </div>
         </div>
-
-        <!-- 独立任务：同源同目标的多张表更适合放进一个批次，共享连接与调度。成员不显示这条，
-             它的批次横幅已经说明了归属。 -->
-        <div class="help mb-12" data-role="batch-hint" th:if="${batch == null}"
-             th:text="#{etl.form.batchHint}">Tables that share one source and one target belong in
-            a single batch: they share the connection pair and one schedule.</div>
 
         <div class="alert alert-warn">
             <div class="alert-body" th:text="#{etl.form.notice}">
