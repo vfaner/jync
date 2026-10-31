@@ -11,6 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.net.ConnectException;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.List;
@@ -21,6 +22,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.mongodb.MongoSocketOpenException;
+import com.mongodb.ServerAddress;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
@@ -187,7 +190,7 @@ class MongoEtlSourceTest {
 
         assertThatThrownBy(() -> source().query(task(EtlWriteMode.OVERWRITE, null), null))
                 .isInstanceOf(EtlProgramException.class)
-                .hasMessage("error.etl.mongo.field.invalid: bad-name");
+                .hasMessage("error.etl.mongo.field.invalid");
         verify(gateway, never()).find(any(), any(), any(), any(), anyInt(), anyInt());
     }
 
@@ -195,7 +198,7 @@ class MongoEtlSourceTest {
     void aResumeKeyOutsideTheSampleIsAProgramError() {
         assertThatThrownBy(() -> source().query(task(EtlWriteMode.APPEND, "unsampled"), null))
                 .isInstanceOf(EtlProgramException.class)
-                .hasMessage("resume key 'unsampled' is not a field of the sampled documents");
+                .hasMessage("error.etl.mongo.resume.missing");
     }
 
     @Test
@@ -210,18 +213,32 @@ class MongoEtlSourceTest {
     }
 
     @Test
-    void aDriverFailureBecomesASourceException() {
+    void aNonConnectionDriverFailureIsASourceErrorNotAConnectionError() {
         when(gateway.collectionExists(config, COLLECTION))
-                .thenThrow(new IllegalStateException("connection refused"));
+                .thenThrow(new IllegalStateException("cannot sort by this field"));
 
         assertThatThrownBy(() -> source().query(task(EtlWriteMode.OVERWRITE, null), null))
                 .isInstanceOf(EtlSourceException.class)
                 .satisfies(e -> {
                     EtlSourceException failure = (EtlSourceException) e;
+                    // Only a socket/timeout failure is a connection problem; anything else
+                    // would send the operator to the wrong check.
                     assertThat(failure.messageKey())
-                            .isEqualTo("etl.precheck.mongo.connection.error");
-                    assertThat(failure.detail()).isEqualTo("connection refused");
+                            .isEqualTo("etl.precheck.mongo.source.error");
+                    assertThat(failure.detail()).isEqualTo("cannot sort by this field");
                 });
+    }
+
+    @Test
+    void aSocketFailureBecomesAConnectionError() {
+        when(gateway.collectionExists(config, COLLECTION))
+                .thenThrow(new MongoSocketOpenException("connect refused",
+                        new ServerAddress("localhost", 27017), new ConnectException("refused")));
+
+        assertThatThrownBy(() -> source().query(task(EtlWriteMode.OVERWRITE, null), null))
+                .isInstanceOf(EtlSourceException.class)
+                .satisfies(e -> assertThat(((EtlSourceException) e).messageKey())
+                        .isEqualTo("etl.precheck.mongo.connection.error"));
     }
 
     @Test
@@ -297,6 +314,25 @@ class MongoEtlSourceTest {
         assertThat(probe.resumeKeyIndex()).isEqualTo(-1);
         assertThat(probe.issues()).extracting(EtlSourceIssue::code)
                 .contains("etl.precheck.mongo.resume.error");
+    }
+
+    /**
+     * A field may be absent from the first sampled document and present in the others. Looking
+     * only at sample one would warn about a null resume value that does not exist.
+     */
+    @Test
+    void probeUsesTheFirstNonNullResumeValue() {
+        when(gateway.sample(eq(config), eq(COLLECTION), any(Document.class), eq(200), anyInt()))
+                .thenReturn(List.of(
+                        new Document("_id", ID),
+                        new Document("_id", new ObjectId()).append("seq", 5)));
+
+        EtlSourceProbe probe = source().probe(task(EtlWriteMode.APPEND, "seq"), 15);
+
+        assertThat(probe.resumeKeyIndex()).isEqualTo(2);
+        assertThat(probe.issues()).extracting(EtlSourceIssue::code)
+                .contains("etl.precheck.mongo.resume.ok")
+                .doesNotContain("etl.precheck.mongo.resume.null");
     }
 
     @Test

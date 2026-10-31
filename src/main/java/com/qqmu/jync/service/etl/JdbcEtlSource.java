@@ -93,7 +93,9 @@ final class JdbcEtlSource implements EtlSource {
         boolean script = statements.size() > 1;
         if (script) {
             allowSessionObjects();
-            // A precheck must not leave the source changed by the script it just prepared.
+            // Run the script inside a transaction so the rollback below can undo it. That is
+            // best effort only: MySQL-family DDL commits implicitly, so a script that changes
+            // the source may leave it changed — the caller is warned, not reassured.
             connection.setAutoCommit(false);
         }
         try (Statement statement = connection.createStatement()) {
@@ -111,6 +113,12 @@ final class JdbcEtlSource implements EtlSource {
                 List<EtlSourceIssue> issues = new ArrayList<>(probe.issues());
                 issues.add(0, new EtlSourceIssue(EtlPrecheckResult.Level.OK,
                         "etl.precheck.script.ok", String.valueOf(statements.size())));
+                // Leading statements executed against the real source, and the rollback cannot
+                // be relied on for DDL. The operator has to know the precheck may have left
+                // the source changed.
+                issues.add(1, new EtlSourceIssue(EtlPrecheckResult.Level.WARN,
+                        "etl.precheck.script.sideEffects",
+                        String.valueOf(statements.size() - 1)));
                 return new EtlSourceProbe(probe.columns(), probe.resumeKeyIndex(), issues);
             }
         } finally {

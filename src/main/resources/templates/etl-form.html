@@ -155,16 +155,6 @@
                                   th:text="${task.postSql}"></textarea>
                         <div class="help" th:text="#{etl.postSql.hint}">Optional: executed after load, e.g. UPDATE target SET total = amount + tax.</div>
                     </div>
-                        <div class="field">
-                            <label for="writeMode" th:text="#{etl.writeMode}">Write mode</label>
-                            <select class="select" id="writeMode" name="writeMode">
-                                <option th:each="mode : ${writeModes}" th:value="${mode.name()}"
-                                        th:selected="${task.writeMode != null and mode == task.writeMode}"
-                                        th:text="#{${'etl.mode.' + mode.name()}}">Overwrite</option>
-                            </select>
-                            <div class="help" th:text="#{etl.writeMode.hint}">Overwrite deletes all target rows; append never deletes; range overwrite deletes one range.</div>
-                        </div>
-                    </div>
 
                     <div class="grid-2">
                         <div class="field">
@@ -206,11 +196,11 @@
                     </div>
 
                     <div class="btn-row">
-                        <button type="submit" class="btn btn-primary" formaction="@{/etl/save}">
+                        <button type="submit" class="btn btn-primary" th:formaction="@{/etl/save}">
                             <svg class="ico"><use href="#check-lg"/></svg>
                             <span th:text="#{common.save}">Save</span>
                         </button>
-                        <button type="submit" class="btn btn-ghost" formaction="@{/etl/precheck}">
+                        <button type="submit" class="btn btn-ghost" th:formaction="@{/etl/precheck}">
                             <svg class="ico"><use href="#search"/>
                             <span th:text="#{etl.precheck.run}">Precheck</span>
                         </button>

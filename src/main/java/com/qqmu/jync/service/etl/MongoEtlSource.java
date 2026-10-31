@@ -5,6 +5,9 @@ import java.util.List;
 
 import org.bson.Document;
 
+import com.mongodb.MongoSecurityException;
+import com.mongodb.MongoSocketException;
+import com.mongodb.MongoTimeoutException;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
@@ -73,7 +76,9 @@ public final class MongoEtlSource implements EtlSource {
                     config, collection, query, sort, BATCH_SIZE, timeout);
             return new MongoEtlSourceCursor(handle, columns, keyIndex);
         } catch (MongoSchemaException e) {
-            throw new EtlProgramException(e.getMessage());
+            // The key is what the run history shows; the offending field is told by the
+            // precheck check, which reads messageKey() and detail() directly.
+            throw new EtlProgramException(e.messageKey());
         } catch (EtlProgramException | EtlSourceException e) {
             throw e;
         } catch (IllegalArgumentException e) {
@@ -194,8 +199,7 @@ public final class MongoEtlSource implements EtlSource {
                 return i + 1;
             }
         }
-        throw new EtlProgramException(
-                "resume key '" + key + "' is not a field of the sampled documents");
+        throw new EtlProgramException("error.etl.mongo.resume.missing");
     }
 
     private static int checkResumeKey(List<EtlSourceColumn> columns, List<Document> samples,
@@ -216,7 +220,15 @@ public final class MongoEtlSource implements EtlSource {
             issues.add(error("etl.precheck.mongo.resume.error", trimmed));
             return -1;
         }
-        Object value = samples.get(0).get(trimmed);
+        // A field may be missing from the first sampled document and present in the rest;
+        // reading only sample one would warn about a null resume value that does not exist.
+        Object value = null;
+        for (Document sample : samples) {
+            value = sample.get(trimmed);
+            if (value != null) {
+                break;
+            }
+        }
         if (value == null) {
             issues.add(warn("etl.precheck.mongo.resume.null", trimmed));
             return index + 1;
@@ -236,7 +248,25 @@ public final class MongoEtlSource implements EtlSource {
         String message = e.getMessage();
         String detail = message == null || message.isBlank()
                 ? e.getClass().getSimpleName() : message;
-        return new EtlSourceException("etl.precheck.mongo.connection.error", detail, e);
+        String key = isConnectionFailure(e)
+                ? "etl.precheck.mongo.connection.error"
+                : "etl.precheck.mongo.source.error";
+        return new EtlSourceException(key, detail, e);
+    }
+
+    /** A driver failure that points at the server, the network or the credentials. */
+    private static boolean isConnectionFailure(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof MongoSocketException
+                    || current instanceof MongoTimeoutException
+                    || current instanceof MongoSecurityException
+                    || current instanceof java.net.ConnectException
+                    || current instanceof java.net.SocketTimeoutException
+                    || current instanceof java.net.UnknownHostException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static EtlSourceIssue ok(String code, String detail) {

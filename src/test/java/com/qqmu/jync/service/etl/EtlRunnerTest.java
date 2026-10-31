@@ -199,6 +199,117 @@ class EtlRunnerTest {
         assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.TARGET);
     }
 
+    /**
+     * Pre-sql runs on the target connection, so its failure is the target's. Reporting it as a
+     * program error sends the operator looking at the wrong side of the copy.
+     */
+    @Test
+    void aFailingPreSqlIsAttributedToTheTarget() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setPreSql("DELETE FROM not_there");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.TARGET);
+    }
+
+    /** Post-sql is target-side too, including after the last batch was flushed. */
+    @Test
+    void aFailingPostSqlIsAttributedToTheTarget() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setPostSql("UPDATE not_there SET id = 1");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.TARGET);
+    }
+
+    /**
+     * With no rows the copy loop never runs, so the stage would still read as the source. The
+     * post-sql statement still executes on the target and its failure belongs there.
+     */
+    @Test
+    void aFailingPostSqlAfterAnEmptySourceIsStillAttributedToTheTarget() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setPostSql("UPDATE not_there SET id = 1");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.TARGET);
+    }
+
+    /**
+     * A driver that fails while closing the source must not turn a finished copy into a thrown
+     * exception: the caller would then never record the run and the operator would see the task
+     * as never having run.
+     */
+    @Test
+    void aSourceThatCannotBeClosedDoesNotDiscardTheRun() throws SQLException {
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlSourceFactory factory = (config, provider) -> new EtlSource() {
+            @Override
+            public EtlSourceCursor query(EtlTask task, EtlCheckpointValue checkpoint) {
+                return new EtlSourceCursor() {
+                    @Override
+                    public List<EtlSourceColumn> columns() {
+                        return List.of(new EtlSourceColumn(
+                                "id", Types.INTEGER, "INTEGER", null, null, true));
+                    }
+
+                    @Override
+                    public int resumeKeyIndex() {
+                        return -1;
+                    }
+
+                    @Override
+                    public boolean next() {
+                        return false;
+                    }
+
+                    @Override
+                    public Object getObject(int oneBasedIndex) {
+                        return null;
+                    }
+
+                    @Override
+                    public String getString(int oneBasedIndex) {
+                        return null;
+                    }
+
+                    @Override
+                    public void close() {
+                    }
+                };
+            }
+
+            @Override
+            public EtlSourceProbe probe(EtlTask task, int timeoutSeconds) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void close() {
+                throw new IllegalStateException("driver went away");
+            }
+        };
+        EtlRunner guarded = new EtlRunner(
+                new SqlDialectFactory(List.of(), new GenericSqlDialect()), checkpoints, factory);
+
+        EtlRunResult result = guarded.run(task("SELECT id FROM src", "dst",
+                EtlWriteMode.OVERWRITE), source, target, connections);
+
+        assertThat(result.success()).isTrue();
+    }
+
     @Test
     void aRangeOverwriteWithoutAConditionIsRejectedBeforeTouchingTheTarget() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)");

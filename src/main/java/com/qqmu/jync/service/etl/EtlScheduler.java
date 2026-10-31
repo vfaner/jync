@@ -90,11 +90,26 @@ public class EtlScheduler {
         }
         try {
             ScheduledFuture<?> future = scheduler.schedule(
-                    () -> taskService.submit(taskId), new CronTrigger(cron.trim()));
+                    () -> trigger(taskId), new CronTrigger(cron.trim()));
             scheduled.put(taskId, future);
             log.info("ETL task {} scheduled with cron {}", taskId, cron.trim());
         } catch (RuntimeException e) {
             log.warn("ETL task {} could not be scheduled: {}", taskId, e.getMessage());
+        }
+    }
+
+    /** One cron firing. */
+    void trigger(Long taskId) {
+        try {
+            if (!taskService.submit(taskId)) {
+                // The previous run has not finished. Skipping is right — a second copy would
+                // race it — but the operator should be able to see why this firing did nothing.
+                log.info("ETL task {} is still running; the scheduled run was skipped", taskId);
+            }
+        } catch (RuntimeException e) {
+            // The scheduler thread only logs what the trigger throws, and a rejected
+            // submission (queue full, executor shutting down) would otherwise vanish.
+            log.warn("ETL task {} could not be started: {}", taskId, e.getMessage());
         }
     }
 

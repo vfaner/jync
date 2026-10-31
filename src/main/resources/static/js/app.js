@@ -3824,6 +3824,9 @@
         tables = payload.tables || [];
         cache[id] = tables;
         say(tables.length ? loadedLabel(tables.length) : text.empty);
+      }).catch(function () {
+        // 网络或服务端异常也要落到状态行，否则一直停在“加载中”。
+        if (select.value === id) { say(text.failed); }
       });
     }
 

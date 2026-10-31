@@ -83,7 +83,9 @@ public class EtlRunner {
             target = connections.open(targetConfig);
             target.setAutoCommit(false);
 
-            // Execute pre-sql (cleanup, deletions, pre-transformations)
+            // Execute pre-sql (cleanup, deletions, pre-transformations). It runs on the target
+            // connection, so a failure belongs to the target, not to the program.
+            stage = Side.TARGET;
             if (task.getPreSql() != null && !task.getPreSql().isBlank()) {
                 executePreOrPost(target, task, task.getPreSql());
             }
@@ -108,6 +110,11 @@ public class EtlRunner {
                     int keyType = Types.NULL;
                     String keyValue = null;
                     Integer timeout = task.getTimeoutSeconds();
+                    if (timeout != null && timeout > 0) {
+                        // A statement property, not a per-row one: setting it inside the batch
+                        // loop repeats the same driver call once per row.
+                        insert.setQueryTimeout(timeout);
+                    }
 
                     stage = Side.SOURCE;
                     while (cursor.next()) {
@@ -129,9 +136,6 @@ public class EtlRunner {
                             } else {
                                 insert.setObject(i, value);
                             }
-                        }
-                        if (timeout != null && timeout > 0) {
-                            insert.setQueryTimeout(timeout);
                         }
                         insert.addBatch();
                         pending++;
@@ -161,7 +165,10 @@ public class EtlRunner {
             log.info("ETL task {} copied {} rows into {} ({} read)",
                     task.getId(), rowsWritten, targetName, rowsRead);
 
-            // Execute post-sql (updates, calculations, post-processing)
+            // Execute post-sql (updates, calculations, post-processing). Like pre-sql it runs
+            // on the target connection — including after an empty source, where the copy loop
+            // never set the stage.
+            stage = Side.TARGET;
             if (task.getPostSql() != null && !task.getPostSql().isBlank()) {
                 executePreOrPost(target, task, task.getPostSql());
             }
@@ -182,9 +189,9 @@ public class EtlRunner {
             safeRollback(target);
             return EtlRunResult.failure(rowsRead, rowsWritten, Side.PROGRAM, String.valueOf(e.getMessage()));
         } finally {
-            if (source != null) {
-                source.close();
-            }
+            // A driver that fails while closing must not replace the result the caller is
+            // about to record; the run already happened.
+            closeQuietly(source);
             closeQuietly(target);
         }
     }
@@ -379,6 +386,17 @@ public class EtlRunner {
             connection.close();
         } catch (SQLException ignored) {
             // Nothing useful can be done at this point.
+        }
+    }
+
+    private static void closeQuietly(EtlSource source) {
+        if (source == null) {
+            return;
+        }
+        try {
+            source.close();
+        } catch (RuntimeException e) {
+            log.warn("ETL source did not close cleanly: {}", e.getMessage());
         }
     }
 }

@@ -284,6 +284,14 @@ class JdbcEtlSourceTest {
                 "SELECT * FROM (SELECT id FROM t) jync_etl_src WHERE 1 = 0");
         assertThat(probe.issues()).extracting(EtlSourceIssue::code)
                 .contains("etl.precheck.script.ok", "etl.precheck.source.ok");
+        // The rollback is best-effort: MySQL-family DDL commits implicitly, so the precheck
+        // may leave the source changed. The operator has to be told, not reassured.
+        assertThat(probe.issues()).extracting(EtlSourceIssue::code)
+                .contains("etl.precheck.script.sideEffects");
+        assertThat(probe.issues()).filteredOn(
+                        issue -> "etl.precheck.script.sideEffects".equals(issue.code()))
+                .extracting(EtlSourceIssue::level)
+                .containsExactly(EtlPrecheckResult.Level.WARN);
     }
 
     @Test
