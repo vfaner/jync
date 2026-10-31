@@ -66,6 +66,9 @@ class EtlBatchMemberFormViewTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(page).contains("data-role=\"batch-banner\"")
+                // The banner already says the batch owns it; a "put these tables in a batch"
+                // hint here would ask the member to join the batch it is already in.
+                .doesNotContain("data-role=\"batch-hint\"")
                 .contains("nightly")
                 .contains("href=\"/etl/batches/5/edit\"")
                 .contains("type=\"hidden\" name=\"sourceDbId\"")
@@ -88,6 +91,7 @@ class EtlBatchMemberFormViewTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(page).doesNotContain("data-role=\"batch-banner\"")
+                .contains("data-role=\"batch-hint\"")
                 .contains("id=\"sourceDbId\"")
                 .contains("id=\"targetDbId\"")
                 .contains("name=\"cronExpression\"");

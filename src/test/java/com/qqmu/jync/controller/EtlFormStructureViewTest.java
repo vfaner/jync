@@ -80,6 +80,18 @@ class EtlFormStructureViewTest {
         assertThat(page).doesNotContain("placeholder=\"0 2 * * *\"");
     }
 
+    /**
+     * A standalone form is the wrong place to discover that several tables from one source and
+     * one target should have been a batch: the task is created first, then someone has to delete
+     * it and rebuild the schedule inside a batch. The hint belongs on the form, before the save.
+     */
+    @Test
+    void aStandaloneTaskFormSuggestsABatchForTablesSharingConnections() throws Exception {
+        String page = newForm();
+
+        assertThat(page).contains("data-role=\"batch-hint\"");
+    }
+
     @Test
     void everyDivIsClosedSoTheFormCannotEndEarly() throws Exception {
         String page = newForm();

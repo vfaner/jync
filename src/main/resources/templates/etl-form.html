@@ -31,6 +31,12 @@
             </div>
         </div>
 
+        <!-- 独立任务：同源同目标的多张表更适合放进一个批次，共享连接与调度。成员不显示这条，
+             它的批次横幅已经说明了归属。 -->
+        <div class="help mb-12" data-role="batch-hint" th:if="${batch == null}"
+             th:text="#{etl.form.batchHint}">Tables that share one source and one target belong in
+            a single batch: they share the connection pair and one schedule.</div>
+
         <div class="alert alert-warn">
             <div class="alert-body" th:text="#{etl.form.notice}">
                 Jync creates the target table once from the query result if it is missing, and never
