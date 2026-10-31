@@ -1,0 +1,236 @@
+package com.qqmu.jync.service.etl;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.scheduling.support.CronExpression;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.EtlTask;
+import com.qqmu.jync.model.EtlWriteMode;
+import com.qqmu.jync.repository.EtlTaskRepository;
+import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.connection.DataSourceManager;
+
+/** CRUD, validation and execution entry points for ETL tasks. */
+@Service
+public class EtlTaskService {
+
+    private static final Logger log = LoggerFactory.getLogger(EtlTaskService.class);
+
+    private final EtlTaskRepository taskRepository;
+    private final DatabaseConfigService databaseConfigService;
+    private final EtlRunner runner;
+    private final EtlCheckpointStore checkpointStore;
+    private final DataSourceManager dataSourceManager;
+    private final EtlExecutionGuard guard;
+    private final Executor executor;
+    private final ApplicationEventPublisher events;
+
+    public EtlTaskService(EtlTaskRepository taskRepository,
+                          DatabaseConfigService databaseConfigService,
+                          EtlRunner runner,
+                          EtlCheckpointStore checkpointStore,
+                          DataSourceManager dataSourceManager,
+                          EtlExecutionGuard guard,
+                          @Qualifier("etlExecutor") Executor executor,
+                          ApplicationEventPublisher events) {
+        this.taskRepository = taskRepository;
+        this.databaseConfigService = databaseConfigService;
+        this.runner = runner;
+        this.checkpointStore = checkpointStore;
+        this.dataSourceManager = dataSourceManager;
+        this.guard = guard;
+        this.executor = executor;
+        this.events = events;
+    }
+
+    @Transactional(readOnly = true)
+    public List<EtlTask> findAll() {
+        return taskRepository.findAllByOrderByIdDesc();
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<EtlTask> findById(Long id) {
+        return taskRepository.findById(id);
+    }
+
+    @Transactional(readOnly = true)
+    public List<DatabaseConfig> connections() {
+        return databaseConfigService.findAll();
+    }
+
+    public boolean isRunning(Long id) {
+        return guard.isRunning(id);
+    }
+
+    @Transactional
+    public EtlTask save(EtlTask form) {
+        validate(form);
+
+        EtlTask entity;
+        boolean extractionChanged = true;
+        if (form.getId() == null) {
+            entity = new EtlTask();
+            entity.setEnabled(false);
+        } else {
+            entity = taskRepository.findById(form.getId())
+                    .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+            extractionChanged = extractionChanged(entity, form);
+        }
+
+        entity.setName(form.getName().trim());
+        entity.setDescription(trimToNull(form.getDescription()));
+        entity.setSourceDbId(form.getSourceDbId());
+        entity.setTargetDbId(form.getTargetDbId());
+        entity.setSourceSql(form.getSourceSql().trim());
+        entity.setTargetTable(form.getTargetTable().trim());
+        entity.setWriteMode(form.getWriteMode() == null
+                ? EtlWriteMode.OVERWRITE : form.getWriteMode());
+        entity.setRangeCondition(trimToNull(form.getRangeCondition()));
+        entity.setResumeKeyColumn(trimToNull(form.getResumeKeyColumn()));
+        entity.setPreSql(trimToNull(form.getPreSql()));
+        entity.setPostSql(trimToNull(form.getPostSql()));
+        entity.setCronExpression(trimToNull(form.getCronExpression()));
+        entity.setTimeoutSeconds(form.getTimeoutSeconds());
+
+        EtlTask saved = taskRepository.save(entity);
+        if (saved.getId() != null && extractionChanged) {
+            // A resume position only means something for the SQL/table it was produced by.
+            checkpointStore.clear(saved.getId());
+        }
+        events.publishEvent(new EtlTaskChangedEvent(saved.getId(), false));
+        return saved;
+    }
+
+    @Transactional
+    public void setEnabled(Long id, boolean enabled) {
+        EtlTask task = taskRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+        if (enabled && (task.getCronExpression() == null
+                || task.getCronExpression().isBlank())) {
+            throw new IllegalArgumentException("error.etl.cron.required");
+        }
+        task.setEnabled(enabled);
+        taskRepository.save(task);
+        events.publishEvent(new EtlTaskChangedEvent(id, false));
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        if (guard.isRunning(id)) {
+            throw new IllegalStateException("error.etl.running");
+        }
+        checkpointStore.clear(id);
+        taskRepository.deleteById(id);
+        events.publishEvent(new EtlTaskChangedEvent(id, true));
+    }
+
+    /**
+     * Queues one run and returns immediately. Returns false when the task is already running
+     * or no executor slot is free, so the caller can tell the operator nothing was started.
+     */
+    public boolean submit(Long id) {
+        if (!guard.tryAcquire(id)) {
+            return false;
+        }
+        try {
+            executor.execute(() -> {
+                try {
+                    execute(id);
+                } catch (RuntimeException e) {
+                    log.warn("ETL task {} crashed outside the copy loop: {}", id, e.getMessage());
+                } finally {
+                    guard.release(id);
+                }
+            });
+            return true;
+        } catch (RejectedExecutionException e) {
+            // The queue is full. Releasing the guard matters more than the message: otherwise
+            // the task would read as running until restart.
+            guard.release(id);
+            throw new IllegalStateException("error.etl.queue.full");
+        } catch (RuntimeException e) {
+            guard.release(id);
+            throw e;
+        }
+    }
+
+    /** Runs synchronously; used by tests and by the submit wrapper above. */
+    public EtlRunResult execute(Long id) {
+        EtlTask task = taskRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+        EtlRunResult result;
+        try {
+            DatabaseConfig source = databaseConfigService.findById(task.getSourceDbId())
+                    .orElseThrow(() -> new IllegalArgumentException("error.etl.source.missing"));
+            DatabaseConfig target = databaseConfigService.findById(task.getTargetDbId())
+                    .orElseThrow(() -> new IllegalArgumentException("error.etl.target.missing"));
+            try (EtlConnections connections = new EtlConnections(dataSourceManager)) {
+                result = runner.run(task, source, target, connections);
+            }
+        } catch (IllegalArgumentException e) {
+            result = EtlRunResult.failure(0, 0, EtlRunResult.Side.PROGRAM, e.getMessage());
+        }
+
+        record(task, result);
+        return result;
+    }
+
+    private void record(EtlTask task, EtlRunResult result) {
+        task.setLastRunTime(Instant.now());
+        task.setLastRunSuccess(result.success());
+        task.setLastRunResult(result.success()
+                ? "SUCCESS read=" + result.rowsRead() + " written=" + result.rowsWritten()
+                : "FAILED side=" + result.failureSide() + " error=" + result.errorMessage());
+        taskRepository.save(task);
+    }
+
+    // --- validation ---------------------------------------------------------------------
+
+    private void validate(EtlTask task) {
+        if (task.getName() == null || task.getName().isBlank()) {
+            throw new IllegalArgumentException("error.etl.name.required");
+        }
+        if (task.getName().trim().length() > 128) {
+            throw new IllegalArgumentException("error.etl.name.tooLong");
+        }
+        EtlTaskValidation.validateExtraction(task, databaseConfigService);
+        if (task.getCronExpression() != null && !task.getCronExpression().isBlank()
+                && !CronExpression.isValidExpression(task.getCronExpression().trim())) {
+            throw new IllegalArgumentException("error.etl.cron.invalid");
+        }
+        if (task.getTimeoutSeconds() != null && task.getTimeoutSeconds() < 0) {
+            throw new IllegalArgumentException("error.etl.timeout.invalid");
+        }
+    }
+
+    private static boolean extractionChanged(EtlTask before, EtlTask after) {
+        return !Objects.equals(before.getSourceDbId(), after.getSourceDbId())
+                || !Objects.equals(before.getTargetDbId(), after.getTargetDbId())
+                || !Objects.equals(trim(before.getSourceSql()), trim(after.getSourceSql()))
+                || !Objects.equals(trim(before.getTargetTable()), trim(after.getTargetTable()))
+                || before.getWriteMode() != after.getWriteMode()
+                || !Objects.equals(trim(before.getRangeCondition()), trim(after.getRangeCondition()))
+                || !Objects.equals(trim(before.getResumeKeyColumn()), trim(after.getResumeKeyColumn()));
+    }
+
+    private static String trim(String value) {
+        return value == null ? null : value.trim();
+    }
+
+    private static String trimToNull(String value) {
+        String trimmed = trim(value);
+        return trimmed == null || trimmed.isEmpty() ? null : trimmed;
+    }
+}

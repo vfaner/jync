@@ -70,6 +70,9 @@ public class SecurityConfig {
             // go; the POSTs are admin-only by the blanket rule below, so the GET must be too
             // — otherwise a viewer is shown a form whose every submit is refused.
             "/projects/bulk",
+            // ETL forms are the same kind of configuration page; the listing itself stays
+            // readable so a viewer can see what is scheduled.
+            "/etl/new", "/etl/*/edit",
             "/ai/new", "/ai/*/edit",
             // The external-authentication page holds the endpoints credentials are sent to and
             // the shared secret's configuration; a viewer has no use for it, and its Save button

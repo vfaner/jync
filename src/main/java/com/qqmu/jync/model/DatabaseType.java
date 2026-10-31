@@ -306,6 +306,19 @@ public enum DatabaseType {
     }
 
     /**
+     * Whether the full-sync engine can work with this product as a source or a target.
+     *
+     * <p>The engine decides structure, type mapping, upsert form and schema folding from the
+     * {@link DialectFamily}; a product outside every family (H2, or a CUSTOM connection whose
+     * family was never declared) leaves it guessing with generic ANSI SQL. Those products are
+     * not offered for real-time projects. They remain usable in ETL, where the customer
+     * supplies the extraction SQL and Jync only copies rows.
+     */
+    public boolean supportsFullSync() {
+        return family != DialectFamily.GENERIC;
+    }
+
+    /**
      * Whether leaving the port blank is a supported choice that must be preserved.
      *
      * <p>Only products with a {@link #portlessUrlTemplate} qualify. For everything else a

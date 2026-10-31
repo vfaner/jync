@@ -140,7 +140,7 @@ public class SystemLogService {
                 }
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    scannedBytes += line.length() + 1L;
+                    scannedBytes += line.getBytes(StandardCharsets.UTF_8).length + 1L;
                     if (scannedBytes > maxBytesScanned) {
                         truncated = true;
                         break;

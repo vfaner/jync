@@ -473,13 +473,12 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 }
                 target.commit();
             } catch (Exception e) {
-                try { target.rollback(); } catch (SQLException ignored) { }
+                JdbcUtil.rollbackAndClose(target);
                 throw e instanceof RuntimeException r ? r : new RuntimeException(e);
             } finally {
                 try {
                     if (originalAutoCommit) target.setAutoCommit(true);
                 } catch (SQLException ignored) { }
-                try { target.close(); } catch (SQLException ignored) { }
             }
             ctx.requireLease();                                  // 丢租约 → 位点不动,接管方重放
             String file = mark.getFile() != null ? mark.getFile() : lastFile;

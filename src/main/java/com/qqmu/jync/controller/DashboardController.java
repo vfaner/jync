@@ -82,7 +82,7 @@ public class DashboardController {
     /** The trend chart's 24 hourly buckets, drawn by app.js (bindActivityChart). */
     @GetMapping("/dashboard/activity-series")
     @ResponseBody
-    public DashboardService.ActivitySeries activitySeries() {
+    public DashboardService.MultiSeriesActivity activitySeries() {
         return dashboardService.activitySeries();
     }
 }

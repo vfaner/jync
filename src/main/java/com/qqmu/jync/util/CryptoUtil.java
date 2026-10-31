@@ -94,8 +94,9 @@ public class CryptoUtil {
             // Written before encryption was enabled, or the key changed. Use as-is.
             return stored;
         }
+        TextEncryptor current = encryptor;
         try {
-            return encryptor.decrypt(stored.substring(PREFIX.length()));
+            return current.decrypt(stored.substring(PREFIX.length()));
         } catch (Exception e) {
             log.error("Failed to decrypt stored password; the crypto key may have changed "
                     + "since it was saved. Re-enter the password for this connection.");

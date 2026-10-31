@@ -34,8 +34,9 @@ public final class AiEndpointValidator {
 
     /**
      * Validates a base URL, throwing {@link IllegalArgumentException} with an i18n message key.
+     * @return The resolved InetAddress, to avoid duplicate DNS lookups for SSRF protection.
      */
-    public static void validateBaseUrl(String baseUrl) {
+    public static InetAddress validateBaseUrl(String baseUrl) {
         // A blank URL has no scheme either, but URI(null) throws NPE, and both callers treat
         // IllegalArgumentException as the only failure channel — an NPE would escape the
         // "never throws" contract of isPermitted and surface as a 500.
@@ -60,8 +61,22 @@ public final class AiEndpointValidator {
         if (host == null || host.isBlank()) {
             throw new IllegalArgumentException("error.ai.baseUrl.invalid");
         }
-        if (isBlockedHost(host)) {
+        // Check blocked hosts directly
+        String trimmed = host.trim();
+        if (BLOCKED_HOSTS.contains(trimmed.toUpperCase(java.util.Locale.ROOT))
+                || ALIYUN_METADATA_IP.equals(trimmed)) {
             throw new IllegalArgumentException("error.ai.baseUrl.blocked");
+        }
+        try {
+            InetAddress address = InetAddress.getByName(trimmed);
+            // Block link-local addresses to prevent SSRF via DNS rebinding
+            if (address.isLinkLocalAddress()) {
+                throw new IllegalArgumentException("error.ai.baseUrl.blocked");
+            }
+            return address;
+        } catch (UnknownHostException e) {
+            // Unresolvable host: the HTTP call will handle DNS failure
+            return null;
         }
     }
 
@@ -86,6 +101,8 @@ public final class AiEndpointValidator {
         }
         try {
             InetAddress address = InetAddress.getByName(trimmed);
+            // Block link-local addresses (potential metadata/SSRF) while allowing loopback and private
+            // intranet addresses (for Ollama/ML models running on internal network)
             return address.isLinkLocalAddress();
         } catch (UnknownHostException e) {
             // Unresolvable host: harmless for SSRF; the HTTP call later reports the DNS failure.

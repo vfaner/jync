@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.util.JdbcUtil;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.DatabaseType;
@@ -810,7 +811,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             }
             target.commit();
         } catch (Exception e) {
-            try { target.rollback(); } catch (SQLException ignored) { }
+            JdbcUtil.rollbackAndClose(target);
             // P2-3: a flush failure may mean schema drift — the cached bindings that
             // built these statements may still carry columns the source dropped (or
             // miss new ones). Evict them so the retry re-reads metadata instead of
@@ -823,7 +824,6 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             try {
                 if (originalAutoCommit) target.setAutoCommit(true);
             } catch (SQLException ignored) { }
-            try { target.close(); } catch (SQLException ignored) { }
         }
         ctx.requireLease();
         positionStore.advanceLsn(projectId, txLsn);

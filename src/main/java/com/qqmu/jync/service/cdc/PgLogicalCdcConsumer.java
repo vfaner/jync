@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.util.JdbcUtil;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeType;
@@ -711,13 +712,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             }
             target.commit();
         } catch (Exception e) {
-            try { target.rollback(); } catch (SQLException ignored) { }
+            JdbcUtil.rollbackAndClose(target);
             throw e;
         } finally {
             try {
                 if (originalAutoCommit) target.setAutoCommit(true);
             } catch (SQLException ignored) { }
-            try { target.close(); } catch (SQLException ignored) { }
         }
         ctx.requireLease();
         positionStore.advanceLsn(projectId, commitLsn);

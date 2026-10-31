@@ -128,16 +128,22 @@
                    SVG 画；换指标只重画，不再取数。24 个点由服务端补齐，空的钟点记 0。 */-->
             <div class="card chart-card" id="activity-chart"
                  th:attr="data-series-url=@{/dashboard/activity-series},
-                          data-changes-label=#{dashboard.changesSeries},
-                          data-rows-label=#{dashboard.rowsSeries}">
+                          data-sync-label=#{dashboard.syncSeries},
+                          data-etl-label=#{dashboard.etlSeries},
+                          data-sync-rows-label=#{dashboard.rowsSeries},
+                          data-etl-rows-label=#{dashboard.etlRowsSeries}">
                 <div class="card-head">
-                    <h2 th:text="#{dashboard.trend}">Sync trend</h2>
+                    <h2 th:text="#{dashboard.trend}">Activity trend</h2>
                     <div class="card-head-tools">
                         <div class="seg" role="group" th:attr="aria-label=#{dashboard.trend}">
-                            <button type="button" class="seg-btn is-active" data-series="changes"
-                                    th:text="#{dashboard.changesSeries}">Changes</button>
-                            <button type="button" class="seg-btn" data-series="rows"
-                                    th:text="#{dashboard.rowsSeries}">Rows</button>
+                            <button type="button" class="seg-btn is-active" data-series="sync-changes"
+                                    th:text="#{dashboard.syncSeries}">Sync Changes</button>
+                            <button type="button" class="seg-btn" data-series="sync-rows"
+                                    th:text="#{dashboard.rowsSeries}">Sync Rows</button>
+                            <button type="button" class="seg-btn" data-series="etl-changes"
+                                    th:text="#{dashboard.etlSeries}">ETL Changes</button>
+                            <button type="button" class="seg-btn" data-series="etl-rows"
+                                    th:text="#{dashboard.etlRowsSeries}">ETL Rows</button>
                         </div>
                     </div>
                 </div>

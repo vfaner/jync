@@ -89,16 +89,22 @@ class NavMenuGroupsViewTest {
     }
 
     @Test
-    void theSyncEntryIsCalledASyncTask() throws Exception {
+    void theSyncGroupHoldsRealTimeSyncAndEtl() throws Exception {
         String page = render(UserRole.ADMIN);
 
-        // "Project" says nothing about what the entry holds; it is one long-running sync job.
-        assertThat(page).containsPattern("href=\"/projects\"[\\s\\S]{0,200}>同步任务<");
+        // The menu entry is the job family, not the old "Project" wording; each workflow is a
+        // child, so the real-time engine and ETL no longer compete for one top-level slot.
+        assertThat(page).contains("同步任务", "实时同步", "ETL");
+        // Match the menu labels, not the logo tagline ("数据库实时同步") that happens to
+        // contain the same word.
+        assertThat(page.indexOf(">同步任务<")).isLessThan(page.indexOf(">实时同步<"));
+        assertThat(page).containsPattern("href=\"/projects\"[\\s\\S]{0,200}>实时同步<");
+        assertThat(page).containsPattern("href=\"/etl\"[\\s\\S]{0,200}>ETL<");
         assertThat(page).doesNotContainPattern("href=\"/projects\"[\\s\\S]{0,200}>项目<");
     }
 
     @Test
-    void theSyncEntryIsCalledASyncTaskInEnglishToo() throws Exception {
+    void theSyncGroupHoldsRealTimeSyncAndEtlInEnglishToo() throws Exception {
         when(databaseConfigService.findPageByRole(any(), anyInt(), anyInt()))
                 .thenReturn(Page.empty());
         String page = mvc.perform(get("/databases")
@@ -107,7 +113,9 @@ class NavMenuGroupsViewTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertThat(page).containsPattern("href=\"/projects\"[\\s\\S]{0,200}>Sync tasks<");
+        assertThat(page).contains("Sync tasks", "Real-time sync", "ETL");
+        assertThat(page).containsPattern("href=\"/projects\"[\\s\\S]{0,200}>Real-time sync<");
+        assertThat(page).containsPattern("href=\"/etl\"[\\s\\S]{0,200}>ETL<");
     }
 
     @Test

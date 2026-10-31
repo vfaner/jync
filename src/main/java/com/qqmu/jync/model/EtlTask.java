@@ -1,0 +1,133 @@
+package com.qqmu.jync.model;
+
+import java.time.Instant;
+
+import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.EnumType;
+import javax.persistence.Enumerated;
+import javax.persistence.GeneratedValue;
+import javax.persistence.GenerationType;
+import javax.persistence.Id;
+import javax.persistence.Lob;
+import javax.persistence.PrePersist;
+import javax.persistence.PreUpdate;
+import javax.persistence.Table;
+import javax.persistence.Version;
+
+import lombok.Getter;
+import lombok.Setter;
+
+/**
+ * One scheduled or manual extraction-and-load job.
+ *
+ * <p>Deliberately separate from {@link Project}: an ETL job has no polling cursor, no CDC
+ * consumer and no structure synchronization, and must never share the real-time scheduler's
+ * thread pool. Its source SQL is customer-authored; Jync copies the result rows and does not
+ * claim the target matches the source.
+ */
+@Entity
+@Table(name = "etl_task")
+@Getter
+@Setter
+public class EtlTask {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, length = 128)
+    private String name;
+
+    @Column(length = 512)
+    private String description;
+
+    @Column(name = "source_db_id", nullable = false)
+    private Long sourceDbId;
+
+    @Column(name = "target_db_id", nullable = false)
+    private Long targetDbId;
+
+    /** Customer-authored query; its result columns become the target column list. */
+    @Lob
+    @Column(name = "source_sql", nullable = false)
+    private String sourceSql;
+
+    /** Optional SQL executed before extraction: cleanup, deletions, transformations. */
+    @Lob
+    @Column(name = "pre_sql", length = 2000)
+    private String preSql;
+
+    /** Optional SQL executed after load: updates, calculations, post-processing. */
+    @Lob
+    @Column(name = "post_sql", length = 2000)
+    private String postSql;
+
+    /** Plain or schema-qualified table name; the schema defaults to the connection's. */
+    @Column(name = "target_table", nullable = false, length = 256)
+    private String targetTable;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "write_mode", nullable = false, length = 24)
+    private EtlWriteMode writeMode = EtlWriteMode.OVERWRITE;
+
+    /** Raw SQL predicate for {@link EtlWriteMode#RANGE_OVERWRITE}. */
+    @Column(name = "range_condition", length = 1000)
+    private String rangeCondition;
+
+    /**
+     * Optional unique, monotonic column of the query result. When set, APPEND and
+     * RANGE_OVERWRITE resume after the last committed value instead of copying from zero.
+     */
+    @Column(name = "resume_key_column", length = 128)
+    private String resumeKeyColumn;
+
+    /** Optional cron expression; blank means manual-only. */
+    @Column(name = "cron_expression", length = 128)
+    private String cronExpression;
+
+    @Column(nullable = false)
+    private Boolean enabled = false;
+
+    /** Optional per-statement query timeout in seconds; null or 0 means no limit. */
+    @Column(name = "timeout_seconds")
+    private Integer timeoutSeconds;
+
+    @Column(name = "last_run_time")
+    private Instant lastRunTime;
+
+    @Column(name = "last_run_success")
+    private Boolean lastRunSuccess;
+
+    @Lob
+    @Column(name = "last_run_result")
+    private String lastRunResult;
+
+    @Column(name = "created_at")
+    private Instant createdAt;
+
+    @Column(name = "updated_at")
+    private Instant updatedAt;
+
+    @Version
+    @Column(name = "opt_version")
+    private Long optVersion;
+
+    @PrePersist
+    void onCreate() {
+        Instant now = Instant.now();
+        this.createdAt = now;
+        this.updatedAt = now;
+        if (this.enabled == null) {
+            this.enabled = false;
+        }
+        if (this.writeMode == null) {
+            this.writeMode = EtlWriteMode.OVERWRITE;
+        }
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        this.updatedAt = Instant.now();
+    }
+}

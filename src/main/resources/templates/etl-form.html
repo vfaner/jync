@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'etl', 'etl.form.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${task.id != null} ? #{etl.form.edit} : #{etl.form.new}">ETL task</h1>
+            <p class="sub" th:text="#{etl.form.hint}">Jync copies the result rows; the query and the target table are yours.</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/etl}">
+                <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div style="max-width:960px">
+        <div class="alert alert-warn">
+            <div class="alert-body" th:text="#{etl.form.notice}">
+                Jync creates the target table once from the query result if it is missing, and never
+                alters it afterwards. It does not guarantee that the target matches the source.
+            </div>
+        </div>
+
+        <form method="post" th:action="@{/etl/save}">
+            <input type="hidden" name="id" th:value="${task.id}">
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#arrow-repeat"/></svg>
+                        <span th:text="#{etl.form.basic}">Task</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="name" th:text="#{common.name}">Name</label>
+                            <input type="text" class="input" id="name" name="name"
+                                   maxlength="128" required th:value="${task.name}">
+                        </div>
+                        <div class="field">
+                            <label for="description" th:text="#{etl.description}">Description</label>
+                            <input type="text" class="input" id="description" name="description"
+                                   maxlength="512" th:value="${task.description}">
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="sourceDbId">
+                                <svg class="ico"><use href="#box-arrow-up-right"/></svg>
+                                <span th:text="#{etl.source}">Source connection</span><span class="req">*</span>
+                            </label>
+                            <select class="select" id="sourceDbId" name="sourceDbId" required>
+                                <option value="" th:text="#{project.selectDatabase}">-- select --</option>
+                                <option th:each="db : ${connections}" th:value="${db.id}"
+                                        th:selected="${task.sourceDbId != null and db.id == task.sourceDbId}"
+                                        th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="targetDbId">
+                                <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                                <span th:text="#{etl.target}">Target connection</span><span class="req">*</span>
+                            </label>
+                            <select class="select" id="targetDbId" name="targetDbId" required>
+                                <option value="" th:text="#{project.selectDatabase}">-- select --</option>
+                                <option th:each="db : ${connections}" th:value="${db.id}"
+                                        th:selected="${task.targetDbId != null and db.id == task.targetDbId}"
+                                        th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="sourceSql" th:text="#{etl.sourceSql}">Extraction SQL</label>
+                        <textarea class="input" id="sourceSql" name="sourceSql" rows="8"
+                                  required th:text="${task.sourceSql}"></textarea>
+                        <div class="help" th:text="#{etl.sourceSql.hint}">The result columns become the target column list; alias expressions.</div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="targetTable" th:text="#{etl.targetTable}">Target table</label>
+                            <input type="text" class="input" id="targetTable" name="targetTable"
+                                   maxlength="256" required th:value="${task.targetTable}">
+                            <div class="help" th:text="#{etl.targetTable.hint}">Plain or schema-qualified name. Created once when missing, never altered.</div>
+                        </div>
+                        <div class="field">
+                            <label for="writeMode" th:text="#{etl.writeMode}">Write mode</label>
+                            <select class="select" id="writeMode" name="writeMode">
+                                <option th:each="mode : ${writeModes}" th:value="${mode.name()}"
+                                        th:selected="${task.writeMode != null and mode == task.writeMode}"
+                                        th:text="#{${'etl.mode.' + mode.name()}}">Overwrite</option>
+                            </select>
+                            <div class="help" th:text="#{etl.writeMode.hint}">Overwrite deletes all target rows; append never deletes; range overwrite deletes one range.</div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="preSql" th:text="#{etl.preSql}">Pre-sql (before load)</label>
+                        <textarea class="input" id="preSql" name="preSql" rows="2"
+                                  th:text="${task.preSql}"></textarea>
+                        <div class="help" th:text="#{etl.preSql.hint}">Optional: executed before extraction, e.g. DELETE FROM target WHERE dt &lt; '2026-01-01'.</div>
+                    </div>
+
+                    <div class="field">
+                        <label for="postSql" th:text="#{etl.postSql}">Post-sql (after load)</label>
+                        <textarea class="input" id="postSql" name="postSql" rows="2"
+                                  th:text="${task.postSql}"></textarea>
+                        <div class="help" th:text="#{etl.postSql.hint}">Optional: executed after load, e.g. UPDATE target SET total = amount + tax.</div>
+                    </div>
+                        <div class="field">
+                            <label for="writeMode" th:text="#{etl.writeMode}">Write mode</label>
+                            <select class="select" id="writeMode" name="writeMode">
+                                <option th:each="mode : ${writeModes}" th:value="${mode.name()}"
+                                        th:selected="${task.writeMode != null and mode == task.writeMode}"
+                                        th:text="#{${'etl.mode.' + mode.name()}}">Overwrite</option>
+                            </select>
+                            <div class="help" th:text="#{etl.writeMode.hint}">Overwrite deletes all target rows; append never deletes; range overwrite deletes one range.</div>
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="rangeCondition" th:text="#{etl.rangeCondition}">Range condition</label>
+                            <input type="text" class="input" id="rangeCondition" name="rangeCondition"
+                                   maxlength="1000" th:value="${task.rangeCondition}">
+                            <div class="help" th:text="#{etl.rangeCondition.hint}">Required for range overwrite; raw SQL after WHERE, e.g. dt &gt;= '2026-01-01'.</div>
+                        </div>
+                        <div class="field">
+                            <label for="resumeKeyColumn" th:text="#{etl.resumeKey}">Resume key</label>
+                            <input type="text" class="input" id="resumeKeyColumn" name="resumeKeyColumn"
+                                   maxlength="128" th:value="${task.resumeKeyColumn}">
+                            <div class="help" th:text="#{etl.resumeKey.hint}">Optional unique monotonic result column. Enables resuming append and range overwrite.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top:16px">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#clock"/></svg>
+                        <span th:text="#{etl.form.schedule}">Schedule</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="cronExpression" th:text="#{etl.cron}">Cron expression</label>
+                            <input type="text" class="input" id="cronExpression" name="cronExpression"
+                                   maxlength="128" placeholder="0 2 * * *" th:value="${task.cronExpression}">
+                            <div class="help" th:text="#{etl.cron.hint}">Leave blank for manual-only. Saving does not enable the task; use the start button in the list.</div>
+                        </div>
+                        <div class="field">
+                            <label for="timeoutSeconds" th:text="#{etl.timeout}">Query timeout (seconds)</label>
+                            <input type="number" class="input" id="timeoutSeconds" name="timeoutSeconds"
+                                   min="0" th:value="${task.timeoutSeconds}">
+                            <div class="help" th:text="#{etl.timeout.hint}">Blank or 0 means no limit.</div>
+                        </div>
+                    </div>
+
+                    <div class="btn-row">
+                        <button type="submit" class="btn btn-primary" formaction="@{/etl/save}">
+                            <svg class="ico"><use href="#check-lg"/></svg>
+                            <span th:text="#{common.save}">Save</span>
+                        </button>
+                        <button type="submit" class="btn btn-ghost" formaction="@{/etl/precheck}">
+                            <svg class="ico"><use href="#search"/>
+                            <span th:text="#{etl.precheck.run}">Precheck</span>
+                        </button>
+                        <a class="btn btn-ghost" th:href="@{/etl}" th:text="#{common.cancel}">Cancel</a>
+                    </div>
+                </div>
+            </div>
+        </form>
+
+        <div class="card" style="margin-top:16px" th:if="${task.id != null and task.lastRunResult != null}">
+            <div class="card-head">
+                <h2><svg class="ico"><use href="#clock-history"/></svg>
+                    <span th:text="#{etl.lastRun}">Last run</span></h2>
+            </div>
+            <div class="card-body">
+                <p class="small muted"
+                   th:text="${task.lastRunTime != null}
+                            ? ${#temporals.format(task.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
+                            : #{common.never}">Never</p>
+                <pre class="small" style="white-space:pre-wrap" th:text="${task.lastRunResult}">result</pre>
+                <span class="badge badge-ok" th:if="${running}"
+                      th:text="#{etl.running}">Running</span>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top:16px" th:if="${precheck != null or precheckError != null}">
+            <div class="card-head">
+                <h2><svg class="ico"><use href="#check-circle-fill"/></svg>
+                    <span th:text="#{etl.precheck.title}">Precheck</span></h2>
+            </div>
+            <div class="card-body">
+                <div th:if="${precheckError != null}" class="alert alert-danger">
+                    <div class="alert-body" th:text="#{precheckError}">Precheck failed: invalid task</div>
+                </div>
+
+                <div th:if="${precheck != null}">
+                    <div class="mb-12">
+                        <span class="badge"
+                              th:class="${precheck.passed()} ? 'badge-ok' : 'badge-danger'"
+                              th:text="#{${precheck.passed() ? 'etl.precheck.summary.passed' : 'etl.precheck.summary.failed'}}">
+                            Passed / Failed
+                        </span>
+                        <span class="small muted ml-8" th:text="#{etl.precheck.columns}">Columns in result: {0}</span>
+                    </div>
+
+                    <div class="grid" style="grid-template-columns: 1fr 1fr; gap:16px">
+                        <div>
+                            <h3 class="small" th:text="#{etl.precheck.checks}">Checks</h3>
+                            <div th:if="${precheck.checks.isEmpty()}" class="small muted">No checks performed (empty task?)</div>
+                            <div th:each="check : ${precheck.checks}" class="mb-4">
+                                <span class="badge"
+                                      th:class="${check.level.name() == 'OK' ? 'badge-ok' : check.level.name() == 'WARN' ? 'badge-warn' : 'badge-danger'}"
+                                      th:text="${check.code}">Code</span>
+                                <span class="small" th:text="${check.detail}">(detail)</span>
+                            </div>
+                        </div>
+                        <div>
+                            <h3 class="small" th:text="#{etl.precheck.resultColumns}">Result columns</h3>
+                            <div class="small" th:if="${precheck.columns.isEmpty()}" th:text="#{etl.precheck.noColumns}">No columns (empty query?)</div>
+                            <div th:each="col : ${precheck.columns}" class="flex justify-between mb-2">
+                                <span class="mono small" th:text="${col.name}">name</span>
+                                <span class="muted small" th:text="${col.typeName}">type</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

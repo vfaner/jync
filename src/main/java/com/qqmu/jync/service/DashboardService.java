@@ -42,6 +42,7 @@ public class DashboardService {
 
     /** Hours the trend chart covers, including the one in progress. */
     static final int SERIES_HOURS = 24;
+    private final ChangeLogRepository changeLogRepository;
 
     private static final DateTimeFormatter HOUR_LABEL =
             DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT);
@@ -49,7 +50,6 @@ public class DashboardService {
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
     private final SyncProgressRepository progressRepository;
-    private final ChangeLogRepository changeLogRepository;
     private final SyncContextFactory contextFactory;
     private final SyncTaskStore taskStore;
 
@@ -163,8 +163,8 @@ public class DashboardService {
      * days back while the axis still claimed "the last 24 hours".
      */
     @Transactional(readOnly = true)
-    public ActivitySeries activitySeries() {
-        return activitySeries(Instant.now());
+    public MultiSeriesActivity activitySeries() {
+        return multiSeriesActivitySeries(Instant.now());
     }
 
     /** The first hour of the window both the trend chart and the "Changes (24h)" tile cover. */
@@ -172,34 +172,49 @@ public class DashboardService {
         return now.truncatedTo(ChronoUnit.HOURS).minus(SERIES_HOURS - 1, ChronoUnit.HOURS);
     }
 
-    ActivitySeries activitySeries(Instant now) {
+    @Transactional(readOnly = true)
+    MultiSeriesActivity multiSeriesActivitySeries(Instant now) {
         Instant start = seriesStart(now);
 
-        Map<Instant, long[]> byHour = new HashMap<>();
+        Map<Instant, long[]> syncByHour = new HashMap<>();
+        Map<Instant, long[]> etlByHour = new HashMap<>();
+
         for (Object[] row : changeLogRepository.hourlySeriesBetween(
                 new java.sql.Timestamp(start.toEpochMilli()),
                 new java.sql.Timestamp(now.toEpochMilli()))) {
             Instant hour = hourOf(row[0]);
-            if (hour != null) {
-                byHour.put(hour, new long[] {
-                        ((Number) row[1]).longValue(), ((Number) row[2]).longValue()});
+            if (hour == null) continue;
+            long changes = ((Number) row[1]).longValue();
+            long rows = ((Number) row[2]).longValue();
+            String changeType = row[3] != null ? row[3].toString() : "";
+            if ("INFO".equals(changeType)) {
+                etlByHour.put(hour, new long[] {changes, rows});
+            } else {
+                syncByHour.put(hour, new long[] {changes, rows});
             }
         }
 
         ZoneId zone = ZoneId.systemDefault();
         List<SeriesPoint> points = new ArrayList<>(SERIES_HOURS);
-        long totalChanges = 0;
-        long totalRows = 0;
+        long totalSyncChanges = 0, totalSyncRows = 0;
+        long totalEtlChanges = 0, totalEtlRows = 0;
+
         for (int i = 0; i < SERIES_HOURS; i++) {
             Instant hour = start.plus(i, ChronoUnit.HOURS);
-            long[] bucket = byHour.get(hour);
-            long changes = bucket == null ? 0 : bucket[0];
-            long rows = bucket == null ? 0 : bucket[1];
-            points.add(new SeriesPoint(HOUR_LABEL.format(hour.atZone(zone)), changes, rows));
-            totalChanges += changes;
-            totalRows += rows;
+            long[] sync = syncByHour.get(hour);
+            long[] etl = etlByHour.get(hour);
+            long syncChanges = sync == null ? 0 : sync[0];
+            long syncRows = sync == null ? 0 : sync[1];
+            long etlChanges = etl == null ? 0 : etl[0];
+            long etlRows = etl == null ? 0 : etl[1];
+            points.add(new SeriesPoint(HOUR_LABEL.format(hour.atZone(zone)),
+                    syncChanges, syncRows, etlChanges, etlRows));
+            totalSyncChanges += syncChanges;
+            totalSyncRows += syncRows;
+            totalEtlChanges += etlChanges;
+            totalEtlRows += etlRows;
         }
-        return new ActivitySeries(points, totalChanges, totalRows);
+        return new MultiSeriesActivity(points, totalSyncChanges, totalSyncRows, totalEtlChanges, totalEtlRows);
     }
 
     /** The hour boundary as an instant, whichever temporal type the driver handed back. */
@@ -220,12 +235,16 @@ public class DashboardService {
         return null;
     }
 
-    /** One hour of the trend chart, labelled in the server's zone. */
-    public record SeriesPoint(String label, long changes, long rows) {
+    /** One hour of the multi-series trend chart: sync and ETL values. */
+    public record SeriesPoint(String label,
+                               long syncChanges, long syncRows,
+                               long etlChanges, long etlRows) {
     }
 
-    /** The whole trend window plus its totals, for the chart header. */
-    public record ActivitySeries(List<SeriesPoint> points, long totalChanges, long totalRows) {
+    /** The whole trend window plus totals for both real-time sync and ETL. */
+    public record MultiSeriesActivity(List<SeriesPoint> points,
+                                       long totalSyncChanges, long totalSyncRows,
+                                       long totalEtlChanges, long totalEtlRows) {
     }
 
     /** Dashboard figures. */

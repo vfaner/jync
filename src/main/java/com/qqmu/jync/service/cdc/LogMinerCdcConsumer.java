@@ -26,6 +26,7 @@ import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
+import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -645,13 +646,12 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             }
             target.commit();
         } catch (Exception e) {
-            try { target.rollback(); } catch (java.sql.SQLException ignored) { }
+            JdbcUtil.rollbackAndClose(target);
             throw e;
         } finally {
             try {
                 if (originalAutoCommit) target.setAutoCommit(true);
             } catch (java.sql.SQLException ignored) { }
-            try { target.close(); } catch (java.sql.SQLException ignored) { }
         }
         ctx.requireLease();
         positionStore.advanceScn(projectId, csn);

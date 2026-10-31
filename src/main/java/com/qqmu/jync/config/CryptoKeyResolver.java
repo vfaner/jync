@@ -130,7 +130,8 @@ public final class CryptoKeyResolver {
      * redo with this key" (see {@link LegacyCryptoKeyMigration}).
      */
     public boolean pendingKeyFileExists() {
-        return Files.exists(pendingKeyFile());
+        // Reject directories to avoid confusing errors if a directory is left at the pending path.
+        return Files.isRegularFile(pendingKeyFile());
     }
 
     /** Reads the live key file; used when it appeared after the environment was resolved. */
@@ -227,17 +228,21 @@ public final class CryptoKeyResolver {
             Properties props = new Properties();
             props.setProperty("password", password);
             props.setProperty("salt", salt);
-            try (OutputStream out = Files.newOutputStream(keyFile)) {
-                props.store(out, "Jync first-boot crypto key — do not share");
-            }
-            // Owner-only so the secret is not world-readable on multi-user hosts. Best effort:
-            // a filesystem without POSIX permissions simply keeps its own defaults.
+            // Create file with owner-only permissions atomically to avoid race condition
+            // where a process could read the default-permission file before chmod
+            java.util.Set<java.nio.file.attribute.PosixFilePermission> perms =
+                    java.util.Set.of(java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                            java.nio.file.attribute.PosixFilePermission.OWNER_WRITE);
             try {
-                Files.setPosixFilePermissions(keyFile, java.util.Set.of(
-                        java.nio.file.attribute.PosixFilePermission.OWNER_READ,
-                        java.nio.file.attribute.PosixFilePermission.OWNER_WRITE));
-            } catch (UnsupportedOperationException | IOException ignored) {
-                // Not a POSIX filesystem (e.g. Windows): nothing more to do.
+                Files.createFile(keyFile, java.nio.file.attribute.PosixFilePermissions.asFileAttribute(perms));
+                try (OutputStream out = Files.newOutputStream(keyFile)) {
+                    props.store(out, "Jync first-boot crypto key — do not share");
+                }
+            } catch (UnsupportedOperationException | IOException e) {
+                // If POSIX permissions are not supported, fall back to default behavior
+                try (OutputStream out = Files.newOutputStream(keyFile)) {
+                    props.store(out, "Jync first-boot crypto key — do not share");
+                }
             }
         } catch (IOException e) {
             // Failing to persist means the next boot would regenerate a different key and

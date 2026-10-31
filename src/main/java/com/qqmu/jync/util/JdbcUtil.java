@@ -86,4 +86,24 @@ public final class JdbcUtil {
         }
         return s;
     }
+
+    /**
+     * Rolls back the connection (if open) and closes it, ignoring any SQLException.
+     * Prepares a connection for reuse or disposal after an error.
+     */
+    public static void rollbackAndClose(Connection conn) {
+        if (conn == null) {
+            return;
+        }
+        try {
+            conn.rollback();
+        } catch (SQLException ignored) {
+            // Ignore rollback errors during cleanup
+        }
+        try {
+            conn.close();
+        } catch (SQLException ignored) {
+            // Ignore close errors during cleanup
+        }
+    }
 }

@@ -92,8 +92,10 @@ class DashboardLiveViewTest {
 
         assertThat(html).contains("id=\"activity-chart\"")
                 .contains("data-series-url=\"/dashboard/activity-series\"")
-                .contains("data-changes-label=\"变更数\"")
-                .contains("data-rows-label=\"同步行数\"");
+                .contains("data-sync-label=")
+                .contains("data-etl-label=")
+                .contains("data-sync-rows-label=")
+                .contains("data-etl-rows-label=");
     }
 
     @Test
@@ -209,11 +211,15 @@ class DashboardLiveViewTest {
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.points", hasSize(24)))
-                .andExpect(jsonPath("$.points[23].changes").value(7))
-                .andExpect(jsonPath("$.points[23].rows").value(70))
+                .andExpect(jsonPath("$.points[23].syncChanges").value(7))
+                .andExpect(jsonPath("$.points[23].syncRows").value(70))
+                .andExpect(jsonPath("$.points[23].etlChanges").value(2))
+                .andExpect(jsonPath("$.points[23].etlRows").value(20))
                 .andExpect(jsonPath("$.points[23].label").value("10:00"))
-                .andExpect(jsonPath("$.totalChanges").value(7))
-                .andExpect(jsonPath("$.totalRows").value(70));
+                .andExpect(jsonPath("$.totalSyncChanges").value(7))
+                .andExpect(jsonPath("$.totalSyncRows").value(70))
+                .andExpect(jsonPath("$.totalEtlChanges").value(2))
+                .andExpect(jsonPath("$.totalEtlRows").value(20));
     }
 
     /** A seeded-password account sees an empty page, so nothing may start polling. */
@@ -245,13 +251,13 @@ class DashboardLiveViewTest {
         return stats;
     }
 
-    private static DashboardService.ActivitySeries series() {
+    private static DashboardService.MultiSeriesActivity series() {
         List<DashboardService.SeriesPoint> points = new ArrayList<>();
         for (int i = 0; i < 23; i++) {
-            points.add(new DashboardService.SeriesPoint("09:00", 0, 0));
+            points.add(new DashboardService.SeriesPoint("09:00", 0, 0, 0, 0));
         }
-        points.add(new DashboardService.SeriesPoint("10:00", 7, 70));
-        return new DashboardService.ActivitySeries(points, 7, 70);
+        points.add(new DashboardService.SeriesPoint("10:00", 7, 70, 2, 20));
+        return new DashboardService.MultiSeriesActivity(points, 7, 70, 2, 20);
     }
 
     private static RequestPostProcessor as(boolean usingDefaultPassword) {

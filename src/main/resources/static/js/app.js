@@ -2524,11 +2524,13 @@
     var totalEl = card.querySelector('.chart-total');
     var emptyEl = card.querySelector('.chart-empty');
     var url = card.getAttribute('data-series-url') || '/dashboard/activity-series';
-    var legend = {
-      changes: card.getAttribute('data-changes-label') || 'Changes',
-      rows: card.getAttribute('data-rows-label') || 'Rows'
+    var labels = {
+      sync: card.getAttribute('data-sync-label') || 'Sync Changes',
+      etl: card.getAttribute('data-etl-label') || 'ETL Changes',
+      'sync-rows': card.getAttribute('data-rows-label') || 'Sync Rows',
+      'etl-rows': card.getAttribute('data-etl-rows-label') || 'ETL Rows'
     };
-    var metric = 'changes';
+    var metric = 'sync-changes'; // Default to sync changes
     var data = null;
     var tip = null;
 
@@ -2575,13 +2577,23 @@
       var points = data.points || [];
       var values = [];
       var max = 0;
+
+      // 解析当前 metric，例如 'sync-changes' → series='sync', type='changes'
+      var parts = metric.split('-');
+      var series = parts[0]; // 'sync' or 'etl'
+      var type = parts[1];    // 'changes' or 'rows'
+
       for (var i = 0; i < points.length; i++) {
-        var v = Number(points[i][metric]) || 0;
+        var v = type === 'changes'
+          ? Number(points[i][series + 'Changes']) || 0
+          : Number(points[i][series + 'Rows']) || 0;
         values.push(v);
         if (v > max) max = v;
       }
-      var total = metric === 'changes'
-        ? Number(data.totalChanges) || 0 : Number(data.totalRows) || 0;
+
+      // 计算总和
+      var totalKey = 'total' + (series === 'sync' ? 'Sync' : 'Etl') + (type === 'changes' ? 'Changes' : 'Rows');
+      var total = Number(data[totalKey]) || 0;
       if (totalEl) totalEl.textContent = group3(total);
 
       clearChart();
@@ -2605,13 +2617,16 @@
       var plotH = Math.max(1, height - padT - padB);
       var scale = plotH / top;
 
-      var brand = cssVar('--brand', '#4f46e5');
-      var accent = cssVar('--accent', '#ec4899');
-      var ok = cssVar('--ok', '#10b981');
-      var line = cssVar('--line', '#e2e8f0');
-      var muted = cssVar('--ink-mute', '#94a3b8');
-      var from = metric === 'changes' ? brand : ok;
-      var to = metric === 'changes' ? accent : '#34d399';
+      // 双系列颜色配置
+      var colors = {
+        'sync-changes': cssVar('--brand', '#4f46e5'),
+        'sync-rows': cssVar('--ok', '#10b981'),
+        'etl-changes': cssVar('--accent', '#ec4899'),
+        'etl-rows': '#34d399'
+      };
+      var color = colors[metric] || colors['sync-changes'];
+      var from = color;
+      var to = color;
 
       var svg = el('svg', { width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
       var defs = el('defs', {});
@@ -2626,11 +2641,11 @@
         var gy = padT + (plotH / 4) * g;
         svg.appendChild(el('line', {
           x1: padL, y1: gy, x2: padL + plotW, y2: gy,
-          stroke: line, 'stroke-width': 1, 'stroke-dasharray': g === 4 ? '' : '3 5'
+          stroke: cssVar('--line', '#e2e8f0'), 'stroke-width': 1, 'stroke-dasharray': g === 4 ? '' : '3 5'
         }));
         var label = el('text', {
           x: padL - 8, y: gy + 4, 'text-anchor': 'end',
-          'font-size': '11', fill: muted
+          'font-size': '11', fill: cssVar('--ink-mute', '#94a3b8')
         });
         label.textContent = group3(top - tickStep * g);
         svg.appendChild(label);
@@ -2680,7 +2695,7 @@
       function addLabel(text, cx, anchor) {
         var t = el('text', {
           x: cx, y: padT + plotH + 17, 'text-anchor': anchor,
-          'font-size': '11', fill: muted
+          'font-size': '11', fill: cssVar('--ink-mute', '#94a3b8')
         });
         t.textContent = text;
         svg.appendChild(t);
@@ -2728,8 +2743,14 @@
         dot.setAttribute('cx', point.x);
         dot.setAttribute('cy', point.y);
         dot.setAttribute('opacity', 1);
-        tip.innerHTML = '<b>' + group3(values[index]) + '</b> ' + legend[metric];
-        tip.appendChild(document.createTextNode(' · ' + points[index].label));
+
+        // 显示详细数据
+        var pointData = points[index];
+        var valueText = group3(values[index]);
+        var seriesLabel = labels[metric] || metric;
+        tip.innerHTML = '<b>' + valueText + '</b> ' + seriesLabel;
+        tip.appendChild(document.createTextNode(' · ' + pointData.label));
+        // 如果是切换的双系列，可能需要显示两个值
         tip.style.left = point.x + 'px';
         tip.style.top = (point.y - 12) + 'px';
         tip.className = 'chart-tip is-on';

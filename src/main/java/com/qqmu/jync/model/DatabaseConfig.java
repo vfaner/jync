@@ -74,6 +74,17 @@ public class DatabaseConfig {
         return type != null && type.upsertCountsDistinguishInsertFromUpdate();
     }
 
+    /**
+     * Whether this connection may take part in a real-time project, as source or target.
+     * A CUSTOM connection answers from the family the user declared, so declaring one makes
+     * the product eligible; declaring none leaves the generic dialect in charge and the
+     * connection ETL-only.
+     */
+    public boolean supportsFullSync() {
+        DatabaseType effective = effectiveType();
+        return effective != null && effective.supportsFullSync();
+    }
+
     /** The SQL family this connection speaks: the preset's own, or CUSTOM's declared one. */
     public DatabaseType.DialectFamily resolvedFamily() {
         if (type == null) {

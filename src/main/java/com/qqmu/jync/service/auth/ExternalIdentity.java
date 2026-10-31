@@ -57,6 +57,11 @@ public final class ExternalIdentity {
      */
     public static boolean secretMatches(OaAuthConfig config, String presented, CryptoUtil crypto) {
         if (config.getSecretHeaderName() == null) {
+            // If in HEADER mode, we need a secret header name configured for validation
+            if (config.modeOrDefault() == OaAuthConfig.Mode.HEADER) {
+                return false;
+            }
+            // For non-header modes, no secret header is needed
             return true;
         }
         if (presented == null) {

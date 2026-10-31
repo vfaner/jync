@@ -186,7 +186,12 @@ public class ProjectController {
     }
 
     private List<DatabaseConfig> optionsForRole(ConnectionRole role, Long selectedId) {
-        List<DatabaseConfig> options = new ArrayList<>(databaseConfigService.findByRole(role));
+        List<DatabaseConfig> options = databaseConfigService.findByRole(role).stream()
+                .filter(DatabaseConfig::supportsFullSync)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        // The current selection is appended even when it is no longer eligible: an existing
+        // project keeps rendering the connection it was saved with instead of silently
+        // losing the value and saving the change back to a different one.
         if (selectedId != null && options.stream().noneMatch(c -> selectedId.equals(c.getId()))) {
             databaseConfigService.findById(selectedId).ifPresent(options::add);
         }
