@@ -75,6 +75,29 @@ class AlertSettingsViewTest {
         assertThat(page).contains("发送测试消息");
     }
 
+    /**
+     * A desktop window is wide enough for both cards; stacking them in one 860px column left
+     * half the screen empty. The two cards share one grid, and the single POST form still
+     * wraps both of them plus the action row — the buttons may leave the category card, but
+     * they must not leave the form.
+     */
+    @Test
+    void theCardsSitSideBySideInOneForm() throws Exception {
+        String page = render();
+
+        assertThat(page).contains("class=\"split split-cols\"");
+        int form = page.indexOf("id=\"alert-settings-form\"");
+        int split = page.indexOf("class=\"split split-cols\"");
+        int delivery = page.indexOf("推送设置");
+        int categories = page.indexOf("告警分类");
+        int save = page.indexOf(">保存</span>");
+        assertThat(form).isGreaterThanOrEqualTo(0);
+        assertThat(split).isGreaterThan(form);
+        assertThat(delivery).isGreaterThan(split);
+        assertThat(categories).isGreaterThan(delivery);
+        assertThat(save).isGreaterThan(categories);
+    }
+
     @Test
     void onlyTheSavedCategoriesArePrefilled() throws Exception {
         String page = render();

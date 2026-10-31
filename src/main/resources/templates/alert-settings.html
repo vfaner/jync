@@ -14,7 +14,7 @@
         </div>
     </div>
 
-    <div style="max-width:860px">
+    <div style="max-width:1180px">
 
         <div class="alert alert-danger" th:if="${formError}">
             <svg class="ico"><use href="#x-circle-fill"/></svg>
@@ -27,6 +27,11 @@
 
         <form id="alert-settings-form" method="post" th:action="@{/alert-settings}" th:object="${form}">
 
+          <!-- 桌面宽屏两卡并排；1100px 以下由 .split 的媒体查询退回单列。
+               每张卡各包一层 div：否则 .card + .card 会在右卡上加 margin-top，
+               单列时和网格间距叠加成双倍行距。 -->
+          <div class="split split-cols">
+            <div>
             <div class="card">
                 <div class="card-head">
                     <h2><svg class="ico"><use href="#activity"/></svg>
@@ -92,7 +97,9 @@
                     </div>
                 </div>
             </div>
+            </div>
 
+            <div>
             <div class="card">
                 <div class="card-head">
                     <h2><svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
@@ -114,19 +121,23 @@
                         </label>
                     </div>
 
-                    <div class="btn-row">
-                        <button type="submit" class="btn btn-primary">
-                            <svg class="ico"><use href="#check-lg"/></svg>
-                            <span th:text="#{alert.save}">Save</span>
-                        </button>
-                        <button type="submit" class="btn btn-ghost"
-                                th:formaction="@{/alert-settings/test}"
-                                th:formnovalidate="true">
-                            <svg class="ico"><use href="#activity"/></svg>
-                            <span th:text="#{alert.test}">Send a test message</span>
-                        </button>
-                    </div>
                 </div>
+            </div>
+            </div>
+          </div>
+
+            <!-- 两个按钮留在同一个表单里，只是搬到两卡下方通栏，左右都够得着 -->
+            <div class="btn-row">
+                <button type="submit" class="btn btn-primary">
+                    <svg class="ico"><use href="#check-lg"/></svg>
+                    <span th:text="#{alert.save}">Save</span>
+                </button>
+                <button type="submit" class="btn btn-ghost"
+                        th:formaction="@{/alert-settings/test}"
+                        th:formnovalidate="true">
+                    <svg class="ico"><use href="#activity"/></svg>
+                    <span th:text="#{alert.test}">Send a test message</span>
+                </button>
             </div>
         </form>
     </div>
