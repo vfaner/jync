@@ -80,6 +80,9 @@ public class SecurityConfig {
             // too, rather than advertising the new address to a viewer.
             "/external-auth",
             "/oa/settings",
+            // The alerting page holds the webhook URL — a bearer credential — and every POST
+            // that changes it is admin-only anyway, so the GET is locked with them.
+            "/alert-settings",
             "/api/databases/discover-drivers",
             // Health dots open one connection per listed database. Read-only in the HTTP
             // sense, but it dials production sources, exactly like the probes below; the

@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.model.ChangeLog;
+import com.qqmu.jync.model.ChangeType;
 
 public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
 
@@ -50,6 +51,12 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
                                        @Param("until") java.sql.Timestamp until);
 
     long countByProjectId(Long projectId);
+
+    /** The alert evaluator's window: failed rows recent enough to describe a live fault. */
+    List<ChangeLog> findBySuccessFalseAndOccurredAtAfter(Instant since);
+
+    /** Successful rows of one type, used to spot row-count repairs in the last few minutes. */
+    List<ChangeLog> findByChangeTypeAndOccurredAtAfter(ChangeType type, Instant since);
 
     // Failure-only view of the log: the operator triaging problems wants the error rows
     // without the successful traffic around them.

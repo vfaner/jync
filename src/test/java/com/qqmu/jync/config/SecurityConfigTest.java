@@ -334,6 +334,16 @@ class SecurityConfigTest {
         assertThat(statusOf(get("/system-logs").with(asViewer()))).isEqualTo(200);
     }
 
+    /**
+     * The alerting page holds the webhook URL — a bearer credential for whatever endpoint it
+     * points at — so it is the administrator's, like the external-authentication page.
+     */
+    @Test
+    void alertSettingsAreAdminOnly() throws Exception {
+        assertThat(statusOf(get("/alert-settings").with(asViewer()))).isEqualTo(302);
+        assertThat(statusOf(get("/alert-settings").with(asAdmin()))).isEqualTo(200);
+    }
+
     @Test
     void theLegacyOaSettingsPathRedirectsAdminsToTheNewPage() throws Exception {
         mvc.perform(get("/oa/settings").with(asAdmin()))

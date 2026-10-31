@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'alerts', 'alert.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{alert.title}">Alert notifications</h1>
+            <p class="sub" th:text="#{alert.subtitle}">
+                Send a webhook when a sync, CDC stream or connection stops behaving.
+            </p>
+        </div>
+    </div>
+
+    <div style="max-width:860px">
+
+        <div class="alert alert-danger" th:if="${formError}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="${#messages.msg(formError)}">Error</div>
+        </div>
+        <div class="alert alert-ok" th:if="${message}">
+            <svg class="ico"><use href="#check-lg"/></svg>
+            <div class="alert-body" th:text="${#messages.msg(message)}">Saved.</div>
+        </div>
+
+        <form id="alert-settings-form" method="post" th:action="@{/alert-settings}" th:object="${form}">
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#activity"/></svg>
+                        <span th:text="#{alert.deliveryCard}">Delivery</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label class="switch">
+                            <input type="checkbox" id="enabled" th:field="*{enabled}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{alert.enabled}">Enable alert notifications</strong>
+                            </span>
+                        </label>
+                        <div class="help" th:text="#{alert.enabledHelp}">
+                            When off, nothing is evaluated and nothing is sent.
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="webhookUrl" th:text="#{alert.webhookUrl}">Webhook URL</label>
+                        <input type="text" class="input" id="webhookUrl" th:field="*{webhookUrl}"
+                               maxlength="2048" autocomplete="off"
+                               th:placeholder="${urlSet} ? ${maskedUrl} : 'https://hooks.example.com/...'">
+                        <div class="help" th:if="${urlSet}" th:text="#{alert.webhookUrlSaved}">
+                            A URL is already saved; leave this blank to keep it.
+                        </div>
+                        <div class="help" th:text="#{alert.webhookUrlHelp}">
+                            The URL is stored encrypted and never shown again in full.
+                        </div>
+                    </div>
+
+                    <div class="field" th:if="${urlSet}">
+                        <label class="switch">
+                            <input type="checkbox" id="clearWebhookUrl"
+                                   th:field="*{clearWebhookUrl}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="#{alert.clearWebhookUrl}">Clear the stored URL</strong>
+                            </span>
+                        </label>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="format" th:text="#{alert.format}">Payload format</label>
+                            <select class="select" id="format" th:field="*{format}">
+                                <option th:each="f : ${formats}" th:value="${f.name()}"
+                                        th:text="${#messages.msg(f.messageKey())}">Generic</option>
+                            </select>
+                            <div class="help" th:text="#{alert.formatHelp}">
+                                WeCom, DingTalk and Feishu expect their own text envelope.
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="cooldownMinutes" th:text="#{alert.cooldown}">Repeat every (minutes)</label>
+                            <input type="number" class="input" id="cooldownMinutes"
+                                   th:field="*{cooldownMinutes}" min="5" max="1440" step="1">
+                            <div class="help" th:text="#{alert.cooldownHelp}">
+                                With 5 to 1440 minutes. A recovery message is always sent once.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+                        <span th:text="#{alert.categoriesCard}">Categories</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="help" th:text="#{alert.categoriesHelp}">
+                        Only the checked categories are evaluated and notified.
+                    </div>
+
+                    <div class="field" th:each="c : ${categories}">
+                        <label class="switch">
+                            <input type="checkbox" name="categories" th:value="${c.name()}"
+                                   th:checked="${#lists.contains(form.categories, c.name())}">
+                            <span class="track"></span>
+                            <span class="switch-text">
+                                <strong th:text="${#messages.msg(c.messageKey())}">Category</strong>
+                            </span>
+                        </label>
+                    </div>
+
+                    <div class="btn-row">
+                        <button type="submit" class="btn btn-primary">
+                            <svg class="ico"><use href="#check-lg"/></svg>
+                            <span th:text="#{alert.save}">Save</span>
+                        </button>
+                        <button type="submit" class="btn btn-ghost"
+                                th:formaction="@{/alert-settings/test}"
+                                th:formnovalidate="true">
+                            <svg class="ico"><use href="#activity"/></svg>
+                            <span th:text="#{alert.test}">Send a test message</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

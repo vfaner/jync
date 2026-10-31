@@ -80,7 +80,7 @@
             <!--/* 配置类入口收进一个下拉。OA 配置只对管理员可见：它保存 OA 的登录地址
                    与字段映射，和 /databases/new、/ai/new 一样属于管理员表单。 */-->
             <div class="nav-group nav-links-group"
-                 th:classappend="${activeNav == 'databases' or activeNav == 'ai' or activeNav == 'oa'} ? 'is-active' : ''">
+                 th:classappend="${activeNav == 'databases' or activeNav == 'ai' or activeNav == 'oa' or activeNav == 'alerts'} ? 'is-active' : ''">
                 <button type="button" class="nav-trigger nav-link-trigger"
                         aria-haspopup="true" aria-expanded="false">
                     <svg class="ico"><use href="#sliders"/></svg>
@@ -100,6 +100,11 @@
                     <a class="menu-item" th:if="${isAdmin}" th:href="@{/external-auth}">
                         <svg class="ico"><use href="#shield-check"/></svg>
                         <span th:text="#{nav.oa}">External authentication</span>
+                    </a>
+                    <!--/* 告警配置保存的是 Webhook 地址（一把 bearer 凭据），只对管理员可见 */-->
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/alert-settings}">
+                        <svg class="ico"><use href="#activity"/></svg>
+                        <span th:text="#{nav.alerts}">Alert notifications</span>
                     </a>
                 </div>
             </div>
