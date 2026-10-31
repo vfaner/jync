@@ -1077,19 +1077,29 @@
                                   th:title="#{'cursor.strategy.' + ${strat} + '.help'}">
                                 <span th:text="#{'cursor.' + ${strat}}">strategy</span>
                             </span>
-                            <!-- 策略无法感知更新时明确标出，避免用户误以为数据完全同步 -->
-                            <svg class="ico" style="color:var(--warn);margin-left:4px"
-                               th:if="${strat == 'IDENTITY' or strat == 'NONE'}"
-                               th:title="#{project.strategyWarn}"><use href="#exclamation-triangle-fill"/></svg>
+                            <!-- 策略无法感知更新时明确标出，避免用户误以为数据完全同步。
+                                 data-tip 由 app.js 画成与性能配置一样的深色气泡并立即弹出；
+                                 原生 title 要等约 1 秒且样式跟着系统走。 -->
+                            <span class="tip-icon tip-warn" tabindex="0" role="img"
+                                  th:if="${strat == 'IDENTITY' or strat == 'NONE'}"
+                                  th:attr="aria-label=#{project.strategyWarn},
+                                           data-tip=#{project.strategyWarn}">
+                                <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
+                            </span>
                         </td>
                         <td class="mono small">
                             <span th:text="${p.cursorColumn ?: '—'}">col</span>
-                            <!-- 游标列没有前导索引时,每次增量读取都要全表扫描:提示管理员在源库补索引。 -->
-                            <svg class="ico" style="color:var(--warn);margin-left:4px"
-                                 th:if="${unindexedCursorTables != null
-                                          and p.cursorColumn != null
-                                          and unindexedCursorTables.contains(p.objectName)}"
-                                 th:title="#{project.cursorIndexHint}"><use href="#exclamation-triangle-fill"/></svg>
+                            <!-- 游标列没有前导索引时,每次增量读取都要全表扫描:提示管理员在源库补索引。
+                                 data-tip 由 app.js 画成与性能配置一样的深色气泡并立即弹出；
+                                 原生 title 要等约 1 秒且样式跟着系统走。 -->
+                            <span class="tip-icon tip-warn" tabindex="0" role="img"
+                                  th:if="${unindexedCursorTables != null
+                                           and p.cursorColumn != null
+                                           and unindexedCursorTables.contains(p.objectName)}"
+                                  th:attr="aria-label=#{project.cursorIndexHint},
+                                           data-tip=#{project.cursorIndexHint}">
+                                <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
+                            </span>
                         </td>
                         <td class="small muted"
                             th:attr="title=${p.lastSyncValue != null

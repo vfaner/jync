@@ -3999,6 +3999,64 @@
     if (sourceId()) { load(sourceId()); }
   }
 
+  /* ─── 即时提示浮层 ──────────────────────────────────────── */
+
+  /**
+   * 表格行内小图标的悬停提示（模板里用 data-tip 标注文案）。
+   *
+   * 不用原生 <title>：它要等系统悬停延时（约 1 秒）才弹，样式也跟随系统。也不用
+   * .tip-body 的绝对定位：图标在 .tbl-wrap（overflow-x: auto）和 .card
+   * （overflow: hidden）里面，气泡会被裁掉。这里把气泡挂到 body 上、用 fixed 按图标
+   * 的位置摆放：悬停或键盘聚焦立刻出现，配色沿用 .tip-body 的深底浅字，页面一滚动
+   * 就收起（fixed 坐标不会跟着滚）。
+   */
+  function bindInstantTips() {
+    var hosts = document.querySelectorAll('[data-tip]');
+    if (!hosts.length) { return; }
+    var bubble = null;
+
+    function bubbleEl() {
+      if (!bubble) {
+        bubble = document.createElement('div');
+        bubble.className = 'tip-body tip-float';
+        bubble.setAttribute('role', 'tooltip');
+        document.body.appendChild(bubble);
+      }
+      return bubble;
+    }
+
+    function hide() {
+      if (bubble) { bubble.classList.remove('is-on'); }
+    }
+
+    function show(host) {
+      var text = host.getAttribute('data-tip');
+      if (!text) { return; }
+      var tip = bubbleEl();
+      tip.textContent = text;
+      tip.classList.add('is-on');
+      var rect = host.getBoundingClientRect();
+      var gap = 8;
+      var left = rect.right + gap;
+      if (left + tip.offsetWidth > window.innerWidth - gap) {
+        left = Math.max(gap, rect.left - gap - tip.offsetWidth);
+      }
+      var top = rect.top + (rect.height - tip.offsetHeight) / 2;
+      top = Math.max(gap, Math.min(top, window.innerHeight - tip.offsetHeight - gap));
+      tip.style.left = left + 'px';
+      tip.style.top = top + 'px';
+    }
+
+    hosts.forEach(function (host) {
+      host.addEventListener('mouseenter', function () { show(host); });
+      host.addEventListener('mouseleave', hide);
+      host.addEventListener('focus', function () { show(host); });
+      host.addEventListener('blur', hide);
+    });
+    window.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -4039,6 +4097,7 @@
     bindEtlSourceKind();
     document.querySelectorAll('[data-role="target-table"]').forEach(bindTargetTablePicker);
     document.querySelectorAll('[data-batch-tables]').forEach(bindBatchTablePicker);
+    bindInstantTips();
     initConfigDirtyTracking();
 
     // B9：顶部 Flash 横幅统一转成居中弹窗 —— 成功用自动消失的轻卡片，

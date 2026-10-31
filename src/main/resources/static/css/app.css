@@ -609,6 +609,15 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .tip-icon:hover .tip-body, .tip-icon:focus .tip-body, .tip-icon:focus-within .tip-body {
   opacity: 1; visibility: visible; }
 @media (max-width: 640px) { .tip-body { width: 220px; } }
+/* 警告型提示图标：保持告警色，悬停也不换成品牌色 */
+.tip-icon.tip-warn { color: var(--warn); vertical-align: -.125em; }
+.tip-icon.tip-warn:hover, .tip-icon.tip-warn:focus { color: var(--warn); }
+/* 挂在 body 上的即时提示气泡（left/top 由 app.js 按图标位置设置）。复用 .tip-body
+   的深底浅字，但必须 fixed：表格行在 .tbl-wrap(overflow-x:auto) 与
+   .card(overflow:hidden) 里，绝对定位的气泡会被裁掉。 */
+.tip-body.tip-float { position: fixed; top: 0; left: 0; transform: none;
+  max-width: calc(100vw - 16px); z-index: 1080; }
+.tip-body.tip-float.is-on { opacity: 1; visibility: visible; }
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }

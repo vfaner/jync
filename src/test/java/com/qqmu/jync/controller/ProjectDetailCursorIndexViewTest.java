@@ -64,8 +64,11 @@ class ProjectDetailCursorIndexViewTest {
 
         String page = render("zh-CN");
 
-        assertThat(occurrences(page, "该游标列在源库没有索引")).isEqualTo(1);
-        // The hint belongs to the flagged row, not to the one that already has its index.
+        // Two attributes on that one row: aria-label for screen readers and data-tip for
+        // the hover bubble. The hint belongs to the flagged row, not to the table that
+        // already has its index, so it appears exactly on one icon.
+        assertThat(occurrences(page, "该游标列在源库没有索引")).isEqualTo(2);
+        assertThat(occurrences(page, "data-tip=\"")).isEqualTo(1);
         assertThat(page).contains("EVENTS");
     }
 
@@ -85,6 +88,35 @@ class ProjectDetailCursorIndexViewTest {
 
         // Advisory: an unreachable source is the page's own warning (sourceWarning), not a 500.
         assertThat(render("zh-CN")).doesNotContain("该游标列在源库没有索引");
+    }
+
+    @Test
+    void theIndexHintRidesTheAppsOwnTipBubble() throws Exception {
+        stubProject();
+        when(projectService.findUnindexedCursorTables(eq(1L), anyList()))
+                .thenReturn(Set.of("EVENTS"));
+
+        String page = render("zh-CN");
+
+        // The browser's own tooltip (title attribute or SVG <title>) waits ~1s and cannot
+        // be styled. The hint is marked data-tip instead and painted by app.js as the same
+        // dark bubble the performance knobs use, instantly on hover or keyboard focus.
+        assertThat(page).doesNotContain("title=\"该游标列在源库没有索引");
+        assertThat(page).contains("data-tip=\"该游标列在源库没有索引：每次增量读取都会全表扫描，建议在该列上建索引。\"");
+        assertThat(page).containsPattern("(?s)data-tip=\"[^\"]*没有索引[^\"]*\">\\s*"
+                + "<svg[^>]*>\\s*<use href=\"#exclamation-triangle-fill\"");
+    }
+
+    @Test
+    void theStrategyWarningRidesTheSameTipBubble() throws Exception {
+        stubProject();
+        when(projectService.findProgress(1L))
+                .thenReturn(List.of(cursor("EVENTS", "NONE")));
+
+        String page = render("zh-CN");
+
+        assertThat(page).doesNotContain("title=\"该表的策略无法检测已有行的更新。\"");
+        assertThat(page).contains("data-tip=\"该表的策略无法检测已有行的更新。\"");
     }
 
     @Test
@@ -123,12 +155,16 @@ class ProjectDetailCursorIndexViewTest {
     }
 
     private static SyncProgress cursor(String table) {
+        return cursor(table, "TIMESTAMP");
+    }
+
+    private static SyncProgress cursor(String table, String strategy) {
         SyncProgress p = new SyncProgress();
         p.setProjectId(1L);
         p.setObjectType(ObjectType.TABLE);
         p.setObjectName(table);
         p.setCursorColumn("UPDATED");
-        p.setCursorStrategy("TIMESTAMP");
+        p.setCursorStrategy(strategy);
         return p;
     }
 
