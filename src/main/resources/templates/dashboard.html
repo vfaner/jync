@@ -95,7 +95,7 @@
                  th:style="'--pct:' + ${metrics.memoryPercent() < 0 ? 0 : metrics.memoryPercent()}">
                 <span th:text="${metrics.memoryPercentText()}">—</span>
             </div>
-            <div class="gauge-label" th:text="#{dashboard.memory}">Memory</div>
+            <div class="gauge-label" th:text="#{dashboard.memory}">System memory</div>
             <div class="gauge-sub" th:text="${metrics.memoryText()}">—</div>
         </div>
         <div class="gauge">
@@ -121,10 +121,14 @@
         </div>
     </div>
 
-            <!-- 项目概览 -->
-    <!-- 双图表行：同步趋势 + JVM 内存趋势 -->
-    <div class="chart-row">
-        <div class="chart-card chart-main">
+    <!--/* 第一行：活动趋势 + 内存趋势并排。 */-->
+    <div class="dash-grid">
+        <!--/* 趋势图：空容器 + data-* 里的地址与文案，由 app.js bindActivityChart 用
+               SVG 画；换指标只重画，不再取数。24 个点由服务端补齐，空的钟点记 0。 */-->
+        <div class="chart-card chart-panel" id="activity-chart"
+             th:attr="data-series-url=@{/dashboard/activity-series},
+                      data-sync-label=#{dashboard.syncSeries},
+                      data-etl-label=#{dashboard.etlSeries}">
             <div class="card-head">
                 <h2 th:text="#{dashboard.trend}">Activity trend</h2>
                 <div class="card-head-tools">
@@ -147,115 +151,30 @@
             </div>
         </div>
 
-        <div class="chart-card chart-side" id="memory-chart" data-series-url="/dashboard/memory-series">
+        <!--/* 内存趋势：JVM 堆内存使用率，单线图。标签写明「应用堆内存」，与上面
+               资源环里的整机内存区分开，避免被当成同一个指标。 */-->
+        <div class="chart-card chart-panel" id="memory-chart"
+             th:attr="data-series-url=@{/dashboard/memory-series},
+                      data-memory-label=#{dashboard.memoryTrend}">
             <div class="card-head">
-                <h2 th:text="#{dashboard.memoryTrend}">JVM Memory trend</h2>
-                <div class="card-head-tools small muted" th:text="#{dashboard.jvmMemoryNote}">应用堆内存使用率</div>
+                <h2 th:text="#{dashboard.memoryTrend}">App memory trend</h2>
+                <div class="card-head-tools small muted" th:text="#{dashboard.jvmMemoryNote}">JVM heap usage</div>
             </div>
             <div class="card-body chart-body">
                 <div class="chart-meta">
                     <strong class="chart-total">—</strong>
-                    <span class="chart-window" th:text="#{dashboard.trendHint}">Last 24h</span>
+                    <span class="chart-window" th:text="#{dashboard.trendHint}">Last 24 hours</span>
                 </div>
                 <div class="chart-slot">
-                    <div class="chart-empty" th:text="#{dashboard.noMemoryTrend}">No memory data in last 24h</div>
+                    <div class="chart-empty" th:text="#{dashboard.noMemoryTrend}">No memory data in the last 24 hours.</div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- 项目概览与最新活动并排 -->
-    <div class="grid-row">
-        <!-- 项目概览 -->
-        <div class="card" id="project-overview" th:fragment="projectOverview">
-            <div class="card-head">
-                <h2 th:text="#{dashboard.projectOverview}">Project overview</h2>
-                <a class="btn btn-ghost btn-xs" th:href="@{/projects}">
-                    <span th:text="#{common.all}">All</span><svg class="ico"><use href="#chevron-right"/></svg>
-                </a>
-            </div>
-            <div class="card-body tight">
-                <div th:if="${#lists.isEmpty(stats.projectSummaries)}" class="empty">
-                    <div class="empty-ico"><svg class="ico"><use href="#inbox"/></svg></div>
-                    <h3 th:text="#{dashboard.noProjects}">No projects yet.</h3>
-                    <p th:text="#{project.createHint}">Create one to begin.</p>
-                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/projects/new}">
-                        <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
-                    </a>
-                </div>
-                <div th:unless="${#lists.isEmpty(stats.projectSummaries)}" class="tbl-wrap">
-                    <table class="tbl" style="table-layout:fixed">
-                        <colgroup>
-                            <col style="width:26%">
-                            <col style="width:18%">
-                            <col style="width:14%">
-                            <col style="width:18%">
-                            <col style="width:24%">
-                        </colgroup>
-                        <thead>
-                        <tr>
-                            <th th:text="#{common.name}">Name</th>
-                            <th th:text="#{common.status}">Status</th>
-                            <th class="num" th:text="#{dashboard.trackedTables}">Tables</th>
-                            <th class="num" th:text="#{dashboard.rowsSynced}">Rows</th>
-                            <th th:text="#{dashboard.lastSync}">Last sync</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        <tr th:each="s : ${stats.projectSummaries}">
-                            <td>
-                                <a style="font-weight:600"
-                                   th:href="@{/projects/{id}(id=${s.project.id})}"
-                                   th:text="${s.project.name}">Project</a>
-                                <div class="small muted truncate" th:if="${s.project.description}"
-                                     th:text="${s.project.description}">desc</div>
-                            </td>
-                            <td th:with="st=${s.statusName()}">
-                                <span class="badge"
-                                      th:classappend="${st == 'RUNNING'} ? 'badge-ok'
-                                                    : (${st == 'ERROR'} ? 'badge-danger' : 'badge-mute')">
-                                    <span class="dot" th:classappend="${st == 'RUNNING'} ? 'dot-live' : ''"></span>
-                                    <span th:text="#{'status.' + ${st}}">Stopped</span>
-                                </span>
-                            </td>
-                            <td class="num" th:text="${s.trackedTableCount}">0</td>
-                            <td class="num" th:text="${s.totalRowsSynced}">0</td>
-                            <td class="small muted"
-                                th:text="${s.task != null and s.task.lastSyncTime != null}
-                                         ? ${#temporals.format(s.task.lastSyncTime, 'MM-dd HH:mm:ss')}">
-                                --:--
-                            </td>
-                        </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- 最新活动 -->
-        <div class="card" id="activity-feed" th:fragment="activityFeed">
-            <div class="card-head">
-                <h2 th:text="#{dashboard.recentActivity}">Recent activity</h2>
-                <a class="btn btn-ghost btn-xs" th:href="@{/logs}">
-                    <span th:text="#{common.viewAll}">View all</span><svg class="ico"><use href="#chevron-right"/></svg>
-                </a>
-            </div>
-            <div class="card-body feed-body">
-                <ul class="feed-live" id="activity-feed-list">
-                    <li th:each="log : ${#lists.take(stats.recentChanges, 10)}" th:classappend="${log.type}">
-                        <span class="badge" th:classappend="${log.type == 'INFO' ? 'badge-info' : 'badge-success'}"
-                              th:text="${#strings.toLowerCase(log.type)}">UPDATE</span>
-                        <strong th:text="${log.projectName}">Project</strong>
-                        <span th:text="${log.message}">...</span>
-                        <time class="small muted" th:text="${#temporals.format(log.occurredAt, 'MM-dd HH:mm')}">--:--</time>
-                    </li>
-                    <li th:if="${#lists.isEmpty(stats.recentChanges)}" class="empty">
-                        <span th:text="#{dashboard.noRecentActivity}">No recent activity</span>
-                    </li>
-                </ul>
-            </div>
-        </div>
-    </div>
+    <!--/* 第二行：项目概览 + 最新活动并排。 */-->
+    <div class="dash-grid">
+            <!-- 项目概览 -->
             <div class="card" id="project-overview" th:fragment="projectOverview">
                 <div class="card-head">
                     <h2 th:text="#{dashboard.projectOverview}">Project overview</h2>
@@ -321,7 +240,6 @@
                     </div>
                 </div>
             </div>
-        </div>
 
         <!--/* 实时活动流：10 秒换一次内容，新条目滑入；条目多到超出视口时按行轮播——
                首行淡出、下一行升上来，循环往复，悬停即停，尊重系统「减少动态效果」偏好。 */-->

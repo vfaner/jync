@@ -8,10 +8,12 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -19,12 +21,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.ChangeLog;
+import com.qqmu.jync.model.EtlRun;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
+import com.qqmu.jync.repository.EtlRunRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.task.SyncContextFactory;
@@ -42,6 +46,17 @@ public class DashboardService {
 
     /** Hours the trend chart covers, including the one in progress. */
     static final int SERIES_HOURS = 24;
+
+    /** Memory samples are one per bucket; 10 minutes keeps a readable curve without a thread. */
+    static final int MEMORY_BUCKET_MINUTES = 10;
+    static final int MEMORY_BUCKETS = SERIES_HOURS * 60 / MEMORY_BUCKET_MINUTES;
+
+    /**
+     * JVM heap usage sampled lazily whenever the card polls — no scheduler, no storage.
+     * Bounded to the 24-hour window, so the map never holds more than {@link #MEMORY_BUCKETS}.
+     */
+    private final Map<Long, Double> memorySamples = new ConcurrentHashMap<>();
+
     private final ChangeLogRepository changeLogRepository;
 
     private static final DateTimeFormatter HOUR_LABEL =
@@ -50,6 +65,7 @@ public class DashboardService {
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
     private final SyncProgressRepository progressRepository;
+    private final EtlRunRepository etlRunRepository;
     private final SyncContextFactory contextFactory;
     private final SyncTaskStore taskStore;
 
@@ -57,12 +73,14 @@ public class DashboardService {
                             DatabaseConfigRepository databaseConfigRepository,
                             SyncProgressRepository progressRepository,
                             ChangeLogRepository changeLogRepository,
+                            EtlRunRepository etlRunRepository,
                             SyncContextFactory contextFactory,
                             SyncTaskStore taskStore) {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
         this.progressRepository = progressRepository;
         this.changeLogRepository = changeLogRepository;
+        this.etlRunRepository = etlRunRepository;
         this.contextFactory = contextFactory;
         this.taskStore = taskStore;
     }
@@ -161,6 +179,11 @@ public class DashboardService {
      *
      * <p>Quiet hours are zeros rather than gaps: dropping them would let the newest point sit
      * days back while the axis still claimed "the last 24 hours".
+     *
+     * <p>Each line reads its own table. The sync line is the change log — every row of it,
+     * including the {@code INFO} entries that carry the CDC window summaries — and the ETL line
+     * is the ETL run history. Borrowing the change log's {@code INFO} rows for the ETL line drew
+     * ETL traffic for anyone who had never created an ETL task.
      */
     @Transactional(readOnly = true)
     public MultiSeriesActivity activitySeries() {
@@ -186,12 +209,18 @@ public class DashboardService {
             if (hour == null) continue;
             long changes = ((Number) row[1]).longValue();
             long rows = ((Number) row[2]).longValue();
-            String changeType = row[3] != null ? row[3].toString() : "";
-            if ("INFO".equals(changeType)) {
-                etlByHour.put(hour, new long[] {changes, rows});
-            } else {
-                syncByHour.put(hour, new long[] {changes, rows});
-            }
+            syncByHour.merge(hour, new long[] {changes, rows},
+                    (left, right) -> new long[] {left[0] + right[0], left[1] + right[1]});
+        }
+
+        // One run is one execution: the count is how many times a task ran, and the rows are
+        // what those runs put into the target. A failed run counts too — it is activity.
+        for (EtlRun run : etlRunRepository.findByOccurredAtBetweenOrderByOccurredAtAsc(start, now)) {
+            if (run.getOccurredAt() == null) continue;
+            long[] bucket = etlByHour.computeIfAbsent(
+                    run.getOccurredAt().truncatedTo(ChronoUnit.HOURS), key -> new long[2]);
+            bucket[0] += 1;
+            bucket[1] += run.getAffectedRows() == null ? 0 : run.getAffectedRows();
         }
 
         ZoneId zone = ZoneId.systemDefault();
@@ -217,24 +246,53 @@ public class DashboardService {
         return new MultiSeriesActivity(points, totalSyncChanges, totalSyncRows, totalEtlChanges, totalEtlRows);
     }
 
-    /** Memory trend chart for last 24 hours, with current memory usage. */
+    /**
+     * JVM heap usage over the same 24-hour window as the activity chart, one sample per
+     * 10-minute bucket and the average over all buckets.
+     *
+     * <p>Samples are taken lazily: each poll of the card records the current reading, so a
+     * freshly started instance draws its first real value immediately and fills in history
+     * as it runs. Buckets without a sample carry the last known value forward, which keeps
+     * the curve continuous instead of dropping to zero.
+     */
     @Transactional(readOnly = true)
     public MemorySeries memorySeries() {
         Instant now = Instant.now();
-        Instant start = seriesStart(now);
+        long currentBucket = now.getEpochSecond() / (MEMORY_BUCKET_MINUTES * 60L);
+        memorySamples.put(currentBucket, jvmHeapPercent());
 
-        // Get current memory percent
-        SystemMetrics.Snapshot snapshot = new SystemMetrics("", null).snapshot();
-        double currentMemory = snapshot.memoryPercent();
-        if (currentMemory < 0) currentMemory = 0;
+        long oldest = currentBucket - MEMORY_BUCKETS + 1;
+        memorySamples.keySet().removeIf(bucket -> bucket < oldest);
 
-        List<MemoryPoint> points = new ArrayList<>(SERIES_HOURS);
-        for (int i = 0; i < SERIES_HOURS; i++) {
-            Instant hour = start.plus(i, ChronoUnit.HOURS);
-            points.add(new MemoryPoint(HOUR_LABEL.format(hour.atZone(ZoneId.systemDefault())), currentMemory));
+        List<Long> known = new ArrayList<>(memorySamples.keySet());
+        Collections.sort(known);
+        double carried = memorySamples.get(known.get(0));
+
+        ZoneId zone = ZoneId.systemDefault();
+        List<MemoryPoint> points = new ArrayList<>(MEMORY_BUCKETS);
+        double sum = 0;
+        for (int i = 0; i < MEMORY_BUCKETS; i++) {
+            long bucket = oldest + i;
+            Double sample = memorySamples.get(bucket);
+            if (sample != null) {
+                carried = sample;
+            }
+            Instant bucketStart = Instant.ofEpochSecond(bucket * MEMORY_BUCKET_MINUTES * 60L);
+            points.add(new MemoryPoint(HOUR_LABEL.format(bucketStart.atZone(zone)), carried));
+            sum += carried;
         }
+        return new MemorySeries(points, sum / MEMORY_BUCKETS);
+    }
 
-        return new MemorySeries(points, currentMemory);
+    /** Heap in use as a percentage of the JVM's maximum heap. */
+    static double jvmHeapPercent() {
+        Runtime runtime = Runtime.getRuntime();
+        long max = runtime.maxMemory();
+        if (max <= 0) {
+            return 0;
+        }
+        long used = runtime.totalMemory() - runtime.freeMemory();
+        return Math.max(0, Math.min(100, used * 100.0 / max));
     }
 
     /** The hour boundary as an instant, whichever temporal type the driver handed back. */

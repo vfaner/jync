@@ -14,14 +14,17 @@ import java.util.concurrent.RejectedExecutionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.model.EtlRun;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
+import com.qqmu.jync.repository.EtlRunRepository;
 import com.qqmu.jync.repository.EtlTaskRepository;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -31,6 +34,8 @@ class EtlTaskServiceTest {
 
     @Mock
     private EtlTaskRepository taskRepository;
+    @Mock
+    private EtlRunRepository runRepository;
     @Mock
     private DatabaseConfigService databaseConfigService;
     @Mock
@@ -48,7 +53,7 @@ class EtlTaskServiceTest {
     @BeforeEach
     void setUp() {
         guard = new EtlExecutionGuard();
-        service = new EtlTaskService(taskRepository, databaseConfigService, runner,
+        service = new EtlTaskService(taskRepository, runRepository, databaseConfigService, runner,
                 checkpointStore, dataSourceManager, guard, Runnable::run, events);
     }
 
@@ -140,8 +145,8 @@ class EtlTaskServiceTest {
      */
     @Test
     void aRejectedSubmissionReleasesTheGuardAndReportsAFullQueue() {
-        EtlTaskService saturated = new EtlTaskService(taskRepository, databaseConfigService,
-                runner, checkpointStore, dataSourceManager, guard, task -> {
+        EtlTaskService saturated = new EtlTaskService(taskRepository, runRepository,
+                databaseConfigService, runner, checkpointStore, dataSourceManager, guard, task -> {
                     throw new RejectedExecutionException("queue full");
                 }, events);
 
@@ -165,6 +170,48 @@ class EtlTaskServiceTest {
         assertThat(task.getLastRunSuccess()).isTrue();
         assertThat(task.getLastRunResult()).contains("SUCCESS").contains("written=3");
         assertThat(task.getLastRunTime()).isNotNull();
+    }
+
+    /**
+     * The dashboard's ETL line is drawn from this history, not from the change log: a run writes
+     * one row per execution with the rows it put into the target, so the chart can count the
+     * runs and sum their volume without guessing which change-log rows were ETL.
+     */
+    @Test
+    void executeKeepsOneHistoryRowForTheTrendChart() {
+        EtlTask task = existing(7L, "SELECT id FROM src");
+        when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
+        stubConnections(1L, 2L);
+        when(runner.run(eq(task), any(), any(), any())).thenReturn(EtlRunResult.success(9, 3));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.execute(7L);
+
+        ArgumentCaptor<EtlRun> captor = ArgumentCaptor.forClass(EtlRun.class);
+        verify(runRepository).save(captor.capture());
+        EtlRun run = captor.getValue();
+        assertThat(run.getEtlTaskId()).isEqualTo(7L);
+        assertThat(run.getSuccess()).isTrue();
+        assertThat(run.getAffectedRows()).isEqualTo(3);
+        assertThat(run.getOccurredAt()).isNotNull();
+    }
+
+    /** A failed run is activity too — the chart must show the attempt, not a quiet hour. */
+    @Test
+    void aFailedRunIsRecordedAsWell() {
+        EtlTask task = existing(7L, "SELECT id FROM src");
+        when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
+        stubConnections(1L, 2L);
+        when(runner.run(eq(task), any(), any(), any()))
+                .thenReturn(EtlRunResult.failure(0, 0, EtlRunResult.Side.TARGET, "denied"));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.execute(7L);
+
+        ArgumentCaptor<EtlRun> captor = ArgumentCaptor.forClass(EtlRun.class);
+        verify(runRepository).save(captor.capture());
+        assertThat(captor.getValue().getSuccess()).isFalse();
+        assertThat(captor.getValue().getAffectedRows()).isZero();
     }
 
     @Test

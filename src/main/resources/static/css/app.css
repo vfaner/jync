@@ -1680,6 +1680,17 @@ table.tbl a.truncate { display: block; }
 
 /* 趋势图 */
 .chart-card { display: flex; flex-direction: column; }
+/* 两张趋势图不套卡片外框，直接铺在页面底色上，只留一行标题。
+   左右内边距与下面卡片正文的 20px 对齐，标题和表头不会因为少了个边框而错位；
+   标题行给同一个最小高度：右边那张没有分段按钮，不统一的话两边的图表起点会
+   差出一个按钮的高度，看起来就是没对齐。 */
+.chart-panel { padding: 0 20px; }
+/* min-height 含内边距（全局 box-sizing:border-box）：48px 刚好容下分段按钮的
+   36px 加上 10px 的下边距，右边那张只有一行小字也撑到同一高度。 */
+.chart-panel .card-head {
+  padding: 0 0 10px; border-bottom: 0; min-height: 48px;
+}
+.chart-panel .card-body { padding: 0; }
 .chart-body { display: flex; flex-direction: column; }
 .chart-meta { display: flex; align-items: baseline; }
 .chart-meta > * + * { margin-left: 10px; }

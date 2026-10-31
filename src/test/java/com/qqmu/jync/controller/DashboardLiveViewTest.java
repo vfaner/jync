@@ -93,9 +93,15 @@ class DashboardLiveViewTest {
         assertThat(html).contains("id=\"activity-chart\"")
                 .contains("data-series-url=\"/dashboard/activity-series\"")
                 .contains("data-sync-label=")
-                .contains("data-etl-label=")
-                .contains("data-sync-rows-label=")
-                .contains("data-etl-rows-label=");
+                .contains("data-etl-label=");
+    }
+
+    @Test
+    void theMemoryChartKnowsWhereToFetchItsSeries() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains("id=\"memory-chart\"")
+                .contains("data-series-url=\"/dashboard/memory-series\"");
     }
 
     @Test

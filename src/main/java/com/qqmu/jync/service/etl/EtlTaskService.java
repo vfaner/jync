@@ -16,8 +16,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.EtlRun;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
+import com.qqmu.jync.repository.EtlRunRepository;
 import com.qqmu.jync.repository.EtlTaskRepository;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -29,6 +31,7 @@ public class EtlTaskService {
     private static final Logger log = LoggerFactory.getLogger(EtlTaskService.class);
 
     private final EtlTaskRepository taskRepository;
+    private final EtlRunRepository runRepository;
     private final DatabaseConfigService databaseConfigService;
     private final EtlRunner runner;
     private final EtlCheckpointStore checkpointStore;
@@ -38,6 +41,7 @@ public class EtlTaskService {
     private final ApplicationEventPublisher events;
 
     public EtlTaskService(EtlTaskRepository taskRepository,
+                          EtlRunRepository runRepository,
                           DatabaseConfigService databaseConfigService,
                           EtlRunner runner,
                           EtlCheckpointStore checkpointStore,
@@ -46,6 +50,7 @@ public class EtlTaskService {
                           @Qualifier("etlExecutor") Executor executor,
                           ApplicationEventPublisher events) {
         this.taskRepository = taskRepository;
+        this.runRepository = runRepository;
         this.databaseConfigService = databaseConfigService;
         this.runner = runner;
         this.checkpointStore = checkpointStore;
@@ -188,12 +193,27 @@ public class EtlTaskService {
     }
 
     private void record(EtlTask task, EtlRunResult result) {
-        task.setLastRunTime(Instant.now());
+        Instant finishedAt = Instant.now();
+        task.setLastRunTime(finishedAt);
         task.setLastRunSuccess(result.success());
         task.setLastRunResult(result.success()
                 ? "SUCCESS read=" + result.rowsRead() + " written=" + result.rowsWritten()
                 : "FAILED side=" + result.failureSide() + " error=" + result.errorMessage());
         taskRepository.save(task);
+
+        // The task row only keeps the latest outcome; the dashboard's ETL line needs the
+        // history, so every run leaves one row behind. Failure to write it must not turn a
+        // finished run into a failed one.
+        EtlRun run = new EtlRun();
+        run.setEtlTaskId(task.getId());
+        run.setSuccess(result.success());
+        run.setAffectedRows((int) Math.min(Integer.MAX_VALUE, result.rowsWritten()));
+        run.setOccurredAt(finishedAt);
+        try {
+            runRepository.save(run);
+        } catch (RuntimeException e) {
+            log.warn("Could not record the ETL run history for task {}: {}", task.getId(), e.getMessage());
+        }
     }
 
     // --- validation ---------------------------------------------------------------------

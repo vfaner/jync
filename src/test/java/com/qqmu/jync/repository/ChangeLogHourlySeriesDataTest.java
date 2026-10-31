@@ -27,11 +27,15 @@ class ChangeLogHourlySeriesDataTest {
     private ChangeLogRepository repository;
 
     private void entry(Instant occurredAt, Integer affectedRows) {
+        entry(occurredAt, affectedRows, ChangeType.INSERT);
+    }
+
+    private void entry(Instant occurredAt, Integer affectedRows, ChangeType changeType) {
         ChangeLog log = new ChangeLog();
         log.setProjectId(1L);
         log.setObjectType(ObjectType.TABLE);
         log.setObjectName("t");
-        log.setChangeType(ChangeType.INSERT);
+        log.setChangeType(changeType);
         log.setSuccess(true);
         log.setAffectedRows(affectedRows);
         log.setOccurredAt(occurredAt);
@@ -65,6 +69,29 @@ class ChangeLogHourlySeriesDataTest {
                 .isEqualTo(12L);
         assertThat(((Number) byHour.get(Instant.parse("2026-01-01T09:00:00Z"))[1]).longValue())
                 .isEqualTo(1L);
+    }
+
+    /**
+     * One point per hour, however many kinds of row the hour holds. The CDC window summaries
+     * ({@code INFO} rows carrying upsert/delete counts) and the row changes they summarise must
+     * land in the same bucket, and neither may overwrite the other: grouping by change type as
+     * well once left an hour holding only the last type's totals, quietly undercounting the
+     * chart. The ETL line does not read this query at all — it has its own history table.
+     */
+    @Test
+    void anHourMixingChangeTypesIsStillOneRowWithTheSummedTotals() {
+        Instant since = Instant.parse("2026-01-01T08:00:00Z");
+        entry(Instant.parse("2026-01-01T10:00:10Z"), 5, ChangeType.INSERT);
+        entry(Instant.parse("2026-01-01T10:30:00Z"), 1, ChangeType.INFO);
+        entry(Instant.parse("2026-01-01T10:45:00Z"), 3, ChangeType.ERROR);
+
+        List<Object[]> rows = repository.hourlySeriesBetween(
+                java.sql.Timestamp.from(since),
+                java.sql.Timestamp.from(Instant.parse("2026-01-01T11:00:00Z")));
+
+        assertThat(rows).hasSize(1);
+        assertThat(((Number) rows.get(0)[1]).longValue()).isEqualTo(3L);
+        assertThat(((Number) rows.get(0)[2]).longValue()).isEqualTo(9L);
     }
 
     /**

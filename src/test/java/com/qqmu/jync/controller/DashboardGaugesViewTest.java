@@ -68,7 +68,7 @@ class DashboardGaugesViewTest {
     void theDashboardShowsTheFourGauges() throws Exception {
         String html = render(SAMPLE, Locale.SIMPLIFIED_CHINESE);
 
-        assertThat(html).contains("负载").contains("CPU").contains("内存").contains("磁盘")
+        assertThat(html).contains("负载").contains("CPU").contains("整机内存").contains("磁盘")
                 .contains("50%").contains("63%").contains("88%").contains("95%")
                 .contains("14.0 GB / 16.0 GB")
                 .contains("8 核心");
@@ -78,8 +78,8 @@ class DashboardGaugesViewTest {
     void englishRendersTheEnglishWording() throws Exception {
         String html = render(SAMPLE, Locale.ENGLISH);
 
-        assertThat(html).contains("Load").contains("cores").contains("Memory").contains("Disk")
-                .doesNotContain("负载").doesNotContain("内存");
+        assertThat(html).contains("Load").contains("cores").contains("System memory").contains("Disk")
+                .doesNotContain("负载").doesNotContain("整机内存");
     }
 
     /**

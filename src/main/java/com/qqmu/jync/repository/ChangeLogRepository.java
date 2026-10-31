@@ -31,6 +31,11 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      * application.yml, so the returned timestamp is the UTC hour boundary. Hours with no traffic
      * are absent — the caller fills them, because a chart must not compress a quiet night.
      *
+     * <p>One row per hour, whatever mix of change types the hour holds: the CDC window
+     * summaries are {@code INFO} rows and the row changes they describe must land in the same
+     * bucket. The dashboard's other line does not come from here — ETL runs have their own
+     * history table.
+     *
      * <p>Native rather than JPQL: Hibernate cannot resolve the return type of a
      * {@code function(...)} call in the select list, and the timestamp parameter is bound as
      * {@link java.sql.Timestamp} so no driver-side {@code Instant} conversion is involved.
