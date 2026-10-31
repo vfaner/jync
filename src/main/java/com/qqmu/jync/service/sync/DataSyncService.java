@@ -2549,7 +2549,6 @@ public class DataSyncService {
         }
     }
 
-    /** Same cursor semantics as the classic full load, computed over the chunks' totals. */
     /**
      * The watermark a chunked load that resumed from stored checkpoints must end at.
      *
@@ -2580,6 +2579,7 @@ public class DataSyncService {
         return earliest == null ? watermark : earliest;
     }
 
+    /** Same cursor semantics as the classic full load, computed over the chunks' totals. */
     private String fullLoadCursorTail(TableMeta table, CursorStrategy strategy,
                                       String watermark, long totalRead) {
         return strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE

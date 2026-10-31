@@ -400,7 +400,7 @@ public class SyncLockService {
             boolean renewed = attemptRenewal() == Renewal.RENEWED;
             if (renewed) {
                 // Only a caller-visible renewal counts: the cycle itself reached a safe
-                // point. Watchdog ticks call extendLease() directly and are not progress.
+                // point. Watchdog ticks call attemptRenewal() directly and are not progress.
                 lastProgressAt = Instant.now();
             }
             return renewed;
