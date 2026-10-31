@@ -205,6 +205,36 @@ class CdcBaselineServiceTest {
     }
 
     @Test
+    void aBaselineThatLandedRowsAdvancesLastSync() throws SQLException {
+        Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+        SyncResult loaded = new SyncResult();
+        loaded.setRowsInserted(1200L);
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(loaded);
+
+        service.runBaseline(ctx(7L), () -> true);
+
+        // The baseline re-copied the source, so data landed at 21:47 even though the stream
+        // afterwards saw nothing new. Without this stamp the page kept the timestamp of the
+        // last CDC change window — days old right next to a fresh position.
+        verify(taskStore).markCdcDataApplied(7L);
+        verify(positionStore).markBaselineDone(7L);
+    }
+
+    @Test
+    void aBaselineThatMovedNothingKeepsThePreviousLastSync() throws SQLException {
+        Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+        when(engine.runCycle(any(SyncContext.class))).thenReturn(new SyncResult());
+
+        service.runBaseline(ctx(7L), () -> true);
+
+        // Empty source: nothing landed, so "上次同步" keeps its old value, same rule as a
+        // polling cycle that moved no rows.
+        verify(taskStore, never()).markCdcDataApplied(anyLong());
+    }
+
+    @Test
     void failureRecordsErrorAndDeletesHalfWrittenPosition() throws SQLException {
         Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
         when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);

@@ -334,6 +334,21 @@ public class CdcBaselineService {
                 assertArchiveStillCovers(ctx.getSourceConfig(), logMinerAnchorScn);
             }
             positionStore.markBaselineDone(projectId);
+            // The baseline just re-copied the source: rows landed in the target, so 上次同步
+            // must move even when the stream afterwards sees no further changes. The change
+            // window logger only stamps the streaming phase, which left a freshly
+            // re-baselined project showing the timestamp of its last CDC change window —
+            // days old, right next to a position that had just been written. Only the
+            // timestamp: status and the result summary belong to the consumer's lifecycle
+            // (see SyncTaskStore.markCdcDataApplied).
+            if (result.hasChanges()) {
+                try {
+                    taskStore.markCdcDataApplied(projectId);
+                } catch (RuntimeException e) {
+                    log.warn("Could not advance last-sync after the CDC baseline of project"
+                            + " {}: {}", projectId, e.getMessage());
+                }
+            }
             log.info("CDC baseline for project {} completed", projectId);
         } catch (RuntimeException | Error e) {
             if (e instanceof LockLostException) {
