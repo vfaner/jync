@@ -91,6 +91,24 @@ class SyncTaskStoreLastSyncTimeTest {
         assertThat(task.getLastSyncResult()).startsWith("FAILED:");
     }
 
+    /**
+     * One table failing does not undo the rows another table committed in the same cycle.
+     * Treating "success" as the gate froze 上次同步 for the whole partial-failure period even
+     * though data kept landing.
+     */
+    @Test
+    @DisplayName("rows that landed in a partially failed cycle still move it")
+    void aPartiallyFailedCycleThatLandedRowsMovesTheLastSyncTime() {
+        SyncResult result = new SyncResult();
+        result.setRowsInserted(500);
+        result.addError("table B: deletion pass failed");
+
+        store.recordOutcome(1L, result);
+
+        assertThat(task.getLastSyncTime()).isAfter(LAST_REAL_SYNC);
+        assertThat(task.getLastSyncResult()).startsWith("FAILED:");
+    }
+
     @Test
     @DisplayName("a CDC window that applied rows moves it, same as a polling cycle")
     void aCdcWindowThatAppliedRowsMovesTheLastSyncTime() {

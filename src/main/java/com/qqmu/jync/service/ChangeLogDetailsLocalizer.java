@@ -30,8 +30,10 @@ public class ChangeLogDetailsLocalizer {
     /** Returned by {@link #get} for a key a bundle does not define. */
     private static final String MISSING = "\u0000missing\u0000";
 
+    // DOTALL: the detail is a driver message, which may wrap. Without it a wrapped cause fell
+    // through untranslated.
     private static final Pattern CONSUMER_START_FAILED =
-            Pattern.compile("^CDC consumer failed to start: (.+)$");
+            Pattern.compile("^CDC consumer failed to start: (.+)$", Pattern.DOTALL);
     private static final Pattern CONSUMER_STARTED =
             Pattern.compile("^(\\w+) consumer started$");
     private static final Pattern CONSUMER_STOPPED =
@@ -39,7 +41,7 @@ public class ChangeLogDetailsLocalizer {
     private static final Pattern CONSUMER_LEASE_LOST =
             Pattern.compile("^(\\w+) (?:consumer|CDC) stopped: lease lost$");
     private static final Pattern CONSUMER_FAILED =
-            Pattern.compile("^(\\w+) consumer failed: (.+)$");
+            Pattern.compile("^(\\w+) consumer failed: (.+)$", Pattern.DOTALL);
     private static final Pattern CDC_WINDOW = Pattern.compile(
             "^CDC window: (\\d+) upserts, (\\d+) deletes(?: \\(through (.+)\\))?$");
 

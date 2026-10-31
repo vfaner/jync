@@ -2340,10 +2340,13 @@ public class DataSyncService {
             result.rowsUpdated += stats.updated;
             result.rowsChangedUnclassified += stats.unclassified;
             // Checkpoint only after the page's rows are committed on the target: a page that
-            // died mid-write leaves no boundary behind and is simply re-read next time.
-            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), 0, chunkIndex,
-                    KeysetChunker.encodePk(sink.values), (int) Math.min(stats.read, Integer.MAX_VALUE),
-                    ChunkCheckpoint.STATUS_CHUNK));
+            // died mid-write leaves no boundary behind and is simply re-read next time. The
+            // attempt's watermark rides along so a later resume rewinds the cursor to it.
+            ChunkCheckpoint checkpoint = new ChunkCheckpoint(ctx.projectId(), table.getName(), 0,
+                    chunkIndex, KeysetChunker.encodePk(sink.values),
+                    (int) Math.min(stats.read, Integer.MAX_VALUE), ChunkCheckpoint.STATUS_CHUNK);
+            checkpoint.setWatermark(watermark);
+            checkpoints.save(checkpoint);
             lastPk = sink.values;
             chunkIndex++;
             if (stats.read < chunkSize) {
@@ -2355,7 +2358,8 @@ public class DataSyncService {
         // The load finished (or the table turned out empty): resume points served their purpose.
         checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
         result.rowsWritten = totalRead;
-        result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, totalRead);
+        result.newCursorValue = fullLoadCursorTail(table, strategy,
+                resumeWatermark(saved, watermark), totalRead);
         return true;
     }
 
@@ -2429,8 +2433,10 @@ public class DataSyncService {
             // the whole source. This table has no key to absorb that duplicate. The marker
             // stays invisible to the resume itself (the offset comes from the target count)
             // and is deleted with the rest on completion.
-            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), 0, -1,
-                    null, 0, ChunkCheckpoint.STATUS_KEYLESS_CHUNK));
+            ChunkCheckpoint marker = new ChunkCheckpoint(ctx.projectId(), table.getName(), 0, -1,
+                    null, 0, ChunkCheckpoint.STATUS_KEYLESS_CHUNK);
+            marker.setWatermark(watermark);
+            checkpoints.save(marker);
         }
         int chunkIndex = 0;
         for (ChunkCheckpoint checkpoint : saved) {
@@ -2474,9 +2480,11 @@ public class DataSyncService {
             result.rowsChangedUnclassified += stats.unclassified;
             // The checkpoint records the offset reached, but only as diagnostics: a resumed
             // load counts the target instead (see the class-level note above).
-            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), 0, chunkIndex,
-                    null, (int) Math.min(position, Integer.MAX_VALUE),
-                    ChunkCheckpoint.STATUS_KEYLESS_CHUNK));
+            ChunkCheckpoint checkpoint = new ChunkCheckpoint(ctx.projectId(), table.getName(), 0,
+                    chunkIndex, null, (int) Math.min(position, Integer.MAX_VALUE),
+                    ChunkCheckpoint.STATUS_KEYLESS_CHUNK);
+            checkpoint.setWatermark(watermark);
+            checkpoints.save(checkpoint);
             chunkIndex++;
             if (stats.read < chunkSize) {
                 break;
@@ -2486,7 +2494,8 @@ public class DataSyncService {
 
         checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
         result.rowsWritten = totalRead;
-        result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, totalRead);
+        result.newCursorValue = fullLoadCursorTail(table, strategy,
+                resumeWatermark(saved, watermark), totalRead);
         result.resumableLoad = true;
         return true;
     }
@@ -2541,6 +2550,36 @@ public class DataSyncService {
     }
 
     /** Same cursor semantics as the classic full load, computed over the chunks' totals. */
+    /**
+     * The watermark a chunked load that resumed from stored checkpoints must end at.
+     *
+     * <p>The prefix below the resume boundary was copied from the <em>earliest</em> attempt's
+     * view of the source. A row there that changed while the load was interrupted was never
+     * re-read, and ending at this cycle's watermark would cover it up: the next incremental
+     * window starts after the change and never delivers it. The earliest attempt's watermark
+     * is therefore the tail, so that whole interval is re-read next cycle (upserts absorb it).
+     *
+     * <p>A checked-out list that was discarded on this attempt is not passed here: its rows
+     * were reloaded, so the current watermark covers them. Rows written before the column
+     * existed carry no value and keep the old behavior.
+     */
+    private static String resumeWatermark(List<ChunkCheckpoint> checkpoints, String watermark) {
+        String earliest = null;
+        Instant earliestAt = null;
+        for (ChunkCheckpoint checkpoint : checkpoints) {
+            if (checkpoint.getWatermark() == null) {
+                continue;
+            }
+            Instant at = checkpoint.getUpdatedAt() == null
+                    ? Instant.EPOCH : checkpoint.getUpdatedAt();
+            if (earliestAt == null || at.isBefore(earliestAt)) {
+                earliestAt = at;
+                earliest = checkpoint.getWatermark();
+            }
+        }
+        return earliest == null ? watermark : earliest;
+    }
+
     private String fullLoadCursorTail(TableMeta table, CursorStrategy strategy,
                                       String watermark, long totalRead) {
         return strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE
@@ -2692,8 +2731,9 @@ public class DataSyncService {
                     // indistinguishable exactly when one range was the one lagging.
                     Thread.currentThread().setName(
                             "full-load-" + table.getName() + "-" + (rangeIndex + 1));
-                    return copyRange(table, targetTable, strategy, upperBound, ctx, range,
-                            rangeIndex, resumePoint(usable, rangeIndex, table), insertFirst);
+                    return copyRange(table, targetTable, strategy, watermark, upperBound, ctx,
+                            range, rangeIndex, resumePoint(usable, rangeIndex, table),
+                            insertFirst);
                 }));
             }
             total = awaitWorkerStats(futures, pool);
@@ -2706,7 +2746,10 @@ public class DataSyncService {
         result.rowsInserted += total.inserted;
         result.rowsUpdated += total.updated;
         result.rowsChangedUnclassified += total.unclassified;
-        result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, total.read);
+        // Same rewind as the sequential path: only the ranges kept from an earlier attempt
+        // describe rows copied under that attempt's watermark.
+        result.newCursorValue = fullLoadCursorTail(table, strategy,
+                resumeWatermark(usable, watermark), total.read);
         return true;
     }
 
@@ -2820,9 +2863,9 @@ public class DataSyncService {
 
     /** One parallel worker: walks its own {@code (lower, upper]} key slice, per-chunk checkpoints. */
     private WriteStats copyRange(TableMeta table, String targetTable, CursorStrategy strategy,
-                                 Object upperBound, SyncContext ctx, KeyRange range,
-                                 int rangeIndex, RangeResume resume, boolean insertFirst)
-            throws SQLException {
+                                 String watermark, Object upperBound, SyncContext ctx,
+                                 KeyRange range, int rangeIndex, RangeResume resume,
+                                 boolean insertFirst) throws SQLException {
         WriteStats totals = new WriteStats();
         if (resume.done) {
             return totals;
@@ -2867,11 +2910,13 @@ public class DataSyncService {
             totals.inserted += stats.inserted;
             totals.updated += stats.updated;
             totals.unclassified += stats.unclassified;
-            checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
-                    chunkIndex++, KeysetChunker.encodePk(sink.values),
+            ChunkCheckpoint checkpoint = new ChunkCheckpoint(ctx.projectId(), table.getName(),
+                    rangeIndex, chunkIndex++, KeysetChunker.encodePk(sink.values),
                     (int) Math.min(stats.read, Integer.MAX_VALUE),
                     ChunkCheckpoint.STATUS_CHUNK, range.lowerLong(), range.upperLong(),
-                    range.lowerKeyJson(), range.upperKeyJson()));
+                    range.lowerKeyJson(), range.upperKeyJson());
+            checkpoint.setWatermark(watermark);
+            checkpoints.save(checkpoint);
             lastPk = sink.values;
             if (stats.read < chunkSize) {
                 break;
@@ -2879,9 +2924,11 @@ public class DataSyncService {
             ctx.requireLease();
         }
         // Marks the slice complete: a resumed load skips this range without reading it again.
-        checkpoints.save(new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
+        ChunkCheckpoint done = new ChunkCheckpoint(ctx.projectId(), table.getName(), rangeIndex,
                 chunkIndex, null, 0, ChunkCheckpoint.STATUS_RANGE_DONE, range.lowerLong(),
-                range.upperLong(), range.lowerKeyJson(), range.upperKeyJson()));
+                range.upperLong(), range.lowerKeyJson(), range.upperKeyJson());
+        done.setWatermark(watermark);
+        checkpoints.save(done);
         return totals;
     }
 

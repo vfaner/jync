@@ -220,7 +220,7 @@
                         <div class="field" th:if="${task.batchId == null}">
                             <label for="cronExpression" th:text="#{etl.cron}">Cron expression</label>
                             <input type="text" class="input" id="cronExpression" name="cronExpression"
-                                   maxlength="128" placeholder="0 2 * * *" th:value="${task.cronExpression}">
+                                   maxlength="128" placeholder="0 0 2 * * *" th:value="${task.cronExpression}">
                             <div class="help" th:text="#{etl.cron.hint}">Leave blank for manual-only. Saving does not enable the task; use the start button in the list.</div>
                         </div>
                         <div class="field">

@@ -169,10 +169,13 @@ class SyncEngineTableFailureIsolationTest {
         when(dataSync.syncTable(any(), any(), argThat(t -> t != null && "T1".equals(t.getName())), any(),
                 any(), any())).thenThrow(new LockLostException("lease lost"));
 
-        engine.runCycle(ctx());
+        SyncResult result = engine.runCycle(ctx());
 
         verify(dataSync, never()).syncTable(any(), any(),
                 argThat(t -> t != null && "T2".equals(t.getName())), any(), any(), any());
+        // Flagged separately so the runner leaves the task row to the instance that took the
+        // lease: recording this round would climb the failure ladder towards the ERROR hat.
+        assertThat(result.isLockLost()).isTrue();
     }
 
     private DataSyncService.TableSyncResult successfulTable() {

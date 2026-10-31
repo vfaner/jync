@@ -55,6 +55,23 @@ class ChangeLogDetailsLocalizerTest {
                 .isEqualTo("基线已重置（任务已停用）");
     }
 
+    /**
+     * A driver message wraps: the failure detail is the root cause's message, which JDBC often
+     * returns across several lines. The pattern matched a single line only, so a wrapped failure
+     * fell through as raw English on a Chinese page.
+     */
+    @Test
+    void aMultiLineDriverMessageIsStillTranslated() {
+        String detail = "FATAL: terminating connection due to administrator command\n"
+                + "\tat org.postgresql.core.v3.QueryExecutorImpl.execute";
+
+        assertThat(localizer.localize("PG consumer failed: " + detail, ZH))
+                .isEqualTo("PG 消费器失败：" + detail);
+        // The start failure carries the same classifier output.
+        assertThat(localizer.localize("CDC consumer failed to start: " + detail, ZH))
+                .isEqualTo("CDC 消费器启动失败：" + detail);
+    }
+
     @Test
     void cdcWindowCountsAreTranslated() {
         assertThat(localizer.localize("CDC window: 12 upserts, 3 deletes", ZH))

@@ -193,6 +193,9 @@ public class EtlTaskService {
                     execute(id);
                 } catch (RuntimeException e) {
                     log.warn("ETL task {} crashed outside the copy loop: {}", id, e.getMessage());
+                    // Logging alone would leave the previous successful run on display, as if
+                    // this trigger had never happened.
+                    recordFailure(id, "crashed outside the copy loop: " + e);
                 } finally {
                     guard.release(id);
                 }
@@ -244,8 +247,13 @@ public class EtlTaskService {
      * leaves a failed last-run and one failed history row rather than appearing never to have run.
      */
     void recordFailure(Long taskId, String detail) {
-        taskRepository.findById(taskId).ifPresent(task ->
-                record(task, EtlRunResult.failure(0, 0, EtlRunResult.Side.PROGRAM, detail)));
+        try {
+            taskRepository.findById(taskId).ifPresent(task ->
+                    record(task, EtlRunResult.failure(0, 0, EtlRunResult.Side.PROGRAM, detail)));
+        } catch (RuntimeException e) {
+            // Bookkeeping must not turn one crash into two: the caller is already reporting it.
+            log.warn("Could not record the ETL failure for task {}: {}", taskId, e.getMessage());
+        }
     }
 
     private void record(EtlTask task, EtlRunResult result) {

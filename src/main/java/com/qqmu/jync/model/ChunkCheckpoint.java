@@ -125,6 +125,18 @@ public class ChunkCheckpoint {
     @Column(name = "range_upper_key")
     private String rangeUpperKey;
 
+    /**
+     * The high-watermark the attempt that wrote this row captured when it started.
+     *
+     * <p>The prefix below a resume boundary was copied from that attempt's view of the source;
+     * a row there that changed during the interruption was never re-read. The resumed load
+     * therefore has to end at the <em>oldest</em> stored watermark, not at its own, or the next
+     * incremental window starts after the change and never delivers it. Null on rows written
+     * by a version that did not record it — those fall back to the current watermark.
+     */
+    @Column(name = "watermark", length = 512)
+    private String watermark;
+
     /** {@link #STATUS_CHUNK}, {@link #STATUS_RANGE_DONE} or {@link #STATUS_KEYLESS_CHUNK}. */
     @Column(name = "status", nullable = false, length = 16)
     private String status = STATUS_CHUNK;

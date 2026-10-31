@@ -370,7 +370,10 @@ public class SyncTaskRunner {
             // A deferred run read nothing, so nothing may be written to the task row:
             // recordOutcome would stamp "No changes" and reset the failure ladder of a task
             // that has not actually recovered. The next fire tries again.
-            if (!result.isDeferred()) {
+            // A run that lost its lease may not write the row at all: the instance that took
+            // the lease owns it. Recording this round climbed the failure ladder and, at
+            // max-retries, raised the ERROR hat — which parks a CDC consumer for good.
+            if (!result.isDeferred() && !result.isLockLost()) {
                 // A run the user stopped is not a failed attempt: recording it through the
                 // failure ladder would show "FAILED" for a deliberate action and push a healthy
                 // project towards the max-retries ERROR hat after a few ordinary stops.

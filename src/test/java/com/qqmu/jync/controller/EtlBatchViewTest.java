@@ -71,6 +71,19 @@ class EtlBatchViewTest {
                 .contains("name=\"targetDbId\"").contains("data-batch-tables");
     }
 
+    /** Same six-field rule as the single-task form: the hint must be a valid expression. */
+    @Test
+    void theCronHintShowsTheSixFieldFormTheValidatorAccepts() throws Exception {
+        when(etlTaskService.connections()).thenReturn(List.of(source(1L), target(2L)));
+
+        String page = mvc.perform(get("/etl/batches/new").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("placeholder=\"0 0 2 * * *\"");
+        assertThat(page).doesNotContain("placeholder=\"0 2 * * *\"");
+    }
+
     @Test
     void createPostsTheChosenTablesAndFlashesTheMessage() throws Exception {
         mvc.perform(post("/etl/batches/create").with(asAdmin()).with(csrf())

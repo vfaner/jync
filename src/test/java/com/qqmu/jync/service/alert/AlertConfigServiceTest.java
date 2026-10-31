@@ -187,7 +187,7 @@ class AlertConfigServiceTest {
 
         assertThat(config.enabledCategorySet())
                 .containsExactlyInAnyOrder(AlertCategory.POLL_STUCK, AlertCategory.DATA_DRIFT);
-        assertThat(config.isCategoryEnabled(AlertCategory.SYNC_FAILURE)).isFalse();
+        assertThat(config.enabledCategorySet()).doesNotContain(AlertCategory.SYNC_FAILURE);
     }
 
     @Test

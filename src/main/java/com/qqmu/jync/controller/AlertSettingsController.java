@@ -72,8 +72,11 @@ public class AlertSettingsController {
             flash.addFlashAttribute("message", "alert.saved");
             return "redirect:/alert-settings";
         } catch (IllegalArgumentException | IllegalStateException e) {
-            // Keep what was typed on screen (the URL field itself is never rendered back) and
-            // let the template resolve the i18n key. Nothing was written.
+            // Keep what was typed on screen — except the URL, which is a bearer credential the
+            // page promises never to render back in full. The template resolves the i18n key.
+            // Nothing was written.
+            form.setWebhookUrl(null);
+            form.setClearWebhookUrl(false);
             model.addAttribute("formError", e.getMessage());
             addPageModel(model, form);
             return "alert-settings";

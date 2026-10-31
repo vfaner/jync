@@ -30,9 +30,9 @@ public class SyncTask {
     @Column(name = "project_id", nullable = false, unique = true)
     private Long projectId;
 
-    /** Optional cron expression; when blank the fixed poll interval is used. */
-    @Column(name = "cron_expression", length = 128)
-    private String cronExpression;
+    // No cron column here: the schedule (cron or poll interval) lives in the project's sync
+    // config. A legacy sync_task.cron_expression field existed but was never written by any
+    // version — anything reading it would always see null.
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)

@@ -222,6 +222,10 @@ public class SyncEngine {
                     ChangeType.ERROR, e.getMessage(), false, 0);
         } catch (LockLostException e) {
             log.error("Project '{}': {}", ctx.projectName(), e.getMessage());
+            // The task row is the new lease holder's to write now: flagging this lets the
+            // runner skip recordOutcome instead of climbing the failure ladder for a round
+            // whose lease was only ever ours for the first half.
+            result.setLockLost(true);
             result.addError(e.getMessage());
             stateWriter.recordLog(ctx.projectId(), ObjectType.PROJECT, ctx.projectName(),
                     ChangeType.ERROR, e.getMessage(), false, 0);
@@ -1477,10 +1481,19 @@ public class SyncEngine {
         String verb = changeType == ChangeType.INSERT ? " inserted" : " updated";
         stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(), changeType,
                 phase + rows + " row(s)" + verb + scanned + " via "
-                        + strategy.getKind().name().toLowerCase() + " strategy"
+                        + strategyLabel(strategy) + " strategy"
                         + (strategy.getColumn() != null ? " on " + strategy.getColumn() : "")
                         + (cause != null ? cause : ""),
                 true, durationMs, affectedRows(rows));
+    }
+
+    /**
+     * The lower-cased strategy name the details localizer parses. Not the machine's locale: on
+     * a Turkish JVM "IDENTITY" lower-cases to a dotless "ıdentity", which the ASCII pattern
+     * cannot match.
+     */
+    static String strategyLabel(CursorStrategy strategy) {
+        return strategy.getKind().name().toLowerCase(Locale.ROOT);
     }
 
     /**

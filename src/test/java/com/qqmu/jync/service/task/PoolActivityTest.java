@@ -64,6 +64,24 @@ class PoolActivityTest {
         assertThat(activity.tryEnter(1L, 3L)).isTrue();
     }
 
+    /**
+     * A same-configuration cycle takes two seats; releasing one left a seat behind on every
+     * run, and after the ceiling was reached the configuration refused every later cycle
+     * until the JVM restarted.
+     */
+    @Test
+    void leavingASameConfigurationCycleReleasesBothOfItsSeats() {
+        PoolActivity activity = new PoolActivity(properties);
+
+        for (int i = 0; i < 4; i++) {
+            assertThat(activity.tryEnter(1L, 1L))
+                    .as("round %d must be admitted; the previous one released everything", i)
+                    .isTrue();
+            activity.leave(1L, 1L);
+            assertThat(activity.activeOn(1L)).isZero();
+        }
+    }
+
     @Test
     void anUnhandledLeavingDoesNotDriveTheCountNegative() {
         PoolActivity activity = new PoolActivity(properties);

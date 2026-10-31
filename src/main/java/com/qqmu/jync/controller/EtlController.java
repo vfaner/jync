@@ -71,7 +71,6 @@ public class EtlController {
             }
         }
 
-        model.addAttribute("tasks", tasks);
         model.addAttribute("standaloneTasks", standaloneTasks);
         model.addAttribute("batches", batches);
         model.addAttribute("batchMembers", batchMembers);

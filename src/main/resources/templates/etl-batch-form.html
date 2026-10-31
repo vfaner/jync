@@ -81,7 +81,7 @@
                             <div class="field">
                                 <label for="cronExpression" th:text="#{etl.cron}">Cron expression</label>
                                 <input type="text" class="input" id="cronExpression" name="cronExpression"
-                                       maxlength="128" placeholder="0 2 * * *" th:value="${batch.cronExpression}">
+                                       maxlength="128" placeholder="0 0 2 * * *" th:value="${batch.cronExpression}">
                                 <div class="help" th:text="#{etl.batch.cron.hint}">The batch runs its tables sequentially at this schedule; member tasks have no schedule of their own.</div>
                             </div>
                             <div class="field">
@@ -147,7 +147,7 @@
                             <div class="field">
                                 <label for="cronExpression" th:text="#{etl.cron}">Cron expression</label>
                                 <input type="text" class="input" id="cronExpression" name="cronExpression"
-                                       maxlength="128" placeholder="0 2 * * *" th:value="${batch.cronExpression}">
+                                       maxlength="128" placeholder="0 0 2 * * *" th:value="${batch.cronExpression}">
                                 <div class="help" th:text="#{etl.batch.cron.hint}">The batch runs its tables sequentially at this schedule; member tasks have no schedule of their own.</div>
                             </div>
                             <div class="field">

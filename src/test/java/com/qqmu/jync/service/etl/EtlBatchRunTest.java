@@ -138,8 +138,24 @@ class EtlBatchRunTest {
                 .isEqualTo("PARTIAL members=3 ok=1 failed=1 skipped=1 read=5 written=4");
     }
 
+    /**
+     * A deleted batch (a stale tab pressing Run) must not be described as "no tables yet";
+     * the operator needs to know the batch itself is gone.
+     */
+    @Test
+    void submitOfAMissingBatchReportsNotFound() {
+        when(batchRepository.existsById(99L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.submit(99L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.batch.not.found");
+        verifyNoInteractions(executor);
+        assertThat(service.isRunning(99L)).isFalse();
+    }
+
     @Test
     void submitRefusesAnEmptyBatchBeforeQueueing() {
+        when(batchRepository.existsById(5L)).thenReturn(true);
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.submit(5L))
@@ -151,6 +167,7 @@ class EtlBatchRunTest {
 
     @Test
     void submitRefusesWhenTheBatchGuardIsHeld() {
+        when(batchRepository.existsById(5L)).thenReturn(true);
         guard.tryAcquire("batch:5");
 
         assertThat(service.submit(5L)).isFalse();
@@ -159,6 +176,7 @@ class EtlBatchRunTest {
 
     @Test
     void queueFullReleasesTheBatchGuard() {
+        when(batchRepository.existsById(5L)).thenReturn(true);
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of(member(1L)));
         doThrow(new RejectedExecutionException()).when(executor).execute(any());
 
@@ -183,7 +201,37 @@ class EtlBatchRunTest {
         assertThat(service.isRunning(5L)).isFalse();
     }
 
+    /**
+     * A batch-level failure before the member loop (an unreadable member list, a dead pool) must
+     * leave a failed summary. Logging only left the batch page showing the previous run's result
+     * as if this trigger never happened.
+     */
+    @Test
+    void aCrashOutsideTheMemberLoopLeavesAFailedSummary() {
+        doAnswer(invocation -> {
+            ((Runnable) invocation.getArgument(0)).run();
+            return null;
+        }).when(executor).execute(any());
+        stubBatchAndMembers(List.of(member(1L)));
+        when(batchRepository.existsById(5L)).thenReturn(true);
+        // First call is submit's "is there anything to run" check; the second is execute()'s.
+        when(taskRepository.findByBatchIdOrderByIdAsc(5L))
+                .thenReturn(List.of(member(1L)))
+                .thenThrow(new IllegalStateException("metadata unavailable"));
+
+        assertThat(service.submit(5L)).isTrue();
+
+        ArgumentCaptor<EtlBatch> saved = ArgumentCaptor.forClass(EtlBatch.class);
+        verify(batchRepository).save(saved.capture());
+        assertThat(saved.getValue().getLastRunSuccess()).isFalse();
+        assertThat(saved.getValue().getLastRunResult())
+                .startsWith("FAILED").contains("metadata unavailable");
+        assertThat(saved.getValue().getLastRunTime()).isNotNull();
+        assertThat(service.isRunning(5L)).isFalse();
+    }
+
     private void stubBatchAndMembers(List<EtlTask> members) {
+        when(batchRepository.existsById(5L)).thenReturn(true);
         when(batchRepository.findById(5L)).thenReturn(Optional.of(batch(5L)));
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(members);
         when(batchRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));

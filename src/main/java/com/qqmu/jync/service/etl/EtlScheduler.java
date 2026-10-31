@@ -179,14 +179,6 @@ public class EtlScheduler {
         }
     }
 
-    boolean isScheduled(Long taskId) {
-        return scheduled.containsKey(taskId);
-    }
-
-    boolean isScheduledBatch(Long batchId) {
-        return batchScheduled.containsKey(batchId);
-    }
-
     private void cancel(Long taskId) {
         ScheduledFuture<?> future = scheduled.remove(taskId);
         if (future != null) {

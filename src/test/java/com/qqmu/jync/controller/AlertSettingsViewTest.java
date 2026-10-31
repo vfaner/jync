@@ -158,6 +158,31 @@ class AlertSettingsViewTest {
         assertThat(page).contains("启用告警时必须填写 Webhook 地址");
     }
 
+    /**
+     * The URL is a bearer credential: the page masks the stored one and promises never to show
+     * it in full. Re-rendering a rejected save with the just-typed value in the input broke that
+     * promise on the one path — an error — where nobody thinks to look.
+     */
+    @Test
+    void aRejectedSaveDoesNotEchoTheTypedUrl() throws Exception {
+        when(configService.load()).thenReturn(config(true, null));
+        when(configService.maskedUrl()).thenReturn(null);
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("error.alert.cooldown"))
+                .when(configService).save(any(AlertConfigForm.class));
+
+        String page = mvc.perform(post("/alert-settings").with(asAdmin()).with(csrf())
+                        .header("Accept-Language", "zh-CN")
+                        .param("enabled", "true")
+                        .param("webhookUrl", "https://hooks.example.com/secret-token")
+                        .param("categories", "SYNC_FAILURE")
+                        .param("cooldownMinutes", "1"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).doesNotContain("secret-token");
+        assertThat(page).contains("重复提醒间隔必须在 5 到 1440 分钟之间");
+    }
+
     @Test
     void aFailedTestSendIsReported() throws Exception {
         when(notifier.sendNow(anyString(), any(), anyString())).thenReturn(false);

@@ -33,6 +33,17 @@ public class SyncResult {
      */
     private boolean deferred;
 
+    /**
+     * Whether the run aborted because its lease was lost mid-cycle (expired, or reclaimed by
+     * another instance).
+     *
+     * <p>The task row no longer belongs to this run: whoever took the lease is writing it. So
+     * this is neither a success nor a failure to record — the runner skips the outcome entirely.
+     * Recording it climbed the failure ladder, and enough lease losses flipped the task to
+     * ERROR, which for CDC parks the consumer until someone rebuilds the baseline by hand.
+     */
+    private boolean lockLost;
+
     private int structureChanges;
 
     // long, not int: a full baseline of one table can exceed 2^31 rows, and an int counter

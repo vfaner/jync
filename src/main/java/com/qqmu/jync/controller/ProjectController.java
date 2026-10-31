@@ -239,7 +239,6 @@ public class ProjectController {
         model.addAttribute("config", config);
         // Drives the disabled state of start/sync-now plus the reason shown on the page.
         model.addAttribute("noSyncWorkMessage", noSyncWorkMessage(config));
-        model.addAttribute("databases", databaseConfigService.findAll());
         SyncTask task = projectService.findTask(id).orElse(null);
         model.addAttribute("task", task);
         // The polling cycle executing on this node, if any: the next-run block uses it to

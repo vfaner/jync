@@ -116,7 +116,7 @@ public class SyncScheduler {
                         project.getName() == null ? "" : project.getName())
                 .storeDurably()
                 .build();
-        Trigger trigger = buildTrigger(projectId, task, config);
+        Trigger trigger = buildTrigger(projectId, config);
 
         try {
             // Remove first so a changed interval or cron actually takes effect.
@@ -129,7 +129,7 @@ public class SyncScheduler {
             // did not run when I expected": Quartz evaluates the expression in the JVM's
             // zone, so a server left on UTC silently shifts a 02:00 schedule by 8 hours.
             log.info("Scheduled sync for project '{}' ({}), next fire: {}", project.getName(),
-                    describeTrigger(task, config), describeNextFire(trigger));
+                    describeTrigger(config), describeNextFire(trigger));
         } catch (SchedulerException e) {
             // A durable job without a trigger (the usual leftover of a deleted job) has no
             // registration to restore; scheduleJob(job, null) would only throw NPE and hide
@@ -167,17 +167,28 @@ public class SyncScheduler {
      *       a promise to run, not a polling hint.</li>
      * </ul>
      */
-    private Trigger buildTrigger(Long projectId, SyncTask task, SyncConfig config) {
-        String cron = config.getCronExpression() != null && !config.getCronExpression().isBlank()
-                ? config.getCronExpression()
-                : task.getCronExpression();
+    /**
+     * The schedule's cron expression, trimmed, or null for the fixed poll interval.
+     *
+     * <p>Read from the project's sync config only. A fallback to {@code SyncTask}'s
+     * {@code cronExpression} column used to follow it, but no version of this application has
+     * ever written that column, so the fallback could never fire — it only suggested that a
+     * task-level schedule existed.
+     */
+    private static String effectiveCron(SyncConfig config) {
+        String cron = config.getCronExpression();
+        return cron == null || cron.isBlank() ? null : cron.trim();
+    }
+
+    private Trigger buildTrigger(Long projectId, SyncConfig config) {
+        String cron = effectiveCron(config);
 
         TriggerBuilder<Trigger> builder = TriggerBuilder.newTrigger()
                 .withIdentity(triggerKey(projectId))
                 .startNow();
 
-        if (cron != null && !cron.isBlank()) {
-            return builder.withSchedule(CronScheduleBuilder.cronSchedule(cron.trim())
+        if (cron != null) {
+            return builder.withSchedule(CronScheduleBuilder.cronSchedule(cron)
                     .withMisfireHandlingInstructionFireAndProceed()).build();
         }
 
@@ -210,10 +221,9 @@ public class SyncScheduler {
                 + " (" + ZoneId.systemDefault().getId() + ")";
     }
 
-    private String describeTrigger(SyncTask task, SyncConfig config) {
-        String cron = config.getCronExpression() != null && !config.getCronExpression().isBlank()
-                ? config.getCronExpression() : task.getCronExpression();
-        if (cron != null && !cron.isBlank()) {
+    private String describeTrigger(SyncConfig config) {
+        String cron = effectiveCron(config);
+        if (cron != null) {
             return "cron: " + cron;
         }
         long interval = config.getPollIntervalMs() != null && config.getPollIntervalMs() > 0

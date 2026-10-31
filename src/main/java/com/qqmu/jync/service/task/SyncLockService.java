@@ -320,7 +320,10 @@ public class SyncLockService {
                 return;
             }
             warnIfNoProgress();
-            if (!extendLease()) {
+            // Only "the row is no longer mine" is a lost lease worth cancelling for. A store
+            // that was briefly unreachable must not disarm the watchdog: the cycle would run
+            // on unrenewed, expire by TTL mid-load and abort through LockLostException.
+            if (attemptRenewal() == Renewal.LOST) {
                 watchdogTask.cancel(false);
             }
         }
@@ -352,30 +355,33 @@ public class SyncLockService {
                     projectId, idleMs / 60_000L);
         }
 
-        /** Extends the lease and reports whether it still belongs to this instance. */
-        private boolean extendLease() {
+        private enum Renewal { RENEWED, LOST, UNAVAILABLE }
+
+        /**
+         * One renewal attempt's verdict. {@code UNAVAILABLE} is deliberately distinct from
+         * {@code LOST}: an unreachable store proves nothing about ownership, so callers that
+         * must stop writing treat it as lost, while the watchdog keeps trying.
+         */
+        private Renewal attemptRenewal() {
             boolean renewed;
             try {
                 renewed = store.renew(projectId, ownerId, ttlMs);
             } catch (RuntimeException e) {
                 log.warn("Renewing the sync lock for project {} failed: {}", projectId,
                         e.getMessage());
-                return false;
+                return Renewal.UNAVAILABLE;
             }
             if (!renewed) {
                 log.warn("Could not renew the sync lock for project {}; another instance may have "
                         + "taken it over", projectId);
+                return Renewal.LOST;
             }
-            return renewed;
+            return Renewal.RENEWED;
         }
 
         /** What the project page needs to explain a frozen next-run time. */
         ActiveCycle snapshot() {
             return new ActiveCycle(projectId, startedAt, lastProgressAt);
-        }
-
-        public Long projectId() {
-            return projectId;
         }
 
         public String owner() {
@@ -391,7 +397,7 @@ public class SyncLockService {
          *         meaning the cycle must stop writing — another instance may own the project
          */
         public boolean renew() {
-            boolean renewed = extendLease();
+            boolean renewed = attemptRenewal() == Renewal.RENEWED;
             if (renewed) {
                 // Only a caller-visible renewal counts: the cycle itself reached a safe
                 // point. Watchdog ticks call extendLease() directly and are not progress.

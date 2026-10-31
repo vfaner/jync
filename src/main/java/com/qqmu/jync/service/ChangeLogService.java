@@ -27,11 +27,6 @@ public class ChangeLogService {
     }
 
     @Transactional(readOnly = true)
-    public long count(Long projectId) {
-        return count(projectId, false);
-    }
-
-    @Transactional(readOnly = true)
     public long count(Long projectId, boolean failedOnly) {
         if (!failedOnly) {
             return projectId != null ? repository.countByProjectId(projectId) : repository.count();
@@ -39,11 +34,6 @@ public class ChangeLogService {
         return projectId != null
                 ? repository.countByProjectIdAndSuccessFalse(projectId)
                 : repository.countBySuccessFalse();
-    }
-
-    @Transactional(readOnly = true)
-    public Page<ChangeLog> page(Long projectId, Pageable pageable) {
-        return page(projectId, false, pageable);
     }
 
     @Transactional(readOnly = true)

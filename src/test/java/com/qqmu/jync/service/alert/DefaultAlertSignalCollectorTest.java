@@ -247,6 +247,27 @@ class DefaultAlertSignalCollectorTest {
         assertThat(event.detailKey()).isEqualTo("alert.detail.dataDrift");
     }
 
+    /**
+     * The usual repair path folds the audit into the reload entry as a trailing cause, so the
+     * details start with the load counts, not with the audit. Matching only a leading prefix
+     * lost the most common drift alert.
+     */
+    @Test
+    void aRepairFoldedIntoAReloadEntryBecomesADataDriftEvent() {
+        when(projectRepository.findAllById(any())).thenReturn(List.of(project(1L, "orders")));
+        ChangeLog reload = failure(1L, ObjectType.DATA, "ORDERS", ChangeType.INSERT,
+                T0.minusSeconds(60));
+        reload.setDetails("51 row(s) inserted (51 scanned) — row count audit: target was missing"
+                + " 4 row(s) already marked as synced (source 55 vs target 51 at or below"
+                + " cursor 42); cursor cleared and the table reloaded");
+        when(changeLogRepository.findByChangeTypeAndOccurredAtAfter(any(), any()))
+                .thenReturn(List.of(reload));
+
+        AlertEvent event = only(collect(), com.qqmu.jync.model.AlertCategory.DATA_DRIFT);
+
+        assertThat(event.object()).isEqualTo("ORDERS");
+    }
+
     @Test
     void threeFailedHealthChecksAreNeededBeforeAConnectionIsReported() {
         DatabaseConfig config = new DatabaseConfig();

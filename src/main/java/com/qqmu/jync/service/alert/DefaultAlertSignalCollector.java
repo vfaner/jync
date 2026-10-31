@@ -289,9 +289,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         // collapse to the newest, or the same drift would be announced repeatedly.
         Map<String, ChangeLog> newest = new LinkedHashMap<>();
         for (ChangeLog row : rows) {
-            if (row.getObjectType() != ObjectType.DATA
-                    || row.getDetails() == null
-                    || !row.getDetails().startsWith("Row count audit")) {
+            if (!isRowCountRepair(row)) {
                 continue;
             }
             String key = row.getProjectId() + "|" + row.getObjectName();
@@ -307,6 +305,19 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
                     "alert.detail.dataDrift",
                     new Object[]{row.getObjectName()}, row.getOccurredAt()));
         }
+    }
+
+    /**
+     * Whether a change-log row describes a row-count repair.
+     *
+     * <p>A repair reaches the log two ways: as an entry of its own when the reload wrote
+     * nothing, or as the cause appended after a reload's load counts. Only the first starts
+     * with the audit's name, so the marker is matched anywhere in the details.
+     */
+    private static boolean isRowCountRepair(ChangeLog row) {
+        return row.getObjectType() == ObjectType.DATA
+                && row.getDetails() != null
+                && row.getDetails().toLowerCase(Locale.ROOT).contains("row count audit");
     }
 
     private static Set<Long> projectIdsOf(Iterable<ChangeLog> rows) {

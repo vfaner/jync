@@ -248,6 +248,28 @@ class EtlTaskServiceTest {
         verify(runner, never()).run(any(), any(), any(), any());
     }
 
+    /**
+     * A crash the copy loop does not catch (an unreadable task row, a dead driver while opening
+     * connections) must still leave a failed last-run and one history row. Logging alone left the
+     * task showing its previous successful run as if the trigger had never happened.
+     */
+    @Test
+    void aCrashOutsideTheCopyLoopStillLeavesAFailedRun() {
+        EtlTask task = existing(7L, "SELECT id FROM src");
+        when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
+        stubConnections(1L, 2L);
+        when(runner.run(eq(task), any(), any(), any()))
+                .thenThrow(new IllegalStateException("driver died"));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThat(service.submit(7L)).isTrue();
+
+        assertThat(task.getLastRunSuccess()).isFalse();
+        assertThat(task.getLastRunResult()).contains("FAILED").contains("driver died");
+        verify(runRepository).save(any(EtlRun.class));
+        assertThat(guard.isRunning(7L)).isFalse();
+    }
+
     // --- helpers ------------------------------------------------------------------------
 
     private void stubConnections(Long sourceId, Long targetId) {

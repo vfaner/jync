@@ -3,7 +3,6 @@ package com.qqmu.jync.service.alert;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
@@ -58,13 +57,6 @@ public class AlertConfigService {
             config.setCooldownMinutes(DEFAULT_COOLDOWN_MINUTES);
         }
         return config;
-    }
-
-    /** Whether alert delivery is switched on and has somewhere to go. */
-    @Transactional(readOnly = true)
-    public boolean isDeliverable() {
-        AlertConfig config = load();
-        return config.isEnabled() && webhookUrlOrNull() != null;
     }
 
     /** The decrypted URL the notifier posts to, or null when none is stored. */
@@ -173,10 +165,5 @@ public class AlertConfigService {
             return null;
         }
         return crypto.decrypt(stored);
-    }
-
-    /** Every category, in declaration order — the order the page lists its checkboxes. */
-    public static List<AlertCategory> allCategories() {
-        return new ArrayList<>(List.of(AlertCategory.values()));
     }
 }

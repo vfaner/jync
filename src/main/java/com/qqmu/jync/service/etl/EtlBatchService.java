@@ -174,6 +174,11 @@ public class EtlBatchService {
      * executor, so a batch of tables occupies one slot rather than one slot per table.
      */
     public boolean submit(Long batchId) {
+        if (!batchRepository.existsById(batchId)) {
+            // A stale tab pressing Run: "no tables yet" would send the operator looking in the
+            // wrong place.
+            throw new IllegalArgumentException("error.etl.batch.not.found");
+        }
         if (!guard.tryAcquire(batchKey(batchId))) {
             return false;
         }
@@ -186,6 +191,8 @@ public class EtlBatchService {
                     execute(batchId);
                 } catch (RuntimeException e) {
                     log.warn("ETL batch {} crashed outside the member loop: {}", batchId, e.getMessage());
+                    // Otherwise the page keeps showing the previous run as if nothing ran.
+                    recordCrash(batchId, "crashed outside the member loop: " + e);
                 } finally {
                     guard.release(batchKey(batchId));
                 }
@@ -314,10 +321,6 @@ public class EtlBatchService {
         return guard.isRunning(batchKey(batchId));
     }
 
-    public boolean isMemberRunning(Long taskId) {
-        return guard.isRunning(taskId);
-    }
-
     static String batchKey(Long batchId) {
         return "batch:" + batchId;
     }
@@ -406,6 +409,24 @@ public class EtlBatchService {
                 : "PARTIAL members=" + members + " ok=" + ok + " failed=" + failed
                 + " skipped=" + skipped + " read=" + rowsRead + " written=" + rowsWritten);
         batchRepository.save(batch);
+    }
+
+    /**
+     * Records a batch failure that happened before the member loop could write its summary.
+     * Defensive on purpose: the caller is already reporting a crash, and a failing write must
+     * not turn it into a second one.
+     */
+    void recordCrash(Long batchId, String detail) {
+        try {
+            batchRepository.findById(batchId).ifPresent(batch -> {
+                batch.setLastRunTime(Instant.now());
+                batch.setLastRunSuccess(false);
+                batch.setLastRunResult("FAILED error=" + detail);
+                batchRepository.save(batch);
+            });
+        } catch (RuntimeException e) {
+            log.warn("Could not record the ETL batch {} failure: {}", batchId, e.getMessage());
+        }
     }
 
     private List<EtlTask> buildMembers(EtlBatch batch, List<String> tables, String schema,

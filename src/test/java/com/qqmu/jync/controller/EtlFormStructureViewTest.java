@@ -68,6 +68,18 @@ class EtlFormStructureViewTest {
                 .andReturn().getResponse().getContentAsString();
     }
 
+    /**
+     * Spring's {@code CronExpression} takes six fields with the seconds first. A hint showing
+     * the five-field Unix form teaches an expression the validator then rejects.
+     */
+    @Test
+    void theCronHintShowsTheSixFieldFormTheValidatorAccepts() throws Exception {
+        String page = newForm();
+
+        assertThat(page).contains("placeholder=\"0 0 2 * * *\"");
+        assertThat(page).doesNotContain("placeholder=\"0 2 * * *\"");
+    }
+
     @Test
     void everyDivIsClosedSoTheFormCannotEndEarly() throws Exception {
         String page = newForm();

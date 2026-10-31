@@ -48,6 +48,8 @@ class DataSyncServiceChunkedLoadTest {
 
     private static final CursorStrategy IDENTITY =
             CursorStrategy.identity("ID", Types.BIGINT, "numeric primary key");
+    private static final CursorStrategy UPDATED_AT =
+            CursorStrategy.timestamp("UPDATED_AT", Types.TIMESTAMP, "modified column");
 
     private Connection source;
     private Connection target;
@@ -122,6 +124,66 @@ class DataSyncServiceChunkedLoadTest {
         verify(checkpoints, times(1)).save(any(ChunkCheckpoint.class));
         verify(checkpoints).deleteByProjectIdAndTableName(7L, "ITEMS");
         assertThat(result.getNewCursorValue()).isEqualTo("5");
+    }
+
+    /**
+     * A resumed load copies only the tail: the prefix was copied from the <em>first</em>
+     * attempt's view of the source. A row below the resume boundary that changed during the
+     * interruption was never re-read, so advancing the cursor to this cycle's watermark
+     * covers that row up and the next incremental window never delivers it. The cursor must
+     * rewind to the watermark the first attempt captured.
+     */
+    @Test
+    void aResumedLoadRewindsTheCursorToTheFirstAttemptsWatermark() throws SQLException {
+        exec(source, "CREATE TABLE EVENTS (ID BIGINT PRIMARY KEY, UPDATED_AT TIMESTAMP,"
+                + " NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE EVENTS (ID BIGINT PRIMARY KEY, UPDATED_AT TIMESTAMP,"
+                + " NAME VARCHAR(50))");
+        // First attempt: only rows 1-2 existed, source watermark 00:00:02; it copied them and
+        // died. Then rows 3-5 were inserted and row 1 was UPDATED at 00:00:04.
+        exec(source, "INSERT INTO EVENTS VALUES"
+                + " (1, TIMESTAMP '2025-01-01 00:00:04', 'a2'),"
+                + " (2, TIMESTAMP '2025-01-01 00:00:02', 'b'),"
+                + " (3, TIMESTAMP '2025-01-01 00:00:03', 'c'),"
+                + " (4, TIMESTAMP '2025-01-01 00:00:04', 'd'),"
+                + " (5, TIMESTAMP '2025-01-01 00:00:05', 'e')");
+        exec(target, "INSERT INTO EVENTS VALUES"
+                + " (1, TIMESTAMP '2025-01-01 00:00:01', 'a'),"
+                + " (2, TIMESTAMP '2025-01-01 00:00:02', 'b')");
+        // The watermark the first attempt captured: MAX(UPDATED_AT) as it stood then, in the
+        // same Instant encoding readHighWatermark stores.
+        String firstAttemptWatermark =
+                instantOf("SELECT UPDATED_AT FROM EVENTS WHERE ID = 2");
+        ChunkCheckpoint firstAttempt = new ChunkCheckpoint(7L, "EVENTS", 0, 0, "[2]", 2,
+                ChunkCheckpoint.STATUS_CHUNK);
+        firstAttempt.setWatermark(firstAttemptWatermark);
+        when(checkpoints.findByProjectIdAndTableName(7L, "EVENTS"))
+                .thenReturn(List.of(firstAttempt));
+
+        SyncProperties properties = new SyncProperties();
+        properties.setChunkSize(2);
+        properties.setSafetyLagMs(0);
+        DataSyncService service = new DataSyncService(properties, checkpoints);
+
+        DataSyncService.TableSyncResult resumed = service.syncTable(source, target,
+                eventsMeta(), UPDATED_AT, new SyncProgress(), ctx);
+        assertThat(resumed.isSuccess()).as(resumed.getError()).isTrue();
+        assertThat(count("EVENTS")).isEqualTo(5);
+        // Row 1 is still the stale copy the first attempt made — the resume cannot fix it.
+        assertThat(targetNameOf(1L)).isEqualTo("a");
+        assertThat(resumed.getNewCursorValue()).isEqualTo(firstAttemptWatermark);
+
+        // The next incremental window is what must repair it.
+        SyncProgress progress = new SyncProgress();
+        progress.setLastSyncValue(resumed.getNewCursorValue());
+        progress.setInitialLoadDone(true);
+        DataSyncService.TableSyncResult incremental = service.syncTable(source, target,
+                eventsMeta(), UPDATED_AT, progress, ctx);
+        assertThat(incremental.isSuccess()).as(incremental.getError()).isTrue();
+
+        assertThat(targetNameOf(1L))
+                .as("a change below the resume boundary must stay inside the next window")
+                .isEqualTo("a2");
     }
 
     @Test
@@ -535,6 +597,40 @@ class DataSyncServiceChunkedLoadTest {
     }
 
     /** Same shape as {@link #itemsMeta()}, with a binary key the JSON boundary cannot hold. */
+    /** ITEMS' shape plus a timestamp cursor column for the resume-window test. */
+    private TableMeta eventsMeta() {
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(Types.BIGINT);
+        ColumnMeta updatedAt = new ColumnMeta();
+        updatedAt.setName("UPDATED_AT");
+        updatedAt.setJdbcType(Types.TIMESTAMP);
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
+
+        TableMeta table = new TableMeta();
+        table.setName("EVENTS");
+        table.setPrimaryKeys(List.of("ID"));
+        table.setColumns(List.of(id, updatedAt, name));
+        return table;
+    }
+
+    /** One timestamp cell in the same Instant encoding {@code readHighWatermark} stores. */
+    private String instantOf(String sql) throws SQLException {
+        try (Statement st = source.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            return rs.next() ? rs.getTimestamp(1).toInstant().toString() : null;
+        }
+    }
+
+    private String targetNameOf(long id) throws SQLException {
+        try (Statement st = target.createStatement();
+             ResultSet rs = st.executeQuery("SELECT NAME FROM EVENTS WHERE ID = " + id)) {
+            return rs.next() ? rs.getString(1) : null;
+        }
+    }
+
     private TableMeta binItemsMeta() {
         ColumnMeta id = new ColumnMeta();
         id.setName("ID");

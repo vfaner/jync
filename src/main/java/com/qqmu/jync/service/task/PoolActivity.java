@@ -70,8 +70,10 @@ public class PoolActivity {
         if (sourceId == null || targetId == null) {
             return;
         }
-        release(sourceId, 1);
-        if (!sourceId.equals(targetId)) {
+        // Mirror tryEnter exactly: a same-configuration cycle took two seats on one id.
+        boolean same = sourceId.equals(targetId);
+        release(sourceId, same ? 2 : 1);
+        if (!same) {
             release(targetId, 1);
         }
     }

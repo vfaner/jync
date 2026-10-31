@@ -129,6 +129,27 @@ class SyncLockServiceRenewTest {
         handle.close();
     }
 
+    /**
+     * A store that hiccups once must not disarm the watchdog for the rest of the cycle.
+     *
+     * <p>Cancelling on ANY failed renewal treated an unreachable metadata database exactly
+     * like a lease a peer had taken. The cycle then ran on with no automatic renewal and its
+     * lease expired by TTL mid-load: a multi-hour full load aborted through LockLostException
+     * because of one transient blip. Only a store that answers "not yours" is a lost lease.
+     */
+    @Test
+    void aTransientStoreFailureDoesNotStopTheWatchdog() {
+        SyncLockService service = serviceWithTtl(3_000L);
+        when(store.renew(eq(1L), anyString(), anyLong()))
+                .thenThrow(new IllegalStateException("metadata db blip"))
+                .thenReturn(true);
+
+        SyncLockService.LockHandle handle = service.tryAcquire(1L);
+        // The second tick can only happen if the first failure did not cancel the timer.
+        verify(store, timeout(4_000).times(2)).renew(eq(1L), anyString(), anyLong());
+        handle.close();
+    }
+
     private int countRenewCalls() {
         return org.mockito.Mockito.mockingDetails(store).getInvocations().stream()
                 .filter(invocation -> "renew".equals(invocation.getMethod().getName()))

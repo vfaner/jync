@@ -38,9 +38,19 @@ public class SyncTaskStore {
         this.properties = properties;
     }
 
+    /**
+     * Stamps the start of a cycle. The ERROR status survives: it is the B7 hat, and the round
+     * that starts may be deferred before it reads anything (a deferred round records no outcome
+     * at all), which would lift the park with no evidence the project healed. A round
+     * that actually finishes lifts it through {@link #recordOutcome}; a human lifts it through
+     * {@link #markCdcRunning} or {@link #markStoppedClearingResult}.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markRunning(Long projectId) {
         taskRepository.findByProjectId(projectId).ifPresent(task -> {
+            if (task.getStatus() == TaskStatus.ERROR) {
+                return;
+            }
             task.setStatus(TaskStatus.RUNNING);
             taskRepository.save(task);
         });
@@ -58,9 +68,11 @@ public class SyncTaskStore {
             // "Last sync" answers "when did data last land", not "when did we last look": the
             // polling engine fires every second even on an idle source, so stamping every
             // outcome made the dashboard's timestamp tick while the row counter stood still.
-            // A failed cycle moved nothing either — the previous successful time stays truthful.
-            // The summary is still recorded below, so the list can still say "No changes".
-            if (result.isSuccess() && result.hasChanges()) {
+            // The row counts are therefore the only gate: a cycle that failed on one table
+            // still committed the rows of the others, and freezing the timestamp for the whole
+            // partial-failure period contradicted them. A cycle that moved nothing keeps the
+            // previous time, success or not.
+            if (result.hasChanges()) {
                 task.setLastSyncTime(Instant.now());
             }
             task.setLastSyncResult(truncate(result.summary()));

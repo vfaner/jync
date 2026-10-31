@@ -80,10 +80,6 @@ public class AlertConfig {
         return selected;
     }
 
-    public boolean isCategoryEnabled(AlertCategory category) {
-        return enabledCategorySet().contains(category);
-    }
-
     /** The format, defaulted for a pre-column row. */
     public AlertWebhookFormat formatOrDefault() {
         return format == null ? AlertWebhookFormat.GENERIC : format;
