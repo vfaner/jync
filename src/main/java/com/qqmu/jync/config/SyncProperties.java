@@ -194,6 +194,9 @@ public class SyncProperties {
      * unindexed table the same statement scans every row each cycle — a slow query whose
      * timeout, on MySQL, also retires the pooled connection. Past this ceiling the probe is
      * skipped with one log line; the data sync itself is unaffected.
+     *
+     * <p>The same ceiling decides when the run advises creating an index on an unindexed
+     * cursor column — once per table, at the first incremental read. 0 turns both off.
      */
     private long maxUnindexedScanRows = 1_000_000L;
 

@@ -203,7 +203,9 @@ sync:
   copy-timeout-seconds: 1800
   # Bookkeeping COUNT(*) probes (the NULL-cursor check and the row-count audit) stop running
   # once a table passes this size with no index leading with the cursor column: the same
-  # statement then scans the whole table every cycle. 0 keeps every probe running.
+  # statement then scans the whole table every cycle. The same ceiling decides when the run
+  # warns once per table that the cursor column should be indexed. 0 keeps every probe
+  # running and turns the warning off.
   max-unindexed-scan-rows: 1000000
   metadata-query-timeout-seconds: 60
   # Grace period for in-flight cycles when the application shuts down; after this the

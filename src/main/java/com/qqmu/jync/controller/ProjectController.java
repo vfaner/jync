@@ -393,6 +393,21 @@ public class ProjectController {
         // by design (T13), so holder-ship comes from statsFor and the snapshot alone.
         boolean cdcActive = current.isLogCdc();
         model.addAttribute("cdcActive", cdcActive);
+
+        // The polling path reads by cursor column only: without an index leading with that
+        // column every incremental read scans the whole source table, which is the read that
+        // reaches the statement timeout on a large table. The sync log says so once; this is
+        // where the operator who can add the index actually sees it. Advisory — a source
+        // that cannot answer loses the hint, not the page.
+        if (!cdcActive) {
+            try {
+                model.addAttribute("unindexedCursorTables",
+                        projectService.findUnindexedCursorTables(id, progressList));
+            } catch (RuntimeException e) {
+                log.debug("Could not inspect cursor-column indexes for project {}: {}",
+                        id, e.toString());
+            }
+        }
         CdcPosition cdcPosition = null;
         Map<String, Object> cdcStats = null;
         if (cdcActive) {

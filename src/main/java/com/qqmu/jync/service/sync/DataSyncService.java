@@ -103,6 +103,13 @@ public class DataSyncService {
     private final Set<String> guardedScanNotices =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /**
+     * Cursor columns already checked for a leading index, so the advisory costs one dictionary
+     * lookup per table per run rather than one per poll.
+     */
+    private final Set<String> cursorIndexChecked =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     public DataSyncService(SyncProperties properties) {
         this(properties, null);
     }
@@ -470,6 +477,7 @@ public class DataSyncService {
                                             CursorStrategy strategy, SyncProgress progress,
                                             SyncContext ctx, TableSyncResult result)
             throws SQLException {
+        adviseCursorIndexOnce(sourceConn, table, strategy, ctx);
         String watermark = readHighWatermark(sourceConn, table, strategy, ctx);
         if (watermark == null) {
             // An empty source table: nothing to do, and nothing to advance.
@@ -1219,6 +1227,46 @@ public class DataSyncService {
     }
 
     /**
+     * Tells the operator once per table when the cursor column has no leading index.
+     *
+     * <p>The cursor column is the one column every incremental read touches: the window
+     * {@code SELECT}, the {@code MAX} watermark and the audit {@code COUNT(*)} all bound
+     * themselves by it. With an index each is a key-range lookup; without one each is a full
+     * scan, so the statement budget eventually runs out — which on MySQL also retires the
+     * pooled connection. Saying so while the table is still small is the point: the warning
+     * arrives before the first timeout, not after.
+     *
+     * <p>Each table is looked at once per run ({@code sync.max-unindexed-scan-rows} decides
+     * what "large" means; 0 turns the advice off with the guard). Indexes created later are
+     * not re-checked — the advice has already been given.
+     */
+    private void adviseCursorIndexOnce(Connection conn, TableMeta table,
+                                       CursorStrategy strategy, SyncContext ctx) {
+        String column = strategy.getColumn();
+        long ceiling = properties.getMaxUnindexedScanRows();
+        if (column == null || strategy.isPseudoColumn() || ceiling <= 0) {
+            return;
+        }
+        // Hand-built contexts (unit tests) carry no project; the table alone scopes the check.
+        String owner = ctx.getProject() == null ? "-" : String.valueOf(ctx.projectId());
+        if (!cursorIndexChecked.add(owner + ":" + table.getName() + ":" + column)) {
+            return;
+        }
+        Long rows = rowEstimate(conn, table, ctx);
+        if (rows != null && rows <= ceiling) {
+            return;
+        }
+        if (!Boolean.FALSE.equals(cursorColumnIsIndexed(conn, table, column, ctx))) {
+            return;
+        }
+        log.warn("Table {} reads by cursor column {}, which has no index at the source: every"
+                        + " incremental read scans the whole table (about {} row(s)) instead of a"
+                        + " key range, and a large enough read reaches the statement timeout."
+                        + " Add an index on {} at the source.",
+                table.getName(), column, rows == null ? "an unknown number of" : rows, column);
+    }
+
+    /**
      * Whether a bookkeeping {@code COUNT(*)} should be left out this cycle.
      *
      * <p>Both such statements (the NULL-cursor probe and the row-count audit) are only cheap
@@ -1263,42 +1311,11 @@ public class DataSyncService {
     /**
      * Whether the cursor column leads any index of the source table; {@code null} when the
      * dictionary could not answer (which the caller must not read as "unindexed").
-     *
-     * <p>The MySQL family keeps the database name in the JDBC catalog and has no schema, the
-     * same swap {@link #targetCursorScale} makes for the target side.
      */
     private Boolean cursorColumnIsIndexed(Connection conn, TableMeta table, String column,
                                           SyncContext ctx) {
-        try {
-            DatabaseMetaData md = conn.getMetaData();
-            boolean mysqlFamily = ctx.resolveSourceFamily()
-                    == com.qqmu.jync.model.DatabaseType.DialectFamily.MYSQL;
-            String schema = ctx.getSourceSchema();
-            try (ResultSet rs = md.getIndexInfo(mysqlFamily ? schema : null,
-                    mysqlFamily ? null : schema, table.getName(), false, true)) {
-                while (rs.next()) {
-                    String indexedColumn = rs.getString("COLUMN_NAME");
-                    if (indexedColumn == null) {
-                        // A table-statistics row, not an index entry.
-                        continue;
-                    }
-                    String indexedTable = rs.getString("TABLE_NAME");
-                    // The table-name argument is a LIKE pattern: asking for T_1 also returns
-                    // TA1, whose leading column must not answer for T_1.
-                    if (indexedTable != null && !indexedTable.equalsIgnoreCase(table.getName())) {
-                        continue;
-                    }
-                    if (rs.getInt("ORDINAL_POSITION") == 1
-                            && indexedColumn.equalsIgnoreCase(column)) {
-                        return Boolean.TRUE;
-                    }
-                }
-            }
-            return Boolean.FALSE;
-        } catch (SQLException | RuntimeException e) {
-            log.debug("Cannot read the indexes of {}: {}", table.getName(), e.getMessage());
-            return null;
-        }
+        return com.qqmu.jync.service.metadata.CursorIndexProbe.columnLeadsIndex(conn,
+                ctx.resolveSourceFamily(), ctx.getSourceSchema(), table.getName(), column);
     }
 
     /** The table's row estimate, fetching one only when the metadata does not carry it. */

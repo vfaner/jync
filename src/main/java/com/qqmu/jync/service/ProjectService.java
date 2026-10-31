@@ -6,8 +6,10 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -41,6 +43,7 @@ import com.qqmu.jync.model.ChunkCheckpoint;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
@@ -52,6 +55,7 @@ import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.PgLogicalCdcConsumer;
 import com.qqmu.jync.service.cdc.YStreamServiceAdmin;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.metadata.CursorIndexProbe;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
@@ -1205,6 +1209,69 @@ public class ProjectService {
             log.debug("Cannot read source objects for project '{}': {}",
                     project.getName(), e.toString());
             throw new IllegalStateException("error.source.objects.read.failed", e);
+        }
+    }
+
+    /**
+     * Source tables whose cursor column is not the leading column of any index, for the
+     * detail page's hint.
+     *
+     * <p>Every incremental read filters and orders by the cursor column, so without a
+     * leading index the window {@code SELECT} and the {@code MAX} watermark scan the whole
+     * table — the read that eventually reaches the statement timeout. The page flags those
+     * tables so the index can be added before that happens.
+     *
+     * <p>Advisory, and it never fails the page: an unreachable source, an unreadable
+     * dictionary, or a table the source listing no longer contains leaves that table
+     * unflagged instead of reporting it from partial information. Rows without a cursor
+     * column (a FULL_COMPARE table, one that has not run yet) are not judged — there is no
+     * column to index.
+     *
+     * @param progress the project's cursor rows, already loaded by the caller
+     */
+    public Set<String> findUnindexedCursorTables(Long projectId, List<SyncProgress> progress) {
+        if (progress == null || progress.isEmpty()) {
+            // No cursor column anywhere — not worth a source round trip.
+            return Set.of();
+        }
+        try {
+            Project project = require(projectId);
+            if (project.getSourceDbId() == null) {
+                return Set.of();
+            }
+            DatabaseConfig source = databaseConfigRepository.findById(project.getSourceDbId())
+                    .orElseThrow(() -> new IllegalStateException("error.connection.missing"));
+            MetadataReader reader =
+                    readerFactory.forType(source.getType(), source.resolvedFamily());
+            Set<String> flagged = new HashSet<>();
+            try (Connection conn = dataSourceManager.getConnection(source)) {
+                String schema = source.getSchemaName() != null
+                        && !source.getSchemaName().isBlank()
+                                ? source.getSchemaName() : reader.resolveDefaultSchema(conn);
+                Set<String> listed = new HashSet<>();
+                for (String name : reader.listTableNames(conn, schema)) {
+                    listed.add(name.toUpperCase(Locale.ROOT));
+                }
+                for (SyncProgress p : progress) {
+                    String column = p.getCursorColumn();
+                    if (column == null || column.isBlank() || p.getObjectName() == null) {
+                        continue;
+                    }
+                    if (!listed.contains(p.getObjectName().toUpperCase(Locale.ROOT))) {
+                        continue;
+                    }
+                    if (Boolean.FALSE.equals(CursorIndexProbe.columnLeadsIndex(
+                            conn, source.resolvedFamily(), schema, p.getObjectName(), column))) {
+                        flagged.add(p.getObjectName());
+                    }
+                }
+            }
+            return flagged;
+        } catch (SQLException | RuntimeException e) {
+            // Keep the driver detail server-side; the page simply shows no hint.
+            log.debug("Cannot inspect cursor-column indexes for project {}: {}",
+                    projectId, e.toString());
+            return Set.of();
         }
     }
 
