@@ -195,7 +195,7 @@ SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 - **游标列建议建索引**：轮询靠游标列做增量，没有索引时每轮都要全表扫描；项目详情页会把缺索引的表直接标出来。
 - 水位线回退 `safety-lag-ms`：晚提交的事务会在下一轮被重新读到，幂等 upsert 吸收重叠。
 - **游标在目标库提交之后才推进**，因此故障恢复语义是 at-least-once，不会丢行。
-- 默认的轮询模式不碰源库日志，也不建触发器，只需一个只读账号。
+- 默认的轮询模式不碰源库 binlog，也不建触发器，只需一个只读账号。
 
 ### 日志 CDC：秒级流式回放
 
@@ -595,8 +595,12 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 | `sync.cdc.server-id-offset` | `612000` | MySQL 假 replica server id 基数，实际 id = 偏移 + 任务 ID |
 | `sync.cdc.lock-ttl-ms` | `30000` | CDC 消费者租约时长 |
 | `sync.cdc.supervise-interval-ms` | `10000` | 各节点巡检并抢占 CDC 租约的周期 |
+| `sync.cdc.connect-timeout-ms` | `10000` | 连接源库的超时时间 |
+| `sync.cdc.reconnect-backoff-ms` | `1000` | 断线重连的初始退避 |
+| `sync.cdc.reconnect-backoff-max-ms` | `60000` | 断线重连的退避上限 |
 | `sync.cdc.max-transaction-rows` / `max-transaction-bytes` | `1000000` / `512 MiB` | 单个源事务的缓冲上限，超限按非瞬态失败停车；`0` 不限 |
-| `sync.cdc.logminer.batch-size` / `idle-poll-ms` | `10000` / `1000` | LogMiner 单批行数与真空闲休眠 |
+| `sync.cdc.logminer.batch-size` | `10000` | LogMiner 单批行数 |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 真空闲休眠 |
 | `sync.cdc.logminer.missing-lob-policy` | `skip` | 行外 LOB 无法还原时：`skip` 计数继续，`fail` 停车 |
 | `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL 逻辑解码真空闲休眠 |
 | `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | 复制槽滞留 WAL 的面板告警阈值（4 GiB） |

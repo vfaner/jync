@@ -195,7 +195,7 @@ SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 - **Index the cursor column**: polling depends on it, and without an index every cycle scans the whole table; the project page flags tables whose cursor column has no index.
 - Watermark lag `safety-lag-ms`: late-committing transactions are read again next cycle and absorbed by the idempotent upsert.
 - **The cursor advances only after the target commits**, so failure recovery is at-least-once and rows are not lost.
-- Default polling touches no source logs and creates no triggers — one read-only account is enough.
+- The default polling mode never reads the source's binlog and creates no triggers — one read-only account is enough.
 
 ### Log CDC: second-level streaming replay
 
@@ -596,8 +596,12 @@ Main settings in `application.yml` (`sync.*` prefix):
 | `sync.cdc.server-id-offset` | `612000` | Fake MySQL replica server-id base; id = offset + task id |
 | `sync.cdc.lock-ttl-ms` | `30000` | CDC consumer lease |
 | `sync.cdc.supervise-interval-ms` | `10000` | CDC lease supervision period |
+| `sync.cdc.connect-timeout-ms` | `10000` | Timeout for connecting to the source |
+| `sync.cdc.reconnect-backoff-ms` | `1000` | Initial reconnect backoff |
+| `sync.cdc.reconnect-backoff-max-ms` | `60000` | Reconnect backoff ceiling |
 | `sync.cdc.max-transaction-rows` / `max-transaction-bytes` | `1000000` / `512 MiB` | Per-source-transaction buffer cap; exceeding it parks the stream; `0` unlimited |
-| `sync.cdc.logminer.batch-size` / `idle-poll-ms` | `10000` / `1000` | LogMiner batch rows and idle sleep |
+| `sync.cdc.logminer.batch-size` | `10000` | LogMiner rows per batch |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner idle sleep |
 | `sync.cdc.logminer.missing-lob-policy` | `skip` | Out-of-line LOB that cannot be restored: `skip` counts and continues, `fail` parks |
 | `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL logical decoding idle sleep |
 | `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | Panel warning for WAL held by a slot (4 GiB) |
