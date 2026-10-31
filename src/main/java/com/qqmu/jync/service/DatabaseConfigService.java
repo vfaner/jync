@@ -22,6 +22,7 @@ import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.connection.DriverPresence;
+import com.qqmu.jync.service.etl.mongo.MongoUriBuilder;
 import com.qqmu.jync.util.CryptoUtil;
 
 import lombok.extern.slf4j.Slf4j;
@@ -196,6 +197,17 @@ public class DatabaseConfigService {
         checkLength(config.getMinerUsername(), 255, "error.connection.username.too.long");
         checkLength(config.getCustomDriver(), 255, "error.connection.driver.too.long");
         checkLength(config.getCustomJarPath(), 1024, "error.connection.jarpath.too.long");
+        if (type == DatabaseType.MONGODB_NATIVE) {
+            // The native Mongo preset is source-only and has no JDBC driver: the jar check and
+            // the JDBC host/URL rules below do not apply. Its URI is validated as a whole.
+            if (config.getRole() != ConnectionRole.SOURCE) {
+                throw new IllegalArgumentException("error.mongodb.native.sourceOnly");
+            }
+            config.setCustomDriver(null);
+            config.setCustomJarPath(null);
+            MongoUriBuilder.validate(config);
+            return;
+        }
         if (type == DatabaseType.CUSTOM) {
             // Without these three a custom connection cannot be opened at all.
             if (config.getCustomUrl() == null || config.getCustomUrl().isBlank()) {
@@ -289,9 +301,16 @@ public class DatabaseConfigService {
         return connectionTestService.test(config);
     }
 
-    /** The JDBC URL that would be used, shown in the UI so the user can sanity-check it. */
+    /**
+     * The URL that would be used, shown in the UI so the user can sanity-check it. The native
+     * Mongo preset renders a masked {@code mongodb://} URI; every JDBC preset keeps rendering
+     * the JDBC URL.
+     */
     public String previewUrl(DatabaseConfig config) {
         try {
+            if (config != null && config.effectiveType() == DatabaseType.MONGODB_NATIVE) {
+                return MongoUriBuilder.preview(config);
+            }
             return dataSourceManager.buildJdbcUrl(config);
         } catch (RuntimeException e) {
             return "(" + e.getMessage() + ")";

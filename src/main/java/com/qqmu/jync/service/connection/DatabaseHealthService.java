@@ -21,6 +21,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.zaxxer.hikari.HikariDataSource;
 
 import lombok.extern.slf4j.Slf4j;
@@ -59,18 +60,22 @@ public class DatabaseHealthService {
     static final String INVALID_MESSAGE = "error.db.health.invalid";
 
     private final DataSourceManager dataSourceManager;
+    private final MongoHealthProbe mongoProbe;
     private final Duration budget;
     private final Duration cacheTtl;
     private final Map<Long, Cached> cache = new ConcurrentHashMap<>();
 
     /** Two constructors: this one is what Spring wires; the other exists for the tests. */
     @Autowired
-    public DatabaseHealthService(DataSourceManager dataSourceManager) {
-        this(dataSourceManager, DEFAULT_BUDGET, DEFAULT_CACHE_TTL);
+    public DatabaseHealthService(DataSourceManager dataSourceManager,
+                                 MongoHealthProbe mongoProbe) {
+        this(dataSourceManager, mongoProbe, DEFAULT_BUDGET, DEFAULT_CACHE_TTL);
     }
 
-    DatabaseHealthService(DataSourceManager dataSourceManager, Duration budget, Duration cacheTtl) {
+    DatabaseHealthService(DataSourceManager dataSourceManager, MongoHealthProbe mongoProbe,
+                          Duration budget, Duration cacheTtl) {
         this.dataSourceManager = dataSourceManager;
+        this.mongoProbe = mongoProbe;
         this.budget = budget;
         this.cacheTtl = cacheTtl;
     }
@@ -167,6 +172,9 @@ public class DatabaseHealthService {
 
     private Health probe(DatabaseConfig config) {
         long start = System.currentTimeMillis();
+        if (config.effectiveType() == DatabaseType.MONGODB_NATIVE) {
+            return probeMongo(config, start);
+        }
         try (HikariDataSource pool = dataSourceManager.createProbeDataSource(config);
              Connection connection = pool.getConnection()) {
             if (!connection.isValid(VALIDATION_SECONDS)) {
@@ -178,6 +186,16 @@ public class DatabaseHealthService {
             return new Health(config.getId(), false, elapsed(start), sqlMessage(e));
         } catch (RuntimeException e) {
             // Driver class missing, bad jar path, malformed URL: all reachable from the page.
+            log.debug("Health check failed for '{}': {}", config.getName(), e.getMessage());
+            return new Health(config.getId(), false, elapsed(start), messageOf(e));
+        }
+    }
+
+    private Health probeMongo(DatabaseConfig config, long start) {
+        try {
+            mongoProbe.ping(config);
+            return new Health(config.getId(), true, elapsed(start), null);
+        } catch (RuntimeException e) {
             log.debug("Health check failed for '{}': {}", config.getName(), e.getMessage());
             return new Health(config.getId(), false, elapsed(start), messageOf(e));
         }

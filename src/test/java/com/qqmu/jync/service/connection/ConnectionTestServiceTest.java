@@ -37,6 +37,7 @@ class ConnectionTestServiceTest {
 
     private ConnectionTestService service() {
         return new ConnectionTestService(dataSourceManager,
+                org.mockito.Mockito.mock(MongoConnectionTester.class),
                 // 原生 MySQL 不触发事件探测;这里的读取器只满足构造签名
                 new BinlogCdcProbe((source, file, pos, serverId, timeout) -> "FormatDescriptionEvent"),
                 new com.qqmu.jync.service.cdc.LogMinerCdcProbe(),

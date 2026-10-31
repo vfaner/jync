@@ -60,6 +60,7 @@ public class DataSourceManager {
     /** Returns the pooled data source for a saved configuration, creating it on first use. */
     public DataSource getDataSource(DatabaseConfig config) {
         Objects.requireNonNull(config, "config");
+        rejectNativeMongo(config);
         if (config.getId() == null) {
             // An unsaved config has no identity to cache under; handing out an uncached pool
             // here leaks one per call (threads, sockets) because no caller can know to close
@@ -192,6 +193,7 @@ public class DataSourceManager {
      */
     public HikariDataSource createTransientDataSource(DatabaseConfig config) {
         Objects.requireNonNull(config, "config");
+        rejectNativeMongo(config);
         return createDataSource(config, 2);
     }
 
@@ -205,6 +207,7 @@ public class DataSourceManager {
      */
     public HikariDataSource createProbeDataSource(DatabaseConfig config) {
         Objects.requireNonNull(config, "config");
+        rejectNativeMongo(config);
         return createDataSource(config, 1, PROBE_CONNECT_TIMEOUT_MS);
     }
 
@@ -259,6 +262,7 @@ public class DataSourceManager {
     }
 
     public String resolveDriverClass(DatabaseConfig config) {
+        rejectNativeMongo(config);
         if (config.getType() == DatabaseType.CUSTOM || StringUtils.hasText(config.getCustomDriver())) {
             if (!StringUtils.hasText(config.getCustomDriver())) {
                 throw new IllegalArgumentException("error.custom.driver.required");
@@ -323,6 +327,7 @@ public class DataSourceManager {
 
     /** Builds the JDBC URL from the template for the type, or uses the custom URL verbatim. */
     public String buildJdbcUrl(DatabaseConfig config) {
+        rejectNativeMongo(config);
         if (StringUtils.hasText(config.getCustomUrl())) {
             return appendExtraParams(config.getCustomUrl().trim(), config);
         }
@@ -353,6 +358,7 @@ public class DataSourceManager {
      * the connection string; every other preset needs nothing beyond URL, user and password.
      */
     static Map<String, String> driverProperties(DatabaseConfig config) {
+        rejectNativeMongo(config);
         if (config == null || config.getType() != DatabaseType.MONGODB
                 || !StringUtils.hasText(config.getDatabaseName())) {
             return Map.of();
@@ -488,6 +494,17 @@ public class DataSourceManager {
     public void shutdown() {
         log.info("Closing {} target database connection pools", cache.size());
         evictAll();
+    }
+
+    /**
+     * The native MongoDB preset is served by the Mongo client, not by a JDBC driver. Every
+     * JDBC-shaped entry point refuses it here, so a stray caller gets a translated message
+     * instead of an NPE on the null driver class or a URL template that is not JDBC.
+     */
+    private static void rejectNativeMongo(DatabaseConfig config) {
+        if (config != null && config.effectiveType() == DatabaseType.MONGODB_NATIVE) {
+            throw new IllegalArgumentException("error.mongodb.native.jdbcUnsupported");
+        }
     }
 
     private static final class CachedDataSource {

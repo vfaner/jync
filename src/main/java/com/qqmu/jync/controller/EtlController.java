@@ -1,8 +1,10 @@
 package com.qqmu.jync.controller;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -58,7 +60,7 @@ public class EtlController {
         EtlTask task = new EtlTask();
         task.setWriteMode(EtlWriteMode.OVERWRITE);
         model.addAttribute("task", task);
-        addFormOptions(model);
+        addFormOptions(model, task);
         return "etl-form";
     }
 
@@ -71,7 +73,7 @@ public class EtlController {
         }
         model.addAttribute("task", task);
         model.addAttribute("running", etlTaskService.isRunning(id));
-        addFormOptions(model);
+        addFormOptions(model, task);
         return "etl-form";
     }
 
@@ -84,7 +86,7 @@ public class EtlController {
             return "redirect:/etl";
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
-            addFormOptions(model);
+            addFormOptions(model, task);
             return "etl-form";
         }
     }
@@ -97,7 +99,7 @@ public class EtlController {
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("precheckError", e.getMessage());
         }
-        addFormOptions(model);
+        addFormOptions(model, task);
         // Pass the task back to the form (it may have binding errors)
         model.addAttribute("task", task);
         return "etl-form";
@@ -149,9 +151,31 @@ public class EtlController {
         return "redirect:/etl";
     }
 
-    private void addFormOptions(Model model) {
-        model.addAttribute("connections", etlTaskService.connections());
+    private void addFormOptions(Model model, EtlTask task) {
+        List<DatabaseConfig> connections = etlTaskService.connections();
+        model.addAttribute("connections", connections);
+        model.addAttribute("targetConnections", targetOptions(connections, task));
         model.addAttribute("writeModes", EtlWriteMode.values());
+    }
+
+    /**
+     * Connections a task may write to. Elasticsearch and MongoDB expose a read-only SQL
+     * interface, so they stay in the source list only. A task saved before that restriction
+     * still shows its current target — the save path refuses it with a message, but hiding
+     * the value would make the error impossible to understand.
+     */
+    private static List<DatabaseConfig> targetOptions(List<DatabaseConfig> connections, EtlTask task) {
+        List<DatabaseConfig> options = connections.stream()
+                .filter(DatabaseConfig::supportsEtlTarget)
+                .collect(Collectors.toCollection(ArrayList::new));
+        if (task != null && task.getTargetDbId() != null
+                && options.stream().noneMatch(c -> task.getTargetDbId().equals(c.getId()))) {
+            connections.stream()
+                    .filter(c -> task.getTargetDbId().equals(c.getId()))
+                    .findFirst()
+                    .ifPresent(options::add);
+        }
+        return options;
     }
 
     private Map<Long, String> connectionNames() {

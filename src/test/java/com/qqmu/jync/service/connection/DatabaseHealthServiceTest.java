@@ -30,7 +30,8 @@ class DatabaseHealthServiceTest {
     private final DataSourceManager dataSourceManager = mock(DataSourceManager.class);
 
     private final DatabaseHealthService service = new DatabaseHealthService(
-            dataSourceManager, Duration.ofSeconds(3), Duration.ofSeconds(60));
+            dataSourceManager, mock(MongoHealthProbe.class),
+            Duration.ofSeconds(3), Duration.ofSeconds(60));
 
     private DatabaseConfig config(long id, String name) {
         DatabaseConfig config = new DatabaseConfig();
@@ -165,7 +166,8 @@ class DatabaseHealthServiceTest {
         });
         when(dataSourceManager.createProbeDataSource(config)).thenReturn(pool);
         DatabaseHealthService impatient = new DatabaseHealthService(
-                dataSourceManager, Duration.ofMillis(150), Duration.ofSeconds(60));
+                dataSourceManager, mock(MongoHealthProbe.class),
+                Duration.ofMillis(150), Duration.ofSeconds(60));
 
         long start = System.currentTimeMillis();
         List<DatabaseHealthService.Health> health = impatient.check(List.of(config), true);

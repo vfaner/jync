@@ -861,28 +861,53 @@
      required(CUSTOM / 驱动未内置)时字段直接展开、没有开关;其余预设由头部开关控制,
      打开才展开字段。收起或隐藏时必须禁用控件 —— hidden 不等于不提交,残留值会覆盖
      预设 URL 或劫持内置驱动。 */
-  function setDriverCardState(card, available, required) {
+  // 原生 MongoDB 复用同一个 customUrl 控件,只是改叫 URI:标签、占位符和帮助文案
+  // 随类型切换。两侧文案都由模板写进 data-*,避免再维护一套 JS 文案表。
+  function syncMongoUriCopy(nativeMongo) {
+    var label = document.getElementById('customUrl-label');
+    if (label) label.textContent = nativeMongo ? label.dataset.native : label.dataset.default;
+    var urlInput = document.getElementById('customUrl');
+    if (urlInput) {
+      urlInput.placeholder = nativeMongo
+          ? urlInput.dataset.nativePlaceholder : urlInput.dataset.defaultPlaceholder;
+    }
+    var help = document.getElementById('customUrl-help');
+    if (help) help.textContent = nativeMongo ? help.dataset.native : help.dataset.default;
+  }
+
+  function setDriverCardState(card, available, required, nativeMongo) {
     if (!card) return;
     var toggle = card.querySelector('[data-role="vendor-driver-toggle"]');
-    var unlocked = available && (required || !!(toggle && toggle.checked));
+    // 原生 MongoDB 没有可选的 jar:URI 直接可填,开关隐藏,jar/驱动类控件禁用。
+    var unlocked = available && (required || nativeMongo || !!(toggle && toggle.checked));
     if (toggle) {
       toggle.checked = unlocked;
-      toggle.disabled = !available || required;
+      toggle.disabled = !available || required || nativeMongo;
       var sw = toggle.closest('.switch');
-      if (sw) sw.hidden = !available || required;
+      if (sw) sw.hidden = !available || required || nativeMongo;
     }
     card.hidden = !available;
-    card.querySelectorAll('#customUrl,#customJarPath,#customDriver,button[data-role="find-drivers"]')
+    card.dataset.nativeMongo = nativeMongo ? 'true' : 'false';
+    card.querySelectorAll('#customUrl')
       .forEach(function (el) { el.disabled = !unlocked; });
+    card.querySelectorAll('#customJarPath,#customDriver,button[data-role="find-drivers"]')
+      .forEach(function (el) { el.disabled = !unlocked || nativeMongo; });
     var body = document.getElementById('driver-card-body');
     if (body) body.hidden = !unlocked;
+    var jarField = document.getElementById('jar-path-field');
+    if (jarField) jarField.hidden = nativeMongo;
+    var driverField = document.getElementById('driver-class-field');
+    if (driverField) driverField.hidden = nativeMongo;
+    var vendorHelp = document.getElementById('vendor-driver-help');
+    if (vendorHelp) vendorHelp.hidden = nativeMongo;
   }
 
   function bindVendorDriverToggle(card) {
     var toggle = card.querySelector('[data-role="vendor-driver-toggle"]');
     if (!toggle) return;
     toggle.addEventListener('change', function () {
-      setDriverCardState(card, true, card.dataset.required === 'true');
+      setDriverCardState(card, true, card.dataset.required === 'true',
+          card.dataset.nativeMongo === 'true');
     });
   }
 
@@ -932,16 +957,24 @@
           // 预设(GoldenDB/TiDB/MySQL 等)由厂商驱动开关按需展开。bundled 由服务端查 classpath 得出。
           var jarCard = document.getElementById('jar-card');
           if (jarCard) {
+            var nativeMongo = p.nativeMongo === true;
             // 未内置驱动的预设必须填 jar;自定义连接整卡必填;其余信创预设可选手动开。
-            var required = p.custom || p.bundled === false;
-            var available = required || p.vendorDriver === true;
+            // 原生 MongoDB 的驱动已内置,卡片只留 URI:不需要 jar,也不显示开关。
+            var required = !nativeMongo && (p.custom || p.bundled === false);
+            var available = nativeMongo || required || p.vendorDriver === true;
             // 切换类型时清空三个覆盖值:上一个类型填的 URL 会覆盖新类型的 URL 模板,
             // 残留的 jar 路径/驱动类会劫持新类型的内置驱动。清空后回退到预设。
             ['customUrl', 'customJarPath', 'customDriver'].forEach(function (id) {
               var el = document.getElementById(id);
               if (el) el.value = '';
             });
-            setDriverCardState(jarCard, available, required);
+            setDriverCardState(jarCard, available, required, nativeMongo);
+            syncMongoUriCopy(nativeMongo);
+            var cardHint = document.getElementById('driver-card-hint');
+            if (cardHint) {
+              cardHint.textContent = nativeMongo ? cardHint.dataset.native
+                  : (required ? cardHint.dataset.default : cardHint.dataset.optional);
+            }
           }
           var hint = document.getElementById('url-hint');
           if (hint) hint.textContent = p.urlTemplate || '';

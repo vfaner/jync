@@ -98,7 +98,18 @@ public class EtlTaskService {
         entity.setDescription(trimToNull(form.getDescription()));
         entity.setSourceDbId(form.getSourceDbId());
         entity.setTargetDbId(form.getTargetDbId());
-        entity.setSourceSql(form.getSourceSql().trim());
+        if (nativeMongo(form.getSourceDbId())) {
+            // A native Mongo task has no extraction SQL, but the column is NOT NULL in
+            // existing installations, so it stores the empty string instead.
+            entity.setSourceSql("");
+            entity.setSourceCollection(form.getSourceCollection().trim());
+            entity.setSourceFilter(trimToNull(form.getSourceFilter()));
+        } else {
+            entity.setSourceSql(form.getSourceSql() == null ? "" : form.getSourceSql().trim());
+            // Switching back to a SQL source must not leave a Mongo collection behind.
+            entity.setSourceCollection(null);
+            entity.setSourceFilter(null);
+        }
         entity.setTargetTable(form.getTargetTable().trim());
         entity.setWriteMode(form.getWriteMode() == null
                 ? EtlWriteMode.OVERWRITE : form.getWriteMode());
@@ -235,10 +246,19 @@ public class EtlTaskService {
         }
     }
 
+    private boolean nativeMongo(Long sourceDbId) {
+        return EtlTaskValidation.isNativeMongo(
+                databaseConfigService.findById(sourceDbId).orElse(null));
+    }
+
     private static boolean extractionChanged(EtlTask before, EtlTask after) {
         return !Objects.equals(before.getSourceDbId(), after.getSourceDbId())
                 || !Objects.equals(before.getTargetDbId(), after.getTargetDbId())
-                || !Objects.equals(trim(before.getSourceSql()), trim(after.getSourceSql()))
+                // A blank SQL and a missing one are the same absence: a Mongo task stores ""
+                // and its edit form sends null, which must not read as an extraction change.
+                || !Objects.equals(trimToNull(before.getSourceSql()), trimToNull(after.getSourceSql()))
+                || !Objects.equals(trim(before.getSourceCollection()), trim(after.getSourceCollection()))
+                || !Objects.equals(trimToNull(before.getSourceFilter()), trimToNull(after.getSourceFilter()))
                 || !Objects.equals(trim(before.getTargetTable()), trim(after.getTargetTable()))
                 || before.getWriteMode() != after.getWriteMode()
                 || !Objects.equals(trim(before.getRangeCondition()), trim(after.getRangeCondition()))

@@ -85,6 +85,16 @@ public class DatabaseConfig {
         return effective != null && effective.supportsFullSync();
     }
 
+    /**
+     * Whether this connection may be the target of an ETL task. Presets answer from their own
+     * product; a CUSTOM connection answers from its declared family, so a user who declared
+     * one can still use it as a target.
+     */
+    public boolean supportsEtlTarget() {
+        DatabaseType effective = effectiveType();
+        return effective == null || effective.supportsEtlTarget();
+    }
+
     /** The SQL family this connection speaks: the preset's own, or CUSTOM's declared one. */
     public DatabaseType.DialectFamily resolvedFamily() {
         if (type == null) {

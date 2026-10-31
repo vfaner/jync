@@ -29,6 +29,7 @@ import lombok.extern.slf4j.Slf4j;
 public class ConnectionTestService {
 
     private final DataSourceManager dataSourceManager;
+    private final MongoConnectionTester mongoTester;
     private final BinlogCdcProbe cdcProbe;
     private final LogMinerCdcProbe logMinerProbe;
     private final PgLogicalReplicationCdcProbe pgProbe;
@@ -37,7 +38,9 @@ public class ConnectionTestService {
     private final TargetDdlProbe targetDdlProbe;
     private final SyncProperties properties;
 
-    public ConnectionTestService(DataSourceManager dataSourceManager, BinlogCdcProbe cdcProbe,
+    public ConnectionTestService(DataSourceManager dataSourceManager,
+                                 MongoConnectionTester mongoTester,
+                                 BinlogCdcProbe cdcProbe,
                                  LogMinerCdcProbe logMinerProbe,
                                  PgLogicalReplicationCdcProbe pgProbe,
                                  SqlServerCdcProbe mssqlProbe,
@@ -45,6 +48,7 @@ public class ConnectionTestService {
                                  TargetDdlProbe targetDdlProbe,
                                  SyncProperties properties) {
         this.dataSourceManager = dataSourceManager;
+        this.mongoTester = mongoTester;
         this.cdcProbe = cdcProbe;
         this.logMinerProbe = logMinerProbe;
         this.pgProbe = pgProbe;
@@ -62,6 +66,11 @@ public class ConnectionTestService {
      */
     public TestResult test(DatabaseConfig config) {
         long start = System.currentTimeMillis();
+        if (config.effectiveType() == DatabaseType.MONGODB_NATIVE) {
+            // No JDBC endpoint exists for this preset, so neither the driver loader nor Hikari
+            // is reachable from here.
+            return mongoTester.test(config);
+        }
         // Fail with an i18n key before the driver loader can produce an English stacktrace-style
         // message ("not on the classpath and no jar path was supplied").
         if (DriverPresence.externalJarRequired(config.getType(), config.getCustomDriver())

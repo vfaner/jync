@@ -53,6 +53,19 @@ public class EtlTask {
     @Column(name = "source_sql", nullable = false)
     private String sourceSql;
 
+    /**
+     * MongoDB collection read when the source connection uses the native driver. SQL sources
+     * leave it empty, and a Mongo task stores an empty {@code sourceSql} so the existing
+     * non-null constraint keeps working without a migration.
+     */
+    @Column(name = "source_collection", length = 255)
+    private String sourceCollection;
+
+    /** Optional Extended JSON filter for the native-driver source; blank means everything. */
+    @Lob
+    @Column(name = "source_filter", length = 4000)
+    private String sourceFilter;
+
     /** Optional SQL executed before extraction: cleanup, deletions, transformations. */
     @Lob
     @Column(name = "pre_sql", length = 2000)

@@ -33,7 +33,7 @@ class FullSyncCapabilityTest {
         for (DatabaseType engine : new DatabaseType[] {
                 DatabaseType.HANA, DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
                 DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.ELASTICSEARCH,
-                DatabaseType.MONGODB}) {
+                DatabaseType.MONGODB, DatabaseType.MONGODB_NATIVE}) {
             assertThat(engine.supportsFullSync()).as(engine.name()).isFalse();
         }
     }

@@ -66,7 +66,7 @@ java -jar target/jync.jar
 项目详情：表/视图/存储过程逐表勾选，每张表的增量检测策略直接标注；调度、全量加载性能与列清洗集中配置
 
 ![新增连接](images/jync_db_add.png)
-新增连接：33 种预置类型可选（其中 SAP HANA、Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 七种分析型引擎用于 ETL），先定源/目标用途，类型选好 JDBC URL 自动拼装，测通再保存
+新增连接：34 种预置类型可选（其中 SAP HANA、Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 七种分析型引擎用于 ETL，MongoDB 另有内置原生驱动预置），先定源/目标用途，类型选好 JDBC URL 自动拼装，测通再保存
 
 ![变更日志](images/jync_log.png)
 变更日志：每次变更的对象、类型、影响行数、耗时与错误详情均可追溯

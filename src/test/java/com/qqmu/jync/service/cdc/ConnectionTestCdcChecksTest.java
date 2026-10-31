@@ -112,7 +112,9 @@ class ConnectionTestCdcChecksTest {
         } catch (SQLException e) {
             throw new IllegalStateException(e);
         }
-        return new ConnectionTestService(dsm, new BinlogCdcProbe(streamReader),
+        return new ConnectionTestService(dsm,
+                mock(com.qqmu.jync.service.connection.MongoConnectionTester.class),
+                new BinlogCdcProbe(streamReader),
                 new LogMinerCdcProbe(),
                 new PgLogicalReplicationCdcProbe(), new SqlServerCdcProbe(),
                 new YStreamCdcProbe(), new TargetDdlProbe(), new SyncProperties());

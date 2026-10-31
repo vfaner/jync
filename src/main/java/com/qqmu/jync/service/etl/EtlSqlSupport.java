@@ -14,13 +14,16 @@ import com.qqmu.jync.util.JdbcUtil;
  * <p>They are shared on purpose: a precheck that accepts what the run then rejects is worse than
  * no precheck, because it moves the customer's trust in the wrong direction.
  */
-final class EtlSqlSupport {
+public final class EtlSqlSupport {
 
     /** Label used for the wrapper around the customer's extraction SQL. */
     static final String SUBQUERY_ALIAS = "jync_etl_src";
 
-    /** Targets are created and written unquoted, so a result label must survive folding. */
-    static final Pattern PLAIN_IDENTIFIER =
+    /**
+     * Targets are created and written unquoted, so a result label must survive folding.
+     * Public because the MongoDB source applies the same rule to document field names.
+     */
+    public static final Pattern PLAIN_IDENTIFIER =
             Pattern.compile("[\\p{L}_][\\p{L}\\p{N}_$#]*");
 
     static final Pattern RESUME_KEY =

@@ -89,6 +89,7 @@ public class DatabaseConfigController {
             DatabaseType.DialectFamily.DB2);
 
     private static void addDriverCardAttributes(Model model, DatabaseConfig config) {
+        model.addAttribute("mongoNative", config.getType() == DatabaseType.MONGODB_NATIVE);
         model.addAttribute("driverCardAvailable", driverCardAvailable(config.getType()));
         model.addAttribute("driverCardRequired", driverCardRequired(config.getType()));
         model.addAttribute("driverCardEnabled", driverCardEnabled(config));
@@ -97,9 +98,13 @@ public class DatabaseConfigController {
     /**
      * The driver card exists for CUSTOM and for commercial / 信创 presets; a standard product
      * (MySQL, PostgreSQL, Oracle, ...) never shows it. A preset whose driver is not on the
-     * classpath keeps the card regardless: without a jar it cannot connect at all.
+     * classpath keeps the card regardless: without a jar it cannot connect at all. A native
+     * MongoDB connection always shows it, but only its URI field.
      */
     private static boolean driverCardAvailable(DatabaseType type) {
+        if (type == DatabaseType.MONGODB_NATIVE) {
+            return true;
+        }
         if (type == null || type == DatabaseType.CUSTOM || type.supportsVendorDriver()) {
             return true;
         }
@@ -109,9 +114,13 @@ public class DatabaseConfigController {
     /**
      * Types that cannot connect without a user-supplied driver: CUSTOM (no preset at all) and
      * presets whose driver class is not on the classpath (GBase, Oscar, Huawei GaussDB, ...).
-     * Their card is required and open on the first paint, with no switch.
+     * Their card is required and open on the first paint, with no switch. A native MongoDB
+     * connection has its driver bundled, so nothing is required.
      */
     private static boolean driverCardRequired(DatabaseType type) {
+        if (type == DatabaseType.MONGODB_NATIVE) {
+            return false;
+        }
         if (type == null || type == DatabaseType.CUSTOM) {
             return true;
         }
@@ -125,6 +134,10 @@ public class DatabaseConfigController {
      * submit them — silently switching the connection back to the bundled driver.
      */
     private static boolean driverCardEnabled(DatabaseConfig config) {
+        // Native MongoDB: the URI is always editable, there is no switch to open the card.
+        if (config.getType() == DatabaseType.MONGODB_NATIVE) {
+            return true;
+        }
         return driverCardRequired(config.getType())
                 || StringUtils.hasText(config.getCustomUrl())
                 || StringUtils.hasText(config.getCustomDriver())

@@ -28,7 +28,9 @@ public final class DriverPresence {
      * its URL/driver/jar are validated as a package elsewhere.
      */
     public static boolean externalJarRequired(DatabaseType type, String customDriver) {
-        if (type == null || type == DatabaseType.CUSTOM) {
+        if (type == null || type == DatabaseType.CUSTOM || !type.hasJdbcDriver()) {
+            // MONGODB_NATIVE has no JDBC driver by design: the bundled synchronous client is
+            // not a java.sql.Driver, so demanding a jar would make the connection unsavable.
             return false;
         }
         String effectiveDriver = StringUtils.hasText(customDriver)

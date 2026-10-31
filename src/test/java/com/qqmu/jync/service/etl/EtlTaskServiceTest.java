@@ -67,6 +67,25 @@ class EtlTaskServiceTest {
         verify(taskRepository, never()).save(any());
     }
 
+    /**
+     * MongoDB's SQL interface is read-only, so a task pointing at it as the target would be
+     * accepted here and fail on its first write, after the operator had already waited for a
+     * run. The refusal belongs at save time, where the operator can still change the target.
+     */
+    @Test
+    void saveRejectsAReadOnlySqlTarget() {
+        DatabaseConfig source = config(1L);
+        DatabaseConfig target = config(2L);
+        target.setType(DatabaseType.MONGODB);
+        when(databaseConfigService.findById(1L)).thenReturn(Optional.of(source));
+        when(databaseConfigService.findById(2L)).thenReturn(Optional.of(target));
+
+        assertThatThrownBy(() -> service.save(form(1L, 2L)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.target.readOnly");
+        verify(taskRepository, never()).save(any());
+    }
+
     @Test
     void saveRejectsARangeOverwriteWithoutACondition() {
         stubConnections(1L, 2L);

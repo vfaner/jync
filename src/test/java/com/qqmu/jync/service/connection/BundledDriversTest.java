@@ -21,7 +21,9 @@ import com.qqmu.jync.model.DatabaseType;
  * preset type must either resolve from the application classpath or be explicitly classified
  * as external (user-supplied jar). The external set is GBase, Oscar, Huawei GaussDB,
  * SAP HANA, ClickHouse, Hive, Impala, Elasticsearch and MongoDB — none of their vendors
- * publishes a redistributable artifact we bundle — plus CUSTOM, which never has a driver.
+ * publishes a redistributable artifact we bundle — plus CUSTOM, which never has a driver,
+ * and MONGODB_NATIVE, which has no JDBC driver class at all (it is served by the bundled
+ * {@code mongodb-driver-sync}, not by a {@link java.sql.Driver}).
  * Doris is deliberately not external: it speaks the MySQL protocol and reuses Connector/J.
  * MongoDB is external on size: its Atlas SQL driver is ~40 MB on Maven Central.
  */
@@ -31,7 +33,7 @@ class BundledDriversTest {
             EnumSet.of(DatabaseType.CUSTOM, DatabaseType.GBASE, DatabaseType.OSCAR,
                     DatabaseType.GAUSSDB, DatabaseType.HANA, DatabaseType.CLICKHOUSE,
                     DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.ELASTICSEARCH,
-                    DatabaseType.MONGODB);
+                    DatabaseType.MONGODB, DatabaseType.MONGODB_NATIVE);
 
     @Test
     @DisplayName("每个预设类型要么内置驱动,要么显式走外部 jar")

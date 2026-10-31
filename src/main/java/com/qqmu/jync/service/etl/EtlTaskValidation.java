@@ -2,9 +2,12 @@ package com.qqmu.jync.service.etl;
 
 import java.util.Objects;
 
+import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.etl.mongo.MongoFilterParser;
 
 /**
  * The checks a task must pass both to be saved and to be prechecked.
@@ -21,16 +24,25 @@ final class EtlTaskValidation {
         if (task.getSourceDbId() == null || task.getTargetDbId() == null) {
             throw new IllegalArgumentException("error.etl.connection.required");
         }
-        if (configs.findById(task.getSourceDbId()).isEmpty()) {
+        var source = configs.findById(task.getSourceDbId()).orElse(null);
+        if (source == null) {
             throw new IllegalArgumentException("error.etl.source.missing");
         }
-        if (configs.findById(task.getTargetDbId()).isEmpty()) {
+        var target = configs.findById(task.getTargetDbId()).orElse(null);
+        if (target == null) {
             throw new IllegalArgumentException("error.etl.target.missing");
+        }
+        if (!target.supportsEtlTarget()) {
+            // Elasticsearch and MongoDB expose a read-only SQL interface: the task would be
+            // accepted here and fail on its first write, after a run had already started.
+            throw new IllegalArgumentException("error.etl.target.readOnly");
         }
         if (Objects.equals(task.getSourceDbId(), task.getTargetDbId())) {
             throw new IllegalArgumentException("error.etl.same.database");
         }
-        if (task.getSourceSql() == null || task.getSourceSql().isBlank()) {
+        if (isNativeMongo(source)) {
+            validateMongoExtraction(task);
+        } else if (task.getSourceSql() == null || task.getSourceSql().isBlank()) {
             throw new IllegalArgumentException("error.etl.sql.required");
         }
         if (task.getTargetTable() == null || task.getTargetTable().isBlank()) {
@@ -49,5 +61,22 @@ final class EtlTaskValidation {
                 && !EtlSqlSupport.RESUME_KEY.matcher(task.getResumeKeyColumn().trim()).matches()) {
             throw new IllegalArgumentException("error.etl.resumeKey.invalid");
         }
+    }
+
+    static boolean isNativeMongo(DatabaseConfig config) {
+        return config != null && config.effectiveType() == DatabaseType.MONGODB_NATIVE;
+    }
+
+    private static void validateMongoExtraction(EtlTask task) {
+        String collection = task.getSourceCollection();
+        if (collection == null || collection.isBlank()) {
+            throw new IllegalArgumentException("error.etl.collection.required");
+        }
+        String trimmed = collection.trim();
+        if (trimmed.startsWith("$") || trimmed.indexOf('\0') >= 0
+                || trimmed.length() > 255) {
+            throw new IllegalArgumentException("error.etl.collection.invalid");
+        }
+        MongoFilterParser.parse(task.getSourceFilter());
     }
 }

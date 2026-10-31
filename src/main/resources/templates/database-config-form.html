@@ -161,15 +161,23 @@
                     会覆盖预设模板、残留的 jar 路径会劫持内置驱动。 */-->
             <div class="card" id="jar-card"
                  th:attr="hidden=${driverCardAvailable} ? null : 'hidden',
-                          data-required=${driverCardRequired} ? 'true' : 'false'">
+                          data-required=${driverCardRequired} ? 'true' : 'false',
+                          data-native-mongo=${mongoNative} ? 'true' : 'false'">
                 <div class="card-head">
-                    <h2><svg class="ico"><use href="#database"/></svg> <span th:text="#{db.jarCard}">Driver settings</span></h2>
+                    <h2><svg class="ico"><use href="#database"/></svg>
+                        <span th:text="${mongoNative} ? #{db.mongo.uri} : #{db.jarCard}">Driver settings</span></h2>
                     <div class="card-head-tools">
-                        <span class="hint"
-                              th:text="${driverCardRequired} ? #{db.jarCardHint} : #{db.jarCardHintOptional}">hint</span>
+                        <span class="hint" id="driver-card-hint"
+                              th:text="${mongoNative} ? #{db.mongo.nativeHint}
+                                       : (${driverCardRequired} ? #{db.jarCardHint} : #{db.jarCardHintOptional})"
+                              th:attr="data-default=#{db.jarCardHint},
+                                       data-optional=#{db.jarCardHintOptional},
+                                       data-native=#{db.mongo.nativeHint}">hint</span>
                         <!--/* 开关放在卡片头部:打开后才展开下面的三个覆盖字段。必填的预设
-                                (CUSTOM / 未内置驱动)没有开关,字段直接展开。 */-->
-                        <label class="switch" th:if="${!driverCardRequired}">
+                                (CUSTOM / 未内置驱动)没有开关,字段直接展开。原生 MongoDB 的
+                                驱动已内置,也没有可覆盖的 jar,开关隐藏。 */-->
+                        <label class="switch" id="vendor-driver-switch" th:if="${!driverCardRequired}"
+                               th:attr="hidden=${mongoNative} ? 'hidden' : null">
                             <input type="checkbox" id="vendor-driver-toggle" data-role="vendor-driver-toggle"
                                    th:checked="${driverCardEnabled}">
                             <span class="track"></span>
@@ -179,39 +187,50 @@
                 </div>
                 <div class="card-body" id="driver-card-body"
                      th:attr="hidden=${driverCardEnabled} ? null : 'hidden'">
-                    <div class="help" th:text="#{db.vendorDriverHelp}">help</div>
+                    <div class="help" id="vendor-driver-help"
+                         th:attr="hidden=${mongoNative} ? 'hidden' : null"
+                         th:text="#{db.vendorDriverHelp}">help</div>
                     <div class="field">
                         <!--/* URL 覆盖对所有类型都有意义(厂商驱动通常只认自家前缀),所以放在
-                                这里而不是 CUSTOM 区块;同一表单只有这一个 customUrl 控件。 */-->
-                        <label for="customUrl" th:text="#{db.customUrl}">JDBC URL</label>
+                                这里而不是 CUSTOM 区块;同一表单只有这一个 customUrl 控件。
+                                原生 MongoDB 下同一控件改叫 URI,data-* 供 app.js 切换文案。 */-->
+                        <label for="customUrl" id="customUrl-label"
+                               th:text="${mongoNative} ? #{db.mongo.uri} : #{db.customUrl}"
+                               th:attr="data-default=#{db.customUrl},data-native=#{db.mongo.uri}">JDBC URL</label>
                         <input type="text" class="input mono" id="customUrl" th:field="*{customUrl}"
                                placeholder="jdbc:other://host:5236/DBNAME"
+                               th:attr="data-default-placeholder='jdbc:other://host:5236/DBNAME',
+                                        data-native-placeholder='mongodb://host:27017/DBNAME'"
                                th:disabled="${driverCardEnabled} ? null : 'disabled'">
-                        <div class="help" th:text="#{db.customUrlHelp}">help</div>
+                        <div class="help" id="customUrl-help"
+                             th:text="${mongoNative} ? #{db.mongo.uriHelp} : #{db.customUrlHelp}"
+                             th:attr="data-default=#{db.customUrlHelp},data-native=#{db.mongo.uriHelp}">help</div>
                     </div>
-                    <div class="field">
+                    <div class="field" id="jar-path-field"
+                         th:attr="hidden=${mongoNative} ? 'hidden' : null">
                         <label for="customJarPath" th:text="#{db.customJarPath}">Driver jar path</label>
                         <div class="input-group">
                             <input type="text" class="input mono" id="customJarPath" th:field="*{customJarPath}"
                                    placeholder="/opt/drivers/gbase-jdbc.jar"
-                                   th:disabled="${driverCardEnabled} ? null : 'disabled'">
+                                   th:disabled="${driverCardEnabled and !mongoNative} ? null : 'disabled'">
                             <button type="button" class="btn btn-ghost" data-role="find-drivers"
                                     th:attr="data-action=@{/api/databases/discover-drivers}"
-                                    th:disabled="${driverCardEnabled} ? null : 'disabled'">
+                                    th:disabled="${driverCardEnabled and !mongoNative} ? null : 'disabled'">
                                 <svg class="ico"><use href="#search"/></svg>
                                 <span th:text="#{db.discoverDrivers}">Detect</span>
                             </button>
                         </div>
                         <div class="help" th:text="#{db.customJarPathHelp}">help</div>
                     </div>
-                    <div class="field">
+                    <div class="field" id="driver-class-field"
+                         th:attr="hidden=${mongoNative} ? 'hidden' : null">
                         <!--/* 驱动类属于 jar:厂商 jar 里的类名常与预设不同(GaussDB 的
                                 gsjdbc200.jar 是 com.huawei.gauss200.jdbc.Driver)。留空即用
                                 预设类,提示行显示的就是它。控件随开关一起禁用,残留值不提交。 */-->
                         <label for="customDriver" th:text="#{db.customDriver}">Driver class</label>
                         <input type="text" class="input mono" id="customDriver" th:field="*{customDriver}"
                                list="driver-options" placeholder="com.example.jdbc.Driver"
-                               th:disabled="${driverCardEnabled} ? null : 'disabled'">
+                               th:disabled="${driverCardEnabled and !mongoNative} ? null : 'disabled'">
                         <datalist id="driver-options"></datalist>
                         <div class="help mono" id="driver-hint"
                              th:text="${config.type != null ? config.type.driverClassName : ''}"></div>

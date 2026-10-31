@@ -161,6 +161,9 @@ public class DatabaseApiController {
         body.put("bundled", DriverPresence.isPresent(dbType.getDriverClassName()));
         // 商业信创预设才提供厂商 URL / jar / 驱动类覆盖;标准产品与 CUSTOM 不借此字段
         body.put("vendorDriver", dbType.supportsVendorDriver());
+        // 原生 MongoDB 只有 URI 可填:表单隐藏 jar/驱动类,也不显示厂商驱动开关。
+        body.put("nativeMongo", dbType == DatabaseType.MONGODB_NATIVE);
+        body.put("jdbc", dbType.hasJdbcDriver());
 
         return ResponseEntity.ok(body);
     }

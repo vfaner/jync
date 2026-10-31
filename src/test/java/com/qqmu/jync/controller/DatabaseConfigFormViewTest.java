@@ -292,6 +292,43 @@ class DatabaseConfigFormViewTest {
         assertThat(extractInput(page, "rawMinerPassword")).contains("disabled");
     }
 
+    /** The opening tag of any element carrying the given id. */
+    private static String elementTag(String page, String id) {
+        int at = page.indexOf("id=\"" + id + "\"");
+        assertThat(at).as("element %s rendered", id).isPositive();
+        int start = page.lastIndexOf('<', at);
+        return page.substring(start, page.indexOf('>', at) + 1);
+    }
+
+    @Test
+    void editingANativeMongoConnectionShowsOnlyTheUriField() throws Exception {
+        // 原生 MongoDB 不需要 JDBC 驱动:卡片只留 URI 一个输入框,jar/驱动类隐藏并禁用,
+        // 厂商驱动开关也不该出现——打开它只会让用户去填一个永远不用的 jar。
+        DatabaseConfig mongo = new DatabaseConfig();
+        mongo.setId(24L);
+        mongo.setName("mongo-src");
+        mongo.setType(DatabaseType.MONGODB_NATIVE);
+        mongo.setRole(ConnectionRole.SOURCE);
+        mongo.setCustomUrl("mongodb://127.0.0.1:27017/shop");
+        when(service.findById(24L)).thenReturn(Optional.of(mongo));
+
+        String page = html(mvc.perform(get("/databases/24/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(JAR_CARD_HIDDEN.matcher(page).find()).isFalse();
+        assertThat(extractInput(page, "customUrl"))
+                .doesNotContain("disabled")
+                .contains("mongodb://127.0.0.1:27017/shop");
+        int labelAt = page.indexOf("for=\"customUrl\"");
+        assertThat(page.substring(labelAt, page.indexOf("</label>", labelAt)))
+                .contains("MongoDB URI");
+        assertThat(elementTag(page, "jar-path-field")).contains("hidden");
+        assertThat(elementTag(page, "driver-class-field")).contains("hidden");
+        assertThat(extractInput(page, "customJarPath")).contains("disabled");
+        assertThat(extractInput(page, "customDriver")).contains("disabled");
+        assertThat(elementTag(page, "vendor-driver-switch")).contains("hidden");
+    }
+
     private static String extractInput(String page, String inputId) {
         int at = page.indexOf("id=\"" + inputId + "\"");
         assertThat(at).as("input %s rendered", inputId).isPositive();

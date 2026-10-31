@@ -312,6 +312,19 @@ public enum DatabaseType {
             27017, DialectFamily.GENERIC),
 
     /**
+     * MongoDB through the native synchronous driver, for self-hosted Community {@code mongod}
+     * and replica sets that expose no JDBC endpoint. The driver is bundled (about 2.2 MB with
+     * its bson/core dependencies) and is not a {@link java.sql.Driver}: this preset carries no
+     * driver class, and every JDBC-shaped path — {@code DataSourceManager}, the full-sync
+     * engine and the ETL target role — refuses it. Only the ETL source adapter uses it.
+     *
+     * <p>Unlike {@link #MONGODB} (Atlas SQL, whose URL is just a host) the database is a URI
+     * path segment, so the template takes the database name.
+     */
+    MONGODB_NATIVE("db.type.MONGODB_NATIVE", null, "mongodb://%s:%d/%s",
+            27017, DialectFamily.GENERIC),
+
+    /**
      * GENERIC, not MYSQL: H2 only understands MySQL syntax when explicitly started with
      * {@code MODE=MySQL}, and the MySQL dialect's DDL suffix
      * ({@code ENGINE=InnoDB DEFAULT CHARSET=utf8mb4}) is rejected by a default-mode H2.
@@ -392,6 +405,30 @@ public enum DatabaseType {
      */
     public boolean supportsFullSync() {
         return family != DialectFamily.GENERIC;
+    }
+
+    /**
+     * Whether this product can be the target of an ETL task.
+     *
+     * <p>Elasticsearch's and MongoDB's SQL interfaces are read-only: they answer {@code SELECT}
+     * and refuse every DML statement. The native MongoDB preset is likewise source-only — the
+     * ETL engine writes through JDBC and it has no JDBC endpoint at all. A task pointed at one
+     * of them as its target would save cleanly and then fail on its first write, so all three
+     * are refused up front. Every other preset — including the analytic engines that are
+     * ETL-only — can at least receive writes.
+     */
+    public boolean supportsEtlTarget() {
+        return this != ELASTICSEARCH && this != MONGODB && this != MONGODB_NATIVE;
+    }
+
+    /**
+     * Whether this preset connects through a {@link java.sql.Driver}, whether bundled or
+     * user-supplied. {@link #CUSTOM} and {@link #MONGODB_NATIVE} return false: the former
+     * gets its driver from the form, the latter speaks the Mongo wire protocol through the
+     * native synchronous client and never touches JDBC.
+     */
+    public boolean hasJdbcDriver() {
+        return driverClassName != null && !driverClassName.isBlank();
     }
 
     /**

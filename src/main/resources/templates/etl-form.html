@@ -59,6 +59,7 @@
                                         th:selected="${task.sourceDbId != null and db.id == task.sourceDbId}"
                                         th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
                             </select>
+                            <div class="help" th:text="#{etl.source.readOnlyHint}">Read-only SQL interfaces can only be a source.</div>
                         </div>
                         <div class="field">
                             <label for="targetDbId">
@@ -67,7 +68,7 @@
                             </label>
                             <select class="select" id="targetDbId" name="targetDbId" required>
                                 <option value="" th:text="#{project.selectDatabase}">-- select --</option>
-                                <option th:each="db : ${connections}" th:value="${db.id}"
+                                <option th:each="db : ${targetConnections}" th:value="${db.id}"
                                         th:selected="${task.targetDbId != null and db.id == task.targetDbId}"
                                         th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
                             </select>
@@ -77,8 +78,23 @@
                     <div class="field">
                         <label for="sourceSql" th:text="#{etl.sourceSql}">Extraction SQL</label>
                         <textarea class="input" id="sourceSql" name="sourceSql" rows="8"
-                                  required th:text="${task.sourceSql}"></textarea>
+                                  th:text="${task.sourceSql}"></textarea>
                         <div class="help" th:text="#{etl.sourceSql.hint}">The result columns become the target column list; alias expressions.</div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="sourceCollection" th:text="#{etl.sourceCollection}">Collection</label>
+                            <input type="text" class="input" id="sourceCollection" name="sourceCollection"
+                                   maxlength="255" th:value="${task.sourceCollection}">
+                            <div class="help" th:text="#{etl.sourceCollection.hint}">Native MongoDB source only. SQL sources leave it blank.</div>
+                        </div>
+                        <div class="field">
+                            <label for="sourceFilter" th:text="#{etl.sourceFilter}">Filter (Extended JSON)</label>
+                            <textarea class="input" id="sourceFilter" name="sourceFilter" rows="4"
+                                      maxlength="4000" placeholder="{}" th:text="${task.sourceFilter}"></textarea>
+                            <div class="help" th:text="#{etl.sourceFilter.hint}">Optional native MongoDB query document. {$where} and friends are refused.</div>
+                        </div>
                     </div>
 
                     <div class="grid-2">
@@ -135,6 +151,7 @@
                             <input type="text" class="input" id="resumeKeyColumn" name="resumeKeyColumn"
                                    maxlength="128" th:value="${task.resumeKeyColumn}">
                             <div class="help" th:text="#{etl.resumeKey.hint}">Optional unique monotonic result column. Enables resuming append and range overwrite.</div>
+                            <div class="help" th:text="#{etl.mongo.resume.hint}">For a native MongoDB source, name a top-level field such as _id.</div>
                         </div>
                     </div>
                 </div>

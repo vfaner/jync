@@ -90,8 +90,27 @@ class DatabaseTypePresetTest {
         for (DatabaseType type : new DatabaseType[] {
                 DatabaseType.HANA, DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
                 DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.ELASTICSEARCH,
-                DatabaseType.MONGODB}) {
+                DatabaseType.MONGODB, DatabaseType.MONGODB_NATIVE}) {
             assertThat(DatabaseType.fromName(type.name())).isSameAs(type);
+        }
+    }
+
+    /**
+     * Elasticsearch's and MongoDB's SQL interfaces can only read. Every other preset — even
+     * the ETL-only analytic engines — can at least receive writes, so only these two are
+     * refused as an ETL target.
+     */
+    @Test
+    void readOnlySqlProductsCannotBeEtlTargets() {
+        assertThat(DatabaseType.ELASTICSEARCH.supportsEtlTarget()).isFalse();
+        assertThat(DatabaseType.MONGODB.supportsEtlTarget()).isFalse();
+        assertThat(DatabaseType.MONGODB_NATIVE.supportsEtlTarget()).isFalse();
+
+        for (DatabaseType type : new DatabaseType[] {
+                DatabaseType.MYSQL, DatabaseType.HANA, DatabaseType.DORIS,
+                DatabaseType.CLICKHOUSE, DatabaseType.HIVE, DatabaseType.IMPALA,
+                DatabaseType.CUSTOM}) {
+            assertThat(type.supportsEtlTarget()).as(type.name()).isTrue();
         }
     }
 

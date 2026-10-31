@@ -130,6 +130,26 @@ class DatabaseTypeDefaultsApiTest {
     }
 
     @Test
+    @DisplayName("原生 MongoDB 没有 JDBC 驱动:表单只让填 URI,不要求 jar")
+    void nativeMongoHasNoJdbcDriver() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "MONGODB_NATIVE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nativeMongo").value(true))
+                .andExpect(jsonPath("$.jdbc").value(false))
+                .andExpect(jsonPath("$.bundled").value(false))
+                .andExpect(jsonPath("$.defaultPort").value(27017));
+    }
+
+    @Test
+    @DisplayName("JDBC 预设用 jdbc=true、nativeMongo=false")
+    void aJdbcPresetIsNotNativeMongo() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "MYSQL"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nativeMongo").value(false))
+                .andExpect(jsonPath("$.jdbc").value(true));
+    }
+
+    @Test
     @DisplayName("未知类型回退 CUSTOM,而不是报错")
     void unknownTypeFallsBackToCustom() throws Exception {
         mvc.perform(get("/api/databases/type-defaults").param("type", "WHATEVER"))

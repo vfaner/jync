@@ -38,11 +38,22 @@ public class EtlPrecheckService {
 
     private final DatabaseConfigService databaseConfigService;
     private final DataSourceManager dataSourceManager;
+    private final EtlSourceFactory sourceFactory;
 
+    /** Test-friendly constructor: every source is probed through JDBC, as before. */
     public EtlPrecheckService(DatabaseConfigService databaseConfigService,
                               DataSourceManager dataSourceManager) {
+        this(databaseConfigService, dataSourceManager, (config, connections) ->
+                new JdbcEtlSource(connections.open(config), config));
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public EtlPrecheckService(DatabaseConfigService databaseConfigService,
+                              DataSourceManager dataSourceManager,
+                              EtlSourceFactory sourceFactory) {
         this.databaseConfigService = databaseConfigService;
         this.dataSourceManager = dataSourceManager;
+        this.sourceFactory = sourceFactory;
     }
 
     /** Prechecks a form that has not been saved yet. */
@@ -64,15 +75,33 @@ public class EtlPrecheckService {
         int timeout = timeout(task.getTimeoutSeconds());
 
         Map<String, String> resultColumns = null;
-        Connection source = null;
+        EtlSource source = null;
+        boolean opened = false;
         try {
-            source = connections.open(sourceConfig);
-            markReadOnly(source);
-            resultColumns = probeSource(source, task, timeout, checks, columns);
+            source = sourceFactory.open(sourceConfig, connections);
+            opened = true;
+            EtlSourceProbe probe = source.probe(task, timeout);
+            resultColumns = new LinkedHashMap<>();
+            for (EtlSourceColumn column : probe.columns()) {
+                resultColumns.putIfAbsent(column.name().toLowerCase(Locale.ROOT), column.name());
+                columns.add(new EtlPrecheckResult.ColumnInfo(column.name(),
+                        column.typeName() == null ? "" : column.typeName()));
+            }
+            for (EtlSourceIssue issue : probe.issues()) {
+                checks.add(new EtlPrecheckResult.Check(
+                        issue.level(), issue.code(), issue.detail()));
+            }
+        } catch (EtlSourceException e) {
+            checks.add(error(e.messageKey(), e.detail()));
         } catch (SQLException e) {
-            checks.add(error("etl.precheck.connection.error", message(e)));
+            // Opening the connection and running the probe fail under different check codes:
+            // an operator fixes "the database is unreachable" differently from "the SQL is bad".
+            checks.add(error(opened ? "etl.precheck.source.error"
+                    : "etl.precheck.connection.error", message(e)));
         } finally {
-            closeQuietly(source);
+            if (source != null) {
+                source.close();
+            }
         }
 
         Connection target = null;
@@ -86,62 +115,6 @@ public class EtlPrecheckService {
         }
 
         return new EtlPrecheckResult(checks, columns);
-    }
-
-    // --- source ---------------------------------------------------------------------------
-
-    /**
-     * Runs the extraction SQL behind a zero-row wrapper and reads its metadata.
-     *
-     * @return the result columns by folded name, or {@code null} when the SQL itself failed and
-     *         the target comparison has nothing to compare against
-     */
-    private Map<String, String> probeSource(Connection source, EtlTask task, int timeout,
-                                            List<EtlPrecheckResult.Check> checks,
-                                            List<EtlPrecheckResult.ColumnInfo> columns) {
-        try (Statement statement = source.createStatement()) {
-            statement.setQueryTimeout(timeout);
-            try (ResultSet rs = statement.executeQuery(
-                    EtlSqlSupport.zeroRowProbe(task.getSourceSql()))) {
-                ResultSetMetaData meta = rs.getMetaData();
-                int count = meta.getColumnCount();
-                Map<String, String> names = new LinkedHashMap<>();
-                for (int i = 1; i <= count; i++) {
-                    String label = meta.getColumnLabel(i);
-                    // The runner writes unquoted, so a label the target cannot reproduce as a
-                    // column name would fail on the first INSERT, after the target was created.
-                    if (label == null
-                            || !EtlSqlSupport.PLAIN_IDENTIFIER.matcher(label).matches()) {
-                        checks.add(error("etl.precheck.column.error", String.valueOf(label)));
-                        continue;
-                    }
-                    names.putIfAbsent(label.toLowerCase(Locale.ROOT), label);
-                    columns.add(new EtlPrecheckResult.ColumnInfo(label, typeName(meta, i)));
-                }
-                checks.add(ok("etl.precheck.source.ok", String.valueOf(count)));
-                checkResumeKey(rs, task, checks);
-                return names;
-            }
-        } catch (SQLException e) {
-            checks.add(error("etl.precheck.source.error", message(e)));
-            return null;
-        }
-    }
-
-    private static void checkResumeKey(ResultSet rs, EtlTask task,
-                                       List<EtlPrecheckResult.Check> checks) {
-        String key = task.getResumeKeyColumn();
-        if (key == null || key.isBlank()) {
-            return;
-        }
-        String trimmed = key.trim();
-        try {
-            rs.findColumn(trimmed);
-            checks.add(ok("etl.precheck.resume.ok", trimmed));
-        } catch (SQLException e) {
-            // The runner looks the key up the same way; a mismatch here would stop it mid-run.
-            checks.add(error("etl.precheck.resume.error", trimmed));
-        }
     }
 
     // --- target ---------------------------------------------------------------------------
@@ -245,25 +218,9 @@ public class EtlPrecheckService {
         return Math.min(configured, MAX_TIMEOUT_SECONDS);
     }
 
-    private static String typeName(ResultSetMetaData meta, int index) {
-        try {
-            return meta.getColumnTypeName(index);
-        } catch (SQLException e) {
-            return "";
-        }
-    }
-
     private static String message(SQLException e) {
         String message = e.getMessage();
         return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
-    }
-
-    private static void markReadOnly(Connection connection) {
-        try {
-            connection.setReadOnly(true);
-        } catch (SQLException ignored) {
-            // A driver that refuses the hint can still run the probing SELECT.
-        }
     }
 
     private static void closeQuietly(Connection connection) {

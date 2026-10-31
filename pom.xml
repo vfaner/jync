@@ -254,6 +254,14 @@
             <version>1.9.27</version>
         </dependency>
 
+        <!-- Native MongoDB client for the MONGODB_NATIVE ETL source. Not a JDBC driver and
+             not an ETL target: only the ETL source adapter uses it. Version follows the
+             Spring Boot 2.7 BOM (4.6.1); the three artifacts total about 2.2 MB. -->
+        <dependency>
+            <groupId>org.mongodb</groupId>
+            <artifactId>mongodb-driver-sync</artifactId>
+        </dependency>
+
         <!-- Renders the current version's release notes on the settings page. -->
         <dependency>
             <groupId>org.commonmark</groupId>
