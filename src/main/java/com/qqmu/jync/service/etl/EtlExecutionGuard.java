@@ -17,17 +17,34 @@ import org.springframework.stereotype.Component;
 @Component
 public class EtlExecutionGuard {
 
-    private final Set<Long> running = ConcurrentHashMap.newKeySet();
+    private final Set<String> running = ConcurrentHashMap.newKeySet();
 
+    /** A task's slot. Batches use their own {@code "batch:<id>"} key through the string API. */
     public boolean tryAcquire(Long taskId) {
-        return running.add(taskId);
+        return tryAcquire(taskKey(taskId));
+    }
+
+    public boolean tryAcquire(String key) {
+        return running.add(key);
     }
 
     public void release(Long taskId) {
-        running.remove(taskId);
+        release(taskKey(taskId));
+    }
+
+    public void release(String key) {
+        running.remove(key);
     }
 
     public boolean isRunning(Long taskId) {
-        return running.contains(taskId);
+        return isRunning(taskKey(taskId));
+    }
+
+    public boolean isRunning(String key) {
+        return running.contains(key);
+    }
+
+    private static String taskKey(Long taskId) {
+        return "task:" + taskId;
     }
 }

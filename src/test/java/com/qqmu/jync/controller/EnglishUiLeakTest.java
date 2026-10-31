@@ -76,7 +76,7 @@ class EnglishUiLeakTest {
     @ValueSource(strings = {
             "/", "/dashboard",
             "/projects", "/projects/new", "/projects/bulk",
-            "/etl", "/etl/new",
+            "/etl", "/etl/new", "/etl/batches/new",
             "/databases", "/databases/new",
             "/ai", "/ai/new",
             "/settings",

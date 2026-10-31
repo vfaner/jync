@@ -48,6 +48,13 @@ public class EtlTask {
     @Column(name = "target_db_id", nullable = false)
     private Long targetDbId;
 
+    /**
+     * Non-null when this task is a member of a batch. The batch owns the source/target
+     * connections and the schedule; this row keeps only its own extraction and load settings.
+     */
+    @Column(name = "batch_id")
+    private Long batchId;
+
     /** Customer-authored query; its result columns become the target column list. */
     @Lob
     @Column(name = "source_sql", nullable = false)

@@ -82,10 +82,12 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | Incremental sync | Timestamp, row SCN, identity column or full comparison, selected automatically; one cursor-range query; safety-lagged watermark; cursor advances only after commit |
 | Log CDC | MySQL binlog, Oracle LogMiner, PostgreSQL logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency |
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
-| Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
+| Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size), ETL batches (one schedule and one connection pair shared by tables with the same source and target, run sequentially) |
 | Reliability | Idempotent upsert, checkpoint resume, database leases, at-least-once delivery, automatic catch-up after downtime |
 | Observability | Dashboard, change log, audit log, system log, per-table throughput log and CDC status panel, on-demand row-count audit |
 | Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout usable on phones; local accounts plus three SSO modes |
+
+> **ETL batches:** each table stays its own ETL task, keeping its extraction SQL, target table, write mode, checkpoint and run history. A batch only puts tables that share a source and target under one schedule: a run opens a single source/target connection pair, executes the members in order, keeps going when one member fails, and records the summary. Source and target are locked once the batch is created, and members no longer carry a schedule of their own; tick tables from the source catalog to generate `select *` members and rewrite each SQL afterwards.
 
 ---
 

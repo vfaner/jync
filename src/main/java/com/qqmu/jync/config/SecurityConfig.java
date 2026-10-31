@@ -71,8 +71,10 @@ public class SecurityConfig {
             // — otherwise a viewer is shown a form whose every submit is refused.
             "/projects/bulk",
             // ETL forms are the same kind of configuration page; the listing itself stays
-            // readable so a viewer can see what is scheduled.
+            // readable so a viewer can see what is scheduled. The batch form sits one level
+            // deeper, so /etl/*/edit does not cover it.
             "/etl/new", "/etl/*/edit",
+            "/etl/batches/new", "/etl/batches/*/edit",
             "/ai/new", "/ai/*/edit",
             // The external-authentication page holds the endpoints credentials are sent to and
             // the shared secret's configuration; a viewer has no use for it, and its Save button

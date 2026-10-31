@@ -16,7 +16,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import com.qqmu.jync.model.EtlBatch;
 import com.qqmu.jync.model.EtlTask;
+import com.qqmu.jync.repository.EtlBatchRepository;
 import com.qqmu.jync.repository.EtlTaskRepository;
 
 /**
@@ -38,11 +40,17 @@ public class EtlScheduler {
     private final ThreadPoolTaskScheduler scheduler = createTriggerPool();
     private final EtlTaskRepository taskRepository;
     private final EtlTaskService taskService;
+    private final EtlBatchRepository batchRepository;
+    private final EtlBatchService batchService;
     private final Map<Long, ScheduledFuture<?>> scheduled = new ConcurrentHashMap<>();
+    private final Map<Long, ScheduledFuture<?>> batchScheduled = new ConcurrentHashMap<>();
 
-    public EtlScheduler(EtlTaskRepository taskRepository, EtlTaskService taskService) {
+    public EtlScheduler(EtlTaskRepository taskRepository, EtlTaskService taskService,
+                        EtlBatchRepository batchRepository, EtlBatchService batchService) {
         this.taskRepository = taskRepository;
         this.taskService = taskService;
+        this.batchRepository = batchRepository;
+        this.batchService = batchService;
     }
 
     private static ThreadPoolTaskScheduler createTriggerPool() {
@@ -62,8 +70,13 @@ public class EtlScheduler {
 
     @EventListener(ApplicationReadyEvent.class)
     public void scheduleAllOnStartup() {
-        for (EtlTask task : taskRepository.findByEnabledTrue()) {
+        // Members never schedule themselves: the batch trigger runs them. Loading them here
+        // would also make a member with a stale enabled flag fight its batch's schedule.
+        for (EtlTask task : taskRepository.findByEnabledTrueAndBatchIdIsNull()) {
             refresh(task.getId());
+        }
+        for (EtlBatch batch : batchRepository.findByEnabledTrue()) {
+            refreshBatch(batch.getId());
         }
     }
 
@@ -77,25 +90,67 @@ public class EtlScheduler {
         }
     }
 
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT,
+            fallbackExecution = true)
+    public void onBatchChanged(EtlBatchChangedEvent event) {
+        if (event.deleted()) {
+            cancelBatch(event.batchId());
+        } else {
+            refreshBatch(event.batchId());
+        }
+    }
+
     /** Converges the registered trigger with the task's current enabled flag and cron. */
     public synchronized void refresh(Long taskId) {
         cancel(taskId);
         EtlTask task = taskRepository.findById(taskId).orElse(null);
-        if (task == null || !Boolean.TRUE.equals(task.getEnabled())) {
-            return;
-        }
-        String cron = task.getCronExpression();
-        if (cron == null || cron.isBlank()) {
+        if (task == null || !shouldSchedule(task)) {
             return;
         }
         try {
             ScheduledFuture<?> future = scheduler.schedule(
-                    () -> trigger(taskId), new CronTrigger(cron.trim()));
+                    () -> trigger(taskId), new CronTrigger(task.getCronExpression().trim()));
             scheduled.put(taskId, future);
-            log.info("ETL task {} scheduled with cron {}", taskId, cron.trim());
+            log.info("ETL task {} scheduled with cron {}", taskId, task.getCronExpression().trim());
         } catch (RuntimeException e) {
             log.warn("ETL task {} could not be scheduled: {}", taskId, e.getMessage());
         }
+    }
+
+    /** Converges the registered trigger with the batch's current enabled flag and cron. */
+    public synchronized void refreshBatch(Long batchId) {
+        cancelBatch(batchId);
+        EtlBatch batch = batchRepository.findById(batchId).orElse(null);
+        if (batch == null || !shouldSchedule(batch)) {
+            return;
+        }
+        try {
+            ScheduledFuture<?> future = scheduler.schedule(
+                    () -> triggerBatch(batchId), new CronTrigger(batch.getCronExpression().trim()));
+            batchScheduled.put(batchId, future);
+            log.info("ETL batch {} scheduled with cron {}", batchId, batch.getCronExpression().trim());
+        } catch (RuntimeException e) {
+            log.warn("ETL batch {} could not be scheduled: {}", batchId, e.getMessage());
+        }
+    }
+
+    /**
+     * A member's schedule belongs to its batch, so a member row never registers a trigger of
+     * its own even if an old row still carries an enabled flag.
+     */
+    static boolean shouldSchedule(EtlTask task) {
+        return task.getBatchId() == null
+                && Boolean.TRUE.equals(task.getEnabled())
+                && cronPresent(task.getCronExpression());
+    }
+
+    static boolean shouldSchedule(EtlBatch batch) {
+        return Boolean.TRUE.equals(batch.getEnabled())
+                && cronPresent(batch.getCronExpression());
+    }
+
+    private static boolean cronPresent(String cron) {
+        return cron != null && !cron.isBlank();
     }
 
     /** One cron firing. */
@@ -113,8 +168,34 @@ public class EtlScheduler {
         }
     }
 
+    /** One cron firing of a batch. */
+    void triggerBatch(Long batchId) {
+        try {
+            if (!batchService.submit(batchId)) {
+                log.info("ETL batch {} is still running; the scheduled run was skipped", batchId);
+            }
+        } catch (RuntimeException e) {
+            log.warn("ETL batch {} could not be started: {}", batchId, e.getMessage());
+        }
+    }
+
+    boolean isScheduled(Long taskId) {
+        return scheduled.containsKey(taskId);
+    }
+
+    boolean isScheduledBatch(Long batchId) {
+        return batchScheduled.containsKey(batchId);
+    }
+
     private void cancel(Long taskId) {
         ScheduledFuture<?> future = scheduled.remove(taskId);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    private void cancelBatch(Long batchId) {
+        ScheduledFuture<?> future = batchScheduled.remove(batchId);
         if (future != null) {
             future.cancel(false);
         }

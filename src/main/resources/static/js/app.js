@@ -3889,6 +3889,116 @@
     apply();
   }
 
+  /* 批次的表选择器：源连接选好后读一次它的表清单，渲染成 name="tables" 的复选框。
+     新建页跟着源下拉走；编辑页的源已锁定，由 data-source-id 提供。批次内已有的
+     目标表禁用并标注，避免两个 OVERWRITE 成员互相覆盖（服务端还会再拒绝一次）。
+     读取失败只提示，不拦表单 —— 至少不会让整页不可用。 */
+  function bindBatchTablePicker(root) {
+    var list = root.querySelector('[data-role="batch-table-list"]');
+    var status = root.querySelector('[data-role="batch-table-status"]');
+    var toolbar = root.querySelector('[data-role="batch-table-toolbar"]');
+    var filter = root.querySelector('[data-role="batch-table-filter"]');
+    var selectAll = root.querySelector('[data-role="batch-select-all"]');
+    var sourceSelect = document.getElementById('sourceDbId');
+    if (!list || !status) { return; }
+
+    var base = (root.getAttribute('data-base') || '').replace(/\/$/, '');
+    var fixedSource = root.getAttribute('data-source-id') || '';
+    var selected = split(root.getAttribute('data-selected'));
+    var existing = split(root.getAttribute('data-existing'));
+    var hint = (status.textContent || '').trim();
+    var cache = {};   // 源 id → 表名数组
+
+    function split(value) {
+      return String(value || '').split(',').map(function (item) {
+        return item.trim();
+      }).filter(Boolean);
+    }
+
+    function say(text) { status.textContent = text; }
+
+    function sourceId() {
+      return fixedSource || (sourceSelect ? sourceSelect.value : '');
+    }
+
+    function render(tables) {
+      list.innerHTML = '';
+      if (!tables.length) {
+        list.textContent = t('etl.batch.noTables');
+        toolbar.hidden = true;
+        return;
+      }
+      tables.forEach(function (name) {
+        var label = document.createElement('label');
+        label.className = 'batch-table-option';
+        label.setAttribute('data-name', String(name).toLowerCase());
+        var box = document.createElement('input');
+        box.type = 'checkbox';
+        box.name = 'tables';
+        box.value = name;
+        box.checked = selected.indexOf(name) >= 0;
+        if (existing.indexOf(name) >= 0) {
+          box.disabled = true;
+          label.classList.add('is-disabled');
+        }
+        label.appendChild(box);
+        var caption = document.createElement('span');
+        caption.textContent = name;
+        label.appendChild(caption);
+        if (existing.indexOf(name) >= 0) {
+          var note = document.createElement('span');
+          note.className = 'small muted';
+          note.textContent = t('etl.batch.existingTables');
+          label.appendChild(note);
+        }
+        list.appendChild(label);
+      });
+      toolbar.hidden = false;
+    }
+
+    function load(id) {
+      list.innerHTML = '';
+      toolbar.hidden = true;
+      if (!id) { say(hint); return; }
+      if (cache[id]) { render(cache[id]); say(''); return; }
+      say(t('etl.batch.tablesLoading'));
+      getJson(base + '/' + encodeURIComponent(id) + '/tables').then(function (payload) {
+        // 源在请求返回前又换了：这份清单已经和下拉框对不上，丢弃。
+        if (sourceId() !== id) { return; }
+        if (!payload || !payload.success) { say(t('etl.batch.tablesFailed')); return; }
+        cache[id] = payload.tables || [];
+        render(cache[id]);
+        say('');
+      }).catch(function () {
+        if (sourceId() === id) { say(t('etl.batch.tablesFailed')); }
+      });
+    }
+
+    if (filter) {
+      filter.addEventListener('input', function () {
+        var tokens = String(filter.value || '').toLowerCase().split(/\s+/).filter(Boolean);
+        list.querySelectorAll('.batch-table-option').forEach(function (label) {
+          var name = label.getAttribute('data-name') || '';
+          var match = tokens.every(function (token) { return name.indexOf(token) >= 0; });
+          label.hidden = !match;
+        });
+      });
+    }
+
+    if (selectAll) {
+      selectAll.addEventListener('click', function () {
+        list.querySelectorAll('input[name="tables"]').forEach(function (box) {
+          if (!box.disabled && !box.closest('.batch-table-option').hidden) { box.checked = true; }
+        });
+      });
+    }
+
+    if (!fixedSource && sourceSelect) {
+      sourceSelect.addEventListener('change', function () { load(sourceSelect.value); });
+    }
+    if (sourceId()) { load(sourceId()); }
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -3928,6 +4038,7 @@
     bindSourceSqlFile();
     bindEtlSourceKind();
     document.querySelectorAll('[data-role="target-table"]').forEach(bindTargetTablePicker);
+    document.querySelectorAll('[data-batch-tables]').forEach(bindBatchTablePicker);
     initConfigDirtyTracking();
 
     // B9：顶部 Flash 横幅统一转成居中弹窗 —— 成功用自动消失的轻卡片，

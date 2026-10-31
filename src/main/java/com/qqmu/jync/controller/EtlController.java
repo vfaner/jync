@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -15,11 +14,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
-import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.model.EtlBatch;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
+import com.qqmu.jync.service.etl.EtlBatchService;
 import com.qqmu.jync.service.etl.EtlPrecheckResult;
 import com.qqmu.jync.service.etl.EtlPrecheckService;
 import com.qqmu.jync.service.etl.EtlTaskService;
@@ -38,10 +38,13 @@ public class EtlController {
 
     private final EtlTaskService etlTaskService;
     private final EtlPrecheckService precheckService;
+    private final EtlBatchService etlBatchService;
 
-    public EtlController(EtlTaskService etlTaskService, EtlPrecheckService precheckService) {
+    public EtlController(EtlTaskService etlTaskService, EtlPrecheckService precheckService,
+                         EtlBatchService etlBatchService) {
         this.etlTaskService = etlTaskService;
         this.precheckService = precheckService;
+        this.etlBatchService = etlBatchService;
     }
 
     @GetMapping
@@ -51,7 +54,28 @@ public class EtlController {
         for (EtlTask task : tasks) {
             running.put(task.getId(), etlTaskService.isRunning(task.getId()));
         }
+
+        // Batches own their members' schedule and connections; the page shows the group and the
+        // tables it runs, while the table below keeps only the tasks that stand alone.
+        List<EtlBatch> batches = etlBatchService.findAll();
+        Map<Long, List<EtlTask>> batchMembers = new HashMap<>();
+        Map<Long, Boolean> batchRunning = new HashMap<>();
+        List<EtlTask> standaloneTasks = new ArrayList<>();
+        for (EtlBatch batch : batches) {
+            batchMembers.put(batch.getId(), etlBatchService.members(batch.getId()));
+            batchRunning.put(batch.getId(), etlBatchService.isRunning(batch.getId()));
+        }
+        for (EtlTask task : tasks) {
+            if (task.getBatchId() == null) {
+                standaloneTasks.add(task);
+            }
+        }
+
         model.addAttribute("tasks", tasks);
+        model.addAttribute("standaloneTasks", standaloneTasks);
+        model.addAttribute("batches", batches);
+        model.addAttribute("batchMembers", batchMembers);
+        model.addAttribute("batchRunning", batchRunning);
         model.addAttribute("running", running);
         model.addAttribute("connectionNames", connectionNames());
         return "etl-list";
@@ -75,6 +99,11 @@ public class EtlController {
         }
         model.addAttribute("task", task);
         model.addAttribute("running", etlTaskService.isRunning(id));
+        if (task.getBatchId() != null) {
+            // The banner and the locked connection pair come from the owning batch.
+            etlBatchService.findById(task.getBatchId())
+                    .ifPresent(batch -> model.addAttribute("batch", batch));
+        }
         addFormOptions(model, task);
         return "etl-form";
     }
@@ -155,9 +184,16 @@ public class EtlController {
 
     private void addFormOptions(Model model, EtlTask task) {
         List<DatabaseConfig> connections = etlTaskService.connections();
-        List<DatabaseConfig> sources = sourceOptions(connections, task);
+        List<DatabaseConfig> sources = EtlConnectionOptions.sources(connections,
+                task == null ? null : task.getSourceDbId());
+        Map<Long, String> connectionNames = new HashMap<>();
+        for (DatabaseConfig config : connections) {
+            connectionNames.put(config.getId(), config.getName());
+        }
+        model.addAttribute("connectionNames", connectionNames);
         model.addAttribute("connections", sources);
-        model.addAttribute("targetConnections", targetOptions(connections, task));
+        model.addAttribute("targetConnections", EtlConnectionOptions.targets(connections,
+                task == null ? null : task.getTargetDbId()));
         model.addAttribute("writeModes", EtlWriteMode.values());
         // The form shows the SQL box or the Mongo fields, never both. Render the half the
         // task actually uses on the first paint rather than letting app.js correct it, which
@@ -173,52 +209,6 @@ public class EtlController {
         }
         return sources.stream().anyMatch(source -> sourceDbId.equals(source.getId())
                 && source.effectiveType() == DatabaseType.MONGODB_NATIVE);
-    }
-
-    /**
-     * The two selects are split by the connection's declared purpose, exactly like the
-     * real-time project form: a connection classified as a source is not offered as a target
-     * and the other way around. A task's current pick is still appended when its role no
-     * longer matches — a reclassified connection must render the saved value instead of
-     * silently falling back to a different one.
-     */
-    private static List<DatabaseConfig> sourceOptions(List<DatabaseConfig> connections, EtlTask task) {
-        List<DatabaseConfig> options = connections.stream()
-                .filter(c -> roleOf(c) == ConnectionRole.SOURCE)
-                .collect(Collectors.toCollection(ArrayList::new));
-        appendSelected(connections, options, task == null ? null : task.getSourceDbId());
-        return options;
-    }
-
-    /**
-     * Connections a task may write to: classified as a target and able to take a write.
-     * Elasticsearch and MongoDB expose a read-only SQL interface, so they stay in the source
-     * list only. A task saved before either restriction still shows its current target — the
-     * save path refuses it with a message, but hiding the value would make the error
-     * impossible to understand.
-     */
-    private static List<DatabaseConfig> targetOptions(List<DatabaseConfig> connections, EtlTask task) {
-        List<DatabaseConfig> options = connections.stream()
-                .filter(c -> roleOf(c) == ConnectionRole.TARGET)
-                .filter(DatabaseConfig::supportsEtlTarget)
-                .collect(Collectors.toCollection(ArrayList::new));
-        appendSelected(connections, options, task == null ? null : task.getTargetDbId());
-        return options;
-    }
-
-    /** Rows created before the role column existed are treated as sources, like the backfill. */
-    private static ConnectionRole roleOf(DatabaseConfig config) {
-        return config.getRole() == null ? ConnectionRole.SOURCE : config.getRole();
-    }
-
-    private static void appendSelected(List<DatabaseConfig> connections,
-                                       List<DatabaseConfig> options, Long selectedId) {
-        if (selectedId != null && options.stream().noneMatch(c -> selectedId.equals(c.getId()))) {
-            connections.stream()
-                    .filter(c -> selectedId.equals(c.getId()))
-                    .findFirst()
-                    .ifPresent(options::add);
-        }
     }
 
     private Map<Long, String> connectionNames() {

@@ -11,109 +11,136 @@
             <p class="sub" th:text="#{etl.listHint}">Copy the rows of your own extraction SQL on a schedule.</p>
         </div>
         <div class="page-actions" th:if="${isAdmin}">
+            <a class="btn btn-ghost btn-sm" th:href="@{/etl/batches/new}">
+                <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{etl.batch.new}">New batch</span>
+            </a>
             <a class="btn btn-primary btn-sm" th:href="@{/etl/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{etl.new}">New ETL task</span>
             </a>
         </div>
     </div>
 
-    <div class="card">
-        <div class="card-body tight">
-            <div th:if="${#lists.isEmpty(tasks)}" class="empty">
-                <div class="empty-ico"><svg class="ico"><use href="#arrow-repeat"/></svg></div>
-                <h3 th:text="#{etl.empty}">No ETL tasks yet.</h3>
-                <p th:text="#{etl.emptyHint}">An ETL task copies the result of your own query; it does not claim the target matches the source.</p>
-                <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/etl/new}">
-                    <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{etl.new}">New ETL task</span>
-                </a>
+    <!-- 批次：同源同目标的表共享一对连接和一条调度，组内按顺序执行。 -->
+    <div data-role="etl-batches">
+        <div th:if="${#lists.isEmpty(batches)}" class="card">
+            <div class="card-body tight">
+                <div class="empty">
+                    <div class="empty-ico"><svg class="ico"><use href="#diagram-3"/></svg></div>
+                    <h3 th:text="#{etl.batch.empty}">No ETL batches yet.</h3>
+                    <p th:text="#{etl.batch.emptyHint}">Put tables that share a source and target in one batch; they run one after another instead of each taking a schedule.</p>
+                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/etl/batches/new}">
+                        <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{etl.batch.new}">New batch</span>
+                    </a>
+                </div>
             </div>
+        </div>
 
-            <div th:unless="${#lists.isEmpty(tasks)}" class="tbl-wrap">
+        <div class="card" style="margin-bottom:16px" th:each="batch : ${batches}">
+            <div class="card-head">
+                <h2>
+                    <svg class="ico"><use href="#diagram-3"/></svg>
+                    <span th:text="${batch.name}">batch</span>
+                    <span class="badge badge-mute"
+                          th:text="#{etl.batch.memberCount(${#lists.size(batchMembers[batch.id])})}">0 tables</span>
+                    <span class="chip small"
+                          th:text="${batch.cronExpression != null and !#strings.isEmpty(batch.cronExpression)
+                                   ? batch.cronExpression : #messages.msg('etl.schedule.manual')}">Manual</span>
+                </h2>
+                <div class="btn-row">
+                    <span class="badge"
+                          th:classappend="${batch.enabled} ? 'badge-ok' : 'badge-mute'">
+                        <span class="dot" th:classappend="${batch.enabled} ? 'dot-live' : ''"></span>
+                        <span th:text="${batch.enabled} ? #{etl.status.enabled} : #{etl.status.disabled}">Enabled</span>
+                    </span>
+                    <span class="badge badge-ok" th:if="${batchRunning[batch.id]}"
+                          th:text="#{etl.batch.running}">Batch running</span>
+                    <th:block th:if="${isAdmin}">
+                        <form method="post" style="display:inline"
+                              th:action="@{/etl/batches/{id}/run(id=${batch.id})}">
+                            <button type="submit" class="btn-icon is-ok"
+                                    th:disabled="${batchRunning[batch.id]}"
+                                    th:title="#{etl.batch.run}">
+                                <svg class="ico"><use href="#play-fill"/></svg>
+                            </button>
+                        </form>
+                        <form method="post" style="display:inline"
+                              th:action="@{/etl/batches/{id}/start(id=${batch.id})}"
+                              th:unless="${batch.enabled}">
+                            <button type="submit" class="btn-icon is-ok"
+                                    th:disabled="${batch.cronExpression == null or #strings.isEmpty(batch.cronExpression)}"
+                                    th:title="#{etl.enable}">
+                                <svg class="ico"><use href="#arrow-clockwise"/></svg>
+                            </button>
+                        </form>
+                        <form method="post" style="display:inline"
+                              th:action="@{/etl/batches/{id}/stop(id=${batch.id})}"
+                              th:if="${batch.enabled}">
+                            <button type="submit" class="btn-icon is-warn"
+                                    th:title="#{etl.disable}">
+                                <svg class="ico"><use href="#pause-fill"/></svg>
+                            </button>
+                        </form>
+                        <a class="btn-icon" th:href="@{/etl/batches/{id}/edit(id=${batch.id})}"
+                           th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
+                        <form method="post" style="display:inline"
+                              th:action="@{/etl/batches/{id}/delete(id=${batch.id})}"
+                              th:attr="data-confirm=#{etl.batch.confirm.delete(${batch.name}, ${#lists.size(batchMembers[batch.id])})}">
+                            <button type="submit" class="btn-icon is-danger"
+                                    th:title="#{common.delete}">
+                                <svg class="ico"><use href="#trash"/></svg>
+                            </button>
+                        </form>
+                    </th:block>
+                </div>
+            </div>
+            <div class="card-body tight">
                 <table class="tbl">
-                    <thead>
-                    <tr>
-                        <th th:text="#{common.name}">Name</th>
-                        <th th:text="#{etl.route}">Source → target</th>
-                        <th th:text="#{etl.writeMode}">Write mode</th>
-                        <th th:text="#{etl.schedule}">Schedule</th>
-                        <th th:text="#{common.status}">Status</th>
-                        <th th:text="#{etl.lastRun}">Last run</th>
-                        <th class="num" th:text="#{common.actions}">Actions</th>
-                    </tr>
-                    </thead>
                     <tbody>
-                    <tr th:each="task : ${tasks}">
+                    <tr th:each="member : ${batchMembers[batch.id]}">
                         <td>
-                            <div class="truncate" style="font-weight:600" th:title="${task.name}"
-                                 th:text="${task.name}">Task</div>
-                            <div class="small muted truncate" th:if="${task.description}"
-                                 th:text="${task.description}">description</div>
+                            <div class="truncate" style="font-weight:600" th:title="${member.name}"
+                                 th:text="${member.name}">table</div>
                         </td>
                         <td class="small"
-                            th:text="|${connectionNames[task.sourceDbId]} → ${connectionNames[task.targetDbId]} · ${task.targetTable}|">
+                            th:text="|${connectionNames.get(member.sourceDbId)} → ${connectionNames.get(member.targetDbId)} · ${member.targetTable}|">
                             src → dst
                         </td>
                         <td>
-                            <span class="chip" th:text="#{${'etl.mode.' + task.writeMode.name()}}">Overwrite</span>
-                        </td>
-                        <td class="small muted nowrap"
-                            th:text="${task.cronExpression != null and !#strings.isEmpty(task.cronExpression)}
-                                     ? task.cronExpression : #{etl.schedule.manual}">Manual</td>
-                        <td>
-                            <span class="badge"
-                                  th:classappend="${task.enabled} ? 'badge-ok' : 'badge-mute'">
-                                <span class="dot" th:classappend="${task.enabled} ? 'dot-live' : ''"></span>
-                                <span th:text="${task.enabled} ? #{etl.status.enabled} : #{etl.status.disabled}">Enabled</span>
-                            </span>
-                            <span class="badge badge-ok" th:if="${running[task.id]}"
-                                  th:text="#{etl.running}">Running</span>
+                            <span class="chip" th:if="${member.writeMode != null}"
+                                  th:text="#{${'etl.mode.' + member.writeMode.name()}}">Overwrite</span>
                         </td>
                         <td>
                             <div class="small muted nowrap"
-                                 th:text="${task.lastRunTime != null}
-                                          ? ${#temporals.format(task.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
+                                 th:text="${member.lastRunTime != null}
+                                          ? ${#temporals.format(member.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
                                           : #{common.never}">Never</div>
                             <span class="badge"
-                                  th:if="${task.lastRunResult != null}"
-                                  th:classappend="${task.lastRunSuccess} ? 'badge-ok' : 'badge-danger'"
-                                  th:title="${task.lastRunResult}"
-                                  th:text="${#strings.abbreviate(task.lastRunResult, 60)}">result</span>
+                                  th:if="${member.lastRunResult != null}"
+                                  th:classappend="${member.lastRunSuccess} ? 'badge-ok' : 'badge-danger'"
+                                  th:title="${member.lastRunResult}"
+                                  th:text="${#strings.abbreviate(member.lastRunResult, 60)}">result</span>
                         </td>
                         <td>
                             <div class="btn-row" style="justify-content:flex-end">
+                                <span class="badge badge-ok" th:if="${running[member.id]}"
+                                      th:text="#{etl.running}">Running</span>
                                 <th:block th:if="${isAdmin}">
                                 <form method="post" style="display:inline"
-                                      th:action="@{/etl/{id}/run(id=${task.id})}">
+                                      th:action="@{/etl/{id}/run(id=${member.id})}">
                                     <button type="submit" class="btn-icon is-ok"
-                                            th:disabled="${running[task.id]}"
+                                            th:disabled="${running[member.id]}"
                                             th:title="#{etl.runNow}">
                                         <svg class="ico"><use href="#play-fill"/></svg>
                                     </button>
                                 </form>
-                                <form method="post" style="display:inline"
-                                      th:action="@{/etl/{id}/start(id=${task.id})}"
-                                      th:unless="${task.enabled}">
-                                    <button type="submit" class="btn-icon is-ok"
-                                            th:disabled="${task.cronExpression == null or #strings.isEmpty(task.cronExpression)}"
-                                            th:title="#{etl.enable}">
-                                        <svg class="ico"><use href="#arrow-clockwise"/></svg>
-                                    </button>
-                                </form>
-                                <form method="post" style="display:inline"
-                                      th:action="@{/etl/{id}/stop(id=${task.id})}"
-                                      th:if="${task.enabled}">
-                                    <button type="submit" class="btn-icon is-warn"
-                                            th:title="#{etl.disable}">
-                                        <svg class="ico"><use href="#pause-fill"/></svg>
-                                    </button>
-                                </form>
-                                <a class="btn-icon" th:href="@{/etl/{id}/edit(id=${task.id})}"
+                                <a class="btn-icon" th:href="@{/etl/{id}/edit(id=${member.id})}"
                                    th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
                                 <form method="post" style="display:inline"
-                                      th:action="@{/etl/{id}/delete(id=${task.id})}"
-                                      th:attr="data-confirm=#{common.confirm.delete(${task.name})}">
+                                      th:action="@{/etl/batches/{id}/members/{taskId}/remove(id=${batch.id}, taskId=${member.id})}"
+                                      th:attr="data-confirm=#{etl.batch.removeMember}">
                                     <button type="submit" class="btn-icon is-danger"
-                                            th:title="#{common.delete}">
+                                            th:disabled="${running[member.id]}"
+                                            th:title="#{etl.batch.removeMember}">
                                         <svg class="ico"><use href="#trash"/></svg>
                                     </button>
                                 </form>
@@ -121,8 +148,124 @@
                             </div>
                         </td>
                     </tr>
+                    <tr th:if="${#lists.isEmpty(batchMembers[batch.id])}">
+                        <td colspan="5" class="small muted" th:text="#{etl.batch.empty}">No tables.</td>
+                    </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 没有批次归属的单表任务保留自己的调度，行为与引入批次前一致。 -->
+    <div data-role="standalone-tasks">
+        <div class="card">
+            <div class="card-body tight">
+                <div th:if="${#lists.isEmpty(standaloneTasks)}" class="empty">
+                    <div class="empty-ico"><svg class="ico"><use href="#arrow-repeat"/></svg></div>
+                    <h3 th:text="#{etl.empty}">No ETL tasks yet.</h3>
+                    <p th:text="#{etl.emptyHint}">An ETL task copies the result of your own query; it does not claim the target matches the source.</p>
+                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/etl/new}">
+                        <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{etl.new}">New ETL task</span>
+                    </a>
+                </div>
+
+                <div th:unless="${#lists.isEmpty(standaloneTasks)}" class="tbl-wrap">
+                    <table class="tbl">
+                        <thead>
+                        <tr>
+                            <th th:text="#{common.name}">Name</th>
+                            <th th:text="#{etl.route}">Source → target</th>
+                            <th th:text="#{etl.writeMode}">Write mode</th>
+                            <th th:text="#{etl.schedule}">Schedule</th>
+                            <th th:text="#{common.status}">Status</th>
+                            <th th:text="#{etl.lastRun}">Last run</th>
+                            <th class="num" th:text="#{common.actions}">Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <tr th:each="task : ${standaloneTasks}">
+                            <td>
+                                <div class="truncate" style="font-weight:600" th:title="${task.name}"
+                                     th:text="${task.name}">Task</div>
+                                <div class="small muted truncate" th:if="${task.description}"
+                                     th:text="${task.description}">description</div>
+                            </td>
+                            <td class="small"
+                                th:text="|${connectionNames.get(task.sourceDbId)} → ${connectionNames.get(task.targetDbId)} · ${task.targetTable}|">
+                                src → dst
+                            </td>
+                            <td>
+                                <span class="chip" th:text="#{${'etl.mode.' + task.writeMode.name()}}">Overwrite</span>
+                            </td>
+                            <td class="small muted nowrap"
+                                th:text="${task.cronExpression != null and !#strings.isEmpty(task.cronExpression)
+                                         ? task.cronExpression : #messages.msg('etl.schedule.manual')}">Manual</td>
+                            <td>
+                                <span class="badge"
+                                      th:classappend="${task.enabled} ? 'badge-ok' : 'badge-mute'">
+                                    <span class="dot" th:classappend="${task.enabled} ? 'dot-live' : ''"></span>
+                                    <span th:text="${task.enabled} ? #{etl.status.enabled} : #{etl.status.disabled}">Enabled</span>
+                                </span>
+                                <span class="badge badge-ok" th:if="${running[task.id]}"
+                                      th:text="#{etl.running}">Running</span>
+                            </td>
+                            <td>
+                                <div class="small muted nowrap"
+                                     th:text="${task.lastRunTime != null}
+                                              ? ${#temporals.format(task.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
+                                              : #{common.never}">Never</div>
+                                <span class="badge"
+                                      th:if="${task.lastRunResult != null}"
+                                      th:classappend="${task.lastRunSuccess} ? 'badge-ok' : 'badge-danger'"
+                                      th:title="${task.lastRunResult}"
+                                      th:text="${#strings.abbreviate(task.lastRunResult, 60)}">result</span>
+                            </td>
+                            <td>
+                                <div class="btn-row" style="justify-content:flex-end">
+                                    <th:block th:if="${isAdmin}">
+                                    <form method="post" style="display:inline"
+                                          th:action="@{/etl/{id}/run(id=${task.id})}">
+                                        <button type="submit" class="btn-icon is-ok"
+                                                th:disabled="${running[task.id]}"
+                                                th:title="#{etl.runNow}">
+                                            <svg class="ico"><use href="#play-fill"/></svg>
+                                        </button>
+                                    </form>
+                                    <form method="post" style="display:inline"
+                                          th:action="@{/etl/{id}/start(id=${task.id})}"
+                                          th:unless="${task.enabled}">
+                                        <button type="submit" class="btn-icon is-ok"
+                                                th:disabled="${task.cronExpression == null or #strings.isEmpty(task.cronExpression)}"
+                                                th:title="#{etl.enable}">
+                                            <svg class="ico"><use href="#arrow-clockwise"/></svg>
+                                        </button>
+                                    </form>
+                                    <form method="post" style="display:inline"
+                                          th:action="@{/etl/{id}/stop(id=${task.id})}"
+                                          th:if="${task.enabled}">
+                                        <button type="submit" class="btn-icon is-warn"
+                                                th:title="#{etl.disable}">
+                                            <svg class="ico"><use href="#pause-fill"/></svg>
+                                        </button>
+                                    </form>
+                                    <a class="btn-icon" th:href="@{/etl/{id}/edit(id=${task.id})}"
+                                       th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
+                                    <form method="post" style="display:inline"
+                                          th:action="@{/etl/{id}/delete(id=${task.id})}"
+                                          th:attr="data-confirm=#{common.confirm.delete(${task.name})}">
+                                        <button type="submit" class="btn-icon is-danger"
+                                                th:title="#{common.delete}">
+                                            <svg class="ico"><use href="#trash"/></svg>
+                                        </button>
+                                    </form>
+                                    </th:block>
+                                </div>
+                            </td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>

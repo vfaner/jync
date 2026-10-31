@@ -12,5 +12,12 @@ public interface EtlTaskRepository extends JpaRepository<EtlTask, Long> {
 
     List<EtlTask> findByEnabledTrue();
 
+    /** Standalone tasks only; batch members inherit their schedule from the batch. */
+    List<EtlTask> findByEnabledTrueAndBatchIdIsNull();
+
+    List<EtlTask> findByBatchIdOrderByIdAsc(Long batchId);
+
+    boolean existsByBatchIdAndTargetTableAndIdNot(Long batchId, String targetTable, Long id);
+
     long countByEnabledTrue();
 }

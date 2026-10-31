@@ -94,6 +94,21 @@ public class EtlTaskService {
             extractionChanged = extractionChanged(entity, form);
         }
 
+        // Membership is set only by the batch service; a form must never move a task into or out
+        // of a batch. A member's connections and schedule belong to the batch.
+        boolean member = entity.getBatchId() != null;
+        if (member) {
+            if (!Objects.equals(entity.getSourceDbId(), form.getSourceDbId())
+                    || !Objects.equals(entity.getTargetDbId(), form.getTargetDbId())) {
+                throw new IllegalArgumentException("error.etl.batch.connectionsLocked");
+            }
+            if (form.getTargetTable() != null
+                    && taskRepository.existsByBatchIdAndTargetTableAndIdNot(
+                            entity.getBatchId(), form.getTargetTable().trim(), entity.getId())) {
+                throw new IllegalArgumentException("error.etl.batch.duplicateTarget");
+            }
+        }
+
         entity.setName(form.getName().trim());
         entity.setDescription(trimToNull(form.getDescription()));
         entity.setSourceDbId(form.getSourceDbId());
@@ -117,7 +132,11 @@ public class EtlTaskService {
         entity.setResumeKeyColumn(trimToNull(form.getResumeKeyColumn()));
         entity.setPreSql(trimToNull(form.getPreSql()));
         entity.setPostSql(trimToNull(form.getPostSql()));
-        entity.setCronExpression(trimToNull(form.getCronExpression()));
+        // A member never schedules itself: the batch owns the cron and the enabled flag.
+        entity.setCronExpression(member ? null : trimToNull(form.getCronExpression()));
+        if (member) {
+            entity.setEnabled(false);
+        }
         entity.setTimeoutSeconds(form.getTimeoutSeconds());
 
         EtlTask saved = taskRepository.save(entity);
@@ -133,6 +152,9 @@ public class EtlTaskService {
     public void setEnabled(Long id, boolean enabled) {
         EtlTask task = taskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+        if (task.getBatchId() != null) {
+            throw new IllegalStateException("error.etl.batch.managed");
+        }
         if (enabled && (task.getCronExpression() == null
                 || task.getCronExpression().isBlank())) {
             throw new IllegalArgumentException("error.etl.cron.required");
@@ -144,6 +166,11 @@ public class EtlTaskService {
 
     @Transactional
     public void delete(Long id) {
+        EtlTask task = taskRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+        if (task.getBatchId() != null) {
+            throw new IllegalStateException("error.etl.batch.managed");
+        }
         if (guard.isRunning(id)) {
             throw new IllegalStateException("error.etl.running");
         }
@@ -184,6 +211,17 @@ public class EtlTaskService {
 
     /** Runs synchronously; used by tests and by the submit wrapper above. */
     public EtlRunResult execute(Long id) {
+        try (EtlConnections connections = new EtlConnections(dataSourceManager)) {
+            return executeWithin(id, connections);
+        }
+    }
+
+    /**
+     * Runs one task on connections owned by the caller. A batch creates one
+     * {@link EtlConnections} for all of its members, so the workers share the source and target
+     * pools instead of opening a fresh pair per table.
+     */
+    public EtlRunResult executeWithin(Long id, EtlConnectionProvider connections) {
         EtlTask task = taskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
         EtlRunResult result;
@@ -192,15 +230,22 @@ public class EtlTaskService {
                     .orElseThrow(() -> new IllegalArgumentException("error.etl.source.missing"));
             DatabaseConfig target = databaseConfigService.findById(task.getTargetDbId())
                     .orElseThrow(() -> new IllegalArgumentException("error.etl.target.missing"));
-            try (EtlConnections connections = new EtlConnections(dataSourceManager)) {
-                result = runner.run(task, source, target, connections);
-            }
+            result = runner.run(task, source, target, connections);
         } catch (IllegalArgumentException e) {
             result = EtlRunResult.failure(0, 0, EtlRunResult.Side.PROGRAM, e.getMessage());
         }
 
         record(task, result);
         return result;
+    }
+
+    /**
+     * Records a failure the batch runner caught outside the copy loop, so a crashed member still
+     * leaves a failed last-run and one failed history row rather than appearing never to have run.
+     */
+    void recordFailure(Long taskId, String detail) {
+        taskRepository.findById(taskId).ifPresent(task ->
+                record(task, EtlRunResult.failure(0, 0, EtlRunResult.Side.PROGRAM, detail)));
     }
 
     private void record(EtlTask task, EtlRunResult result) {

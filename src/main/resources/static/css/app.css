@@ -1869,3 +1869,19 @@ table.tbl a.truncate { display: block; }
 @media (prefers-reduced-motion: reduce) {
   .health.is-checking .health-dot { animation: none; opacity: 1; }
 }
+
+/* ETL 批次的表选择器：一列勾选框，过长的表名省略。 */
+.batch-table-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.batch-table-option[hidden] {
+  display: none;
+}
+.batch-table-option.is-disabled {
+  cursor: not-allowed;
+  opacity: .6;
+}

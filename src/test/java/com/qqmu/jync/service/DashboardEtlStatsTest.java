@@ -13,6 +13,7 @@ import org.springframework.data.domain.Sort;
 
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
+import com.qqmu.jync.repository.EtlBatchRepository;
 import com.qqmu.jync.repository.EtlRunRepository;
 import com.qqmu.jync.repository.EtlTaskRepository;
 import com.qqmu.jync.repository.ProjectRepository;
@@ -29,11 +30,12 @@ class DashboardEtlStatsTest {
 
     private final ProjectRepository projectRepository = mock(ProjectRepository.class);
     private final EtlTaskRepository etlTaskRepository = mock(EtlTaskRepository.class);
+    private final EtlBatchRepository etlBatchRepository = mock(EtlBatchRepository.class);
 
     private final DashboardService service = new DashboardService(
             projectRepository, mock(DatabaseConfigRepository.class),
             mock(SyncProgressRepository.class), mock(ChangeLogRepository.class),
-            mock(EtlRunRepository.class), etlTaskRepository,
+            mock(EtlRunRepository.class), etlTaskRepository, etlBatchRepository,
             mock(SyncContextFactory.class), mock(SyncTaskStore.class));
 
     @Test
@@ -62,5 +64,17 @@ class DashboardEtlStatsTest {
         assertThat(stats.getProjectCount()).isZero();
         assertThat(stats.getEnabledProjectCount()).isZero();
         assertThat(stats.getEtlTaskCount()).isEqualTo(3);
+    }
+
+    /** An enabled batch is one scheduled job, even though its member rows are disabled. */
+    @Test
+    void enabledBatchesCountAsScheduledEtlJobs() {
+        when(projectRepository.findAll(any(Sort.class))).thenReturn(List.of());
+        when(etlTaskRepository.countByEnabledTrue()).thenReturn(1L);
+        when(etlBatchRepository.countByEnabledTrue()).thenReturn(2L);
+
+        DashboardService.Stats stats = service.collect(Instant.parse("2026-01-01T10:25:00Z"));
+
+        assertThat(stats.getEnabledEtlTaskCount()).isEqualTo(3);
     }
 }

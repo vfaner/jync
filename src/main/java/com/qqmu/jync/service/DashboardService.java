@@ -28,6 +28,7 @@ import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
+import com.qqmu.jync.repository.EtlBatchRepository;
 import com.qqmu.jync.repository.EtlRunRepository;
 import com.qqmu.jync.repository.EtlTaskRepository;
 import com.qqmu.jync.repository.ProjectRepository;
@@ -68,6 +69,7 @@ public class DashboardService {
     private final SyncProgressRepository progressRepository;
     private final EtlRunRepository etlRunRepository;
     private final EtlTaskRepository etlTaskRepository;
+    private final EtlBatchRepository etlBatchRepository;
     private final SyncContextFactory contextFactory;
     private final SyncTaskStore taskStore;
 
@@ -77,6 +79,7 @@ public class DashboardService {
                             ChangeLogRepository changeLogRepository,
                             EtlRunRepository etlRunRepository,
                             EtlTaskRepository etlTaskRepository,
+                            EtlBatchRepository etlBatchRepository,
                             SyncContextFactory contextFactory,
                             SyncTaskStore taskStore) {
         this.projectRepository = projectRepository;
@@ -85,6 +88,7 @@ public class DashboardService {
         this.changeLogRepository = changeLogRepository;
         this.etlRunRepository = etlRunRepository;
         this.etlTaskRepository = etlTaskRepository;
+        this.etlBatchRepository = etlBatchRepository;
         this.contextFactory = contextFactory;
         this.taskStore = taskStore;
     }
@@ -100,8 +104,11 @@ public class DashboardService {
         stats.setEnabledProjectCount(projectRepository.countByEnabledTrue());
         // The second job family: ETL runs from its own table and must not hide behind the
         // real-time count.
+        // Rows stay the table count; the enabled tile counts schedules, so an enabled batch is
+        // one job even though its members are disabled and never trigger on their own.
         stats.setEtlTaskCount(etlTaskRepository.count());
-        stats.setEnabledEtlTaskCount(etlTaskRepository.countByEnabledTrue());
+        stats.setEnabledEtlTaskCount(
+                etlTaskRepository.countByEnabledTrue() + etlBatchRepository.countByEnabledTrue());
         stats.setDatabaseCount(databaseConfigRepository.count());
 
         // Ordered by id: both the selected-table counting and the first-five overview

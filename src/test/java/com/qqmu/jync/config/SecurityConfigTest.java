@@ -219,7 +219,8 @@ class SecurityConfigTest {
     void aViewerIsNotOfferedTheFormPages() throws Exception {
         // HTML pages redirect to /?denied; API endpoints return 403.
         for (String page : new String[] {"/databases/new", "/projects/new", "/projects/bulk",
-                "/etl/new", "/etl/1/edit", "/ai/new"}) {
+                "/etl/new", "/etl/1/edit", "/etl/batches/new", "/etl/batches/1/edit",
+                "/ai/new"}) {
             assertThat(statusOf(get(page).with(asViewer()))).as(page).isEqualTo(302);
         }
         assertThat(statusOf(get("/api/databases/discover-drivers").with(asViewer())))
@@ -567,7 +568,7 @@ class SecurityConfigTest {
     @Test
     void anAdminReachesTheFormPages() throws Exception {
         for (String page : new String[] {"/databases/new", "/projects/new", "/projects/bulk",
-                "/etl/new", "/ai/new"}) {
+                "/etl/new", "/etl/batches/new", "/ai/new"}) {
             assertThat(statusOf(get(page).with(asAdmin()))).as(page).isEqualTo(200);
         }
     }

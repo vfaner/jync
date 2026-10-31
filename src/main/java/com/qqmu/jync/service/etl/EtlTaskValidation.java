@@ -20,15 +20,20 @@ final class EtlTaskValidation {
     private EtlTaskValidation() {
     }
 
-    static void validateExtraction(EtlTask task, DatabaseConfigService configs) {
-        if (task.getSourceDbId() == null || task.getTargetDbId() == null) {
+    /**
+     * The connection checks a task and a batch share. Returns the source so callers that need
+     * its type do not look it up twice.
+     */
+    static DatabaseConfig validateConnections(DatabaseConfigService configs,
+                                              Long sourceDbId, Long targetDbId) {
+        if (sourceDbId == null || targetDbId == null) {
             throw new IllegalArgumentException("error.etl.connection.required");
         }
-        var source = configs.findById(task.getSourceDbId()).orElse(null);
+        var source = configs.findById(sourceDbId).orElse(null);
         if (source == null) {
             throw new IllegalArgumentException("error.etl.source.missing");
         }
-        var target = configs.findById(task.getTargetDbId()).orElse(null);
+        var target = configs.findById(targetDbId).orElse(null);
         if (target == null) {
             throw new IllegalArgumentException("error.etl.target.missing");
         }
@@ -37,9 +42,15 @@ final class EtlTaskValidation {
             // accepted here and fail on its first write, after a run had already started.
             throw new IllegalArgumentException("error.etl.target.readOnly");
         }
-        if (Objects.equals(task.getSourceDbId(), task.getTargetDbId())) {
+        if (Objects.equals(sourceDbId, targetDbId)) {
             throw new IllegalArgumentException("error.etl.same.database");
         }
+        return source;
+    }
+
+    static void validateExtraction(EtlTask task, DatabaseConfigService configs) {
+        DatabaseConfig source = validateConnections(configs,
+                task.getSourceDbId(), task.getTargetDbId());
         if (isNativeMongo(source)) {
             validateMongoExtraction(task);
         } else {

@@ -21,6 +21,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.etl.EtlBatchService;
 import com.qqmu.jync.service.etl.EtlPrecheckService;
 import com.qqmu.jync.service.etl.EtlTaskService;
 
@@ -45,6 +46,9 @@ class EtlFormStructureViewTest {
 
     @MockBean
     private EtlPrecheckService precheckService;
+
+    @MockBean
+    private EtlBatchService etlBatchService;
 
     private static RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();

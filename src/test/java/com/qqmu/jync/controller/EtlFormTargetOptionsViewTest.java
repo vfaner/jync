@@ -28,6 +28,7 @@ import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.etl.EtlBatchService;
 import com.qqmu.jync.service.etl.EtlPrecheckService;
 import com.qqmu.jync.service.etl.EtlTaskService;
 
@@ -53,6 +54,9 @@ class EtlFormTargetOptionsViewTest {
 
     @MockBean
     private EtlPrecheckService precheckService;
+
+    @MockBean
+    private EtlBatchService etlBatchService;
 
     private static RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();

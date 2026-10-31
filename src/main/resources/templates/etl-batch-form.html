@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'etl', 'etl.batch.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${batch.id != null} ? #{etl.form.edit} : #{etl.batch.new}">ETL batch</h1>
+            <p class="sub" th:text="#{etl.batch.subtitle}">One schedule and one connection pair shared by every table in the batch.</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/etl}">
+                <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div style="max-width:1080px">
+        <div class="alert alert-danger" th:if="${error != null}">
+            <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+            <div class="alert-body">
+                <span th:text="${#messages.msgOrNull(error) ?: error}">Error</span>
+                <span th:if="${errorDetail != null and !#strings.isEmpty(errorDetail)}"
+                      th:text="|: ${errorDetail}|"></span>
+            </div>
+        </div>
+
+        <th:block th:if="${batch.id == null}">
+            <form method="post" th:action="@{/etl/batches/create}">
+                <div class="card">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#arrow-repeat"/></svg>
+                            <span th:text="#{etl.batch.title}">ETL batches</span></h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="name" th:text="#{etl.batch.name}">Batch name</label>
+                                <input type="text" class="input" id="name" name="name"
+                                       maxlength="128" required th:value="${batch.name}">
+                            </div>
+                            <div class="field">
+                                <label for="description" th:text="#{etl.description}">Description</label>
+                                <input type="text" class="input" id="description" name="description"
+                                       maxlength="512" th:value="${batch.description}">
+                            </div>
+                        </div>
+
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="sourceDbId">
+                                    <svg class="ico"><use href="#box-arrow-up-right"/></svg>
+                                    <span th:text="#{etl.batch.source}">Source connection</span><span class="req">*</span>
+                                </label>
+                                <select class="select" id="sourceDbId" name="sourceDbId" required>
+                                    <option value="" th:text="#{project.selectDatabase}">-- select --</option>
+                                    <option th:each="db : ${connections}" th:value="${db.id}"
+                                            th:selected="${batch.sourceDbId != null and db.id == batch.sourceDbId}"
+                                            th:data-type="${db.type.name()}"
+                                            th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="targetDbId">
+                                    <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                                    <span th:text="#{etl.batch.target}">Target connection</span><span class="req">*</span>
+                                </label>
+                                <select class="select" id="targetDbId" name="targetDbId" required>
+                                    <option value="" th:text="#{project.selectDatabase}">-- select --</option>
+                                    <option th:each="db : ${targetConnections}" th:value="${db.id}"
+                                            th:selected="${batch.targetDbId != null and db.id == batch.targetDbId}"
+                                            th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
+                                </select>
+                                <div class="help" th:text="#{etl.batch.lockedHint}">Source and target cannot change after the batch is created.</div>
+                            </div>
+                        </div>
+
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="cronExpression" th:text="#{etl.cron}">Cron expression</label>
+                                <input type="text" class="input" id="cronExpression" name="cronExpression"
+                                       maxlength="128" placeholder="0 2 * * *" th:value="${batch.cronExpression}">
+                                <div class="help" th:text="#{etl.batch.cron.hint}">The batch runs its tables sequentially at this schedule; member tasks have no schedule of their own.</div>
+                            </div>
+                            <div class="field">
+                                <label for="timeoutSeconds" th:text="#{etl.timeout}">Query timeout (seconds)</label>
+                                <input type="number" class="input" id="timeoutSeconds" name="timeoutSeconds"
+                                       min="0" th:value="${batch.timeoutSeconds}">
+                                <div class="help" th:text="#{etl.batch.timeout.hint}">Applied to new members; each table can be adjusted later.</div>
+                            </div>
+                        </div>
+
+                        <div th:replace="~{::batch-table-picker}"></div>
+                    </div>
+                </div>
+
+                <div class="btn-row" style="margin-top:16px">
+                    <button type="submit" class="btn btn-primary">
+                        <svg class="ico"><use href="#check-lg"/></svg>
+                        <span th:text="#{common.save}">Save</span>
+                    </button>
+                    <a class="btn btn-ghost" th:href="@{/etl}" th:text="#{common.cancel}">Cancel</a>
+                </div>
+            </form>
+        </th:block>
+
+        <th:block th:if="${batch.id != null}">
+            <form method="post" th:action="@{/etl/batches/save}">
+                <input type="hidden" name="id" th:value="${batch.id}">
+                <input type="hidden" name="sourceDbId" th:value="${batch.sourceDbId}">
+                <input type="hidden" name="targetDbId" th:value="${batch.targetDbId}">
+
+                <div class="card">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#gear"/></svg>
+                            <span th:text="#{etl.batch.title}">ETL batches</span></h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="name" th:text="#{etl.batch.name}">Batch name</label>
+                                <input type="text" class="input" id="name" name="name"
+                                       maxlength="128" required th:value="${batch.name}">
+                            </div>
+                            <div class="field">
+                                <label for="description" th:text="#{etl.description}">Description</label>
+                                <input type="text" class="input" id="description" name="description"
+                                       maxlength="512" th:value="${batch.description}">
+                            </div>
+                        </div>
+
+                        <div class="grid-2">
+                            <div class="field">
+                                <label th:text="#{etl.batch.source}">Source connection</label>
+                                <div class="input" th:text="${connectionNames.get(batch.sourceDbId)} ?: '—'">—</div>
+                                <div class="help" th:text="#{etl.batch.lockedHint}">Source and target cannot change after the batch is created.</div>
+                            </div>
+                            <div class="field">
+                                <label th:text="#{etl.batch.target}">Target connection</label>
+                                <div class="input" th:text="${connectionNames.get(batch.targetDbId)} ?: '—'">—</div>
+                            </div>
+                        </div>
+
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="cronExpression" th:text="#{etl.cron}">Cron expression</label>
+                                <input type="text" class="input" id="cronExpression" name="cronExpression"
+                                       maxlength="128" placeholder="0 2 * * *" th:value="${batch.cronExpression}">
+                                <div class="help" th:text="#{etl.batch.cron.hint}">The batch runs its tables sequentially at this schedule; member tasks have no schedule of their own.</div>
+                            </div>
+                            <div class="field">
+                                <label for="timeoutSeconds" th:text="#{etl.timeout}">Query timeout (seconds)</label>
+                                <input type="number" class="input" id="timeoutSeconds" name="timeoutSeconds"
+                                       min="0" th:value="${batch.timeoutSeconds}">
+                                <div class="help" th:text="#{etl.timeout.hint}">Blank or 0 means no limit.</div>
+                            </div>
+                        </div>
+
+                        <div class="btn-row">
+                            <button type="submit" class="btn btn-primary">
+                                <svg class="ico"><use href="#check-lg"/></svg>
+                                <span th:text="#{common.save}">Save</span>
+                            </button>
+                            <a class="btn btn-ghost" th:href="@{/etl}" th:text="#{common.cancel}">Cancel</a>
+                        </div>
+                    </div>
+                </div>
+            </form>
+
+            <div class="card" style="margin-top:16px">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#table"/></svg>
+                        <span th:text="#{etl.batch.members}">Tables</span>
+                        <span class="badge badge-mute" th:text="#{etl.batch.memberCount(${#lists.size(members)})}">0 tables</span></h2>
+                </div>
+                <div class="card-body tight">
+                    <div th:if="${#lists.isEmpty(members)}" class="empty">
+                        <h3 th:text="#{etl.batch.empty}">No ETL batches yet.</h3>
+                        <p th:text="#{etl.batch.emptyHint}">Put tables that share a source and target in one batch; they run one after another instead of each taking a schedule.</p>
+                    </div>
+                    <div th:unless="${#lists.isEmpty(members)}" class="tbl-wrap">
+                        <table class="tbl">
+                            <thead>
+                            <tr>
+                                <th th:text="#{common.name}">Name</th>
+                                <th th:text="#{etl.targetTable}">Target table</th>
+                                <th th:text="#{etl.writeMode}">Write mode</th>
+                                <th th:text="#{etl.lastRun}">Last run</th>
+                                <th class="num" th:text="#{common.actions}">Actions</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <tr th:each="member : ${members}">
+                                <td>
+                                    <div class="truncate" style="font-weight:600" th:title="${member.name}"
+                                         th:text="${member.name}">table</div>
+                                </td>
+                                <td class="small mono" th:text="${member.targetTable}">target</td>
+                                <td>
+                                    <span class="chip" th:if="${member.writeMode != null}"
+                                          th:text="#{${'etl.mode.' + member.writeMode.name()}}">Overwrite</span>
+                                </td>
+                                <td>
+                                    <div class="small muted nowrap"
+                                         th:text="${member.lastRunTime != null}
+                                                  ? ${#temporals.format(member.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
+                                                  : #{common.never}">Never</div>
+                                    <span class="badge"
+                                          th:if="${member.lastRunResult != null}"
+                                          th:classappend="${member.lastRunSuccess} ? 'badge-ok' : 'badge-danger'"
+                                          th:title="${member.lastRunResult}"
+                                          th:text="${#strings.abbreviate(member.lastRunResult, 60)}">result</span>
+                                </td>
+                                <td>
+                                    <div class="btn-row" style="justify-content:flex-end">
+                                        <form method="post" style="display:inline"
+                                              th:action="@{/etl/{id}/run(id=${member.id})}">
+                                            <button type="submit" class="btn-icon is-ok"
+                                                    th:disabled="${memberRunning[member.id]}"
+                                                    th:title="#{etl.runNow}">
+                                                <svg class="ico"><use href="#play-fill"/></svg>
+                                            </button>
+                                        </form>
+                                        <a class="btn-icon" th:href="@{/etl/{id}/edit(id=${member.id})}"
+                                           th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
+                                        <form method="post" style="display:inline"
+                                              th:action="@{/etl/batches/{id}/members/{taskId}/remove(id=${batch.id}, taskId=${member.id})}"
+                                              th:attr="data-confirm=#{etl.batch.removeMember}">
+                                            <button type="submit" class="btn-icon is-danger"
+                                                    th:disabled="${memberRunning[member.id]}"
+                                                    th:title="#{etl.batch.removeMember}">
+                                                <svg class="ico"><use href="#trash"/></svg>
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <form method="post" th:action="@{/etl/batches/{id}/add-tables(id=${batch.id})}"
+                  style="margin-top:16px">
+                <div class="card">
+                    <div class="card-head">
+                        <h2><svg class="ico"><use href="#plus-lg"/></svg>
+                            <span th:text="#{etl.batch.addTables}">Add tables</span></h2>
+                    </div>
+                    <div class="card-body">
+                        <div th:replace="~{::batch-table-picker}"></div>
+                        <div class="btn-row">
+                            <button type="submit" class="btn btn-primary">
+                                <svg class="ico"><use href="#plus-lg"/></svg>
+                                <span th:text="#{etl.batch.addTables}">Add tables</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </th:block>
+    </div>
+
+</div>
+</th:block>
+
+<!--/* 源换了就重新拉表清单；编辑页的源已锁定，由 data-source-id 带出。
+       复选框由 app.js 的 bindBatchTablePicker 渲染，name="tables" 随所在表单提交。 */-->
+<div th:fragment="batch-table-picker" th:remove="tag">
+    <div class="field" data-batch-tables
+         th:attr="data-base=@{/api/databases},
+                  data-source-id=${batch.sourceDbId},
+                  data-selected=${#strings.listJoin(selectedTables, ',')},
+                  data-existing=${#strings.listJoin(existingTables, ',')}">
+        <label th:text="#{etl.batch.pickTables}">Choose tables</label>
+        <div class="btn-row mb-12" data-role="batch-table-toolbar" hidden>
+            <button type="button" class="btn btn-ghost btn-sm" data-role="batch-select-all"
+                    th:text="#{etl.batch.selectAll}">Select all</button>
+            <input type="text" class="input" style="max-width:260px"
+                   data-role="batch-table-filter" autocomplete="off">
+        </div>
+        <div class="small" data-role="batch-table-list"></div>
+        <div class="help" data-role="batch-table-status" th:text="#{etl.batch.tablesHint}">Ticked tables become tasks using select * by default.</div>
+    </div>
+</div>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>
