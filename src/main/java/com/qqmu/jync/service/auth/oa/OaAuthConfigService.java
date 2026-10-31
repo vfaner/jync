@@ -206,9 +206,13 @@ public class OaAuthConfigService {
         if ((config.getSecretHeaderName() == null) != (config.getSecretHeaderValue() == null)) {
             throw new IllegalArgumentException("error.oa.secret.incomplete");
         }
-        if (config.getSecretHeaderName() != null) {
-            validateHeaderName(config.getSecretHeaderName());
+        if (config.getSecretHeaderName() == null) {
+            // The header filter fails closed here: with no shared secret to compare, every
+            // header-authenticated request is refused. Saving such a row would look valid on
+            // this page while letting nobody in, so the incompleteness is rejected at save.
+            throw new IllegalArgumentException("error.oa.secret.required");
         }
+        validateHeaderName(config.getSecretHeaderName());
     }
 
     private void validateTicket(OaAuthConfig config) {

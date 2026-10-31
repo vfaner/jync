@@ -71,10 +71,26 @@ class HeaderSsoAuthenticationFilterTest {
         return session;
     }
 
+    /**
+     * Header mode requires a configured shared secret; the filter refuses every request that
+     * arrives without it. A real gateway injects both headers, so tests that expect a sign-in
+     * to succeed configure the secret exactly as the settings page would.
+     */
+    private void configureSharedSecret() {
+        config.setSecretHeaderName("X-Auth-Secret");
+        config.setSecretHeaderValue(crypto.encrypt("s3cr3t"));
+    }
+
+    private static void addSharedSecret(MockHttpServletRequest request) {
+        request.addHeader("X-Auth-Secret", "s3cr3t");
+    }
+
     @Test
     void aTrustedPeerWithTheIdentityHeaderBecomesASession() throws Exception {
+        configureSharedSecret();
         MockHttpServletRequest request = request("/", "127.0.0.1");
         request.addHeader("X-Auth-User", "alice");
+        addSharedSecret(request);
         MockHttpSession session = session(request);
         String before = session.getId();
         MockFilterChain chain = new MockFilterChain();
@@ -192,11 +208,13 @@ class HeaderSsoAuthenticationFilterTest {
 
     @Test
     void theAdminHeaderGrantsTheAdminRole() throws Exception {
+        configureSharedSecret();
         config.setAdminHeader("X-Auth-Admin");
         config.setAdminValue("true,1");
         MockHttpServletRequest request = request("/", "127.0.0.1");
         request.addHeader("X-Auth-User", "alice");
         request.addHeader("X-Auth-Admin", "true");
+        addSharedSecret(request);
         MockHttpSession session = session(request);
 
         filter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
@@ -209,9 +227,11 @@ class HeaderSsoAuthenticationFilterTest {
 
     @Test
     void theAdminUserListGrantsTheAdminRole() throws Exception {
+        configureSharedSecret();
         config.setAdminUsers("root");
         MockHttpServletRequest request = request("/", "127.0.0.1");
         request.addHeader("X-Auth-User", "root");
+        addSharedSecret(request);
         MockHttpSession session = session(request);
 
         filter.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
@@ -224,14 +244,36 @@ class HeaderSsoAuthenticationFilterTest {
 
     @Test
     void aMissingIdentityHeaderSendsTheBrowserToThePortal() throws Exception {
+        configureSharedSecret();
         config.setLoginEntryUrl("https://portal.example.com/login");
         MockHttpServletRequest request = request("/", "127.0.0.1");
+        addSharedSecret(request);
         session(request);
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         filter.doFilter(request, response, new MockFilterChain());
 
         assertThat(response.getRedirectedUrl()).isEqualTo("https://portal.example.com/login");
+    }
+
+    /**
+     * With no shared secret configured, the identity header alone must not create a session:
+     * a proxy that forwards client headers would otherwise let any client pick its own
+     * username. The settings page refuses to save this shape for the same reason.
+     */
+    @Test
+    void headerModeWithoutASharedSecretRefusesTheIdentityHeader() throws Exception {
+        MockHttpServletRequest request = request("/", "127.0.0.1");
+        request.addHeader("X-Auth-User", "alice");
+        session(request);
+        MockFilterChain chain = new MockFilterChain();
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(chain.getRequest()).isNull();
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 
     @Test

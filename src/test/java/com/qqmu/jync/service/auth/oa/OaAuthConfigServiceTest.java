@@ -285,7 +285,24 @@ class OaAuthConfigServiceTest {
                 .hasMessage("error.oa.userHeader.required");
 
         config.setUserHeader("X-Auth-User");
-        assertThat(service.save(config).getUserHeader()).isEqualTo("X-Auth-User");
+        config.setSecretHeaderName("X-Auth-Secret");
+        assertThat(service.save(config, "s3cr3t", false).getUserHeader())
+                .isEqualTo("X-Auth-User");
+    }
+
+    /**
+     * The filter refuses a header-mode request outright when no shared secret is configured,
+     * so saving such a row would produce a configuration that lets no header request through
+     * while looking perfectly valid on the settings page. Rejecting it here makes the failure
+     * visible at the moment the administrator can still fix it.
+     */
+    @Test
+    void enablingHeaderModeWithoutASharedSecretIsRefused() {
+        OaAuthConfig config = headerConfig();
+
+        assertThatThrownBy(() -> service.save(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.oa.secret.required");
     }
 
     @Test
@@ -333,10 +350,16 @@ class OaAuthConfigServiceTest {
     }
 
     @Test
-    void clearingTheSecretRemovesIt() {
+    void clearingTheSecretIsRefusedWhileHeaderModeIsEnabled() {
         OaAuthConfig config = headerConfig();
         config.setSecretHeaderName("X-Auth-Secret");
 
+        // Clearing it would leave an enabled header-mode row with no secret — the one shape the
+        // filter refuses — so the server must not write it.
+        assertThatThrownBy(() -> service.save(config, "s3cr3t", true))
+                .hasMessage("error.oa.secret.required");
+
+        config.setEnabled(false);
         assertThat(service.save(config, "s3cr3t", true).getSecretHeaderValue()).isNull();
     }
 
@@ -365,10 +388,11 @@ class OaAuthConfigServiceTest {
     @Test
     void fieldsThatBelongToAnotherModeAreNotValidated() {
         OaAuthConfig config = headerConfig();
+        config.setSecretHeaderName("X-Auth-Secret");
         config.setValidateUrl("not a url");
         config.setSuccessField("code");
 
-        assertThat(service.save(config).getValidateUrl()).isEqualTo("not a url");
+        assertThat(service.save(config, "s3cr3t", false).getValidateUrl()).isEqualTo("not a url");
     }
 
     private OaAuthConfig headerConfig() {

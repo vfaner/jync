@@ -190,7 +190,9 @@
 
                     <div class="grid-2">
                         <div class="field">
-                            <label for="secretHeaderName" th:text="#{oa.secretHeaderName}">Shared-secret header (optional)</label>
+                            <label for="secretHeaderName">
+                                <span th:text="#{oa.secretHeaderName}">Shared-secret header</span><span class="req">*</span>
+                            </label>
                             <input type="text" class="input" id="secretHeaderName"
                                    th:field="*{secretHeaderName}" maxlength="128"
                                    placeholder="X-Auth-Secret">
