@@ -11,7 +11,7 @@
 
 ![Jync 捷同 · 异构数据库实时同步工具](docs/images/jync.png)
 
-在**异构数据库**之间持续同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点选即可在内置的 **26 种数据库（另支持自定义类型）之间任意两种**建立同步链路。不需要 Kafka、Flink、ZooKeeper，也不需要编写一行作业代码。
+在**异构数据库**之间持续同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点选即可在内置的 **33 种数据库（另支持自定义类型）** 之间建立同步或 ETL 链路；其中 SAP HANA、Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 七种分析型引擎用于 ETL。不需要 Kafka、Flink、ZooKeeper，也不需要编写一行作业代码。
 
 - **零外部依赖**：Spring Boot 单体 + Thymeleaf 服务端渲染 + Quartz + H2 内嵌元数据库，内网离线可用。
 - **全量不是批量查询导入**：主键 keyset 分块、单表内并行、结果集流式读取、逐块提交与检查点，单表吞吐可达 **20 万行/秒量级**。
@@ -99,7 +99,7 @@
     <td align="center" width="33%"><a href="docs/images/jync_db.png" target="_blank" rel="noopener"><img src="docs/images/jync_db.png" alt="连接管理" width="100%"></a><br><sub><b>连接管理</b> · 源 / 目标分栏</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_db_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_add.png" alt="新增连接" width="100%"></a><br><sub><b>新增连接</b> · 26 种预置类型，测通再保存</sub></td>
+    <td align="center"><a href="docs/images/jync_db_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_add.png" alt="新增连接" width="100%"></a><br><sub><b>新增连接</b> · 33 种预置类型，测通再保存</sub></td>
     <td align="center"><a href="docs/images/jync_celue.png" target="_blank" rel="noopener"><img src="docs/images/jync_celue.png" alt="捕获策略" width="100%"></a><br><sub><b>捕获策略</b> · 轮询 / 全量比对 / 日志 CDC</sub></td>
     <td align="center"><a href="docs/images/jync_lx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lx.png" alt="任务详情" width="100%"></a><br><sub><b>任务详情</b> · 对象、调度、性能、列清洗</sub></td>
   </tr>
@@ -360,12 +360,13 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 <a name="databases"></a>
 ## 支持的数据库
 
-内置 **26 种**：MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、openGauss、**华为 GaussDB**、**达梦**、**人大金仓**、**OceanBase**、**TiDB**、**中兴 GoldenDB**、**腾讯 TDSQL（MySQL 版）**、**阿里 PolarDB（MySQL 版）**、**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB**、**平安 RASESQL**、**东方金信 SeaboxSQL**、**瀚高**、**海量 Vastbase**、**崖山**、**南大通用 GBase**、**神通 Oscar**、H2。
+内置 **33 种**：MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、openGauss、**华为 GaussDB**、**达梦**、**人大金仓**、**OceanBase**、**TiDB**、**中兴 GoldenDB**、**腾讯 TDSQL（MySQL 版）**、**阿里 PolarDB（MySQL 版）**、**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB**、**平安 RASESQL**、**东方金信 SeaboxSQL**、**瀚高**、**海量 Vastbase**、**崖山**、**南大通用 GBase**、**神通 Oscar**、**Apache Doris**、**SAP HANA**、**ClickHouse**、**Apache Hive**、**Apache Impala**、**Elasticsearch**、**MongoDB**、H2。
 
 - **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时独立 `URLClassLoader` 加载；可指定方言家族（通用 / Oracle / MySQL / PostgreSQL / SQL Server / DB2），决定建表、upsert 与元数据读取方式。
-- **驱动内置**：除 **GBase**、**神通** 与 **华为 GaussDB** 外均随包内置。这三家未在 Maven Central 发布官方构件，需自备 jar 并填写路径；厂商 jar 的驱动类名与预设不同时可在同一张卡片覆盖。
+- **驱动内置**：除 **GBase**、**神通**、**华为 GaussDB**、**SAP HANA**、**ClickHouse**、**Hive**、**Impala**、**Elasticsearch**、**MongoDB** 外均随包内置。这些厂商未在 Maven Central 发布可再分发的官方构件，需自备 jar 并填写路径；厂商 jar 的驱动类名与预设不同时可在同一张卡片覆盖。
 - **华为 GaussDB**：与 openGauss 是两个产品，驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`，方言归入 PostgreSQL 系。
 - **协议兼容预设**：万里 GreatDB、银联 UPDRDB、星环 KunDB 兼容 MySQL 协议；平安 RASESQL、东方金信 SeaboxSQL 兼容 PostgreSQL 协议。它们复用内置驱动与对应方言族，表结构、索引、视图、过程与 upsert 走同一条已验证链路。
+- **分析型 / 搜索型引擎（ETL 专用）**：SAP HANA、Apache Doris、ClickHouse、Apache Hive、Apache Impala、Elasticsearch、MongoDB。它们没有对应的方言族，不参与实时同步的建表与 upsert，只在 ETL 任务中按客户编写的 SQL 读写；其中 Elasticsearch 的 SQL 接口只读，只能作为 ETL 源。Doris 走 MySQL 协议并复用内置 Connector/J。MongoDB 只能通过官方的 Atlas SQL JDBC 驱动连接 **MongoDB Atlas**（自建单机 mongod 不提供 JDBC 入口）：地址只填主机、端口可留空，库名作为 JDBC 属性传给驱动而不是拼进 URL，驱动 jar 约 40 MB 需自备。
 - **PolarDB / TDSQL 分版本**：MySQL 版有独立预置；PostgreSQL 版选 PostgreSQL 预置；PolarDB Oracle 兼容版协议是 PostgreSQL、驱动为 `com.aliyun.polardb2.Driver`，请用自定义类型。
 - **许可证**：驱动版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 

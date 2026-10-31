@@ -19,15 +19,19 @@ import com.qqmu.jync.model.DatabaseType;
  * <p>Without this, removing (or forgetting) a driver dependency in {@code pom.xml} compiles
  * fine and only fails at the customer site when they click "Test connection". Instead every
  * preset type must either resolve from the application classpath or be explicitly classified
- * as external (user-supplied jar). The external set is currently GBase, Oscar and Huawei
- * GaussDB — none of their vendors publishes a redistributable artifact — plus CUSTOM, which
- * never has a driver.
+ * as external (user-supplied jar). The external set is GBase, Oscar, Huawei GaussDB,
+ * SAP HANA, ClickHouse, Hive, Impala, Elasticsearch and MongoDB — none of their vendors
+ * publishes a redistributable artifact we bundle — plus CUSTOM, which never has a driver.
+ * Doris is deliberately not external: it speaks the MySQL protocol and reuses Connector/J.
+ * MongoDB is external on size: its Atlas SQL driver is ~40 MB on Maven Central.
  */
 class BundledDriversTest {
 
     private static final Set<DatabaseType> EXTERNAL =
             EnumSet.of(DatabaseType.CUSTOM, DatabaseType.GBASE, DatabaseType.OSCAR,
-                    DatabaseType.GAUSSDB);
+                    DatabaseType.GAUSSDB, DatabaseType.HANA, DatabaseType.CLICKHOUSE,
+                    DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.ELASTICSEARCH,
+                    DatabaseType.MONGODB);
 
     @Test
     @DisplayName("每个预设类型要么内置驱动,要么显式走外部 jar")
@@ -45,13 +49,13 @@ class BundledDriversTest {
     }
 
     @Test
-    @DisplayName("内置驱动预设共 23 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/OceanBase/TiDB/GoldenDB/TDSQL/PolarDB/万里 GreatDB/银联 UPDRDB/星环 KunDB/平安 RASESQL/东方金信 SeaboxSQL/瀚高/海量/崖山/H2")
-    void twentyThreeDriversAreBundled() {
+    @DisplayName("内置驱动预设共 24 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/OceanBase/TiDB/GoldenDB/TDSQL/PolarDB/万里 GreatDB/银联 UPDRDB/星环 KunDB/平安 RASESQL/东方金信 SeaboxSQL/瀚高/海量/崖山/Doris/H2")
+    void twentyFourDriversAreBundled() {
         long bundled = Arrays.stream(DatabaseType.values())
                 .filter(t -> !EXTERNAL.contains(t))
                 .filter(t -> DriverPresence.isPresent(t.getDriverClassName()))
                 .count();
-        assertEquals(23, bundled);
+        assertEquals(24, bundled);
     }
 
     /**

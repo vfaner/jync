@@ -29,6 +29,13 @@ class FullSyncCapabilityTest {
     void genericProductsDoNotSupportFullSync() {
         assertThat(DatabaseType.H2.supportsFullSync()).isFalse();
         assertThat(DatabaseType.CUSTOM.supportsFullSync()).isFalse();
+        // Analytic / distributed / document engines: no family describes their SQL, so ETL only.
+        for (DatabaseType engine : new DatabaseType[] {
+                DatabaseType.HANA, DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
+                DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.ELASTICSEARCH,
+                DatabaseType.MONGODB}) {
+            assertThat(engine.supportsFullSync()).as(engine.name()).isFalse();
+        }
     }
 
     @Test

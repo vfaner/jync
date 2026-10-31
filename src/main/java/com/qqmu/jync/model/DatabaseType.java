@@ -236,6 +236,82 @@ public enum DatabaseType {
             2003, DialectFamily.POSTGRES),
 
     /**
+     * SAP HANA: its own SQL dialect, reachable only through SAP's {@code ngdbc.jar}, which is
+     * not redistributable and not on Maven Central. The database name travels as a URL
+     * property ({@code ?databaseName=}), not a path segment. GENERIC on purpose — none of the
+     * dialect families describes HANA, so the preset is an ETL connection (customer-supplied
+     * extraction SQL), where the type mapping and DDL of a full sync would be guesses.
+     */
+    HANA("db.type.HANA", "com.sap.db.jdbc.Driver",
+            "jdbc:sap://%s:%d/?databaseName=%s",
+            30015, DialectFamily.GENERIC),
+
+    /**
+     * Apache Doris speaks the MySQL wire protocol, so its frontend query port (9030) accepts
+     * the bundled Connector/J. GENERIC, not MYSQL: the MySQL dialect's DDL suffix
+     * ({@code ENGINE=InnoDB DEFAULT CHARSET=utf8mb4}) is invalid in Doris, and upsert
+     * semantics differ from MySQL's. As an ETL connection the customer writes the extraction
+     * and load SQL that fits their table model.
+     */
+    DORIS("db.type.DORIS", "com.mysql.cj.jdbc.Driver",
+            "jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC"
+                    + "&characterEncoding=utf8&rewriteBatchedStatements=true",
+            9030, DialectFamily.GENERIC),
+
+    /**
+     * ClickHouse through its official JDBC driver over the HTTP port (8123; deployments that
+     * expose only the native port 9000 edit the field). GENERIC: ClickHouse SQL is its own
+     * dialect and takes none of the DDL or upsert statements the full-sync engine emits, so
+     * this preset is for ETL.
+     */
+    CLICKHOUSE("db.type.CLICKHOUSE", "com.clickhouse.jdbc.ClickHouseDriver",
+            "jdbc:clickhouse://%s:%d/%s",
+            8123, DialectFamily.GENERIC),
+
+    /**
+     * Apache Hive via HiveServer2 ({@code hive-jdbc} plus the Hadoop client jars, too large to
+     * bundle). GENERIC: HiveQL departs from every family here (no transactions or upsert in
+     * the common setups), so it is an ETL source or target driven by the customer's SQL.
+     */
+    HIVE("db.type.HIVE", "org.apache.hive.jdbc.HiveDriver",
+            "jdbc:hive2://%s:%d/%s",
+            10000, DialectFamily.GENERIC),
+
+    /**
+     * Apache Impala through Cloudera's driver, on the Impala daemon's HS2-compatible port.
+     * GENERIC for the same reason as Hive: the dialect and its write semantics are not those
+     * of any family, so only ETL uses it.
+     */
+    IMPALA("db.type.IMPALA", "com.cloudera.impala.jdbc.Driver",
+            "jdbc:impala://%s:%d/%s",
+            21050, DialectFamily.GENERIC),
+
+    /**
+     * Elasticsearch SQL, read-only by nature: the X-Pack SQL JDBC driver answers queries but
+     * cannot INSERT, so this connection is an ETL <em>source</em>. The endpoint has no
+     * database name — the third format argument is not part of the template, and
+     * {@link String#format} ignores extras. GENERIC, like the other engines here.
+     */
+    ELASTICSEARCH("db.type.ELASTICSEARCH", "org.elasticsearch.xpack.sql.jdbc.EsDriver",
+            "jdbc:es://http://%s:%d",
+            9200, DialectFamily.GENERIC),
+
+    /**
+     * MongoDB through MongoDB's Atlas SQL JDBC driver — the only JDBC access MongoDB offers.
+     * There is no relational driver for a standalone {@code mongod}, and the former BI
+     * Connector (which spoke the MySQL protocol) is end-of-life, so this preset connects to
+     * the SQL interface of MongoDB Atlas. Two differences from every relational preset are
+     * handled in {@link com.qqmu.jync.service.connection.DataSourceManager}: the database is a
+     * JDBC property rather than a URL path (the driver rejects a database path in the URL),
+     * and an Atlas host is normally addressed without a port, so a blank port keeps the
+     * port-less template. The driver is a ~40 MB external jar, not bundled.
+     */
+    MONGODB("db.type.MONGODB", "com.mongodb.jdbc.MongoDriver",
+            "jdbc:mongodb://%s:%d",
+            "jdbc:mongodb://%s",
+            27017, DialectFamily.GENERIC),
+
+    /**
      * GENERIC, not MYSQL: H2 only understands MySQL syntax when explicitly started with
      * {@code MODE=MySQL}, and the MySQL dialect's DDL suffix
      * ({@code ENGINE=InnoDB DEFAULT CHARSET=utf8mb4}) is rejected by a default-mode H2.

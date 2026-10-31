@@ -237,6 +237,9 @@ public class DataSourceManager {
             hikari.setDriverClassName(driverClass);
             hikari.setUsername(config.getUsername());
             hikari.setPassword(cryptoUtil.decrypt(config.getPassword()));
+            for (Map.Entry<String, String> property : driverProperties(config).entrySet()) {
+                hikari.addDataSourceProperty(property.getKey(), property.getValue());
+            }
             hikari.setPoolName("jync-" + (config.getName() == null ? "adhoc" : config.getName()));
             hikari.setMaximumPoolSize(poolSize);
             hikari.setMinimumIdle(1);
@@ -341,6 +344,20 @@ public class DataSourceManager {
         }
         int port = config.getPort() != null ? config.getPort() : type.getDefaultPort();
         return appendExtraParams(String.format(type.getUrlTemplate(), host, port, dbName), config);
+    }
+
+    /**
+     * JDBC properties the URL cannot carry for a given product. MongoDB's Atlas SQL driver
+     * takes the database as a property ({@code database=...}) and rejects a database path in
+     * the URL, so the form's database field is translated here instead of being templated into
+     * the connection string; every other preset needs nothing beyond URL, user and password.
+     */
+    static Map<String, String> driverProperties(DatabaseConfig config) {
+        if (config == null || config.getType() != DatabaseType.MONGODB
+                || !StringUtils.hasText(config.getDatabaseName())) {
+            return Map.of();
+        }
+        return Map.of("database", config.getDatabaseName().trim());
     }
 
     /**
