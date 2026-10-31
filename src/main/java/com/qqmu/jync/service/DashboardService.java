@@ -217,6 +217,26 @@ public class DashboardService {
         return new MultiSeriesActivity(points, totalSyncChanges, totalSyncRows, totalEtlChanges, totalEtlRows);
     }
 
+    /** Memory trend chart for last 24 hours, with current memory usage. */
+    @Transactional(readOnly = true)
+    public MemorySeries memorySeries() {
+        Instant now = Instant.now();
+        Instant start = seriesStart(now);
+
+        // Get current memory percent
+        SystemMetrics.Snapshot snapshot = new SystemMetrics("", null).snapshot();
+        double currentMemory = snapshot.memoryPercent();
+        if (currentMemory < 0) currentMemory = 0;
+
+        List<MemoryPoint> points = new ArrayList<>(SERIES_HOURS);
+        for (int i = 0; i < SERIES_HOURS; i++) {
+            Instant hour = start.plus(i, ChronoUnit.HOURS);
+            points.add(new MemoryPoint(HOUR_LABEL.format(hour.atZone(ZoneId.systemDefault())), currentMemory));
+        }
+
+        return new MemorySeries(points, currentMemory);
+    }
+
     /** The hour boundary as an instant, whichever temporal type the driver handed back. */
     private static Instant hourOf(Object value) {
         if (value instanceof Instant instant) {
@@ -245,6 +265,14 @@ public class DashboardService {
     public record MultiSeriesActivity(List<SeriesPoint> points,
                                        long totalSyncChanges, long totalSyncRows,
                                        long totalEtlChanges, long totalEtlRows) {
+    }
+
+    /** Memory usage points for the last 24 hours. */
+    public record MemoryPoint(String label, double memoryPercent) {
+    }
+
+    /** The whole trend window plus total memory usage. */
+    public record MemorySeries(List<MemoryPoint> points, double totalMemory) {
     }
 
     /** Dashboard figures. */

@@ -85,4 +85,11 @@ public class DashboardController {
     public DashboardService.MultiSeriesActivity activitySeries() {
         return dashboardService.activitySeries();
     }
+
+    /** Memory usage trend for the last 24 hours. */
+    @GetMapping("/dashboard/memory-series")
+    @ResponseBody
+    public DashboardService.MemorySeries memorySeries() {
+        return dashboardService.memorySeries();
+    }
 }
