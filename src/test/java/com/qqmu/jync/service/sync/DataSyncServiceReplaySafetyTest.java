@@ -147,10 +147,16 @@ class DataSyncServiceReplaySafetyTest {
         }
     }
 
+    /**
+     * The reads over the source take the copy budget. The short-statement bound would abort a
+     * copy that legitimately outlives it — and on MySQL that abort also retires the pooled
+     * connection — so the two budgets are deliberately separate.
+     */
     @Test
-    void sourceStatementsReceiveTheConfiguredQueryTimeout() throws SQLException {
+    void sourceCopyStatementsReceiveTheCopyTimeout() throws SQLException {
         SyncProperties properties = new SyncProperties();
         properties.setQueryTimeoutSeconds(123);
+        properties.setCopyTimeoutSeconds(456);
         DataSyncService svc = new DataSyncService(properties);
 
         exec(source, "CREATE TABLE TIMEOUT_T (ID BIGINT PRIMARY KEY)");
@@ -166,7 +172,7 @@ class DataSyncServiceReplaySafetyTest {
                 spy.connection(), target, table, IDENTITY, new SyncProgress(), ctx);
 
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
-        assertThat(spy.timeouts()).contains(123);
+        assertThat(spy.timeouts()).contains(456).doesNotContain(123);
     }
 
     /** Connection proxy that records query timeouts set on statements it hands out. */

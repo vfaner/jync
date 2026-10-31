@@ -186,6 +186,18 @@ public class SyncProperties {
     private long rowCountAuditIntervalMs = 60_000L;
 
     /**
+     * Size at which the bookkeeping {@code COUNT(*)} probes stop running when the cursor
+     * column is not indexed; {@code 0} keeps every probe running.
+     *
+     * <p>The NULL-cursor probe and the row-count audit bound their counts by the cursor
+     * column, which is only cheap when an index leads with that column. Over a large
+     * unindexed table the same statement scans every row each cycle — a slow query whose
+     * timeout, on MySQL, also retires the pooled connection. Past this ceiling the probe is
+     * skipped with one log line; the data sync itself is unaffected.
+     */
+    private long maxUnindexedScanRows = 1_000_000L;
+
+    /**
      * Largest drift the audit repairs by key before falling back to clearing the cursor and
      * reloading the whole table; 0 disables the targeted repair (every drift reloads).
      *
@@ -204,6 +216,19 @@ public class SyncProperties {
      * support it.
      */
     private int queryTimeoutSeconds = 300;
+
+    /**
+     * How long the two reads whose duration scales with the table may run: the high-watermark
+     * {@code MAX(cursor)} and the window {@code SELECT *}.
+     *
+     * <p>{@link #queryTimeoutSeconds} is sized for the short statements around the copy. On
+     * MySQL Connector/J its expiry cancels the statement <em>and</em> HikariCP evicts the
+     * connection ("Statement cancelled due to timeout or client request", then "Connection is
+     * closed" for every later table of the cycle), so a copy that legitimately needs longer
+     * than the short-statement budget must not be aborted for it. 0 removes the bound; the
+     * driver and the socket keep their own timeouts.
+     */
+    private int copyTimeoutSeconds = 1800;
 
     /** Same bound for short metadata enumeration queries, which have no reason to run for minutes. */
     private int metadataQueryTimeoutSeconds = 60;

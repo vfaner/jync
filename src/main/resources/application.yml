@@ -196,6 +196,15 @@ sync:
   # Statement timeout for data-plane queries; a lock wait or a dead socket otherwise parks the
   # worker forever. 0 disables. Metadata enumeration uses the shorter metadata-query-timeout.
   query-timeout-seconds: 300
+  # The row copy (window SELECT and high-watermark MAX) scales with the table, so it has its
+  # own budget: under the 5-minute statement bound a large copy is cancelled, and on MySQL
+  # Connector/J that also makes HikariCP evict the connection ("Connection is closed" for
+  # every later table of the cycle). 0 removes the bound.
+  copy-timeout-seconds: 1800
+  # Bookkeeping COUNT(*) probes (the NULL-cursor check and the row-count audit) stop running
+  # once a table passes this size with no index leading with the cursor column: the same
+  # statement then scans the whole table every cycle. 0 keeps every probe running.
+  max-unindexed-scan-rows: 1000000
   metadata-query-timeout-seconds: 60
   # Grace period for in-flight cycles when the application shuts down; after this the
   # scheduler stops without waiting and open batches are rolled back. 0 skips the wait.

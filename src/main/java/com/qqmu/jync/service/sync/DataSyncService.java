@@ -96,6 +96,13 @@ public class DataSyncService {
      */
     private volatile LobSpillStore lobSpillStore;
 
+    /**
+     * Tables already told about a skipped bookkeeping count, so the INFO line appears once per
+     * table rather than on every poll of a two-second cycle. Debug after that.
+     */
+    private final Set<String> guardedScanNotices =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     public DataSyncService(SyncProperties properties) {
         this(properties, null);
     }
@@ -264,11 +271,64 @@ public class DataSyncService {
             return incrementalLoad(sourceConn, targetConn, table, targetTable, strategy,
                     progress, ctx, result);
         } catch (SQLException e) {
-            log.error("Data sync failed for table {}: {}", table.getName(), e.getMessage());
-            result.error = e.getMessage();
+            String message = explainFailure(e);
+            log.error("Data sync failed for table {}: {}", table.getName(), message);
+            result.error = message;
             // Deliberately leaves newCursorValue null so the window is retried next cycle.
             return result;
         }
+    }
+
+    /**
+     * The failure text the change log will show, with the remedy appended where the driver's
+     * own wording does not imply one.
+     *
+     * <p>"Statement cancelled due to timeout or client request" and "Connection is closed" are
+     * driver and pool internals. An operator reading them in the change log cannot tell
+     * whether to raise a limit, add an index, or do nothing and wait for the next cycle, so
+     * the two patterns get that answer appended. Anything else is returned verbatim: inventing
+     * advice for an error we do not recognise would only mislead.
+     */
+    static String explainFailure(SQLException e) {
+        String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        if (ranOutOfTime(e)) {
+            return message + " (the statement ran longer than its timeout: raise"
+                    + " sync.copy-timeout-seconds for the row copy, sync.query-timeout-seconds"
+                    + " for the writes, or index the cursor column so the read does not scan"
+                    + " the whole table)";
+        }
+        if (connectionWasRetired(e, message)) {
+            return message + " (the pooled connection was closed or retired mid-read; this"
+                    + " table is retried on the next cycle)";
+        }
+        return message;
+    }
+
+    private static boolean ranOutOfTime(Throwable error) {
+        Throwable current = error;
+        // Causes and getNextException() are two separate chains a driver may use; a depth cap
+        // keeps a self-referencing chain from looping.
+        for (int depth = 0; current != null && depth < 10; depth++) {
+            if (current instanceof java.sql.SQLTimeoutException) {
+                return true;
+            }
+            Throwable next = current.getCause();
+            if (next == null && current instanceof SQLException) {
+                next = ((SQLException) current).getNextException();
+            }
+            current = next;
+        }
+        return false;
+    }
+
+    private static boolean connectionWasRetired(SQLException e, String message) {
+        String state = e.getSQLState();
+        if (state != null && state.startsWith("08")) {
+            return true;
+        }
+        String lower = message.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("connection is closed") || lower.contains("connection is broken")
+                || lower.contains("connection has been closed");
     }
 
     /**
@@ -544,7 +604,9 @@ public class DataSyncService {
         String sql = "SELECT MAX(" + KeysetChunker.sqlRef(dialect, strategy) + ") FROM "
                 + dialect.qualify(ctx.getSourceSchema(), table.getName());
         try (Statement st = sourceConn.createStatement()) {
-            JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
+            // A MAX over an unindexed cursor column is a full scan: it belongs to the copy's
+            // budget, not to the short-statement one (see sync.copy-timeout-seconds).
+            JdbcUtil.applyQueryTimeout(st, properties.getCopyTimeoutSeconds());
             try (ResultSet rs = st.executeQuery(sql)) {
                 if (rs.next()) {
                     Object value = readWatermarkValue(rs, strategy);
@@ -596,6 +658,9 @@ public class DataSyncService {
                                     CursorStrategy strategy, SyncContext ctx) {
         if (strategy.isPseudoColumn()) {
             // ORA_ROWSCN is never NULL; counting NULLs would be a pointless full scan.
+            return;
+        }
+        if (bookkeepingCountWouldScan(sourceConn, table, strategy, ctx, "NULL-cursor probe")) {
             return;
         }
         SqlDialect dialect = ctx.getSourceDialect();
@@ -680,6 +745,12 @@ public class DataSyncService {
         Object cursor = parseCursor(progress.getLastSyncValue(), strategy);
         if (cursor == null) {
             // Nothing claimed as delivered yet; the next cycle's initial load covers it.
+            return null;
+        }
+        if (bookkeepingCountWouldScan(sourceConn, table, strategy, ctx, "row-count audit")) {
+            // The audit exists to catch a short target; a COUNT(*) over a large unindexed
+            // table is the one statement guaranteed to hit the timeout instead, and its
+            // expiry retires the pooled connection for the rest of the cycle.
             return null;
         }
 
@@ -1147,6 +1218,106 @@ public class DataSyncService {
         }
     }
 
+    /**
+     * Whether a bookkeeping {@code COUNT(*)} should be left out this cycle.
+     *
+     * <p>Both such statements (the NULL-cursor probe and the row-count audit) are only cheap
+     * when an index leads with the cursor column. Over a large unindexed table each is a full
+     * scan, every cycle, to produce a warning or a number nobody can act on sooner — and on
+     * MySQL Connector/J its timeout also makes HikariCP retire the connection the rest of the
+     * cycle then fails on. The answer is therefore "skip" only when the column is known to be
+     * unindexed <em>and</em> the table is known to be above {@code
+     * sync.max-unindexed-scan-rows}: an unknown answer on either dimension keeps the old
+     * behavior, because a skipped audit on a table that needed one loses drift detection.
+     */
+    private boolean bookkeepingCountWouldScan(Connection conn, TableMeta table,
+                                              CursorStrategy strategy, SyncContext ctx,
+                                              String what) {
+        long ceiling = properties.getMaxUnindexedScanRows();
+        if (ceiling <= 0 || strategy.getColumn() == null) {
+            return false;
+        }
+        // Size first: the ordinary small table answers from metadata the engine already holds
+        // and never pays for the index dictionary round trip.
+        Long rows = rowEstimate(conn, table, ctx);
+        if (rows == null || rows <= ceiling) {
+            return false;
+        }
+        if (!Boolean.FALSE.equals(cursorColumnIsIndexed(conn, table, strategy.getColumn(), ctx))) {
+            return false;
+        }
+        String key = what + ':' + table.getName();
+        if (guardedScanNotices.add(key)) {
+            log.info("Skipping the {} for {}: cursor column {} has no leading index and the table"
+                            + " holds about {} row(s), above sync.max-unindexed-scan-rows ({})."
+                            + " The COUNT(*) would scan the whole table; the data sync is"
+                            + " unaffected.",
+                    what, table.getName(), strategy.getColumn(), rows, ceiling);
+        } else {
+            log.debug("Still skipping the {} for {} (unindexed cursor column, ~{} rows)",
+                    what, table.getName(), rows);
+        }
+        return true;
+    }
+
+    /**
+     * Whether the cursor column leads any index of the source table; {@code null} when the
+     * dictionary could not answer (which the caller must not read as "unindexed").
+     *
+     * <p>The MySQL family keeps the database name in the JDBC catalog and has no schema, the
+     * same swap {@link #targetCursorScale} makes for the target side.
+     */
+    private Boolean cursorColumnIsIndexed(Connection conn, TableMeta table, String column,
+                                          SyncContext ctx) {
+        try {
+            DatabaseMetaData md = conn.getMetaData();
+            boolean mysqlFamily = ctx.resolveSourceFamily()
+                    == com.qqmu.jync.model.DatabaseType.DialectFamily.MYSQL;
+            String schema = ctx.getSourceSchema();
+            try (ResultSet rs = md.getIndexInfo(mysqlFamily ? schema : null,
+                    mysqlFamily ? null : schema, table.getName(), false, true)) {
+                while (rs.next()) {
+                    String indexedColumn = rs.getString("COLUMN_NAME");
+                    if (indexedColumn == null) {
+                        // A table-statistics row, not an index entry.
+                        continue;
+                    }
+                    String indexedTable = rs.getString("TABLE_NAME");
+                    // The table-name argument is a LIKE pattern: asking for T_1 also returns
+                    // TA1, whose leading column must not answer for T_1.
+                    if (indexedTable != null && !indexedTable.equalsIgnoreCase(table.getName())) {
+                        continue;
+                    }
+                    if (rs.getInt("ORDINAL_POSITION") == 1
+                            && indexedColumn.equalsIgnoreCase(column)) {
+                        return Boolean.TRUE;
+                    }
+                }
+            }
+            return Boolean.FALSE;
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Cannot read the indexes of {}: {}", table.getName(), e.getMessage());
+            return null;
+        }
+    }
+
+    /** The table's row estimate, fetching one only when the metadata does not carry it. */
+    private Long rowEstimate(Connection conn, TableMeta table, SyncContext ctx) {
+        if (table.getApproximateRowCount() != null) {
+            return table.getApproximateRowCount();
+        }
+        com.qqmu.jync.service.metadata.MetadataReader reader = ctx.getSourceReader();
+        if (reader == null) {
+            return null;
+        }
+        try {
+            return reader.estimateRowCount(conn, ctx.getSourceSchema(), table.getName());
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Cannot estimate the row count of {}: {}", table.getName(), e.getMessage());
+            return null;
+        }
+    }
+
     private boolean isGreaterThan(Object candidate, Object reference) {
         if (candidate == null) {
             return false;
@@ -1279,7 +1450,9 @@ public class DataSyncService {
         long queryStarted = System.nanoTime();
         try (PreparedStatement select = sourceConn.prepareStatement(selectSql)) {
             sourceRead = SourceReadSession.begin(sourceConn, needsSourceTransaction(ctx));
-            JdbcUtil.applyQueryTimeout(select, properties.getQueryTimeoutSeconds());
+            // The copy itself: its duration grows with the table, so it takes the copy budget
+            // rather than the short-statement bound that a wedged statement is meant to hit.
+            JdbcUtil.applyQueryTimeout(select, properties.getCopyTimeoutSeconds());
             if (identityOn != null) {
                 try (Statement idStmt = targetConn.createStatement()) {
                     idStmt.execute(identityOn);

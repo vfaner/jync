@@ -283,6 +283,20 @@
                     </dd>
                 </div>
                 <div class="kv wide">
+                    <dt th:text="#{settings.copyTimeout}">Row copy timeout</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.copyTimeoutSeconds} + ' s'">1800 s</span>
+                        <div class="help" th:text="#{settings.copyTimeoutHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
+                    <dt th:text="#{settings.maxUnindexedScanRows}">Unindexed scan ceiling</dt>
+                    <dd>
+                        <span class="chip" th:text="${properties.maxUnindexedScanRows}">1000000</span>
+                        <div class="help" th:text="#{settings.maxUnindexedScanRowsHelp}">help</div>
+                    </dd>
+                </div>
+                <div class="kv wide">
                     <dt th:text="#{settings.metadataTimeout}">Metadata query timeout</dt>
                     <dd>
                         <span class="chip" th:text="${properties.metadataQueryTimeoutSeconds} + ' s'">60 s</span>
