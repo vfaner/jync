@@ -24,6 +24,7 @@ import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeType;
+import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -866,7 +867,8 @@ public class SyncEngine {
 
     /** Synchronizes rows for every selected table, one table at a time. */
     private void syncData(DatabaseMeta sourceMeta, Connection sourceConn, Connection targetConn,
-                          SyncContext ctx, SyncResult result, Set<String> blockedTables) {
+                          SyncContext ctx, SyncResult result, Set<String> blockedTables)
+            throws SQLException {
         // CDC 项目的数据只允许从基线全量 + binlog 回放两条路进目标库:常规轮询周期若也
         // 跑数据阶段,会和流式回放双写同一张表,DELETE 语义直接冲突(B6/B8)。
         CaptureStrategy strategy = ctx.getConfig().getCaptureStrategyOrDefault();
@@ -887,11 +889,17 @@ public class SyncEngine {
                 ? ctx.getTargetDialect().getConstraintToggleStatements(
                         ctx.getTargetSchema(), toggledTables, true)
                 : List.of();
-        DdlExecutor executor = new DdlExecutor(targetConn);
+        // The handles the loop actually uses. A table whose statement is cancelled replaces
+        // them (see reopenIfClosed), so they are variables rather than the parameters. The
+        // cycle's own try-with-resources closes only the original borrows, so any replacement
+        // is tracked here and closed when the data phase ends.
+        Connection source = sourceConn;
+        Connection target = targetConn;
+        List<Connection> replacements = new ArrayList<>();
         for (String sql : disableStatements) {
             // Per table, best effort: one table the target refuses must not leave the rest
             // with foreign keys enforced during the load.
-            executor.executeQuietly(sql);
+            new DdlExecutor(target).executeQuietly(sql);
         }
 
         // 目标端表清单每周期只读一次：命中的表跳过每轮一次的幂等 CREATE（那是一批注定被
@@ -903,7 +911,7 @@ public class SyncEngine {
             try {
                 knownTargetTables = new HashSet<>();
                 for (String name : ctx.getTargetReader()
-                        .listTableNames(targetConn, ctx.getTargetSchema())) {
+                        .listTableNames(target, ctx.getTargetSchema())) {
                     knownTargetTables.add(name.toUpperCase());
                 }
             } catch (SQLException e) {
@@ -920,6 +928,13 @@ public class SyncEngine {
                 if (!ctx.getConfig().includesTable(table.getName())) {
                     continue;
                 }
+                // A previous table may have taken its connection with it, and the next table
+                // would then fail in milliseconds with "Connection is closed" rather than a
+                // reason of its own.
+                source = reopenIfClosed(source, ctx.getSourceConfig(), "source", ctx,
+                        replacements);
+                target = reopenIfClosed(target, ctx.getTargetConfig(), "target", ctx,
+                        replacements);
                 // Backstop for tables that write nothing (empty result) yet still take time:
                 // deep write paths renew at every commit, but a table with no commits reaches
                 // none, so renew once per table as well. A failed renewal throws and aborts the
@@ -927,7 +942,7 @@ public class SyncEngine {
                 // picked up by whichever instance holds the lock next.
                 ctx.requireLease();
                 try {
-                    syncOneTable(table, sourceConn, targetConn, ctx, result, blockedTables,
+                    syncOneTable(table, source, target, ctx, result, blockedTables,
                             knownTargetTables);
                 } catch (StopRequestedException | LockLostException | PoolContentionException e) {
                     // Not a table failure: the whole cycle must stop here (a pool that ran
@@ -952,9 +967,20 @@ public class SyncEngine {
                 // Restore enforcement, even when a table failed part-way through, and table by
                 // table: a driver abandons the rest of a multi-statement batch on the first
                 // failure, so one bad table must not leave every later table with checks off.
+                // The target may be the very connection that was retired, and the toggles are
+                // persistent table state rather than session state, so a fresh handle can and
+                // must still restore them.
+                try {
+                    target = reopenIfClosed(target, ctx.getTargetConfig(), "target", ctx,
+                            replacements);
+                } catch (SQLException | RuntimeException e) {
+                    log.error("Could not open a target connection to restore constraints for"
+                            + " project '{}': {}", ctx.projectName(), e.getMessage());
+                }
                 // This must not be quiet: a failed re-enable would return the connection to the
                 // pool with checks still off, so the next borrower (this app's next cycle, or
                 // any other client of the pool) would silently skip foreign-key enforcement.
+                DdlExecutor executor = new DdlExecutor(target);
                 String failed = null;
                 for (String sql : ctx.getTargetDialect().getConstraintToggleStatements(
                         ctx.getTargetSchema(), toggledTables, false)) {
@@ -969,10 +995,58 @@ public class SyncEngine {
                 if (failed != null) {
                     log.error("Aborting the physical connection so it cannot be recycled with"
                             + " constraint checks still disabled");
-                    abortPhysicalConnection(targetConn);
+                    abortPhysicalConnection(target);
+                }
+            }
+            // Only the cycle's own try-with-resources owns the original borrows; these are ours.
+            for (Connection replacement : replacements) {
+                try {
+                    replacement.close();
+                } catch (SQLException | RuntimeException e) {
+                    log.debug("A replacement connection did not close cleanly: {}",
+                            e.getMessage());
                 }
             }
         }
+    }
+
+    /**
+     * Returns the handle to use for this side of the cycle, reopening it if the pool retired it.
+     *
+     * <p>A failed statement can take its connection with it: HikariCP evicts any connection
+     * whose statement threw a {@link java.sql.SQLTimeoutException} — which is what a copy that
+     * runs past {@code sync.query-timeout-seconds} produces — or SQLState {@code 08}, and every
+     * later call on the borrowed handle then answers with {@code "Connection is closed"}. The
+     * cycle holds one handle per side for every table, so without this replacement one slow
+     * table files an ERROR row for each table after it: a real five-minute failure buried under
+     * a burst of identical connection errors, all cleared by the next cycle's fresh borrow.
+     *
+     * <p>A replacement is borrowed here rather than by the cycle, so it is added to
+     * {@code replacements} for the caller to close when the data phase ends.
+     */
+    private Connection reopenIfClosed(Connection conn, DatabaseConfig config, String side,
+                                      SyncContext ctx, List<Connection> replacements)
+            throws SQLException {
+        boolean closed;
+        try {
+            closed = conn.isClosed();
+        } catch (SQLException | RuntimeException e) {
+            // A handle too broken to answer isClosed cannot be used either.
+            closed = true;
+        }
+        if (!closed) {
+            return conn;
+        }
+        log.warn("Project '{}': the {} connection was closed during the cycle; opening a new one"
+                + " for the remaining tables", ctx.projectName(), side);
+        try {
+            conn.close();
+        } catch (SQLException | RuntimeException ignored) {
+            // Already released by the pool; nothing left to close.
+        }
+        Connection replacement = dataSourceManager.getConnectionOrDefer(config);
+        replacements.add(replacement);
+        return replacement;
     }
 
     /**

@@ -3,8 +3,11 @@ package com.qqmu.jync.service.sync;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Proxy;
@@ -58,6 +61,7 @@ class SyncEngineConstraintToggleIsolationTest {
     private SyncEngine engine;
     private Connection sourceConn;
     private Connection targetConn;
+    private Connection rawTargetConn;
     private DatabaseConfig sourceCfg;
     private DatabaseConfig targetCfg;
     private Project project;
@@ -78,6 +82,7 @@ class SyncEngineConstraintToggleIsolationTest {
         sourceConn = DriverManager.getConnection("jdbc:h2:mem:toggle_src;DB_CLOSE_DELAY=-1", "sa", "");
         Connection h2Target = DriverManager.getConnection(
                 "jdbc:h2:mem:toggle_tgt;DB_CLOSE_DELAY=-1", "sa", "");
+        rawTargetConn = h2Target;
         targetConn = constrainedTarget(h2Target);
         sourceCfg = new DatabaseConfig();
         targetCfg = new DatabaseConfig();
@@ -159,6 +164,35 @@ class SyncEngineConstraintToggleIsolationTest {
 
         assertThat(executedDdl)
                 .as("every toggled table must be re-enabled even when the listing threw")
+                .anySatisfy(sql -> assertThat(sql)
+                        .contains("T1").contains("WITH CHECK CHECK CONSTRAINT ALL"))
+                .anySatisfy(sql -> assertThat(sql)
+                        .contains("T2").contains("WITH CHECK CHECK CONSTRAINT ALL"));
+    }
+
+    @Test
+    void aTargetThatDiedMidLoadIsReopenedToRestoreTheConstraints() throws Exception {
+        // The engine holds one target for every table. A statement timeout retires it (the
+        // pool evicts on SQLTimeoutException), and the toggles left behind are persistent
+        // table state — so the re-enable must run on a replacement handle, not be skipped.
+        Connection renewed = constrainedTarget(DriverManager.getConnection(
+                "jdbc:h2:mem:toggle_tgt;DB_CLOSE_DELAY=-1", "sa", ""));
+        when(dataSourceManager.getConnectionOrDefer(targetCfg))
+                .thenReturn(targetConn, renewed);
+        // The last table is the one that takes the connection down, so no later iteration
+        // can replace it: the restore in the finally is the only chance left.
+        when(dataSync.syncTable(any(), any(),
+                argThat(t -> t != null && "T2".equals(t.getName())), any(), any(), any()))
+                .thenAnswer(inv -> {
+                    rawTargetConn.close();
+                    return successfulTable();
+                });
+
+        engine.runCycle(ctx());
+
+        verify(dataSourceManager, times(2)).getConnectionOrDefer(targetCfg);
+        assertThat(executedDdl)
+                .as("every toggled table must be re-enabled on the reopened target")
                 .anySatisfy(sql -> assertThat(sql)
                         .contains("T1").contains("WITH CHECK CHECK CONSTRAINT ALL"))
                 .anySatisfy(sql -> assertThat(sql)
