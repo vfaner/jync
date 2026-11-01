@@ -61,7 +61,6 @@ class EtlListViewTest {
         when(etlTaskService.isRunning(7L)).thenReturn(false);
         when(etlTaskService.isRunning(9L)).thenReturn(false);
         when(etlBatchService.findAll()).thenReturn(List.of(batch));
-        when(etlBatchService.members(5L)).thenReturn(List.of(member));
         when(etlBatchService.isRunning(5L)).thenReturn(false);
 
         String page = mvc.perform(get("/etl").with(asAdmin()))
@@ -79,7 +78,6 @@ class EtlListViewTest {
         when(etlTaskService.findAll()).thenReturn(List.of());
         when(etlTaskService.connections()).thenReturn(List.of());
         when(etlBatchService.findAll()).thenReturn(List.of(batch(5L, "nightly")));
-        when(etlBatchService.members(5L)).thenReturn(List.of());
         when(etlBatchService.isRunning(5L)).thenReturn(false);
 
         String page = mvc.perform(get("/etl").with(asViewer()))

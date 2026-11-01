@@ -103,6 +103,12 @@ public class EtlTaskService {
         // Membership is set only by the batch service; a form must never move a task into or out
         // of a batch. A member's connections and schedule belong to the batch.
         boolean member = entity.getBatchId() != null;
+        if (!member && Boolean.TRUE.equals(entity.getEnabled())
+                && (form.getCronExpression() == null || form.getCronExpression().isBlank())) {
+            // setEnabled refuses to enable without a cron; editing must not produce that state,
+            // or the scheduler cancels a task the page still shows as scheduled.
+            throw new IllegalArgumentException("error.etl.cron.required");
+        }
         if (member) {
             if (!Objects.equals(entity.getSourceDbId(), form.getSourceDbId())
                     || !Objects.equals(entity.getTargetDbId(), form.getTargetDbId())) {

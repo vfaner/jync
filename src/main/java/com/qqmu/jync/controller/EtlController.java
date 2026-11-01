@@ -1,6 +1,7 @@
 package com.qqmu.jync.controller;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,13 +63,23 @@ public class EtlController {
         Map<Long, Boolean> batchRunning = new HashMap<>();
         List<EtlTask> standaloneTasks = new ArrayList<>();
         for (EtlBatch batch : batches) {
-            batchMembers.put(batch.getId(), etlBatchService.members(batch.getId()));
+            // Start every card with an empty list; the members are grouped below from the task
+            // list already loaded for this page. Querying members per batch made the page issue
+            // one select per batch on every render.
+            batchMembers.put(batch.getId(), new ArrayList<>());
             batchRunning.put(batch.getId(), etlBatchService.isRunning(batch.getId()));
         }
         for (EtlTask task : tasks) {
             if (task.getBatchId() == null) {
                 standaloneTasks.add(task);
+            } else {
+                batchMembers.computeIfAbsent(task.getBatchId(), id -> new ArrayList<>())
+                        .add(task);
             }
+        }
+        // findAll orders by id descending; member lists were always ordered oldest first.
+        for (List<EtlTask> members : batchMembers.values()) {
+            members.sort(Comparator.comparing(EtlTask::getId));
         }
 
         model.addAttribute("standaloneTasks", standaloneTasks);

@@ -310,6 +310,74 @@ class EtlRunnerTest {
         assertThat(result.success()).isTrue();
     }
 
+    /**
+     * A driver error raised while fetching the next row is a source failure. The loop leaves the
+     * stage at TARGET after each row's insert, so a next() that throws was reported as the
+     * target side and sent the operator to the wrong connection.
+     */
+    @Test
+    void aSourceFailureWhileFetchingTheNextRowIsAttributedToTheSource() throws SQLException {
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlSourceFactory factory = (config, provider) -> new EtlSource() {
+            @Override
+            public EtlSourceCursor query(EtlTask task, EtlCheckpointValue checkpoint) {
+                return new EtlSourceCursor() {
+                    private int row;
+
+                    @Override
+                    public List<EtlSourceColumn> columns() {
+                        return List.of(new EtlSourceColumn(
+                                "id", Types.INTEGER, "INTEGER", null, null, true));
+                    }
+
+                    @Override
+                    public int resumeKeyIndex() {
+                        return -1;
+                    }
+
+                    @Override
+                    public boolean next() throws SQLException {
+                        if (row++ == 0) {
+                            return true;
+                        }
+                        throw new SQLException("source connection lost");
+                    }
+
+                    @Override
+                    public Object getObject(int oneBasedIndex) {
+                        return 1;
+                    }
+
+                    @Override
+                    public String getString(int oneBasedIndex) {
+                        return "1";
+                    }
+
+                    @Override
+                    public void close() {
+                    }
+                };
+            }
+
+            @Override
+            public EtlSourceProbe probe(EtlTask task, int timeoutSeconds) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        EtlRunner guarded = new EtlRunner(
+                new SqlDialectFactory(List.of(), new GenericSqlDialect()), checkpoints, factory);
+
+        EtlRunResult result = guarded.run(task("SELECT id FROM src", "dst",
+                EtlWriteMode.OVERWRITE), source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.SOURCE);
+    }
+
     @Test
     void aRangeOverwriteWithoutAConditionIsRejectedBeforeTouchingTheTarget() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)");

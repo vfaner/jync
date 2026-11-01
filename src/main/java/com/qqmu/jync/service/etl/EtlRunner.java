@@ -116,9 +116,13 @@ public class EtlRunner {
                         insert.setQueryTimeout(timeout);
                     }
 
-                    stage = Side.SOURCE;
-                    while (cursor.next()) {
+                    while (true) {
+                        // Set before the fetch: the loop leaves the stage at TARGET after each
+                        // row's insert, so a next() that throws was blamed on the target.
                         stage = Side.SOURCE;
+                        if (!cursor.next()) {
+                            break;
+                        }
                         rowsRead++;
                         Object[] values = new Object[columns.size()];
                         for (int i = 1; i <= columns.size(); i++) {

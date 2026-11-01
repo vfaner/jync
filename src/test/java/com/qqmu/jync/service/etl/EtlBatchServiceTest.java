@@ -157,6 +157,47 @@ class EtlBatchServiceTest {
         assertThat(saved.getName()).isEqualTo("renamed");
     }
 
+    /**
+     * Clearing the cron of a running batch leaves {@code enabled=true} on a batch the scheduler
+     * just cancelled, and nothing re-registers it: the page keeps claiming the batch is scheduled
+     * while it silently never runs again. Enabling requires a cron, so editing must not remove it.
+     */
+    @Test
+    void anEnabledBatchCannotLoseItsCron() {
+        EtlBatch stored = batch(5L);
+        stored.setEnabled(true);
+        when(batchRepository.findById(5L)).thenReturn(Optional.of(stored));
+
+        EtlBatch edit = form();
+        edit.setId(5L);
+        edit.setDescription("renamed");
+        edit.setCronExpression(" ");
+
+        assertThatThrownBy(() -> service.saveSettings(edit))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.cron.required");
+        verify(batchRepository, never()).save(any());
+    }
+
+    /**
+     * A batch run loaded its member list when it started; deleting a member mid-run makes the
+     * runner execute a row that no longer exists and clears the checkpoint of a task that is
+     * still writing one. {@link EtlBatchService#delete} refuses in this state; so must removal.
+     */
+    @Test
+    void removingAMemberIsRefusedWhileTheBatchRuns() {
+        EtlBatch batch = batch(5L);
+        EtlTask member = member(7L, 5L);
+        when(batchRepository.findById(5L)).thenReturn(Optional.of(batch));
+        when(taskRepository.findById(7L)).thenReturn(Optional.of(member));
+        guard.tryAcquire("batch:5");
+
+        assertThatThrownBy(() -> service.removeMember(5L, 7L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.etl.batch.running");
+        verify(taskRepository, never()).delete(any());
+    }
+
     @Test
     void deletingABatchRemovesItsMembersAndTheirCheckpoints() {
         EtlBatch batch = batch(5L);

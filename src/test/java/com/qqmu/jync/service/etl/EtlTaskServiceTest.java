@@ -108,6 +108,30 @@ class EtlTaskServiceTest {
                 .hasMessage("error.etl.cron.invalid");
     }
 
+    /**
+     * Enabling a task requires a cron. Clearing it through the edit form keeps the task enabled
+     * while the scheduler cancels it, so it never runs again and the list page still says it is
+     * scheduled. The same stance as {@code setEnabled} has to hold on save.
+     */
+    @Test
+    void anEnabledTaskCannotLoseItsCron() {
+        stubConnections(1L, 2L);
+        EtlTask existing = existing(5L, "SELECT id FROM src");
+        existing.setEnabled(true);
+        existing.setCronExpression("0 0 3 * * *");
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing));
+
+        EtlTask edit = form(1L, 2L);
+        edit.setId(5L);
+        edit.setCronExpression(" ");
+        edit.setName("renamed");
+
+        assertThatThrownBy(() -> service.save(edit))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.cron.required");
+        verify(taskRepository, never()).save(any());
+    }
+
     @Test
     void saveRejectsAResumeKeyThatIsNotAPlainColumnName() {
         stubConnections(1L, 2L);

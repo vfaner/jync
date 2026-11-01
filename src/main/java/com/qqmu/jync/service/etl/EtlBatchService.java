@@ -153,6 +153,11 @@ public class EtlBatchService {
         if (!batchId.equals(member.getBatchId())) {
             throw new IllegalArgumentException("error.etl.not.found");
         }
+        if (isRunning(batchId)) {
+            // The batch run took its member list when it started; removing one now leaves the
+            // runner executing a deleted row and clearing a checkpoint that is still being written.
+            throw new IllegalStateException("error.etl.batch.running");
+        }
         if (guard.isRunning(taskId)) {
             throw new IllegalStateException("error.etl.batch.memberRunning");
         }
@@ -267,6 +272,12 @@ public class EtlBatchService {
             entity = batchRepository.findById(form.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
             // The connection pair is fixed once members exist; the form's values are ignored.
+        }
+        if (Boolean.TRUE.equals(entity.getEnabled())
+                && (form.getCronExpression() == null || form.getCronExpression().isBlank())) {
+            // An enabled batch without a cron is cancelled by the scheduler but still shown as
+            // enabled, and nothing re-registers it. setEnabled already refuses this state.
+            throw new IllegalArgumentException("error.etl.cron.required");
         }
         entity.setName(form.getName().trim());
         entity.setDescription(trimToNull(form.getDescription()));
