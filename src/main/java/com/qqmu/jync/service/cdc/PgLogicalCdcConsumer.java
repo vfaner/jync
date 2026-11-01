@@ -1100,10 +1100,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     @Override
     public void requestStop() {
         running = false;
-        Connection conn = currentSource;
-        if (conn != null) {
-            try { conn.close(); } catch (SQLException ignored) { }
-        }
+        // Do not close the source connection here: it will be closed in the finally block
+        // after the drain loop exits. Closing it mid-flight causes "Connection closed"
+        // exceptions that are misclassified as fatal when stopping normally.
     }
 
     /**

@@ -393,7 +393,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
     // ── shared ─────────────────────────────────────────────────────────────────
 
     private Map<Long, String> projectNames(Set<Long> ids) {
-        Map<Long, String> names = new HashMap<>();
+        Map<Long, String> names = new LinkedHashMap<>();
         if (ids.isEmpty()) {
             return names;
         }
