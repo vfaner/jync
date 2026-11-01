@@ -26,7 +26,7 @@
 | **下载（Gitee）** | [gitee.com/super_rgh/jync/releases/latest](https://gitee.com/super_rgh/jync/releases/latest) |
 | **镜像（AtomGit）** | [gitcode.com/vfaner/jync](https://gitcode.com/vfaner/jync) |
 | **官网** | [jync.qqmu.com](https://jync.qqmu.com) |
-| **视频演示** | [Bilibili · 26 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+| **视频演示** | [Bilibili · 14 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
 
 > AtomGit（gitcode.com）是代码与发布包的同步镜像；下载、问题反馈与 PR 以 GitHub / Gitee 为准。
 

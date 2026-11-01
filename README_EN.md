@@ -26,7 +26,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | **Download (Gitee)** | [gitee.com/super_rgh/jync/releases/latest](https://gitee.com/super_rgh/jync/releases/latest) |
 | **Mirror (AtomGit)** | [gitcode.com/vfaner/jync](https://gitcode.com/vfaner/jync) |
 | **Website** | [jync.qqmu.com](https://jync.qqmu.com) |
-| **Video walkthrough** | [Bilibili · 26 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+| **Video walkthrough** | [Bilibili · 14 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
 
 > AtomGit (gitcode.com) is a synced mirror of the code and release assets; downloads, issues and pull requests are handled on GitHub / Gitee.
 

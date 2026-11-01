@@ -1,7 +1,7 @@
 # Jync 捷同 · 最受欢迎的异构数据库实时同步工具
 
 > 单 JAR 开箱即用 —— 不要 Kafka，不要 ZooKeeper，不要一行代码。
-> 项目地址：[GitHub](https://github.com/vfaner/jync) ｜ [Gitee 镜像](https://gitee.com/super_rgh/jync) ｜ [19 分钟演示视频](https://www.bilibili.com/video/BV1iHYJ6vEEd)
+> 项目地址：[GitHub](https://github.com/vfaner/jync) ｜ [Gitee 镜像](https://gitee.com/super_rgh/jync) ｜ [14 分钟演示视频](https://www.bilibili.com/video/BV1iHYJ6vEEd)
 > 下载地址：[GitHub Releases](https://github.com/vfaner/jync/releases/latest) ｜ [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) ｜ [详细教程](https://jync.qqmu.com/deploy.html)
 
 ## 开发背景
