@@ -230,6 +230,21 @@ class SqlBodyConverterTest {
         assertThat(out).doesNotContain("FETCH FIRST");
     }
 
+    /**
+     * MySQL accepts both "LIMIT n OFFSET m" and "LIMIT m, n" (offset first). Only the bare
+     * "LIMIT n" form was rewritten; either offset form went through verbatim and Oracle/DB2
+     * answered ORA-00933 / SQL0104N, so the view failed on every cycle and never retired.
+     */
+    @Test
+    void limitWithOffsetIsRewrittenForOracleAndDb2() {
+        assertThat(converter.convertLimitClause("SELECT * FROM t LIMIT 10 OFFSET 5",
+                DatabaseType.DialectFamily.MYSQL, DatabaseType.DialectFamily.ORACLE))
+                .isEqualTo("SELECT * FROM t OFFSET 5 ROWS FETCH FIRST 10 ROWS ONLY");
+        assertThat(converter.convertLimitClause("SELECT * FROM t LIMIT 5, 10",
+                DatabaseType.DialectFamily.MYSQL, DatabaseType.DialectFamily.DB2))
+                .isEqualTo("SELECT * FROM t OFFSET 5 ROWS FETCH FIRST 10 ROWS ONLY");
+    }
+
     /** Removing a real FROM DUAL must leave a literal that merely mentions it intact. */
     @Test
     void fromDualInsideALiteralIsNotRemoved() {

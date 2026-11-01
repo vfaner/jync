@@ -394,14 +394,17 @@ public class OracleDialect extends AbstractSqlDialect {
         String sequence = truncateIdentifier("SEQ_" + table + "_" + col.getName());
         String trigger = truncateIdentifier("TRG_" + table + "_" + col.getName());
         String column = quoteIdentifier(col.getName());
+        // Both are schema objects of the CONNECTION USER when unqualified, while the table is
+        // in the project's schema. Two projects on one login user would then share one sequence
+        // name, and a reseed of one would rewind the other's counter.
         List<String> stmts = new ArrayList<>(2);
-        stmts.add("CREATE SEQUENCE " + quoteIdentifier(sequence)
+        stmts.add("CREATE SEQUENCE " + qualify(schema, sequence)
                 + " START WITH 1 INCREMENT BY 1 NOCACHE");
-        stmts.add("CREATE OR REPLACE TRIGGER " + quoteIdentifier(trigger)
+        stmts.add("CREATE OR REPLACE TRIGGER " + qualify(schema, trigger)
                 + " BEFORE INSERT ON " + qualify(schema, table)
                 + " FOR EACH ROW BEGIN"
                 + " IF :NEW." + column + " IS NULL THEN"
-                + " SELECT " + quoteIdentifier(sequence) + ".NEXTVAL"
+                + " SELECT " + qualify(schema, sequence) + ".NEXTVAL"
                 + " INTO :NEW." + column + " FROM DUAL;"
                 + " END IF; END;");
         return stmts;
@@ -423,8 +426,8 @@ public class OracleDialect extends AbstractSqlDialect {
         // independently. The dependent trigger is recompiled by the CREATE OR REPLACE.
         String sequence = truncateIdentifier("SEQ_" + table + "_" + column.getName());
         List<String> stmts = new ArrayList<>(3);
-        stmts.add("DROP SEQUENCE " + quoteIdentifier(sequence));
-        stmts.add("CREATE SEQUENCE " + quoteIdentifier(sequence)
+        stmts.add("DROP SEQUENCE " + qualify(schema, sequence));
+        stmts.add("CREATE SEQUENCE " + qualify(schema, sequence)
                 + " START WITH " + nextValue + " INCREMENT BY 1 NOCACHE");
         stmts.add(legacyIdentityDdl(schema, table, column).get(1));
         return stmts;

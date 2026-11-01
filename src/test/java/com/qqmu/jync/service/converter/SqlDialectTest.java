@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Types;
 import java.util.List;
+import java.util.Locale;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -112,6 +114,28 @@ class SqlDialectTest {
 
         String oracleSql = oracle.getUpsertSql("s", "orders", columns, pk).toUpperCase();
         assertThat(oracleSql).contains("TENANT_ID").contains("ORDER_ID");
+    }
+
+    /**
+     * Case folding must not depend on the JVM default locale. In Turkish, "id".toUpperCase() is
+     * "İD", not "ID": a column and its key written in different case then stop matching, and the
+     * key column lands in the update list. Oracle answers that with ORA-38104 ("columns
+     * referenced in the ON clause cannot be updated") on every row.
+     */
+    @Test
+    @DisplayName("a Turkish default locale cannot move a key column into the update list")
+    void keyColumnsStayKeyColumnsUnderATurkishDefaultLocale() {
+        Locale original = Locale.getDefault();
+        try {
+            Locale.setDefault(new Locale("tr", "TR"));
+            String sql = new MySqlDialect().getUpsertSql("s", "t",
+                    List.of("ID", "name"), List.of("id"));
+
+            assertThat(sql).doesNotContain("VALUES(`ID`)");
+            assertThat(sql).contains("VALUES(`name`)");
+        } finally {
+            Locale.setDefault(original);
+        }
     }
 
     @Test

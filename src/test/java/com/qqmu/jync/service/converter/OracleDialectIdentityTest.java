@@ -6,6 +6,7 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -81,6 +82,31 @@ class OracleDialectIdentityTest {
                         .isLessThanOrEqualTo(30);
             }
         }
+    }
+
+    /**
+     * A sequence or trigger created without a schema prefix belongs to the CONNECTION USER's
+     * schema, not the project's target schema. With the table in APP and the login user JYNC,
+     * the fallback objects land in JYNC; two projects sharing JYNC and a table name then share
+     * one sequence, and a reseed of one rewinds the other's counter into primary-key collisions.
+     */
+    @Test
+    @DisplayName("pre-12 identity objects are created in the target schema")
+    void legacyIdentityObjectsAreSchemaQualified() {
+        List<String> extra = oracle11.getPostCreateTableDdl(tableWithIdentity(), "app", "orders",
+                DatabaseType.MYSQL);
+
+        assertThat(extra.get(0).toUpperCase())
+                .contains("CREATE SEQUENCE \"APP\".\"SEQ_ORDERS_ID\"");
+        assertThat(extra.get(1).toUpperCase())
+                .contains("CREATE OR REPLACE TRIGGER \"APP\".\"TRG_ORDERS_ID\"")
+                .contains("SELECT \"APP\".\"SEQ_ORDERS_ID\".NEXTVAL");
+
+        List<String> reseed = oracle11.getIdentityReseedDdl("app", "orders", identityId(), 4097L);
+        assertThat(reseed.get(0).toUpperCase())
+                .contains("DROP SEQUENCE \"APP\".\"SEQ_ORDERS_ID\"");
+        assertThat(reseed.get(1).toUpperCase())
+                .contains("CREATE SEQUENCE \"APP\".\"SEQ_ORDERS_ID\"");
     }
 
     @Test

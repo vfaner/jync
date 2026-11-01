@@ -780,7 +780,8 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         if (!indexNamesAreGlobal()) {
             return truncateIdentifier(name);
         }
-        if (name.toLowerCase().contains(table.toLowerCase())) {
+        if (name.toLowerCase(java.util.Locale.ROOT)
+                .contains(table.toLowerCase(java.util.Locale.ROOT))) {
             return truncateIdentifier(name);
         }
         return truncateIdentifier(table + "_" + name);
@@ -923,9 +924,12 @@ public abstract class AbstractSqlDialect implements SqlDialect {
 
     /** Non-key columns, i.e. the ones an upsert should overwrite. */
     protected List<String> nonKeyColumns(List<String> columns, List<String> pkColumns) {
-        List<String> pkUpper = pkColumns.stream().map(String::toUpperCase).collect(Collectors.toList());
+        // Locale.ROOT: in Turkish "id".toUpperCase() is "İD", which stops matching "ID".
+        List<String> pkUpper = pkColumns.stream()
+                .map(c -> c.toUpperCase(java.util.Locale.ROOT))
+                .collect(Collectors.toList());
         return columns.stream()
-                .filter(c -> !pkUpper.contains(c.toUpperCase()))
+                .filter(c -> !pkUpper.contains(c.toUpperCase(java.util.Locale.ROOT)))
                 .collect(Collectors.toList());
     }
 

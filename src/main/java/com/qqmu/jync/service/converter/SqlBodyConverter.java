@@ -481,9 +481,15 @@ public class SqlBodyConverter {
                               DatabaseType.DialectFamily to) {
         if (to == DatabaseType.DialectFamily.ORACLE || to == DatabaseType.DialectFamily.DB2) {
             // LIMIT n -> FETCH FIRST n ROWS ONLY (Oracle 12c+, DB2). Literal-aware: a view
-            // body ending in the text "LIMIT 5" inside a string must not be rewritten.
-            return applyOutsideLiterals(sql, from, to,
-                    code -> code.replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s*$",
+            // body ending in the text "LIMIT 5" inside a string must not be rewritten. The
+            // offset forms ("LIMIT n OFFSET m", "LIMIT m, n") must be handled before the bare
+            // one; left alone they reach Oracle/DB2 verbatim and fail on every cycle.
+            return applyOutsideLiterals(sql, from, to, code -> code
+                    .replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s+OFFSET\\s+(\\d+)\\s*$",
+                            "OFFSET $2 ROWS FETCH FIRST $1 ROWS ONLY")
+                    .replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s*,\\s*(\\d+)\\s*$",
+                            "OFFSET $1 ROWS FETCH FIRST $2 ROWS ONLY")
+                    .replaceAll("(?i)\\bLIMIT\\s+(\\d+)\\s*$",
                             "FETCH FIRST $1 ROWS ONLY"));
         }
         if (to == DatabaseType.DialectFamily.SQLSERVER) {
