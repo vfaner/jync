@@ -346,6 +346,11 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         return supplier;
     }
 
+    /** The transaction sink the stream handler calls; package-private for tests. */
+    CdcEventStreamHandler.TransactionSink sinkForTest() {
+        return sink;
+    }
+
     /**
      * Blocks until the stream ends. {@code connect(timeoutMs)} in the Debezium fork only
      * bounds the handshake: it returns once the connection is up and the event loop keeps
@@ -478,6 +483,11 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             } finally {
                 try {
                     if (originalAutoCommit) target.setAutoCommit(true);
+                } catch (SQLException ignored) { }
+                // 归还池连接：异常路径已由 rollbackAndClose 关闭，这里是成功路径唯一的关闭点。
+                // 漏掉它，每个已提交事务都会永久占走一个目标池连接。
+                try {
+                    target.close();
                 } catch (SQLException ignored) { }
             }
             ctx.requireLease();                                  // 丢租约 → 位点不动,接管方重放

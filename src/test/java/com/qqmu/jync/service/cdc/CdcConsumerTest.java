@@ -190,6 +190,32 @@ class CdcConsumerTest {
         verify(ps, atLeastOnce()).setQueryTimeout(45);
     }
 
+    @Test
+    void aCommittedTransactionReturnsItsTargetConnectionToThePool() throws Exception {
+        // 每次成功提交都从目标池借一个连接；不归还的话，池在十来个事务后耗尽，
+        // 同一目标上的全量/轮询任务一起卡死。
+        Project project = project(11L);
+        Connection target = mock(Connection.class);
+        when(target.getAutoCommit()).thenReturn(true);
+        SyncContext ctx = SyncContext.builder()
+                .project(project)
+                .config(new SyncConfig())
+                .targetDialect(new GenericSqlDialect())
+                .connectionProvider(config -> target)
+                .build();
+        CdcConsumer consumer = new CdcConsumer(project, mock(SyncLockService.LockHandle.class),
+                ctx, mock(BinlogClientFactory.class), mock(CdcPositionStore.class),
+                mock(CdcBaselineService.class), mock(SyncTaskStore.class),
+                mock(SyncStateWriter.class), mock(DataSourceManager.class),
+                new CdcRuntimeStats(), new SyncProperties());
+
+        consumer.sinkForTest().apply(List.of(),
+                new CdcPositionMark("mysql-bin.000004", 120L, null));
+
+        verify(target).commit();
+        verify(target).close();
+    }
+
     // —— FIX B(评审 Important):supplier 不得吞掉瞬态元数据失败 ——
     // 返回 null =「表不受支持」→ handler 跳过该表行事件,事务照常提交、位点照常前进
     // = 静默永久丢行(at-least-once 被打破)。瞬态失败必须抛出:异常经监听器 →

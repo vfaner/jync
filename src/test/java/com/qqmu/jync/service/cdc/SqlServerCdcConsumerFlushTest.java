@@ -178,5 +178,7 @@ class SqlServerCdcConsumerFlushTest {
 
         verify(reader, times(1)).readTable(any(), anyString(), anyString());
         verify(targetConn, times(2)).commit();
+        // 每次提交后必须归还目标连接；否则每个事务泄漏一个池连接。
+        verify(targetConn, times(2)).close();
     }
 }

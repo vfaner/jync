@@ -824,6 +824,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             try {
                 if (originalAutoCommit) target.setAutoCommit(true);
             } catch (SQLException ignored) { }
+            // 归还池连接：异常路径已由 rollbackAndClose 关闭，这里是成功路径唯一的关闭点。
+            try {
+                target.close();
+            } catch (SQLException ignored) { }
         }
         ctx.requireLease();
         positionStore.advanceLsn(projectId, txLsn);

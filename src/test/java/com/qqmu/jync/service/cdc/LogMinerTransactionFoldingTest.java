@@ -63,6 +63,8 @@ class LogMinerTransactionFoldingTest {
     private DataSourceManager dataSourceManager;
     private SyncProperties properties;
     private MetadataReader reader;
+    /** Every target connection the provider handed out, so leaks are visible. */
+    private final java.util.List<Connection> openedTargets = new java.util.ArrayList<>();
 
     @BeforeEach
     void setUp() throws SQLException {
@@ -113,6 +115,11 @@ class LogMinerTransactionFoldingTest {
                         "INSERT", "FOLD"))), 2);
 
         assertThat(rowsOf("fold")).containsExactly("1|new");
+        // 提交后的目标连接必须归还池；否则每个事务泄漏一个连接，池耗尽后同库其它任务卡死。
+        assertThat(openedTargets).isNotEmpty();
+        for (Connection conn : openedTargets) {
+            assertThat(conn.isClosed()).as("target connection returned to the pool").isTrue();
+        }
     }
 
     @Test
@@ -305,7 +312,11 @@ class LogMinerTransactionFoldingTest {
                 .targetDialect(new GenericSqlDialect())
                 .batchSize(100)
                 .sourceReader(reader)
-                .connectionProvider(cfg -> h2conn())
+                .connectionProvider(cfg -> {
+                    Connection conn = h2conn();
+                    openedTargets.add(conn);
+                    return conn;
+                })
                 .build();
 
         Project project = new Project();

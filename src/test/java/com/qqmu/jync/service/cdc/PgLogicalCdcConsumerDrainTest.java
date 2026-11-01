@@ -80,6 +80,8 @@ class PgLogicalCdcConsumerDrainTest {
     private PgLogicalCdcConsumer consumer;
     private CdcRuntimeStats stats;
     private SyncConfig config;
+    /** Every target connection the provider handed out, so leaks are visible. */
+    private final java.util.List<Connection> openedTargets = new java.util.ArrayList<>();
 
     private static ColumnMeta column(String name, int jdbcType, boolean pk) {
         ColumnMeta column = new ColumnMeta();
@@ -152,7 +154,9 @@ class PgLogicalCdcConsumerDrainTest {
                 .sourceReader(reader)
                 .connectionProvider(cfg -> {
                     try {
-                        return h2conn();
+                        Connection conn = h2conn();
+                        openedTargets.add(conn);
+                        return conn;
                     } catch (SQLException e) {
                         throw new RuntimeException(e);
                     }
@@ -338,6 +342,11 @@ class PgLogicalCdcConsumerDrainTest {
         order.verify(advancePs).setString(eq(2), eq("0/1002"));
         order.verify(advancePs).executeQuery();
         verify(source, never()).rollback();
+        // 提交后的目标连接必须归还池；否则每个事务泄漏一个连接，池耗尽后同库其它任务卡死。
+        assertThat(openedTargets).isNotEmpty();
+        for (Connection conn : openedTargets) {
+            assertThat(conn.isClosed()).as("target connection returned to the pool").isTrue();
+        }
     }
 
     @Test
