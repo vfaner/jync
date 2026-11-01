@@ -36,7 +36,27 @@ class DatabaseConfigEffectiveTypeTest {
 
     @Test
     void aCustomConnectionDeclaringHanaSupportsFullSync() {
+        assertThat(custom(DatabaseType.DialectFamily.HANA).supportsSyncSource()).isTrue();
+        assertThat(custom(DatabaseType.DialectFamily.HANA).supportsSyncTarget()).isTrue();
         assertThat(custom(DatabaseType.DialectFamily.HANA).supportsFullSync()).isTrue();
+    }
+
+    @Test
+    void aCustomConnectionWithoutAFamilyCannotBeEitherRole() {
+        assertThat(custom(null).supportsSyncSource()).isFalse();
+        assertThat(custom(null).supportsSyncTarget()).isFalse();
+        assertThat(custom(DatabaseType.DialectFamily.GENERIC).supportsSyncSource()).isFalse();
+        assertThat(custom(DatabaseType.DialectFamily.GENERIC).supportsSyncTarget()).isFalse();
+    }
+
+    @Test
+    void aPollingOnlyPresetIsASourceOnlyWhateverFamilyItResolvesTo() {
+        DatabaseConfig clickHouse = new DatabaseConfig();
+        clickHouse.setType(DatabaseType.CLICKHOUSE);
+
+        assertThat(clickHouse.supportsSyncSource()).isTrue();
+        assertThat(clickHouse.supportsSyncTarget()).isFalse();
+        assertThat(clickHouse.pollingOnlySource()).isTrue();
     }
 
     @Test

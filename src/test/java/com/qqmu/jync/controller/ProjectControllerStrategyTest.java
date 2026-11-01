@@ -263,6 +263,31 @@ class ProjectControllerStrategyTest {
     }
 
     /**
+     * 六个分析型 / 搜索型引擎只做轮询源:项目详情页只能出现 POLLING 与 FULL_COMPARE 两张卡,
+     * 任何一种 CDC 卡都不该渲染。
+     */
+    @Test
+    void detailHidesEveryCdcStrategyForPollingOnlyEngines() throws Exception {
+        for (DatabaseType type : List.of(DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
+                DatabaseType.HIVE, DatabaseType.IMPALA,
+                DatabaseType.ELASTICSEARCH, DatabaseType.MONGODB)) {
+            stubDetail(type);
+
+            String page = mvc.perform(get("/projects/1"))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(page).as(type.name())
+                    .contains("value=\"POLLING\"", "value=\"FULL_COMPARE\"")
+                    .doesNotContain("value=\"BINLOG_CDC\"")
+                    .doesNotContain("value=\"LOGMINER_CDC\"")
+                    .doesNotContain("value=\"PG_LOGICAL_CDC\"")
+                    .doesNotContain("value=\"SQLSERVER_CDC\"")
+                    .doesNotContain("value=\"YSTREAM_CDC\"");
+        }
+    }
+
+    /**
      * v1.9.0:PG 逻辑 CDC 的门禁已按方言家族放行,页面的策略卡片必须同步放行 ——
      * 卡片仍按字面 POSTGRESQL 渲染时,openGauss 用户在项目页根本选不到该策略,
      * 后端放行等于没放行。

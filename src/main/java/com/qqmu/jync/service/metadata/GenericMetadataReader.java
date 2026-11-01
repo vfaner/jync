@@ -79,6 +79,18 @@ public class GenericMetadataReader implements MetadataReader {
         return new String[]{"TABLE"};
     }
 
+    /**
+     * Whether the driver's {@code getPrimaryKeys()} answer is a real unique key.
+     *
+     * <p>True everywhere a primary key exists, because the loader's keyset plan and the target's
+     * upsert predicate both depend on it. Analytic engines synthesize the answer from a sort key
+     * or index metadata instead: believing it makes the loader pick a plan the table cannot
+     * honour, and lets a target upsert collapse rows that are distinct in the source.
+     */
+    protected boolean trustsDriverPrimaryKeys() {
+        return true;
+    }
+
     /** JDBC view type names the listing asks for; see {@link #tableTypes()}. */
     protected String[] viewTypes() {
         return new String[]{"VIEW"};
@@ -284,24 +296,26 @@ public class GenericMetadataReader implements MetadataReader {
         // Primary key first, so columns can be flagged as they are read.
         // Sorted by KEY_SEQ: composite key order is significant for upsert predicates.
         Map<Short, String> pkBySeq = new TreeMap<>();
-        try (ResultSet rs = md.getPrimaryKeys(catalog, schemaPattern(schema), tableName)) {
-            while (rs.next()) {
-                // tableName is a SQL LIKE pattern to the driver ('_' matches any char), so a
-                // name like A_B also matches AXB. Keep only rows for the table we asked for.
-                if (!isRequestedObject(rs.getString("TABLE_NAME"), tableName,
-                        rs.getString("TABLE_SCHEM"), schema)) {
-                    continue;
+        if (trustsDriverPrimaryKeys()) {
+            try (ResultSet rs = md.getPrimaryKeys(catalog, schemaPattern(schema), tableName)) {
+                while (rs.next()) {
+                    // tableName is a SQL LIKE pattern to the driver ('_' matches any char), so a
+                    // name like A_B also matches AXB. Keep only rows for the table we asked for.
+                    if (!isRequestedObject(rs.getString("TABLE_NAME"), tableName,
+                            rs.getString("TABLE_SCHEM"), schema)) {
+                        continue;
+                    }
+                    String pkColumn = rs.getString("COLUMN_NAME");
+                    // COLUMN_NAME is nullable per the JDBC spec; a null entry would NPE the
+                    // pk.toUpperCase() below and fail the whole table read. Skip the row.
+                    if (pkColumn == null) {
+                        continue;
+                    }
+                    pkBySeq.put(rs.getShort("KEY_SEQ"), pkColumn);
                 }
-                String pkColumn = rs.getString("COLUMN_NAME");
-                // COLUMN_NAME is nullable per the JDBC spec; a null entry would NPE the
-                // pk.toUpperCase() below and fail the whole table read. Skip the row.
-                if (pkColumn == null) {
-                    continue;
-                }
-                pkBySeq.put(rs.getShort("KEY_SEQ"), pkColumn);
+            } catch (SQLException e) {
+                log.debug("getPrimaryKeys failed for {}: {}", tableName, e.getMessage());
             }
-        } catch (SQLException e) {
-            log.debug("getPrimaryKeys failed for {}: {}", tableName, e.getMessage());
         }
         table.setPrimaryKeys(new ArrayList<>(pkBySeq.values()));
 

@@ -11,7 +11,7 @@
 
 ![Jync 捷同 · 异构数据库实时同步工具](docs/images/jync.png)
 
-在**异构数据库**之间持续同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点选即可在内置的 **34 种数据库（另支持自定义类型）** 之间建立同步或 ETL 链路；其中 Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 六种分析型引擎用于 ETL。不需要 Kafka、Flink、ZooKeeper，也不需要编写一行作业代码。
+在**异构数据库**之间持续同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点选即可在内置的 **34 种数据库（另支持自定义类型）** 之间建立同步或 ETL 链路；其中 Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 六种分析型引擎可作为实时同步的**源**（仅轮询 / 全表比对），也可用于 ETL。不需要 Kafka、Flink、ZooKeeper，也不需要编写一行作业代码。
 
 - **零外部依赖**：Spring Boot 单体 + Thymeleaf 服务端渲染 + Quartz + H2 内嵌元数据库，内网离线可用。
 - **全量不是批量查询导入**：主键 keyset 分块、单表内并行、结果集流式读取、逐块提交与检查点，单表吞吐可达 **20 万行/秒量级**。
@@ -351,7 +351,7 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 - **驱动内置**：除 **GBase**、**神通**、**华为 GaussDB**、**SAP HANA**、**ClickHouse**、**Hive**、**Impala**、**Elasticsearch**、**MongoDB（Atlas SQL）** 外均随包内置。这些厂商未提供可再分发的官方构件（SAP ngdbc 虽已上架 Maven Central，许可证仍不允许再分发），需自备 jar 并填写路径；驱动类名与预设不同时可在同一张卡片覆盖。
 - **协议兼容预设**：万里 GreatDB、银联 UPDRDB、星环 KunDB 兼容 MySQL 协议；平安 RASESQL、东方金信 SeaboxSQL 兼容 PostgreSQL 协议，复用内置驱动与对应方言族。
 - **SAP HANA**：支持结构同步与轮询式数据同步（时间戳 / 主键增量），写入用 `UPSERT … WITH PRIMARY KEY`，视图与存储过程/函数用 `CREATE OR REPLACE` 重建。HANA 不公开事务日志，**真 CDC 需要 SAP SLT 或 SDI**，本工具不提供。
-- **分析型 / 搜索型引擎（ETL 专用）**：Apache Doris、ClickHouse、Apache Hive、Apache Impala、Elasticsearch、MongoDB。它们不参与实时同步的建表与 upsert，只在 ETL 任务中使用；**Elasticsearch 与 MongoDB 只读**，只能作为 ETL 源。MongoDB 提供两条路径：**MongoDB** 预置走官方 Atlas SQL JDBC 驱动（支持 Atlas 与启用 SQL Interface 的 Enterprise Advanced，驱动约 40 MB 需自备）；**MongoDB（原生驱动）** 使用随包内置的 Java 驱动，任何 `mongod` 都能直连，填集合名与可选的 Extended JSON 过滤条件即可，不需要 SQL 或外部 jar。
+- **分析型 / 搜索型引擎（同步源 + ETL）**：Apache Doris、ClickHouse、Apache Hive、Apache Impala、Elasticsearch、MongoDB。它们没有日志 CDC，因此**只做实时同步的源**，可选策略为轮询与全表比对，**从不作为目标**（不做建表与 upsert）；表一律按无主键读取，详见 [已知限制](docs/known-limitations.md#36-分析型--搜索型引擎作为同步源)。ETL 中它们既可以是源，也可以是目标（Elasticsearch 与 MongoDB 除外——这两个的 SQL 接口只读，只能作 ETL 源）。MongoDB 提供两条路径：**MongoDB** 预置走官方 Atlas SQL JDBC 驱动（支持 Atlas 与启用 SQL Interface 的 Enterprise Advanced，驱动约 40 MB 需自备）；**MongoDB（原生驱动）** 使用随包内置的 Java 驱动，任何 `mongod` 都能直连，填集合名与可选的 Extended JSON 过滤条件即可，不需要 SQL 或外部 jar。
 - **华为 GaussDB** 与 openGauss 是两个产品：驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`，方言归入 PostgreSQL 系。
 - **PolarDB / TDSQL 分版本**：MySQL 版有独立预置；PostgreSQL 版选 PostgreSQL；PolarDB Oracle 兼容版请用自定义类型。
 - 驱动版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
@@ -687,7 +687,7 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 | 部署形态 | **单个 jar** | Kafka + Connect + ZK | 客户端脚本 | 桌面 + 资源库 | 桌面客户端 |
 | 配置方式 | **Web 点选** | YAML / REST + 消费端代码 | JSON 作业 | 图形 ETL | 向导 |
 | 上手速度 | **分钟级** | 天级：先搭 Kafka 全家桶 | 小时级：手写 JSON 作业 | 天级：理解转换与作业模型 | 分钟级，但仅一次性迁移 |
-| 持续增量 | 轮询 / Cron + 日志 CDC（MySQL、Oracle、达梦、PostgreSQL、SQL Server、崖山） | 日志级 | 不适用（一次性） | 部分（自建定时） | 部分（计划任务 / 全表比对） |
+| 持续增量 | 轮询 / Cron + 日志 CDC（MySQL、Oracle、达梦、PostgreSQL、SQL Server、崖山）；6 种分析型引擎可作轮询源 | 日志级 | 不适用（一次性） | 部分（自建定时） | 部分（计划任务 / 全表比对） |
 | 全量加载 | **keyset 分块 + 表内并行 + 流式读取 + 检查点** | 支持快照；异构目标需自写消费端 | 分片作业 | 作业内实现 | 一次性向导 |
 | 结构同步 | **自动建表 / 索引 / 视图 / 过程** | 部分，落库需自写 | 需预建表 | 部分 | 仅一次性 |
 | ETL 与批次 | **取数 SQL + 7 种分析型引擎 + 批次共享连接与调度** | 需外接 | 分片作业 | 图形转换 | 仅导入导出 |

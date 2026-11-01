@@ -11,6 +11,10 @@ import org.junit.jupiter.params.provider.EnumSource;
  * dialect families. A product outside every family (H2, or a CUSTOM connection that never
  * declared one) must not be offered as a source or target of a real-time project — its
  * structure, type mapping and upsert contract are guesses the engine cannot make.
+ *
+ * <p>The six analytic / search engines are the one deliberate exception, and only as a
+ * source: they have no log-based CDC, so polling and full compare are all they can offer, and
+ * the write path (DDL, keyed upsert, delete) has no meaning on them.
  */
 class FullSyncCapabilityTest {
 
@@ -25,16 +29,25 @@ class FullSyncCapabilityTest {
         assertThat(type.supportsFullSync()).isTrue();
     }
 
+    @ParameterizedTest
+    @EnumSource(value = DatabaseType.class, names = {
+            "DORIS", "CLICKHOUSE", "HIVE", "IMPALA", "ELASTICSEARCH", "MONGODB"
+    })
+    void pollingOnlyEnginesAreSourcesButNeverTargets(DatabaseType type) {
+        assertThat(type.supportsSyncSource()).isTrue();
+        assertThat(type.supportsSyncTarget()).isFalse();
+        assertThat(type.pollingOnlySource()).isTrue();
+        assertThat(type.supportsFullSync()).isTrue();
+    }
+
     @Test
-    void genericProductsDoNotSupportFullSync() {
-        assertThat(DatabaseType.H2.supportsFullSync()).isFalse();
-        assertThat(DatabaseType.CUSTOM.supportsFullSync()).isFalse();
-        // Analytic / distributed / document engines: no family describes their SQL, so ETL only.
-        for (DatabaseType engine : new DatabaseType[] {
-                DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
-                DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.ELASTICSEARCH,
-                DatabaseType.MONGODB, DatabaseType.MONGODB_NATIVE}) {
-            assertThat(engine.supportsFullSync()).as(engine.name()).isFalse();
+    void h2UndeclaredCustomAndNativeMongoStayOutsideRealTimeProjects() {
+        for (DatabaseType type : new DatabaseType[] {
+                DatabaseType.H2, DatabaseType.CUSTOM, DatabaseType.MONGODB_NATIVE}) {
+            assertThat(type.supportsSyncSource()).as(type.name()).isFalse();
+            assertThat(type.supportsSyncTarget()).as(type.name()).isFalse();
+            assertThat(type.pollingOnlySource()).as(type.name()).isFalse();
+            assertThat(type.supportsFullSync()).as(type.name()).isFalse();
         }
     }
 
@@ -43,15 +56,21 @@ class FullSyncCapabilityTest {
         DatabaseConfig declared = new DatabaseConfig();
         declared.setType(DatabaseType.CUSTOM);
         declared.setDialectFamily(DatabaseType.DialectFamily.ORACLE);
+        assertThat(declared.supportsSyncSource()).isTrue();
+        assertThat(declared.supportsSyncTarget()).isTrue();
         assertThat(declared.supportsFullSync()).isTrue();
 
         DatabaseConfig undeclared = new DatabaseConfig();
         undeclared.setType(DatabaseType.CUSTOM);
+        assertThat(undeclared.supportsSyncSource()).isFalse();
+        assertThat(undeclared.supportsSyncTarget()).isFalse();
         assertThat(undeclared.supportsFullSync()).isFalse();
 
         DatabaseConfig generic = new DatabaseConfig();
         generic.setType(DatabaseType.CUSTOM);
         generic.setDialectFamily(DatabaseType.DialectFamily.GENERIC);
+        assertThat(generic.supportsSyncSource()).isFalse();
+        assertThat(generic.supportsSyncTarget()).isFalse();
         assertThat(generic.supportsFullSync()).isFalse();
     }
 
@@ -59,9 +78,18 @@ class FullSyncCapabilityTest {
     void aPresetConnectionInheritsItsOwnCapability() {
         DatabaseConfig config = new DatabaseConfig();
         config.setType(DatabaseType.MYSQL);
+        assertThat(config.supportsSyncSource()).isTrue();
+        assertThat(config.supportsSyncTarget()).isTrue();
         assertThat(config.supportsFullSync()).isTrue();
 
+        config.setType(DatabaseType.CLICKHOUSE);
+        assertThat(config.supportsSyncSource()).isTrue();
+        assertThat(config.supportsSyncTarget()).isFalse();
+        assertThat(config.pollingOnlySource()).isTrue();
+
         config.setType(DatabaseType.H2);
+        assertThat(config.supportsSyncSource()).isFalse();
+        assertThat(config.supportsSyncTarget()).isFalse();
         assertThat(config.supportsFullSync()).isFalse();
     }
 }

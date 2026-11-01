@@ -155,8 +155,13 @@ public class BulkProjectController {
     private void addOptions(Model model, Long sourceDbId) {
         List<DatabaseConfig> sources = new ArrayList<>(
                 databaseConfigService.findByRole(ConnectionRole.SOURCE));
-        List<DatabaseConfig> targets = new ArrayList<>(
-                databaseConfigService.findByRole(ConnectionRole.TARGET));
+        // Analytic / search engines are read-only sync sources: they may appear as the source,
+        // never as the target. Filtering here (rather than in the role of the connection) keeps
+        // the connection usable for ETL, where several of them can be a target.
+        List<DatabaseConfig> targets = databaseConfigService.findByRole(ConnectionRole.TARGET)
+                .stream()
+                .filter(db -> !db.pollingOnlySource())
+                .collect(Collectors.toCollection(ArrayList::new));
 
         Map<Long, List<CaptureStrategy>> supported = new LinkedHashMap<>();
         for (DatabaseConfig db : sources) {

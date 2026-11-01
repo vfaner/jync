@@ -5,13 +5,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 /**
- * The analytic / distributed engines are ETL connections: the customer supplies the extraction
- * SQL and Jync only copies rows, so none of them needs a dialect family. Marking one MYSQL
- * (Doris) or POSTGRES (ClickHouse) would make the full-sync engine emit DDL their products
- * reject — {@code ENGINE=InnoDB} in Doris's case — so the family is deliberately GENERIC and
- * {@link DatabaseType#supportsFullSync()} stays false. SAP HANA is the exception: its
- * ANSI-adjacent grammar needs a dedicated family (it rejects the SQL:2008 pagination tail,
- * the ANSI column-alter forms and DROP … IF EXISTS), so it is covered by its own test below.
+ * The analytic / distributed engines carry no dialect family: the customer supplies the
+ * extraction SQL in ETL, and the full-sync write path (DDL, keyed upsert, delete) has no
+ * meaning on them. Marking one MYSQL (Doris) or POSTGRES (ClickHouse) would make the engine
+ * emit DDL their products reject — {@code ENGINE=InnoDB} in Doris's case.
+ *
+ * <p>They still take part in real-time sync as <em>sources</em>: a read-only dialect handles
+ * quoting and pagination, and polling / full compare are the only strategies they offer.
+ * {@link DatabaseType#supportsSyncSource()} is therefore true while
+ * {@link DatabaseType#supportsSyncTarget()} stays false. SAP HANA is unrelated to this
+ * exception: its ANSI-adjacent grammar needs a dedicated family, so it supports both roles.
  */
 class DatabaseTypePresetTest {
 
@@ -38,7 +41,9 @@ class DatabaseTypePresetTest {
         assertThat(type.getDefaultPort()).isEqualTo(9030);
         assertThat(url(type)).startsWith("jdbc:mysql://localhost:9030/db");
         assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
-        assertThat(type.supportsFullSync()).isFalse();
+        assertThat(type.supportsSyncSource()).isTrue();
+        assertThat(type.supportsSyncTarget()).isFalse();
+        assertThat(type.supportsFullSync()).isTrue();
     }
 
     @Test
@@ -49,7 +54,9 @@ class DatabaseTypePresetTest {
         assertThat(type.getDefaultPort()).isEqualTo(8123);
         assertThat(url(type)).isEqualTo("jdbc:clickhouse://localhost:8123/db");
         assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
-        assertThat(type.supportsFullSync()).isFalse();
+        assertThat(type.supportsSyncSource()).isTrue();
+        assertThat(type.supportsSyncTarget()).isFalse();
+        assertThat(type.supportsFullSync()).isTrue();
     }
 
     @Test
@@ -60,7 +67,9 @@ class DatabaseTypePresetTest {
         assertThat(type.getDefaultPort()).isEqualTo(10000);
         assertThat(url(type)).isEqualTo("jdbc:hive2://localhost:10000/db");
         assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
-        assertThat(type.supportsFullSync()).isFalse();
+        assertThat(type.supportsSyncSource()).isTrue();
+        assertThat(type.supportsSyncTarget()).isFalse();
+        assertThat(type.supportsFullSync()).isTrue();
     }
 
     @Test
@@ -71,7 +80,9 @@ class DatabaseTypePresetTest {
         assertThat(type.getDefaultPort()).isEqualTo(21050);
         assertThat(url(type)).isEqualTo("jdbc:impala://localhost:21050/db");
         assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
-        assertThat(type.supportsFullSync()).isFalse();
+        assertThat(type.supportsSyncSource()).isTrue();
+        assertThat(type.supportsSyncTarget()).isFalse();
+        assertThat(type.supportsFullSync()).isTrue();
     }
 
     @Test
@@ -84,7 +95,9 @@ class DatabaseTypePresetTest {
         // template, and String.format ignores extras.
         assertThat(url(type)).isEqualTo("jdbc:es://http://localhost:9200");
         assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
-        assertThat(type.supportsFullSync()).isFalse();
+        assertThat(type.supportsSyncSource()).isTrue();
+        assertThat(type.supportsSyncTarget()).isFalse();
+        assertThat(type.supportsFullSync()).isTrue();
     }
 
     @Test
@@ -133,6 +146,8 @@ class DatabaseTypePresetTest {
                 .isEqualTo("jdbc:mongodb://atlas.example.net");
         assertThat(url(type)).isEqualTo("jdbc:mongodb://localhost:27017");
         assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
-        assertThat(type.supportsFullSync()).isFalse();
+        assertThat(type.supportsSyncSource()).isTrue();
+        assertThat(type.supportsSyncTarget()).isFalse();
+        assertThat(type.supportsFullSync()).isTrue();
     }
 }

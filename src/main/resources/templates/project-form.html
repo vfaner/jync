@@ -72,6 +72,8 @@
                             </select>
                         </div>
                     </div>
+                    <div class="help" id="source-only-hint"
+                         th:text="#{project.sourceOnlyHint}">Doris, ClickHouse, Hive, Impala, Elasticsearch and MongoDB can be sync sources only.</div>
                     <div class="help" th:if="${copyFrom != null}"
                          th:text="#{project.clone.targetHint}">Choose a different target for this project.</div>
                     <div class="help" id="endpoint-lock-hint" th:if="${topologyLocked}"

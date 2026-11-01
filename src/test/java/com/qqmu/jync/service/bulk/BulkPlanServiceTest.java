@@ -244,6 +244,21 @@ class BulkPlanServiceTest {
                 .hasMessage("error.project.bulk.target.role");
     }
 
+    /**
+     * 分析型 / 搜索型引擎只能读,不能写:它们的 JDBC 目标端没有事务、没有按主键 upsert。批量页
+     * 已经把六个从目标下拉里拿掉,直连 POST 仍可能指定;必须在连源库之前就拒绝。
+     */
+    @Test
+    void aPollingOnlyEngineIsRefusedAsTheTargetBeforeConnecting() {
+        target.setType(DatabaseType.CLICKHOUSE);
+
+        assertThatThrownBy(() -> service().plan(
+                new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.bulk.target.unsupported");
+        verify(dataSourceManager, never()).createTransientDataSource(any());
+    }
+
     @Test
     void aTaskCountBelowOneIsRefusedInsteadOfSilentlyBecomingOne() {
         assertThatThrownBy(() -> service().plan(

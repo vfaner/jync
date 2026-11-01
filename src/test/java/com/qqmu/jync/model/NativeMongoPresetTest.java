@@ -22,6 +22,8 @@ class NativeMongoPresetTest {
         assertThat(type.getDefaultPort()).isEqualTo(27017);
         assertThat(type.allowsBlankPort()).isFalse();
         assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
+        assertThat(type.supportsSyncSource()).isFalse();
+        assertThat(type.supportsSyncTarget()).isFalse();
         assertThat(type.supportsFullSync()).isFalse();
         assertThat(type.supportsEtlTarget()).isFalse();
     }

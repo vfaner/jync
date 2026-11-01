@@ -63,10 +63,14 @@ class ProjectFormViewTest {
     }
 
     private DatabaseConfig config(long id, String name, ConnectionRole role) {
+        return config(id, name, role, DatabaseType.MYSQL);
+    }
+
+    private DatabaseConfig config(long id, String name, ConnectionRole role, DatabaseType type) {
         DatabaseConfig c = new DatabaseConfig();
         c.setId(id);
         c.setName(name);
-        c.setType(DatabaseType.MYSQL);
+        c.setType(type);
         c.setRole(role);
         return c;
     }
@@ -93,6 +97,45 @@ class ProjectFormViewTest {
         String targetSelect = selectBlock(page, "targetDbId");
         assertThat(targetSelect).contains("tgt-only").doesNotContain("src-only");
         assertThat(page).doesNotContain("??project.", "??db.");
+    }
+
+    @Test
+    void sourceSelectorOffersPollingEnginesButTargetSelectorDoesNot() throws Exception {
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE)).thenReturn(List.of(
+                config(1L, "ch-src", ConnectionRole.SOURCE, DatabaseType.CLICKHOUSE),
+                config(2L, "h2-src", ConnectionRole.SOURCE, DatabaseType.H2)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET)).thenReturn(List.of(
+                config(3L, "mysql-tgt", ConnectionRole.TARGET),
+                config(4L, "ch-tgt", ConnectionRole.TARGET, DatabaseType.CLICKHOUSE)));
+
+        String page = mvc.perform(get("/projects/new").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // 分析型引擎有只读方言，可以当源；H2 没有家族，仍然不出现。
+        assertThat(selectBlock(page, "sourceDbId"))
+                .contains("ch-src").doesNotContain("h2-src");
+        // 同一个引擎不能当目标。
+        assertThat(selectBlock(page, "targetDbId"))
+                .contains("mysql-tgt").doesNotContain("ch-tgt");
+    }
+
+    @Test
+    void theFormExplainsThatAnalyticEnginesAreSourceOnly() throws Exception {
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(config(1L, "ch-src", ConnectionRole.SOURCE,
+                        DatabaseType.CLICKHOUSE)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET))
+                .thenReturn(List.of(config(2L, "mysql-tgt", ConnectionRole.TARGET)));
+
+        String page = mvc.perform(get("/projects/new").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The hint names the engines in both bundles, so asserting on the element and one
+        // product name works whichever locale the test JVM resolves.
+        assertThat(page).contains("id=\"source-only-hint\"").contains("ClickHouse");
+        assertThat(page).doesNotContain("??project.");
     }
 
     @Test

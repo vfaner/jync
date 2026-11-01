@@ -2,6 +2,7 @@ package com.qqmu.jync.service.converter;
 
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.model.DatabaseType;
@@ -13,7 +14,8 @@ public class SqlDialectFactory {
     private final List<SqlDialect> dialects;
     private final GenericSqlDialect fallback;
 
-    public SqlDialectFactory(List<SqlDialect> dialects, GenericSqlDialect fallback) {
+    public SqlDialectFactory(List<SqlDialect> dialects,
+                             @Qualifier("genericSqlDialect") GenericSqlDialect fallback) {
         this.dialects = dialects;
         this.fallback = fallback;
     }

@@ -377,6 +377,15 @@ public enum DatabaseType {
     private final int defaultPort;
     private final DialectFamily family;
 
+    /**
+     * Presets with no log-based CDC. They take part in real-time sync as polling / full-compare
+     * sources only: the read path is plain SELECT, which they all speak, while the write path
+     * (DDL, keyed upsert, delete) has no equivalent on them.
+     */
+    private static final Set<DatabaseType> POLLING_ONLY_SOURCES =
+            Collections.unmodifiableSet(EnumSet.of(
+                    DORIS, CLICKHOUSE, HIVE, IMPALA, ELASTICSEARCH, MONGODB));
+
     DatabaseType(String messageKey, String driverClassName, String urlTemplate,
                  int defaultPort, DialectFamily family) {
         this(messageKey, driverClassName, urlTemplate, null, defaultPort, family);
@@ -397,16 +406,42 @@ public enum DatabaseType {
     }
 
     /**
-     * Whether the full-sync engine can work with this product as a source or a target.
+     * Whether this product can be the source of a real-time sync project.
      *
      * <p>The engine decides structure, type mapping, upsert form and schema folding from the
      * {@link DialectFamily}; a product outside every family (H2, or a CUSTOM connection whose
-     * family was never declared) leaves it guessing with generic ANSI SQL. Those products are
-     * not offered for real-time projects. They remain usable in ETL, where the customer
-     * supplies the extraction SQL and Jync only copies rows.
+     * family was never declared) leaves it guessing with generic ANSI SQL. Those products stay
+     * out of real-time projects and remain usable in ETL, where the customer supplies the
+     * extraction SQL and Jync only copies rows.
+     *
+     * <p>The six {@linkplain #POLLING_ONLY_SOURCES polling-only engines} are the exception, and
+     * only as a source: reading needs nothing more than quoting and pagination, which their
+     * read-only dialects supply.
+     */
+    public boolean supportsSyncSource() {
+        return family != DialectFamily.GENERIC || POLLING_ONLY_SOURCES.contains(this);
+    }
+
+    /**
+     * Whether this product can be the target of a real-time sync project. The polling-only
+     * engines are deliberately excluded: a target needs CREATE TABLE, a keyed upsert and
+     * DELETE, and none of them has all three.
+     */
+    public boolean supportsSyncTarget() {
+        return family != DialectFamily.GENERIC;
+    }
+
+    /** True for the six engine presets that may only ever be a sync source. */
+    public boolean pollingOnlySource() {
+        return POLLING_ONLY_SOURCES.contains(this);
+    }
+
+    /**
+     * Either-role compatibility alias. Prefer {@link #supportsSyncSource()} or
+     * {@link #supportsSyncTarget()} at call sites that care which role is being filled.
      */
     public boolean supportsFullSync() {
-        return family != DialectFamily.GENERIC;
+        return supportsSyncSource() || supportsSyncTarget();
     }
 
     /**

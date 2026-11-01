@@ -85,6 +85,24 @@ public class DatabaseConfig {
         return effective != null && effective.supportsFullSync();
     }
 
+    /** Whether this connection may be the source of a real-time project. */
+    public boolean supportsSyncSource() {
+        DatabaseType effective = effectiveType();
+        return effective != null && effective.supportsSyncSource();
+    }
+
+    /** Whether this connection may be the target of a real-time project. */
+    public boolean supportsSyncTarget() {
+        DatabaseType effective = effectiveType();
+        return effective != null && effective.supportsSyncTarget();
+    }
+
+    /** Whether this connection is one of the six engine presets that may only be a source. */
+    public boolean pollingOnlySource() {
+        DatabaseType effective = effectiveType();
+        return effective != null && effective.pollingOnlySource();
+    }
+
     /**
      * Whether this connection may be the target of an ETL task. Presets answer from their own
      * product; a CUSTOM connection answers from its declared family, so a user who declared

@@ -133,6 +133,11 @@ public class BulkPlanService {
         if (target.getRole() != null && target.getRole() != ConnectionRole.TARGET) {
             throw new IllegalArgumentException("error.project.bulk.target.role");
         }
+        // Analytic / search engines have no transactional write path and no enforced primary
+        // key: the sync engine cannot load into them. Refuse before connecting to the source.
+        if (target.pollingOnlySource()) {
+            throw new IllegalArgumentException("error.project.bulk.target.unsupported");
+        }
         // Refuse a strategy the source cannot serve BEFORE the listing is read: the preview
         // must not present a plan that create() would then reject in saveConfig, and a bogus
         // strategy name has no reason to cost a source connect at all.

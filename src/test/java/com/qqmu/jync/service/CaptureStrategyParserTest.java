@@ -181,6 +181,21 @@ class CaptureStrategyParserTest {
                         CaptureStrategy.SQLSERVER_CDC);
     }
 
+    /**
+     * 六个分析型 / 搜索型引擎没有日志 CDC，只能轮询或全表比对。这条钉住策略卡片：卡片由
+     * supportedFor 驱动，若哪天有人给它们补了一个 CDC 策略，页面会跟着出现，这里先红。
+     */
+    @Test
+    void pollingOnlyEnginesGetExactlyPollingAndFullCompare() {
+        for (DatabaseType type : List.of(DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
+                DatabaseType.HIVE, DatabaseType.IMPALA,
+                DatabaseType.ELASTICSEARCH, DatabaseType.MONGODB)) {
+            assertThat(CaptureStrategyParser.supportedFor(type, type.getFamily()))
+                    .as(type.name())
+                    .containsExactly(CaptureStrategy.POLLING, CaptureStrategy.FULL_COMPARE);
+        }
+    }
+
     /** 源连接类型解析不出来时，页面只能给出与类型无关的两种。 */
     @Test
     void anUnknownSourceOffersOnlyTheTypeAgnosticStrategies() {

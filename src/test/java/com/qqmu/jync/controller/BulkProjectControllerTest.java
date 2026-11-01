@@ -98,6 +98,30 @@ class BulkProjectControllerTest {
                 .andExpect(model().attribute("targetDatabases", List.of(target)));
     }
 
+    /**
+     * 六个分析型 / 搜索型引擎只做同步源,不做目标;它们在来源下拉里照常出现,目标下拉里必须消失。
+     */
+    @Test
+    void pollingOnlyEnginesAreHiddenFromTheTargetSelector() throws Exception {
+        DatabaseConfig mysqlTarget = config(3L, "mysql-tgt");
+        mysqlTarget.setRole(ConnectionRole.TARGET);
+        DatabaseConfig clickHouseTarget = config(4L, "ch-tgt");
+        clickHouseTarget.setType(DatabaseType.CLICKHOUSE);
+        clickHouseTarget.setRole(ConnectionRole.TARGET);
+        DatabaseConfig clickHouseSource = config(5L, "ch-src");
+        clickHouseSource.setType(DatabaseType.CLICKHOUSE);
+        clickHouseSource.setRole(ConnectionRole.SOURCE);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(clickHouseSource));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET))
+                .thenReturn(List.of(mysqlTarget, clickHouseTarget));
+
+        mvc.perform(get("/projects/bulk"))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("sourceDatabases", List.of(clickHouseSource)))
+                .andExpect(model().attribute("targetDatabases", List.of(mysqlTarget)));
+    }
+
     @Test
     void theFormTellsThePageWhichStrategiesEachSourceSupports() throws Exception {
         DatabaseConfig oracle = config(1L, "oracle测试");

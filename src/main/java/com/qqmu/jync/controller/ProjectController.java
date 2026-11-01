@@ -186,8 +186,14 @@ public class ProjectController {
     }
 
     private List<DatabaseConfig> optionsForRole(ConnectionRole role, Long selectedId) {
+        // The two selectors ask different questions: a polling-only engine can read a source
+        // but must never appear as a target.
+        java.util.function.Predicate<DatabaseConfig> eligible =
+                role == ConnectionRole.TARGET
+                        ? DatabaseConfig::supportsSyncTarget
+                        : DatabaseConfig::supportsSyncSource;
         List<DatabaseConfig> options = databaseConfigService.findByRole(role).stream()
-                .filter(DatabaseConfig::supportsFullSync)
+                .filter(eligible)
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         // The current selection is appended even when it is no longer eligible: an existing
         // project keeps rendering the connection it was saved with instead of silently

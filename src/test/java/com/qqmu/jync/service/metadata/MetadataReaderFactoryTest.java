@@ -24,6 +24,7 @@ class MetadataReaderFactoryTest {
             new SqlServerMetadataReader(),
             new Db2MetadataReader(),
             new HanaMetadataReader(),
+            new KeylessEngineMetadataReader(),
             new GenericMetadataReader()));
 
     @Test
@@ -80,6 +81,24 @@ class MetadataReaderFactoryTest {
         assertThat(factory.forType(DatabaseType.HANA)).isInstanceOf(HanaMetadataReader.class);
         assertThat(factory.forType(DatabaseType.CUSTOM, DatabaseType.DialectFamily.HANA))
                 .isInstanceOf(HanaMetadataReader.class);
+    }
+
+    @Test
+    @DisplayName("六个分析型 / 搜索型引擎走无主键读取器，其余仍落到通用读取器")
+    void pollingOnlyEnginesGetTheKeylessReader() {
+        for (DatabaseType type : List.of(DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
+                DatabaseType.HIVE, DatabaseType.IMPALA,
+                DatabaseType.ELASTICSEARCH, DatabaseType.MONGODB)) {
+            assertThat(factory.forType(type))
+                    .as("%s 应路由到 KeylessEngineMetadataReader", type)
+                    .isInstanceOf(KeylessEngineMetadataReader.class);
+        }
+        // H2 and the native MongoDB driver stay on the generic reader: neither takes part in
+        // real-time sync, but the fallback must not be widened by the new reader.
+        for (DatabaseType type : List.of(DatabaseType.H2, DatabaseType.MONGODB_NATIVE)) {
+            assertThat(factory.forType(type)).as("%s", type)
+                    .isExactlyInstanceOf(GenericMetadataReader.class);
+        }
     }
 
     @Test
