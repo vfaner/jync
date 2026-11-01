@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.cdc;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -130,7 +131,25 @@ public final class CdcRuntimeStats {
     /** Whether {@link #retainedWalBytes} crossed the configured warning threshold. */
     private volatile boolean retainedWalHigh;
 
-    private volatile long lastEventEpochMillis;
+    /**
+     * How late the newest processed event was, in ms; -1 before any connection, 0 from
+     * connect until a post-connection event arrives. Measured once, when the event is
+     * applied — not recomputed from "now", or an idle source would look more and more
+     * behind while the consumer is perfectly caught up.
+     */
+    private volatile long lastEventLatenessMillis = -1L;
+    /**
+     * Wall-clock time the newest event was processed; -1 before the first event. Unlike
+     * {@link #lastEventLatenessMillis} this is an absolute time, so the panel can show
+     * 「上次事件」 without implying how far behind anything is.
+     */
+    private volatile long lastEventAtMillis = -1L;
+    /**
+     * When the current connection was established; -1 before the first one. Events whose
+     * source timestamp predates it are replay from the stored position — catch-up work,
+     * not current lag (see {@link #touchEvent(long)}).
+     */
+    private volatile long connectedAtMillis = -1L;
     private volatile long startedAtMillis;
 
     // —— counters ——
@@ -307,6 +326,16 @@ public final class CdcRuntimeStats {
     // —— connection state ——
 
     public void setConnected(boolean connected) {
+        if (connected && !this.connected) {
+            long now = clockMillis.getAsLong();
+            this.connectedAtMillis = now;
+            // A (re)connect resumes from the stored position: whatever is already sitting in
+            // the log is replayed catch-up, not a delay this connection has fallen into. A
+            // fresh connection starts at zero lag; touchEvent() keeps pre-connection events
+            // from raising it again, so an idle source does not freeze at a huge number
+            // (measured: 1,135 s after a restart, with no new event ever replacing it).
+            this.lastEventLatenessMillis = 0L;
+        }
         this.connected = connected;
     }
 
@@ -403,17 +432,49 @@ public final class CdcRuntimeStats {
         return positionLsn;
     }
 
+    /**
+     * Record that an event with source timestamp {@code epochMillis} has just been applied.
+     *
+     * <p>The engine keeps this event's own lateness, not the clock it is called at: the lag
+     * card answers "how far behind was the stream when we handled the newest change", and a
+     * source that simply has nothing to replicate is caught up, not falling behind. Engines
+     * that poll and pass their own current time therefore stay at zero between changes.
+     *
+     * <p>An event produced <em>before</em> this connection was established is replay from
+     * the stored position. It still counts as activity (「上次事件」 moves), but not as
+     * current lag — otherwise a restart against an idle source pins the panel at the age of
+     * the last old event until the source happens to change again.
+     */
     public void touchEvent(long epochMillis) {
-        this.lastEventEpochMillis = epochMillis;
+        long now = clockMillis.getAsLong();
+        this.lastEventAtMillis = now;
+        if (epochMillis <= 0 || epochMillis > now) {
+            this.lastEventLatenessMillis = 0L;
+            return;
+        }
+        if (epochMillis < connectedAtMillis) {
+            return;
+        }
+        this.lastEventLatenessMillis = now - epochMillis;
     }
 
-    /** Seconds since the last event; -1 while disconnected or before the first event. */
+    /** Wall-clock time the newest event was processed, or null before the first event. */
+    public Instant getLastEventAt() {
+        long at = lastEventAtMillis;
+        return at > 0 ? Instant.ofEpochMilli(at) : null;
+    }
+
+    /**
+     * How late the newest processed event was, in seconds; -1 while disconnected or before
+     * the first connection. Zero on an idle stream that is caught up — it does not grow with
+     * wall-clock time, and replay from the stored position does not raise it.
+     */
     public long lagSeconds() {
-        long last = lastEventEpochMillis;
-        if (!connected || last <= 0) {
+        long lateness = lastEventLatenessMillis;
+        if (!connected || lateness < 0) {
             return -1L;
         }
-        return Math.max(0L, (System.currentTimeMillis() - last) / 1000L);
+        return lateness / 1000L;
     }
 
     // —— throughput ——
@@ -462,6 +523,7 @@ public final class CdcRuntimeStats {
         snapshot.put("retainedWalLabel", getRetainedWalLabel());
         snapshot.put("retainedWalHigh", retainedWalHigh);
         snapshot.put("lagSeconds", lagSeconds());
+        snapshot.put("lastEventAt", getLastEventAt());
         snapshot.put("eventsPerSecond", eventsPerSecond());
         snapshot.put("rowsApplied", getRowsApplied());
         snapshot.put("skippedDdl", skippedDdl.get());

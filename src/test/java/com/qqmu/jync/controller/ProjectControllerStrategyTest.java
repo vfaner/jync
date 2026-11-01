@@ -13,6 +13,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -39,6 +41,7 @@ import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
+import com.qqmu.jync.service.cdc.CdcRuntimeStats;
 
 /**
  * C1 策略卡片在控制器层的四件事:合法策略透传、非法策略拦下且不透传、非 MySQL 源库
@@ -536,6 +539,31 @@ class ProjectControllerStrategyTest {
         // 端点存在的意义就是放过源库:对象列举与就绪探测绝不重跑。
         verify(projectService, never()).listSourceObjects(anyLong());
         verify(cdcOperationsService, never()).probeProject(anyLong());
+    }
+
+    /**
+     * 用户看着「落后 566 秒」只会觉得这套同步很慢,哪怕源库根本空闲。卡片改为显示
+     * 「上次事件」的时刻:处理过事件就是那一刻的墙钟时间。多列自适应容器让宽屏一行
+     * 排几列、不再拖出一整行的空白。
+     */
+    @Test
+    void cdcCardShowsTheLastEventTimeInsteadOfALagCounter() throws Exception {
+        stubCdcDetail(true);
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        stats.setConnected(true);
+        stats.touchEvent(System.currentTimeMillis());
+        when(cdcConsumerManager.statsFor(1L)).thenReturn(stats);
+
+        String fragment = mvc.perform(get("/projects/1/cdc-card"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String expected = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                .withZone(ZoneId.systemDefault())
+                .format(stats.getLastEventAt());
+        assertThat(fragment).contains("class=\"dl auto\"");
+        assertThat(fragment).contains("id=\"cdc-last-event\"");
+        assertThat(fragment).contains(expected);
     }
 
     @Test

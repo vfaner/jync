@@ -144,16 +144,17 @@ class YStreamCdcConsumerTest {
     }
 
     @Test
-    void aDeliveredEventRefreshesTheLagClock() throws Exception {
-        // project-detail renders stats.lagSeconds, and every other engine touches this
-        // clock as it delivers. A YStream stream that never does shows "—" forever even
-        // while rows are flowing, which reads as "stalled" to whoever is watching.
+    void aDeliveredEventRefreshesTheLastEventTime() throws Exception {
+        // Every other engine touches this clock as it delivers; the detail card's
+        // 「上次事件」 comes from it. A YStream stream that never does would claim no
+        // event was ever applied even while rows are flowing.
         stats.setConnected(true);
-        assertThat(stats.lagSeconds()).isEqualTo(-1L);
+        assertThat(stats.snapshot().get("lastEventAt")).isNull();
 
         consumer.handle(insert("ORDERS", row(9L, "nine"), pos(3)));
 
-        assertThat(stats.lagSeconds()).isGreaterThanOrEqualTo(0L);
+        assertThat(stats.snapshot().get("lastEventAt")).isNotNull();
+        assertThat(stats.lagSeconds()).isZero();
     }
 
     private static Project project() {

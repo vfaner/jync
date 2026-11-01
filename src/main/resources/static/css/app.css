@@ -1075,6 +1075,13 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .dl.pairs .kv.wide dd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 /* flex 子项的 min-width 是 auto，不置 0 就永远缩不到最宽那个词以下，断行也就无从发生。 */
 .dl.pairs .kv.wide dd .help { margin-top: 0; max-width: none; min-width: 0; }
+/* 指标型 dl（CDC 状态）：按可用宽度自动排成多列——宽屏一行好几格，窗口变窄自动
+   减少，不再让一行指标独占整张卡；900px 断点回退单列。标签在上、值在下，长英文
+   标签（Missing-LOB changes skipped）也不会挤掉右侧的数字。.wide 行跨满整行。 */
+.dl.auto { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px 28px; }
+.dl.auto .kv { display: grid; gap: 3px; align-content: start; }
+.dl.auto .kv.wide { grid-column: 1 / -1; }
+.dl.auto .kv.wide dd { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 
 /* ─── 活动流 ────────────────────────────────────────────── */
 .feed { list-style: none; margin: 0; padding: 0; }
@@ -1390,6 +1397,9 @@ table.tbl a.truncate { display: block; }
   /* .kv 成对的 dl 同样收单列，但配对内部保持「标签 + 值」一行 */
   .dl.pairs { grid-template-columns: 1fr; gap: 9px 0; }
   .dl.pairs dt { margin-top: 0; }
+  /* 指标格在手机上逐条竖排；标签在上、值在下，与宽屏一致 */
+  .dl.auto { grid-template-columns: 1fr; gap: 12px 0; }
+  .dl.auto dt { margin-top: 0; }
 }
 /* ─── 登录页 ────────────────────────────────────────────
    唯一不套 layout 的页面。只用既有 CSS 变量，因此深色主题
