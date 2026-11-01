@@ -202,6 +202,45 @@ class TablePreviewServiceTest {
         verify(familyDialect).qualify("PUBLIC", "ORDERS");
     }
 
+    /**
+     * DB2 folds unquoted identifiers upper case exactly like Oracle. The reader already folds
+     * the schema for its catalog lookup, but the preview SELECT is built by the dialect, which
+     * quotes the schema verbatim — an unfolded lower-case name would address a case-sensitive
+     * twin that DB2 does not have.
+     */
+    @Test
+    void aDb2ConnectionFoldsItsSchemaBeforeQuotingThePreviewSql() throws SQLException {
+        createOrders(1);
+        source.setType(DatabaseType.CUSTOM);
+        source.setDialectFamily(DatabaseType.DialectFamily.DB2);
+        source.setSchemaName("public");
+        source.setCustomUrl("jdbc:h2:mem:table_preview");
+
+        MetadataReader familyReader = mock(MetadataReader.class);
+        when(familyReader.supports(DatabaseType.DB2)).thenReturn(true);
+        when(familyReader.listTableNames(any(Connection.class), eq("PUBLIC")))
+                .thenReturn(List.of("ORDERS"));
+        when(familyReader.listViewNames(any(Connection.class), eq("PUBLIC")))
+                .thenReturn(List.of());
+        SqlDialect familyDialect = mock(SqlDialect.class);
+        when(familyDialect.family()).thenReturn(DatabaseType.DialectFamily.DB2);
+        when(familyDialect.explicitType()).thenReturn(null);
+        when(familyDialect.withServerMajorVersion(null)).thenReturn(familyDialect);
+        when(familyDialect.forProduct(any())).thenReturn(familyDialect);
+        when(familyDialect.qualify("PUBLIC", "ORDERS"))
+                .thenReturn("\"PUBLIC\".\"ORDERS\"");
+
+        service = new TablePreviewService(projectRepository, databaseConfigRepository,
+                dataSourceManager, new MetadataReaderFactory(List.of(familyReader)),
+                new SqlDialectFactory(List.of(familyDialect), new GenericSqlDialect()),
+                new ObjectMapper());
+
+        TablePreview preview = service.preview(1L, "orders", TablePreviewService.Side.SOURCE);
+
+        assertThat(preview.schema()).isEqualTo("PUBLIC");
+        verify(familyDialect).qualify("PUBLIC", "ORDERS");
+    }
+
     @Test
     void formatsNullBinaryAndLongCellsForTransport() throws SQLException {
         try (Statement st = connection.createStatement()) {

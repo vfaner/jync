@@ -44,10 +44,17 @@ public final class CursorIndexProbe {
             return null;
         }
         boolean mysqlFamily = family == DialectFamily.MYSQL;
+        // Oracle- and DB2-family dictionaries key unquoted identifiers upper case; a
+        // lower-case configured schema matches no row, and the probe would report a table
+        // that has the index as unindexed. PostgreSQL keeps whatever case it was given.
+        String dictionarySchema = !mysqlFamily
+                && (family == DialectFamily.ORACLE || family == DialectFamily.DB2)
+                && schema != null && !schema.isBlank()
+                        ? schema.toUpperCase(java.util.Locale.ROOT) : schema;
         try {
             DatabaseMetaData md = conn.getMetaData();
             try (ResultSet rs = md.getIndexInfo(mysqlFamily ? schema : null,
-                    mysqlFamily ? null : schema, table, false, true)) {
+                    mysqlFamily ? null : dictionarySchema, table, false, true)) {
                 while (rs.next()) {
                     String indexedColumn = rs.getString("COLUMN_NAME");
                     if (indexedColumn == null) {

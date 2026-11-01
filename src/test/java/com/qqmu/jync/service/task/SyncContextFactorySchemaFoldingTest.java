@@ -40,6 +40,25 @@ class SyncContextFactorySchemaFoldingTest {
                 .isEqualTo("APP");
     }
 
+    /**
+     * DB2 keys unquoted identifiers upper case exactly like Oracle, and the DB2 reader already
+     * folds the schema for its catalog lookups. The target DDL quotes the schema verbatim, so a
+     * lower-case configured name would address a schema DB2 does not have — the bulk plan path
+     * already folds DB2, and this path must agree with it.
+     */
+    @Test
+    void aDb2PresetFoldsItsSchema() {
+        assertThat(factory.normalizeConfiguredSchema(db(DatabaseType.DB2, null), "app"))
+                .isEqualTo("APP");
+    }
+
+    @Test
+    void aCustomDb2ConnectionFoldsItsSchemaTheSameWay() {
+        assertThat(factory.normalizeConfiguredSchema(
+                        db(DatabaseType.CUSTOM, DatabaseType.DialectFamily.DB2), "app"))
+                .isEqualTo("APP");
+    }
+
     @Test
     void otherFamiliesKeepTheConfiguredCase() {
         assertThat(factory.normalizeConfiguredSchema(

@@ -289,9 +289,12 @@ public class TablePreviewService {
             throws SQLException {
         if (config.getSchemaName() != null && !config.getSchemaName().isBlank()) {
             String schema = config.getSchemaName().trim();
-            // Oracle-family dictionaries fold unquoted identifiers to upper case; quoting the
-            // user's lower-case spelling would target a case-sensitive twin that does not exist.
-            return config.resolvedFamily() == DatabaseType.DialectFamily.ORACLE
+            // Oracle- and DB2-family dictionaries fold unquoted identifiers to upper case;
+            // quoting the user's lower-case spelling would target a case-sensitive twin that
+            // does not exist.
+            DatabaseType.DialectFamily family = config.resolvedFamily();
+            return family == DatabaseType.DialectFamily.ORACLE
+                    || family == DatabaseType.DialectFamily.DB2
                     ? schema.toUpperCase(java.util.Locale.ROOT) : schema;
         }
         return reader.resolveDefaultSchema(conn);

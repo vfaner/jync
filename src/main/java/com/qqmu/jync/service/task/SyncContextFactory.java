@@ -228,11 +228,15 @@ public class SyncContextFactory {
     }
 
     /**
-     * Oracle-family dictionaries key unquoted identifiers upper case. Uses the resolved
-     * family, so a CUSTOM connection that declared Oracle folds exactly like the preset.
+     * Oracle- and DB2-family dictionaries key unquoted identifiers upper case. Uses the
+     * resolved family, so a CUSTOM connection that declared either one folds exactly like the
+     * preset. The target DDL quotes the schema verbatim, so an unfolded lower-case name would
+     * address a schema that does not exist (the bulk plan path folds DB2 for the same reason).
      */
     String normalizeConfiguredSchema(DatabaseConfig config, String schema) {
-        if (config != null && config.resolvedFamily() == DatabaseType.DialectFamily.ORACLE) {
+        if (config != null
+                && (config.resolvedFamily() == DatabaseType.DialectFamily.ORACLE
+                        || config.resolvedFamily() == DatabaseType.DialectFamily.DB2)) {
             return schema.toUpperCase(java.util.Locale.ROOT);
         }
         return schema;
