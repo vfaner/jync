@@ -11,6 +11,10 @@
   /* 采样是后台定时写的，页面 10 秒拉一次；隐藏标签页时停掉，回来立刻补一次。 */
   var REFRESH_INTERVAL = 10000;
 
+  /* 每张折线图的面积渐变必须有全局唯一的 id：同一文档里重复 id 时，url(#id) 只会解析到
+     文档顺序中的第一个，导致项目页所有曲线（吞吐 / 延迟 / 失败）的面积都染成第一张图的颜色。 */
+  var gradientSeq = 0;
+
   function cssVar(name, fallback) {
     var value = getComputedStyle(document.documentElement).getPropertyValue(name);
     return (value && value.replace(/^\s+|\s+$/g, '')) || fallback;
@@ -213,7 +217,9 @@
     clear(slot);
     var svg = el('svg', { width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
     var defs = el('defs', {});
-    var gradient = el('linearGradient', { id: 'jync-metric-fill', x1: '0', y1: '0', x2: '0', y2: '1' });
+    gradientSeq += 1;
+    var fillId = 'jync-metric-fill-' + gradientSeq;
+    var gradient = el('linearGradient', { id: fillId, x1: '0', y1: '0', x2: '0', y2: '1' });
     gradient.appendChild(el('stop', { offset: '0%', 'stop-color': color, 'stop-opacity': '0.26' }));
     gradient.appendChild(el('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': '0' }));
     defs.appendChild(gradient);
@@ -260,7 +266,7 @@
       svg.appendChild(el('path', {
         d: d + ' L' + segment[segment.length - 1].x + ' ' + baseY
           + ' L' + segment[0].x + ' ' + baseY + ' Z',
-        fill: 'url(#jync-metric-fill)', stroke: 'none'
+        fill: 'url(#' + fillId + ')', stroke: 'none'
       }));
       svg.appendChild(el('path', {
         d: d, fill: 'none', stroke: color, 'stroke-width': 2.2,
