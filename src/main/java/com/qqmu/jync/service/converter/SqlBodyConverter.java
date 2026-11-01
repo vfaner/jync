@@ -94,6 +94,18 @@ public class SqlBodyConverter {
         toDb2.put("GETDATE", "CURRENT TIMESTAMP");
         toDb2.put("NOW", "CURRENT TIMESTAMP");
         functionMaps.put(DatabaseType.DialectFamily.DB2, toDb2);
+
+        // HANA's own spellings; each replacement was checked against HANA Express 2.00.082.
+        Map<String, String> toHana = new LinkedHashMap<>();
+        toHana.put("NVL", "COALESCE");
+        toHana.put("IFNULL", "COALESCE");
+        toHana.put("ISNULL", "COALESCE");
+        toHana.put("SYSDATE", "CURRENT_TIMESTAMP");
+        toHana.put("SYSTIMESTAMP", "CURRENT_TIMESTAMP");
+        toHana.put("GETDATE", "CURRENT_TIMESTAMP");
+        toHana.put("NOW", "CURRENT_TIMESTAMP");
+        toHana.put("LEN", "LENGTH");
+        functionMaps.put(DatabaseType.DialectFamily.HANA, toHana);
     }
 
     /**
@@ -514,24 +526,50 @@ public class SqlBodyConverter {
     /** Oracle's {@code FROM DUAL} has no equivalent elsewhere and must be dropped. */
     String convertDualTable(String sql, DatabaseType.DialectFamily from,
                             DatabaseType.DialectFamily to) {
+        String result = sql;
         if (from == DatabaseType.DialectFamily.ORACLE && to != DatabaseType.DialectFamily.ORACLE) {
-            return applyOutsideLiterals(sql, from, to, code -> {
+            result = applyOutsideLiterals(result, from, to, code -> {
                 if (to == DatabaseType.DialectFamily.DB2) {
                     return code.replaceAll("(?i)\\bFROM\\s+DUAL\\b",
                             "FROM SYSIBM.SYSDUMMY1");
                 }
+                if (to == DatabaseType.DialectFamily.HANA) {
+                    return code.replaceAll("(?i)\\bFROM\\s+DUAL\\b", "FROM DUMMY");
+                }
                 return code.replaceAll("(?i)\\s+FROM\\s+DUAL\\b", "");
+            });
+        } else if (from == DatabaseType.DialectFamily.HANA && to != DatabaseType.DialectFamily.HANA) {
+            // DUMMY is HANA's dummy table. Oracle needs DUAL, MySQL accepts it, DB2 has its
+            // own; PostgreSQL and SQL Server have none, so the clause goes.
+            result = applyOutsideLiterals(result, from, to, code -> {
+                if (to == DatabaseType.DialectFamily.ORACLE
+                        || to == DatabaseType.DialectFamily.MYSQL) {
+                    return code.replaceAll("(?i)\\bFROM\\s+DUMMY\\b", "FROM DUAL");
+                }
+                if (to == DatabaseType.DialectFamily.DB2) {
+                    return code.replaceAll("(?i)\\bFROM\\s+DUMMY\\b", "FROM SYSIBM.SYSDUMMY1");
+                }
+                return code.replaceAll("(?i)\\s+FROM\\s+DUMMY\\b", "");
             });
         }
         if (to == DatabaseType.DialectFamily.ORACLE && from != DatabaseType.DialectFamily.ORACLE) {
             // A bare SELECT without FROM is invalid in Oracle. Test the masked text so a FROM
             // mentioned inside a literal or comment is not mistaken for a real FROM clause.
-            String masked = maskNonCode(sql, from, to);
+            String masked = maskNonCode(result, from, to);
             if (masked.matches("(?is)^\\s*SELECT\\s+(?!.*\\bFROM\\b).*$")) {
-                return sql.trim() + " FROM DUAL";
+                result = result.trim() + " FROM DUAL";
+            }
+        } else if (to == DatabaseType.DialectFamily.HANA
+                && from != DatabaseType.DialectFamily.HANA) {
+            // Same for HANA, which rejects a SELECT without FROM and spells the dummy table
+            // DUMMY. Testing the masked text keeps a literal that mentions FROM from
+            // suppressing the fix.
+            String masked = maskNonCode(result, from, to);
+            if (masked.matches("(?is)^\\s*SELECT\\s+(?!.*\\bFROM\\b).*$")) {
+                result = result.trim() + " FROM DUMMY";
             }
         }
-        return sql;
+        return result;
     }
 
     /**

@@ -254,6 +254,56 @@ class SqlBodyConverterTest {
         assertThat(out).endsWith("AS note");
     }
 
+    // --- SAP HANA: DUMMY in, DUMMY out -----------------------------------------------
+
+    /**
+     * HANA's dummy table is DUMMY. Oracle spells it DUAL, MySQL accepts DUAL, DB2 has
+     * SYSIBM.SYSDUMMY1. PostgreSQL and SQL Server have none, so the clause goes — the row
+     * still evaluates there, as it does for the Oracle→PostgreSQL path above.
+     */
+    @Test
+    void hanaDummyIsTranslatedForEachTarget() {
+        assertThat(converter.convert("SELECT 1 FROM DUMMY", DatabaseType.HANA,
+                DatabaseType.ORACLE)).isEqualTo("SELECT 1 FROM DUAL");
+        assertThat(converter.convert("SELECT 1 FROM DUMMY", DatabaseType.HANA,
+                DatabaseType.MYSQL)).isEqualTo("SELECT 1 FROM DUAL");
+        assertThat(converter.convert("SELECT 1 FROM DUMMY", DatabaseType.HANA,
+                DatabaseType.DB2)).contains("SYSIBM.SYSDUMMY1");
+        assertThat(converter.convert("SELECT 1 FROM DUMMY", DatabaseType.HANA,
+                DatabaseType.POSTGRESQL)).isEqualTo("SELECT 1");
+    }
+
+    /** The dummy table carries a WHERE clause in real bodies; it must survive the rewrite. */
+    @Test
+    void aFilteredDummyQueryKeepsItsFilter() {
+        assertThat(converter.convert("SELECT a FROM DUMMY WHERE 1 = 1",
+                DatabaseType.HANA, DatabaseType.ORACLE))
+                .isEqualTo("SELECT a FROM DUAL WHERE 1 = 1");
+    }
+
+    /** HANA rejects a SELECT with no FROM (syntax error), so a bare one gains FROM DUMMY. */
+    @Test
+    void aBareSelectGetsFromDummyWhenTheTargetIsHana() {
+        assertThat(converter.convert("SELECT 1", DatabaseType.MYSQL, DatabaseType.HANA))
+                .isEqualTo("SELECT 1 FROM DUMMY");
+    }
+
+    @Test
+    void anOracleDualBecomesDummyForHana() {
+        assertThat(converter.convert("SELECT 1 FROM DUAL", DatabaseType.ORACLE,
+                DatabaseType.HANA)).isEqualTo("SELECT 1 FROM DUMMY");
+        assertThat(converter.convert("SELECT a FROM DUAL WHERE 1 = 1", DatabaseType.ORACLE,
+                DatabaseType.HANA)).isEqualTo("SELECT a FROM DUMMY WHERE 1 = 1");
+    }
+
+    @Test
+    void functionsAreRewrittenForHana() {
+        assertThat(converter.convert("SELECT IFNULL(a, 0)", DatabaseType.MYSQL,
+                DatabaseType.HANA)).contains("COALESCE(a, 0)");
+        assertThat(converter.convert("SELECT NOW()", DatabaseType.ORACLE,
+                DatabaseType.HANA)).contains("CURRENT_TIMESTAMP");
+    }
+
     /**
      * A bare SELECT whose literal mentions FROM must still gain FROM DUAL for Oracle; the old
      * blind regex saw the literal's FROM and skipped it, producing invalid Oracle SQL.
