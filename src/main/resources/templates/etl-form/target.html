@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="grid-2" th:fragment="block">
+    <div class="field" data-role="target-table"
+         th:attr="data-tables-url=@{/api/databases},
+                  data-loading-text=#{etl.targetTable.loading},
+                  data-loaded-text=#{etl.targetTable.loaded},
+                  data-failed-text=#{etl.targetTable.loadFailed},
+                  data-empty-text=#{etl.targetTable.noTables},
+                  data-no-match-text=#{etl.targetTable.noMatch}">
+        <label for="targetTable" th:text="#{etl.targetTable}">Target table</label>
+        <div class="table-picker">
+            <input type="text" class="input" id="targetTable" name="targetTable"
+                   maxlength="256" required autocomplete="off"
+                   role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="targetTablePanel"
+                   th:value="${task.targetTable}">
+            <div class="table-picker-panel" id="targetTablePanel"
+                 data-role="target-table-panel" role="listbox" hidden></div>
+        </div>
+        <div class="help" data-role="target-table-status" hidden></div>
+        <div class="help" th:text="#{etl.targetTable.hint}">Plain or schema-qualified name — pick from the list or type it. Created once when missing, never altered.</div>
+    </div>
+    <div class="field">
+        <label for="writeMode" th:text="#{etl.writeMode}">Write mode</label>
+        <select class="select" id="writeMode" name="writeMode">
+            <option th:each="mode : ${writeModes}" th:value="${mode.name()}"
+                    th:selected="${task.writeMode != null and mode == task.writeMode}"
+                    th:text="#{${'etl.mode.' + mode.name()}}">Overwrite</option>
+        </select>
+        <div class="help" th:text="#{etl.writeMode.hint}">Overwrite deletes all target rows; append never deletes; range overwrite deletes one range.</div>
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="card" style="margin-top:16px" th:fragment="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#clock"/></svg>
+            <span th:text="${task.batchId != null} ? #{etl.batch.memberManaged} : #{etl.form.schedule}">Schedule</span></h2>
+    </div>
+    <div class="card-body">
+        <div class="help mb-12" th:if="${task.batchId != null}"
+             th:text="#{etl.batch.cron.hint}">The batch owns the schedule.</div>
+        <div class="grid-2">
+            <div class="field" th:if="${task.batchId == null}">
+                <label for="cronExpression" th:text="#{etl.cron}">Cron expression</label>
+                <input type="text" class="input" id="cronExpression" name="cronExpression"
+                       maxlength="128" placeholder="0 0 2 * * *" th:value="${task.cronExpression}">
+                <div class="help" th:text="#{etl.cron.hint}">Leave blank for manual-only. Saving does not enable the task; use the start button in the list.</div>
+            </div>
+            <div class="field">
+                <label for="timeoutSeconds" th:text="#{etl.timeout}">Query timeout (seconds)</label>
+                <input type="number" class="input" id="timeoutSeconds" name="timeoutSeconds"
+                       min="0" th:value="${task.timeoutSeconds}">
+                <div class="help" th:text="#{etl.timeout.hint}">Blank or 0 means no limit.</div>
+            </div>
+        </div>
+
+        <div class="btn-row">
+            <button type="submit" class="btn btn-primary" th:formaction="@{/etl/save}">
+                <svg class="ico"><use href="#check-lg"/></svg>
+                <span th:text="#{common.save}">Save</span>
+            </button>
+            <button type="submit" class="btn btn-ghost" th:formaction="@{/etl/precheck}">
+                <svg class="ico"><use href="#search"/>
+                <span th:text="#{etl.precheck.run}">Precheck</span>
+            </button>
+            <a class="btn btn-ghost" th:href="@{/etl}" th:text="#{common.cancel}">Cancel</a>
+        </div>
+    </div>
+</div>
+</body>
+</html>

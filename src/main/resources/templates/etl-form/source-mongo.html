@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="grid-2" data-role="source-mongo-group" th:hidden="${!sourceMongo}" th:fragment="block">
+    <div class="field">
+        <label for="sourceCollection" th:text="#{etl.sourceCollection}">Collection</label>
+        <input type="text" class="input" id="sourceCollection" name="sourceCollection"
+               maxlength="255" th:value="${task.sourceCollection}">
+        <div class="help" th:text="#{etl.sourceCollection.hint}">Native MongoDB source only. SQL sources leave it blank.</div>
+    </div>
+    <div class="field">
+        <label for="sourceFilter" th:text="#{etl.sourceFilter}">Filter (Extended JSON)</label>
+        <textarea class="input" id="sourceFilter" name="sourceFilter" rows="4"
+                  maxlength="4000" placeholder="{}" th:text="${task.sourceFilter}"></textarea>
+        <div class="help" th:text="#{etl.sourceFilter.hint}">Optional native MongoDB query document. {$where} and friends are refused.</div>
+    </div>
+</div>
+</body>
+</html>

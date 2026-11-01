@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="card" th:fragment="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#arrow-repeat"/></svg>
+            <span th:text="#{etl.form.basic}">Task</span></h2>
+    </div>
+    <div class="card-body">
+        <div class="grid-2">
+            <div class="field">
+                <label for="name" th:text="#{common.name}">Name</label>
+                <input type="text" class="input" id="name" name="name"
+                       maxlength="128" required th:value="${task.name}">
+            </div>
+            <div class="field">
+                <label for="description" th:text="#{etl.description}">Description</label>
+                <input type="text" class="input" id="description" name="description"
+                       maxlength="512" th:value="${task.description}">
+            </div>
+        </div>
+
+        <th:block th:replace="~{etl-form/connections :: block}"/>
+        <th:block th:replace="~{etl-form/source-sql :: block}"/>
+        <th:block th:replace="~{etl-form/source-mongo :: block}"/>
+        <!--/* 源引擎专属参数插槽：MongoDB 已由上面的独立模块承接；Hive / Impala /
+             ClickHouse 等将来有专属取数参数时，新增 etl-form/source-<库>.html
+             （片段名 block）并在这里引用，其它引擎的模块不动。 */-->
+        <th:block th:replace="~{etl-form/target :: block}"/>
+        <!--/* 目标引擎专属参数插槽：某个目标库有专属写入参数时，新增
+             etl-form/target-<库>.html（片段名 block）并在这里引用。 */-->
+        <th:block th:replace="~{etl-form/options :: block}"/>
+    </div>
+</div>
+</body>
+</html>

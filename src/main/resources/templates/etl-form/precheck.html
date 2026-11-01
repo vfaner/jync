@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="card" style="margin-top:16px" th:if="${precheck != null or precheckError != null}" th:fragment="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#check-circle-fill"/></svg>
+            <span th:text="#{etl.precheck.title}">Precheck</span></h2>
+    </div>
+    <div class="card-body">
+        <div th:if="${precheckError != null}" class="alert alert-danger">
+            <div class="alert-body" th:text="#{precheckError}">Precheck failed: invalid task</div>
+        </div>
+
+        <div th:if="${precheck != null}">
+            <div class="mb-12">
+                <span class="badge"
+                      th:class="${precheck.passed()} ? 'badge-ok' : 'badge-danger'"
+                      th:text="#{${precheck.passed() ? 'etl.precheck.summary.passed' : 'etl.precheck.summary.failed'}}">
+                    Passed / Failed
+                </span>
+                <span class="small muted ml-8" th:text="#{etl.precheck.columns}">Columns in result: {0}</span>
+            </div>
+
+            <div class="grid" style="grid-template-columns: 1fr 1fr; gap:16px">
+                <div>
+                    <h3 class="small" th:text="#{etl.precheck.checks}">Checks</h3>
+                    <div th:if="${precheck.checks.isEmpty()}" class="small muted">No checks performed (empty task?)</div>
+                    <div th:each="check : ${precheck.checks}" class="mb-4">
+                        <span class="badge"
+                              th:class="${check.level.name() == 'OK' ? 'badge-ok' : check.level.name() == 'WARN' ? 'badge-warn' : 'badge-danger'}"
+                              th:text="${check.code}">Code</span>
+                        <span class="small" th:text="${check.detail}">(detail)</span>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="small" th:text="#{etl.precheck.resultColumns}">Result columns</h3>
+                    <div class="small" th:if="${precheck.columns.isEmpty()}" th:text="#{etl.precheck.noColumns}">No columns (empty query?)</div>
+                    <div th:each="col : ${precheck.columns}" class="flex justify-between mb-2">
+                        <span class="mono small" th:text="${col.name}">name</span>
+                        <span class="muted small" th:text="${col.typeName}">type</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

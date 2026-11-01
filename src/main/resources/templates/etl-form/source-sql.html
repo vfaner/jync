@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="field" data-role="source-sql-group" th:hidden="${sourceMongo}" th:fragment="block">
+    <div class="label-row" style="justify-content:space-between">
+        <label for="sourceSql" th:text="#{etl.sourceSql}">Extraction SQL</label>
+        <label class="btn btn-ghost btn-sm" for="sourceSqlFile">
+            <svg class="ico" aria-hidden="true"><use href="#code-square"/></svg>
+            <span th:text="#{etl.sourceSql.loadFile}">Load .sql file</span>
+        </label>
+        <!-- Read in the browser into the textarea; posted nowhere, because the
+             form is a urlencoded POST the controller never parses as multipart. -->
+        <input type="file" id="sourceSqlFile" accept=".sql,.txt,text/plain" hidden>
+    </div>
+    <textarea class="input mono sql-edit" id="sourceSql" name="sourceSql" rows="8"
+              wrap="off" spellcheck="false"
+              th:text="${task.sourceSql}"></textarea>
+    <div class="help" th:text="#{etl.sourceSql.hint}">The last SELECT supplies the rows.</div>
+</div>
+</body>
+</html>

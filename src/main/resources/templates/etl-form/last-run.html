@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="card" style="margin-top:16px" th:if="${task.id != null and task.lastRunResult != null}" th:fragment="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#clock-history"/></svg>
+            <span th:text="#{etl.lastRun}">Last run</span></h2>
+    </div>
+    <div class="card-body">
+        <p class="small muted"
+           th:text="${task.lastRunTime != null}
+                    ? ${#temporals.format(task.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
+                    : #{common.never}">Never</p>
+        <pre class="small" style="white-space:pre-wrap" th:text="${task.lastRunResult}">result</pre>
+        <span class="badge badge-ok" th:if="${running}"
+              th:text="#{etl.running}">Running</span>
+    </div>
+</div>
+</body>
+</html>

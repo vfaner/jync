@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<th:block th:fragment="block" th:remove="tag">
+<div class="field">
+    <label for="preSql" th:text="#{etl.preSql}">Pre-sql (before load)</label>
+    <textarea class="input mono sql-edit" id="preSql" name="preSql" rows="2"
+              wrap="off" spellcheck="false"
+              th:text="${task.preSql}"></textarea>
+    <div class="help" th:text="#{etl.preSql.hint}">Optional: runs on the target database before the load and commits immediately, e.g. DELETE FROM target WHERE dt &lt; '2026-01-01'.</div>
+</div>
+
+<div class="field">
+    <label for="postSql" th:text="#{etl.postSql}">Post-sql (after load)</label>
+    <textarea class="input mono sql-edit" id="postSql" name="postSql" rows="2"
+              wrap="off" spellcheck="false"
+              th:text="${task.postSql}"></textarea>
+    <div class="help" th:text="#{etl.postSql.hint}">Optional: runs on the target database after the load and commits immediately, e.g. UPDATE target SET total = amount + tax.</div>
+</div>
+
+<div class="grid-2">
+    <div class="field">
+        <label for="rangeCondition" th:text="#{etl.rangeCondition}">Range condition</label>
+        <input type="text" class="input" id="rangeCondition" name="rangeCondition"
+               maxlength="1000" th:value="${task.rangeCondition}">
+        <div class="help" th:text="#{etl.rangeCondition.hint}">Required for range overwrite; raw SQL after WHERE, e.g. dt &gt;= '2026-01-01'.</div>
+    </div>
+    <div class="field">
+        <label for="resumeKeyColumn" th:text="#{etl.resumeKey}">Resume key</label>
+        <input type="text" class="input" id="resumeKeyColumn" name="resumeKeyColumn"
+               maxlength="128" th:value="${task.resumeKeyColumn}">
+        <div class="help" th:text="#{etl.resumeKey.hint}">Optional unique monotonic result column. Enables resuming append and range overwrite.</div>
+        <div class="help" th:text="#{etl.mongo.resume.hint}">For a native MongoDB source, name a top-level field such as _id.</div>
+    </div>
+</div>
+</th:block>
+</body>
+</html>
