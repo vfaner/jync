@@ -104,8 +104,14 @@ public class HanaSqlDialect extends AbstractSqlDialect {
     @Override
     public String getUpsertSql(String schema, String table, List<String> columns,
                                List<String> pkColumns) {
-        return "INSERT INTO " + qualify(schema, table) + " (" + quotedList(columns)
-                + ") VALUES (" + placeholders(columns.size()) + ")";
+        if (pkColumns == null || pkColumns.isEmpty()) {
+            // WITH PRIMARY KEY is rejected (error 7) when the target has no primary key,
+            // so a keyless caller gets the plain INSERT it would get anywhere else.
+            return "INSERT INTO " + qualify(schema, table) + " (" + quotedList(columns)
+                    + ") VALUES (" + placeholders(columns.size()) + ")";
+        }
+        return "UPSERT " + qualify(schema, table) + " (" + quotedList(columns)
+                + ") VALUES (" + placeholders(columns.size()) + ") WITH PRIMARY KEY";
     }
 
     // --- ANSI baseline, replaced by the HANA forms in the column-DDL and routine tasks ---

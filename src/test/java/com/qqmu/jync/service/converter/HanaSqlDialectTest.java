@@ -44,6 +44,19 @@ class HanaSqlDialectTest {
     }
 
     @Test
+    void upsertUsesHanasNativeUpsertWithPrimaryKey() {
+        assertThat(dialect.getUpsertSql("JC_PROBE", "T", List.of("ID", "NAME"), List.of("ID")))
+                .isEqualTo("UPSERT \"JC_PROBE\".\"T\" (\"ID\", \"NAME\") VALUES (?, ?)"
+                        + " WITH PRIMARY KEY");
+    }
+
+    @Test
+    void upsertBindOrderIsTheColumnOrder() {
+        assertThat(dialect.upsertBindOrder(List.of("ID", "NAME"), List.of("ID")))
+                .containsExactly("ID", "NAME");
+    }
+
+    @Test
     void theFactoryRoutesHanaAndAHanaDeclaredCustomConnectionToThisDialect() {
         SqlDialectFactory factory = new SqlDialectFactory(
                 List.of(new HanaSqlDialect(), new GenericSqlDialect()), new GenericSqlDialect());
