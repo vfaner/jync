@@ -115,18 +115,20 @@ class ConversionAssistServiceTest {
     @Test
     @DisplayName("a saved override lands under the key the sync path reads")
     void anOverrideIsKeyedTheWayTheSyncPathLooksItUp() {
-        service.saveOverride(1L, "PROCEDURE", "GET_TOTAL", "CREATE PROCEDURE x() BEGIN END");
+        service.saveOverride(1L, "PROCEDURE", "GET_TOTAL",
+                "CREATE PROCEDURE GET_TOTAL() BEGIN END");
 
         // StructureSyncService calls config.ddlOverride("PROCEDURE", name). Any other key here
         // would store the statement where nothing ever reads it.
         assertThat(savedConfig().ddlOverride("PROCEDURE", "GET_TOTAL"))
-                .isEqualTo("CREATE PROCEDURE x() BEGIN END");
+                .isEqualTo("CREATE PROCEDURE GET_TOTAL() BEGIN END");
     }
 
     @Test
     @DisplayName("a function's override folds onto the PROCEDURE key")
     void aFunctionFoldsOntoTheProcedureKey() {
-        service.saveOverride(1L, "FUNCTION", "CALC_TAX", "CREATE FUNCTION x() RETURNS INT RETURN 1");
+        service.saveOverride(1L, "FUNCTION", "CALC_TAX",
+                "CREATE FUNCTION CALC_TAX() RETURNS INT RETURN 1");
 
         // The sync path does not distinguish the two; it looks up PROCEDURE for both. Storing
         // FUNCTION:CALC_TAX would be invisible to it.
@@ -253,6 +255,22 @@ class ConversionAssistServiceTest {
 
         assertThat(savedConfig().ddlOverride("PROCEDURE", "InsertTestData"))
                 .isEqualTo("CREATE PROCEDURE `cee`.`InsertTestData`() BEGIN END");
+    }
+
+    @Test
+    @DisplayName("an override that creates another object is refused instead of mis-filed")
+    void anOverrideNamingAnotherObjectIsRefused() {
+        // The key is what apply looks up; the header is what actually runs. When they disagree,
+        // applying V_SALES's override drops and recreates whatever the header names, V_SALES is
+        // never created, and the sync still reports the change as done.
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V_SALES",
+                "CREATE VIEW V_OTHER AS SELECT 1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("error.override.name.mismatch")
+                .hasMessageContaining("V_OTHER")
+                .hasMessageContaining("V_SALES");
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
     }
 
     @Test

@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Locale;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -147,23 +148,69 @@ class StructureSyncServiceProcedureOverrideTest {
     }
 
     @Test
-    @DisplayName("the drop follows the name and type the override itself declares")
-    void theDropUsesTheNameAndTypeTheOverrideDeclares() {
+    @DisplayName("the preparatory drop targets the event's routine, never the header's name")
+    void theDropUsesTheEventNameNotTheOverrideHeader() {
+        // A mismatched header used to steer the drop, so saving X's override could delete Y and
+        // still report X as created. Apply now refuses the mismatch; the drop helper agrees.
         List<String> statements = StructureSyncService.routineOverrideStatements(
-                new MySqlDialect(), "CREATE FUNCTION `Calc`() RETURNS INT RETURN 1", "cee",
+                new MySqlDialect(), "CREATE PROCEDURE `Calc`() BEGIN END", "cee",
                 procedure("BEGIN NULL; END"));
 
-        assertThat(statements.get(0)).isEqualTo("DROP FUNCTION `cee`.`Calc`");
+        assertThat(statements.get(0)).isEqualTo("DROP PROCEDURE `cee`.`InsertTestData`");
+    }
+
+    @Test
+    @DisplayName("an apply refuses an override that names another routine")
+    void anOverrideNamingAnotherRoutineIsRefused() {
+        SyncConfig config = new SyncConfig();
+        config.getDdlOverrides().put("PROCEDURE:InsertTestData",
+                "CREATE PROCEDURE `cee`.`Other`() BEGIN END");
+
+        StructureSyncService.ApplyOutcome outcome =
+                structure.apply(target, event("BEGIN NULL; END"), mysqlContext(config, "cee"));
+
+        assertThat(outcome.applied).isFalse();
+        assertThat(outcome.error).contains("InsertTestData").contains("Other");
+        assertThat(outcome.error).doesNotContain("already exists");
+    }
+
+    @Test
+    @DisplayName("a trailing SQL*Plus slash never reaches the driver")
+    void aTrailingSlashIsStrippedFromTheOverride() {
+        // SQL Developer writes PL/SQL as the block, then a lone "/" line. That line is a client
+        // command, not SQL: Oracle answers ORA-00911 and the override fails on every cycle. The
+        // block's own END; must survive — stripping trailing semicolons like a view would break it.
+        String override = "CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;\n/\n";
+
+        List<String> statements = StructureSyncService.routineOverrideStatements(
+                new GenericSqlDialect(), override, "cee", procedure("BEGIN NULL; END"));
+
+        assertThat(statements)
+                .containsExactly("CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;");
     }
 
     @Test
     @DisplayName("a dialect whose CREATE replaces routines runs the override alone")
     void aReplacingDialectLeavesTheOverrideAlone() {
-        String override = "CREATE PROCEDURE `InsertTestData`() BEGIN END";
+        String override = "CREATE OR REPLACE PROCEDURE `InsertTestData`() BEGIN END";
 
         List<String> statements = StructureSyncService.routineOverrideStatements(
                 new GenericSqlDialect(), override, "cee", procedure("BEGIN NULL; END"));
 
         assertThat(statements).containsExactly(override);
+    }
+
+    @Test
+    @DisplayName("a plain CREATE routine override still drops the existing routine first")
+    void aPlainCreateRoutineOverrideDropsFirst() {
+        // Same hole as the view path: without OR REPLACE the CREATE fails with "already exists"
+        // on every cycle once the routine exists, so the override never converges.
+        String override = "CREATE PROCEDURE `InsertTestData`() BEGIN END";
+
+        List<String> statements = StructureSyncService.routineOverrideStatements(
+                new GenericSqlDialect(), override, "cee", procedure("BEGIN NULL; END"));
+
+        assertThat(statements.get(1)).isEqualTo(override);
+        assertThat(statements.get(0).toUpperCase(Locale.ROOT)).contains("DROP PROCEDURE");
     }
 }

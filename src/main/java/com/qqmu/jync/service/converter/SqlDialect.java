@@ -277,6 +277,18 @@ public interface SqlDialect {
     /** {@code CREATE OR REPLACE VIEW} where supported, otherwise a drop-and-create pair. */
     List<String> getCreateViewSql(ViewMeta view, String schema, DatabaseType sourceType);
 
+    /**
+     * True when a view CREATE cannot replace an existing view here, so
+     * {@link #getCreateViewSql} drops it first.
+     *
+     * <p>A DDL override runs verbatim, outside that sequence. Without the same drop, a retried
+     * override fails with "already exists" on every cycle once the view is present — the
+     * failure never converges because the snapshot that would retire it is never written.
+     */
+    default boolean dropsBeforeViewCreate() {
+        return false;
+    }
+
     List<String> getCreateProcedureSql(ProcedureMeta procedure, String schema, DatabaseType sourceType);
 
     /**

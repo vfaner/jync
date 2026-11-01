@@ -169,6 +169,11 @@ public class Db2Dialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean dropsBeforeViewCreate() {
+        return true;
+    }
+
+    @Override
     public List<String> getCreateProcedureSql(ProcedureMeta procedure, String schema,
                                               DatabaseType sourceType) {
         String body = procedure.getDefinition();

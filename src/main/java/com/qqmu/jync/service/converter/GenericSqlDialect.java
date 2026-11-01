@@ -108,6 +108,11 @@ public class GenericSqlDialect extends AbstractSqlDialect {
                 "CREATE VIEW " + qualify(schema, view.getName()) + " AS " + stripSemicolon(view.getDefinition()));
     }
 
+    @Override
+    public boolean dropsBeforeViewCreate() {
+        return true;
+    }
+
     private String stripSemicolon(String sql) {
         if (sql == null) {
             return null;

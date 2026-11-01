@@ -522,9 +522,27 @@ public class StructureSyncService {
         String override = ctx.getConfig().ddlOverride("VIEW", view.getName());
         List<String> statements;
         if (override != null && !override.isBlank()) {
-            // A view is a plain SQL statement, so a pasted/model-supplied trailing semicolon is a
-            // terminator, not syntax: Oracle rejects it on DDL submitted through JDBC.
-            statements = List.of(JdbcUtil.stripTrailingSemicolon(override));
+            String overrideSchema = DdlHeader.schema(override);
+            String targetSchema = ctx.getTargetSchema();
+            if (overrideSchema != null && targetSchema != null
+                    && !overrideSchema.equalsIgnoreCase(targetSchema)) {
+                // Same hazard as the routine path: the statement runs verbatim on the target
+                // connection, and schemas are server-level — a header naming another schema
+                // writes the view there, possibly the source schema itself.
+                return ApplyOutcome.failed("DDL override for VIEW " + view.getName()
+                        + " creates it in schema '" + overrideSchema
+                        + "', but this project writes to '" + targetSchema
+                        + "'. Remove the schema prefix or change it to the target schema.");
+            }
+            String mismatch = overrideNameMismatch(override, view.getName());
+            if (mismatch != null) {
+                // The statement runs verbatim: a header naming another view would drop and
+                // recreate that view while this change is recorded as applied.
+                return ApplyOutcome.failed("DDL override for VIEW " + view.getName()
+                        + " creates '" + mismatch + "', not '" + view.getName()
+                        + "'. Key the override to the object it creates.");
+            }
+            statements = viewOverrideStatements(dialect, override, targetSchema, view);
         } else {
             // Normalize to a bare SELECT, then translate it into the target's dialect.
             ViewMeta translated = new ViewMeta();
@@ -575,6 +593,14 @@ public class StructureSyncService {
                         + "', but this project writes to '" + targetSchema
                         + "'. Remove the schema prefix or change it to the target schema.");
             }
+            String mismatch = overrideNameMismatch(override, proc.getName());
+            if (mismatch != null) {
+                // Same hazard as the view path: the drop and the CREATE follow the header, so a
+                // different name destroys that routine and leaves this one uncreated.
+                return ApplyOutcome.failed("DDL override for " + proc.getRoutineType() + " "
+                        + proc.getName() + " creates '" + mismatch + "', not '"
+                        + proc.getName() + "'. Key the override to the object it creates.");
+            }
             statements = routineOverrideStatements(dialect, override, targetSchema, proc);
         } else {
             // Old configs (or a hand-edited selection) can still name an Oracle package member
@@ -624,6 +650,40 @@ public class StructureSyncService {
     }
 
     /**
+     * The statements a saved view override expands to.
+     *
+     * <p>A view is a plain SQL statement, so a pasted/model-supplied trailing semicolon is a
+     * terminator, not syntax: Oracle rejects it on DDL submitted through JDBC. Dialects that
+     * cannot replace a view get the same preparatory drop the automatic path emits; without it
+     * a retried override fails with "already exists" every cycle once the view is present.
+     */
+    static List<String> viewOverrideStatements(SqlDialect dialect, String override,
+                                               String targetSchema, ViewMeta view) {
+        String statement = JdbcUtil.stripTrailingSemicolon(override);
+        // A plain CREATE VIEW cannot replace an existing view even on a dialect that supports
+        // OR REPLACE; leaving it alone meant "already exists" on every cycle.
+        if (!dialect.dropsBeforeViewCreate() && DdlHeader.replacesInPlace(statement)) {
+            return List.of(statement);
+        }
+        // The event's name, never the header's: apply refuses a mismatch before getting here,
+        // and the drop must not reintroduce the hazard if that check is ever bypassed.
+        String name = view.getName();
+        if (name == null || name.isBlank()) {
+            name = DdlHeader.name(override);
+        }
+        return List.of(dialect.getDropViewSql(targetSchema, name), statement);
+    }
+
+    /** The name the override actually creates when it does not match the event's object. */
+    private static String overrideNameMismatch(String override, String expected) {
+        String declared = DdlHeader.name(override);
+        if (declared == null || declared.isBlank() || expected == null) {
+            return null;
+        }
+        return declared.equalsIgnoreCase(expected) ? null : declared;
+    }
+
+    /**
      * The statements a saved routine override expands to.
      *
      * <p>Dialects that cannot replace a routine get the same drop the automatic path emits.
@@ -633,17 +693,19 @@ public class StructureSyncService {
      */
     static List<String> routineOverrideStatements(SqlDialect dialect, String override,
                                                   String targetSchema, ProcedureMeta proc) {
-        if (!dialect.dropsBeforeRoutineCreate()) {
-            return List.of(override);
+        // SQL Developer writes PL/SQL as the block, then a lone "/" line. That line is a client
+        // command, not SQL, and Oracle answers it with ORA-00911. The block's own END; stays:
+        // this is the slash stripper, not stripTrailingSemicolon.
+        String statement = JdbcUtil.stripTrailingSlash(override);
+        // Same as the view path: without OR REPLACE the routine exists check fails every cycle.
+        if (!dialect.dropsBeforeRoutineCreate() && DdlHeader.replacesInPlace(statement)) {
+            return List.of(statement);
         }
-        String name = DdlHeader.name(override);
+        String name = proc.getName();
         if (name == null || name.isBlank()) {
-            name = proc.getName();
+            name = DdlHeader.name(override);
         }
-        String type = DdlHeader.objectType(override);
-        boolean isFunction = "FUNCTION".equalsIgnoreCase(type)
-                || (type == null && proc.isFunction());
-        return List.of(dialect.getDropProcedureSql(targetSchema, name, isFunction), override);
+        return List.of(dialect.getDropProcedureSql(targetSchema, name, proc.isFunction()), statement);
     }
 
     /** Tables referenced by foreign keys must exist first; sorts by dependency depth. */

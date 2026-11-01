@@ -24,7 +24,7 @@ public final class DdlHeader {
      * anchored at the start so a CREATE word buried in the body cannot satisfy it.
      */
     private static final Pattern CREATE_HEADER = Pattern.compile(
-            "\\ACREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:(?:DEFINER\\s*=\\s*\\S+"
+            "\\ACREATE\\s+(?:(?:OR\\s+REPLACE|OR\\s+ALTER)\\s+)?(?:(?:DEFINER\\s*=\\s*\\S+"
             + "|ALGORITHM\\s*=\\s*\\w+|SQL\\s+SECURITY\\s+\\w+"
             // Oracle puts these between OR REPLACE and the object kind; its own DDL export
             // (SQL Developer) writes "CREATE OR REPLACE FORCE VIEW", so rejecting them blocked
@@ -38,8 +38,20 @@ public final class DdlHeader {
 
     /** The CREATE-header object type (VIEW/PROCEDURE/FUNCTION), or null when none is present. */
     public static String objectType(String sql) {
-        Matcher matcher = CREATE_HEADER.matcher(sql == null ? "" : sql);
+        String header = headerText(sql);
+        Matcher matcher = CREATE_HEADER.matcher(header == null ? "" : header);
         return matcher.find() ? matcher.group("type").toUpperCase(Locale.ROOT) : null;
+    }
+
+    /**
+     * True when the CREATE header replaces an existing object by itself (OR REPLACE / OR ALTER).
+     * A plain CREATE fails with "already exists" once the object is present, so the override
+     * path prepends a DROP in that case — otherwise the change never converges.
+     */
+    public static boolean replacesInPlace(String sql) {
+        String header = headerText(sql);
+        return header != null
+                && header.matches("(?is)^CREATE\\s+OR\\s+(?:REPLACE|ALTER)\\s+.*");
     }
 
     /** The schema qualifier on the object, or null when the name is unqualified. */
@@ -59,65 +71,129 @@ public final class DdlHeader {
      * a name containing a dot is not mistaken for a qualifier.
      */
     private static List<String> objectPath(String sql) {
-        if (sql == null) {
+        String header = headerText(sql);
+        if (header == null) {
             return List.of();
         }
-        Matcher matcher = CREATE_HEADER.matcher(sql);
+        Matcher matcher = CREATE_HEADER.matcher(header);
         if (!matcher.find()) {
             return List.of();
         }
-        List<String> parts = new ArrayList<>(2);
+        List<String> parts = new ArrayList<>(3);
         int i = matcher.end();
-        int n = sql.length();
+        int n = header.length();
         while (true) {
-            while (i < n && Character.isWhitespace(sql.charAt(i))) {
+            while (i < n && Character.isWhitespace(header.charAt(i))) {
                 i++;
             }
             if (i >= n) {
                 break;
             }
-            char c = sql.charAt(i);
+            char c = header.charAt(i);
             String part;
             if (c == '`' || c == '"') {
-                int end = sql.indexOf(c, i + 1);
-                if (end < 0) {
+                int end = i + 1;
+                StringBuilder unescaped = new StringBuilder();
+                while (end < n) {
+                    char ch = header.charAt(end);
+                    if (ch == c) {
+                        // A doubled delimiter is one literal character, not the closing quote.
+                        if (end + 1 < n && header.charAt(end + 1) == c) {
+                            unescaped.append(c);
+                            end += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    unescaped.append(ch);
+                    end++;
+                }
+                if (end >= n) {
                     return List.of();
                 }
-                part = sql.substring(i + 1, end);
+                part = unescaped.toString();
                 i = end + 1;
             } else if (c == '[') {
-                int end = sql.indexOf(']', i + 1);
-                if (end < 0) {
+                int end = i + 1;
+                StringBuilder unescaped = new StringBuilder();
+                while (end < n) {
+                    char ch = header.charAt(end);
+                    if (ch == ']') {
+                        if (end + 1 < n && header.charAt(end + 1) == ']') {
+                            unescaped.append(']');
+                            end += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    unescaped.append(ch);
+                    end++;
+                }
+                if (end >= n) {
                     return List.of();
                 }
-                part = sql.substring(i + 1, end);
+                part = unescaped.toString();
                 i = end + 1;
             } else {
                 int start = i;
-                while (i < n && !Character.isWhitespace(sql.charAt(i))
-                        && sql.charAt(i) != '.' && sql.charAt(i) != '('
-                        && sql.charAt(i) != ';') {
+                while (i < n && !Character.isWhitespace(header.charAt(i))
+                        && header.charAt(i) != '.' && header.charAt(i) != '('
+                        && header.charAt(i) != ';') {
                     i++;
                 }
-                part = sql.substring(start, i);
+                part = header.substring(start, i);
             }
             if (part.isEmpty()) {
                 return List.of();
             }
             parts.add(part);
-            // A path has at most schema.name; anything after that is the parameter list or body.
-            if (parts.size() == 2) {
+            // A path has at most database.schema.name; anything after that is the body.
+            if (parts.size() == 3) {
                 break;
             }
-            while (i < n && Character.isWhitespace(sql.charAt(i))) {
+            while (i < n && Character.isWhitespace(header.charAt(i))) {
                 i++;
             }
-            if (i < n && sql.charAt(i) == '.') {
+            if (i < n && header.charAt(i) == '.') {
                 i++;
                 continue;
             }
             break;
         }
         return parts;
+    }
+
+    /**
+     * Skips whitespace and the leading block or line comments SSMS and SQL Developer put above
+     * a generated script. Without this the anchored header never matched, so a legitimate
+     * pasted override was refused as "no CREATE header".
+     */
+    private static String headerText(String sql) {
+        if (sql == null) {
+            return null;
+        }
+        int i = 0;
+        int n = sql.length();
+        while (i < n) {
+            while (i < n && Character.isWhitespace(sql.charAt(i))) {
+                i++;
+            }
+            if (i + 1 < n && sql.charAt(i) == '/' && sql.charAt(i + 1) == '*') {
+                int end = sql.indexOf("*/", i + 2);
+                if (end < 0) {
+                    return null;
+                }
+                i = end + 2;
+            } else if (i + 1 < n && sql.charAt(i) == '-' && sql.charAt(i + 1) == '-') {
+                int end = sql.indexOf('\n', i + 2);
+                if (end < 0) {
+                    return null;
+                }
+                i = end + 1;
+            } else {
+                break;
+            }
+        }
+        return sql.substring(i);
     }
 }

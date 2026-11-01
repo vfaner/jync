@@ -198,8 +198,20 @@ public class PostgresDialect extends AbstractSqlDialect {
 
     @Override
     public List<String> getCreateViewSql(ViewMeta view, String schema, DatabaseType sourceType) {
-        return List.of("CREATE OR REPLACE VIEW " + qualify(schema, view.getName())
-                + " AS " + stripSemicolon(view.getDefinition()));
+        // CREATE OR REPLACE VIEW only accepts a query with the same columns in the same order
+        // and types. Dropping, renaming or retyping a column is refused ("cannot drop columns
+        // from view") and the change then fails on every cycle, never retiring. Drop-then-create
+        // can express those changes; the executor tolerates a missing view, so this re-runs.
+        return List.of(
+                "DROP VIEW " + qualify(schema, view.getName()),
+                "CREATE VIEW " + qualify(schema, view.getName()) + " AS "
+                        + stripSemicolon(view.getDefinition()));
+    }
+
+    @Override
+    public boolean dropsBeforeViewCreate() {
+        // A verbatim override runs outside getCreateViewSql; give it the same preparatory drop.
+        return true;
     }
 
     @Override

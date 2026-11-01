@@ -384,6 +384,14 @@ public class ConversionAssistService {
         if (headerType == null || !headerMatches) {
             throw new IllegalArgumentException("error.override.header.mismatch");
         }
+        // The key is what apply looks up; the header is what actually runs. When they disagree,
+        // applying X's override drops and recreates whatever the header names, X is never created,
+        // and the sync still reports the change as done.
+        String headerName = DdlHeader.name(statement);
+        if (headerName != null && !objectName.equalsIgnoreCase(headerName)) {
+            throw new IllegalArgumentException("error.override.name.mismatch: found '"
+                    + headerName + "', keyed '" + objectName + "'");
+        }
 
         Project project = require(projectId);
         // The statement runs verbatim on the target connection, and schemas are server-level:

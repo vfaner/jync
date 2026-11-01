@@ -88,6 +88,32 @@ public final class JdbcUtil {
     }
 
     /**
+     * Removes trailing SQL*Plus {@code /} lines from a submitted statement.
+     *
+     * <p>SQL Developer writes a PL/SQL block as the block followed by a lone {@code /} line. The
+     * slash is a client command that submits the buffer; sent through JDBC it is invalid SQL and
+     * Oracle answers ORA-00911. Only whole {@code /} lines are removed — unlike
+     * {@link #stripTrailingSemicolon}, the block's own {@code END;} must survive.
+     *
+     * @return the statement without trailing slash lines or surrounding whitespace; null stays null
+     */
+    public static String stripTrailingSlash(String sql) {
+        if (sql == null) {
+            return null;
+        }
+        String s = sql.strip();
+        while (!s.isEmpty()) {
+            int lastBreak = s.lastIndexOf('\n');
+            String lastLine = (lastBreak < 0 ? s : s.substring(lastBreak + 1)).strip();
+            if (!"/".equals(lastLine)) {
+                break;
+            }
+            s = lastBreak < 0 ? "" : s.substring(0, lastBreak).strip();
+        }
+        return s;
+    }
+
+    /**
      * Rolls back the connection (if open) and closes it, ignoring any SQLException.
      * Prepares a connection for reuse or disposal after an error.
      */
