@@ -3,12 +3,11 @@
       th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'projects', 'metrics.project.title')}">
 <body>
 <th:block th:fragment="content" th:remove="tag">
-<!--/* 任务性能页：只画这一个任务自己的吞吐、延迟与失败，外加（仅管理员）本进程的
-       CPU / 堆 / 线程 / GC。数据由 metrics.js 拉 /projects/{id}/metrics，
-       服务端只负责首屏骨架与入口，图表全部在浏览器里画。
+<!--/* 任务性能页：只画这一个任务自己的吞吐、延迟与失败。数据由 metrics.js 拉
+       /projects/{id}/metrics，服务端只负责首屏骨架与入口，图表全部在浏览器里画。
 
-       进程资源区块的可见性由服务端决定：访客拿到的 JSON 里根本没有 cpu/heap
-       这几条序列，页面不是靠隐藏 DOM 来保密的。 */-->
+       进程资源（CPU / 堆 / 线程 / GC）属于整台服务器而不是某一个任务，不在本页，
+       已移到看板的管理员进程区块，也不再经过这个接口。 */-->
 <div id="metrics-root"
      th:attr="data-metrics-url=@{/projects/{id}/metrics(id=${project.id})},
               data-range=${metricsRange}">
@@ -51,7 +50,7 @@
         <div class="stat is-warn">
             <span class="stat-ico"><svg class="ico"><use href="#clock-history"/></svg></span>
             <div class="stat-body">
-                <div class="stat-n" data-current="lag" data-digits="0" data-suffix=" ms">—</div>
+                <div class="stat-n" data-current="lag" data-format="duration">—</div>
                 <div class="stat-l" th:text="#{metrics.card.lag}">Replication lag</div>
             </div>
         </div>
@@ -65,7 +64,12 @@
         <div class="stat is-ok">
             <span class="stat-ico"><svg class="ico"><use href="#activity"/></svg></span>
             <div class="stat-body">
-                <div class="stat-n"><span data-status class="chip">—</span></div>
+                <div class="stat-n">
+                    <span data-status class="chip"
+                          th:attr="data-running=#{status.RUNNING},
+                                   data-stopped=#{status.STOPPED},
+                                   data-error=#{status.ERROR}">—</span>
+                </div>
                 <div class="stat-l" th:text="#{metrics.card.status}">Status</div>
             </div>
         </div>
@@ -83,7 +87,7 @@
             <div class="card" id="chart-lag">
                 <div class="card-head"><h3 th:text="#{metrics.chart.lag}">Replication lag</h3></div>
                 <div class="card-body">
-                    <div class="chart-slot" data-chart="lag" data-unit="ms" data-color="var(--warn)"
+                    <div class="chart-slot" data-chart="lag" data-duration="true" data-color="var(--warn)"
                          th:attr="data-empty=#{metrics.noData}"></div>
                 </div>
             </div>
@@ -101,14 +105,15 @@
                     <h3 th:text="#{metrics.chart.changeShare}">Change types</h3>
                 </div>
                 <div class="card-body">
-                    <div data-chart-share
-                         th:attr="data-caption=#{metrics.donut.caption},data-empty=#{metrics.noData}"></div>
+                    <div class="chart-host" data-chart-share
+                         th:attr="data-caption=#{metrics.donut.caption},data-empty=#{metrics.noChanges}"></div>
                 </div>
             </div>
             <div class="card" id="chart-hot-objects">
                 <div class="card-head"><h3 th:text="#{metrics.chart.hotObjects}">Hot tables</h3></div>
                 <div class="card-body">
-                    <div data-chart-hot th:attr="data-empty=#{metrics.noData}"></div>
+                    <div class="chart-host" data-chart-hot
+                         th:attr="data-empty=#{metrics.noChanges}"></div>
                 </div>
             </div>
         </div>

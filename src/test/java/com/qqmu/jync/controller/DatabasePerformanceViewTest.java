@@ -127,6 +127,36 @@ class DatabasePerformanceViewTest {
         assertThat(html).contains("data-mode=\"database\"");
     }
 
+    /**
+     * 占用空间来自目录统计的原始字节数（MySQL 是 DATA_LENGTH + INDEX_LENGTH）。直接显示
+     * "16384" 说不清单位，脚本需要知道这张卡片和这条曲线按字节换算成 KB / MB / GB。
+     */
+    @Test
+    void theSpaceCardAndChartAskTheScriptForByteUnits() throws Exception {
+        givenConnection();
+        givenSample(true, null, 12, 30.0, 99.5, 0);
+
+        String html = page();
+
+        assertThat(html).containsPattern("data-current=\"bytes\"[^>]*data-format=\"bytes\"");
+        assertThat(html).containsPattern("data-chart=\"bytes\"[^>]*data-bytes=\"true\"");
+    }
+
+    /**
+     * 连接延迟同样以毫秒采样：慢连接一次探测要好几秒，直接画 "2345 ms" 不如按时间单位
+     * 换算（和项目页的同步延迟、变更日志的耗时同一种读法）。
+     */
+    @Test
+    void theLatencyCardAndChartAskTheScriptForDurationUnits() throws Exception {
+        givenConnection();
+        givenSample(true, null, 12, 30.0, 99.5, 0);
+
+        String html = page();
+
+        assertThat(html).containsPattern("data-current=\"latency\"[^>]*data-format=\"duration\"");
+        assertThat(html).containsPattern("data-chart=\"latency\"[^>]*data-duration=\"true\"");
+    }
+
     private String page() throws Exception {
         return mvc.perform(get("/databases/{id}/performance", CONNECTION).with(as(UserRole.ADMIN)))
                 .andExpect(status().isOk())

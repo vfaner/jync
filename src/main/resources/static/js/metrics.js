@@ -26,6 +26,71 @@
     return group3(Math.round(value * 10) / 10);
   }
 
+  var DURATION_UNITS = [
+    { ms: 86400000, suffix: ' d' },
+    { ms: 3600000, suffix: ' h' },
+    { ms: 60000, suffix: ' m' },
+    { ms: 1000, suffix: ' s' },
+    { ms: 1, suffix: ' ms' }
+  ];
+
+  /**
+   * 毫秒换算成最多两级时间单位：1135000 → "18 m 55 s"，1992 → "1 s 992 ms"。
+   * 和变更日志的耗时（DurationFormat）同一种读法；单位字母与界面语言无关，中英文界面
+   * 共用一份。不足一秒保留毫秒——写成 "0 s" 会把几百毫秒的延迟抹成「没有延迟」。
+   */
+  function formatDuration(value) {
+    if (value === null || value === undefined || isNaN(value)) return '—';
+    var ms = Math.max(0, Math.round(Number(value)));
+    if (ms < 1000) return group3(ms) + ' ms';
+    for (var i = 0; i < DURATION_UNITS.length; i++) {
+      var unit = DURATION_UNITS[i];
+      if (ms >= unit.ms) {
+        var whole = Math.floor(ms / unit.ms);
+        var lower = DURATION_UNITS[i + 1];
+        var remainder = lower ? Math.floor((ms - whole * unit.ms) / lower.ms) : 0;
+        return whole + unit.suffix + (remainder > 0 ? ' ' + remainder + lower.suffix : '');
+      }
+    }
+    return ms + ' ms';
+  }
+
+  /** 曲线纵轴用的最大时间单位：全是 < 1 s 的探测延迟时，轴仍然是毫秒。 */
+  function durationUnit(max) {
+    for (var i = 0; i < DURATION_UNITS.length; i++) {
+      if (max >= DURATION_UNITS[i].ms) return DURATION_UNITS[i];
+    }
+    return { ms: 1, suffix: ' ms' };
+  }
+
+  var BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+
+  /**
+   * 字节数换算成最多两级单位：16384 → "16 KB"，1 GB 又 2 MB → "1 GB 2 MB"。
+   * 目录统计给的是原始字节（MySQL 为 DATA_LENGTH + INDEX_LENGTH），直接显示 16384
+   * 既看不出单位，也读不出量级。
+   */
+  function formatBytes(value) {
+    if (value === null || value === undefined || isNaN(value)) return '—';
+    var n = Math.max(0, Math.round(Number(value)));
+    var unit = 0;
+    var scaled = n;
+    while (scaled >= 1024 && unit < BYTE_UNITS.length - 1) {
+      scaled = scaled / 1024;
+      unit++;
+    }
+    if (unit === 0) return group3(n) + ' B';
+    var whole = Math.floor(scaled);
+    var text = group3(whole) + ' ' + BYTE_UNITS[unit];
+    // 第二级只写真正有余数的部分；不足一级整数时省略，不写出 "1 GB 0 B"。
+    var remainder = n - whole * Math.pow(1024, unit);
+    var lower = Math.floor(remainder / Math.pow(1024, unit - 1));
+    if (lower > 0) {
+      text += ' ' + group3(lower) + ' ' + BYTE_UNITS[unit - 1];
+    }
+    return text;
+  }
+
   function el(tag, attrs) {
     var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
     for (var key in attrs) {
@@ -36,16 +101,27 @@
     return node;
   }
 
-  /** 轴顶取整齐的刻度：最大值除以四格后向上取到 1/2/5 × 10^n。 */
-  function niceTop(value) {
-    if (value <= 0) return 0;
+  /** 刻度步长取整齐值：最大值除以四格后向上取到 1/2/5 × 10^n。 */
+  function niceStep(value) {
+    // 全零序列没有最大值可依；给 1 让轴画成 4/3/2/1/0，而不是四格都取整成同一个数。
+    if (!(value > 0)) return 1;
     var raw = value / 4;
     var exp = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
     var steps = [1, 2, 5, 10];
     for (var i = 0; i < steps.length; i++) {
-      if (steps[i] * exp >= raw) return steps[i] * exp * 4;
+      if (steps[i] * exp >= raw) return steps[i] * exp;
     }
-    return 10 * exp * 4;
+    return 10 * exp;
+  }
+
+  /**
+   * 刻度文字。步长不足 1 时保留步长的小数位：直接 Math.round 会把 0.4 / 0.3 / 0.2 /
+   * 0.1 / 0 抹成 0,0,0,0,0——与全零行数图曾出现的 1,1,1,0,0 是同一类错误。
+   */
+  function axisLabel(value, step) {
+    if (step >= 1) return group3(Math.round(value));
+    var digits = Math.min(3, Math.max(1, Math.ceil(-Math.log(step) / Math.LN10)));
+    return String(Number(value.toFixed(digits)));
   }
 
   function clear(slot) {
@@ -71,7 +147,7 @@
 
   /**
    * 单序列折线图。points = [{label, value}]，value 为 null 处断开。
-   * opts: {color, unit, percent, longLabels}
+   * opts: {color, unit, percent, bytes, duration, longLabels}
    */
   function line(slot, points, opts) {
     opts = opts || {};
@@ -93,11 +169,37 @@
       return;
     }
 
+    // 字节序列先换算到最大量级再定刻度：16,384 B 的轴画成 "16 KB"，而不是 "16384"。
+    var byteDiv = 1;
+    var byteSuffix = '';
+    if (opts.bytes) {
+      var byteUnit = 0;
+      var scaledMax = max;
+      while (scaledMax >= 1024 && byteUnit < BYTE_UNITS.length - 1) {
+        scaledMax = scaledMax / 1024;
+        byteUnit++;
+      }
+      byteDiv = Math.pow(1024, byteUnit);
+      byteSuffix = max > 0 ? ' ' + BYTE_UNITS[byteUnit] : '';
+    }
+    // 时间序列同理：1,135,000 ms 的轴画成 "20 m" 这一级，而不是七位数字。
+    var durationDiv = 1;
+    var durationSuffix = '';
+    if (opts.duration) {
+      var dUnit = durationUnit(max);
+      durationDiv = dUnit.ms;
+      durationSuffix = max > 0 ? dUnit.suffix : '';
+    }
+    var valueDiv = opts.bytes ? byteDiv : (opts.duration ? durationDiv : 1);
+    var axisMax = opts.bytes ? max / byteDiv : (opts.duration ? max / durationDiv : max);
+
     var width = slot.clientWidth || 640;
     var height = slot.clientHeight || 200;
-    var top = opts.percent ? 100 : niceTop(max);
-    if (top <= 0) top = 1;
-    var padL = Math.max(40, 14 + group3(Math.round(top)).length * 6.6);
+    var tickStep = opts.percent ? 25 : niceStep(axisMax);
+    var top = opts.percent ? 100 : tickStep * 4;
+    var axisSuffix = opts.percent ? '%' : (opts.bytes ? byteSuffix : durationSuffix);
+    var topLabel = axisLabel(top, tickStep) + axisSuffix;
+    var padL = Math.max(40, 14 + topLabel.length * 6.6);
     var padR = 12;
     var padT = 10;
     var padB = 24;
@@ -127,7 +229,7 @@
       var tick = el('text', {
         x: padL - 8, y: gy + 4, 'text-anchor': 'end', 'font-size': '11', fill: mute
       });
-      tick.textContent = group3(Math.round(top - (top / 4) * g)) + (opts.percent ? '%' : '');
+      tick.textContent = axisLabel(top - tickStep * g, tickStep) + axisSuffix;
       svg.appendChild(tick);
     }
 
@@ -136,7 +238,7 @@
     for (var p = 0; p < points.length; p++) {
       coords.push(values[p] === null ? null : {
         x: padL + step * p,
-        y: padT + plotH - values[p] * scale
+        y: padT + plotH - (values[p] / valueDiv) * scale
       });
     }
 
@@ -233,8 +335,10 @@
       dot.setAttribute('cx', point.x);
       dot.setAttribute('cy', point.y);
       dot.setAttribute('opacity', 1);
-      tip.textContent = formatNumber(values[index], 1)
-        + (opts.unit ? ' ' + opts.unit : '') + ' · ' + timeLabel(points[index].label, true);
+      tip.textContent = (opts.bytes ? formatBytes(values[index])
+        : opts.duration ? formatDuration(values[index])
+        : formatNumber(values[index], 1) + (opts.unit ? ' ' + opts.unit : ''))
+        + ' · ' + timeLabel(points[index].label, true);
       tip.style.left = point.x + 'px';
       tip.style.top = (point.y - 12) + 'px';
       tip.className = 'chart-tip is-on';
@@ -401,8 +505,11 @@
       var raw = Object.prototype.hasOwnProperty.call(current, key) ? current[key] : null;
       var digits = cards[i].getAttribute('data-digits');
       var suffix = cards[i].getAttribute('data-suffix') || '';
-      var text = formatNumber(raw, digits === null ? 1 : Number(digits));
-      cards[i].textContent = raw === null || raw === undefined ? '—' : text + suffix;
+      var format = cards[i].getAttribute('data-format');
+      var text = format === 'bytes' ? formatBytes(raw)
+        : format === 'duration' ? formatDuration(raw)
+        : formatNumber(raw, digits === null ? 1 : Number(digits)) + suffix;
+      cards[i].textContent = raw === null || raw === undefined ? '—' : text;
     }
     var stamp = root.querySelector('[data-last-sample]');
     if (stamp) {
@@ -411,9 +518,13 @@
     }
     var status = root.querySelector('[data-status]');
     if (status && view) {
-      status.textContent = view.status || '—';
-      status.className = 'chip' + (view.status === 'RUNNING' ? ' chip-ok'
-        : view.status === 'ERROR' ? ' chip-danger' : '');
+      var code = view.status;
+      // 模板把三种状态名放在 data-* 上，由 i18n 决定文字；直接写 code 会让中文界面
+      // 露出 "RUNNING"。
+      var label = code ? status.getAttribute('data-' + code.toLowerCase()) : null;
+      status.textContent = label || code || '—';
+      status.className = 'chip' + (code === 'RUNNING' ? ' chip-ok'
+        : code === 'ERROR' ? ' chip-danger' : '');
     }
   }
 
@@ -429,6 +540,8 @@
           color: slots[i].getAttribute('data-color') || undefined,
           unit: slots[i].getAttribute('data-unit') || '',
           percent: slots[i].getAttribute('data-percent') === 'true',
+          bytes: slots[i].getAttribute('data-bytes') === 'true',
+          duration: slots[i].getAttribute('data-duration') === 'true',
           longLabels: currentRange === '7d',
           emptyText: slots[i].getAttribute('data-empty') || ''
         });

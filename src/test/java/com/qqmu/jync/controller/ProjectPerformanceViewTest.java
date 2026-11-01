@@ -87,6 +87,49 @@ class ProjectPerformanceViewTest {
     }
 
     /**
+     * 延迟是毫秒数：1,135,000 ms 既读不出量级，也让人觉得任务慢得没边。卡片和曲线改成
+     * 按时间单位换算，和变更日志的耗时同一种读法——超过一秒就是「多少秒多少毫秒」。
+     */
+    @Test
+    void theLagCardAndChartAskTheScriptForDurationUnits() throws Exception {
+        givenProject();
+
+        String html = page(UserRole.VIEWER);
+
+        assertThat(html).containsPattern("data-current=\"lag\"[^>]*data-format=\"duration\"");
+        assertThat(html).containsPattern("data-chart=\"lag\"[^>]*data-duration=\"true\"");
+    }
+
+    /**
+     * 状态标签的文字由 i18n 决定：脚本只拿这些 data-* 去查，不能自己把 "RUNNING" 写进
+     * 中文界面。
+     */
+    @Test
+    void theStatusChipCarriesTheLocalizedLabelsForTheScript() throws Exception {
+        givenProject();
+
+        String html = page(UserRole.VIEWER);
+
+        assertThat(html).contains("data-running=")
+                .contains("data-stopped=")
+                .contains("data-error=");
+    }
+
+    /**
+     * 环形 / 条形图的宿主必须自己定位。.chart-empty 是 absolute + inset:0，宿主不定位时
+     * 占位说明会逃到视口、盖住整页并吞掉 1 小时 / 7 天按钮的点击。
+     */
+    @Test
+    void theChangePanelsArePositionedHosts() throws Exception {
+        givenProject();
+
+        String html = page(UserRole.VIEWER);
+
+        assertThat(html).contains("class=\"chart-host\" data-chart-share")
+                .contains("class=\"chart-host\" data-chart-hot");
+    }
+
+    /**
      * 进程曲线只能从看板那个管理员专属的接口来。项目页的 JSON 若还夹带 CPU / 堆 / GC，
      * 只读账号换一个地址就能绕开看板的限制。
      */

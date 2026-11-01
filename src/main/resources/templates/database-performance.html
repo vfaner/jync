@@ -65,7 +65,7 @@
         <div class="stat is-info">
             <span class="stat-ico"><svg class="ico"><use href="#activity"/></svg></span>
             <div class="stat-body">
-                <div class="stat-n" data-current="latency" data-digits="0" data-suffix=" ms">—</div>
+                <div class="stat-n" data-current="latency" data-format="duration">—</div>
                 <div class="stat-l" th:text="#{metrics.db.card.latency}">Latency</div>
             </div>
         </div>
@@ -86,7 +86,7 @@
         <div class="stat is-warn">
             <span class="stat-ico"><svg class="ico"><use href="#hdd-network"/></svg></span>
             <div class="stat-body">
-                <div class="stat-n" data-current="bytes" data-digits="0">—</div>
+                <div class="stat-n" data-current="bytes" data-format="bytes">—</div>
                 <div class="stat-l" th:text="#{metrics.db.card.bytes}">Space used</div>
             </div>
         </div>
@@ -144,7 +144,7 @@
     <div class="card">
         <div class="card-head"><h3 th:text="#{metrics.db.card.latency}">Latency</h3></div>
         <div class="card-body">
-            <div class="chart-slot" data-chart="latency" data-unit="ms"
+            <div class="chart-slot" data-chart="latency" data-duration="true"
                  th:attr="data-empty=#{metrics.noData}"></div>
         </div>
     </div>
@@ -152,7 +152,7 @@
     <div class="card">
         <div class="card-head"><h3 th:text="#{metrics.db.card.bytes}">Space used</h3></div>
         <div class="card-body">
-            <div class="chart-slot" data-chart="bytes" data-color="var(--accent)"
+            <div class="chart-slot" data-chart="bytes" data-color="var(--accent)" data-bytes="true"
                  th:attr="data-empty=#{metrics.noData}"></div>
         </div>
     </div>
