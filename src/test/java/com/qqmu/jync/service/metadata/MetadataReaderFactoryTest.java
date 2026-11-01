@@ -23,6 +23,7 @@ class MetadataReaderFactoryTest {
             new OracleMetadataReader(),
             new SqlServerMetadataReader(),
             new Db2MetadataReader(),
+            new HanaMetadataReader(),
             new GenericMetadataReader()));
 
     @Test
@@ -71,6 +72,14 @@ class MetadataReaderFactoryTest {
                 .isInstanceOf(SqlServerMetadataReader.class);
         assertThat(factory.forType(DatabaseType.DB2))
                 .isInstanceOf(Db2MetadataReader.class);
+    }
+
+    @Test
+    @DisplayName("SAP HANA 走字典读取器，声明 HANA 家族的 CUSTOM 也一样")
+    void hanaGetsItsOwnReader() {
+        assertThat(factory.forType(DatabaseType.HANA)).isInstanceOf(HanaMetadataReader.class);
+        assertThat(factory.forType(DatabaseType.CUSTOM, DatabaseType.DialectFamily.HANA))
+                .isInstanceOf(HanaMetadataReader.class);
     }
 
     @Test
