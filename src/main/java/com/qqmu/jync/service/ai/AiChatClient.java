@@ -2,7 +2,6 @@ package com.qqmu.jync.service.ai;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -151,37 +150,12 @@ public class AiChatClient {
         try {
             HttpClient client = HTTP_CLIENT;
 
-            // Validate and resolve IP once to prevent DNS rebinding TOCTOU
-            InetAddress resolved = null;
-            try {
-                resolved = AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
-            } catch (IllegalArgumentException e) {
-                return ChatResult.failure(e.getMessage(), endpoint, model, 0);
-            }
-
-            // Build request with explicit IP to ensure connection uses the validated address
-            HttpRequest request;
-            if (resolved != null) {
-                // Use the resolved IP to lock the connection, while preserving original host header
-                // This prevents DNS rebinding attacks where the hostname resolves to a different IP after validation
-                URI originalUri = URI.create(endpoint);
-                String originalHost = originalUri.getHost();
-                // Replace host in endpoint URI with the resolved IP
-                String ipEndpoint = endpoint.replaceFirst(originalHost, resolved.getHostAddress());
-                // Build the request with IP endpoint, then rebuild to preserve original Host header
-                request = buildRequest(protocol, ipEndpoint, model, apiKey, timeout,
-                        system, user, maxTokens, false, effort);
-                // For JDK compatibility: extract URI, rebuild with explicit Host header
-                request = HttpRequest.newBuilder(request.uri())
-                        .header("Host", originalHost)
-                        // Copy other original headers from the built request
-                        .header("Content-Type", "application/json")
-                        .header("Accept", "application/json")
-                        .build();
-            } else {
-                request = buildRequest(protocol, endpoint, model, apiKey, timeout,
-                        system, user, maxTokens, false, effort);
-            }
+            // The base URL was validated above; the JDK client re-resolves the host when it
+            // connects. Pinning the validated IP here is not possible through HttpRequest:
+            // "Host" is a restricted header, so rewriting the URI and restoring the host via
+            // a header throws IllegalArgumentException before any byte is sent.
+            HttpRequest request = buildRequest(protocol, endpoint, model, apiKey, timeout,
+                    system, user, maxTokens, false, effort);
 
             HttpResponse<String> response =
                     client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -259,33 +233,10 @@ public class AiChatClient {
 
         try {
             HttpClient client = HTTP_CLIENT;
-            // Validate and resolve IP once to prevent DNS rebinding TOCTOU
-            InetAddress resolved = null;
-            try {
-                resolved = AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
-            } catch (IllegalArgumentException e) {
-                return ChatResult.failure(e.getMessage(), endpoint, model, 0);
-            }
-
-            // Build request with explicit IP to ensure connection uses the validated address
-            // This prevents DNS rebinding attacks where the hostname resolves to a different IP after validation
-            HttpRequest request;
-            if (resolved != null) {
-                URI originalUri = URI.create(endpoint);
-                String originalHost = originalUri.getHost();
-                String ipEndpoint = endpoint.replaceFirst(originalHost, resolved.getHostAddress());
-                request = buildRequest(protocol, ipEndpoint, model, apiKey, timeout,
-                        system, user, maxTokens, true, effort);
-                // For JDK compatibility: extract URI, rebuild with explicit Host header
-                request = HttpRequest.newBuilder(request.uri())
-                        .header("Host", originalHost)
-                        .header("Content-Type", "application/json")
-                        .header("Accept", "text/event-stream")
-                        .build();
-            } else {
-                request = buildRequest(protocol, endpoint, model, apiKey, timeout,
-                        system, user, maxTokens, true, effort);
-            }
+            // See complete(): the base URL was validated above, and pinning the resolved IP
+            // through the restricted "Host" header is not possible with the JDK client.
+            HttpRequest request = buildRequest(protocol, endpoint, model, apiKey, timeout,
+                    system, user, maxTokens, true, effort);
 
             HttpResponse<java.io.InputStream> response =
                     client.send(request, HttpResponse.BodyHandlers.ofInputStream());

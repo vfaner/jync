@@ -151,6 +151,10 @@ public class EtlRunner {
                             rowsWritten += pending;
                             pending = 0;
                             stage = Side.PROGRAM;
+                            // Only after the commit: a checkpoint written for an uncommitted
+                            // batch would skip those rows on restart (at-least-once, not
+                            // at-most-once). keyType/keyValue hold the last row of the batch.
+                            saveCheckpoint(task, resumable, keyType, keyValue);
                         }
                     }
 
@@ -160,12 +164,8 @@ public class EtlRunner {
                         target.commit();
                         rowsWritten += pending;
                         stage = Side.PROGRAM;
+                        saveCheckpoint(task, resumable, keyType, keyValue);
                     }
-                    // Save checkpoint only after the batch is successfully committed, ensuring
-                    // at-least-once semantics don't cause duplicate inserts if the run restarts.
-                    // For plain INSERT, idempotency must be handled by the caller; OVERWRITE and
-                    // UPSERT will already avoid duplicates on re-run.
-                    saveCheckpoint(task, resumable, keyType, keyValue);
                 }
             }
 

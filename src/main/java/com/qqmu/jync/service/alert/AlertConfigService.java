@@ -157,21 +157,19 @@ public class AlertConfigService {
                     || uri.getHost() == null || uri.getHost().isBlank()) {
                 throw new IllegalArgumentException("error.alert.url.invalid");
             }
-            // Resolve IP to prevent SSRF to internal/cloud metadata addresses
-            String host = uri.getHost();
-            InetAddress address = InetAddress.getByName(host);
-            // Block link-local addresses (169.254.x.x) and private/cloud metadata IPs
-            // Keep loopback (127.0.0.0/8) and site-local private addresses (10/8, 172.16/12, 192.168/16)
-            // unblocked for intranet use cases
-            if (address.isLinkLocalAddress()) {
-                throw new IllegalArgumentException("error.alert.url.invalid");
+            // Resolve the host to refuse link-local/cloud-metadata targets. A host that does
+            // not resolve right now is accepted: an intranet webhook may be unreachable from
+            // this node (or DNS may be down), and the POST will report the failure anyway.
+            try {
+                InetAddress address = InetAddress.getByName(uri.getHost());
+                if (address.isLinkLocalAddress()
+                        || "100.100.100.200".equals(address.getHostAddress())) {
+                    throw new IllegalArgumentException("error.alert.url.invalid");
+                }
+            } catch (UnknownHostException e) {
+                // Accepted; see above.
             }
-            // Explicitly block cloud metadata services and public IP ranges
-            // Aliyun 100.100.100.200 is a CGNAT address that can be used for SSRF attacks
-            if ("100.100.100.200".equals(address.getHostAddress())) {
-                throw new IllegalArgumentException("error.alert.url.invalid");
-            }
-        } catch (URISyntaxException | UnknownHostException e) {
+        } catch (URISyntaxException e) {
             throw new IllegalArgumentException("error.alert.url.invalid");
         }
     }

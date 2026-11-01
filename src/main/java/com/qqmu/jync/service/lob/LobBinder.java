@@ -160,23 +160,17 @@ public final class LobBinder {
                     // "not implemented" from setCharacterStream(int, Reader, long) — only the
                     // int one reads the reader. A length above int range goes to the long
                     // overload because no other driver can take it either way.
-                    try {
-                        if (lob.length() <= Integer.MAX_VALUE) {
-                            ps.setCharacterStream(index, reader, (int) lob.length());
-                        } else {
-                            ps.setCharacterStream(index, reader, lob.length());
-                        }
-                    } finally {
-                        closeQuietly(reader);
+                    // The reader stays open: the driver reads it at execute() time, and the
+                    // value's owner releases it (LobValue.release) after the batch runs.
+                    if (lob.length() <= Integer.MAX_VALUE) {
+                        ps.setCharacterStream(index, reader, (int) lob.length());
+                    } else {
+                        ps.setCharacterStream(index, reader, lob.length());
                     }
                 } else {
                     // Length 0 means "unknown" to the driver, which is exactly the case
-                    // for a one-shot value read from a result set.
-                    try {
-                        ps.setCharacterStream(index, reader);
-                    } finally {
-                        closeQuietly(reader);
-                    }
+                    // for a one-shot value read from a result set. Stay open until execute().
+                    ps.setCharacterStream(index, reader);
                 }
                 return true;
             }
@@ -202,17 +196,11 @@ public final class LobBinder {
                     tracker.track(blob);
                 }
             } else if (lob.length() > 0) {
-                try {
-                    ps.setBinaryStream(index, stream, lob.length());
-                } finally {
-                    closeQuietly(stream);
-                }
+                // The driver reads the stream at execute() time; closing it here would make
+                // every non-Oracle target fail with "Stream closed". LobValue.release owns it.
+                ps.setBinaryStream(index, stream, lob.length());
             } else {
-                try {
-                    ps.setBinaryStream(index, stream);
-                } finally {
-                    closeQuietly(stream);
-                }
+                ps.setBinaryStream(index, stream);
             }
             return true;
         } catch (java.io.IOException e) {
