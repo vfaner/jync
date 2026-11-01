@@ -151,7 +151,6 @@ public class EtlRunner {
                             rowsWritten += pending;
                             pending = 0;
                             stage = Side.PROGRAM;
-                            saveCheckpoint(task, resumable, keyType, keyValue);
                         }
                     }
 
@@ -161,8 +160,12 @@ public class EtlRunner {
                         target.commit();
                         rowsWritten += pending;
                         stage = Side.PROGRAM;
-                        saveCheckpoint(task, resumable, keyType, keyValue);
                     }
+                    // Save checkpoint only after the batch is successfully committed, ensuring
+                    // at-least-once semantics don't cause duplicate inserts if the run restarts.
+                    // For plain INSERT, idempotency must be handled by the caller; OVERWRITE and
+                    // UPSERT will already avoid duplicates on re-run.
+                    saveCheckpoint(task, resumable, keyType, keyValue);
                 }
             }
 

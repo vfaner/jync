@@ -1,7 +1,9 @@
 package com.qqmu.jync.service.alert;
 
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.time.Instant;
 import java.util.EnumSet;
 import java.util.List;
@@ -155,7 +157,21 @@ public class AlertConfigService {
                     || uri.getHost() == null || uri.getHost().isBlank()) {
                 throw new IllegalArgumentException("error.alert.url.invalid");
             }
-        } catch (URISyntaxException e) {
+            // Resolve IP to prevent SSRF to internal/cloud metadata addresses
+            String host = uri.getHost();
+            InetAddress address = InetAddress.getByName(host);
+            // Block link-local addresses (169.254.x.x) and private/cloud metadata IPs
+            // Keep loopback (127.0.0.0/8) and site-local private addresses (10/8, 172.16/12, 192.168/16)
+            // unblocked for intranet use cases
+            if (address.isLinkLocalAddress()) {
+                throw new IllegalArgumentException("error.alert.url.invalid");
+            }
+            // Explicitly block cloud metadata services and public IP ranges
+            // Aliyun 100.100.100.200 is a CGNAT address that can be used for SSRF attacks
+            if ("100.100.100.200".equals(address.getHostAddress())) {
+                throw new IllegalArgumentException("error.alert.url.invalid");
+            }
+        } catch (URISyntaxException | UnknownHostException e) {
             throw new IllegalArgumentException("error.alert.url.invalid");
         }
     }
