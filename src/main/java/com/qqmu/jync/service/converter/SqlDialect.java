@@ -279,6 +279,18 @@ public interface SqlDialect {
 
     List<String> getCreateProcedureSql(ProcedureMeta procedure, String schema, DatabaseType sourceType);
 
+    /**
+     * True when a routine CREATE cannot replace an existing routine here, so
+     * {@link #getCreateProcedureSql} drops it first.
+     *
+     * <p>A DDL override runs verbatim, outside that sequence. Without the same drop, a retried
+     * override fails with "already exists" on every cycle once its object is present — the
+     * failure never converges because the snapshot that would retire it is never written.
+     */
+    default boolean dropsBeforeRoutineCreate() {
+        return false;
+    }
+
     String getDropTableSql(String schema, String table);
 
     String getDropViewSql(String schema, String view);

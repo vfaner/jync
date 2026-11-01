@@ -5,12 +5,9 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +23,7 @@ import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.converter.DdlHeader;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
@@ -60,21 +58,6 @@ public class ConversionAssistService {
     public static final String KIND_PROCEDURE = "PROCEDURE";
     public static final String KIND_VIEW = "VIEW";
     public static final String KIND_FUNCTION = "FUNCTION";
-
-    /**
-     * Pulls the object type out of a CREATE header, tolerating the optional prefixes dialects
-     * allow before it: OR REPLACE, and MySQL's DEFINER / ALGORITHM / SQL SECURITY clauses. It is
-     * anchored at the start so a CREATE word buried in the body cannot satisfy it.
-     */
-    private static final Pattern CREATE_HEADER = Pattern.compile(
-            "\\ACREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:(?:DEFINER\\s*=\\s*\\S+"
-            + "|ALGORITHM\\s*=\\s*\\w+|SQL\\s+SECURITY\\s+\\w+"
-            // Oracle puts these between OR REPLACE and the object kind; its own DDL export
-            // (SQL Developer) writes "CREATE OR REPLACE FORCE VIEW", so rejecting them blocked
-            // saving exactly the Oracle-authored overrides this feature exists for.
-            + "|FORCE|NOFORCE|EDITIONABLE|NONEDITIONABLE|EDITIONING)\\s+)*"
-            + "(?<type>VIEW|PROCEDURE|FUNCTION)\\b",
-            Pattern.CASE_INSENSITIVE);
 
     private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository databaseConfigRepository;
@@ -393,7 +376,7 @@ public class ConversionAssistService {
         String normalizedKind = resolveKind(kind);
 
         String statement = sql.strip();
-        String headerType = createHeaderType(statement);
+        String headerType = DdlHeader.objectType(statement);
         boolean headerMatches = KIND_VIEW.equals(normalizedKind)
                 ? KIND_VIEW.equals(headerType)
                 // A FUNCTION body is filed under the PROCEDURE key, so accept either.
@@ -403,6 +386,17 @@ public class ConversionAssistService {
         }
 
         Project project = require(projectId);
+        // The statement runs verbatim on the target connection, and schemas are server-level:
+        // a header naming another schema writes the object there — possibly the source schema
+        // itself when both connections share a server. Refuse it here rather than let the run
+        // fail with the driver's "already exists" while the object sits somewhere unexpected.
+        String headerSchema = DdlHeader.schema(statement);
+        String targetSchema = headerSchema == null ? null : targetSchemaOrNull(project);
+        if (targetSchema != null && !targetSchema.equalsIgnoreCase(headerSchema)) {
+            throw new IllegalArgumentException("error.override.schema.mismatch: found '"
+                    + headerSchema + "', target '" + targetSchema + "'");
+        }
+
         SyncConfig config = projectService.loadConfig(project);
         String key = normalizedKind + ":" + objectName;
         config.getDdlOverrides().put(key, statement);
@@ -411,10 +405,19 @@ public class ConversionAssistService {
                 key, project.getName(), statement.length());
     }
 
-    /** The CREATE-header object type (VIEW/PROCEDURE/FUNCTION), or null when none is present. */
-    private static String createHeaderType(String sql) {
-        Matcher matcher = CREATE_HEADER.matcher(sql);
-        return matcher.find() ? matcher.group("type").toUpperCase(Locale.ROOT) : null;
+    /**
+     * The target schema to check an override against, or null when it cannot be resolved.
+     *
+     * <p>Resolution may open a connection; a save must not fail because that read failed. The
+     * apply path performs the same check before executing, so skipping it here is not a hole.
+     */
+    private String targetSchemaOrNull(Project project) {
+        try {
+            return resolveTargetSchema(requireTarget(project));
+        } catch (RuntimeException e) {
+            log.debug("Cannot resolve the target schema to check an override: {}", e.getMessage());
+            return null;
+        }
     }
 
     /** Removes an override, restoring automatic conversion for that object. */

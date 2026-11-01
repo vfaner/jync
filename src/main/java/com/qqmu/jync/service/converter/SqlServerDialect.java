@@ -249,6 +249,11 @@ public class SqlServerDialect extends AbstractSqlDialect {
         return stmts;
     }
 
+    @Override
+    public boolean dropsBeforeRoutineCreate() {
+        return true;
+    }
+
     /**
      * A drop that only runs when the object exists, in syntax every release accepts.
      *

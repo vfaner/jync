@@ -18,6 +18,7 @@ import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
+import com.qqmu.jync.service.converter.DdlHeader;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.util.JdbcUtil;
@@ -561,7 +562,20 @@ public class StructureSyncService {
         boolean usingOverride = override != null && !override.isBlank();
         List<String> statements;
         if (usingOverride) {
-            statements = List.of(override);
+            String overrideSchema = DdlHeader.schema(override);
+            String targetSchema = ctx.getTargetSchema();
+            if (overrideSchema != null && targetSchema != null
+                    && !overrideSchema.equalsIgnoreCase(targetSchema)) {
+                // The statement runs verbatim, and schemas are server-level: this would create
+                // the routine in another schema on the target server — possibly the source
+                // schema itself when both connections share a server. Nothing good can come
+                // from running it; say both names so the operator can fix the override.
+                return ApplyOutcome.failed("DDL override for " + proc.getRoutineType() + " "
+                        + proc.getName() + " creates it in schema '" + overrideSchema
+                        + "', but this project writes to '" + targetSchema
+                        + "'. Remove the schema prefix or change it to the target schema.");
+            }
+            statements = routineOverrideStatements(dialect, override, targetSchema, proc);
         } else {
             // Old configs (or a hand-edited selection) can still name an Oracle package member
             // ("PKG.PROC"): package routines were listed under their stripped short name. The
@@ -607,6 +621,29 @@ public class StructureSyncService {
         }
         return ApplyOutcome.ok((event.getChangeType() == ChangeType.CREATE ? "Created" : "Replaced")
                 + " " + proc.getRoutineType() + " " + proc.getName());
+    }
+
+    /**
+     * The statements a saved routine override expands to.
+     *
+     * <p>Dialects that cannot replace a routine get the same drop the automatic path emits.
+     * Without it a retried override fails with "already exists" on every cycle once its object
+     * is present, and the change never retires from the queue. The override text itself is not
+     * rewritten — only the preparatory drop is added.
+     */
+    static List<String> routineOverrideStatements(SqlDialect dialect, String override,
+                                                  String targetSchema, ProcedureMeta proc) {
+        if (!dialect.dropsBeforeRoutineCreate()) {
+            return List.of(override);
+        }
+        String name = DdlHeader.name(override);
+        if (name == null || name.isBlank()) {
+            name = proc.getName();
+        }
+        String type = DdlHeader.objectType(override);
+        boolean isFunction = "FUNCTION".equalsIgnoreCase(type)
+                || (type == null && proc.isFunction());
+        return List.of(dialect.getDropProcedureSql(targetSchema, name, isFunction), override);
     }
 
     /** Tables referenced by foreign keys must exist first; sorts by dependency depth. */

@@ -669,6 +669,11 @@ public class MySqlDialect extends AbstractSqlDialect {
         return stmts;
     }
 
+    @Override
+    public boolean dropsBeforeRoutineCreate() {
+        return true;
+    }
+
     private String buildHeader(ProcedureMeta proc, String schema, boolean isFunction) {
         String params = proc.getParameters().stream()
                 .filter(p -> !"RETURN".equalsIgnoreCase(p.getMode()))

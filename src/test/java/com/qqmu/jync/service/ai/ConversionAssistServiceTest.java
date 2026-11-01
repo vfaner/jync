@@ -223,6 +223,51 @@ class ConversionAssistServiceTest {
     }
 
     @Test
+    @DisplayName("an override that names another schema is refused instead of writing there")
+    void anOverrideNamingAnotherSchemaIsRefused() {
+        // The reported failure: the editor carried the source schema into the statement, so on
+        // the target server the routine was created in `test-rgh` — invisible in the target
+        // database the operator was inspecting, and "already exists" on every retry because
+        // the source procedure lives there.
+        when(databaseConfigRepository.findById(20L))
+                .thenReturn(Optional.of(db(20L, "dst", DatabaseType.MYSQL, "cee")));
+
+        assertThatThrownBy(() -> service.saveOverride(1L, "PROCEDURE", "InsertTestData",
+                "CREATE PROCEDURE `test-rgh`.`InsertTestData`() BEGIN END"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("error.override.schema.mismatch")
+                .hasMessageContaining("test-rgh")
+                .hasMessageContaining("cee");
+
+        verify(projectService, never()).saveConfig(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("an override qualified with the target schema is still saved")
+    void anOverrideQualifiedWithTheTargetSchemaIsAccepted() {
+        when(databaseConfigRepository.findById(20L))
+                .thenReturn(Optional.of(db(20L, "dst", DatabaseType.MYSQL, "cee")));
+
+        service.saveOverride(1L, "PROCEDURE", "InsertTestData",
+                "CREATE PROCEDURE `cee`.`InsertTestData`() BEGIN END");
+
+        assertThat(savedConfig().ddlOverride("PROCEDURE", "InsertTestData"))
+                .isEqualTo("CREATE PROCEDURE `cee`.`InsertTestData`() BEGIN END");
+    }
+
+    @Test
+    @DisplayName("an unqualified override is not held against the target schema")
+    void anUnqualifiedOverrideIsAcceptedWhenTheTargetSchemaIsKnown() {
+        when(databaseConfigRepository.findById(20L))
+                .thenReturn(Optional.of(db(20L, "dst", DatabaseType.MYSQL, "cee")));
+
+        service.saveOverride(1L, "VIEW", "V_SALES", "CREATE VIEW V_SALES AS SELECT 1");
+
+        assertThat(savedConfig().ddlOverride("VIEW", "V_SALES"))
+                .isEqualTo("CREATE VIEW V_SALES AS SELECT 1");
+    }
+
+    @Test
     @DisplayName("surrounding whitespace is stripped before saving")
     void whitespaceIsStripped() {
         service.saveOverride(1L, "VIEW", "V", "\n\n  CREATE VIEW V AS SELECT 1  \n\n");

@@ -193,6 +193,11 @@ public class Db2Dialect extends AbstractSqlDialect {
         return stmts;
     }
 
+    @Override
+    public boolean dropsBeforeRoutineCreate() {
+        return true;
+    }
+
     /** DB2 MERGE, with the row source built from a VALUES list over SYSIBM.SYSDUMMY1. */
     @Override
     public String getUpsertSql(String schema, String table, List<String> columns,
