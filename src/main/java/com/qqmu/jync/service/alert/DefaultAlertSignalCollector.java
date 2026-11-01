@@ -342,8 +342,11 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
             }
         }
         for (Long id : new LinkedHashSet<>(confirmedUnhealthy)) {
+            // The connection id is the object key: with an empty object every broken connection
+            // collapses onto "DB_UNHEALTHY:0:", so all but one alert is dropped and a recovery of
+            // the last one clears a still-broken connection.
             events.add(new AlertEvent(AlertCategory.DB_UNHEALTHY, 0L,
-                    healthNames.getOrDefault(id, "#" + id), "",
+                    healthNames.getOrDefault(id, "#" + id), "#" + id,
                     "alert.detail.dbUnhealthy",
                     new Object[]{healthMessages.getOrDefault(id, "")}, now));
         }

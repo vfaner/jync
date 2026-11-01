@@ -296,6 +296,37 @@ class DefaultAlertSignalCollectorTest {
                 e -> e.category() == com.qqmu.jync.model.AlertCategory.DB_UNHEALTHY);
     }
 
+    /**
+     * Two broken connections are two incidents. With an empty object both events collapse onto
+     * one dedup key ("DB_UNHEALTHY:0:"): only the last connection is announced, and when it
+     * recovers its clearance message marks the still-broken one as healed.
+     */
+    @Test
+    void eachUnhealthyConnectionGetsItsOwnAlertKey() {
+        DatabaseConfig prod = new DatabaseConfig();
+        prod.setId(7L);
+        prod.setName("prod");
+        DatabaseConfig stage = new DatabaseConfig();
+        stage.setId(8L);
+        stage.setName("stage");
+        when(databaseConfigService.findAll()).thenReturn(List.of(prod, stage));
+        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+                new DatabaseHealthService.Health(7L, false, 12, "refused"),
+                new DatabaseHealthService.Health(8L, false, 9, "timeout")));
+
+        collect();
+        clock.advance(Duration.ofMinutes(5));
+        collect();
+        clock.advance(Duration.ofMinutes(5));
+
+        List<AlertEvent> unhealthy = collect().stream()
+                .filter(e -> e.category() == com.qqmu.jync.model.AlertCategory.DB_UNHEALTHY)
+                .toList();
+        assertThat(unhealthy).extracting(AlertEvent::subject)
+                .containsExactlyInAnyOrder("prod", "stage");
+        assertThat(unhealthy).extracting(AlertEvent::dedupKey).doesNotHaveDuplicates();
+    }
+
     @Test
     void oneBrokenSignalSourceDoesNotHideTheOthers() {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, "orders")));
