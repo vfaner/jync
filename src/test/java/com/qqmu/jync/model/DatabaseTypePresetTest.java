@@ -9,7 +9,9 @@ import org.junit.jupiter.api.Test;
  * SQL and Jync only copies rows, so none of them needs a dialect family. Marking one MYSQL
  * (Doris) or POSTGRES (ClickHouse) would make the full-sync engine emit DDL their products
  * reject — {@code ENGINE=InnoDB} in Doris's case — so the family is deliberately GENERIC and
- * {@link DatabaseType#supportsFullSync()} stays false.
+ * {@link DatabaseType#supportsFullSync()} stays false. SAP HANA is the exception: its
+ * ANSI-adjacent grammar needs a dedicated family (it rejects the SQL:2008 pagination tail,
+ * the ANSI column-alter forms and DROP … IF EXISTS), so it is covered by its own test below.
  */
 class DatabaseTypePresetTest {
 
@@ -24,8 +26,8 @@ class DatabaseTypePresetTest {
         assertThat(type.getDriverClassName()).isEqualTo("com.sap.db.jdbc.Driver");
         assertThat(type.getDefaultPort()).isEqualTo(30015);
         assertThat(url(type)).isEqualTo("jdbc:sap://localhost:30015/?databaseName=db");
-        assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
-        assertThat(type.supportsFullSync()).isFalse();
+        assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.HANA);
+        assertThat(type.supportsFullSync()).isTrue();
     }
 
     @Test

@@ -237,14 +237,16 @@ public enum DatabaseType {
 
     /**
      * SAP HANA: its own SQL dialect, reachable only through SAP's {@code ngdbc.jar}, which is
-     * not redistributable and not on Maven Central. The database name travels as a URL
-     * property ({@code ?databaseName=}), not a path segment. GENERIC on purpose — none of the
-     * dialect families describes HANA, so the preset is an ETL connection (customer-supplied
-     * extraction SQL), where the type mapping and DDL of a full sync would be guesses.
+     * not redistributable. The driver is on Maven Central
+     * ({@code com.sap.cloud.db.jdbc:ngdbc}) but is still supplied by the user, not bundled.
+     * The database name travels as a URL property ({@code ?databaseName=}), not a path
+     * segment. HANA's grammar is close enough to ANSI to reuse the shared DDL scaffolding,
+     * but it rejects the SQL:2008 pagination tail, the ANSI column-alter forms and
+     * {@code DROP … IF EXISTS}, so it has a family of its own.
      */
     HANA("db.type.HANA", "com.sap.db.jdbc.Driver",
             "jdbc:sap://%s:%d/?databaseName=%s",
-            30015, DialectFamily.GENERIC),
+            30015, DialectFamily.HANA),
 
     /**
      * Apache Doris speaks the MySQL wire protocol, so its frontend query port (9030) accepts
@@ -498,6 +500,8 @@ public enum DatabaseType {
                 return SQLSERVER;
             case DB2:
                 return DB2;
+            case HANA:
+                return HANA;
             default:
                 return null;
         }
@@ -505,6 +509,6 @@ public enum DatabaseType {
 
     /** SQL dialect groupings. Several products map onto one family. */
     public enum DialectFamily {
-        MYSQL, ORACLE, POSTGRES, SQLSERVER, DB2, GENERIC
+        MYSQL, ORACLE, POSTGRES, SQLSERVER, DB2, HANA, GENERIC
     }
 }

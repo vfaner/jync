@@ -19,7 +19,7 @@ class FullSyncCapabilityTest {
             "MYSQL", "MARIADB", "ORACLE", "SQLSERVER", "DB2", "POSTGRESQL", "OPENGAUSS",
             "GAUSSDB", "DM", "KINGBASE", "OCEANBASE", "TIDB", "GOLDENDB", "TDSQL",
             "POLARDB", "GREATDB", "UPDRDB", "KUNDB", "RASESQL", "SEABOXSQL", "HIGHGO",
-            "VASTBASE", "YASHANDB", "GBASE", "OSCAR"
+            "VASTBASE", "YASHANDB", "GBASE", "OSCAR", "HANA"
     })
     void everyFamilyPresetSupportsFullSync(DatabaseType type) {
         assertThat(type.supportsFullSync()).isTrue();
@@ -31,7 +31,7 @@ class FullSyncCapabilityTest {
         assertThat(DatabaseType.CUSTOM.supportsFullSync()).isFalse();
         // Analytic / distributed / document engines: no family describes their SQL, so ETL only.
         for (DatabaseType engine : new DatabaseType[] {
-                DatabaseType.HANA, DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
+                DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
                 DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.ELASTICSEARCH,
                 DatabaseType.MONGODB, DatabaseType.MONGODB_NATIVE}) {
             assertThat(engine.supportsFullSync()).as(engine.name()).isFalse();

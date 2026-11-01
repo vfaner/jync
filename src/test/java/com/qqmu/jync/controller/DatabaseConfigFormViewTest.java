@@ -355,6 +355,15 @@ class DatabaseConfigFormViewTest {
         return page.substring(start, end + 1);
     }
 
+    /** Extracts the #dialectFamily &lt;select&gt; element together with its options. */
+    private static String selectBlock(String page, String selectId) {
+        int at = page.indexOf("id=\"" + selectId + "\"");
+        assertThat(at).as("select %s rendered", selectId).isPositive();
+        int start = page.lastIndexOf("<select", at);
+        int end = page.indexOf("</select>", at);
+        return page.substring(start, end + "</select>".length());
+    }
+
     @Test
     void customConnectionOffersTheDialectFamilyAndKeepsTheStoredOne() throws Exception {
         // A custom JDBC URL says nothing about the grammar the product speaks, so the user
@@ -372,6 +381,9 @@ class DatabaseConfigFormViewTest {
                 .andExpect(status().isOk()));
 
         assertThat(extractSelect(page, "dialectFamily")).doesNotContain("disabled");
+        // Scoped to the family select: the page also carries a type select, whose HANA option
+        // would make a page-wide assertion pass without the family entry existing.
+        assertThat(selectBlock(page, "dialectFamily")).contains("value=\"HANA\"");
         assertThat(page).contains("value=\"ORACLE\"", "value=\"POSTGRES\"",
                 "value=\"SQLSERVER\"", "value=\"GENERIC\"");
         // th:field marks the stored enum value as selected

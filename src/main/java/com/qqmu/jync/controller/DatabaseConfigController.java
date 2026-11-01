@@ -87,7 +87,8 @@ public class DatabaseConfigController {
             DatabaseType.DialectFamily.MYSQL,
             DatabaseType.DialectFamily.POSTGRES,
             DatabaseType.DialectFamily.SQLSERVER,
-            DatabaseType.DialectFamily.DB2);
+            DatabaseType.DialectFamily.DB2,
+            DatabaseType.DialectFamily.HANA);
 
     private static void addDriverCardAttributes(Model model, DatabaseConfig config) {
         model.addAttribute("mongoNative", config.getType() == DatabaseType.MONGODB_NATIVE);

@@ -30,6 +30,13 @@ class DatabaseConfigEffectiveTypeTest {
                 .isEqualTo(DatabaseType.SQLSERVER);
         assertThat(custom(DatabaseType.DialectFamily.DB2).effectiveType())
                 .isEqualTo(DatabaseType.DB2);
+        assertThat(custom(DatabaseType.DialectFamily.HANA).effectiveType())
+                .isEqualTo(DatabaseType.HANA);
+    }
+
+    @Test
+    void aCustomConnectionDeclaringHanaSupportsFullSync() {
+        assertThat(custom(DatabaseType.DialectFamily.HANA).supportsFullSync()).isTrue();
     }
 
     @Test
