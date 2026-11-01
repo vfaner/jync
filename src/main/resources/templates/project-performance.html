@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'projects', 'metrics.project.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<!--/* 任务性能页：只画这一个任务自己的吞吐、延迟与失败，外加（仅管理员）本进程的
+       CPU / 堆 / 线程 / GC。数据由 metrics.js 拉 /projects/{id}/metrics，
+       服务端只负责首屏骨架与入口，图表全部在浏览器里画。
+
+       进程资源区块的可见性由服务端决定：访客拿到的 JSON 里根本没有 cpu/heap
+       这几条序列，页面不是靠隐藏 DOM 来保密的。 */-->
+<div id="metrics-root"
+     th:attr="data-metrics-url=@{/projects/{id}/metrics(id=${project.id})},
+              data-range=${metricsRange}">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${project.name}">Project</h1>
+            <p class="sub">
+                <span th:text="#{metrics.project.subtitle}">Task performance</span>
+                <span th:if="${sourceConnection != null and targetConnection != null}"
+                      th:text="|· ${sourceConnection.name} → ${targetConnection.name}|">· src → tgt</span>
+            </p>
+        </div>
+        <div class="page-actions">
+            <div class="seg" role="group" th:aria-label="#{metrics.range.label}">
+                <button type="button" class="seg-btn" data-range="1h" th:text="#{metrics.range.hour}">1h</button>
+                <button type="button" class="seg-btn" data-range="24h" th:text="#{metrics.range.day}">24h</button>
+                <button type="button" class="seg-btn" data-range="7d" th:text="#{metrics.range.week}">7d</button>
+            </div>
+            <a class="btn btn-ghost btn-sm" th:href="@{/projects/{id}(id=${project.id})}">
+                <svg class="ico"><use href="#arrow-left"/></svg>
+                <span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <p class="help" style="margin:0 0 14px">
+        <span th:text="#{metrics.lastSample}">Last sample</span>:
+        <span data-last-sample th:attr="data-none=#{metrics.noSample}">—</span>
+    </p>
+
+    <div class="stat-grid">
+        <div class="stat is-info">
+            <span class="stat-ico"><svg class="ico"><use href="#table"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" data-current="rowsTotal" data-digits="0">—</div>
+                <div class="stat-l" th:text="#{metrics.card.rowsTotal}">Rows synced</div>
+            </div>
+        </div>
+        <div class="stat is-warn">
+            <span class="stat-ico"><svg class="ico"><use href="#clock-history"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" data-current="lag" data-digits="0" data-suffix=" ms">—</div>
+                <div class="stat-l" th:text="#{metrics.card.lag}">Replication lag</div>
+            </div>
+        </div>
+        <div class="stat is-danger">
+            <span class="stat-ico"><svg class="ico"><use href="#exclamation-triangle-fill"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" data-current="failures" data-digits="0">—</div>
+                <div class="stat-l" th:text="#{metrics.card.failures}">Consecutive failures</div>
+            </div>
+        </div>
+        <div class="stat is-ok">
+            <span class="stat-ico"><svg class="ico"><use href="#activity"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n"><span data-status class="chip">—</span></div>
+                <div class="stat-l" th:text="#{metrics.card.status}">Status</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="split-wide" style="margin-top:18px">
+        <div>
+            <div class="card" id="chart-rows">
+                <div class="card-head"><h3 th:text="#{metrics.chart.rows}">Rows synced</h3></div>
+                <div class="card-body">
+                    <div class="chart-slot" data-chart="rows"
+                         th:attr="data-unit='',data-empty=#{metrics.noData}"></div>
+                </div>
+            </div>
+            <div class="card" id="chart-lag">
+                <div class="card-head"><h3 th:text="#{metrics.chart.lag}">Replication lag</h3></div>
+                <div class="card-body">
+                    <div class="chart-slot" data-chart="lag" data-unit="ms" data-color="var(--warn)"
+                         th:attr="data-empty=#{metrics.noData}"></div>
+                </div>
+            </div>
+            <div class="card" id="chart-failures">
+                <div class="card-head"><h3 th:text="#{metrics.chart.failures}">Consecutive failures</h3></div>
+                <div class="card-body">
+                    <div class="chart-slot" data-chart="failures" data-color="var(--danger)"
+                         th:attr="data-empty=#{metrics.noData}"></div>
+                </div>
+            </div>
+        </div>
+        <div>
+            <div class="card" id="chart-change-share">
+                <div class="card-head">
+                    <h3 th:text="#{metrics.chart.changeShare}">Change types</h3>
+                </div>
+                <div class="card-body">
+                    <div data-chart-share
+                         th:attr="data-caption=#{metrics.donut.caption},data-empty=#{metrics.noData}"></div>
+                </div>
+            </div>
+            <div class="card" id="chart-hot-objects">
+                <div class="card-head"><h3 th:text="#{metrics.chart.hotObjects}">Hot tables</h3></div>
+                <div class="card-body">
+                    <div data-chart-hot th:attr="data-empty=#{metrics.noData}"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag">
+<script th:src="@{/js/metrics.js(v=${appVersion})}"></script>
+<script>
+    (function () {
+        var root = document.getElementById('metrics-root');
+        if (root && window.JyncMetrics) {
+            window.JyncMetrics.bind(root);
+        }
+    })();
+</script>
+</th:block>
+</body>
+</html>

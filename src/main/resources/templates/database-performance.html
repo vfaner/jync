@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'databases', 'metrics.db.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<!--/* 数据库性能页：连接健康与延迟、库内运行指标、容量，全部来自元数据库里的采样。
+
+       连接不通时页面照常打开 —— 想看曲线的时候往往正是它挂了的时候 —— 顶部红条说明
+       最后一次探测失败的原因，曲线停在最后一个成功点，不补假数据。
+
+       运行指标区块：某个产品四项都读不到（没有读取器，或账号缺权限）时显示占位说明，
+       四张卡片保持 "—"，绝不画成 0。 */-->
+<div id="metrics-root" data-mode="database"
+     th:attr="data-metrics-url=@{/databases/{id}/metrics(id=${config.id})},
+              data-range=${metricsRange}">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${config.name}">Connection</h1>
+            <p class="sub">
+                <span th:text="${config.type}">MYSQL</span>
+                <span th:text="|· ${config.host}:${config.port}|">· host:port</span>
+            </p>
+        </div>
+        <div class="page-actions">
+            <div class="seg" role="group" th:aria-label="#{metrics.range.label}">
+                <button type="button" class="seg-btn" data-range="1h" th:text="#{metrics.range.hour}">1h</button>
+                <button type="button" class="seg-btn" data-range="24h" th:text="#{metrics.range.day}">24h</button>
+                <button type="button" class="seg-btn" data-range="7d" th:text="#{metrics.range.week}">7d</button>
+            </div>
+            <a class="btn btn-ghost btn-sm" th:href="@{/databases}">
+                <svg class="ico"><use href="#arrow-left"/></svg>
+                <span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <!--/* 红条常驻 DOM，用 hidden 控制显隐：页面正常打开后数据库再断，轮询只能翻转
+           hidden，节点不在就永远看不到告警。data-timeout / data-invalid 带着两条健康
+           检查消息的本地化文案，供脚本在轮询里把消息键翻成人话（与 app.js 同一做法）。 */-->
+    <div class="alert alert-danger" id="db-down-banner"
+         th:attr="hidden=${metrics.ok} ? 'hidden' : null,
+                  data-timeout=#{error.db.health.timeout},
+                  data-invalid=#{error.db.health.invalid}">
+        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+        <div class="alert-body">
+            <strong th:text="#{metrics.db.down.title}">Last probe failed</strong>
+            <div data-down-message
+                 th:text="${metrics.message != null
+                           ? (#messages.msgOrNull(metrics.message) ?: metrics.message) : ''}">message</div>
+            <div th:text="#{metrics.db.down.body}">The curves stop at the last successful sample.</div>
+        </div>
+    </div>
+
+    <p class="help" style="margin:0 0 14px">
+        <span th:text="#{metrics.lastSample}">Last sample</span>:
+        <span data-last-sample th:attr="data-none=#{metrics.noSample}">—</span>
+        <span th:if="${metrics.uptimePercent != null}">
+            · <span th:text="#{metrics.db.uptime}">Uptime</span>:
+            <span th:text="${#numbers.formatDecimal(metrics.uptimePercent, 1, 1)} + '%'">100%</span>
+        </span>
+    </p>
+
+    <div class="stat-grid">
+        <div class="stat is-info">
+            <span class="stat-ico"><svg class="ico"><use href="#activity"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" data-current="latency" data-digits="0" data-suffix=" ms">—</div>
+                <div class="stat-l" th:text="#{metrics.db.card.latency}">Latency</div>
+            </div>
+        </div>
+        <div class="stat is-ok">
+            <span class="stat-ico"><svg class="ico"><use href="#table"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" data-current="tableCount" data-digits="0">—</div>
+                <div class="stat-l" th:text="#{metrics.db.card.tables}">Tables</div>
+            </div>
+        </div>
+        <div class="stat is-info">
+            <span class="stat-ico"><svg class="ico"><use href="#list"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" data-current="rowCount" data-digits="0">—</div>
+                <div class="stat-l" th:text="#{metrics.db.card.rows}">Rows</div>
+            </div>
+        </div>
+        <div class="stat is-warn">
+            <span class="stat-ico"><svg class="ico"><use href="#hdd-network"/></svg></span>
+            <div class="stat-body">
+                <div class="stat-n" data-current="bytes" data-digits="0">—</div>
+                <div class="stat-l" th:text="#{metrics.db.card.bytes}">Space used</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+        <div class="card-head">
+            <h3 th:text="#{metrics.db.runtime.title}">In-database runtime</h3>
+            <span class="hint" th:if="${runtimeSupported}" th:text="#{metrics.db.runtime.hint}">
+                Read from the database's own session and statistics views</span>
+        </div>
+        <div class="card-body">
+            <div id="runtime-unsupported" th:unless="${runtimeSupported}">
+                <p class="help" style="margin:0 0 12px" th:text="#{metrics.db.runtime.unsupported}">
+                    This database reports no runtime counters.
+                </p>
+            </div>
+            <div class="stat-grid" style="margin-bottom:14px">
+                <div class="stat">
+                    <div class="stat-body">
+                        <div class="stat-n" data-current="sessions" data-digits="0">—</div>
+                        <div class="stat-l" th:text="#{metrics.db.card.sessions}">Sessions</div>
+                    </div>
+                </div>
+                <div class="stat">
+                    <div class="stat-body">
+                        <div class="stat-n" data-current="qps" data-digits="1">—</div>
+                        <div class="stat-l" th:text="#{metrics.db.card.qps}">QPS</div>
+                    </div>
+                </div>
+                <div class="stat">
+                    <div class="stat-body">
+                        <div class="stat-n" data-current="cacheHit" data-digits="1" data-suffix="%">—</div>
+                        <div class="stat-l" th:text="#{metrics.db.card.cacheHit}">Cache hit</div>
+                    </div>
+                </div>
+                <div class="stat">
+                    <div class="stat-body">
+                        <div class="stat-n" data-current="locks" data-digits="0">—</div>
+                        <div class="stat-l" th:text="#{metrics.db.card.locks}">Lock waits</div>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-slot" data-chart="sessions" data-color="var(--info)"
+                 th:attr="data-empty=#{metrics.noData}"></div>
+            <div class="chart-slot" data-chart="qps" data-color="var(--brand)"
+                 th:attr="data-empty=#{metrics.noData}"></div>
+            <div class="chart-slot" data-chart="cacheHit" data-color="var(--ok)" data-percent="true"
+                 th:attr="data-empty=#{metrics.noData}"></div>
+            <div class="chart-slot" data-chart="locks" data-color="var(--danger)"
+                 th:attr="data-empty=#{metrics.noData}"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-head"><h3 th:text="#{metrics.db.card.latency}">Latency</h3></div>
+        <div class="card-body">
+            <div class="chart-slot" data-chart="latency" data-unit="ms"
+                 th:attr="data-empty=#{metrics.noData}"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-head"><h3 th:text="#{metrics.db.card.bytes}">Space used</h3></div>
+        <div class="card-body">
+            <div class="chart-slot" data-chart="bytes" data-color="var(--accent)"
+                 th:attr="data-empty=#{metrics.noData}"></div>
+        </div>
+    </div>
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag">
+<script th:src="@{/js/metrics.js(v=${appVersion})}"></script>
+<script>
+    (function () {
+        var root = document.getElementById('metrics-root');
+        if (root && window.JyncMetrics) {
+            window.JyncMetrics.bind(root);
+        }
+    })();
+</script>
+</th:block>
+</body>
+</html>

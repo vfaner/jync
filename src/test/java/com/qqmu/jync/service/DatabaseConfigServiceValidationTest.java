@@ -44,13 +44,14 @@ class DatabaseConfigServiceValidationTest {
     @Mock private ConnectionTestService connectionTestService;
     @Mock private CryptoUtil cryptoUtil;
     @Mock private AdminAuditService auditService;
+    @Mock private com.qqmu.jync.repository.DbMetricSampleRepository dbMetricSampleRepository;
 
     private DatabaseConfigService service;
 
     @BeforeEach
     void setUp() {
         service = new DatabaseConfigService(repository, projectRepository,
-                dataSourceManager, connectionTestService, cryptoUtil, auditService);
+                dataSourceManager, connectionTestService, cryptoUtil, auditService, dbMetricSampleRepository);
     }
 
     private DatabaseConfig preset(DatabaseType type, String jarPath) {

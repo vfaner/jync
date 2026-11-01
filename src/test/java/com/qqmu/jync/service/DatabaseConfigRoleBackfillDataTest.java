@@ -48,7 +48,7 @@ class DatabaseConfigRoleBackfillDataTest {
     void setUp() {
         service = new DatabaseConfigService(repository, projectRepository,
                 mock(DataSourceManager.class), mock(ConnectionTestService.class), mock(CryptoUtil.class),
-                mock(AdminAuditService.class));
+                mock(AdminAuditService.class), mock(com.qqmu.jync.repository.DbMetricSampleRepository.class));
     }
 
     @Test

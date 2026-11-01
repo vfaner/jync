@@ -15,6 +15,13 @@
             <svg class="ico"><use href="#code-square"/></svg>
             <span th:text="#{conversion.list}">Conversion review</span>
         </a>
+        <!--/* 性能页两种角色都能进：吞吐与延迟是只读信息；进程资源区块由服务端
+               在 JSON 里就不下发给访客。 */-->
+        <a class="btn btn-ghost btn-sm"
+           th:href="@{/projects/{id}/performance(id=${project.id})}">
+            <svg class="ico"><use href="#graph-up"/></svg>
+            <span th:text="#{metrics.open}">Performance</span>
+        </a>
         <a class="btn btn-ghost btn-sm" th:if="${isAdmin}"
            th:href="@{/projects/{id}/edit(id=${project.id})}">
             <svg class="ico"><use href="#pencil"/></svg><span th:text="#{common.edit}">Edit</span>

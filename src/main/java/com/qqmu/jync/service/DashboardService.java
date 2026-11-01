@@ -8,12 +8,10 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -48,16 +46,6 @@ public class DashboardService {
 
     /** Hours the trend chart covers, including the one in progress. */
     static final int SERIES_HOURS = 24;
-
-    /** Memory samples are one per bucket; 10 minutes keeps a readable curve without a thread. */
-    static final int MEMORY_BUCKET_MINUTES = 10;
-    static final int MEMORY_BUCKETS = SERIES_HOURS * 60 / MEMORY_BUCKET_MINUTES;
-
-    /**
-     * JVM heap usage sampled lazily whenever the card polls — no scheduler, no storage.
-     * Bounded to the 24-hour window, so the map never holds more than {@link #MEMORY_BUCKETS}.
-     */
-    private final Map<Long, Double> memorySamples = new ConcurrentHashMap<>();
 
     private final ChangeLogRepository changeLogRepository;
 
@@ -140,9 +128,14 @@ public class DashboardService {
 
         // The tile and the trend chart both say "the last 24 hours", so they must count the same
         // window: the chart's 24 hourly buckets, the last of which is the hour in progress.
+        // The chart draws two lines — the change log (real-time sync) and the ETL run history —
+        // so the tile above it is their sum. Counting only the change log left an ETL-only
+        // server showing "0 changes" under a chart whose ETL line was plainly not flat.
         Instant windowStart = seriesStart(now);
-        stats.setChangesToday(changeLogRepository.countByOccurredAtBetween(windowStart, now));
-        stats.setRowsToday(changeLogRepository.sumAffectedRowsBetween(windowStart, now));
+        stats.setChangesToday(changeLogRepository.countByOccurredAtBetween(windowStart, now)
+                + etlRunRepository.countByOccurredAtBetween(windowStart, now));
+        stats.setRowsToday(changeLogRepository.sumAffectedRowsBetween(windowStart, now)
+                + etlRunRepository.sumAffectedRowsBetween(windowStart, now));
 
         stats.setErrorTaskCount(taskStore.findByStatus(TaskStatus.ERROR).size());
         stats.setRecentChanges(recentChanges());
@@ -261,55 +254,6 @@ public class DashboardService {
         return new MultiSeriesActivity(points, totalSyncChanges, totalSyncRows, totalEtlChanges, totalEtlRows);
     }
 
-    /**
-     * JVM heap usage over the same 24-hour window as the activity chart, one sample per
-     * 10-minute bucket and the average over all buckets.
-     *
-     * <p>Samples are taken lazily: each poll of the card records the current reading, so a
-     * freshly started instance draws its first real value immediately and fills in history
-     * as it runs. Buckets without a sample carry the last known value forward, which keeps
-     * the curve continuous instead of dropping to zero.
-     */
-    @Transactional(readOnly = true)
-    public MemorySeries memorySeries() {
-        Instant now = Instant.now();
-        long currentBucket = now.getEpochSecond() / (MEMORY_BUCKET_MINUTES * 60L);
-        memorySamples.put(currentBucket, jvmHeapPercent());
-
-        long oldest = currentBucket - MEMORY_BUCKETS + 1;
-        memorySamples.keySet().removeIf(bucket -> bucket < oldest);
-
-        List<Long> known = new ArrayList<>(memorySamples.keySet());
-        Collections.sort(known);
-        double carried = memorySamples.get(known.get(0));
-
-        ZoneId zone = ZoneId.systemDefault();
-        List<MemoryPoint> points = new ArrayList<>(MEMORY_BUCKETS);
-        double sum = 0;
-        for (int i = 0; i < MEMORY_BUCKETS; i++) {
-            long bucket = oldest + i;
-            Double sample = memorySamples.get(bucket);
-            if (sample != null) {
-                carried = sample;
-            }
-            Instant bucketStart = Instant.ofEpochSecond(bucket * MEMORY_BUCKET_MINUTES * 60L);
-            points.add(new MemoryPoint(HOUR_LABEL.format(bucketStart.atZone(zone)), carried));
-            sum += carried;
-        }
-        return new MemorySeries(points, sum / MEMORY_BUCKETS);
-    }
-
-    /** Heap in use as a percentage of the JVM's maximum heap. */
-    static double jvmHeapPercent() {
-        Runtime runtime = Runtime.getRuntime();
-        long max = runtime.maxMemory();
-        if (max <= 0) {
-            return 0;
-        }
-        long used = runtime.totalMemory() - runtime.freeMemory();
-        return Math.max(0, Math.min(100, used * 100.0 / max));
-    }
-
     /** The hour boundary as an instant, whichever temporal type the driver handed back. */
     private static Instant hourOf(Object value) {
         if (value instanceof Instant instant) {
@@ -338,14 +282,6 @@ public class DashboardService {
     public record MultiSeriesActivity(List<SeriesPoint> points,
                                        long totalSyncChanges, long totalSyncRows,
                                        long totalEtlChanges, long totalEtlRows) {
-    }
-
-    /** Memory usage points for the last 24 hours. */
-    public record MemoryPoint(String label, double memoryPercent) {
-    }
-
-    /** The whole trend window plus total memory usage. */
-    public record MemorySeries(List<MemoryPoint> points, double totalMemory) {
     }
 
     /** Dashboard figures. */

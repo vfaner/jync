@@ -50,6 +50,7 @@ import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
+import com.qqmu.jync.repository.TaskMetricSampleRepository;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.PgLogicalCdcConsumer;
@@ -106,6 +107,7 @@ public class ProjectService {
     private final CdcConsumerManager cdcManager;
     private final SyncStateWriter stateWriter;
     private final CdcPositionStore positionStore;
+    private final TaskMetricSampleRepository taskMetricSampleRepository;
     private final SyncProperties properties;
 
     /**
@@ -142,6 +144,7 @@ public class ProjectService {
                           CdcConsumerManager cdcManager,
                           SyncStateWriter stateWriter,
                           CdcPositionStore positionStore,
+                          TaskMetricSampleRepository taskMetricSampleRepository,
                           SyncProperties properties) {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
@@ -161,6 +164,7 @@ public class ProjectService {
         this.cdcManager = cdcManager;
         this.stateWriter = stateWriter;
         this.positionStore = positionStore;
+        this.taskMetricSampleRepository = taskMetricSampleRepository;
         this.properties = properties;
     }
 
@@ -1080,6 +1084,10 @@ public class ProjectService {
             progressRepository.deleteByProjectId(projectId);
             snapshotService.deleteAllForProject(projectId);
             changeLogRepository.deleteByProjectId(projectId);
+            // Performance history belongs to the project: keeping it would grow the metadata
+            // store with rows the (now unreachable) page could never show. Process samples
+            // are deliberately not touched — they describe the JVM, not this project.
+            taskMetricSampleRepository.deleteByProjectId(projectId);
             projectRepository.deleteById(projectId);
             // Drop the runner's per-project state (queued rerun, attempt count, stop epoch,
             // heartbeat marker) so a reused id cannot inherit a ghost cycle.

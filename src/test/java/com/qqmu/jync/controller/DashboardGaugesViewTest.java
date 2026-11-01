@@ -24,6 +24,7 @@ import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.DashboardService;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.metrics.MetricsQueryService;
 
 /**
  * The 看板 opens with four donuts for the host the sync runs on: load, CPU, memory, disk.
@@ -49,6 +50,8 @@ class DashboardGaugesViewTest {
     private DashboardService dashboardService;
     @MockBean
     private SystemMetrics systemMetrics;
+    @MockBean
+    private MetricsQueryService metricsQueryService;
 
     private String render(SystemMetrics.Snapshot snapshot, Locale locale) throws Exception {
         return render(snapshot, locale, false);

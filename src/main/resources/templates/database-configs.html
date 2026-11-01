@@ -90,6 +90,10 @@
                                         th:title="#{common.test}">
                                     <svg class="ico"><use href="#plug"/></svg>
                                 </button>
+                                <!--/* 性能页：连接不通也能进，页面顶部标红、曲线停在最后一个
+                                       成功点 —— 想看曲线的时候往往正是它挂了的时候。 */-->
+                                <a class="btn-icon" th:href="@{/databases/{id}/performance(id=${config.id})}"
+                                   th:title="#{metrics.openDb}"><svg class="ico"><use href="#graph-up"/></svg></a>
                                 <a class="btn-icon" th:href="@{/databases/{id}/edit(id=${config.id})}"
                                    th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
                                 <form method="post" style="display:inline"
@@ -192,6 +196,10 @@
                                         th:title="#{common.test}">
                                     <svg class="ico"><use href="#plug"/></svg>
                                 </button>
+                                <!--/* 性能页：连接不通也能进，页面顶部标红、曲线停在最后一个
+                                       成功点 —— 想看曲线的时候往往正是它挂了的时候。 */-->
+                                <a class="btn-icon" th:href="@{/databases/{id}/performance(id=${config.id})}"
+                                   th:title="#{metrics.openDb}"><svg class="ico"><use href="#graph-up"/></svg></a>
                                 <a class="btn-icon" th:href="@{/databases/{id}/edit(id=${config.id})}"
                                    th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
                                 <form method="post" style="display:inline"

@@ -4,22 +4,29 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
 import com.qqmu.jync.service.DashboardService;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.metrics.AppMetricsView;
+import com.qqmu.jync.service.metrics.MetricsQueryService;
+import com.qqmu.jync.service.metrics.MetricsRange;
 
-/** Renders the dashboard and the three fragments that keep it live. */
+/** Renders the dashboard and the fragments that keep it live. */
 @Controller
 public class DashboardController {
 
     private final DashboardService dashboardService;
     private final SystemMetrics systemMetrics;
+    private final MetricsQueryService metricsQueryService;
 
-    public DashboardController(DashboardService dashboardService, SystemMetrics systemMetrics) {
+    public DashboardController(DashboardService dashboardService, SystemMetrics systemMetrics,
+                               MetricsQueryService metricsQueryService) {
         this.dashboardService = dashboardService;
         this.systemMetrics = systemMetrics;
+        this.metricsQueryService = metricsQueryService;
     }
 
     /**
@@ -86,10 +93,14 @@ public class DashboardController {
         return dashboardService.activitySeries();
     }
 
-    /** Memory usage trend for the last 24 hours. */
-    @GetMapping("/dashboard/memory-series")
+    /**
+     * The process resources this JVM shares with every task on the server, for the dashboard
+     * card. Admin-only in {@code SecurityConfig}: these figures describe every account that
+     * shares the machine, which is why they are not attached to any one project.
+     */
+    @GetMapping("/dashboard/process-metrics")
     @ResponseBody
-    public DashboardService.MemorySeries memorySeries() {
-        return dashboardService.memorySeries();
+    public AppMetricsView processMetrics(@RequestParam(required = false) String range) {
+        return metricsQueryService.app(MetricsRange.parse(range));
     }
 }

@@ -34,6 +34,7 @@ import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.DashboardService;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.metrics.MetricsQueryService;
 
 /**
  * The dashboard is a live screen: the title block is gone, the tiles, the trend chart and the
@@ -52,11 +53,17 @@ class DashboardLiveViewTest {
     private DashboardService dashboardService;
     @MockBean
     private SystemMetrics systemMetrics;
+    @MockBean
+    private MetricsQueryService metricsQueryService;
 
     private String dashboard(Locale locale) throws Exception {
+        return dashboard(locale, UserRole.ADMIN);
+    }
+
+    private String dashboard(Locale locale, UserRole role) throws Exception {
         when(dashboardService.collect()).thenReturn(stats());
         when(systemMetrics.snapshot()).thenReturn(SystemMetrics.Snapshot.UNKNOWN);
-        return mvc.perform(get("/dashboard").locale(locale).with(as(false)))
+        return mvc.perform(get("/dashboard").locale(locale).with(as(role, false)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
     }
@@ -86,22 +93,76 @@ class DashboardLiveViewTest {
                 .contains("data-refresh-url=\"/dashboard/activity-feed\"");
     }
 
+    /**
+     * 趋势图是一张图两条线：实时同步与 ETL 各一条。切换的是「变更数 / 行数」，不是
+     * 「实时同步 / ETL」——后者现在同时画出来，用颜色区分。
+     */
     @Test
-    void theChartKnowsWhereToFetchItsSeries() throws Exception {
+    void theChartDrawsBothSeriesAndSwitchesBetweenChangesAndRows() throws Exception {
         String html = dashboard(Locale.SIMPLIFIED_CHINESE);
 
         assertThat(html).contains("id=\"activity-chart\"")
                 .contains("data-series-url=\"/dashboard/activity-series\"")
                 .contains("data-sync-label=")
-                .contains("data-etl-label=");
+                .contains("data-etl-label=")
+                .contains("data-metric=\"changes\"")
+                .contains("data-metric=\"rows\"");
+        // 图例：两条线的名字与颜色都要在页面上，读者才知道哪根是哪个。
+        assertThat(html).contains("chart-legend")
+                .contains("实时同步")
+                .contains("ETL 任务")
+                .doesNotContain("data-series=\"sync\"");
+    }
+
+    /**
+     * 进程资源（CPU / 堆 / 线程 / GC）是整个 JVM 的，不属于任何一张同步表，所以它现在只有
+     * 看板这一块；采样历史换成由 metrics.js 拉取，不再用进程内的环形缓冲。
+     */
+    /**
+     * 进程资源说的是这台机器上的 JVM，不是某个任务，所以它不套卡片：直接排在资源环和
+     * 同步趋势之间，与上面的整机指标连成一段。
+     */
+    @Test
+    void theProcessRowSitsAboveTheTrendChartAndCarriesNoCard() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE, UserRole.ADMIN);
+
+        int gauges = html.indexOf("id=\"resource-gauges\"");
+        int process = html.indexOf("id=\"process-block\"");
+        int chart = html.indexOf("id=\"activity-chart\"");
+        assertThat(gauges).isGreaterThanOrEqualTo(0);
+        assertThat(process).isGreaterThan(gauges);
+        assertThat(chart).isGreaterThan(process);
+        assertThat(html).contains("class=\"process-row\"");
     }
 
     @Test
-    void theMemoryChartKnowsWhereToFetchItsSeries() throws Exception {
-        String html = dashboard(Locale.SIMPLIFIED_CHINESE);
+    void theProcessCardKnowsWhereToFetchItsSamples() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE, UserRole.ADMIN);
 
-        assertThat(html).contains("id=\"memory-chart\"")
-                .contains("data-series-url=\"/dashboard/memory-series\"");
+        assertThat(html).contains("id=\"process-block\"")
+                .contains("data-metrics-url=\"/dashboard/process-metrics\"")
+                .contains("data-range=\"7d\"")
+                .contains("/js/metrics.js");
+        // 四张数字卡：CPU / 堆 / 线程 / GC 次数。
+        for (String key : new String[] {"cpu", "heap", "threads", "gcCount"}) {
+            assertThat(html).as(key).contains("data-current=\"" + key + "\"");
+        }
+        // 四条曲线，其中 GC 耗时是这次新加的一条。
+        for (String key : new String[] {"cpu", "heap", "threads", "gcTime"}) {
+            assertThat(html).as(key).contains("data-chart=\"" + key + "\"");
+        }
+        // 旧的进程内内存趋势整块退场，不再有第二个内存图。
+        assertThat(html).doesNotContain("id=\"memory-chart\"")
+                .doesNotContain("/dashboard/memory-series");
+    }
+
+    /** 面向本机所有账号的 JVM 数字，只读账号不该在页面上看到，也就不该去轮询它。 */
+    @Test
+    void aViewerGetsNoProcessCard() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE, UserRole.VIEWER);
+
+        assertThat(html).doesNotContain("id=\"process-block\"")
+                .doesNotContain("/dashboard/process-metrics");
     }
 
     @Test
@@ -289,11 +350,15 @@ class DashboardLiveViewTest {
     }
 
     private static RequestPostProcessor as(boolean usingDefaultPassword) {
+        return as(UserRole.ADMIN, usingDefaultPassword);
+    }
+
+    private static RequestPostProcessor as(UserRole role, boolean usingDefaultPassword) {
         AppUser user = new AppUser();
         user.setId(1L);
-        user.setUsername("admin");
+        user.setUsername(role == UserRole.ADMIN ? "admin" : "view");
         user.setPasswordHash("not-checked-here");
-        user.setRole(UserRole.ADMIN);
+        user.setRole(role);
         SyncUserDetails principal = new SyncUserDetails(user, usingDefaultPassword);
         return authentication(new UsernamePasswordAuthenticationToken(
                 principal, null, principal.getAuthorities()));

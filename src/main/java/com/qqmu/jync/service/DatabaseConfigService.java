@@ -18,6 +18,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
+import com.qqmu.jync.repository.DbMetricSampleRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -38,19 +39,22 @@ public class DatabaseConfigService {
     private final ConnectionTestService connectionTestService;
     private final CryptoUtil cryptoUtil;
     private final AdminAuditService auditService;
+    private final DbMetricSampleRepository metricSampleRepository;
 
     public DatabaseConfigService(DatabaseConfigRepository repository,
                                  ProjectRepository projectRepository,
                                  DataSourceManager dataSourceManager,
                                  ConnectionTestService connectionTestService,
                                  CryptoUtil cryptoUtil,
-                                 AdminAuditService auditService) {
+                                 AdminAuditService auditService,
+                                 DbMetricSampleRepository metricSampleRepository) {
         this.repository = repository;
         this.projectRepository = projectRepository;
         this.dataSourceManager = dataSourceManager;
         this.connectionTestService = connectionTestService;
         this.cryptoUtil = cryptoUtil;
         this.auditService = auditService;
+        this.metricSampleRepository = metricSampleRepository;
     }
 
     public List<DatabaseConfig> findAll() {
@@ -255,6 +259,9 @@ public class DatabaseConfigService {
             throw new IllegalStateException("error.connection.in.use:" + joinNames(dependents));
         }
         dataSourceManager.evict(id);
+        // The samples describe a connection that is about to stop existing; left behind they
+        // would keep growing the metadata store with rows no page can reach.
+        metricSampleRepository.deleteByConnectionId(id);
         repository.deleteById(id);
         auditService.record(AuditAction.DB_DELETE,
                 "Deleted connection '" + victim.getName() + "' (" + victim.getType() + ")");

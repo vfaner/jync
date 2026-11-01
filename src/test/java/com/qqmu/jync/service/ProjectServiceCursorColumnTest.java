@@ -67,6 +67,7 @@ class ProjectServiceCursorColumnTest {
     @Mock private com.qqmu.jync.service.cdc.CdcConsumerManager cdcManager;
     @Mock private SyncStateWriter stateWriter;
     @Mock private com.qqmu.jync.service.cdc.CdcPositionStore positionStore;
+    @Mock private com.qqmu.jync.repository.TaskMetricSampleRepository taskMetricSampleRepository;
 
     private final com.qqmu.jync.config.SyncProperties properties =
             new com.qqmu.jync.config.SyncProperties();
@@ -79,7 +80,7 @@ class ProjectServiceCursorColumnTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                properties);
+                taskMetricSampleRepository, properties);
     }
 
     private Project project(boolean enabled) {

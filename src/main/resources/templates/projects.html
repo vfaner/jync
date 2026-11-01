@@ -91,8 +91,12 @@
                                     <svg class="ico"><use href="#pause-fill"/></svg>
                                 </button>
                                 </th:block>
+                                <!--/* 性能页入口对两种角色都开放：访客也要能看同步吞吐，
+                                       进程资源区块由服务端在 JSON 里就不下发。 */-->
+                                <a class="btn-icon" th:href="@{/projects/{id}/performance(id=${project.id})}"
+                                   th:title="#{metrics.open}"><svg class="ico"><use href="#graph-up"/></svg></a>
                                 <!--/* 详情入口 = 名称链接（悬停/点击皆可）；手动跑一轮收进
-                                       项目详情页的运行控制区。列表只留 启停/编辑/删除，
+                                       项目详情页的运行控制区。列表只留 启停/性能/编辑/删除，
                                        操作列因此能保持一行。 */-->
                                 <th:block th:if="${isAdmin}">
                                 <a class="btn-icon" th:href="@{/projects/{id}/edit(id=${project.id})}"

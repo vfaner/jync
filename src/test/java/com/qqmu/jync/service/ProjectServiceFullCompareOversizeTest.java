@@ -66,6 +66,7 @@ class ProjectServiceFullCompareOversizeTest {
     @Mock private com.qqmu.jync.service.cdc.CdcConsumerManager cdcManager;
     @Mock private SyncStateWriter stateWriter;
     @Mock private com.qqmu.jync.service.cdc.CdcPositionStore positionStore;
+    @Mock private com.qqmu.jync.repository.TaskMetricSampleRepository taskMetricSampleRepository;
 
     private final SyncProperties properties = new SyncProperties();
     private ProjectService service;
@@ -76,7 +77,7 @@ class ProjectServiceFullCompareOversizeTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                properties);
+                taskMetricSampleRepository, properties);
     }
 
     private void snapshots(TableMeta... tables) {

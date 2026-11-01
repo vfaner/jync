@@ -25,6 +25,7 @@ import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.DashboardService;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.metrics.MetricsQueryService;
 
 /**
  * The failing-tasks banner is a number followed by a noun, and English needs two nouns: one
@@ -44,6 +45,8 @@ class DashboardErrorBannerTest {
     private DashboardService dashboardService;
     @MockBean
     private SystemMetrics systemMetrics;
+    @MockBean
+    private MetricsQueryService metricsQueryService;
 
     @Test
     void oneFailingTaskIsSingular() throws Exception {

@@ -50,6 +50,35 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     List<Object[]> hourlySeriesBetween(@Param("since") java.sql.Timestamp since,
                                        @Param("until") java.sql.Timestamp until);
 
+    /**
+     * Per-minute change counts for one project, split by change type.
+     *
+     * <p>Minute is the finest bucket any page asks for; the caller re-buckets into its range
+     * (10 minutes, an hour) in memory. Grouping at minute granularity keeps the row count
+     * bounded — at most {@code minutes × 3} rows for a week — so the page never loads a raw
+     * change log into memory just to draw a line. Same native {@code date_trunc} precedent as
+     * {@link #hourlySeriesBetween}.
+     */
+    @Query(value = "select date_trunc('minute', occurred_at), change_type, count(*) "
+            + "from change_log where project_id = :projectId "
+            + "and occurred_at >= :since and occurred_at <= :until "
+            + "group by date_trunc('minute', occurred_at), change_type",
+            nativeQuery = true)
+    List<Object[]> minutelyChangesForProject(@Param("projectId") Long projectId,
+                                             @Param("since") java.sql.Timestamp since,
+                                             @Param("until") java.sql.Timestamp until);
+
+    /** The hottest tables of one project in the window; the caller caps the page size. */
+    @Query(value = "select object_name, count(*) from change_log "
+            + "where project_id = :projectId and object_name is not null "
+            + "and occurred_at >= :since and occurred_at <= :until "
+            + "group by object_name order by count(*) desc",
+            nativeQuery = true)
+    List<Object[]> topChangedObjects(@Param("projectId") Long projectId,
+                                     @Param("since") java.sql.Timestamp since,
+                                     @Param("until") java.sql.Timestamp until,
+                                     Pageable pageable);
+
     long countByProjectId(Long projectId);
 
     /** The alert evaluator's window: failed rows recent enough to describe a live fault. */

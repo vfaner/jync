@@ -164,7 +164,7 @@ class DashboardServiceSeriesTest {
 
     /**
      * The tile says "Changes (24h)" and the chart says "Last 24 hours" — a reader will add up the
-     * bars and compare. They used to be two different windows: the tile counted from exactly
+     * two lines and compare. They used to be two different windows: the tile counted from exactly
      * 24 hours ago with no upper bound, the chart from the top of the hour 23 hours back. Any
      * change logged in the first hour of the tile's window (or with a clock-skewed future
      * timestamp) appeared in the tile and in none of the bars.
@@ -178,18 +178,50 @@ class DashboardServiceSeriesTest {
                 new Object[] {Timestamp.from(Instant.parse("2025-12-31T20:00:00Z")), 1L, 4L}));
         when(changeLogRepository.countByOccurredAtBetween(any(), any())).thenReturn(4L);
         when(changeLogRepository.sumAffectedRowsBetween(any(), any())).thenReturn(16L);
+        // The same two runs seen by both queries: the tile's aggregates and the chart's list.
+        when(etlRunRepository.findByOccurredAtBetweenOrderByOccurredAtAsc(any(), any()))
+                .thenReturn(List.of(
+                        run(Instant.parse("2026-01-01T10:05:00Z"), 4),
+                        run(Instant.parse("2026-01-01T10:40:00Z"), 6)));
+        when(etlRunRepository.countByOccurredAtBetween(any(), any())).thenReturn(2L);
+        when(etlRunRepository.sumAffectedRowsBetween(any(), any())).thenReturn(10L);
 
         DashboardService.Stats stats = service.collect(now);
         DashboardService.MultiSeriesActivity series = service.multiSeriesActivitySeries(now);
 
-        assertThat(stats.getChangesToday()).isEqualTo(series.totalSyncChanges());
-        assertThat(stats.getRowsToday()).isEqualTo(series.totalSyncRows());
+        assertThat(stats.getChangesToday())
+                .isEqualTo(series.totalSyncChanges() + series.totalEtlChanges());
+        assertThat(stats.getRowsToday())
+                .isEqualTo(series.totalSyncRows() + series.totalEtlRows());
         org.mockito.Mockito.verify(changeLogRepository)
                 .countByOccurredAtBetween(windowStart, now);
         org.mockito.Mockito.verify(changeLogRepository)
                 .sumAffectedRowsBetween(windowStart, now);
         org.mockito.Mockito.verify(changeLogRepository)
                 .hourlySeriesBetween(Timestamp.from(windowStart), Timestamp.from(now));
+        org.mockito.Mockito.verify(etlRunRepository)
+                .countByOccurredAtBetween(windowStart, now);
+        org.mockito.Mockito.verify(etlRunRepository)
+                .sumAffectedRowsBetween(windowStart, now);
+    }
+
+    /**
+     * The trend chart draws two lines — sync and ETL — so the tile above it must be their sum.
+     * Counting only the change log made an ETL-only server show "0 changes" while its line on
+     * the chart was clearly not flat.
+     */
+    @Test
+    void theTilesSumBothSyncAndEtlActivity() {
+        Instant now = Instant.parse("2026-01-01T10:25:00Z");
+        when(changeLogRepository.countByOccurredAtBetween(any(), any())).thenReturn(4L);
+        when(changeLogRepository.sumAffectedRowsBetween(any(), any())).thenReturn(16L);
+        when(etlRunRepository.countByOccurredAtBetween(any(), any())).thenReturn(2L);
+        when(etlRunRepository.sumAffectedRowsBetween(any(), any())).thenReturn(10L);
+
+        DashboardService.Stats stats = service.collect(now);
+
+        assertThat(stats.getChangesToday()).isEqualTo(6);
+        assertThat(stats.getRowsToday()).isEqualTo(26);
     }
 
     @Test

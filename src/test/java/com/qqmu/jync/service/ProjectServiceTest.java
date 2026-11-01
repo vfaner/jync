@@ -85,6 +85,7 @@ class ProjectServiceTest {
     @Mock private com.qqmu.jync.service.cdc.CdcConsumerManager cdcManager;
     @Mock private com.qqmu.jync.service.sync.SyncStateWriter stateWriter;
     @Mock private com.qqmu.jync.service.cdc.CdcPositionStore positionStore;
+    @Mock private com.qqmu.jync.repository.TaskMetricSampleRepository taskMetricSampleRepository;
 
     private final com.qqmu.jync.config.SyncProperties properties =
             new com.qqmu.jync.config.SyncProperties();
@@ -97,7 +98,7 @@ class ProjectServiceTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                properties);
+                taskMetricSampleRepository, properties);
     }
 
     private Project project(Long id) {
@@ -543,7 +544,8 @@ class ProjectServiceTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 new MetadataReaderFactory(java.util.List.of(familyReader)), snapshotService,
                 contextFactory, scheduler, taskRunner, taskStore, syncEngine, lockService,
-                auditService, cdcManager, stateWriter, positionStore, properties);
+                auditService, cdcManager, stateWriter, positionStore, taskMetricSampleRepository,
+                properties);
 
         assertThat(service.listSourceObjects(1L).getTables()).containsExactly("pg_orders");
         assertThat(service.listTableColumns(1L, "pg_orders")).containsExactly("total");

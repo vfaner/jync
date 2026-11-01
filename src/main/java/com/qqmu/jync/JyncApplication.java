@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import com.qqmu.jync.config.MetricsProperties;
 import com.qqmu.jync.config.SyncProperties;
 
 /**
@@ -17,7 +18,7 @@ import com.qqmu.jync.config.SyncProperties;
  */
 @SpringBootApplication(exclude = MongoAutoConfiguration.class)
 @EnableScheduling
-@EnableConfigurationProperties(SyncProperties.class)
+@EnableConfigurationProperties({SyncProperties.class, MetricsProperties.class})
 public class JyncApplication {
 
     public static void main(String[] args) {

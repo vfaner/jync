@@ -65,6 +65,10 @@ public class SecurityConfig {
      */
     private static final String[] ADMIN_ONLY_GET = {
             "/databases/new", "/databases/*/edit",
+            // The connection's performance page reads the target database's own runtime
+            // counters (sessions, cache hit, locks) — figures about every user of that server,
+            // not just this application. Its JSON poll is the same data and is gated with it.
+            "/databases/*/performance", "/databases/*/metrics",
             "/projects/new", "/projects/*/edit",
             // The bulk wizard reads a whole source's table listing and creates tasks in one
             // go; the POSTs are admin-only by the blanket rule below, so the GET must be too
@@ -82,6 +86,10 @@ public class SecurityConfig {
             // too, rather than advertising the new address to a viewer.
             "/external-auth",
             "/oa/settings",
+            // The dashboard's process card: CPU, heap and GC of the JVM every task on this
+            // server shares, so the figures describe every account using the machine. The
+            // dashboard page itself stays readable for viewers; this one feed does not.
+            "/dashboard/process-metrics",
             // The alerting page holds the webhook URL — a bearer credential — and every POST
             // that changes it is admin-only anyway, so the GET is locked with them.
             "/alert-settings",

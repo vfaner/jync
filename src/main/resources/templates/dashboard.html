@@ -129,22 +129,94 @@
         </div>
     </div>
 
-    <!--/* 第一行：活动趋势 + 内存趋势并排。 */-->
-    <div class="dash-grid">
-        <!--/* 趋势图：空容器 + data-* 里的地址与文案，由 app.js bindActivityChart 用
-               SVG 画；换指标只重画，不再取数。24 个点由服务端补齐，空的钟点记 0。 */-->
+    <!--/* 进程资源：CPU / 堆 / 线程 / GC 属于整个 JVM，本服务器上所有任务共用，所以它
+           不套卡片、紧跟在整机资源环之后——上面两排说的都是「这台机器」，下面才是任务。
+           数据来自落库的采样历史（metrics.js 每 10 秒取一次 /dashboard/process-metrics）。
+           仅管理员可见：这些数字描述的是所有账号共用的这台机器。 */-->
+    <section class="process-row" id="process-block" th:if="${isAdmin}"
+             th:attr="data-metrics-url=@{/dashboard/process-metrics}" data-range="24h">
+        <div class="process-head">
+            <h2 th:text="#{metrics.process.title}">Process resources</h2>
+            <span class="hint" th:text="#{metrics.process.hint}">Shared by every task on this server</span>
+            <span class="small muted">
+                <span th:text="#{metrics.lastSample}">Last sample</span>:
+                <span data-last-sample th:attr="data-none=#{metrics.noSample}">—</span>
+            </span>
+            <div class="seg" role="group" th:attr="aria-label=#{metrics.range.label}">
+                <button type="button" class="seg-btn" data-range="1h"
+                        th:text="#{metrics.range.hour}">1h</button>
+                <button type="button" class="seg-btn is-active" data-range="24h"
+                        th:text="#{metrics.range.day}">24h</button>
+                <button type="button" class="seg-btn" data-range="7d"
+                        th:text="#{metrics.range.week}">7d</button>
+            </div>
+        </div>
+        <div class="stat-grid process-stats">
+            <div class="stat">
+                <div class="stat-body">
+                    <div class="stat-n" data-current="cpu" data-digits="1" data-suffix="%">—</div>
+                    <div class="stat-l" th:text="#{metrics.chart.cpu}">CPU</div>
+                </div>
+            </div>
+            <div class="stat">
+                <div class="stat-body">
+                    <div class="stat-n" data-current="heap" data-digits="1" data-suffix="%">—</div>
+                    <div class="stat-l" th:text="#{metrics.chart.heap}">Heap</div>
+                </div>
+            </div>
+            <div class="stat">
+                <div class="stat-body">
+                    <div class="stat-n" data-current="threads" data-digits="0">—</div>
+                    <div class="stat-l" th:text="#{metrics.chart.threads}">Threads</div>
+                </div>
+            </div>
+            <div class="stat">
+                <div class="stat-body">
+                    <div class="stat-n" data-current="gcCount" data-digits="0">—</div>
+                    <div class="stat-l" th:text="#{metrics.card.gcCount}">GC count</div>
+                </div>
+            </div>
+        </div>
+        <div class="chart-row">
+            <div class="chart-tile">
+                <div class="chart-tile-title" th:text="#{metrics.chart.cpu}">CPU</div>
+                <div class="chart-slot" data-chart="cpu" data-percent="true" data-color="var(--brand)"
+                     th:attr="data-empty=#{metrics.noData}"></div>
+            </div>
+            <div class="chart-tile">
+                <div class="chart-tile-title" th:text="#{metrics.chart.heap}">Heap</div>
+                <div class="chart-slot" data-chart="heap" data-percent="true" data-color="var(--accent)"
+                     th:attr="data-empty=#{metrics.noData}"></div>
+            </div>
+            <div class="chart-tile">
+                <div class="chart-tile-title" th:text="#{metrics.chart.threads}">Threads</div>
+                <div class="chart-slot" data-chart="threads" data-color="var(--info)"
+                     th:attr="data-empty=#{metrics.noData}"></div>
+            </div>
+            <div class="chart-tile">
+                <div class="chart-tile-title" th:text="#{metrics.chart.gcTime}">GC time</div>
+                <div class="chart-slot" data-chart="gcTime" data-unit="ms" data-color="var(--warn)"
+                     th:attr="data-empty=#{metrics.noData}"></div>
+            </div>
+        </div>
+    </section>
+
+    <!--/* 同步趋势：一张图两条线（实时同步 / ETL），切换的只是「变更数 / 行数」。
+           空容器 + data-* 里的地址与文案，由 app.js bindActivityChart 用 SVG 画；
+           换指标只重画，不再取数。24 个点由服务端补齐，空的钟点记 0。 */-->
+    <div class="dash-grid is-single">
         <div class="chart-card chart-panel" id="activity-chart"
              th:attr="data-series-url=@{/dashboard/activity-series},
-                      data-sync-label=#{dashboard.syncSeries},
-                      data-etl-label=#{dashboard.etlSeries}">
+                      data-sync-label=#{dashboard.syncLabel},
+                      data-etl-label=#{dashboard.etlLabel}">
             <div class="card-head">
                 <h2 th:text="#{dashboard.trend}">Activity trend</h2>
                 <div class="card-head-tools">
                     <div class="seg" role="group" th:attr="aria-label=#{dashboard.trend}">
-                        <button type="button" class="seg-btn is-active" data-series="sync"
-                                th:text="#{dashboard.syncSeries}">Sync</button>
-                        <button type="button" class="seg-btn" data-series="etl"
-                                th:text="#{dashboard.etlSeries}">ETL</button>
+                        <button type="button" class="seg-btn is-active" data-metric="changes"
+                                th:text="#{dashboard.changesSeries}">Changes</button>
+                        <button type="button" class="seg-btn" data-metric="rows"
+                                th:text="#{dashboard.rowsSeries}">Rows</button>
                     </div>
                 </div>
             </div>
@@ -152,29 +224,19 @@
                 <div class="chart-meta">
                     <strong class="chart-total">—</strong>
                     <span class="chart-window" th:text="#{dashboard.trendHint}">Last 24 hours</span>
+                    <span class="chart-legend">
+                        <span class="chart-legend-item">
+                            <i class="legend-dot legend-dot-sync"></i>
+                            <span th:text="#{dashboard.syncLabel}">Sync</span>
+                        </span>
+                        <span class="chart-legend-item">
+                            <i class="legend-dot legend-dot-etl"></i>
+                            <span th:text="#{dashboard.etlLabel}">ETL</span>
+                        </span>
+                    </span>
                 </div>
                 <div class="chart-slot">
                     <div class="chart-empty" th:text="#{dashboard.noTrend}">No changes in the last 24 hours.</div>
-                </div>
-            </div>
-        </div>
-
-        <!--/* 内存趋势：JVM 堆内存使用率，单线图。标签写明「应用堆内存」，与上面
-               资源环里的整机内存区分开，避免被当成同一个指标。 */-->
-        <div class="chart-card chart-panel" id="memory-chart"
-             th:attr="data-series-url=@{/dashboard/memory-series},
-                      data-memory-label=#{dashboard.memoryTrend}">
-            <div class="card-head">
-                <h2 th:text="#{dashboard.memoryTrend}">App memory trend</h2>
-                <div class="card-head-tools small muted" th:text="#{dashboard.jvmMemoryNote}">JVM heap usage</div>
-            </div>
-            <div class="card-body chart-body">
-                <div class="chart-meta">
-                    <strong class="chart-total">—</strong>
-                    <span class="chart-window" th:text="#{dashboard.trendHint}">Last 24 hours</span>
-                </div>
-                <div class="chart-slot">
-                    <div class="chart-empty" th:text="#{dashboard.noMemoryTrend}">No memory data in the last 24 hours.</div>
                 </div>
             </div>
         </div>
@@ -294,7 +356,20 @@
 </div>
 </th:block>
 
-<th:block th:fragment="scripts" th:remove="tag"></th:block>
+<th:block th:fragment="scripts" th:remove="tag">
+<!--/* 进程资源块的轮询。metrics.js 只认 root 上的 data-*，不认具体页面，所以项目页和
+       看板共用同一份脚本；root 找不到（访客、默认口令账号）就什么都不做，不会去请求
+       那个管理员专属的接口。 */-->
+<script th:src="@{/js/metrics.js(v=${appVersion})}"></script>
+<script>
+    (function () {
+        var root = document.getElementById('process-block');
+        if (root && window.JyncMetrics) {
+            window.JyncMetrics.bind(root);
+        }
+    })();
+</script>
+</th:block>
 
 <!--/* 10 秒一次的轮询取两块内容：统计卡 + 任务概览。两块在页面上不在同一层，包不进
        一个共同容器，所以由这个片段按顺序把两者拼进同一个响应，app.js 再分别替换各自

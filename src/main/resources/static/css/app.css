@@ -1747,6 +1747,23 @@ table.tbl a.truncate { display: block; }
   display: grid; grid-template-columns: 1.62fr 1fr; gap: 18px;
   align-items: stretch; margin-top: 18px;
 }
+/* 只剩一块时别再留一条空列：内存趋势退场后，活动趋势独占这一行。 */
+.dash-grid.is-single { grid-template-columns: 1fr; }
+
+/* 进程资源块里的四条曲线：两列排布；卡片里的 .chart-slot 原本是给整行大图用的高度。 */
+.chart-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.chart-tile-title { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+.chart-row .chart-slot { height: 170px; margin-top: 4px; }
+@media (max-width: 900px) {
+  .chart-row { grid-template-columns: 1fr; }
+}
+
+/* 进程资源不套卡片：紧跟整机资源环，用自己的标题行把这一节和上面的任务数字隔开。 */
+.process-row { margin-top: 18px; }
+.process-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+.process-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.process-head .seg { margin-left: auto; }
+.process-stats { margin-bottom: 14px; }
 .dash-main { display: flex; flex-direction: column; min-width: 0; }
 .dash-main > .card + .card { margin-top: 18px; }
 
@@ -1773,6 +1790,12 @@ table.tbl a.truncate { display: block; }
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 .chart-window { font-size: 12.5px; color: var(--ink-mute); }
+/* 图例：一张图两条线，颜色是唯一的区分手段，所以名字必须和图一起出现。 */
+.chart-legend { display: inline-flex; align-items: center; gap: 14px; margin-left: auto; font-size: 12px; color: var(--ink-soft); }
+.chart-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.legend-dot-sync { background: var(--brand); }
+.legend-dot-etl { background: var(--accent); }
 .chart-slot { position: relative; height: 232px; margin-top: 10px; }
 .chart-slot svg { display: block; width: 100%; height: 100%; }
 .chart-empty {
@@ -1787,7 +1810,10 @@ table.tbl a.truncate { display: block; }
   transform: translate(-50%, -100%); opacity: 0; transition: opacity .12s;
 }
 .chart-tip.is-on { opacity: 1; }
-.chart-tip b { font-variant-numeric: tabular-nums; }
+.chart-tip b { font-variant-numeric: tabular-nums; margin-left: auto; padding-left: 12px; }
+.chart-tip-time { font-size: 11px; color: var(--ink-mute); margin-bottom: 3px; }
+.chart-tip-row { display: flex; align-items: center; gap: 6px; }
+.chart-tip-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
 
 /* 指标切换 */
 .seg {
@@ -1894,3 +1920,31 @@ table.tbl a.truncate { display: block; }
   cursor: not-allowed;
   opacity: .6;
 }
+
+/* ─── 性能页：环形占比与条形排行 ─────────────────────────
+   两张图都不用图表库：环形是两段圆弧拼的 path，条形是 flex 轨道。
+   颜色取语义变量，深浅主题自动跟随。 */
+.donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.donut-wrap svg { flex: 0 0 auto; }
+.donut-legend { list-style: none; margin: 0; padding: 0; font-size: 12.5px; color: var(--ink-soft); }
+.donut-legend li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.donut-swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+
+.bar-list { list-style: none; margin: 0; padding: 0; }
+.bar-list li { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12.5px; }
+.bar-name {
+  flex: 0 0 38%; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--ink-soft);
+}
+.bar-track { flex: 1 1 auto; height: 8px; border-radius: 999px; background: var(--bg-tint); overflow: hidden; }
+.bar-fill {
+  display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--brand), var(--accent));
+}
+.bar-num { flex: 0 0 auto; min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* 同一张卡里叠几条折线时，235px 的默认槽高会互相贴住；留一条缝。 */
+.card-body .chart-slot + .chart-slot { margin-top: 12px; }
+
+.chip.chip-ok { color: var(--ok); background: var(--fb-ok-13); }
+.chip.chip-danger { color: var(--danger); background: var(--fb-danger-13); }

@@ -2714,9 +2714,13 @@
   }
 
   /**
-   * 看板趋势图：取 /dashboard/activity-series 的 24 个钟点，用 SVG 画面积折线。
+   * 看板趋势图：取 /dashboard/activity-series 的 24 个钟点，一张图里同时画实时同步与 ETL
+   * 两条曲线，颜色取 CSS 变量（--brand / --accent），与卡片头部的图例一一对应。
    *
-   * <p>不引图表库（内网离线、老内核），配色取 CSS 变量，深浅主题自动跟随；换指标只重画
+   * <p>切换的是口径而不是系列：「变更数」看两条线各自的条数，「行数」看两条线各自动到的
+   * 行数。两种口径下都是两条线，读者可以直接比出实时同步与 ETL 的量级是否接近。
+   *
+   * <p>不引图表库（内网离线、老内核），配色取 CSS 变量，深浅主题自动跟随；换口径只重画
    * 已取到的数据，不再打一次接口。窗口宽度变了或主题切换时重画，保证坐标始终按真实像素算，
    * 文字不会被等比缩放拉变形。
    */
@@ -2732,7 +2736,8 @@
       sync: card.getAttribute('data-sync-label') || 'Sync',
       etl: card.getAttribute('data-etl-label') || 'ETL'
     };
-    var metric = 'sync'; // Default to sync changes
+    // 口径：'changes'（次数）或 'rows'（行数）。两条线始终同时画。
+    var metric = 'changes';
     var data = null;
     var tip = null;
 
@@ -2772,26 +2777,61 @@
     function clearChart() {
       var svg = slot.querySelector('svg');
       if (svg) slot.removeChild(svg);
+      // 重画会换掉挂鼠标事件的那层 svg，气泡却还留在 slot 里：不清掉就是悬停时窗口
+      // 一变或定时刷新一到，旧气泡永远停在最后的位置，再悬停又多出一个。
+      if (tip && tip.parentNode) tip.parentNode.removeChild(tip);
+      tip = null;
+    }
+
+    /** 当前口径下某条线（sync / etl）在一个钟点上的值。 */
+    function valueAt(point, series) {
+      var suffix = metric === 'rows' ? 'Rows' : 'Changes';
+      return Number(point[series + suffix]) || 0;
+    }
+
+    /** 折线转平滑曲线：Catmull-Rom 转三次贝塞尔；点少时退化成直线，不会画飞。 */
+    function smoothPath(coords) {
+      var d = 'M' + coords[0].x + ' ' + coords[0].y;
+      for (var c = 0; c < coords.length - 1; c++) {
+        var p0 = coords[c - 1] || coords[c];
+        var p1 = coords[c];
+        var p2 = coords[c + 1];
+        var p3 = coords[c + 2] || p2;
+        var c1x = p1.x + (p2.x - p0.x) / 6;
+        var c1y = p1.y + (p2.y - p0.y) / 6;
+        var c2x = p2.x - (p3.x - p1.x) / 6;
+        var c2y = p2.y - (p3.y - p1.y) / 6;
+        d += ' C' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
+      }
+      return d;
     }
 
     function draw() {
       if (!data) return;
       var points = data.points || [];
-      var values = [];
+
+      // 两条线共用一根纵轴，轴顶取两条线里的最大值：短的那条不会被压成贴底的直线，
+      // 读者还是看得出形状。
+      var series = [
+        { key: 'sync', color: cssVar('--brand', '#4f46e5') },
+        { key: 'etl', color: cssVar('--accent', '#ec4899') }
+      ];
+      var values = {};
       var max = 0;
-
-      // 当前指标：'sync' or 'etl'，两种都取变更条数
-      var series = metric;
-
-      for (var i = 0; i < points.length; i++) {
-        var v = Number(points[i][series + 'Changes']) || 0;
-        values.push(v);
-        if (v > max) max = v;
+      for (var s = 0; s < series.length; s++) {
+        var list = [];
+        for (var i = 0; i < points.length; i++) {
+          var v = valueAt(points[i], series[s].key);
+          list.push(v);
+          if (v > max) max = v;
+        }
+        values[series[s].key] = list;
       }
 
-      // 计算总和
-      var totalKey = 'total' + (series === 'sync' ? 'Sync' : 'Etl') + 'Changes';
-      var total = Number(data[totalKey]) || 0;
+      // 顶上那个数是两条线之和，与该口径一致：读图时把两根线加起来就对得上。
+      var suffix = metric === 'rows' ? 'Rows' : 'Changes';
+      var total = (Number(data['totalSync' + suffix]) || 0)
+          + (Number(data['totalEtl' + suffix]) || 0);
       if (totalEl) totalEl.textContent = group3(total);
 
       clearChart();
@@ -2813,24 +2853,10 @@
       var padB = 26;
       var plotW = Math.max(1, width - padL - padR);
       var plotH = Math.max(1, height - padT - padB);
+      var baseY = padT + plotH;
       var scale = plotH / top;
 
-      // 双系列颜色配置
-      var colors = {
-        sync: cssVar('--brand', '#4f46e5'),
-        etl: cssVar('--accent', '#ec4899')
-      };
-      var color = colors[metric] || colors.sync;
-      var from = color;
-      var to = color;
-
       var svg = el('svg', { width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
-      var defs = el('defs', {});
-      var gradient = el('linearGradient', { id: 'jync-chart-fill', x1: '0', y1: '0', x2: '0', y2: '1' });
-      gradient.appendChild(el('stop', { offset: '0%', 'stop-color': from, 'stop-opacity': '0.28' }));
-      gradient.appendChild(el('stop', { offset: '100%', 'stop-color': from, 'stop-opacity': '0' }));
-      defs.appendChild(gradient);
-      svg.appendChild(defs);
 
       // 横向网格与纵轴刻度
       for (var g = 0; g <= 4; g++) {
@@ -2848,45 +2874,34 @@
       }
 
       var step = points.length > 1 ? plotW / (points.length - 1) : plotW;
-      var coords = [];
-      for (var p = 0; p < values.length; p++) {
-        coords.push({
-          x: padL + step * p,
-          y: padT + plotH - values[p] * scale
-        });
+      var coords = {};
+      for (var s2 = 0; s2 < series.length; s2++) {
+        var key = series[s2].key;
+        var list2 = values[key];
+        var out = [];
+        for (var p = 0; p < list2.length; p++) {
+          out.push({ x: padL + step * p, y: baseY - list2[p] * scale });
+        }
+        coords[key] = out;
       }
 
-      // 平滑曲线：Catmull-Rom 转三次贝塞尔；点少时退化成直线，不会画飞
-      var d = 'M' + coords[0].x + ' ' + coords[0].y;
-      for (var c = 0; c < coords.length - 1; c++) {
-        var p0 = coords[c - 1] || coords[c];
-        var p1 = coords[c];
-        var p2 = coords[c + 1];
-        var p3 = coords[c + 2] || p2;
-        var c1x = p1.x + (p2.x - p0.x) / 6;
-        var c1y = p1.y + (p2.y - p0.y) / 6;
-        var c2x = p2.x - (p3.x - p1.x) / 6;
-        var c2y = p2.y - (p3.y - p1.y) / 6;
-        d += ' C' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
+      // 只描线不填色：两条曲线叠在一起时，面积会互相盖住。先画 ETL 再画同步，
+      // 同步是主力，压在上一层。
+      for (var s3 = series.length - 1; s3 >= 0; s3--) {
+        var line = series[s3];
+        svg.appendChild(el('path', {
+          d: smoothPath(coords[line.key]), fill: 'none', stroke: line.color,
+          'stroke-width': 2.2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round'
+        }));
       }
-      var baseY = padT + plotH;
-      svg.appendChild(el('path', {
-        d: d + ' L' + coords[coords.length - 1].x + ' ' + baseY
-          + ' L' + coords[0].x + ' ' + baseY + ' Z',
-        fill: 'url(#jync-chart-fill)', stroke: 'none'
-      }));
-      svg.appendChild(el('path', {
-        d: d, fill: 'none', stroke: from, 'stroke-width': 2.4,
-        'stroke-linecap': 'round', 'stroke-linejoin': 'round'
-      }));
 
       // 横轴时间：每 4 个小时一个刻度 + 最后一个
       for (var x = 0; x < points.length; x += 4) {
-        addLabel(points[x].label, coords[x].x, 'middle');
+        addLabel(points[x].label, coords.sync[x].x, 'middle');
       }
       if ((points.length - 1) % 4 !== 0) {
         addLabel(points[points.length - 1].label,
-          coords[coords.length - 1].x, 'end');
+          coords.sync[coords.sync.length - 1].x, 'end');
       }
       function addLabel(text, cx, anchor) {
         var t = el('text', {
@@ -2897,16 +2912,22 @@
         svg.appendChild(t);
       }
 
-      // 悬停：竖向指示线 + 圆点 + 气泡
+      // 悬停：一条竖向指示线 + 每条线一个圆点 + 同时列出两种数值的气泡
       var guide = el('line', {
         x1: 0, y1: padT, x2: 0, y2: baseY,
-        stroke: from, 'stroke-width': 1, 'stroke-dasharray': '3 4', opacity: 0
-      });
-      var dot = el('circle', {
-        r: 4, fill: from, stroke: cssVar('--bg', '#fff'), 'stroke-width': 2, opacity: 0
+        stroke: cssVar('--ink-mute', '#94a3b8'), 'stroke-width': 1,
+        'stroke-dasharray': '3 4', opacity: 0
       });
       svg.appendChild(guide);
-      svg.appendChild(dot);
+      var dots = {};
+      for (var s4 = 0; s4 < series.length; s4++) {
+        var dot = el('circle', {
+          r: 4, fill: series[s4].color, stroke: cssVar('--bg', '#fff'),
+          'stroke-width': 2, opacity: 0
+        });
+        dots[series[s4].key] = dot;
+        svg.appendChild(dot);
+      }
 
       var overlay = el('rect', {
         x: padL, y: padT, width: plotW, height: plotH,
@@ -2917,7 +2938,9 @@
 
       function hideTip() {
         guide.setAttribute('opacity', 0);
-        dot.setAttribute('opacity', 0);
+        for (var k in dots) {
+          if (Object.prototype.hasOwnProperty.call(dots, k)) dots[k].setAttribute('opacity', 0);
+        }
         if (tip) tip.className = 'chart-tip';
       }
 
@@ -2931,39 +2954,71 @@
         var at = event.clientX - box.left - padL;
         var index = Math.round(at / step);
         if (index < 0) index = 0;
-        if (index > coords.length - 1) index = coords.length - 1;
-        var point = coords[index];
-        guide.setAttribute('x1', point.x);
-        guide.setAttribute('x2', point.x);
-        guide.setAttribute('opacity', 1);
-        dot.setAttribute('cx', point.x);
-        dot.setAttribute('cy', point.y);
-        dot.setAttribute('opacity', 1);
+        if (index > points.length - 1) index = points.length - 1;
 
-        // 显示详细数据
-        var pointData = points[index];
-        var valueText = group3(values[index]);
-        var seriesLabel = labels[metric] || metric;
-        tip.innerHTML = '<b>' + valueText + '</b> ' + seriesLabel;
-        tip.appendChild(document.createTextNode(' · ' + pointData.label));
-        // 如果是切换的双系列，可能需要显示两个值
-        tip.style.left = point.x + 'px';
-        tip.style.top = (point.y - 12) + 'px';
+        var atX = coords.sync[index].x;
+        var highest = baseY;
+        guide.setAttribute('x1', atX);
+        guide.setAttribute('x2', atX);
+        guide.setAttribute('opacity', 1);
+        for (var d2 = 0; d2 < series.length; d2++) {
+          var key2 = series[d2].key;
+          var cy = coords[key2][index].y;
+          if (cy < highest) highest = cy;
+          dots[key2].setAttribute('cx', atX);
+          dots[key2].setAttribute('cy', cy);
+          dots[key2].setAttribute('opacity', 1);
+        }
+
+        // 气泡两行：两条线各自的颜色、名字与数值，外加时间。
+        tip.textContent = '';
+        var time = document.createElement('div');
+        time.className = 'chart-tip-time';
+        time.textContent = points[index].label;
+        tip.appendChild(time);
+        for (var r = 0; r < series.length; r++) {
+          var row = document.createElement('div');
+          row.className = 'chart-tip-row';
+          var swatch = document.createElement('i');
+          swatch.className = 'chart-tip-dot';
+          swatch.style.background = series[r].color;
+          var name = document.createElement('span');
+          name.textContent = labels[series[r].key] || series[r].key;
+          var num = document.createElement('b');
+          num.textContent = group3(values[series[r].key][index]);
+          row.appendChild(swatch);
+          row.appendChild(name);
+          row.appendChild(num);
+          tip.appendChild(row);
+        }
+        tip.style.left = atX + 'px';
+        tip.style.top = Math.max(padT, highest) - 10 + 'px';
         tip.className = 'chart-tip is-on';
       });
       overlay.addEventListener('mouseleave', hideTip);
     }
 
-    var segButtons = card.querySelectorAll('.seg-btn');
+    var segButtons = card.querySelectorAll('[data-metric]');
+    // 初始口径与页面上标了 is-active 的那颗按钮一致，首屏按钮和曲线不会对不上。
+    for (var sb = 0; sb < segButtons.length; sb++) {
+      if (segButtons[sb].classList.contains('is-active')) {
+        metric = segButtons[sb].getAttribute('data-metric') || metric;
+        break;
+      }
+    }
+    function activate(button) {
+      for (var i = 0; i < segButtons.length; i++) {
+        segButtons[i].classList.toggle('is-active', segButtons[i] === button);
+      }
+    }
     for (var b = 0; b < segButtons.length; b++) {
       (function (button) {
         button.addEventListener('click', function () {
-          var next = button.getAttribute('data-series');
-          if (!next || next === metric) return;
+          var next = button.getAttribute('data-metric');
+          if (!next) return;
+          activate(button);
+          if (next === metric) return;
           metric = next;
-          for (var i = 0; i < segButtons.length; i++) {
-            segButtons[i].classList.toggle('is-active', segButtons[i] === button);
-          }
           draw();
         });
       })(segButtons[b]);
@@ -2986,288 +3041,6 @@
           // 图表留上一帧：一次网络抖动不该把看板清空
         })
         .then(function () { inFlight = false; });
-    }
-
-    var resizeTimer = null;
-    window.addEventListener('resize', function () {
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(draw, 150);
-    });
-    if (window.MutationObserver) {
-      new MutationObserver(draw).observe(document.documentElement, {
-        attributes: true, attributeFilter: ['data-theme']
-      });
-    }
-
-    var timer = null;
-    function apply() {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-      if (!document.hidden) {
-        timer = setInterval(load, SERIES_REFRESH_INTERVAL);
-      }
-    }
-    document.addEventListener('visibilitychange', function () {
-      var wasOn = timer !== null;
-      apply();
-      if (!document.hidden && !wasOn) load();
-    });
-
-    apply();
-    load();
-  }
-
-  /**
-   * 看板内存趋势：JVM 堆使用率，固定 0–100% 纵轴，单线图。数据随看板趋势图一起
-   * 每 SERIES_REFRESH_INTERVAL 刷新，不另开定时器。
-   */
-  function bindMemoryChart() {
-    var card = document.getElementById('memory-chart');
-    if (!card) return;
-    var slot = card.querySelector('.chart-slot');
-    if (!slot) return;
-    var totalEl = card.querySelector('.chart-total');
-    var emptyEl = card.querySelector('.chart-empty');
-    var url = card.getAttribute('data-series-url') || '/dashboard/memory-series';
-    var data = null;
-    var tip = null;
-
-    function cssVar(name, fallback) {
-      var value = getComputedStyle(document.documentElement).getPropertyValue(name);
-      return (value && value.replace(/^\s+|\s+$/g, '')) || fallback;
-    }
-
-    function el(tag, attrs) {
-      var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-      for (var key in attrs) {
-        if (Object.prototype.hasOwnProperty.call(attrs, key)) {
-          node.setAttribute(key, attrs[key]);
-        }
-      }
-      return node;
-    }
-
-    function clearChart() {
-      var svg = slot.querySelector('svg');
-      if (svg) slot.removeChild(svg);
-    }
-
-    /**
-     * 纵轴上限：把峰值除以四格后向上取到 1/2/5 × 10ⁿ，四条刻度就是 0.2/0.4/0.6/0.8
-     * 这种整数。JVM 堆在 24 小时里常常只用掉个位数百分比，固定 0–100 的话整条曲线
-     * 贴着底线走，涨没涨根本看不出来 —— 所以这里让轴跟着数据缩放，再压在 100% 封顶。
-     */
-    function niceTop(value) {
-      // 起步高度按 0.6% 算：空载实例（0.7%）不会因为轴太矮被压成一条直线。
-      // 不再额外留余量 —— 1/2/5 的档位很粗，0.764 和 0.762 就会跨到 2%，白白空掉半张图。
-      var peak = Math.max(value, 0.6);
-      var raw = peak / 4;
-      var exp = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
-      var steps = [1, 2, 5, 10];
-      var step = 10 * exp;
-      for (var i = 0; i < steps.length; i++) {
-        if (steps[i] * exp >= raw) {
-          step = steps[i] * exp;
-          break;
-        }
-      }
-      // 浮点误差可能让 step*4 差一点点低于峰值，兜一下底
-      return Math.min(100, Math.max(step * 4, peak));
-    }
-
-    function draw() {
-      if (!data) return;
-      var points = data.points || [];
-      // 先清掉上一帧：轮询和 resize 都会重画，不清就会一层层叠上去，
-      // 卡片被撑高、上一张的刻度还露在外面。
-      clearChart();
-      if (!points.length) {
-        if (emptyEl) emptyEl.hidden = false;
-        return;
-      }
-      if (emptyEl) emptyEl.hidden = true;
-
-      var width = slot.clientWidth || 360;
-      var height = slot.clientHeight || 232;
-      var padL = 42;
-      var padR = 12;
-      var padT = 12;
-      var padB = 26;
-      var plotW = Math.max(1, width - padL - padR);
-      var plotH = Math.max(1, height - padT - padB);
-
-      var values = [];
-      var peak = 0;
-      for (var i = 0; i < points.length; i++) {
-        var v = Math.max(0, Math.min(100, Number(points[i].memoryPercent) || 0));
-        values.push(v);
-        if (v > peak) peak = v;
-      }
-      var top = niceTop(peak);
-      var scale = plotH / top;
-      // 刻度步长小于 1 时带一位小数，否则 0.2% 会被写成 0%
-      var stepValue = top / 4;
-      var decimals = stepValue < 0.1 ? 2 : (stepValue < 1 ? 1 : 0);
-
-      function pct(value) {
-        var text = value.toFixed(decimals);
-        if (text.indexOf('.') >= 0) {
-          text = text.replace(/0+$/, '').replace(/\.$/, '');
-        }
-        return text + '%';
-      }
-
-      var color = cssVar('--accent', '#ec4899');
-      var svg = el('svg', { width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
-      var defs = el('defs', {});
-      var gradient = el('linearGradient', { id: 'memory-chart-fill', x1: '0', y1: '0', x2: '0', y2: '1' });
-      gradient.appendChild(el('stop', { offset: '0%', 'stop-color': color, 'stop-opacity': '0.28' }));
-      gradient.appendChild(el('stop', { offset: '100%', 'stop-color': color, 'stop-opacity': '0' }));
-      defs.appendChild(gradient);
-      svg.appendChild(defs);
-
-      // 横向网格与纵轴刻度：0 → 轴顶，四等分
-      for (var g = 0; g <= 4; g++) {
-        var gy = padT + (plotH / 4) * g;
-        svg.appendChild(el('line', {
-          x1: padL, y1: gy, x2: padL + plotW, y2: gy,
-          stroke: cssVar('--line', '#e2e8f0'), 'stroke-width': 1, 'stroke-dasharray': g === 4 ? '' : '3 5'
-        }));
-        var label = el('text', {
-          x: padL - 8, y: gy + 4, 'text-anchor': 'end',
-          'font-size': '11', fill: cssVar('--ink-mute', '#94a3b8')
-        });
-        label.textContent = pct(top - stepValue * g);
-        svg.appendChild(label);
-      }
-
-      var step = points.length > 1 ? plotW / (points.length - 1) : plotW;
-      var coords = [];
-      for (var p = 0; p < values.length; p++) {
-        coords.push({ x: padL + step * p, y: padT + plotH - values[p] * scale });
-      }
-
-      // 平滑曲线（Catmull-Rom 转贝塞尔）
-      var d = 'M' + coords[0].x + ' ' + coords[0].y;
-      for (var c = 0; c < coords.length - 1; c++) {
-        var p0 = coords[c - 1] || coords[c];
-        var p1 = coords[c];
-        var p2 = coords[c + 1];
-        var p3 = coords[c + 2] || p2;
-        var c1x = p1.x + (p2.x - p0.x) / 6;
-        var c1y = p1.y + (p2.y - p0.y) / 6;
-        var c2x = p2.x - (p3.x - p1.x) / 6;
-        var c2y = p2.y - (p3.y - p1.y) / 6;
-        d += ' C' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
-      }
-      var baseY = padT + plotH;
-      svg.appendChild(el('path', {
-        d: d + ' L' + coords[coords.length - 1].x + ' ' + baseY
-          + ' L' + coords[0].x + ' ' + baseY + ' Z',
-        fill: 'url(#memory-chart-fill)', stroke: 'none'
-      }));
-      svg.appendChild(el('path', {
-        d: d, fill: 'none', stroke: color, 'stroke-width': 2.4,
-        'stroke-linecap': 'round', 'stroke-linejoin': 'round'
-      }));
-
-      // 横轴时间：每 3 小时一个刻度 + 最后一个（10 分钟一点，18 点 = 3 小时）。
-      // 与上面活动图每 4 小时一格对齐，刻度数相当，标签不会挤成一条虚线。
-      var tick = 18;
-      for (var x = 0; x < points.length; x += tick) {
-        addLabel(points[x].label, coords[x].x, 'middle');
-      }
-      if ((points.length - 1) % tick !== 0) {
-        addLabel(points[points.length - 1].label,
-          coords[coords.length - 1].x, 'end');
-      }
-      function addLabel(text, cx, anchor) {
-        var t = el('text', {
-          x: cx, y: padT + plotH + 17, 'text-anchor': anchor,
-          'font-size': '11', fill: cssVar('--ink-mute', '#94a3b8')
-        });
-        t.textContent = text;
-        svg.appendChild(t);
-      }
-
-      // 悬停指示
-      var guide = el('line', {
-        x1: 0, y1: padT, x2: 0, y2: baseY,
-        stroke: color, 'stroke-width': 1, 'stroke-dasharray': '3 4', opacity: 0
-      });
-      var dot = el('circle', {
-        r: 4, fill: color, stroke: cssVar('--bg', '#fff'), 'stroke-width': 2, opacity: 0
-      });
-      svg.appendChild(guide);
-      svg.appendChild(dot);
-      var overlay = el('rect', {
-        x: padL, y: padT, width: plotW, height: plotH,
-        fill: 'transparent', style: 'cursor: crosshair'
-      });
-      svg.appendChild(overlay);
-      slot.appendChild(svg);
-
-      overlay.addEventListener('mousemove', function (event) {
-        if (!tip) {
-          tip = document.createElement('div');
-          tip.className = 'chart-tip';
-          slot.appendChild(tip);
-        }
-        var box = slot.getBoundingClientRect();
-        var at = event.clientX - box.left - padL;
-        var index = Math.round(at / step);
-        if (index < 0) index = 0;
-        if (index > coords.length - 1) index = coords.length - 1;
-        var point = coords[index];
-        guide.setAttribute('x1', point.x);
-        guide.setAttribute('x2', point.x);
-        guide.setAttribute('opacity', 1);
-        dot.setAttribute('cx', point.x);
-        dot.setAttribute('cy', point.y);
-        dot.setAttribute('opacity', 1);
-        tip.innerHTML = '<b>' + (Math.round(values[index] * 100) / 100) + '%</b>'
-          + ' · ' + points[index].label;
-        tip.style.left = point.x + 'px';
-        tip.style.top = (point.y - 12) + 'px';
-        tip.className = 'chart-tip is-on';
-      });
-      overlay.addEventListener('mouseleave', function () {
-        guide.setAttribute('opacity', 0);
-        dot.setAttribute('opacity', 0);
-        if (tip) tip.className = 'chart-tip';
-      });
-    }
-
-    var inFlight = false;
-    function load() {
-      if (inFlight) return;
-      inFlight = true;
-      fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } })
-        .then(function (response) {
-          if (!response.ok) throw new Error('HTTP ' + response.status);
-          return response.json();
-        })
-        .then(function (json) {
-          data = json;
-          if (totalEl) tc(json);
-          draw();
-        })
-        .catch(function () {
-          // 图表留上一帧
-        })
-        .then(function () { inFlight = false; });
-    }
-
-    function tc(json) {
-      var points = json.points || [];
-      if (!points.length) return;
-      var sum = 0;
-      for (var i = 0; i < points.length; i++) {
-        sum += Math.max(0, Math.min(100, Number(points[i].memoryPercent) || 0));
-      }
-      totalEl.textContent = (Math.round(sum / points.length * 10) / 10) + '%';
     }
 
     var resizeTimer = null;
@@ -4084,7 +3857,6 @@
     bindResourceRefresh();
     bindLiveStats();
     bindActivityChart();
-    bindMemoryChart();
     bindActivityFeed();
     bindDatabaseHealth();
     bindDonate();

@@ -11,6 +11,12 @@
             <p class="sub" th:text="#{db.formHint}">Test before saving to catch mistakes early</p>
         </div>
         <div class="page-actions">
+            <!--/* 已保存的连接才有性能记录可看；新建表单里没有 id，不显示入口。 */-->
+            <a class="btn btn-ghost btn-sm" th:if="${config.id != null}"
+               th:href="@{/databases/{id}/performance(id=${config.id})}">
+                <svg class="ico"><use href="#graph-up"/></svg>
+                <span th:text="#{metrics.openDb}">Performance</span>
+            </a>
             <a class="btn btn-ghost btn-sm" th:href="@{/databases}">
                 <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
             </a>

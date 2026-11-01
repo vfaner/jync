@@ -24,6 +24,7 @@ import com.qqmu.jync.service.DashboardService;
 import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.metrics.MetricsQueryService;
 
 /**
  * The forced password change happens on the home page, in the layout's password modal.
@@ -43,6 +44,8 @@ class ForcedPasswordModalViewTest {
 
     @MockBean
     private DashboardService dashboardService;
+    @MockBean
+    private MetricsQueryService metricsQueryService;
 
     private String render(boolean usingDefaultPassword) throws Exception {
         return mvc.perform(get("/dashboard")

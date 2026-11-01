@@ -25,6 +25,7 @@ import com.qqmu.jync.service.DashboardService;
 import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.metrics.MetricsQueryService;
 
 /**
  * The update dot is part of the shared layout, not of the settings page: admins get it on every
@@ -43,6 +44,8 @@ class NavUpdateBadgeViewTest {
     private DashboardService dashboardService;
     @MockBean
     private BuildProperties buildProperties;
+    @MockBean
+    private MetricsQueryService metricsQueryService;
 
     private static RequestPostProcessor as(UserRole role) {
         AppUser user = new AppUser();
