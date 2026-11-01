@@ -9,7 +9,9 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
+import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
 /**
@@ -95,6 +97,57 @@ class HanaSqlDialectTest {
         c.setSize(size);
         c.setNullable(true);
         return c;
+    }
+
+    @Test
+    void viewsAreReplacedInPlaceBecauseHanaHasNoDropIfExists() {
+        ViewMeta view = new ViewMeta();
+        view.setName("V_USER");
+        view.setDefinition("SELECT \"ID\" FROM \"S\".\"T_USER\";");
+
+        assertThat(dialect.getCreateViewSql(view, "S", DatabaseType.HANA))
+                .containsExactly("CREATE OR REPLACE VIEW \"S\".\"V_USER\" AS "
+                        + "SELECT \"ID\" FROM \"S\".\"T_USER\"");
+        assertThat(dialect.dropsBeforeViewCreate()).isFalse();
+    }
+
+    @Test
+    void routineDefinitionsAreRewrittenToCreateOrReplace() {
+        ProcedureMeta proc = new ProcedureMeta();
+        proc.setName("P_ADD");
+        proc.setDefinition("CREATE PROCEDURE \"S\".\"P_ADD\" (IN a INTEGER, OUT c INTEGER) "
+                + "LANGUAGE SQLSCRIPT AS BEGIN c := :a; END");
+
+        assertThat(dialect.getCreateProcedureSql(proc, "S", DatabaseType.HANA))
+                .containsExactly("CREATE OR REPLACE PROCEDURE \"S\".\"P_ADD\" "
+                        + "(IN a INTEGER, OUT c INTEGER) "
+                        + "LANGUAGE SQLSCRIPT AS BEGIN c := :a; END");
+
+        ProcedureMeta fn = new ProcedureMeta();
+        fn.setName("F_ADD");
+        fn.setRoutineType("FUNCTION");
+        fn.setDefinition("CREATE FUNCTION \"S\".\"F_ADD\" (a INTEGER) RETURNS c INTEGER "
+                + "LANGUAGE SQLSCRIPT AS BEGIN c := :a; END");
+
+        assertThat(dialect.getCreateProcedureSql(fn, "S", DatabaseType.HANA))
+                .containsExactly("CREATE OR REPLACE FUNCTION \"S\".\"F_ADD\" (a INTEGER) "
+                        + "RETURNS c INTEGER LANGUAGE SQLSCRIPT AS BEGIN c := :a; END");
+    }
+
+    @Test
+    void aDefinitionWithoutABodyProducesNoStatement() {
+        ProcedureMeta empty = new ProcedureMeta();
+        empty.setName("P_EMPTY");
+
+        assertThat(dialect.getCreateProcedureSql(empty, "S", DatabaseType.HANA)).isEmpty();
+    }
+
+    @Test
+    void tableCommentsUseCommentOnAndClearWithNull() {
+        assertThat(dialect.getAlterTableCommentSql("S", "T", "it's a comment"))
+                .isEqualTo("COMMENT ON TABLE \"S\".\"T\" IS 'it''s a comment'");
+        assertThat(dialect.getAlterTableCommentSql("S", "T", "  "))
+                .isEqualTo("COMMENT ON TABLE \"S\".\"T\" IS NULL");
     }
 
     @Test
