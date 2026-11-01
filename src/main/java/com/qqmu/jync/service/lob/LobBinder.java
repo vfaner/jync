@@ -160,15 +160,23 @@ public final class LobBinder {
                     // "not implemented" from setCharacterStream(int, Reader, long) — only the
                     // int one reads the reader. A length above int range goes to the long
                     // overload because no other driver can take it either way.
-                    if (lob.length() <= Integer.MAX_VALUE) {
-                        ps.setCharacterStream(index, reader, (int) lob.length());
-                    } else {
-                        ps.setCharacterStream(index, reader, lob.length());
+                    try {
+                        if (lob.length() <= Integer.MAX_VALUE) {
+                            ps.setCharacterStream(index, reader, (int) lob.length());
+                        } else {
+                            ps.setCharacterStream(index, reader, lob.length());
+                        }
+                    } finally {
+                        closeQuietly(reader);
                     }
                 } else {
                     // Length 0 means "unknown" to the driver, which is exactly the case
                     // for a one-shot value read from a result set.
-                    ps.setCharacterStream(index, reader);
+                    try {
+                        ps.setCharacterStream(index, reader);
+                    } finally {
+                        closeQuietly(reader);
+                    }
                 }
                 return true;
             }
@@ -194,9 +202,17 @@ public final class LobBinder {
                     tracker.track(blob);
                 }
             } else if (lob.length() > 0) {
-                ps.setBinaryStream(index, stream, lob.length());
+                try {
+                    ps.setBinaryStream(index, stream, lob.length());
+                } finally {
+                    closeQuietly(stream);
+                }
             } else {
-                ps.setBinaryStream(index, stream);
+                try {
+                    ps.setBinaryStream(index, stream);
+                } finally {
+                    closeQuietly(stream);
+                }
             }
             return true;
         } catch (java.io.IOException e) {

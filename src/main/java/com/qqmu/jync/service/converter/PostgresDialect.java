@@ -349,20 +349,23 @@ public class PostgresDialect extends AbstractSqlDialect {
 
     @Override
     protected String placeholderFor(Integer jdbcType) {
-        if (jdbcType != null
-                && (jdbcType == java.sql.Types.TIME
-                        || jdbcType == java.sql.Types.TIME_WITH_TIMEZONE)) {
-            // TIME values arrive as strings (MySQL's TIME domain can exceed 24h); neither
-            // PostgreSQL nor openGauss will implicitly cast varchar to time.
-            return "?::time";
-        }
-        if (jdbcType != null
-                && (jdbcType == java.sql.Types.TIMESTAMP
-                        || jdbcType == java.sql.Types.TIMESTAMP_WITH_TIMEZONE)) {
-            // MySQL DATETIME is read as the server's wall-clock string (Connector/J's
-            // getTimestamp shifts it across time zones); the family does not implicitly
-            // cast varchar to timestamp. A setTimestamp value survives the same cast.
-            return "?::timestamp";
+        if (jdbcType != null) {
+            if (jdbcType == java.sql.Types.TIME) {
+                return "?::time";
+            }
+            if (jdbcType == java.sql.Types.TIME_WITH_TIMEZONE) {
+                // PostgreSQL retains the timezone offset explicitly for timetz; using plain time
+                // would drop the offset and convert to the session time zone, breaking cross-tz sync.
+                return "?::timetz";
+            }
+            if (jdbcType == java.sql.Types.TIMESTAMP) {
+                return "?::timestamp";
+            }
+            if (jdbcType == java.sql.Types.TIMESTAMP_WITH_TIMEZONE) {
+                // timestamptz retains the source timestamp as an absolute point in time, converting to
+                // the target session zone consistently; this is correct for cross-timezone sync.
+                return "?::timestamptz";
+            }
         }
         return "?";
     }
