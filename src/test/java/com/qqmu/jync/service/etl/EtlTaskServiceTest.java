@@ -150,6 +150,50 @@ class EtlTaskServiceTest {
         verify(checkpointStore, never()).clear(eq(5L));
     }
 
+    /**
+     * The runner loaded its SQL and resume key when it started; a save that clears the
+     * checkpoint mid-run is then overwritten by the old query's next checkpoint, and the
+     * following run can resume from a watermark the new query never produced. Refusing the
+     * extraction change is the same stance ProjectService takes for a running project.
+     */
+    @Test
+    void changingTheExtractionOfARunningTaskIsRefused() {
+        stubConnections(1L, 2L);
+        EtlTask existing = existing(5L, "SELECT id FROM src");
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing));
+        guard.tryAcquire(5L);
+
+        EtlTask edit = form(1L, 2L);
+        edit.setId(5L);
+        edit.setSourceSql("SELECT id, name FROM src");
+
+        assertThatThrownBy(() -> service.save(edit))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.etl.running.extraction");
+        verify(taskRepository, never()).save(any());
+        guard.release(5L);
+    }
+
+    /** A rename does not touch the copy loop's inputs, so it must not be blocked. */
+    @Test
+    void renamingARunningTaskIsStillAllowed() {
+        stubConnections(1L, 2L);
+        EtlTask existing = existing(5L, "SELECT id FROM src");
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        guard.tryAcquire(5L);
+
+        EtlTask edit = form(1L, 2L);
+        edit.setId(5L);
+        edit.setSourceSql("SELECT id FROM src");
+        edit.setName("renamed");
+
+        service.save(edit);
+
+        verify(taskRepository).save(any());
+        guard.release(5L);
+    }
+
     @Test
     void submitRefusesATaskThatIsAlreadyRunning() {
         guard.tryAcquire(9L);

@@ -969,6 +969,10 @@ public class ProjectService {
             throw refusalWhileRunning("reset", project);
         }
         syncEngine.resetProject(projectId);
+        // The last-run chip is state too: leaving "FAILED: 1 error(s) — ..." beside a project
+        // whose cursors were just wiped makes the page contradict the reset. Same cleanup the
+        // strategy-switch path performs; the lease check above already ruled out a live run.
+        taskStore.markStoppedClearingResult(projectId);
     }
 
     /**

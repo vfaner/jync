@@ -399,6 +399,15 @@ public class EtlBatchService {
 
     private void recordRun(EtlBatch batch, int members, int ok, int failed, int skipped,
                            long rowsRead, long rowsWritten) {
+        // Re-read: the batch was loaded before the members ran, and a settings edit meanwhile
+        // bumps @Version. Writing the pre-run snapshot would lose that edit or fail the merge,
+        // turning a run that finished every member into "crashed outside the member loop".
+        Long batchId = batch.getId();
+        batch = batchRepository.findById(batchId).orElse(null);
+        if (batch == null) {
+            log.debug("ETL batch {} was deleted during its run; nothing to record", batchId);
+            return;
+        }
         // A skipped member means its table was not refreshed, so the batch is not a clean success
         // even though nothing failed.
         boolean success = failed == 0 && skipped == 0;

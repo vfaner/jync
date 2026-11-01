@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -119,6 +120,28 @@ class EtlBatchRunTest {
         assertThat(batch.getLastRunSuccess()).isTrue();
         assertThat(batch.getLastRunTime()).isNotNull();
         assertThat(batch.getLastRunResult()).isEqualTo("SUCCESS members=2 read=8 written=6");
+    }
+
+    /**
+     * Same reason as a single task: the batch row is loaded before the members run, and a
+     * settings edit while they are running bumps its version. The summary must be written to
+     * the current row, or the successful run is reported as FAILED by recordCrash.
+     */
+    @Test
+    void theSummaryIsWrittenToTheBatchAsItStandsAfterTheRun() {
+        EtlBatch loadedAtStart = batch(5L);
+        EtlBatch editedDuringTheRun = batch(5L);
+        editedDuringTheRun.setName("renamed while running");
+        when(batchRepository.findById(5L))
+                .thenReturn(Optional.of(loadedAtStart), Optional.of(editedDuringTheRun));
+        when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of());
+        when(batchRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.execute(5L);
+
+        verify(batchRepository).save(same(editedDuringTheRun));
+        assertThat(editedDuringTheRun.getLastRunSuccess()).isTrue();
+        assertThat(loadedAtStart.getLastRunSuccess()).isNull();
     }
 
     @Test

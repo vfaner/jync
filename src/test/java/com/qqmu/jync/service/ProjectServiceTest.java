@@ -949,6 +949,24 @@ class ProjectServiceTest {
         verify(syncEngine).resetProject(1L);
     }
 
+    /**
+     * The page promises the state was wiped; the last-run chip is state too. Leaving
+     * {@code FAILED: 1 error(s) — ...} next to a freshly reset project is the same lie
+     * {@code markStoppedClearingResult} exists to prevent on the strategy-switch path.
+     */
+    @Test
+    void resettingProgressDropsTheStaleRunSummary() {
+        Project existing = storedProject(1L, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(cdcManager.strategyOf(existing)).thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+
+        service.resetProgress(1L);
+
+        verify(syncEngine).resetProject(1L);
+        verify(taskStore).markStoppedClearingResult(1L);
+    }
+
     @Test
     void keepingTheSameEndpointsDoesNotClearSyncState() {
         Project existing = storedProject(1L, false);

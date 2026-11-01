@@ -92,6 +92,12 @@ public class EtlTaskService {
             entity = taskRepository.findById(form.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
             extractionChanged = extractionChanged(entity, form);
+            if (extractionChanged && guard.isRunning(form.getId())) {
+                // The runner read its SQL, target and resume key when it started. Clearing the
+                // checkpoint now would be undone by the old query's next checkpoint write, and
+                // the next run could resume from a watermark the new query never produced.
+                throw new IllegalStateException("error.etl.running.extraction");
+            }
         }
 
         // Membership is set only by the batch service; a form must never move a task into or out
@@ -238,7 +244,7 @@ public class EtlTaskService {
             result = EtlRunResult.failure(0, 0, EtlRunResult.Side.PROGRAM, e.getMessage());
         }
 
-        record(task, result);
+        record(id, result);
         return result;
     }
 
@@ -248,15 +254,25 @@ public class EtlTaskService {
      */
     void recordFailure(Long taskId, String detail) {
         try {
-            taskRepository.findById(taskId).ifPresent(task ->
-                    record(task, EtlRunResult.failure(0, 0, EtlRunResult.Side.PROGRAM, detail)));
+            record(taskId, EtlRunResult.failure(0, 0, EtlRunResult.Side.PROGRAM, detail));
         } catch (RuntimeException e) {
             // Bookkeeping must not turn one crash into two: the caller is already reporting it.
             log.warn("Could not record the ETL failure for task {}: {}", taskId, e.getMessage());
         }
     }
 
-    private void record(EtlTask task, EtlRunResult result) {
+    /**
+     * Applies the outcome to the task row as it stands now, not to the entity the run loaded
+     * before it started. A run can last minutes; an edit saved meanwhile bumps {@code @Version},
+     * and writing the pre-run snapshot back would then lose the edit or fail the merge — and the
+     * caller's crash handler would report a run that copied every row as FAILED.
+     */
+    private void record(Long taskId, EtlRunResult result) {
+        EtlTask task = taskRepository.findById(taskId).orElse(null);
+        if (task == null) {
+            log.debug("ETL task {} was deleted during its run; nothing to record", taskId);
+            return;
+        }
         Instant finishedAt = Instant.now();
         task.setLastRunTime(finishedAt);
         task.setLastRunSuccess(result.success());

@@ -69,6 +69,32 @@ class EtlTaskServiceExecuteWithinTest {
         verify(runRepository).save(any());
     }
 
+    /**
+     * A run can take minutes. Editing the task meanwhile used to conflict at the final
+     * {@code save} (the entity was loaded before the run and never re-read), so a run that
+     * copied every row was recorded as a crash instead of a success. Recording must apply the
+     * outcome to the row as it stands now, not to the snapshot from before the copy.
+     */
+    @Test
+    void theOutcomeIsRecordedOnTheTaskAsItStandsAfterTheRun() {
+        EtlTask loadedAtStart = task(7L);
+        EtlTask editedDuringTheRun = task(7L);
+        editedDuringTheRun.setName("renamed while running");
+        when(taskRepository.findById(7L))
+                .thenReturn(Optional.of(loadedAtStart), Optional.of(editedDuringTheRun));
+        stubConnections();
+        EtlConnectionProvider connections = mock(EtlConnectionProvider.class);
+        when(runner.run(eq(loadedAtStart), any(), any(), same(connections)))
+                .thenReturn(EtlRunResult.success(2, 2));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.executeWithin(7L, connections);
+
+        verify(taskRepository).save(same(editedDuringTheRun));
+        assertThat(editedDuringTheRun.getLastRunSuccess()).isTrue();
+        assertThat(loadedAtStart.getLastRunSuccess()).isNull();
+    }
+
     @Test
     void executeWithinTurnsAConfigurationFailureIntoAProgramFailure() {
         EtlTask task = task(7L);
