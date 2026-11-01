@@ -41,8 +41,10 @@ public class DatabaseMetricsSampler {
         this.clock = clock;
     }
 
+    // First round after 30 s, not a full interval: the performance pages should have a point
+    // by the time anyone opens them after a restart.
     @Scheduled(fixedDelayString = "${metrics.db-interval-ms:300000}",
-            initialDelayString = "${metrics.db-interval-ms:300000}")
+            initialDelayString = "${metrics.db-initial-delay-ms:30000}")
     public void sampleDatabases() {
         if (!properties.isEnabled()) {
             return;

@@ -41,6 +41,14 @@ public class SyncTask {
     @Column(name = "last_sync_time")
     private Instant lastSyncTime;
 
+    /**
+     * When a cycle last finished without error — the heartbeat behind the delay card.
+     * {@link #lastSyncTime} stands still on an idle source by design, so it cannot answer
+     * "is the engine still turning"; this one moves on every clean pass.
+     */
+    @Column(name = "last_success_at")
+    private Instant lastSuccessAt;
+
     @Lob
     @Column(name = "last_sync_result")
     private String lastSyncResult;

@@ -150,6 +150,11 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
     }
 
     @Override
+    public boolean reportsTableStats() {
+        return true;
+    }
+
+    @Override
     public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
         // One row per table: partition rows summed over index_id 0/1 (heap or clustered index,
         // which is the row count), pages summed over that partition's allocation units. The

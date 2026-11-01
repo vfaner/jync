@@ -33,6 +33,12 @@ public class MetricsProperties {
     /** Interval for the connection health and runtime-metrics sample. */
     private long dbIntervalMs = 300_000L;
 
+    /**
+     * Delay before the first connection sample. Short on purpose: a restart would otherwise
+     * leave every performance page on "no samples yet" for a whole interval.
+     */
+    private long dbInitialDelayMs = 30_000L;
+
     /** Interval for the table/row/space sweep, which is the expensive one. */
     private long capacityIntervalMs = 3_600_000L;
 }

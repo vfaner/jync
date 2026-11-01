@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.metrics;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -16,6 +17,7 @@ import java.time.ZoneOffset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -65,6 +67,22 @@ class DatabaseMetricsSamplerTest {
         when(databaseSample.sample(any(), anyBoolean())).thenThrow(new IllegalStateException("x"));
 
         assertThatCode(() -> sampler.sampleDatabases()).doesNotThrowAnyException();
+    }
+
+    /**
+     * A restart must not leave the performance page empty for a whole interval: the first
+     * round rides on its own, short delay instead of the 5-minute cadence. The defaults are
+     * pinned here because neither value is reachable from a unit test otherwise.
+     */
+    @Test
+    void theFirstRoundIsScheduledShortlyAfterStartup() throws Exception {
+        Scheduled scheduled = DatabaseMetricsSampler.class
+                .getDeclaredMethod("sampleDatabases").getAnnotation(Scheduled.class);
+
+        assertThat(scheduled.fixedDelayString()).isEqualTo("${metrics.db-interval-ms:300000}");
+        assertThat(scheduled.initialDelayString())
+                .isEqualTo("${metrics.db-initial-delay-ms:30000}");
+        assertThat(new MetricsProperties().getDbInitialDelayMs()).isEqualTo(30_000L);
     }
 
     /** A clock the test can move; the sampler never reads the wall clock directly. */

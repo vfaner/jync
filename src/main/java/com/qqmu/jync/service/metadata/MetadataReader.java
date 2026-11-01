@@ -132,6 +132,17 @@ public interface MetadataReader {
     }
 
     /**
+     * Whether {@link #estimateTableStats} can answer for this product.
+     *
+     * <p>False by default: an empty map from a reader with no catalog query means "cannot
+     * tell", not "an empty schema". Callers that display the figures use this to leave them
+     * unknown instead of reporting zero tables in a database full of them.
+     */
+    default boolean reportsTableStats() {
+        return false;
+    }
+
+    /**
      * Rows and bytes per table for the whole schema, from the product's optimizer statistics.
      *
      * <p>Deliberately separate from {@link #estimateRowCount}: that method falls back to

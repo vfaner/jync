@@ -15,6 +15,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.model.TaskMetricSample;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.AppMetricSampleRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
@@ -133,11 +134,6 @@ public class MetricsSampler {
         long progressRows = progress.stream()
                 .mapToLong(p -> p.getRowsSyncedTotal() == null ? 0L : p.getRowsSyncedTotal())
                 .sum();
-        Instant lastSuccess = progress.stream()
-                .map(SyncProgress::getLastSyncTime)
-                .filter(t -> t != null)
-                .max(Instant::compareTo)
-                .orElse(null);
         // A CDC consumer's changes never reach SyncProgress: the polling engine writes the
         // baseline and then stops, so those rows are the only record of what CDC delivered —
         // without them a streaming project charts as permanently idle. A consumer owned by
@@ -170,11 +166,27 @@ public class MetricsSampler {
                     return delta < 0 ? null : delta;
                 })
                 .orElse(null));
-        row.setLagMs(cdc != null ? cdcLagMs
-                : lastSuccess == null ? null : Duration.between(lastSuccess, now).toMillis());
         SyncTask task = taskStore.find(projectId).orElse(null);
+        row.setLagMs(cdc != null ? cdcLagMs : pollingLagMs(task, now));
         row.setConsecutiveFailures(task == null ? null : task.getConsecutiveFailures());
         row.setStatus(task == null || task.getStatus() == null ? null : task.getStatus().name());
         return row;
+    }
+
+    /**
+     * Delay for a polling project: how long since the engine last finished a clean pass.
+     *
+     * <p>Not "how stale is the data" — progress only advances when rows land, so an idle
+     * source would otherwise show hours of "delay" while the engine is polling every second.
+     * Unknown when the task is not running, or has not completed a pass yet: there is no
+     * heartbeat to measure from, and a stale timestamp must not stand in for one.
+     */
+    private Long pollingLagMs(SyncTask task, Instant now) {
+        if (task == null || task.getStatus() != TaskStatus.RUNNING
+                || task.getLastSuccessAt() == null) {
+            return null;
+        }
+        // A clock that stepped backwards must not chart a negative delay.
+        return Math.max(0L, Duration.between(task.getLastSuccessAt(), now).toMillis());
     }
 }

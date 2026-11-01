@@ -205,4 +205,23 @@ class TableStatsReadersTest {
 
         assertThat(stats(new GenericMetadataReader(), conn)).isEmpty();
     }
+
+    /**
+     * The capacity cards distinguish "the schema has no tables" from "this product has no
+     * catalog query". Only the five readers below answer the latter; everything that inherits
+     * the generic reader — H2, the analytic engines, HANA, a CUSTOM connection — must say it
+     * cannot tell, or the page would draw zero tables for a database full of them.
+     */
+    @Test
+    void onlyTheFiveCatalogReadersReportTableStats() {
+        assertThat(new MySQLMetadataReader().reportsTableStats()).isTrue();
+        assertThat(new OracleMetadataReader().reportsTableStats()).isTrue();
+        assertThat(new SqlServerMetadataReader().reportsTableStats()).isTrue();
+        assertThat(new PostgresMetadataReader().reportsTableStats()).isTrue();
+        assertThat(new Db2MetadataReader().reportsTableStats()).isTrue();
+
+        assertThat(new GenericMetadataReader().reportsTableStats()).isFalse();
+        assertThat(new KeylessEngineMetadataReader().reportsTableStats()).isFalse();
+        assertThat(new HanaMetadataReader().reportsTableStats()).isFalse();
+    }
 }

@@ -83,6 +83,11 @@ public class SyncTaskStore {
             // the project as active. Stats are still recorded either way.
             boolean stopped = task.getStatus() == TaskStatus.STOPPED;
             if (result.isSuccess()) {
+                // Separate from lastSyncTime: this answers "when did the engine last finish
+                // a pass", so it moves on idle cycles too. The delay card measures from it;
+                // a partially failed pass is deliberately not a heartbeat, so a project that
+                // keeps half-failing shows a growing delay next to its failure count.
+                task.setLastSuccessAt(Instant.now());
                 task.setConsecutiveFailures(0);
                 if (!stopped) {
                     task.setStatus(TaskStatus.RUNNING);

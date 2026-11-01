@@ -135,6 +135,11 @@ public class MySQLMetadataReader extends GenericMetadataReader {
     }
 
     @Override
+    public boolean reportsTableStats() {
+        return true;
+    }
+
+    @Override
     public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
         // TABLE_ROWS is InnoDB's estimate — good enough to rank and bin tables, and free.
         // Views are excluded: their TABLE_ROWS is null and they are not sync targets here.

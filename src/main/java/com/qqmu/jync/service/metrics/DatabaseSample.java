@@ -16,10 +16,8 @@ import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DbMetricSample;
-import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.DbMetricSampleRepository;
-import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.connection.DatabaseHealthService;
 import com.qqmu.jync.service.metadata.MetadataReader;
@@ -32,13 +30,18 @@ import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Takes one reading of every connection that at least one enabled project uses.
+ * Takes one reading of every configured connection.
+ *
+ * <p>Not just the ones an enabled project points at: every row of the connection list offers
+ * a performance page, so a connection with no project (or only a disabled one) would leave
+ * that page permanently on "no samples yet". The cost is one short-lived probe per connection
+ * per interval — the same order as the health check the alert evaluator already runs against
+ * all connections, and it is tunable through {@code metrics.db-interval-ms}.
  *
  * <p>The connection list is re-read on every round, never cached: a connection deleted
- * between two rounds must not be dialled again, and a project switched off must stop
- * costing its servers a probe. Anything that goes wrong while reading a figure leaves that
- * figure null — the health verdict it was collected alongside stands, because "the monitor
- * lacks permission" is not "the database is down".
+ * between two rounds must not be dialled again. Anything that goes wrong while reading a
+ * figure leaves that figure null — the health verdict it was collected alongside stands,
+ * because "the monitor lacks permission" is not "the database is down".
  */
 @Component
 @Slf4j
@@ -47,7 +50,6 @@ public class DatabaseSample {
     /** A driver's message can be a paragraph of stack-ish text; the page shows a line. */
     private static final int MESSAGE_LIMIT = 500;
 
-    private final ProjectRepository projectRepository;
     private final DatabaseConfigRepository configRepository;
     private final DatabaseHealthService healthService;
     private final DataSourceManager dataSourceManager;
@@ -58,14 +60,12 @@ public class DatabaseSample {
     /** Previous raw execution counter per connection, so the next reading can be a rate. */
     private final Map<Long, CounterMark> lastCounters = new ConcurrentHashMap<>();
 
-    public DatabaseSample(ProjectRepository projectRepository,
-                          DatabaseConfigRepository configRepository,
+    public DatabaseSample(DatabaseConfigRepository configRepository,
                           DatabaseHealthService healthService,
                           DataSourceManager dataSourceManager,
                           MetadataReaderFactory readerFactory,
                           RuntimeMetricsRouter router,
                           DbMetricSampleRepository sampleRepository) {
-        this.projectRepository = projectRepository;
         this.configRepository = configRepository;
         this.healthService = healthService;
         this.dataSourceManager = dataSourceManager;
@@ -78,8 +78,8 @@ public class DatabaseSample {
     }
 
     public List<DbMetricSample> sample(Instant now, boolean includeCapacity) {
-        List<DatabaseConfig> configs = referencedConnections();
-        // Forget the marks of connections no project uses any more. Keeping them would price a
+        List<DatabaseConfig> configs = configRepository.findAll();
+        // Forget the marks of deleted connections. Keeping them would price a
         // delete-then-recreate as one long interval, and the map would grow for the life of the
         // process by one entry per connection ever sampled.
         Set<Long> live = new HashSet<>();
@@ -124,25 +124,6 @@ public class DatabaseSample {
         return row;
     }
 
-    private List<DatabaseConfig> referencedConnections() {
-        Set<Long> ids = new HashSet<>();
-        for (Project project : projectRepository.findByEnabledTrue()) {
-            addIfPresent(ids, project.getSourceDbId());
-            addIfPresent(ids, project.getTargetDbId());
-        }
-        if (ids.isEmpty()) {
-            return List.of();
-        }
-        // findAllById silently drops ids of connections deleted since the projects were read.
-        return configRepository.findAllById(ids);
-    }
-
-    private void addIfPresent(Set<Long> ids, Long id) {
-        if (id != null) {
-            ids.add(id);
-        }
-    }
-
     private void fillRuntime(DatabaseConfig config, DbMetricSample row, Instant now) {
         try (HikariDataSource pool = dataSourceManager.createTransientDataSource(config);
              Connection connection = pool.getConnection()) {
@@ -180,9 +161,14 @@ public class DatabaseSample {
     }
 
     private void fillCapacity(DatabaseConfig config, DbMetricSample row) {
+        MetadataReader reader = readerFactory.forType(config.effectiveType());
+        if (!reader.reportsTableStats()) {
+            // No catalog query for this product: an empty answer means "cannot tell", and
+            // writing it as zero would draw zero tables for a database full of them.
+            return;
+        }
         try (HikariDataSource pool = dataSourceManager.createTransientDataSource(config);
              Connection connection = pool.getConnection()) {
-            MetadataReader reader = readerFactory.forType(config.effectiveType());
             String schema = config.getSchemaName();
             if (schema == null || schema.isBlank()) {
                 schema = reader.resolveDefaultSchema(connection);

@@ -299,6 +299,11 @@ public class OracleMetadataReader extends GenericMetadataReader {
     }
 
     @Override
+    public boolean reportsTableStats() {
+        return true;
+    }
+
+    @Override
     public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
         // NUM_ROWS and AVG_ROW_LEN come from the same dictionary row, so the byte estimate
         // costs nothing extra. Both are null until the table has been analyzed, and the product

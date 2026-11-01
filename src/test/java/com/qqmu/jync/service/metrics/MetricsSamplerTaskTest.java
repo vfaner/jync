@@ -147,6 +147,69 @@ class MetricsSamplerTaskTest {
         assertThat(savedTaskSample().getLagMs()).isNull();
     }
 
+    /**
+     * A polling project's progress timestamp only moves when rows land, so an idle source
+     * leaves it hours behind while the engine keeps polling every second. Reporting that
+     * distance as "replication lag" made a healthy idle project look permanently stalled —
+     * the card must instead say how long ago the last cycle finished.
+     */
+    @Test
+    void aRunningPollingTaskMeasuresLagFromItsLastSuccessfulCycle() {
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
+        SyncProgress idle = progress(1L, 100L);
+        idle.setLastSyncTime(NOW.minus(Duration.ofHours(10)));
+        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(idle));
+        when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
+                .thenReturn(Optional.empty());
+        SyncTask task = new SyncTask();
+        task.setStatus(TaskStatus.RUNNING);
+        task.setLastSuccessAt(NOW.minusSeconds(2));
+        when(taskStore.find(1L)).thenReturn(Optional.of(task));
+
+        sampler.sampleTasks();
+
+        assertThat(savedTaskSample().getLagMs()).isEqualTo(2_000L);
+    }
+
+    @Test
+    void aStoppedPollingTaskHasNoLagReading() {
+        // Nothing is polling, so "how long since the last cycle" is not a delay reading —
+        // it is just the age of a stopped engine. The lag card must stay empty.
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
+        SyncProgress idle = progress(1L, 100L);
+        idle.setLastSyncTime(NOW.minus(Duration.ofHours(10)));
+        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(idle));
+        when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
+                .thenReturn(Optional.empty());
+        SyncTask task = new SyncTask();
+        task.setStatus(TaskStatus.STOPPED);
+        task.setLastSuccessAt(NOW.minusSeconds(2));
+        when(taskStore.find(1L)).thenReturn(Optional.of(task));
+
+        sampler.sampleTasks();
+
+        assertThat(savedTaskSample().getLagMs()).isNull();
+    }
+
+    @Test
+    void aRunningPollingTaskWithoutASuccessfulCycleYetHasNoLagReading() {
+        // Just started: the first cycle has not finished, so there is nothing to measure
+        // from — the stale progress timestamp must not stand in for it.
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
+        SyncProgress idle = progress(1L, 100L);
+        idle.setLastSyncTime(NOW.minus(Duration.ofHours(10)));
+        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(idle));
+        when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
+                .thenReturn(Optional.empty());
+        SyncTask task = new SyncTask();
+        task.setStatus(TaskStatus.RUNNING);
+        when(taskStore.find(1L)).thenReturn(Optional.of(task));
+
+        sampler.sampleTasks();
+
+        assertThat(savedTaskSample().getLagMs()).isNull();
+    }
+
     @Test
     void aProgressResetDoesNotProduceANegativeDelta() {
         // 清空进度 (and a CDC baseline rebuild) deletes the progress rows, so the running total

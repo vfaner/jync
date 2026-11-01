@@ -218,6 +218,11 @@ public class PostgresMetadataReader extends GenericMetadataReader {
     }
 
     @Override
+    public boolean reportsTableStats() {
+        return true;
+    }
+
+    @Override
     public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
         // 'r' is a plain table, 'p' a declarative partitioned parent (its size includes the
         // children, so binning by it is right). reltuples is -1 until the table is analyzed

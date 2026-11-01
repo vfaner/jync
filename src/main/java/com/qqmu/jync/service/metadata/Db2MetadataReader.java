@@ -137,6 +137,11 @@ public class Db2MetadataReader extends GenericMetadataReader {
     }
 
     @Override
+    public boolean reportsTableStats() {
+        return true;
+    }
+
+    @Override
     public Map<String, MetadataReader.TableStat> estimateTableStats(Connection conn, String schema) {
         // SYSCAT.TABLES.CARD is the statistics row count (-1 until RUNSTATS). DB2 has no
         // per-table byte total in this view without joining tablespaces, so the size stays

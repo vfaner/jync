@@ -27,7 +27,6 @@ import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.DbMetricSample;
-import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.DbMetricSampleRepository;
 import com.qqmu.jync.repository.ProjectRepository;
@@ -41,15 +40,15 @@ import com.qqmu.jync.service.metrics.runtime.RuntimeMetricsRouter;
 import com.zaxxer.hikari.HikariDataSource;
 
 /**
- * The connection sampler only watches connections a project actually uses, and never lets a
- * monitoring failure masquerade as a data problem — or the other way round.
+ * The connection sampler watches every configured connection — each one has a performance
+ * page — and never lets a monitoring failure masquerade as a data problem, or the other way
+ * round.
  */
 @ExtendWith(MockitoExtension.class)
 class DatabaseSampleTest {
 
     private static final Instant NOW = Instant.parse("2026-11-01T10:00:00Z");
 
-    @Mock private ProjectRepository projectRepository;
     @Mock private DatabaseConfigRepository configRepository;
     @Mock private DatabaseHealthService healthService;
     @Mock private DataSourceManager dataSourceManager;
@@ -61,15 +60,17 @@ class DatabaseSampleTest {
 
     @BeforeEach
     void setUp() {
-        sample = new DatabaseSample(projectRepository, configRepository, healthService,
+        sample = new DatabaseSample(configRepository, healthService,
                 dataSourceManager, readerFactory, router, sampleRepository);
     }
 
+    /**
+     * Every configured connection has a performance page, including one no project uses yet.
+     * Sampling only the ones a project references left those pages permanently empty.
+     */
     @Test
-    void onlyConnectionsReferencedByAProjectAreSampled() throws Exception {
-        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(
-                project(1L, 10L, 20L), project(2L, 20L, 30L)));
-        when(configRepository.findAllById(any())).thenReturn(List.of(
+    void everyConfiguredConnectionIsSampled() throws Exception {
+        when(configRepository.findAll()).thenReturn(List.of(
                 config(10L), config(20L), config(30L)));
         when(healthService.check(anyList(), eq(false))).thenReturn(List.of(
                 health(10L, true), health(20L, true), health(30L, true)));
@@ -78,14 +79,21 @@ class DatabaseSampleTest {
 
         assertThat(rows).extracting(DbMetricSample::getConnectionId)
                 .containsExactlyInAnyOrder(10L, 20L, 30L);
-        ArgumentCaptor<Iterable<Long>> requested = ArgumentCaptor.forClass(Iterable.class);
-        verify(configRepository).findAllById(requested.capture());
-        assertThat(requested.getValue()).containsExactlyInAnyOrder(10L, 20L, 30L);
     }
 
     @Test
-    void aConnectionNoEnabledProjectUsesIsNotSampled() throws Exception {
-        when(projectRepository.findByEnabledTrue()).thenReturn(List.of());
+    void aConnectionNoProjectUsesIsStillSampled() throws Exception {
+        when(configRepository.findAll()).thenReturn(List.of(config(10L)));
+        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+
+        List<DbMetricSample> rows = sample.sample(NOW, false);
+
+        assertThat(rows).extracting(DbMetricSample::getConnectionId).containsExactly(10L);
+    }
+
+    @Test
+    void withNoConfiguredConnectionsThereIsNothingToSample() throws Exception {
+        when(configRepository.findAll()).thenReturn(List.of());
 
         assertThat(sample.sample(NOW, false)).isEmpty();
         verify(sampleRepository, never()).save(any());
@@ -93,8 +101,7 @@ class DatabaseSampleTest {
 
     @Test
     void anUnhealthyConnectionStillGetsAFailureSample() throws Exception {
-        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, 10L, null)));
-        when(configRepository.findAllById(any())).thenReturn(List.of(config(10L)));
+        when(configRepository.findAll()).thenReturn(List.of(config(10L)));
         when(healthService.check(anyList(), eq(false))).thenReturn(List.of(
                 new DatabaseHealthService.Health(10L, false, 3000, "[SQLState 08S01] refused")));
 
@@ -110,8 +117,7 @@ class DatabaseSampleTest {
 
     @Test
     void aRuntimeReadFailureDoesNotEraseTheHealthResult() throws Exception {
-        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, 10L, null)));
-        when(configRepository.findAllById(any())).thenReturn(List.of(config(10L)));
+        when(configRepository.findAll()).thenReturn(List.of(config(10L)));
         when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
         HikariDataSource pool = mock(HikariDataSource.class);
         when(dataSourceManager.createTransientDataSource(any())).thenReturn(pool);
@@ -127,8 +133,7 @@ class DatabaseSampleTest {
 
     @Test
     void theSecondReadingTurnsTheCounterIntoAqps() throws Exception {
-        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, 10L, null)));
-        when(configRepository.findAllById(any())).thenReturn(List.of(config(10L)));
+        when(configRepository.findAll()).thenReturn(List.of(config(10L)));
         when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
         stubPool();
         when(router.read(any(), any()))
@@ -146,8 +151,7 @@ class DatabaseSampleTest {
 
     @Test
     void aRestartedServerCounterDoesNotProduceANegativeQps() throws Exception {
-        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, 10L, null)));
-        when(configRepository.findAllById(any())).thenReturn(List.of(config(10L)));
+        when(configRepository.findAll()).thenReturn(List.of(config(10L)));
         when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
         stubPool();
         when(router.read(any(), any()))
@@ -161,18 +165,14 @@ class DatabaseSampleTest {
     }
 
     /**
-     * A connection can leave the project set (deleted, or its project disabled) and come back
-     * later. The counter mark from the first stint must not survive the gap: subtracting it
-     * would turn a rate over ten minutes into a "current" qps, and the map would grow by one
-     * entry for every connection ever sampled.
+     * A connection can be deleted and later re-created under the same id. The counter mark
+     * from the first stint must not survive the gap: subtracting it would price one long
+     * interval as a "current" qps, and the map would grow by one entry for every connection
+     * ever sampled.
      */
     @Test
     void aCounterMarkIsForgottenWhenTheConnectionLeavesTheSampleSet() throws Exception {
-        when(projectRepository.findByEnabledTrue())
-                .thenReturn(List.of(project(1L, 10L, null)),
-                        List.of(project(1L, 20L, null)),
-                        List.of(project(1L, 10L, null)));
-        when(configRepository.findAllById(any()))
+        when(configRepository.findAll())
                 .thenReturn(List.of(config(10L)), List.of(config(20L)), List.of(config(10L)));
         when(healthService.check(anyList(), eq(false)))
                 .thenReturn(List.of(health(10L, true)), List.of(health(20L, true)),
@@ -190,15 +190,57 @@ class DatabaseSampleTest {
         assertThat(third.get(0).getQps()).isNull();
     }
 
+    /**
+     * A product whose reader has no catalog-statistics query (H2, the analytic engines, a
+     * CUSTOM connection) must leave the three capacity figures unknown. Writing zeros would
+     * draw "0 tables / 0 rows / 0 bytes" for a database the page simply cannot measure.
+     */
     @Test
-    void capacityIsOnlyReadWhenTheSlowerScheduleSaysSo() throws Exception {
-        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, 10L, null)));
-        when(configRepository.findAllById(any())).thenReturn(List.of(config(10L)));
+    void capacityStaysUnknownWhenTheReaderCannotQueryCatalogStatistics() throws Exception {
+        when(configRepository.findAll()).thenReturn(List.of(config(10L)));
         when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
         stubPool();
         when(router.read(any(), any())).thenReturn(Optional.empty());
         MetadataReader reader = mock(MetadataReader.class);
         when(readerFactory.forType(any())).thenReturn(reader);
+
+        sample.sample(NOW, true);
+
+        DbMetricSample row = first();
+        assertThat(row.getTableCount()).isNull();
+        assertThat(row.getRowCount()).isNull();
+        assertThat(row.getBytes()).isNull();
+    }
+
+    /** The other half of the distinction: a capable reader on an empty schema really is zero. */
+    @Test
+    void anEmptySchemaOnAReaderWithCatalogStatisticsIsZeroTables() throws Exception {
+        when(configRepository.findAll()).thenReturn(List.of(config(10L)));
+        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        stubPool();
+        when(router.read(any(), any())).thenReturn(Optional.empty());
+        MetadataReader reader = mock(MetadataReader.class);
+        when(reader.reportsTableStats()).thenReturn(true);
+        when(reader.estimateTableStats(any(), any())).thenReturn(Map.of());
+        when(readerFactory.forType(any())).thenReturn(reader);
+
+        sample.sample(NOW, true);
+
+        DbMetricSample row = first();
+        assertThat(row.getTableCount()).isZero();
+        assertThat(row.getRowCount()).isZero();
+        assertThat(row.getBytes()).isZero();
+    }
+
+    @Test
+    void capacityIsOnlyReadWhenTheSlowerScheduleSaysSo() throws Exception {
+        when(configRepository.findAll()).thenReturn(List.of(config(10L)));
+        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        stubPool();
+        when(router.read(any(), any())).thenReturn(Optional.empty());
+        MetadataReader reader = mock(MetadataReader.class);
+        when(readerFactory.forType(any())).thenReturn(reader);
+        when(reader.reportsTableStats()).thenReturn(true);
         when(reader.estimateTableStats(any(), any()))
                 .thenReturn(Map.of("a", new MetadataReader.TableStat(10L, 1024L),
                         "b", new MetadataReader.TableStat(5L, 512L)));
@@ -230,14 +272,6 @@ class DatabaseSampleTest {
 
     private DbMetricSample rowsFrom(List<DbMetricSample> rows) {
         return rows.get(rows.size() - 1);
-    }
-
-    private Project project(Long id, Long sourceId, Long targetId) {
-        Project project = new Project();
-        project.setId(id);
-        project.setSourceDbId(sourceId);
-        project.setTargetDbId(targetId);
-        return project;
     }
 
     private DatabaseConfig config(Long id) {
