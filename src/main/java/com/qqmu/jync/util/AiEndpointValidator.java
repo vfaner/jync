@@ -90,23 +90,4 @@ public final class AiEndpointValidator {
         }
     }
 
-    private static boolean isBlockedHost(String host) {
-        String trimmed = host.trim();
-        // Locale.ROOT: a default-locale uppercase maps 'i' to 'İ' under tr-TR, so a
-        // metadata hostname would stop matching the blocklist (metadata.googleapis.com
-        // resolves to a public address, leaving the link-local check nothing to catch).
-        if (BLOCKED_HOSTS.contains(trimmed.toUpperCase(java.util.Locale.ROOT))
-                || ALIYUN_METADATA_IP.equals(trimmed)) {
-            return true;
-        }
-        try {
-            InetAddress address = InetAddress.getByName(trimmed);
-            // Block link-local addresses (potential metadata/SSRF) while allowing loopback and private
-            // intranet addresses (for Ollama/ML models running on internal network)
-            return address.isLinkLocalAddress();
-        } catch (UnknownHostException e) {
-            // Unresolvable host: harmless for SSRF; the HTTP call later reports the DNS failure.
-            return false;
-        }
-    }
 }
