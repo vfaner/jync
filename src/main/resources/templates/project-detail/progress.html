@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<th:block th:fragment="block" th:remove="tag">
+<!-- 各表进度与游标策略 -->
+<div class="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#graph-up"/></svg> <span th:text="#{project.progress}">Progress</span></h2>
+        <div class="card-head-tools">
+            <span class="hint" th:text="#{cursor.help}">help</span>
+            <span id="row-count-badge" class="badge is-hidden"></span>
+            <!-- 行数核对是显式动作：页面打开不查库，点击后才逐表 COUNT(*)。 -->
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-role="row-count-open"
+                    th:if="${isAdmin and !#lists.isEmpty(progressList)}"
+                    th:attr="data-action=@{/api/projects/{id}/row-count(id=${project.id})},
+                             data-running=${project.enabled},
+                             title=#{rowcount.hint}">
+                <svg class="ico"><use href="#check-lg"/></svg>
+                <span th:text="#{rowcount.open}">Check row counts</span>
+            </button>
+        </div>
+    </div>
+    <div class="card-body tight">
+        <div th:if="${#lists.isEmpty(progressList)}" class="empty">
+            <div class="empty-ico"><svg class="ico"><use href="#hourglass"/></svg></div>
+            <h3 th:text="#{dashboard.noActivity}">No activity yet.</h3>
+        </div>
+        <div th:unless="${#lists.isEmpty(progressList)}" class="tbl-wrap">
+            <table class="tbl dense">
+                <thead>
+                <tr>
+                    <th th:text="#{log.objectName}">Table</th>
+                    <th th:text="#{cursor.strategy}">Strategy</th>
+                    <th th:text="#{cursor.column}">Column</th>
+                    <th th:text="#{dashboard.lastSync}">Last sync</th>
+                    <!-- 「设置游标」列：仅轮询/全量比对模式可用。日志 CDC 下游标列是死配置，
+                         同调度卡片一并隐藏（data-role="polling-only" 由 app.js 联动）。 -->
+                    <th class="num" data-role="polling-only"
+                        th:classappend="${(isAdmin and !cdcActive)} ? '' : 'is-hidden'"
+                        th:text="#{cursor.set}">Set cursor</th>
+                    <!-- 只读预览：源/目标各一个入口。纯 GET，不改变同步状态，访客同样可见。 -->
+                    <th class="num" th:text="#{preview.title}">Preview</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="p : ${progressList}" th:with="strat=${p.cursorStrategy ?: 'NONE'}">
+                    <td class="mono" style="font-weight:600">
+                        <span th:text="${p.objectName}">table</span>
+                        <!-- 进行中的分块全量:切分方式、已完成块数、断点续传提示(任务书 A5)。
+                             断点行只在装载未完成时存在,完成即清,所以有徽章 = 该表全量仍在途。 -->
+                        <div th:if="${fullLoadProgress != null and fullLoadProgress.containsKey(p.objectName)}"
+                             th:with="flp=${fullLoadProgress.get(p.objectName)}"
+                             class="small" style="font-weight:400;margin-top:2px">
+                            <span class="badge badge-info" th:title="#{fullload.resumeHint}">
+                                <span th:if="${flp.parallel}"
+                                      th:text="#{fullload.parallel(${flp.rangesDone}, ${flp.rangesSeen})}">parallel</span>
+                                <span th:unless="${flp.parallel}"
+                                      th:text="#{fullload.sequential}">sequential</span>
+                            </span>
+                            <span class="muted" th:text="#{fullload.chunks(${flp.chunksDone})}">chunks</span>
+                        </div>
+                        <!-- 无主键表的全量只能流式整拉,中断即整表重来(任务书 A1:UI 明示)。 -->
+                        <div th:if="${p.resumableLoad != null and !p.resumableLoad}"
+                             class="small" style="font-weight:400;margin-top:2px">
+                            <span class="badge badge-warn" th:title="#{fullload.noResumeHint}"
+                                  th:text="#{fullload.noResume}">no resume</span>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge"
+                              th:classappend="${strat == 'TIMESTAMP' or strat == 'ROW_SCN'} ? 'badge-ok'
+                                            : (${strat == 'IDENTITY'} ? 'badge-info'
+                                            : (${strat == 'FULL_COMPARE'} ? 'badge-warn' : 'badge-danger'))"
+                              th:title="#{'cursor.strategy.' + ${strat} + '.help'}">
+                            <span th:text="#{'cursor.' + ${strat}}">strategy</span>
+                        </span>
+                        <!-- 策略无法感知更新时明确标出，避免用户误以为数据完全同步。
+                             data-tip 由 app.js 画成与性能配置一样的深色气泡并立即弹出；
+                             原生 title 要等约 1 秒且样式跟着系统走。 -->
+                        <span class="tip-icon tip-warn" tabindex="0" role="img"
+                              th:if="${strat == 'IDENTITY' or strat == 'NONE'}"
+                              th:attr="aria-label=#{project.strategyWarn},
+                                       data-tip=#{project.strategyWarn}">
+                            <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
+                        </span>
+                    </td>
+                    <td class="mono small">
+                        <span th:text="${p.cursorColumn ?: '—'}">col</span>
+                        <!-- 游标列没有前导索引时,每次增量读取都要全表扫描:提示管理员在源库补索引。
+                             data-tip 由 app.js 画成与性能配置一样的深色气泡并立即弹出；
+                             原生 title 要等约 1 秒且样式跟着系统走。 -->
+                        <span class="tip-icon tip-warn" tabindex="0" role="img"
+                              th:if="${unindexedCursorTables != null
+                                       and p.cursorColumn != null
+                                       and unindexedCursorTables.contains(p.objectName)}"
+                              th:attr="aria-label=#{project.cursorIndexHint},
+                                       data-tip=#{project.cursorIndexHint}">
+                            <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
+                        </span>
+                    </td>
+                    <td class="small muted"
+                        th:attr="title=${p.lastSyncValue != null
+                                 ? #messages.msg('cursor.lastValue') + ': ' + p.lastSyncValue : null}"
+                        th:text="${p.lastSyncTime != null}
+                                 ? ${#temporals.format(p.lastSyncTime, 'MM-dd HH:mm:ss')}
+                                 : #{common.never}">never</td>
+                    <!-- td 本身不 th:if 藏掉（那样 JS 联动就没法恢复），改为加 is-hidden 类；
+                         isAdmin=false 时始终隐藏（访客态）。 -->
+                    <td data-role="polling-only"
+                        th:classappend="${(isAdmin and !cdcActive)} ? '' : 'is-hidden'">
+                        <!-- 每行一个小表单，可为单表覆盖自动识别的游标列。
+                             输入框带 datalist 候选，聚焦时从后端拉取该表可用的游标列
+                             （时间 + 整数类型），免去手动敲列名。 -->
+                        <form method="post" class="input-group" style="justify-content:flex-end"
+                              th:action="@{/projects/{id}/cursor(id=${project.id})}"
+                              data-role="cursor-form">
+                            <input type="hidden" name="tableName" th:value="${p.objectName}">
+                            <input type="text" class="input mono" style="max-width:145px" name="cursorColumn"
+                                   th:value="${config.cursorColumnFor(p.objectName)}"
+                                   th:placeholder="#{cursor.auto}"
+                                   th:attr="list='datalist-cursor-' + ${p.objectName},
+                                            data-table=${p.objectName},
+                                            data-action=@{/api/projects/{id}/cursor-candidates(id=${project.id})}">
+                            <datalist th:id="'datalist-cursor-' + ${p.objectName}"></datalist>
+                            <button type="submit" class="btn-icon" th:title="#{common.apply}">
+                                <svg class="ico"><use href="#check-lg"/></svg>
+                            </button>
+                        </form>
+                    </td>
+                    <td class="num nowrap">
+                        <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
+                                th:if="${isAdmin}"
+                                data-side="source"
+                                th:attr="data-table=${p.objectName},
+                                         data-action=@{/api/projects/{id}/preview(id=${project.id})},
+                                         title=#{preview.sourceHint}">
+                            <svg class="ico"><use href="#table"/></svg>
+                            <span th:text="#{preview.source}">Source</span>
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
+                                th:if="${isAdmin}"
+                                data-side="target"
+                                th:attr="data-table=${p.objectName},
+                                         data-action=@{/api/projects/{id}/preview(id=${project.id})},
+                                         title=#{preview.targetHint}">
+                            <svg class="ico"><use href="#eye"/></svg>
+                            <span th:text="#{preview.target}">Target</span>
+                        </button>
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div style="margin-top:16px">
+    <a class="btn btn-ghost btn-sm" th:href="@{/change-logs(projectId=${project.id})}">
+        <svg class="ico"><use href="#clock-history"/></svg>
+        <span th:text="#{project.viewAllLogs}">Full change log</span>
+    </a>
+</div>
+
+<!-- 只读预览弹窗：页面只渲染空壳，内容由 app.js 按按钮上的 data-* 拉取填充。 -->
+<div class="modal" id="preview-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:attr="aria-label=#{preview.title}">
+    <div class="modal-mask" data-close-modal="preview-modal"></div>
+    <div class="modal-dialog preview-dialog">
+        <button type="button" class="modal-close" data-close-modal="preview-modal"
+                th:attr="aria-label=#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 id="preview-title" th:text="#{preview.title}">Preview</h3>
+            <p id="preview-meta" class="mono small"></p>
+        </div>
+        <!-- 带参数的文案不进全局字典，随控件走 data-template（同 project.selectedCount）。 -->
+        <div id="preview-body" class="preview-body"
+             th:attr="data-template=#{preview.truncated}">
+            <div class="help" th:text="#{preview.loading}">Loading...</div>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-close-modal="preview-modal"
+                    th:text="#{common.close}">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- 行数核对弹窗：行由服务端按进度列表渲染，app.js 只负责逐表填数。
+     带 {0} 的文案放在 data-* 上，由 JS 替换（同 preview.truncated）。 -->
+<div class="modal" id="row-count-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:if="${isAdmin and !#lists.isEmpty(progressList)}"
+     th:attr="aria-label=#{rowcount.title},
+              data-confirm=#{rowcount.confirm},
+              data-confirm-running=#{rowcount.confirmRunning},
+              data-summary=#{rowcount.summary},
+              data-badge-mismatch=#{rowcount.badgeMismatch},
+              data-badge-failed=#{rowcount.badgeFailed},
+              data-stopped=#{rowcount.stopped}">
+    <div class="modal-mask" data-close-modal="row-count-modal"></div>
+    <div class="modal-dialog preview-dialog">
+        <button type="button" class="modal-close" data-close-modal="row-count-modal"
+                th:attr="aria-label=#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 th:text="#{rowcount.title}">Row counts</h3>
+            <p id="row-count-summary" class="small muted"
+               th:text="#{rowcount.notChecked}">Not checked</p>
+            <p class="small muted"
+               th:text="#{rowcount.scopeHint}">Only tables that already have a sync
+                record are listed; the rest appear after the next sync.</p>
+        </div>
+        <div id="row-count-body" class="preview-body">
+            <table class="tbl dense">
+                <thead>
+                <tr>
+                    <th th:text="#{log.objectName}">Table</th>
+                    <th class="num" th:text="#{rowcount.sourceRows}">Source rows</th>
+                    <th class="num" th:text="#{rowcount.targetRows}">Target rows</th>
+                    <th class="num" th:text="#{rowcount.diff}">Difference</th>
+                    <th class="num" th:text="#{rowcount.syncedTotal}">Rows synced</th>
+                    <th th:text="#{rowcount.status}">Status</th>
+                    <th class="num" th:text="#{rowcount.actions}">Actions</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="p : ${progressList}"
+                    data-role="row-count-row"
+                    th:attr="data-object=${p.objectName}">
+                    <td class="mono" th:text="${p.objectName}">table</td>
+                    <td class="num" data-role="source-count">—</td>
+                    <td class="num" data-role="target-count">—</td>
+                    <td class="num" data-role="diff" th:title="#{rowcount.diffHint}">—</td>
+                    <td class="num" th:text="${p.rowsSyncedTotal ?: 0}">0</td>
+                    <td data-role="status">
+                        <span class="badge" th:text="#{rowcount.notChecked}">Not checked</span>
+                    </td>
+                    <td class="num">
+                        <button type="button" class="btn btn-ghost btn-xs"
+                                data-role="row-count-one"
+                                th:attr="title=#{rowcount.recheck}">
+                            <svg class="ico"><use href="#arrow-repeat"/></svg>
+                            <span th:text="#{rowcount.recheck}">Re-check</span>
+                        </button>
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-primary btn-sm"
+                    id="row-count-start" th:text="#{rowcount.start}">Start</button>
+            <button type="button" class="btn btn-ghost btn-sm is-hidden"
+                    id="row-count-stop" th:text="#{rowcount.stop}">Stop</button>
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-close-modal="row-count-modal"
+                    th:text="#{common.close}">Close</button>
+        </div>
+    </div>
+</div>
+</th:block>
+</body>
+</html>

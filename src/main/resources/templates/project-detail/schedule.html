@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- 选项与调度 -->
+<!-- 调度卡片：仅轮询/全量比对模式生效。日志 CDC 模式下由长驻消费者持续流式回放，
+     Quartz 调度、cron、轮询间隔都是死配置，直接藏掉以避免误导。
+     data-role="polling-only" 由 app.js 在策略卡片切到任一日志 CDC 时同步隐藏。
+     "自定义调度"开关关闭时折叠两个输入框——留空使用全局默认值，这是多数用户的预期。
+     加载性能(批次/并行度)不属于调度，见下方常显的「全量加载性能」卡片。 -->
+<div class="card" data-role="polling-only" th:fragment="card"
+     th:classappend="${cdcActive} ? 'is-hidden' : ''"
+     th:with="customSched=${config.pollIntervalMs != null
+                or config.cronExpression != null}">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#clock"/></svg> <span th:text="#{project.schedule}">Schedule</span></h2>
+    </div>
+    <div class="card-body">
+        <label class="switch" data-role="custom-schedule-toggle">
+            <input type="checkbox" name="customSchedule" value="true"
+                   th:checked="${customSched}" data-role="custom-schedule-input">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.customSchedule}">自定义调度</strong>
+                <span class="help" th:text="#{option.customScheduleHelp}">开启后自定义轮询间隔 / Cron / 批次大小；关闭则使用全局默认值</span>
+            </span>
+        </label>
+        <div data-role="custom-schedule-fields"
+             th:classappend="${customSched} ? '' : 'is-hidden'" style="margin-top:14px">
+            <div class="field">
+                <label for="pollIntervalMs" th:text="#{option.pollInterval}">Poll interval</label>
+                <input type="number" class="input" id="pollIntervalMs" name="pollIntervalMs"
+                       min="200" step="1" th:value="${config.pollIntervalMs}">
+                <div class="help" th:text="#{option.pollIntervalHelp}">help</div>
+            </div>
+            <div class="field">
+                <label for="cronExpression" th:text="#{option.cronExpression}">Cron</label>
+                <input type="text" class="input mono" id="cronExpression" name="cronExpression"
+                       placeholder="0/5 * * * * ?" th:value="${config.cronExpression}">
+                <div class="help" th:text="#{option.cronExpressionHelp}">help</div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

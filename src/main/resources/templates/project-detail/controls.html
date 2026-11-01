@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- 运行控制 -->
+<div class="card" th:fragment="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#sliders"/></svg> <span th:text="#{project.controls}">Controls</span></h2>
+        <!-- 三处状态面（列表/详情/看板）共用一条口径：ERROR 帽优先，其次看
+             project.enabled，不读 sync_task.status 的 RUNNING —— 干净停机后
+             该行会残留 RUNNING（CDC 分支尤甚），读它会出现"绿徽章 + 启动按钮"
+             这种自相矛盾；enabled 与按钮同源，徽章因此永远和按钮一致。 -->
+        <div th:with="err=${task != null and task.status != null and task.status.name() == 'ERROR'}">
+            <span class="badge"
+                  th:classappend="${err} ? 'badge-danger'
+                                : (${project.enabled} ? 'badge-ok' : 'badge-mute')">
+                <span class="dot" th:classappend="${project.enabled and !err} ? 'dot-live' : ''"></span>
+                <span th:text="${err} ? #{status.ERROR} : (${project.enabled} ? #{status.RUNNING} : #{status.STOPPED})">Stopped</span>
+            </span>
+        </div>
+    </div>
+    <div class="card-body">
+        <dl class="dl" style="margin-bottom:16px">
+            <dt th:text="#{dashboard.lastSync}">Last sync</dt>
+            <dd th:text="${task != null and task.lastSyncTime != null}
+                         ? ${#temporals.format(task.lastSyncTime, 'yyyy-MM-dd HH:mm:ss')}
+                         : #{common.never}">Never</dd>
+            <th:block th:if="${task != null and task.lastSyncResult != null}">
+                <dt th:text="#{common.details}">Result</dt>
+                <dd><span class="chip" th:text="${task.lastSyncResult}">result</span></dd>
+            </th:block>
+            <!--/* 下次自动运行：调度是否真的就绪必须在触发前可见。项目未启动时 Quartz
+                   里根本没有这个 job，光看页面和运行中的项目毫无区别，只能等过了时间
+                   才发现没跑。时区随附——cron 按服务器时区求值，服务器在 UTC 时
+                   17:55 会落在本地凌晨。CDC 项目持续消费，没有定时。 */-->
+            <th:block th:unless="${selectedCdc}">
+                <dt th:text="#{project.nextRun}">Next run</dt>
+                <dd data-role="next-run">
+                    <span th:if="${nextRunAt != null}"
+                          th:text="${#temporals.format(nextRunAt, 'yyyy-MM-dd HH:mm:ss')}
+                                   + ' (' + ${serverZone} + ')'">2026-10-22 17:55:00</span>
+                    <span th:unless="${nextRunAt != null}" class="muted"
+                          th:text="${project.enabled} ? #{project.nextRun.pending}
+                                   : #{project.nextRun.notStarted}">Not started</span>
+                    <!--/* 一个已经过去的「下次自动运行」不是调度丢了：这一轮 fire 还没
+                           返回，@DisallowConcurrentExecution 会在它结束前把该 job 的
+                           触发器从 Quartz 时间轮里摘掉，之后每次到点都被跳过。页面必须
+                           说出这一点，否则用户只会继续等（或者去点没用的强制解锁）。*/-->
+                    <div class="help" th:if="${activeCycle != null and activeCycle.running}"
+                         th:text="#{project.nextRun.executing(${activeCycle.minutesSinceProgress})}">
+                        Previous round still running</div>
+                    <div class="help text-danger"
+                         th:if="${activeCycle != null and activeCycle.running and activeCycle.stuck}"
+                         th:text="#{project.nextRun.stuck(${activeCycle.stuckThresholdMinutes})}">
+                        Possibly wedged</div>
+                    <div class="help" th:if="${nextRunOverdue and (activeCycle == null or !activeCycle.running)}"
+                         th:text="#{project.nextRun.overdue}">This time has passed</div>
+                </dd>
+            </th:block>
+            <!--/* 锁可见性：持有者 + 租约到期时间。过期分两种：本实例还有轮次在跑
+                   （红色，它已失去租约，会在下个安全点中止）；没有轮次在跑（灰色，
+                   只是上一轮留下的行，下一次取锁会直接接管，无需处理）。 */-->
+            <th:block th:if="${lockHeld}">
+                <dt th:text="#{project.lock}">Sync lock</dt>
+                <dd>
+                    <span class="badge" th:classappend="${lockStale} ? 'badge-mute'
+                                    : (${lockExpired} ? 'badge-danger' : 'badge-warn')">
+                        <svg class="ico"><use href="#lock-fill"/></svg>
+                        <span th:text="${lockStale} ? #{project.lock.stale}
+                                       : (${lockExpired} ? #{project.lock.expired} : #{project.lock.held})">Held</span>
+                    </span>
+                    <span class="small mono" th:text="${task.lockOwner}">owner</span>
+                    <span class="small muted" th:if="${task.lockExpiresAt != null}"
+                          th:text="#{project.lock.until} + ' '
+                                   + ${#temporals.format(task.lockExpiresAt, 'yyyy-MM-dd HH:mm:ss')}">until</span>
+                    <div class="help" th:if="${lockStale}"
+                         th:text="#{project.lock.staleHelp}">Leftover lease, does not block</div>
+                </dd>
+            </th:block>
+        </dl>
+
+        <div class="btn-row" th:if="${isAdmin}">
+            <!--/* B9:表单变脏(改了没保存)时由 app.js 摘掉 is-hidden 亮出徽标;
+                   点启动/立即同步/重建基线会先弹「保存并执行/按已保存配置执行/取消」三选一。 */-->
+            <span class="badge badge-warn is-hidden" data-role="dirty-badge"
+                  th:text="#{dirty.badge}">配置未保存</span>
+            <!-- 保存配置按钮放在立即同步前面:它是配置 form 的 submit,但视觉上归在运行控制区。
+                 用 form="config-form" 属性关联到下方的表单,这样按钮可以在 form 外面也能提交它。 -->
+            <button type="submit" form="config-form" class="btn btn-primary btn-sm"
+                    th:disabled="${project.enabled}"
+                    th:title="${project.enabled} ? #{project.config.lockedWhileRunning} : #{common.save}">
+                <svg class="ico"><use href="#check-lg"/></svg><span th:text="#{project.saveConfig}">保存配置</span>
+            </button>
+            <!--/* B9 文案澄清：启用 = 按调度自动增量轮询 / CDC 持续消费（tooltip 明说
+                   非逐轮全量）；「手动跑一轮」不改启用状态。悬停即见语义，消除
+                   「开启同步 = 轮询全量？」的误解。 */-->
+            <!--/* 没有可同步的内容(显式全不选,或轮询策略下同步选项全关):启动只会
+                   空跑。禁用并说明原因,服务端仍做兜底拒绝(stale 页面/直接调 API)。
+                   CDC 不受同步选项影响,服务端与这里都不会因此禁用。 */-->
+            <button type="button" class="btn btn-ok btn-sm" th:unless="${project.enabled}"
+                    th:disabled="${noSyncWorkMessage != null}"
+                    data-role="api-btn" data-reload="true"
+                    th:title="${noSyncWorkMessage != null} ? ${noSyncWorkMessage} : #{project.startHelp}"
+                    th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
+                             data-busy-text=#{common.loading}">
+                <svg class="ico"><use href="#play-fill"/></svg><span th:text="#{project.start}">Start</span>
+            </button>
+            <button type="button" class="btn btn-warn btn-sm" th:if="${project.enabled}"
+                    data-role="api-btn" data-reload="true"
+                    th:attr="data-action=@{/api/projects/{id}/stop(id=${project.id})},
+                             data-busy-text=#{common.loading}">
+                <svg class="ico"><use href="#pause-fill"/></svg><span th:text="#{project.stop}">Stop</span>
+            </button>
+            <!--/* 立即同步只对非 CDC 项目渲染:CDC 是持续消费,「补一轮」没有意义,
+                   服务端也会以 error.project.cdc.use.rebaseline 拒绝。CDC 项目的一键
+                   恢复入口是重建基线(B7),复用 api-btn 的 postJson + data-confirm
+                   模式。确认文案按任务状态分两套:运行中明示停消费/清位点/立即全量,
+                   已停用则明示只清状态、启用后才全量(此时服务端不会启动消费者)。 */-->
+            <button type="button" class="btn btn-primary btn-sm" th:unless="${cdcActive}"
+                    th:disabled="${noSyncWorkMessage != null}"
+                    data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
+                    th:title="${noSyncWorkMessage != null} ? ${noSyncWorkMessage}"
+                    th:attr="data-action=@{/api/projects/{id}/sync-now(id=${project.id})},
+                             data-busy-text=#{common.loading}">
+                <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{project.syncNow}">Sync now</span>
+            </button>
+            <button type="button" class="btn btn-primary btn-sm" th:if="${cdcActive}"
+                    data-role="api-btn" data-reload="true" data-cdc-visibility="cdc"
+                    th:attr="data-action=@{/api/projects/{id}/cdc-rebaseline(id=${project.id})},
+                             data-confirm=${project.enabled} ? #{cdc.rebaseline.confirm} : #{cdc.rebaseline.confirm.pending},
+                             data-busy-text=#{common.loading}">
+                <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
+                <span th:text="#{cdc.rebaseline.button}">Rebuild baseline</span>
+            </button>
+            <!--/* CDC 任务的进度行不参与续流,清空进度是空操作;全量重载的入口是
+                   旁边的「重建基线」。服务端同样会拒绝,这里只是不去点一个死按钮。 */-->
+            <button type="button" class="btn btn-outline-danger btn-sm"
+                    data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
+                    th:attr="data-action=@{/api/projects/{id}/reset(id=${project.id})},
+                             data-confirm=#{common.confirm.reset(${project.name})},
+                             data-busy-text=#{common.loading}">
+                <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
+                <span th:text="#{project.reset}">Reset progress</span>
+            </button>
+            <!--/* 强制解锁只在锁被持有时出现；持有者会在下一次续约时发现租约没了并中止。
+                   过期且本实例无轮次在跑的残留行没有可清的东西，因此不显示。
+                   二次确认说明后果，因为这个操作可能停掉一轮还活着的同步。 */-->
+            <button type="button" class="btn btn-outline-danger btn-sm"
+                    th:if="${lockHeld and !lockStale}"
+                    data-role="api-btn" data-reload="true"
+                    th:attr="data-action=@{/api/projects/{id}/force-unlock(id=${project.id})},
+                             data-confirm=#{project.confirm.forceUnlock(${task.lockOwner})},
+                             data-busy-text=#{common.loading}">
+                <svg class="ico"><use href="#unlock-fill"/></svg>
+                <span th:text="#{project.lock.forceUnlock}">Force unlock</span>
+            </button>
+            <!--/* 克隆一个项目（一个源同步到第二个目标）：复用新建表单，源库与同步设置
+                   由服务端预填，目标库强制重新选择，运行状态不复制。 */-->
+            <a class="btn btn-ghost btn-sm" th:href="@{/projects/new(from=${project.id})}">
+                <svg class="ico"><use href="#arrow-left-right"/></svg>
+                <span th:text="#{project.clone}">Clone</span>
+            </a>
+        </div>
+        <!--/* 禁用态的按钮不会弹 tooltip，这里把原因直接写在页面上。 */-->
+        <p class="small muted" style="margin:11px 0 0"
+           th:if="${isAdmin and noSyncWorkMessage != null}"
+           th:text="${noSyncWorkMessage}">No sync objects selected</p>
+        <!--/* 停用项目上的重建基线只清进度和错误状态,不启动消费者(服务端强制):
+               全量加载是消费者线程的一部分,巡检又只保留启用项目的消费者,先起后停
+               必然打断基线,页面还会同时出现「已停止」与「CDC 运行中」。把「启用后
+               才全量」明说,别让用户猜。 */-->
+        <p class="small muted" id="cdc-rebaseline-disabled-hint" style="margin:11px 0 0"
+           th:if="${isAdmin and cdcActive and !project.enabled}" data-cdc-visibility="cdc"
+           th:text="#{cdc.rebaseline.disabled.hint}">Disabled-project rebaseline hint</p>
+        <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin and !cdcActive}"
+           data-cdc-visibility="non-cdc"
+           th:text="#{project.syncNowHelp}">Sync now help</p>
+        <p class="small muted" style="margin:3px 0 0"
+           th:if="${isAdmin and !cdcActive}" data-cdc-visibility="non-cdc"
+           th:text="#{project.resetHelp}">Reset help</p>
+        <p class="small muted" style="margin:0" th:unless="${isAdmin}"
+           th:text="#{common.readOnly}">Read-only account.</p>
+    </div>
+</div>
+</body>
+</html>

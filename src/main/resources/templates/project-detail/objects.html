@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- 对象选择 -->
+<div class="card" style="margin-top:18px" th:fragment="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#list-check"/></svg> <span th:text="#{project.syncObjects}">Objects</span></h2>
+        <span class="badge badge-brand" th:if="${sourceObjects != null}">
+            <svg class="ico"><use href="#database"/></svg>
+            <span th:text="${sourceObjects.schema}">schema</span>
+        </span>
+    </div>
+    <div class="card-body">
+        <!-- 勾选状态显式提交:字段在场 = 这是用户的完整选择,某一类全不勾就是
+             "这一类都不同步";字段缺席(源库列举失败,选择器没渲染)时后端保留已保存
+             的选择,不会把空提交误当成"全不要"。 -->
+        <input type="hidden" name="objectSelectionExplicit" value="true"
+               th:if="${sourceObjects != null}">
+        <!-- 表 -->
+        <div class="picker" data-role="picker">
+            <div class="picker-head">
+                <span class="picker-title">
+                    <svg class="ico"><use href="#table"/></svg>
+                    <span th:text="#{project.tables}">Tables</span>
+                    <span class="badge badge-mute" data-count
+                          th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                </span>
+                <span class="picker-tools">
+                    <input type="search" class="input" data-filter th:placeholder="#{common.filter}">
+                    <button type="button" class="btn btn-ghost btn-xs" data-all
+                            th:text="#{common.selectAll}">All</button>
+                    <button type="button" class="btn btn-ghost btn-xs" data-none
+                            th:text="#{common.selectNone}">None</button>
+                </span>
+            </div>
+            <!-- 显式白名单:勾了哪些就只同步哪些;全不勾 = 这一类都不同步,
+                 周期检测不到对象就空转(不报错)。includesTable 已经区分了
+                 "老配置的空集合=全部"与"保存过的空集合=全不选"。 -->
+            <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.tables)}">
+                <!--/* 每张表一行:左侧源表勾选框,中间虚线箭头,右侧目标表名。
+                       目标表名留空 = 与源表同名(placeholder 显示源表名);输入中的
+                       空格由 app.js 实时去掉,保存时服务端再规范化一次。隐藏的
+                       mappingSource 与输入框按文档顺序成对提交,控制器据此重建映射。 */-->
+                <div class="map-head">
+                    <span th:text="#{project.tableMap.source}">Source</span>
+                    <span aria-hidden="true"></span>
+                    <span th:text="#{project.tableMap.target}">Target</span>
+                </div>
+                <div class="pick map-row" th:each="tbl : ${sourceObjects.tables}"
+                     th:with="mapped=${config.targetTableName(tbl)}">
+                    <label class="map-source">
+                        <input type="checkbox" name="tables" th:value="${tbl}"
+                               th:checked="${config.includesTable(tbl)}">
+                        <span th:text="${tbl}">table</span>
+                    </label>
+                    <span class="map-arrow" aria-hidden="true"></span>
+                    <input type="hidden" name="mappingSource" th:value="${tbl}">
+                    <input type="text" class="input map-target" name="mappingTarget"
+                           maxlength="128" th:value="${mapped == tbl ? '' : mapped}"
+                           th:placeholder="${tbl}"
+                           th:attr="data-source=${tbl}">
+                </div>
+            </div>
+            <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.tables)}"
+               th:text="#{project.noTables}">No tables.</p>
+        </div>
+
+        <!-- 视图 -->
+        <div class="picker" data-role="picker">
+            <div class="picker-head">
+                <span class="picker-title">
+                    <svg class="ico"><use href="#eye"/></svg>
+                    <span th:text="#{project.views}">Views</span>
+                    <span class="badge badge-mute" data-count
+                          th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                </span>
+                <span class="picker-tools">
+                    <button type="button" class="btn btn-ghost btn-xs" data-all
+                            th:text="#{common.selectAll}">All</button>
+                    <button type="button" class="btn btn-ghost btn-xs" data-none
+                            th:text="#{common.selectNone}">None</button>
+                </span>
+            </div>
+            <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.views)}">
+                <label class="pick" th:each="v : ${sourceObjects.views}">
+                    <input type="checkbox" name="views" th:value="${v}"
+                           th:checked="${config.includesView(v)}">
+                    <span th:text="${v}">view</span>
+                </label>
+            </div>
+            <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.views)}"
+               th:text="#{project.noViews}">No views.</p>
+        </div>
+
+        <!-- 存储过程 -->
+        <div class="picker" data-role="picker">
+            <div class="picker-head">
+                <span class="picker-title">
+                    <svg class="ico"><use href="#code-square"/></svg>
+                    <span th:text="#{project.procedures}">Procedures</span>
+                    <span class="badge badge-mute" data-count
+                          th:attr="data-template=#{project.selectedCount('{0}','{1}')}"></span>
+                </span>
+                <span class="picker-tools">
+                    <button type="button" class="btn btn-ghost btn-xs" data-all
+                            th:text="#{common.selectAll}">All</button>
+                    <button type="button" class="btn btn-ghost btn-xs" data-none
+                            th:text="#{common.selectNone}">None</button>
+                </span>
+            </div>
+            <div class="picker-list" th:if="${sourceObjects != null and !#lists.isEmpty(sourceObjects.procedures)}">
+                <label class="pick" th:each="p : ${sourceObjects.procedures}">
+                    <input type="checkbox" name="procedures" th:value="${p}"
+                           th:checked="${config.includesProcedure(p)}">
+                    <span th:text="${p}">proc</span>
+                </label>
+            </div>
+            <p class="picker-empty" th:if="${sourceObjects == null or #lists.isEmpty(sourceObjects.procedures)}"
+               th:text="#{project.noProcedures}">No procedures.</p>
+        </div>
+    </div>
+</div>
+</body>
+</html>

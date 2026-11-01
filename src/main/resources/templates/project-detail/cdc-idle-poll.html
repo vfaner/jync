@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- CDC 空闲轮询间隔：只对三个轮询式日志 CDC 引擎生效
+     (LogMiner / PG 逻辑复制槽 / SQL Server CDC)。捞到数据时立即连续挖掘,
+     此项只决定"空闲多久再探一次",在低延迟与源库负载之间权衡。
+     MySQL binlog 是推送模式,不轮询,故 BINLOG_CDC 下也隐藏。
+     data-cdc-visibility="polling-cdc" 由 app.js 按当前选中策略联动;
+     隐藏时输入框同时 disabled,避免陈旧值随表单提交(本项目固定纪律)。 -->
+<div class="card" data-cdc-visibility="polling-cdc" th:fragment="card"
+     th:classappend="${selectedStrategy == 'LOGMINER_CDC'
+            or selectedStrategy == 'PG_LOGICAL_CDC'
+            or selectedStrategy == 'SQLSERVER_CDC'
+            or selectedStrategy == 'YSTREAM_CDC'} ? '' : 'is-hidden'">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#clock"/></svg> <span th:text="#{option.cdcIdlePoll}">CDC idle poll interval</span></h2>
+    </div>
+    <div class="card-body">
+        <div class="field">
+            <label for="cdcIdlePollMs" th:text="#{option.cdcIdlePoll}">CDC idle poll interval</label>
+            <input type="number" class="input" id="cdcIdlePollMs" name="cdcIdlePollMs"
+                   min="50" step="1" th:value="${config.cdcIdlePollMs}"
+                   th:disabled="${selectedStrategy != 'LOGMINER_CDC'
+                       and selectedStrategy != 'PG_LOGICAL_CDC'
+                       and selectedStrategy != 'SQLSERVER_CDC'
+                       and selectedStrategy != 'YSTREAM_CDC'}">
+            <div class="help" th:text="#{option.cdcIdlePollHelp}">help</div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -438,7 +438,7 @@ public class ProjectController {
      * {@code listSourceObjects} against the LIVE source database (and, for a pristine
      * MySQL project, the readiness probe) on every request — up to ~15s per cycle on a
      * slow source, once per open tab every 5 seconds. This handler builds only what
-     * {@code project-detail :: cdc-card} reads: the persisted position plus this node's
+     * {@code project-detail/cdc-status :: cdc-card} reads: the persisted position plus this node's
      * runtime stats snapshot (both cheap, in-memory/metadata-store reads; the card's
      * unsupported-table badges come from the stats snapshot, never from a live listing).
      *
@@ -473,7 +473,7 @@ public class ProjectController {
         model.addAttribute("cdcActive", cdcActive);
         model.addAttribute("cdcPosition", cdcPosition);
         model.addAttribute("cdcStats", cdcStats);
-        return "project-detail :: cdc-card";
+        return "project-detail/cdc-status :: cdc-card";
     }
 
     /** Saves the object selection and sync options. */

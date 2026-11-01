@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- 同步选项 -->
+<div class="card" style="margin-top:0" th:fragment="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#toggles"/></svg> <span th:text="#{project.syncOptions}">Options</span></h2>
+    </div>
+    <div class="card-body">
+        <!--/* 日志 CDC 下这三个开关不参与增量流(消费者只按所选表过滤,
+               行变更照常应用),基线执行时又会被强制打开,显示出来只会
+               诱导无效修改:隐藏但不禁用,提交时保存值原样带回,切回
+               轮询后恢复显示。视图/存储过程不同,见下方基线分组。 */-->
+        <p class="small muted" data-cdc-visibility="cdc"
+           th:classappend="${selectedCdc} ? '' : 'is-hidden'"
+           style="margin:0 0 10px" th:text="#{project.syncOptions.cdcHidden}">Log CDC mode: the polling switches are hidden.</p>
+        <label class="switch" data-role="polling-only"
+               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
+            <!-- 源库一张表都没有时,表结构/表数据/索引无从同步:强制关并置灰,
+                 避免开着空开关点保存被「至少选择一张表」拦下。列举失败(sourceObjects
+                 为 null)属于临时状况,保持已保存配置不动。 -->
+            <input type="checkbox" name="syncStructure" value="true"
+                   th:checked="${config.syncStructure and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
+                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.syncStructure}">Structure</strong>
+                <span class="help" th:text="#{option.syncStructureHelp}">help</span>
+            </span>
+        </label>
+        <label class="switch" data-role="polling-only"
+               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
+            <input type="checkbox" name="syncData" value="true"
+                   th:checked="${config.syncData and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
+                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.syncData}">Data</strong>
+                <span class="help" th:text="#{option.syncDataHelp}">help</span>
+            </span>
+        </label>
+        <label class="switch" data-role="polling-only"
+               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
+            <input type="checkbox" name="syncIndexes" value="true"
+                   th:checked="${config.syncIndexes and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
+                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.syncIndexes}">Indexes</strong>
+                <span class="help" th:text="#{option.syncIndexesHelp}">help</span>
+            </span>
+        </label>
+        <th:block th:replace="~{project-detail/baseline-options :: group}"/>
+    </div>
+</div>
+</body>
+</html>

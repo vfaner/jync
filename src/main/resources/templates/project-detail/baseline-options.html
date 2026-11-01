@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* 本组只在基线全量加载(首次启动、重建基线)里生效,流式回放不
+       看它们;CDC 模式下收进默认收起的分组,标题即作用域,不再靠
+       一段容易被跳过的说明。视图/存储过程同属基线但不在执行期被
+       强制打开,所以也放进组里保持可编辑——藏掉它们等于 CDC 用户
+       无法在本模式关掉视图/例程同步。收起只改界面,输入照常提交,
+       切回轮询/全量比对后整组恢复常显。 */-->
+<div class="baseline-options" data-role="baseline-options" th:fragment="group">
+    <button type="button" class="baseline-options-toggle"
+            data-role="baseline-options-toggle"
+            aria-expanded="false" aria-controls="baseline-options-body"
+            th:classappend="${selectedCdc} ? '' : 'is-hidden'">
+        <svg class="ico baseline-options-chevron" aria-hidden="true"><use href="#chevron-right"/></svg>
+        <span class="baseline-options-title" th:text="#{project.syncOptions.baselineGroup}">Baseline full load</span>
+        <span class="help" th:text="#{project.syncOptions.baselineGroupHelp}">help</span>
+    </button>
+    <div id="baseline-options-body" class="baseline-options-body"
+         data-role="baseline-options-body"
+         th:classappend="${selectedCdc} ? 'is-hidden' : ''">
+        <label class="switch">
+            <input type="checkbox" name="syncViews" value="true"
+                   th:checked="${config.syncViews and (sourceObjects == null or !#lists.isEmpty(sourceObjects.views))}"
+                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.views)}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.syncViews}">Views</strong>
+                <span class="help" th:text="#{option.syncViewsHelp}">help</span>
+            </span>
+        </label>
+        <label class="switch">
+            <input type="checkbox" name="syncProcedures" value="true"
+                   th:checked="${config.syncProcedures and (sourceObjects == null or !#lists.isEmpty(sourceObjects.procedures))}"
+                   th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.procedures)}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.syncProcedures}">Procedures</strong>
+                <span class="help" th:text="#{option.syncProceduresHelp}">help</span>
+            </span>
+        </label>
+
+        <hr class="divider">
+        <label class="switch is-warn">
+            <input type="checkbox" name="allowDrop" value="true" th:checked="${config.allowDrop}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong style="color:var(--warn)" th:text="#{option.allowDrop}">Allow drops</strong>
+                <span class="help" th:text="#{option.allowDropHelp}">help</span>
+            </span>
+        </label>
+        <label class="switch">
+            <input type="checkbox" name="syncDeletes" value="true" th:checked="${config.syncDeletes}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.syncDeletes}">Sync deletes</strong>
+                <span class="help" th:text="#{option.syncDeletesHelp}">help</span>
+            </span>
+        </label>
+        <label class="switch">
+            <input type="checkbox" name="disableTargetConstraints" value="true"
+                   th:checked="${config.disableTargetConstraints}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.disableConstraints}">Suspend FKs</strong>
+                <span class="help" th:text="#{option.disableConstraintsHelp}">help</span>
+            </span>
+        </label>
+        <label class="switch">
+            <input type="checkbox" name="truncateBeforeInitialLoad" value="true"
+                   th:checked="${config.truncateBeforeInitialLoad}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.truncateBeforeInitialLoad}">Truncate first</strong>
+                <span class="help" th:text="#{option.truncateBeforeInitialLoadHelp}">help</span>
+            </span>
+        </label>
+    </div>
+</div>
+</body>
+</html>

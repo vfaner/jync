@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- CDC 模式下的占位说明：替代上面整张调度卡片，告诉用户为什么这些配置消失了。 -->
+<div class="card" data-role="cdc-schedule-hint" th:fragment="card"
+     th:classappend="${cdcActive} ? '' : 'is-hidden'">
+    <div class="card-body">
+        <div class="help" style="margin:0">
+            <svg class="ico" style="color:var(--brand);vertical-align:-3px;margin-right:4px"><use href="#info-circle"/></svg>
+            <span th:text="#{project.schedule.cdcHidden}">Streaming CDC owns the schedule; polling config is ignored.</span>
+        </div>
+    </div>
+</div>
+</body>
+</html>

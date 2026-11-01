@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* CDC 状态面板(C3):仅存储策略 = BINLOG_CDC 时渲染。cdcStats 是
+       CdcRuntimeStats.snapshot() 的 Map(statsFor()==null → 整块 null):本节点
+       不持有消费者时降级为 not.holder + 持久化位点(cdcPosition 来自库,与节点
+       无关)。位点取「实时优先、持久化兜底」;GTID 截断前 40 字符;落后 -1 显示
+       「—」;lastError 红字截断;无主键表逐表标注(B4 验收点)。活跃度绝不读
+       sync_task.status(干净停机后它按设计停在 RUNNING),圆点只看 connected。
+       5 秒片段刷新由 app.js bindCdcRefresh 驱动:取 data-refresh-url 指向的轻量
+       片段端点 /projects/{id}/cdc-card(服务端只查持久化位点 + 本节点 stats
+       快照,绝不重跑源库对象列举/就绪探测),响应就是这张卡片本身,DOMParser
+       解析后仍按 id 取卡换 innerHTML;页面隐藏时暂停。th:fragment 让整张卡可被
+       该端点单独渲染,整页渲染路径不受影响。 */-->
+<div class="card" id="cdc-card" th:fragment="cdc-card" th:if="${cdcActive}"
+     th:attr="data-refresh-url=@{/projects/{id}/cdc-card(id=${project.id})}"
+     th:with="stats=${cdcStats},
+              livePos=${stats != null and stats.positionFile != null},
+              posFile=${livePos ? stats.positionFile : (cdcPosition != null ? cdcPosition.binlogFile : null)},
+              posPos=${livePos ? stats.positionPos : (cdcPosition != null ? cdcPosition.binlogPos : null)},
+              scn=${stats != null and stats.positionScn != null ? stats.positionScn : (cdcPosition != null ? cdcPosition.scn : null)},
+              lsn=${stats != null and stats.positionLsn != null ? stats.positionLsn : (cdcPosition != null ? cdcPosition.lsn : null)},
+              gtid=${stats != null and stats.gtidSet != null ? stats.gtidSet : (cdcPosition != null ? cdcPosition.gtidSet : null)},
+              gtidShort=${gtid != null and #strings.length(gtid) > 40 ? #strings.substring(gtid, 0, 40) + '…' : gtid},
+              lastError=${stats != null ? stats.lastError : null},
+              lastErrorShort=${lastError != null and #strings.length(lastError) > 160 ? #strings.substring(lastError, 0, 160) + '…' : lastError}">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#activity"/></svg> <span th:text="#{cdc.status.title}">CDC status</span></h2>
+        <!--/* 连接状态圆点:connected 绿(呼吸动画)/断红。持有者才有圆点。 */-->
+        <span class="badge" th:if="${stats != null}"
+              th:classappend="${stats.connected} ? 'badge-ok' : 'badge-danger'">
+            <span class="dot" th:classappend="${stats.connected} ? 'dot-live' : ''"></span>
+            <span th:text="${stats.connected} ? #{status.RUNNING} : #{cdc.status.disconnected}">Connected</span>
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="small muted" th:if="${stats == null}" th:text="#{cdc.status.not.holder}">not holder</p>
+        <dl class="dl">
+            <dt th:text="#{cdc.status.position}">Position</dt>
+            <dd>
+                <span class="chip mono" th:if="${posFile != null}"
+                      th:text="${posFile} + ':' + ${posPos}">file:pos</span>
+                <span class="chip mono" th:if="${posFile == null and scn != null}"
+                      th:text="${'SCN ' + scn}">SCN 123</span>
+                <span class="chip mono" th:if="${posFile == null and scn == null and lsn != null}"
+                      th:text="${'LSN ' + lsn}">LSN 0/167D3F8</span>
+                <span th:if="${posFile == null and scn == null and lsn == null}">—</span>
+                <div class="small muted mono" th:if="${gtidShort != null}"
+                     th:text="'GTID ' + ${gtidShort}">gtid</div>
+                <!--/* 位点年龄:持久化位点的落库时间,不持有消费者的节点也能看 */-->
+                <div class="small muted" th:if="${cdcPosition != null and cdcPosition.updatedAt != null}"
+                     th:text="#{cdc.status.position.updated} + ' '
+                              + ${#temporals.format(cdcPosition.updatedAt, 'yyyy-MM-dd HH:mm:ss')}">updated</div>
+            </dd>
+            <th:block th:if="${stats != null}">
+                <dt th:text="#{cdc.status.lag}">Lag</dt>
+                <dd th:text="${stats.lagSeconds >= 0} ? #{cdc.status.lag.value(${stats.lagSeconds})} : '—'">—</dd>
+                <dt th:text="#{cdc.status.throughput}">Throughput</dt>
+                <dd th:text="#{cdc.status.throughput.value(${stats.eventsPerSecond})}">0 rows/s</dd>
+                <dt th:text="#{cdc.status.rows}">Rows applied</dt>
+                <dd th:text="${stats.rowsApplied}">0</dd>
+                <dt th:text="#{cdc.status.skipped.ddl}">DDL skipped</dt>
+                <dd th:text="${stats.skippedDdl}">0</dd>
+                <dt th:text="#{cdc.status.skipped.unsupported}">Unsupported skipped</dt>
+                <dd th:text="${stats.skippedUnsupported}">0</dd>
+                <dt th:text="#{cdc.status.unmappable}">Unmappable</dt>
+                <dd th:text="${stats.unmappable}">0</dd>
+                <dt th:text="#{cdc.status.zero.date}">Zero dates</dt>
+                <dd th:text="${stats.zeroDateCoerced}">0</dd>
+                <dt th:text="#{cdc.status.skipped.missinglob}">Missing-LOB changes skipped</dt>
+                <dd th:text="${stats.skippedMissingLob}">0</dd>
+                <dt th:text="#{cdc.status.uncaptured.gaps}">Uncaptured gap warnings</dt>
+                <dd th:text="${stats.uncapturedGaps}">0</dd>
+                <!--/* PG 逻辑槽把 WAL 滞留在 restart_lsn 之后:消费停滞时源库磁盘会被占满。
+                     测不出(openGauss 没有 pg_lsn)时 retainedWalBytes 为 null,整行不渲染。 */-->
+                <th:block th:if="${stats.retainedWalBytes != null}">
+                    <dt th:text="#{cdc.status.wal.retained}">WAL held by the slot</dt>
+                    <dd>
+                        <span class="chip mono" th:text="${stats.retainedWalLabel}">0</span>
+                        <span class="badge badge-warn" th:if="${stats.retainedWalHigh}"
+                              th:text="#{cdc.status.wal.retained.high}">high</span>
+                    </dd>
+                </th:block>
+            </th:block>
+            <th:block th:if="${lastErrorShort != null}">
+                <dt th:text="#{cdc.status.lastError}">Last error</dt>
+                <dd><span class="small mono" style="color:var(--danger)"
+                          th:text="${lastErrorShort}">last error</span></dd>
+            </th:block>
+        </dl>
+        <!--/* B4:无主键表逐表标注——CDC 流不跟踪它们,仅基线播种过一次。 */-->
+        <div th:if="${stats != null and !#sets.isEmpty(stats.unsupportedTables)}" style="margin-top:12px">
+            <div class="small muted" style="margin-bottom:6px"
+                 th:text="#{cdc.status.unsupported.tables}">No-PK tables</div>
+            <span class="badge badge-warn mono" style="margin:0 6px 6px 0"
+                  th:each="tbl : ${stats.unsupportedTables}" th:text="${tbl}">db.tbl</span>
+        </div>
+        <!--/* LogMiner 行外 LOB:按表给出跳过数,便于判断是单表问题还是普遍的 LOB 表。 */-->
+        <div th:if="${stats != null and !#maps.isEmpty(stats.missingLobByTable)}" style="margin-top:12px">
+            <div class="small muted" style="margin-bottom:6px"
+                 th:text="#{cdc.status.missinglob.tables}">Tables with unrecoverable LOB changes</div>
+            <span class="badge badge-warn mono" style="margin:0 6px 6px 0"
+                  th:each="entry : ${stats.missingLobByTable}"
+                  th:text="${entry.key} + ' (' + ${entry.value} + ')'">db.tbl (12)</span>
+        </div>
+    </div>
+</div>
+</body>
+</html>

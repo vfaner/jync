@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!-- 全量加载性能：与调度无关，轮询与 CDC 模式都常显——CDC 的基线全量走同一
+     条 chunked 加载路径。批次越大提交越稀、并行度越高连接越多，两者都受
+     连接池与数据库承受能力约束：数据库敏感时把并行度设为 1、批次调小。 -->
+<div class="card" data-role="full-load-performance" th:fragment="card">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#activity"/></svg> <span th:text="#{project.performance}">全量加载性能</span></h2>
+    </div>
+    <div class="card-body">
+        <div class="field">
+            <div class="label-row">
+                <label for="batchSize" th:text="#{option.batchSize}">Batch size</label>
+                <span class="tip-icon" tabindex="0" role="img"
+                      th:attr="aria-label=#{option.batchSizeTip(${fullLoadBatchDefault})}">
+                    <svg class="ico" aria-hidden="true"><use href="#question-circle"/></svg>
+                    <span class="tip-body" role="tooltip" id="batchSizeTip"
+                          th:text="#{option.batchSizeTip(${fullLoadBatchDefault})}">tip</span>
+                </span>
+            </div>
+            <input type="number" class="input" id="batchSize" name="batchSize"
+                   min="1" max="20000" step="1" th:value="${config.batchSize}"
+                   th:placeholder="${fullLoadBatchDefault}">
+            <div class="help"
+                 th:text="#{option.batchSizeHelp(${fullLoadBatchDefault})}">help</div>
+        </div>
+        <div class="field">
+            <div class="label-row">
+                <label for="fullLoadParallelism" th:text="#{option.fullLoadParallelism}">并行度</label>
+                <span class="tip-icon" tabindex="0" role="img"
+                      th:attr="aria-label=#{option.fullLoadParallelismTip(${fullLoadParallelismDefault})}">
+                    <svg class="ico" aria-hidden="true"><use href="#question-circle"/></svg>
+                    <span class="tip-body" role="tooltip" id="fullLoadParallelismTip"
+                          th:text="#{option.fullLoadParallelismTip(${fullLoadParallelismDefault})}">tip</span>
+                </span>
+            </div>
+            <input type="number" class="input" id="fullLoadParallelism" name="fullLoadParallelism"
+                   min="1" max="8" th:value="${config.fullLoadParallelism}"
+                   th:placeholder="${fullLoadParallelismDefault}">
+            <div class="help"
+                 th:text="#{option.fullLoadParallelismHelp(${fullLoadParallelismDefault})}">help</div>
+            <!-- 生效上限:引擎按连接池座位数钳制并行度,不给数字的话
+                 存 8 看起来就是 8,实际可能只跑 4。 -->
+            <div class="help" id="fullLoadParallelismCap"
+                 th:text="#{option.fullLoadParallelismCap(${fullLoadPoolSize}, ${fullLoadParallelismCap})}">cap</div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

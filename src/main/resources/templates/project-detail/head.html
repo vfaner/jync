@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<th:block th:fragment="head" th:remove="tag">
+<div class="page-head">
+    <div>
+        <h1 th:text="${project.name}">Project</h1>
+        <p class="sub" th:if="${project.description}" th:text="${project.description}">description</p>
+    </div>
+    <div class="page-actions">
+        <!--/* 转换复审入口：只在项目已配好两端时才有意义 */-->
+        <a class="btn btn-ghost btn-sm"
+           th:if="${project.sourceDbId != null and project.targetDbId != null}"
+           th:href="@{/projects/{id}/conversions(id=${project.id})}">
+            <svg class="ico"><use href="#code-square"/></svg>
+            <span th:text="#{conversion.list}">Conversion review</span>
+        </a>
+        <a class="btn btn-ghost btn-sm" th:if="${isAdmin}"
+           th:href="@{/projects/{id}/edit(id=${project.id})}">
+            <svg class="ico"><use href="#pencil"/></svg><span th:text="#{common.edit}">Edit</span>
+        </a>
+        <a class="btn btn-ghost btn-sm" th:href="@{/projects}">
+            <svg class="ico"><use href="#arrow-left"/></svg><span th:text="#{common.back}">Back</span>
+        </a>
+    </div>
+</div>
+
+<div th:if="${sourceWarning}" class="alert alert-warn">
+    <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+    <div class="alert-body" th:text="${#messages.msgOrNull(sourceWarning) ?: sourceWarning}">warning</div>
+</div>
+
+<!-- 全量比对每轮整表读写：显式选择会绕过自动解析的行数上限，即使没超上限，短间隔下
+     也可能过重。两类表都先在这里说明代价；无主键表不在列表内（只做一次种子）。 -->
+<div th:if="${fullCompareLoad != null and !fullCompareLoad.empty}" class="alert alert-warn">
+    <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+    <div class="alert-body">
+        <strong th:text="#{project.fullcompare.load.title}">warning</strong>
+        <div th:text="#{project.fullcompare.load.body(
+                ${#numbers.formatInteger(fullCompareLoad.intervalMs, 1, 'COMMA')})}">body</div>
+        <ul>
+            <li th:each="l : ${fullCompareLoad.tables}"
+                th:if="${l.overCap and l.recommendedIntervalMs > fullCompareLoad.intervalMs}"
+                th:text="#{project.fullcompare.load.overCap(
+                        ${l.table.name},
+                        ${#numbers.formatInteger(l.table.approximateRowCount, 1, 'COMMA')},
+                        ${#numbers.formatInteger(fullCompareLoad.maxRows, 1, 'COMMA')},
+                        ${#numbers.formatInteger(l.recommendedIntervalMs / 1000, 1, 'COMMA')})}">
+                over cap</li>
+            <li th:each="l : ${fullCompareLoad.tables}"
+                th:if="${l.overCap and l.recommendedIntervalMs <= fullCompareLoad.intervalMs}"
+                th:text="#{project.fullcompare.load.overCapNoInterval(
+                        ${l.table.name},
+                        ${#numbers.formatInteger(l.table.approximateRowCount, 1, 'COMMA')},
+                        ${#numbers.formatInteger(fullCompareLoad.maxRows, 1, 'COMMA')})}">
+                over cap</li>
+            <li th:each="l : ${fullCompareLoad.tables}" th:if="${!l.overCap}"
+                th:text="#{project.fullcompare.load.heavy(
+                        ${l.table.name},
+                        ${#numbers.formatInteger(l.table.approximateRowCount, 1, 'COMMA')},
+                        ${#numbers.formatInteger(l.recommendedIntervalMs / 1000, 1, 'COMMA')})}">
+                heavy</li>
+        </ul>
+        <div th:text="#{project.fullcompare.load.hint}">hint</div>
+    </div>
+</div>
+</th:block>
+</body>
+</html>
