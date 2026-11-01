@@ -185,7 +185,7 @@
                         <textarea class="input mono sql-edit" id="preSql" name="preSql" rows="2"
                                   wrap="off" spellcheck="false"
                                   th:text="${task.preSql}"></textarea>
-                        <div class="help" th:text="#{etl.preSql.hint}">Optional: executed before extraction, e.g. DELETE FROM target WHERE dt &lt; '2026-01-01'.</div>
+                        <div class="help" th:text="#{etl.preSql.hint}">Optional: runs on the target database before the load and commits immediately, e.g. DELETE FROM target WHERE dt &lt; '2026-01-01'.</div>
                     </div>
 
                     <div class="field">
@@ -193,7 +193,7 @@
                         <textarea class="input mono sql-edit" id="postSql" name="postSql" rows="2"
                                   wrap="off" spellcheck="false"
                                   th:text="${task.postSql}"></textarea>
-                        <div class="help" th:text="#{etl.postSql.hint}">Optional: executed after load, e.g. UPDATE target SET total = amount + tax.</div>
+                        <div class="help" th:text="#{etl.postSql.hint}">Optional: runs on the target database after the load and commits immediately, e.g. UPDATE target SET total = amount + tax.</div>
                     </div>
 
                     <div class="grid-2">
