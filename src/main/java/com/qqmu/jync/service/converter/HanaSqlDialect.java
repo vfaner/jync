@@ -1,0 +1,138 @@
+package com.qqmu.jync.service.converter;
+
+import java.util.List;
+
+import org.springframework.stereotype.Component;
+
+import com.qqmu.jync.dto.meta.ColumnMeta;
+import com.qqmu.jync.dto.meta.ProcedureMeta;
+import com.qqmu.jync.dto.meta.ViewMeta;
+import com.qqmu.jync.model.DatabaseType;
+
+/**
+ * SAP HANA.
+ *
+ * <p>HANA accepts standard DDL and JDBC types, but rejects the SQL:2008 pagination tail
+ * ({@code OFFSET n ROWS FETCH NEXT m ROWS ONLY}), the three ANSI column-alter forms, and
+ * a plain INSERT where an idempotent upsert is required. Each override below is the form
+ * verified against HANA Express 2.00.082 on 2026-11-01.
+ */
+@Component
+public class HanaSqlDialect extends AbstractSqlDialect {
+
+    @Override
+    public DatabaseType.DialectFamily family() {
+        return DatabaseType.DialectFamily.HANA;
+    }
+
+    @Override
+    protected char quoteChar() {
+        return '"';
+    }
+
+    /**
+     * BOOLEAN exists in HANA 2.0 but not in every older SPS and cannot be used everywhere a
+     * numeric can; SMALLINT holds the same 0/1 values and reads back through getBoolean.
+     */
+    @Override
+    protected String booleanType() {
+        return "SMALLINT";
+    }
+
+    @Override
+    protected String tinyIntType() {
+        return "TINYINT";
+    }
+
+    @Override
+    protected String smallIntType() {
+        return "SMALLINT";
+    }
+
+    @Override
+    protected String intType() {
+        return "INTEGER";
+    }
+
+    @Override
+    protected String bigIntType() {
+        return "BIGINT";
+    }
+
+    @Override
+    protected String floatType() {
+        return "REAL";
+    }
+
+    @Override
+    protected String doubleType() {
+        return "DOUBLE";
+    }
+
+    @Override
+    protected String dateType() {
+        return "DATE";
+    }
+
+    @Override
+    protected String timeType() {
+        return "TIME";
+    }
+
+    @Override
+    protected String timestampType() {
+        return "TIMESTAMP";
+    }
+
+    @Override
+    protected String blobType() {
+        return "BLOB";
+    }
+
+    /** HANA has a native CLOB; NCLOB is not a distinct type. */
+    @Override
+    protected String clobType() {
+        return "CLOB";
+    }
+
+    /** HANA has LIMIT/OFFSET; it rejects the SQL:2008 OFFSET … FETCH NEXT tail. */
+    @Override
+    public String getPaginationSql(String baseSql, long offset, int limit) {
+        return baseSql + " LIMIT " + limit + " OFFSET " + offset;
+    }
+
+    @Override
+    public String getUpsertSql(String schema, String table, List<String> columns,
+                               List<String> pkColumns) {
+        return "INSERT INTO " + qualify(schema, table) + " (" + quotedList(columns)
+                + ") VALUES (" + placeholders(columns.size()) + ")";
+    }
+
+    // --- ANSI baseline, replaced by the HANA forms in the column-DDL and routine tasks ---
+
+    @Override
+    public String getModifyColumnSql(String schema, String table, ColumnMeta column,
+                                     DatabaseType sourceType) {
+        return "ALTER TABLE " + qualify(schema, table) + " ALTER COLUMN "
+                + quoteIdentifier(column.getName()) + " " + mapType(column, sourceType);
+    }
+
+    @Override
+    public List<String> getCreateViewSql(ViewMeta view, String schema,
+                                         DatabaseType sourceType) {
+        return List.of(
+                "DROP VIEW " + qualify(schema, view.getName()),
+                "CREATE VIEW " + qualify(schema, view.getName()) + " AS "
+                        + view.getDefinition());
+    }
+
+    @Override
+    public List<String> getCreateProcedureSql(ProcedureMeta procedure, String schema,
+                                              DatabaseType sourceType) {
+        String body = procedure.getDefinition();
+        if (body == null || body.isBlank()) {
+            return List.of();
+        }
+        return List.of(body.trim());
+    }
+}
