@@ -116,7 +116,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
     <td align="center"><a href="docs/images/jync_lx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lx.png" alt="Task detail" width="100%"></a><br><sub><b>Task detail</b> · objects, schedule, performance, cleansing</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_cdc.png" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.png" alt="Log CDC" width="100%"></a><br><sub><b>Log CDC</b> · position, lag, throughput, skip counters</sub></td>
+    <td align="center"><a href="docs/images/jync_cdc.png" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.png" alt="Log CDC" width="100%"></a><br><sub><b>Log CDC</b> · position, last event, throughput, skip counters</sub></td>
     <td align="center"><a href="docs/images/jync_diaodu.png" target="_blank" rel="noopener"><img src="docs/images/jync_diaodu.png" alt="Scheduling" width="100%"></a><br><sub><b>Scheduling</b> · polling interval or Cron</sub></td>
     <td align="center"><a href="docs/images/jync_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xn.png" alt="Full-load performance" width="100%"></a><br><sub><b>Full-load performance</b> · batch size and parallelism</sub></td>
   </tr>

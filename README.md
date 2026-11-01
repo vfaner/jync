@@ -116,7 +116,7 @@
     <td align="center"><a href="docs/images/jync_lx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lx.png" alt="任务详情" width="100%"></a><br><sub><b>任务详情</b> · 对象、调度、性能、列清洗</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_cdc.png" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.png" alt="日志 CDC" width="100%"></a><br><sub><b>日志 CDC</b> · 位点 / 落后秒数 / 吞吐 / 跳过计数</sub></td>
+    <td align="center"><a href="docs/images/jync_cdc.png" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.png" alt="日志 CDC" width="100%"></a><br><sub><b>日志 CDC</b> · 位点 / 上次事件 / 吞吐 / 跳过计数</sub></td>
     <td align="center"><a href="docs/images/jync_diaodu.png" target="_blank" rel="noopener"><img src="docs/images/jync_diaodu.png" alt="调度设置" width="100%"></a><br><sub><b>调度设置</b> · 轮询间隔或 Cron</sub></td>
     <td align="center"><a href="docs/images/jync_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xn.png" alt="全量加载性能" width="100%"></a><br><sub><b>全量加载性能</b> · 批量大小与并行度</sub></td>
   </tr>
