@@ -48,8 +48,9 @@ import lombok.extern.slf4j.Slf4j;
  * by a simplified re-implementation. If the two ever diverge the page becomes a liar — showing a
  * reviewer SQL that sync would not actually run is worse than showing nothing.
  *
- * <p>Nothing here touches the target except {@link CandidateValidator}, which is only reached
- * through an explicit user action.
+ * <p>Nothing here writes to the target. It reads the target connection only to resolve its
+ * default schema when none is configured, and {@link CandidateValidator} is reached only through
+ * an explicit user action.
  */
 @Service
 @Slf4j
@@ -207,8 +208,7 @@ public class ConversionAssistService {
 
         try (Connection conn = dataSourceManager.getConnection(source)) {
             String sourceSchema = schemaOf(source, reader, conn);
-            String targetSchema = target.getSchemaName() != null
-                    && !target.getSchemaName().isBlank() ? target.getSchemaName() : sourceSchema;
+            String targetSchema = resolveTargetSchema(target);
 
             if (KIND_VIEW.equals(detail.kind)) {
                 ViewMeta view = reader.readView(conn, sourceSchema, name);
@@ -453,6 +453,26 @@ public class ConversionAssistService {
             throws SQLException {
         return config.getSchemaName() != null && !config.getSchemaName().isBlank()
                 ? config.getSchemaName() : reader.resolveDefaultSchema(conn);
+    }
+
+    /**
+     * The schema structure sync will write to: the configured one, or the target connection's
+     * default. Never the source's — "APP" on an Oracle source is not a MySQL database name, and
+     * a mechanical statement (or an override saved from it) that names it targets nothing.
+     */
+    private String resolveTargetSchema(DatabaseConfig target) {
+        if (target.getSchemaName() != null && !target.getSchemaName().isBlank()) {
+            return target.getSchemaName();
+        }
+        MetadataReader targetReader =
+                readerFactory.forType(target.getType(), target.resolvedFamily());
+        try (Connection conn = dataSourceManager.getConnection(target)) {
+            return targetReader.resolveDefaultSchema(conn);
+        } catch (SQLException e) {
+            log.debug("Cannot resolve the default schema of target connection '{}'",
+                    target.getName(), e);
+            throw new IllegalStateException("error.target.schema.read.failed", e);
+        }
     }
 
     private Project require(Long projectId) {

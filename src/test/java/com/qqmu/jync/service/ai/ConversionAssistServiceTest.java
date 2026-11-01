@@ -524,4 +524,37 @@ class ConversionAssistServiceTest {
         assertThat(afterEdit.isCached()).isFalse();
         assertThat(afterEdit.getSql()).isEqualTo("SELECT 1");
     }
+
+    @Test
+    @DisplayName("a blank target schema is resolved from the target, not copied from the source")
+    void aBlankTargetSchemaIsResolvedFromTheTargetConnection() throws Exception {
+        // Source is Oracle with schema APP; target is MySQL with no schema configured.
+        // The target's own default schema is "cee".
+        when(reader.resolveDefaultSchema(any())).thenReturn("cee");
+
+        ViewMeta view = new ViewMeta();
+        view.setName("V_SALES");
+        view.setDefinition("CREATE VIEW V_SALES AS SELECT 1 FROM DUAL");
+        when(reader.readView(any(), any(), eq("V_SALES"))).thenReturn(view);
+
+        SqlDialect dialect = mock(SqlDialect.class);
+        when(dialect.getCreateViewSql(any(), any(), any()))
+                .thenReturn(List.of("CREATE VIEW `cee`.`V_SALES` AS SELECT 1"));
+        SqlDialectFactory dialectFactory = mock(SqlDialectFactory.class);
+        when(dialectFactory.forType(any())).thenReturn(dialect);
+        when(dialectFactory.forType(any(), any())).thenReturn(dialect);
+        when(dialectFactory.forType(any(), any(), any())).thenReturn(dialect);
+        service = new ConversionAssistService(projectRepository, databaseConfigRepository,
+                projectService, dataSourceManager, readerFactory, dialectFactory,
+                mock(SqlBodyConverter.class), mock(AiSqlAssistant.class), validator,
+                providerService);
+
+        service.load(1L, "VIEW", "V_SALES");
+
+        ArgumentCaptor<String> schema = ArgumentCaptor.forClass(String.class);
+        verify(dialect).getCreateViewSql(any(), schema.capture(), any());
+        // "APP" exists only on the source. Writing it into the mechanical statement fabricates
+        // a target schema, and an override saved from that statement then targets it.
+        assertThat(schema.getValue()).isEqualTo("cee");
+    }
 }

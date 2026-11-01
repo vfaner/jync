@@ -558,8 +558,9 @@ public class StructureSyncService {
         }
 
         String override = ctx.getConfig().ddlOverride("PROCEDURE", proc.getName());
+        boolean usingOverride = override != null && !override.isBlank();
         List<String> statements;
-        if (override != null && !override.isBlank()) {
+        if (usingOverride) {
             statements = List.of(override);
         } else {
             // Old configs (or a hand-edited selection) can still name an Oracle package member
@@ -590,6 +591,14 @@ public class StructureSyncService {
         try {
             executor.executeReplaceSequence(statements);
         } catch (SQLException e) {
+            // Nothing was converted on the override path — it ran the user's statement verbatim.
+            // Saying "automatic conversion" there sends them looking for a converter bug that
+            // does not exist; the override itself is what failed.
+            if (usingOverride) {
+                return ApplyOutcome.failed("DDL override for " + proc.getRoutineType() + " "
+                        + proc.getName() + " failed (" + e.getMessage()
+                        + "). Fix the override, or clear it to let Jync generate the DDL.");
+            }
             // Procedural syntax often cannot be translated automatically. Report precisely so
             // the user can paste a corrected body as a DDL override.
             return ApplyOutcome.failed("Automatic conversion of " + proc.getRoutineType() + " "
