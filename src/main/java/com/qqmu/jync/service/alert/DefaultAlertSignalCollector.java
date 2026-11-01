@@ -4,13 +4,13 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -75,11 +75,11 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
      * Per-node streak counters. They are deliberately in memory: a node that restarts re-earns
      * the streak, which is cheaper than persisting a count that only gates noise.
      */
-    private final Map<Long, Integer> disconnectStreak = new HashMap<>();
-    private final Map<Long, Integer> healthFailureStreak = new HashMap<>();
-    private final Set<Long> confirmedUnhealthy = new LinkedHashSet<>();
-    private final Map<Long, String> healthNames = new HashMap<>();
-    private final Map<Long, String> healthMessages = new HashMap<>();
+    private final Map<Long, Integer> disconnectStreak = new ConcurrentHashMap<>();
+    private final Map<Long, Integer> healthFailureStreak = new ConcurrentHashMap<>();
+    private final Set<Long> confirmedUnhealthy = ConcurrentHashMap.newKeySet();
+    private final Map<Long, String> healthNames = new ConcurrentHashMap<>();
+    private final Map<Long, String> healthMessages = new ConcurrentHashMap<>();
     private Instant lastHealthCheckAt;
 
     @Autowired
