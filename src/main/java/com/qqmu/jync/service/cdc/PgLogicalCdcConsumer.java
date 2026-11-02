@@ -452,6 +452,14 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 resetSpiller();
                                 advanceSlot(conn, slotName, commitLsn);
                                 lastCommitLsn = commitLsn;
+                                // 延迟只认 COMMIT 行里的提交时刻(include-timestamp /
+                                // openGauss 自带);没有时间戳的服务器至少刷新「上次事件」,
+                                // 且不覆盖行事件已经测到的延迟。
+                                if (line.commitMillis != null) {
+                                    stats.touchEvent(line.commitMillis);
+                                } else {
+                                    stats.touchActivity();
+                                }
                                 continue;
                             }
                             PgTestDecodingParser.ParsedChange change = line.change;
@@ -589,7 +597,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                     budget.add(change.oldImage);
                                 }
                             }
-                            stats.touchEvent(System.currentTimeMillis());
                         }
                     }
                 }

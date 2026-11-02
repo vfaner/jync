@@ -501,7 +501,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                         + " unknown (no ROTATE event and no resume file); the transaction"
                         + " will replay after the next reconnect", projectId);
             }
-            stats.touchEvent(System.currentTimeMillis());
+            // 每个行事件已经用 binlog 头里的事件时间 touchEvent() 测过延迟；提交时再
+            // 按「现在」touch 一次会把那个数字覆盖成 0，延迟卡片就永远是 0。
+            stats.touchActivity();
             deserializationFailures.set(0);                      // 成功事务:清零连败计数
         };
     }

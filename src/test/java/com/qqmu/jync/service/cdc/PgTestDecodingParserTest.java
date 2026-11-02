@@ -30,6 +30,25 @@ class PgTestDecodingParserTest {
         assertThat(commit.txStart).isFalse();
         assertThat(commit.txEnd).isTrue();
         assertThat(commit.xid).isEqualTo(13480L);
+        // 时间就在括号里,是这条事务的提交时刻 —— 延迟指标唯一的真实来源。
+        assertThat(commit.commitMillis).isEqualTo(1_793_188_782_711L);
+    }
+
+    @Test
+    void vanillaPostgresCommitTimeComesFromTheTimestampOption() {
+        // docker 实测(postgres:16, include-timestamp=1):
+        //   COMMIT 732 (at 2026-11-02 00:35:38.81995+00)
+        PgTestDecodingParser.SlotLine commit = parser.parse(
+                "COMMIT 732 (at 2026-11-02 00:35:38.81995+00)");
+        assertThat(commit.xid).isEqualTo(732L);
+        assertThat(commit.commitMillis).isEqualTo(1_793_579_738_819L);
+    }
+
+    @Test
+    void aCommitLineWithoutATimestampHasNoCommitTime() {
+        PgTestDecodingParser.SlotLine commit = parser.parse("COMMIT 12345");
+        assertThat(commit.txEnd).isTrue();
+        assertThat(commit.commitMillis).isNull();
     }
 
     @Test

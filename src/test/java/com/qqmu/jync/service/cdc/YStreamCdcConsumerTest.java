@@ -79,6 +79,8 @@ class YStreamCdcConsumerTest {
     private YStreamServiceLifecycle lifecycle;
     private SyncContext ctx;
     private YStreamCdcConsumer consumer;
+    private final java.util.concurrent.atomic.AtomicLong clock =
+            new java.util.concurrent.atomic.AtomicLong(1_700_000_000_000L);
 
     @BeforeEach
     void setUp() throws SQLException {
@@ -127,7 +129,7 @@ class YStreamCdcConsumerTest {
                 .connectionProvider(cfg -> DriverManager.getConnection(H2_URL, "sa", ""))
                 .build();
 
-        stats = new CdcRuntimeStats();
+        stats = new CdcRuntimeStats(clock::get);
         stateWriter = mock(SyncStateWriter.class);
         consumer = new YStreamCdcConsumer(project(), lock, ctx, positionStore, baselineService,
                 taskStore, stateWriter, dataSourceManager,
@@ -155,6 +157,21 @@ class YStreamCdcConsumerTest {
 
         assertThat(stats.snapshot().get("lastEventAt")).isNotNull();
         assertThat(stats.lagSeconds()).isZero();
+    }
+
+    @Test
+    void aLateDmlRecordsItsSourceDelayAndACommitDoesNotEraseIt() throws Exception {
+        // The SCN on a DML carries the moment the source wrote the row. Measuring the
+        // arrival clock instead would always say 0; measuring it and then touching
+        // "now" again on the commit would throw the number away.
+        stats.setConnected(true);
+        long sourceAt = clock.get();
+        clock.addAndGet(90_000L);
+
+        handle(insert("ORDERS", row(9L, "nine"), pos(3), sourceAt),
+                YStreamEvent.commit(pos(4)));
+
+        assertThat(stats.lagSeconds()).isEqualTo(90L);
     }
 
     private static Project project() {
@@ -193,19 +210,27 @@ class YStreamCdcConsumerTest {
         return values;
     }
 
-    private static YStreamEvent insert(String table, Map<String, Object> values,
-                                       YStreamPosition position) {
-        return YStreamEvent.row(Operation.INSERT, "APP", table, values, Map.of(), position);
+    private YStreamEvent insert(String table, Map<String, Object> values,
+                                YStreamPosition position) {
+        return insert(table, values, position, clock.get());
     }
 
-    private static YStreamEvent delete(String table, Map<String, Object> oldValues,
-                                       YStreamPosition position) {
-        return YStreamEvent.row(Operation.DELETE, "APP", table, Map.of(), oldValues, position);
+    private YStreamEvent insert(String table, Map<String, Object> values,
+                                YStreamPosition position, long sourceTimeMillis) {
+        return YStreamEvent.row(Operation.INSERT, "APP", table, values, Map.of(), position,
+                sourceTimeMillis);
     }
 
-    private static YStreamEvent update(String table, Map<String, Object> newValues,
-                                       Map<String, Object> oldValues, YStreamPosition position) {
-        return YStreamEvent.row(Operation.UPDATE, "APP", table, newValues, oldValues, position);
+    private YStreamEvent delete(String table, Map<String, Object> oldValues,
+                                YStreamPosition position) {
+        return YStreamEvent.row(Operation.DELETE, "APP", table, Map.of(), oldValues, position,
+                clock.get());
+    }
+
+    private YStreamEvent update(String table, Map<String, Object> newValues,
+                                Map<String, Object> oldValues, YStreamPosition position) {
+        return YStreamEvent.row(Operation.UPDATE, "APP", table, newValues, oldValues, position,
+                clock.get());
     }
 
     private void seedTarget(long id, String name) throws SQLException {

@@ -147,6 +147,31 @@ class YstreamLcrAdapterTest {
     }
 
     @Test
+    void aDmlEventCarriesTheSourceCommitTimestamp() {
+        // YStream 的 DML 带 getCurrentScn();它的 Timestamp 是源库写入该行的时刻,
+        // 也是「延迟」唯一可信的来源。少了它,延迟只能拿处理时刻冒充,恒为 0。
+        YstreamColumns values = new YstreamColumns(List.of(column("ID", "7", false)));
+        YstreamDmlInterface lcr = dml(DmlType.INSERT, values, YstreamColumns.EMPTY,
+                position(11L));
+        SystemChangeNumber scn = mock(SystemChangeNumber.class);
+        when(scn.getTimestamp()).thenReturn(new java.sql.Timestamp(1_793_579_738_819L));
+        when(lcr.getCurrentScn()).thenReturn(scn);
+
+        assertThat(YstreamLcrAdapter.toEvent(lcr).sourceTimeMillis())
+                .isEqualTo(1_793_579_738_819L);
+    }
+
+    @Test
+    void aDmlWithoutAnScnHasNoSourceTime() {
+        YstreamColumns values = new YstreamColumns(List.of(column("ID", "7", false)));
+        YstreamDmlInterface lcr = dml(DmlType.INSERT, values, YstreamColumns.EMPTY,
+                position(11L));
+        when(lcr.getCurrentScn()).thenReturn(null);
+
+        assertThat(YstreamLcrAdapter.toEvent(lcr).sourceTimeMillis()).isZero();
+    }
+
+    @Test
     void anUpdateKeepsBothImagesWhenTheStreamSendsThem() {
         YstreamColumns newValues = new YstreamColumns(List.of(column("ID", "7", false)));
         YstreamColumns oldValues = new YstreamColumns(List.of(column("ID", "6", false)));

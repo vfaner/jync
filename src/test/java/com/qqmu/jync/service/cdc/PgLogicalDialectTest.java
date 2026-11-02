@@ -116,11 +116,14 @@ class PgLogicalDialectTest {
     }
 
     @Test
-    void postgresSqlIsTheExistingConstantByteForByte() {
+    void postgresSqlAsksForTheCommitTimestamp() {
+        // include-timestamp 只给 COMMIT 行加 "(at <时刻>)",数据行格式不变(实测
+        // postgres:16);没有它,延迟只能拿「处理时刻」冒充「源提交时刻」,永远是 0。
         assertThat(PgLogicalDialect.POSTGRES.peekChangesSql())
                 .isEqualTo("SELECT lsn::text, data FROM pg_logical_slot_peek_changes("
                         + "?::name, NULL::pg_lsn, ?::integer,"
-                        + " VARIADIC ARRAY['include-xids', '1']::text[])");
+                        + " VARIADIC ARRAY['include-xids', '1', 'include-timestamp',"
+                        + " '1']::text[])");
         assertThat(PgLogicalDialect.POSTGRES.advanceSlotSql())
                 .isEqualTo("SELECT end_lsn::text FROM pg_replication_slot_advance("
                         + "?::name, ?::pg_lsn)");

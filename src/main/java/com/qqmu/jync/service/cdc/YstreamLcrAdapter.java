@@ -152,7 +152,25 @@ final class YstreamLcrAdapter implements YStreamClientAdapter {
         };
         return new YStreamEvent(Kind.DML, operation, schema, name,
                 values(dml.getNewValues()), values(dml.getOldValues()),
-                dml.hasChunkData(), position);
+                dml.hasChunkData(), position, sourceTimeMillis(dml));
+    }
+
+    /**
+     * The SCN's timestamp is the moment the source wrote this row — the only honest input
+     * to the lag gauge. A stream/driver that will not hand over an SCN is not a reason to
+     * drop the row, so refusal degrades to "no source time" (0) rather than a failure.
+     */
+    private static long sourceTimeMillis(YstreamDmlInterface dml) {
+        try {
+            com.sics.ystream.result.SystemChangeNumber scn = dml.getCurrentScn();
+            if (scn == null) {
+                return 0L;
+            }
+            java.sql.Timestamp timestamp = scn.getTimestamp();
+            return timestamp == null ? 0L : timestamp.getTime();
+        } catch (RuntimeException e) {
+            return 0L;
+        }
     }
 
     private static Kind xactKind(XactType type) {

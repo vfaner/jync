@@ -1,5 +1,7 @@
 package com.qqmu.jync.service.cdc;
 
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -163,17 +165,25 @@ public final class PgTestDecodingParser {
         public final boolean txEnd;
         public final Long xid;
         public final ParsedChange change; // null when txStart/txEnd
+        /** Commit wall-clock time from the {@code (at ...)} suffix, or null when absent. */
+        public final Long commitMillis;
 
-        private SlotLine(boolean start, boolean end, Long xid, ParsedChange change) {
+        private SlotLine(boolean start, boolean end, Long xid, ParsedChange change,
+                         Long commitMillis) {
             this.txStart = start;
             this.txEnd = end;
             this.xid = xid;
             this.change = change;
+            this.commitMillis = commitMillis;
         }
 
-        static SlotLine start(Long xid) { return new SlotLine(true, false, xid, null); }
-        static SlotLine commit(Long xid) { return new SlotLine(false, true, xid, null); }
-        static SlotLine row(ParsedChange change) { return new SlotLine(false, false, null, change); }
+        static SlotLine start(Long xid) { return new SlotLine(true, false, xid, null, null); }
+        static SlotLine commit(Long xid, Long commitMillis) {
+            return new SlotLine(false, true, xid, null, commitMillis);
+        }
+        static SlotLine row(ParsedChange change) {
+            return new SlotLine(false, false, null, change, null);
+        }
     }
 
     /**
@@ -190,7 +200,8 @@ public final class PgTestDecodingParser {
             return SlotLine.start(parseXid(trimmed.substring(6)));
         }
         if (trimmed.startsWith("COMMIT ")) {
-            return SlotLine.commit(parseXid(trimmed.substring(7)));
+            String rest = trimmed.substring(7);
+            return SlotLine.commit(parseXid(rest), parseCommitTime(rest));
         }
         if (!trimmed.startsWith("table ")) {
             return SlotLine.row(ParsedChange.ignorable("not a row event: " + trimmed));
@@ -357,6 +368,40 @@ public final class PgTestDecodingParser {
         try {
             return Long.parseLong(token);
         } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Reads the {@code (at <timestamp>)} suffix that {@code include-timestamp '1'} (vanilla
+     * PostgreSQL) and openGauss always emit on COMMIT. This is the only real commit time the
+     * slot gives us — the arrival clock is not latency — so a missing or unparseable suffix
+     * must yield null rather than a guessed value.
+     */
+    private static Long parseCommitTime(String rest) {
+        if (rest == null) {
+            return null;
+        }
+        int at = rest.indexOf("(at ");
+        int end = at < 0 ? -1 : rest.indexOf(')', at);
+        if (end < 0) {
+            return null;
+        }
+        String raw = rest.substring(at + 4, end).trim();
+        int sep = raw.indexOf(' ');
+        if (sep > 0) {
+            raw = raw.substring(0, sep) + 'T' + raw.substring(sep + 1).replace(" ", "");
+        }
+        // openGauss/BISQL print "+0530"; ISO_OFFSET_DATE_TIME wants "+05:30". Only touch a
+        // trailing 5-character offset — dashes inside the date must be left alone.
+        int sign = Math.max(raw.lastIndexOf('+'), raw.lastIndexOf('-'));
+        if (sign > 0 && raw.length() - sign == 5 && raw.charAt(sign + 3) != ':') {
+            raw = raw.substring(0, sign + 3) + ":" + raw.substring(sign + 3);
+        }
+        try {
+            return OffsetDateTime.parse(raw, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                    .toInstant().toEpochMilli();
+        } catch (RuntimeException e) {
             return null;
         }
     }

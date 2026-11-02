@@ -57,7 +57,11 @@ enum PgLogicalDialect {
     POSTGRES(
             "SELECT lsn::text, data FROM pg_logical_slot_peek_changes("
                     + "?::name, NULL::pg_lsn, ?::integer,"
-                    + " VARIADIC ARRAY['include-xids', '1']::text[])",
+                    // include-timestamp: 给 COMMIT 行加 "(at <时刻>)"。没有它,延迟指标
+                    // 只能拿处理时刻冒充源提交时刻,永远是 0。openGauss 自己就会带,
+                    // 且未在真库验证过该选项,故只在本分支打开。
+                    + " VARIADIC ARRAY['include-xids', '1', 'include-timestamp',"
+                    + " '1']::text[])",
             "SELECT end_lsn::text FROM pg_replication_slot_advance("
                     + "?::name, ?::pg_lsn)",
             "SELECT pg_current_wal_lsn()::text",

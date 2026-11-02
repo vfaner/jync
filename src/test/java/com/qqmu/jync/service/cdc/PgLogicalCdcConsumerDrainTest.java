@@ -73,6 +73,8 @@ class PgLogicalCdcConsumerDrainTest {
     private PreparedStatement peekPs;
     private PreparedStatement advancePs;
     private final Deque<ResultSet> script = new ArrayDeque<>();
+    private final java.util.concurrent.atomic.AtomicLong clock =
+            new java.util.concurrent.atomic.AtomicLong(1_700_000_000_000L);
     private CdcPositionStore positionStore;
     private DataSourceManager dataSourceManager;
     private SyncProperties properties;
@@ -146,7 +148,7 @@ class PgLogicalCdcConsumerDrainTest {
         when(reader.readTable(any(), anyString(), anyString())).thenReturn(meta);
 
         config = new SyncConfig();
-        stats = new CdcRuntimeStats();
+        stats = new CdcRuntimeStats(clock::get);
         SyncContext ctx = SyncContext.builder()
                 .config(config)
                 .targetDialect(new GenericSqlDialect())
@@ -347,6 +349,34 @@ class PgLogicalCdcConsumerDrainTest {
         for (Connection conn : openedTargets) {
             assertThat(conn.isClosed()).as("target connection returned to the pool").isTrue();
         }
+    }
+
+    @Test
+    void theCommitTimestampBecomesTheMeasuredLag() throws Exception {
+        // include-timestamp 让 COMMIT 行带上源提交时刻;用它量延迟才是「处理时已经迟了
+        // 多久」。旧实现传「现在」,不管落后多少永远读到 0。
+        stats.setConnected(true);                       // connectedAt = t0
+        long commitAt = clock.get();
+        clock.addAndGet(90_000L);                       // 90 秒后才处理到这笔提交
+        String commit = "COMMIT 12345 (at " + pgTimestamp(commitAt) + ")";
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", insert(1L, "x")},
+                new String[]{"0/1002", commit});
+
+        consumer.drain(source, "jync_1");
+
+        assertThat(stats.lagSeconds()).isEqualTo(90L);
+        assertThat(stats.snapshot().get("lastEventAt"))
+                .isEqualTo(java.time.Instant.ofEpochMilli(clock.get()));
+    }
+
+    private static String pgTimestamp(long epochMillis) {
+        return java.time.OffsetDateTime.ofInstant(
+                        java.time.Instant.ofEpochMilli(epochMillis),
+                        java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern(
+                        "yyyy-MM-dd HH:mm:ss.SSSSSSxxx"));
     }
 
     @Test

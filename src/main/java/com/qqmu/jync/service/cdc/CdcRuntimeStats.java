@@ -458,6 +458,16 @@ public final class CdcRuntimeStats {
         this.lastEventLatenessMillis = now - epochMillis;
     }
 
+    /**
+     * Record activity whose source time is unknown (a transaction boundary, a DDL, an empty
+     * commit). 「上次事件」 moves, but any lag already measured from a row's own timestamp is
+     * kept: the commit that ends a transaction says nothing about how far behind the source
+     * was, and overwriting the measurement with the arrival clock would report 0 forever.
+     */
+    public void touchActivity() {
+        this.lastEventAtMillis = clockMillis.getAsLong();
+    }
+
     /** Wall-clock time the newest event was processed, or null before the first event. */
     public Instant getLastEventAt() {
         long at = lastEventAtMillis;

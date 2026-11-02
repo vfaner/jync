@@ -23,10 +23,21 @@ import com.qqmu.jync.service.cdc.YStreamPositionCodec.YStreamPosition;
  * @param chunked    the row carries chunked (out-of-line) LOB data this consumer cannot
  *                   assemble
  * @param position   the client position of this LCR; null when the source did not send one
+ * @param sourceTimeMillis wall-clock time the source wrote this LCR (from the DML's SCN), or
+ *                   0 when the LCR carries none — transaction boundaries and DDLs do not.
+ *                   This is the only honest source for the lag gauge: the time the row
+ *                   reaches us is not how far behind the source is.
  */
 public record YStreamEvent(Kind kind, Operation operation, String schema, String table,
                            Map<String, Object> newValues, Map<String, Object> oldValues,
-                           boolean chunked, YStreamPosition position) {
+                           boolean chunked, YStreamPosition position, long sourceTimeMillis) {
+
+    /** Compatibility form for LCRs that carry no source time. */
+    public YStreamEvent(Kind kind, Operation operation, String schema, String table,
+                        Map<String, Object> newValues, Map<String, Object> oldValues,
+                        boolean chunked, YStreamPosition position) {
+        this(kind, operation, schema, table, newValues, oldValues, chunked, position, 0L);
+    }
 
     /** What a YStream LCR is; the client's {@code LcrType} plus the xact subtypes. */
     public enum Kind {
@@ -61,8 +72,14 @@ public record YStreamEvent(Kind kind, Operation operation, String schema, String
     public static YStreamEvent row(Operation operation, String schema, String table,
                                    Map<String, Object> newValues, Map<String, Object> oldValues,
                                    YStreamPosition position) {
+        return row(operation, schema, table, newValues, oldValues, position, 0L);
+    }
+
+    public static YStreamEvent row(Operation operation, String schema, String table,
+                                   Map<String, Object> newValues, Map<String, Object> oldValues,
+                                   YStreamPosition position, long sourceTimeMillis) {
         return new YStreamEvent(Kind.DML, operation, schema, table, newValues, oldValues,
-                false, position);
+                false, position, sourceTimeMillis);
     }
 
     public static YStreamEvent chunk(String schema, String table, YStreamPosition position) {

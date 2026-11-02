@@ -449,9 +449,13 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         }
         if (event.position() != null) {
             lastSeen = event.position();
-            // Every other engine touches this as it delivers; without it the panel's lag
-            // stays "—" even while rows are flowing.
-            stats.touchEvent(System.currentTimeMillis());
+            if (event.sourceTimeMillis() > 0) {
+                // DML 带 SCN 时间戳:那才是「落后源库多久」的真实读数。用到达时刻会恒为 0。
+                stats.touchEvent(event.sourceTimeMillis());
+            } else {
+                // COMMIT / DDL / 元数据没有源时间:算活动,但不覆盖行事件已经测到的延迟。
+                stats.touchActivity();
+            }
         }
         Kind kind = event.kind();
         if (kind == null) {

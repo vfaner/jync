@@ -63,6 +63,29 @@ class CdcRuntimeStatsTest {
                 .isEqualTo(Instant.ofEpochMilli(clock.get()));
     }
 
+    /**
+     * 提交 / DDL / 心跳这类连接级记录没有源时间戳。调用方仍要让「上次事件」前进,
+     * 但不能把刚量到的延迟抹成 0 —— 一条提交记录不证明流已经追上。
+     */
+    @Test
+    void touchActivityMovesLastEventWithoutErasingMeasuredLag() {
+        AtomicLong clock = new AtomicLong(1_700_000_000_000L);
+        CdcRuntimeStats stats = new CdcRuntimeStats(clock::get);
+        stats.setConnected(true);
+
+        long eventAt = clock.get();
+        clock.addAndGet(90_000L);
+        stats.touchEvent(eventAt);
+        assertThat(stats.lagSeconds()).isEqualTo(90L);
+
+        clock.addAndGet(5_000L);
+        stats.touchActivity();
+
+        assertThat(stats.lagSeconds()).isEqualTo(90L);
+        assertThat(stats.snapshot().get("lastEventAt"))
+                .isEqualTo(Instant.ofEpochMilli(clock.get()));
+    }
+
     /** 心跳 / 格式描述事件的源时间戳可能是 0;把它当成 1970 年会读出天文数字。 */
     @Test
     void anUnknownOrFutureEventTimestampIsNotLag() {

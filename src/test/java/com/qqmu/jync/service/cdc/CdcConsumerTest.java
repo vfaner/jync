@@ -30,6 +30,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -214,6 +215,39 @@ class CdcConsumerTest {
 
         verify(target).commit();
         verify(target).close();
+    }
+
+    @Test
+    void aCommittedTransactionDoesNotEraseTheLagMeasuredByItsEvents() throws Exception {
+        // binlog 事件头带源时间戳(handler 每条都 touchEvent);事务提交时再按「现在」
+        // touch 一次会把刚量到的落后量抹成 0,面板与 Prometheus 永远显示「跟上了」。
+        AtomicLong clock = new AtomicLong(1_700_000_000_000L);
+        CdcRuntimeStats stats = new CdcRuntimeStats(clock::get);
+        stats.setConnected(true);
+        long eventAt = clock.get();
+        clock.addAndGet(90_000L);
+        stats.touchEvent(eventAt);
+        assertThat(stats.lagSeconds()).isEqualTo(90L);
+
+        Project project = project(12L);
+        Connection target = mock(Connection.class);
+        when(target.getAutoCommit()).thenReturn(true);
+        SyncContext ctx = SyncContext.builder()
+                .project(project)
+                .config(new SyncConfig())
+                .targetDialect(new GenericSqlDialect())
+                .connectionProvider(config -> target)
+                .build();
+        CdcConsumer consumer = new CdcConsumer(project, mock(SyncLockService.LockHandle.class),
+                ctx, mock(BinlogClientFactory.class), mock(CdcPositionStore.class),
+                mock(CdcBaselineService.class), mock(SyncTaskStore.class),
+                mock(SyncStateWriter.class), mock(DataSourceManager.class),
+                stats, new SyncProperties());
+
+        consumer.sinkForTest().apply(List.of(),
+                new CdcPositionMark("mysql-bin.000004", 130L, null));
+
+        assertThat(stats.lagSeconds()).isEqualTo(90L);
     }
 
     // —— FIX B(评审 Important):supplier 不得吞掉瞬态元数据失败 ——
