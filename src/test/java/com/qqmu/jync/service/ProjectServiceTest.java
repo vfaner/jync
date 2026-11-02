@@ -332,6 +332,9 @@ class ProjectServiceTest {
         verify(syncEngine).evictProjectCaches(1L);
         verify(lockService).evictProject(1L);
         verify(progressRepository).deleteByProjectId(1L);
+        // In-flight chunked loads persist their resume points here, and the table has no
+        // foreign key to the project: left behind, they are orphan rows nothing can reach.
+        verify(checkpointRepository).deleteByProjectId(1L);
         verify(snapshotService).deleteAllForProject(1L);
         verify(changeLogRepository).deleteByProjectId(1L);
         verify(projectRepository).deleteById(1L);

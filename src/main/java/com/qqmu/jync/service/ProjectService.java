@@ -1082,6 +1082,9 @@ public class ProjectService {
             lockService.evictProject(projectId);
             positionStore.delete(projectId);
             progressRepository.deleteByProjectId(projectId);
+            // Resume points of an interrupted chunked load carry no foreign key either; a
+            // deleted project would leave one row per committed chunk behind forever.
+            checkpointRepository.deleteByProjectId(projectId);
             snapshotService.deleteAllForProject(projectId);
             changeLogRepository.deleteByProjectId(projectId);
             // Performance history belongs to the project: keeping it would grow the metadata
