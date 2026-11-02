@@ -503,21 +503,21 @@ sudo systemctl daemon-reload && sudo systemctl enable --now jync
 ### Docker and Kubernetes
 
 ```bash
-docker build -t jync:1.9.0 .
+docker build -t jync:1.10.0 .
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.9.0
+  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.10.0
 ```
 
 Or `docker compose up -d --build`. The runtime image contains only a JRE, runs as non-root and has a built-in `HEALTHCHECK`; metadata and logs land in the host `./data` and `./logs`, so rebuilding the image loses nothing.
 
 ```bash
-docker build -t registry.example.com/qqmu/jync:1.9.0 .
-docker push registry.example.com/qqmu/jync:1.9.0
+docker build -t registry.example.com/qqmu/jync:1.10.0 .
+docker push registry.example.com/qqmu/jync:1.10.0
 kubectl apply -k deploy/k8s/
 ```
 
-The manifests default to `jync:1.9.0`; change registry and tag with the `images` transform in `kustomization.yaml`. The Service is `ClusterIP`, so use `port-forward` or an Ingress outside the cluster. The H2 metadata store lives on a `ReadWriteOnce` PVC, so **replicas must stay at 1**; switch to an external MySQL / PostgreSQL metadata store before scaling out.
+The manifests default to `jync:1.10.0`; change registry and tag with the `images` transform in `kustomization.yaml`. The Service is `ClusterIP`, so use `port-forward` or an Ingress outside the cluster. The H2 metadata store lives on a `ReadWriteOnce` PVC, so **replicas must stay at 1**; switch to an external MySQL / PostgreSQL metadata store before scaling out.
 
 ### Reverse proxy and HTTPS
 

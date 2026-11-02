@@ -502,21 +502,21 @@ sudo systemctl daemon-reload && sudo systemctl enable --now jync
 ### Docker 与 Kubernetes
 
 ```bash
-docker build -t jync:1.9.0 .
+docker build -t jync:1.10.0 .
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.9.0
+  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.10.0
 ```
 
 或 `docker compose up -d --build`。运行镜像仅含 JRE，非 root 运行，内置 `HEALTHCHECK`；元数据与日志落在宿主机 `./data`、`./logs`，重建镜像不丢数据。
 
 ```bash
-docker build -t registry.example.com/qqmu/jync:1.9.0 .
-docker push registry.example.com/qqmu/jync:1.9.0
+docker build -t registry.example.com/qqmu/jync:1.10.0 .
+docker push registry.example.com/qqmu/jync:1.10.0
 kubectl apply -k deploy/k8s/
 ```
 
-清单默认镜像 `jync:1.9.0`，可用 `kustomization.yaml` 的 `images` 变换改仓库与 tag。Service 为 `ClusterIP`，集群外访问用 `port-forward` 或配置 Ingress。H2 元数据库是 `ReadWriteOnce` PVC，**副本数必须为 1**；需要多副本时先把元数据库换成外部 MySQL / PostgreSQL。
+清单默认镜像 `jync:1.10.0`，可用 `kustomization.yaml` 的 `images` 变换改仓库与 tag。Service 为 `ClusterIP`，集群外访问用 `port-forward` 或配置 Ingress。H2 元数据库是 `ReadWriteOnce` PVC，**副本数必须为 1**；需要多副本时先把元数据库换成外部 MySQL / PostgreSQL。
 
 ### 反向代理与 HTTPS
 
