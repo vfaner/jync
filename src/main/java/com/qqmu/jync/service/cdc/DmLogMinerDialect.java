@@ -156,4 +156,25 @@ public final class DmLogMinerDialect implements MiningDialect {
     public boolean waitsForArchives() {
         return true;
     }
+
+    private static final String Q_OLDEST_MINEABLE_SCN = "SELECT MIN(FIRST_CHANGE#) FROM V$ARCHIVED_LOG";
+
+    /**
+     * The lowest SCN that the DM log miner can still mine from — the minimum FIRST_CHANGE#
+     * of all archived logs. Logs older than this are no longer available and would cause
+     * ORA-01284 (file not found) if we tried to mine them.
+     *
+     * @return the oldest mineable SCN, or null if there are no archived logs yet
+     */
+    @Override
+    public Long oldestMineableScn(Connection source) throws SQLException {
+        try (Statement st = source.createStatement();
+             ResultSet rs = st.executeQuery(Q_OLDEST_MINEABLE_SCN)) {
+            if (!rs.next()) {
+                return null;
+            }
+            long minFirstChange = rs.getLong(1);
+            return rs.wasNull() ? null : minFirstChange;
+        }
+    }
 }

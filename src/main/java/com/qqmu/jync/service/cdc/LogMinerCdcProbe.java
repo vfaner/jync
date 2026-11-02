@@ -225,7 +225,7 @@ public class LogMinerCdcProbe {
             // Reading the archived-file catalogue is the permission every mining cycle
             // leans on; on the measured instance it is granted to PUBLIC by default.
             count(conn, "SELECT COUNT(*) FROM V$ARCHIVED_LOG");
-            long grants = count(conn, "SELECT COUNT(*) FROM DBA_TAB_PRIVS"
+            long grants = count(conn, "SELECT COUNT(*) FROM ALL_TAB_PRIVS"
                     + " WHERE TABLE_NAME='DBMS_LOGMNR' AND PRIVILEGE='EXECUTE'"
                     + " AND (GRANTEE = USER OR GRANTEE='PUBLIC'"
                     + " OR GRANTEE IN (SELECT ROLE FROM SESSION_ROLES))");

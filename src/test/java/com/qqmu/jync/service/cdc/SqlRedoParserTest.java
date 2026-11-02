@@ -253,6 +253,44 @@ class SqlRedoParserTest {
     }
 
     @Test
+    void updateOldImageNullColumnWithoutSpaceIsParsed() {
+        // 无空格的情况:Oracle 有时会输出 `"COL"IS NULL` 而不是 `"COL" IS NULL`
+        String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"ID\" = '1'"
+                + " and \"NAME\"IS NULL"
+                + " and \"TS\" = TO_TIMESTAMP('12-10月-26 04.29.23.261316 上午')"
+                + " and ROWID = 'AAAR4TAAYAAAAAPAAA';";
+        SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());
+        assertThat(c.unsupportedReason).isNull();
+        assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
+        assertThat(c.row).containsKey("NAME");
+        assertThat(c.row.get("NAME")).isNull();
+    }
+
+    @Test
+    void updateOldImageNullColumnWithSpaceInNameIsParsed() {
+        // 带空格的列名情况:Oracle 输出 `"COLUMN NAME" IS NULL`
+        TableMeta meta = new TableMeta();
+        meta.setName("SPIKE_T");
+        meta.setSchema("SRC");
+        meta.getColumns().add(col("ID", Types.BIGINT, true));
+        meta.getColumns().add(col("COLUMN NAME", Types.VARCHAR, false));
+        meta.getColumns().add(col("NOTE", Types.VARCHAR, false));
+        meta.getPrimaryKeys().add("ID");
+        CdcTableBinding binding = CdcTableBinding.of("SRC", "SPIKE_T", meta, "SPIKE_T", Collections.emptyMap());
+
+        String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"ID\" = '1'"
+                + " and \"COLUMN NAME\" IS NULL"
+                + " and \"NOTE\" = 'old'"
+                + " and ROWID = 'AAAR4TAAYAAAAAPAAA';";
+        SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, binding);
+        assertThat(c.unsupportedReason).isNull();
+        assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
+        assertThat(c.row).containsKey("COLUMN NAME");
+        assertThat(c.row.get("COLUMN NAME")).isNull();
+        assertThat(c.row.get("NOTE")).isEqualTo("x");
+    }
+
+    @Test
     void updateMissingPkInWhereIsUnsupported() {
         String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"NAME\" = 'Alice';";
         SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());

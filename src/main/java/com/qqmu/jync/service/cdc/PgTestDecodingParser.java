@@ -636,8 +636,9 @@ public final class PgTestDecodingParser {
 
     /**
      * money is printed with the locale's decorations: {@code $9.99}, {@code -$1,234.56},
-     * or {@code ($0.50)} for negatives under some lc_monetary settings. Strip everything
-     * but digits/minus/dot, honor parentheses, keep BigDecimal precision. Unparseable
+     * {@code 1.234,56} (European style) or {@code ($0.50)} for negatives under some
+     * lc_monetary settings. Strip decorations, handle both . and , as decimal separators,
+     * honor parentheses for negatives, keep BigDecimal precision. Unparseable
      * text propagates to {@link #coerceByType}'s catch → raw fallback.
      */
     private static Object parseMoney(String raw) {
@@ -646,16 +647,27 @@ public final class PgTestDecodingParser {
         if (negative) {
             body = body.substring(1, body.length() - 1);
         }
-        StringBuilder digits = new StringBuilder(body.length());
+
+        // Process characters, keep digits, minus sign, and one decimal separator
+        StringBuilder numeric = new StringBuilder();
+        boolean hasDecimal = false;
+
         for (int i = 0; i < body.length(); i++) {
             char c = body.charAt(i);
-            if ((c >= '0' && c <= '9') || c == '.') {
-                digits.append(c);
+            if (c >= '0' && c <= '9') {
+                numeric.append(c);
             } else if (c == '-') {
+                // Minus sign indicates negative value
                 negative = true;
+            } else if ((c == '.' || c == ',') && !hasDecimal) {
+                // Use first decimal separator found as the decimal point
+                numeric.append('.'); // Convert all decimal separators to . for parsing
+                hasDecimal = true;
             }
+            // Ignore all other characters (currency symbols, commas for thousands)
         }
-        java.math.BigDecimal value = new java.math.BigDecimal(digits.toString());
+
+        java.math.BigDecimal value = new java.math.BigDecimal(numeric.toString());
         return negative ? value.negate() : value;
     }
 

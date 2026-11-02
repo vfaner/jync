@@ -505,17 +505,23 @@ public class SqlRedoParser {
         while (text.endsWith(";")) {
             text = text.substring(0, text.length() - 1).trim();
         }
-        String[] parts = text.split("\\s+");
-        if (parts.length != 3
-                || !"IS".equalsIgnoreCase(parts[1])
-                || !"NULL".equalsIgnoreCase(parts[2])) {
+
+        // Find "IS NULL" as a substring, case-insensitive
+        int isIndex = text.toUpperCase(Locale.ROOT).indexOf("IS NULL");
+        if (isIndex < 0) {
             return null;
         }
-        String col = parts[0];
-        if (col.length() < 2 || !col.startsWith("\"") || !col.endsWith("\"")) {
+
+        // Extract everything before "IS NULL", trim any whitespace
+        String colPart = text.substring(0, isIndex).trim();
+
+        // The column must be quoted with double quotes
+        if (colPart.length() < 2 || !colPart.startsWith("\"") || !colPart.endsWith("\"")) {
             return null;
         }
-        return col.substring(1, col.length() - 1).toUpperCase(Locale.ROOT);
+
+        // Remove quotes and convert to uppercase
+        return colPart.substring(1, colPart.length() - 1).toUpperCase(Locale.ROOT);
     }
 
     // —— splitters that respect quotes, double-quotes and parentheses ——
