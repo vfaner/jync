@@ -219,11 +219,23 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 
 ---
 
-## 11. 专属迁移（ES/OpenSearch → Easysearch）
+## 11. 专属迁移（ES/OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES）
 
-专属迁移是**手动或 cron 触发的一次性整索引复制**，不是实时同步，也不走 JDBC 能力矩阵。
+专属迁移是**手动或 cron 触发的一次性整对象复制**，不是实时同步，也不走 JDBC 能力矩阵。三种类型共用同一套连接、任务、预检、运行历史与取消机制，差异只在对象类型与写入方式。
 
-- **只复制运行那一刻的数据。** 运行结束后源端的新增、修改、删除不会被回放。需要目标与源一致时，用 `OVERWRITE` 重跑；`APPEND` 只按 `_id` upsert，不会删除源端已删除的文档。
+### 11.1 三种类型共同的限制
+
+- **只复制运行那一刻的数据。** 运行结束后源端的新增、修改、删除不会被回放。需要目标与源一致时，用 `OVERWRITE` 重跑；`APPEND` 只会追加或 upsert，不会删除源端已删除的对象。
+- **`OVERWRITE` 会先删除目标同名对象。** 这是破坏性操作：表单默认值与预检都会提示，首次对生产目标运行前务必先跑预检并确认目标名。
+- **没有断点续传。** 迁移按对象整体处理：失败后用 `OVERWRITE` 重跑收敛，或用 `APPEND` 幂等追加。中途取消只保留已提交的批次，不会从断点接着跑。
+- **取消只在批间生效。** 每批写入完成后才检查取消标志；正在提交的那一批会写完，因此取消后目标上会留下前几个批次的数据。
+- **目标命名按各产品的规则校验，不会静默截断。** Easysearch 索引名超过 255 个字符、MongoDB 集合名超过 120 字节（UTF-8）、KingbaseES 标识符超过 63 字节，或名称含非法字符时，预检报 ERROR、运行时该对象计 FAILED，不会截短后冒险创建。
+- **行数校验要求源端静止。** `verifyCount` 比较源与目标计数；运行期间源端持续写入会让计数不等，从而把该对象判为失败。大对象请安排低峰期，或关闭计数校验。
+- **对象数量与批量大小有上限。** 一次最多 `maxCollections` / `maxIndices`（默认 200）个对象，单批受 `batchSize` 与字节上限约束；超大对象要调小批量并放宽连接超时。
+- **运行锁是进程内的。** 同一任务在单实例内不会重叠运行；多实例部署没有分布式租约，两个实例可能同时跑同一个任务。需要多实例时请自行保证同一任务只在一个实例上调度。
+- **不迁移分片、用户与角色。** 分片集合的 shard key、zone 与 chunk 分布不复制：`OVERWRITE` 重建出来的集合在目标上是未分片的，需要分片时请在目标端自行 `shardCollection`；`APPEND` 写入目标已有集合时沿用其既有分片设置。GridFS 不做特殊处理，`fs.files` 与 `fs.chunks` 按普通集合复制——两者都迁移且源端静止时目标上可正常读取，但运行期间的写入不保证与源端一致。用户、角色、认证方式与授权不迁移；搜索侧同样不复制安全配置与集群级 settings。
+
+### 11.2 ES/OpenSearch → Easysearch
 - **`OVERWRITE` 会先删除目标同名索引。** 这是破坏性操作：表单默认值与预检都会提示，首次对生产目标运行前务必先跑预检并确认索引名。
 - **`_source.enabled=false` 的索引无法迁移。** 没有 `_source` 就没有可写入目标文档；预检直接报 ERROR，不进入运行。
 - **部分 mapping 类型在 Easysearch 上语义不同或不受支持。** `knn_vector` / `dense_vector`、`sparse_vector`、`rank_features`、`rank_feature`、`flat_object`、`completion`、`search_as_you_type`、`percolator`、`join` 与 runtime fields 预检会 WARN；是否可用取决于目标产品的版本与插件，不要把它当成“一定能迁”。
@@ -234,3 +246,29 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 - **运行锁是进程内的。** 与 ETL 一样，同一任务在单实例内不会重叠运行；多实例部署没有分布式租约，两个实例可能同时跑同一个任务。需要多实例时请自行保证同一任务只在一个实例上调度。
 - **Easysearch 兼容性基于 ES 7.x REST。** 实现使用 `_cat`、`_settings`、`_mapping`、`_alias`、`_search?scroll`、`_bulk`、`_count`、`_mget`、`_refresh`；CI 只对假服务与 Elasticsearch 兼容路径做过验证。上线前请用目标 Easysearch 版本试跑一次，重点看 settings 清理、mapping 类型与 `_bulk` 响应。
 - **搜索连接独立于数据库连接。** 账号、密码与 API Key 加密存储，页面不回显；关闭 TLS 校验会在审计日志留痕，且只应用于你自己控制的、使用自签名证书的目标。
+
+### 11.3 MongoDB → MongoDB
+
+- **`APPEND` 的语义与 ES 不同。** ES 的 `APPEND` 是按 `_id` upsert，会覆盖目标同 `_id` 文档；MongoDB → MongoDB 的 `APPEND` 保留目标已有文档、`_id` 冲突的文档**跳过**并计 duplicates 且在结果里 WARN，**不覆盖**。需要以源为准时用 `OVERWRITE`；需要幂等覆盖请改用 MongoDB → KingbaseES 的 `upsertOnId`，或先手工清理目标。
+- **只复制普通集合。** `view` 与 `timeseries` 集合预检 WARN、运行时 SKIPPED；`system.*` 集合默认排除，除非模式显式以 `system.` 开头。空集合在运行时 SKIPPED，不会删除或重建目标集合。
+- **重复键在 `ordered=false` 下是部分成功。** 普通集合用无序插入，一批里部分文档失败不会中断其余文档；写入数以驱动回报的 `insertedCount` 为准。capped 集合必须有序插入，因为插入顺序与淘汰行为有语义。
+- **集合选项与索引尽力复制。** 只保留可写选项（`capped`、`size`、`max`、`validator`、`collation` 等），`uuid` 等只读字段被过滤；索引跳过 `_id_` 并去掉 `v` / `ns` / `background`。单个索引创建失败只 WARN，但该集合最终计 FAILED。
+- **批量上限按 JSON 字节估算。** 分批同时受条数（默认 1000）与 UTF-8 JSON 字节（默认 8MB）约束；Binary 字段会被 base64 放大，因此实际写入的 BSON 可能与估算不同。远低于服务端 48MB 命令上限仍可能遇到超时，超大文档请调小批量。
+- **同一个 MongoDB 集群跨库复制要建两条连接记录。** 任务要求源连接与目标连接不是同一条；同一 host、不同 `databaseName` 的两条记录即可。
+- **源与目标指向同一个数据库时任务拒绝运行。** 运行前会解析两条连接（含 URI 路径与 `databaseName`）的实际库名与 host 列表，两者相同时直接判失败（`error.migration.mongo.sameDatabase`），不打开网关。原因是 `OVERWRITE` 会先删目标集合——同库复制会在读源之前就把它删掉。同一 host、不同库名仍允许；用两条连接记录绕不过这条检查。
+- **写关注错误不再被当成重复键吞掉。** 只有真正的重复键（11000 / 11001）才计入 duplicates 并按上述规则跳过或失败；`wtimeout` 等写关注错误会原样抛出让该集合计 FAILED，不会被静默当作「已存在」。
+- **MongoDB 连接安全。** 密码只存加密字段、页面不回显；**URI 中禁止写密码**，服务端会拒绝。TLS 校验开关对 MongoDB 不生效（表单隐藏），需要时通过 URI 参数（如 `tls=true`、`tlsCAFile`）配置。测试连接与运行日志不输出 URI。
+
+### 11.4 MongoDB → KingbaseES
+
+- **表结构由采样推断，不随数据演进。** 只采样 `sampleLimit`（默认 200）条文档的顶层字段；后续文档出现未采样字段会被忽略，类型冲突会写入失败。需要新字段时改大采样重跑 `OVERWRITE`。
+- **嵌套文档与数组写成 TEXT 的 JSON，不展开为列。** `nestedMode` 目前只接受 `JSON`：Document、Array、Null 与混合类型都渲染成 relaxed Extended JSON 文本。想在 KingbaseES 里拆成关系列需要自行建视图或改 SQL。
+- **`_id` 是主键。** `createPrimaryKey` 默认开启，`_id` 为 NOT NULL 且有主键约束；抽样中没有 `_id` 的集合直接失败（无键可建），不会退化成无主键表。关掉主键时 `_id` 可空，但同一批里重复 `_id` 不会被约束拦截。
+- **`upsertOnId` 需要主键。** 打开后生成 `INSERT … ON CONFLICT ("_id") DO UPDATE`，因此必须同时开启 `createPrimaryKey`；否则选项校验报错。它为 `APPEND` 提供了幂等重跑，但不会删除源端已删除的行。
+- **字段名必须能直接作为普通标识符。** 采样推断出的顶层字段名要匹配 `[\p{L}_][\p{L}\p{N}_$#]*`（字母或下划线开头，后接字母、数字、`_`、`$`、`#`）；含点号、空格、连字符等字符的字段名预检报 ERROR，不会引用后冒险建表。
+- **`APPEND` 到已有表要求列对得上，且按列名精确大小写匹配。** 写入器按推断出的原始字段名绑定列，大小写折叠的「近似匹配」会让预检通过、首批写入才失败，因此这里不做忽略大小写比较。目标缺列、或目标多出 NOT NULL 且无默认值的列，预检报 ERROR；类型不匹配只 WARN，由数据库在写入时决定是否接受。
+- **`APPEND` + `upsertOnId` 要求目标表 `_id` 已有唯一索引或主键。** 否则 `ON CONFLICT ("_id")` 在 KingbaseES 上无法定位冲突，会在运行时报错；预检会检查唯一约束，缺失时报 ERROR（`migration.precheck.table.idNotUnique`）。
+- **建表类型受共享 PostgreSQL 方言约束。** ObjectId → VARCHAR(24)，String → TEXT，整数 / 长整数 / 浮点 / 小数 / 布尔 / 日期按 BSON 类型映射，Binary → BYTEA。PostgreSQL 的 `BYTEA` 参数必须用 `setBytes` 绑定（驱动已处理），不要把二进制列改写成 `oid`。
+- **KingbaseES 连接安全。** 仅支持 BASIC 认证，账号与密码只存加密字段；**JDBC URL 与 extraParams 中禁止出现 `user` / `password`**，服务端会拒绝。`schemaName` 留空使用连接的当前 schema；schema 与表名按 63 字节校验，所有 DDL/DML 都经方言引用标识符。目标 schema 不存在时预检报 ERROR（`migration.precheck.schema.missing`），不会隐式建 schema。
+- **没有跨集合事务。** 每个集合的 DDL 立即提交、数据按批提交；某一集合失败不会回滚其他集合，`continueOnError` 打开时继续处理下一个集合，最终整体计 FAILED。
+- **真库验证范围。** CI 用 PostgreSQL 16 容器验证共享方言（建表、类型、INSERT、`ON CONFLICT`、回滚），真实 KingbaseES 走可选的环境变量集成测试（`JYNC_KINGBASE_IT_URL` 等）；上线前请用目标版本试跑一次，重点看类型映射、schema 与标识符大写规则。

@@ -21,8 +21,11 @@ public class MigrationConnectionForm {
     private String name;
     private MigrationConnectionKind kind = MigrationConnectionKind.ELASTICSEARCH;
     private String baseUrl;
+    private String databaseName;
+    private String schemaName;
     private MigrationConnectionAuthType authType = MigrationConnectionAuthType.NONE;
     private String username;
+    private String extraParams;
     private boolean verifyTls = true;
     private Integer connectTimeoutMs = 5000;
     private Integer requestTimeoutMs = 60000;
@@ -34,8 +37,11 @@ public class MigrationConnectionForm {
         connection.setName(name);
         connection.setKind(kind);
         connection.setBaseUrl(baseUrl);
+        connection.setDatabaseName(databaseName);
+        connection.setSchemaName(schemaName);
         connection.setAuthType(authType);
         connection.setUsername(username);
+        connection.setExtraParams(extraParams);
         connection.setVerifyTls(verifyTls);
         connection.setConnectTimeoutMs(connectTimeoutMs == null ? 5000 : connectTimeoutMs);
         connection.setRequestTimeoutMs(requestTimeoutMs == null ? 60000 : requestTimeoutMs);
@@ -49,8 +55,11 @@ public class MigrationConnectionForm {
         form.setName(connection.getName());
         form.setKind(connection.getKind());
         form.setBaseUrl(connection.getBaseUrl());
+        form.setDatabaseName(connection.getDatabaseName());
+        form.setSchemaName(connection.getSchemaName());
         form.setAuthType(connection.getAuthType());
         form.setUsername(connection.getUsername());
+        form.setExtraParams(connection.getExtraParams());
         form.setVerifyTls(connection.isVerifyTls());
         form.setConnectTimeoutMs(connection.getConnectTimeoutMs());
         form.setRequestTimeoutMs(connection.getRequestTimeoutMs());

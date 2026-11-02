@@ -186,7 +186,8 @@ class SecurityConfigTest {
     @Test
     void aViewerCanReadEveryListingPage() throws Exception {
         for (String page : new String[] {"/", "/projects", "/etl", "/databases", "/ai",
-                "/change-logs", "/migrations", "/migrations/es-to-easysearch"}) {
+                "/change-logs", "/migrations", "/migrations/es-to-easysearch",
+                "/migrations/mongodb-to-mongodb", "/migrations/mongodb-to-kingbase"}) {
             assertThat(statusOf(get(page).with(asViewer()))).as(page).isEqualTo(200);
         }
     }
@@ -221,7 +222,9 @@ class SecurityConfigTest {
         for (String page : new String[] {"/databases/new", "/projects/new", "/projects/bulk",
                 "/etl/new", "/etl/1/edit", "/etl/batches/new", "/etl/batches/1/edit",
                 "/ai/new", "/migrations/es-to-easysearch/new",
-                "/migrations/es-to-easysearch/1/edit", "/migrations/connections",
+                "/migrations/es-to-easysearch/1/edit",
+                "/migrations/mongodb-to-mongodb/new",
+                "/migrations/mongodb-to-kingbase/new", "/migrations/connections",
                 "/migrations/connections/new", "/migrations/connections/1/edit"}) {
             assertThat(statusOf(get(page).with(asViewer()))).as(page).isEqualTo(302);
         }
@@ -575,7 +578,9 @@ class SecurityConfigTest {
     void anAdminReachesTheFormPages() throws Exception {
         for (String page : new String[] {"/databases/new", "/projects/new", "/projects/bulk",
                 "/etl/new", "/etl/batches/new", "/ai/new",
-                "/migrations/es-to-easysearch/new", "/migrations/connections/new"}) {
+                "/migrations/es-to-easysearch/new",
+                "/migrations/mongodb-to-mongodb/new",
+                "/migrations/mongodb-to-kingbase/new", "/migrations/connections/new"}) {
             assertThat(statusOf(get(page).with(asAdmin()))).as(page).isEqualTo(200);
         }
     }

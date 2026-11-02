@@ -19,6 +19,8 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.service.migration.MigrationConnectionService;
+import com.qqmu.jync.service.migration.connection.MigrationConnectionTestResult;
+import com.qqmu.jync.service.migration.connection.MigrationDiscoveryItem;
 
 @WebMvcTest(MigrationApiController.class)
 @WithMockUser(roles = "ADMIN")
@@ -33,7 +35,7 @@ class MigrationApiControllerTest {
     @Test
     void discoveryReturnsTheParsedIndexList() throws Exception {
         when(service.listIndices(3L, "orders-*")).thenReturn(List.of(
-                new MigrationConnectionService.IndexInfo(
+                new MigrationDiscoveryItem(
                         "orders-2026", 12L, "1kb", "open", "green")));
 
         mvc.perform(get("/api/migrations/indices")
@@ -41,7 +43,7 @@ class MigrationApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.count").value(1))
-                .andExpect(jsonPath("$.indices[0].index").value("orders-2026"))
+                .andExpect(jsonPath("$.indices[0].name").value("orders-2026"))
                 .andExpect(jsonPath("$.indices[0].docsCount").value(12));
     }
 
@@ -59,7 +61,7 @@ class MigrationApiControllerTest {
     @Test
     void aTransientConnectionCanBeTestedBeforeSaving() throws Exception {
         when(service.testTransient(any(), any(), any())).thenReturn(
-                new MigrationConnectionService.TestResult(true, null,
+                new MigrationConnectionTestResult(true, null,
                         "elasticsearch", "7.17.22", "prod", 12));
 
         mvc.perform(post("/api/migrations/connections/test").with(csrf())
@@ -76,7 +78,7 @@ class MigrationApiControllerTest {
     @Test
     void aFailedTestStillAnswers200WithTheReason() throws Exception {
         when(service.testTransient(any(), any(), any())).thenReturn(
-                new MigrationConnectionService.TestResult(false,
+                new MigrationConnectionTestResult(false,
                         "GET / -> 401 Unauthorized", null, null, null, 5));
 
         mvc.perform(post("/api/migrations/connections/test").with(csrf())
@@ -90,7 +92,7 @@ class MigrationApiControllerTest {
 
     @Test
     void aSavedConnectionCanBeTested() throws Exception {
-        when(service.test(7L)).thenReturn(new MigrationConnectionService.TestResult(
+        when(service.test(7L)).thenReturn(new MigrationConnectionTestResult(
                 true, null, "easysearch", "2.0.0", "easy", 8));
 
         mvc.perform(post("/api/migrations/connections/7/test").with(csrf()))

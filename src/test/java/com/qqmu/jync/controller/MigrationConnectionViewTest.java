@@ -91,6 +91,25 @@ class MigrationConnectionViewTest {
                 .doesNotContain("enc:");
     }
 
+    @Test
+    void theNewFormOffersTheDatabaseFieldsEachProductNeeds() throws Exception {
+        String page = mvc.perform(get("/migrations/connections/new").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("name=\"databaseName\"")
+                .contains("name=\"schemaName\"")
+                .contains("name=\"extraParams\"")
+                .contains("data-role=\"connection-kind\"")
+                .contains("data-role=\"database-name-field\"")
+                .contains("data-role=\"kingbase-only\"")
+                .contains("data-role=\"extra-params-field\"")
+                .contains("data-placeholder-mongo=\"mongodb://127.0.0.1:27017/shop\"")
+                .contains("data-placeholder-kingbase=\"jdbc:kingbase8://127.0.0.1:54321/test\"")
+                .contains("value=\"MONGODB\"")
+                .contains("value=\"KINGBASE\"");
+    }
+
     private static MigrationConnection connection() {
         MigrationConnection connection = new MigrationConnection();
         connection.setId(3L);

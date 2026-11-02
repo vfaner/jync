@@ -25,10 +25,14 @@ class MigrationModelTest {
     }
 
     @Test
-    void onlyTheImplementedTypeIsDeclared() {
+    void onlyTheImplementedTypesAreDeclared() {
         assertThat(MigrationType.values())
-                .containsExactly(MigrationType.ES_TO_EASYSEARCH);
-        assertThat(MigrationType.ES_TO_EASYSEARCH.available()).isTrue();
+                .containsExactly(MigrationType.ES_TO_EASYSEARCH,
+                        MigrationType.MONGODB_TO_MONGODB,
+                        MigrationType.MONGODB_TO_KINGBASE);
+        for (MigrationType type : MigrationType.values()) {
+            assertThat(type.available()).as("availability of %s", type).isTrue();
+        }
     }
 
     @Test
@@ -40,6 +44,9 @@ class MigrationModelTest {
         assertThat(connection.isVerifyTls()).isTrue();
         assertThat(connection.getConnectTimeoutMs()).isEqualTo(5000);
         assertThat(connection.getRequestTimeoutMs()).isEqualTo(60000);
+        assertThat(connection.getDatabaseName()).isNull();
+        assertThat(connection.getSchemaName()).isNull();
+        assertThat(connection.getExtraParams()).isNull();
         assertThat(connection.getCreatedAt()).isNotNull();
         assertThat(connection.getUpdatedAt()).isNotNull();
     }

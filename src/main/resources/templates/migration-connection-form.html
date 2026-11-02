@@ -41,7 +41,8 @@
                             <label for="kind">
                                 <span th:text="#{migration.connections.kind}">Product</span><span class="req">*</span>
                             </label>
-                            <select class="select" id="kind" th:field="*{kind}" required>
+                            <select class="select" id="kind" th:field="*{kind}" required
+                                    data-role="connection-kind">
                                 <option th:each="choice : ${kinds}" th:value="${choice.name()}"
                                         th:text="#{${'migration.kind.' + choice.name()}}">Elasticsearch</option>
                             </select>
@@ -54,7 +55,38 @@
                         </label>
                         <input type="text" class="input mono" id="baseUrl" th:field="*{baseUrl}"
                                required maxlength="512" placeholder="http://127.0.0.1:9200"
-                               autocomplete="off">
+                               autocomplete="off"
+                               data-role="base-url"
+                               data-placeholder-es="http://127.0.0.1:9200"
+                               data-placeholder-mongo="mongodb://127.0.0.1:27017/shop"
+                               data-placeholder-kingbase="jdbc:kingbase8://127.0.0.1:54321/test">
+                    </div>
+
+                    <div class="field" data-role="database-name-field">
+                        <label for="databaseName" th:text="#{migration.connections.databaseName}">Database</label>
+                        <input type="text" class="input mono" id="databaseName"
+                               th:field="*{databaseName}" maxlength="255" autocomplete="off">
+                        <div class="help" th:text="#{migration.connections.databaseNameHelp}">
+                            The MongoDB database, or the database in the JDBC URL.
+                        </div>
+                    </div>
+
+                    <div class="field" data-role="kingbase-only">
+                        <label for="schemaName" th:text="#{migration.connections.schemaName}">Schema</label>
+                        <input type="text" class="input mono" id="schemaName"
+                               th:field="*{schemaName}" maxlength="128" autocomplete="off">
+                        <div class="help" th:text="#{migration.connections.schemaNameHelp}">
+                            Leave blank to use the connection's current schema.
+                        </div>
+                    </div>
+
+                    <div class="field" data-role="extra-params-field">
+                        <label for="extraParams" th:text="#{migration.connections.extraParams}">Extra parameters</label>
+                        <input type="text" class="input mono" id="extraParams"
+                               th:field="*{extraParams}" maxlength="512" autocomplete="off">
+                        <div class="help" th:text="#{migration.connections.extraParamsHelp}">
+                            Appended to the URL. Never put a user or password here.
+                        </div>
                     </div>
 
                     <div class="grid-2">
@@ -94,7 +126,7 @@
                         </div>
                     </div>
 
-                    <div class="field">
+                    <div class="field" data-role="tls-field">
                         <label class="switch">
                             <input type="checkbox" th:field="*{verifyTls}">
                             <span class="track"></span>
@@ -150,6 +182,8 @@
 </div>
 </th:block>
 
-<th:block th:fragment="scripts" th:remove="tag"></th:block>
+<th:block th:fragment="scripts" th:remove="tag">
+    <script th:src="@{/js/migration.js(v=${appVersion})}"></script>
+</th:block>
 </body>
 </html>

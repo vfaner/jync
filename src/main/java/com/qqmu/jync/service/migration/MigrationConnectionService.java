@@ -1,16 +1,13 @@
 package com.qqmu.jync.service.migration;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.MigrationConnection;
@@ -18,13 +15,20 @@ import com.qqmu.jync.model.MigrationConnectionAuthType;
 import com.qqmu.jync.repository.MigrationConnectionRepository;
 import com.qqmu.jync.repository.MigrationTaskRepository;
 import com.qqmu.jync.service.AdminAuditService;
-import com.qqmu.jync.service.migration.es.SearchHttpClient;
-import com.qqmu.jync.service.migration.es.SearchHttpClientFactory;
+import com.qqmu.jync.service.migration.connection.MigrationConnectionAdapterRegistry;
+import com.qqmu.jync.service.migration.connection.MigrationConnectionEndpoint;
+import com.qqmu.jync.service.migration.connection.MigrationConnectionKindAdapter;
+import com.qqmu.jync.service.migration.connection.MigrationConnectionTestResult;
+import com.qqmu.jync.service.migration.connection.MigrationDiscoveryItem;
 import com.qqmu.jync.util.CryptoUtil;
 
 import lombok.extern.slf4j.Slf4j;
 
-/** CRUD, validation and probing for dedicated-migration search endpoints. */
+/**
+ * CRUD, validation and probing for dedicated-migration connections. The kind-specific endpoint
+ * and protocol work lives in a {@link MigrationConnectionKindAdapter}; this service owns the
+ * generic rules: names, credentials, audit.
+ */
 @Service
 @Slf4j
 public class MigrationConnectionService {
@@ -33,18 +37,18 @@ public class MigrationConnectionService {
     private final MigrationTaskRepository tasks;
     private final CryptoUtil cryptoUtil;
     private final AdminAuditService auditService;
-    private final SearchHttpClientFactory clientFactory;
+    private final MigrationConnectionAdapterRegistry adapters;
 
     public MigrationConnectionService(MigrationConnectionRepository connections,
                                       MigrationTaskRepository tasks,
                                       CryptoUtil cryptoUtil,
                                       AdminAuditService auditService,
-                                      SearchHttpClientFactory clientFactory) {
+                                      MigrationConnectionAdapterRegistry adapters) {
         this.connections = connections;
         this.tasks = tasks;
         this.cryptoUtil = cryptoUtil;
         this.auditService = auditService;
-        this.clientFactory = clientFactory;
+        this.adapters = adapters;
     }
 
     public List<MigrationConnection> findAll() {
@@ -73,7 +77,7 @@ public class MigrationConnectionService {
     @Transactional
     public MigrationConnection save(MigrationConnectionForm form, String rawPassword,
                                     String rawApiKey) {
-        validate(form);
+        validateCommon(form);
 
         MigrationConnection entity;
         MigrationConnection existing = null;
@@ -102,9 +106,23 @@ public class MigrationConnectionService {
             entity = new MigrationConnection();
         }
 
+        if (existing != null && existing.getKind() != form.getKind()
+                && tasks.countBySourceConnectionIdOrTargetConnectionId(
+                        existing.getId(), existing.getId()) > 0) {
+            // A saved task keeps the kind it was validated against; switching the connection
+            // underneath it would turn a valid task into one that can no longer run.
+            throw new IllegalStateException("error.migration.connection.kind.inUse");
+        }
+        MigrationConnectionKindAdapter adapter = adapters.forKind(form.getKind());
+        MigrationConnectionEndpoint endpoint = adapter.normalize(form);
+        adapter.validateAuth(form, rawPassword, rawApiKey, existing);
+
         entity.setName(form.getName());
         entity.setKind(form.getKind());
-        entity.setBaseUrl(normalizeUrl(form.getBaseUrl()));
+        entity.setBaseUrl(endpoint.baseUrl());
+        entity.setDatabaseName(endpoint.databaseName());
+        entity.setSchemaName(endpoint.schemaName());
+        entity.setExtraParams(endpoint.extraParams());
         entity.setAuthType(form.getAuthType());
         entity.setUsername(form.getUsername());
         entity.setVerifyTls(form.isVerifyTls());
@@ -156,7 +174,7 @@ public class MigrationConnectionService {
         }
     }
 
-    private void validate(MigrationConnectionForm form) {
+    private void validateCommon(MigrationConnectionForm form) {
         if (form.getName() == null || form.getName().isBlank()) {
             throw new IllegalArgumentException("error.migration.connection.name.required");
         }
@@ -173,10 +191,6 @@ public class MigrationConnectionService {
         if (form.getBaseUrl() == null || form.getBaseUrl().isBlank()) {
             throw new IllegalArgumentException("error.migration.connection.url.invalid");
         }
-        if (form.getAuthType() == MigrationConnectionAuthType.BASIC
-                && (form.getUsername() == null || form.getUsername().isBlank())) {
-            throw new IllegalArgumentException("error.migration.connection.username.required");
-        }
         if (form.getConnectTimeoutMs() != null
                 && (form.getConnectTimeoutMs() < 500 || form.getConnectTimeoutMs() > 60000)) {
             throw new IllegalArgumentException("error.migration.connection.timeout.invalid");
@@ -189,14 +203,6 @@ public class MigrationConnectionService {
         if (form.getDescription() != null && form.getDescription().length() > 512) {
             throw new IllegalArgumentException(
                     "error.migration.connection.description.too.long");
-        }
-    }
-
-    private static String normalizeUrl(String raw) {
-        try {
-            return SearchHttpClient.normalizeBaseUrl(raw);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("error.migration.connection.url.invalid");
         }
     }
 
@@ -215,19 +221,19 @@ public class MigrationConnectionService {
         log.info("Deleted dedicated-migration connection {}", id);
     }
 
-    public TestResult test(Long id) {
+    public MigrationConnectionTestResult test(Long id) {
         MigrationConnection connection = connections.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "error.migration.connection.missing"));
-        return probe(clientFactory.create(connection));
+        return adapters.forKind(connection.getKind()).test(connection);
     }
 
     /**
      * Tests form values before saving. A saved form with blank secrets (the edit page never
      * receives them) falls back to the stored values.
      */
-    public TestResult testTransient(MigrationConnectionForm form, String rawPassword,
-                                    String rawApiKey) {
+    public MigrationConnectionTestResult testTransient(MigrationConnectionForm form,
+                                                       String rawPassword, String rawApiKey) {
         MigrationConnection entity = form.toEntity();
         String password = rawPassword;
         String apiKey = rawApiKey;
@@ -243,102 +249,20 @@ public class MigrationConnectionService {
                 }
             }
         }
-        entity.setBaseUrl(normalizeUrl(form.getBaseUrl()));
-        return probe(new SearchHttpClient(entity, password, apiKey));
+        MigrationConnectionKindAdapter adapter = adapters.forKind(form.getKind());
+        MigrationConnectionEndpoint endpoint = adapter.normalize(form);
+        entity.setBaseUrl(endpoint.baseUrl());
+        entity.setDatabaseName(endpoint.databaseName());
+        entity.setSchemaName(endpoint.schemaName());
+        entity.setExtraParams(endpoint.extraParams());
+        return adapter.testTransient(entity, password, apiKey);
     }
 
-    private TestResult probe(SearchHttpClient client) {
-        long start = System.nanoTime();
-        try {
-            JsonNode root = client.get("/");
-            String product = root.path("version").path("distribution").asText("");
-            if (product.isBlank()) {
-                product = root.path("tagline").asText("unknown");
-            }
-            String version = root.path("version").path("number").asText(null);
-            String cluster = root.path("cluster_name").asText(null);
-            return new TestResult(true, null, product, version, cluster, elapsedMs(start));
-        } catch (RuntimeException e) {
-            return new TestResult(false, e.getMessage(), null, null, null, elapsedMs(start));
-        }
-    }
-
-    private static long elapsedMs(long start) {
-        return (System.nanoTime() - start) / 1_000_000;
-    }
-
-    /** Non-system indices only, unless the user's own pattern explicitly asks for one. */
-    public List<IndexInfo> listIndices(Long connectionId, String pattern) {
+    /** Discovers copyable objects on the source connection, never touching the target. */
+    public List<MigrationDiscoveryItem> listIndices(Long connectionId, String pattern) {
         MigrationConnection connection = connections.findById(connectionId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "error.migration.connection.missing"));
-        SearchHttpClient client = clientFactory.create(connection);
-        String effective = pattern == null ? "" : pattern.trim();
-        JsonNode cat = client.get("/_cat/indices?format=json"
-                + "&h=index,docs.count,store.size,status,health&expand_wildcards=open");
-        List<IndexInfo> indices = new ArrayList<>();
-        if (cat != null && cat.isArray()) {
-            for (JsonNode row : cat) {
-                String name = row.path("index").asText("");
-                if (name.isBlank() || name.startsWith(".") && !asksForDotIndex(effective)) {
-                    continue;
-                }
-                if (!matchesAny(name, effective)) {
-                    continue;
-                }
-                indices.add(new IndexInfo(name, row.path("docs.count").asLong(0),
-                        row.path("store.size").asText(""),
-                        row.path("status").asText(""),
-                        row.path("health").asText("")));
-            }
-        }
-        return indices;
-    }
-
-    private static boolean asksForDotIndex(String pattern) {
-        for (String part : pattern.split(",")) {
-            if (part.trim().startsWith(".")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean matchesAny(String index, String pattern) {
-        if (pattern == null || pattern.isBlank()) {
-            return true;
-        }
-        for (String part : pattern.split(",")) {
-            String glob = part.trim();
-            if (!glob.isEmpty() && globMatches(index, glob)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean globMatches(String value, String glob) {
-        StringBuilder regex = new StringBuilder("^");
-        for (char c : glob.toCharArray()) {
-            if (c == '*') {
-                regex.append(".*");
-            } else if (c == '?') {
-                regex.append('.');
-            } else {
-                regex.append(Pattern.quote(String.valueOf(c)));
-            }
-        }
-        regex.append('$');
-        return Pattern.compile(regex.toString()).matcher(value).matches();
-    }
-
-    /** What the connection card shows after a successful probe. */
-    public record TestResult(boolean success, String message, String product,
-                             String version, String clusterName, long elapsedMs) {
-    }
-
-    /** A row of {@code _cat/indices}; discovery never touches the target. */
-    public record IndexInfo(String index, long docsCount, String storeSize,
-                            String status, String health) {
+        return adapters.forKind(connection.getKind()).list(connection, pattern);
     }
 }

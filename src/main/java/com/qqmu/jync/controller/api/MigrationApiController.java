@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.service.migration.MigrationConnectionService;
+import com.qqmu.jync.service.migration.connection.MigrationConnectionTestResult;
+import com.qqmu.jync.service.migration.connection.MigrationDiscoveryItem;
 
 /**
  * JSON helpers for the dedicated-migration forms: index discovery and connection probes.
@@ -36,7 +38,7 @@ public class MigrationApiController {
                                        @RequestParam(defaultValue = "") String pattern) {
         Map<String, Object> body = new LinkedHashMap<>();
         try {
-            List<MigrationConnectionService.IndexInfo> indices =
+            List<MigrationDiscoveryItem> indices =
                     service.listIndices(connectionId, pattern);
             body.put("success", true);
             body.put("count", indices.size());
@@ -69,7 +71,7 @@ public class MigrationApiController {
         }
     }
 
-    private static Map<String, Object> result(MigrationConnectionService.TestResult result,
+    private static Map<String, Object> result(MigrationConnectionTestResult result,
                                               String endpoint) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", result.success());

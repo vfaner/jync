@@ -28,6 +28,10 @@ import com.qqmu.jync.model.MigrationConnectionKind;
 import com.qqmu.jync.repository.MigrationConnectionRepository;
 import com.qqmu.jync.repository.MigrationTaskRepository;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.migration.connection.MigrationConnectionAdapterRegistry;
+import com.qqmu.jync.service.migration.connection.MigrationConnectionTestResult;
+import com.qqmu.jync.service.migration.connection.MigrationDiscoveryItem;
+import com.qqmu.jync.service.migration.connection.SearchConnectionAdapter;
 import com.qqmu.jync.service.migration.es.SearchHttpClient;
 import com.qqmu.jync.service.migration.es.SearchHttpClientFactory;
 import com.qqmu.jync.util.CryptoUtil;
@@ -49,7 +53,8 @@ class MigrationConnectionServiceTest {
     @BeforeEach
     void setUp() {
         service = new MigrationConnectionService(connections, tasks, cryptoUtil,
-                auditService, clientFactory);
+                auditService, new MigrationConnectionAdapterRegistry(
+                        List.of(new SearchConnectionAdapter(clientFactory))));
     }
 
     private MigrationConnectionForm form() {
@@ -226,6 +231,22 @@ class MigrationConnectionServiceTest {
     }
 
     @Test
+    void changingTheKindOfAConnectionUsedByATaskIsRefused() {
+        MigrationConnection existing = stored(3L, "enc:old");
+        MigrationConnectionForm form = form();
+        form.setId(3L);
+        form.setKind(MigrationConnectionKind.OPENSEARCH);
+        when(connections.findById(3L)).thenReturn(Optional.of(existing));
+        when(connections.findByName("es-prod")).thenReturn(Optional.of(existing));
+        when(tasks.countBySourceConnectionIdOrTargetConnectionId(3L, 3L)).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.save(form, "", ""))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.migration.connection.kind.inUse");
+        verify(connections, never()).save(any(MigrationConnection.class));
+    }
+
+    @Test
     void deletingAConnectionStillUsedByATaskIsRefused() {
         when(connections.findById(3L)).thenReturn(Optional.of(stored(3L, null)));
         when(tasks.countBySourceConnectionIdOrTargetConnectionId(3L, 3L)).thenReturn(1L);
@@ -257,7 +278,7 @@ class MigrationConnectionServiceTest {
                 + "\"version\":{\"number\":\"7.17.22\",\"distribution\":\"elasticsearch\"}}");
         when(client.get("/")).thenReturn(root);
 
-        MigrationConnectionService.TestResult result = service.test(3L);
+        MigrationConnectionTestResult result = service.test(3L);
 
         assertThat(result.success()).isTrue();
         assertThat(result.product()).isEqualTo("elasticsearch");
@@ -279,11 +300,11 @@ class MigrationConnectionServiceTest {
                 + "\"status\":\"open\",\"health\":\"green\"}]");
         when(client.get(startsWith("/_cat/indices"))).thenReturn(cat);
 
-        List<MigrationConnectionService.IndexInfo> indices =
+        List<MigrationDiscoveryItem> indices =
                 service.listIndices(3L, "orders-*");
 
         assertThat(indices).singleElement().satisfies(index -> {
-            assertThat(index.index()).isEqualTo("orders-2026");
+            assertThat(index.name()).isEqualTo("orders-2026");
             assertThat(index.docsCount()).isEqualTo(12L);
         });
     }

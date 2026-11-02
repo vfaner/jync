@@ -45,8 +45,17 @@ public class MigrationConnection {
     @Column(nullable = false, length = 24)
     private MigrationConnectionKind kind;
 
+    /** The endpoint URI. HTTP(S) for search engines, {@code mongodb(+srv)://} for MongoDB, JDBC for KingbaseES. */
     @Column(name = "base_url", nullable = false, length = 512)
     private String baseUrl;
+
+    /** MongoDB database, or the database named in a KingbaseES JDBC URL. Null for search engines. */
+    @Column(name = "database_name", length = 255)
+    private String databaseName;
+
+    /** KingbaseES target schema; null means the connection's current schema. */
+    @Column(name = "schema_name", length = 128)
+    private String schemaName;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "auth_type", nullable = false, length = 16)
@@ -63,6 +72,10 @@ public class MigrationConnection {
     @Lob
     @Column(name = "api_key_enc")
     private String apiKeyEnc;
+
+    /** Extra driver options (Mongo URI options or JDBC parameters). Never holds credentials. */
+    @Column(name = "extra_params", length = 512)
+    private String extraParams;
 
     @Column(name = "verify_tls", nullable = false)
     private boolean verifyTls = true;

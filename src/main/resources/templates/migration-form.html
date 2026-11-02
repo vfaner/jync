@@ -80,10 +80,19 @@
 
             <!--/* 类型专属参数。Thymeleaf 3.0 会把 th:replace="${handler.optionsFragment}"
                    当成模板名而不是片段表达式，所以这里用 th:switch 分派；新增类型时在
-                   这里加一个 case，并把类型专属参数放进 migration-form/ 下自己的片段。 */-->
+                   这里加一个 case，并把类型专属参数放进 migration-form/ 下自己的片段。
+                   th:replace 必须放在内层元素上：它与 th:case 同处一个标签时先于
+                   th:case 执行，会把每个 case 的片段都渲染出来。 */-->
             <th:block th:switch="${task.type.name()}">
-                <th:block th:case="'ES_TO_EASYSEARCH'"
-                          th:replace="~{migration-form/options-es :: options}"/>
+                <th:block th:case="'ES_TO_EASYSEARCH'">
+                    <div th:replace="~{migration-form/options-es :: options}"></div>
+                </th:block>
+                <th:block th:case="'MONGODB_TO_MONGODB'">
+                    <div th:replace="~{migration-form/options-mongo :: options}"></div>
+                </th:block>
+                <th:block th:case="'MONGODB_TO_KINGBASE'">
+                    <div th:replace="~{migration-form/options-mongo-kingbase :: options}"></div>
+                </th:block>
             </th:block>
 
             <div class="card" style="margin-top:16px">

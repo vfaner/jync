@@ -84,7 +84,7 @@
 | 日志 CDC | MySQL binlog、Oracle LogMiner、达梦 LogMiner、PostgreSQL 系逻辑解码（含 openGauss 等国产内核）、SQL Server CDC、崖山 YStream；长驻线程流式回放，秒级延迟 |
 | 结构同步 | 表、索引、视图、存储过程/函数；类型映射、函数转换、标识符引号、分页语法、DDL 覆盖 |
 | ETL | 按客户取数 SQL 复制结果行；7 种分析型引擎；多语句脚本；覆盖 / 追加 / 范围覆盖；断点续跑；同源同目标的表可组成**批次**共享连接与调度 |
-| 专属迁移 | Elasticsearch / OpenSearch → Easysearch：独立的搜索连接、索引自动发现、settings / mappings / alias 复制、按 `_id` / `_routing` 批量写入、预检与兼容性探测；手动或 cron 运行，可取消并查看每次运行历史 |
+| 专属迁移 | 三种整库复制：Elasticsearch / OpenSearch → Easysearch（索引自动发现、settings / mappings / alias 复制、按 `_id` / `_routing` 批量写入、兼容性探测）；MongoDB → MongoDB（集合选项与索引复制、文档原样写入并保留 `_id`）；MongoDB → KingbaseES（采样推断建表、`_id` 主键、批量 INSERT / `ON CONFLICT` upsert）。均带预检，手动或 cron 运行，可取消并查看每次运行历史 |
 | 数据加工 | 列清洗（7 种规则）、表名映射、只读数据预览、按需行数核对、任务克隆、批量建任务（按表大小分箱） |
 | 告警通知 | Webhook 推送同步失败、轮询卡死、项目未运行、CDC 停摆、数据漂移、连接健康、PG slot 积压；通用 JSON / 钉钉 / 企业微信 / 飞书；冷却时间与恢复通知；地址加密存储 |
 | 可靠性 | 幂等 upsert、检查点续传、数据库租约锁、at-least-once、停机变更自动补齐 |
@@ -376,7 +376,11 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 - **驱动内置**：除 **GBase**、**神通**、**华为 GaussDB**、**SAP HANA**、**ClickHouse**、**Hive**、**Impala**、**Elasticsearch**、**MongoDB（Atlas SQL）** 外均随包内置。这些厂商未提供可再分发的官方构件（SAP ngdbc 虽已上架 Maven Central，许可证仍不允许再分发），需自备 jar 并填写路径；驱动类名与预设不同时可在同一张卡片覆盖。
 - **协议兼容预设**：万里 GreatDB、银联 UPDRDB、星环 KunDB 兼容 MySQL 协议；平安 RASESQL、东方金信 SeaboxSQL 兼容 PostgreSQL 协议，复用内置驱动与对应方言族。
 - **SAP HANA**：独立方言家族，支持结构同步与轮询式数据同步（时间戳 / 主键增量），写入用 `UPSERT … WITH PRIMARY KEY`，分页走 `LIMIT / OFFSET`，视图与存储过程/函数用 `CREATE OR REPLACE` 重建，表注释走 `COMMENT ON`。HANA 不公开事务日志，**真 CDC 需要 SAP SLT 或 SDI**，本工具不提供。
-- **专属迁移不走 JDBC**：Easysearch 不作为 `DatabaseType` 出现在实时同步或 ETL 的能力矩阵里。Elasticsearch / OpenSearch → Easysearch 由独立的搜索连接和专属任务完成整索引复制（settings、mappings、别名与文档），与上面的 JDBC 连接、同步任务、ETL 任务互不影响；限制见 [已知限制](docs/known-limitations.md)。
+- **专属迁移不走 JDBC**：Easysearch、MongoDB、KingbaseES 的专属迁移都不作为 `DatabaseType` 出现在实时同步或 ETL 的能力矩阵里。它们由「专属连接」和专属任务完成一次性的整对象复制，与上面的 JDBC 连接、同步任务、ETL 任务互不影响。
+  - **Elasticsearch / OpenSearch → Easysearch**：搜索连接 + 整索引复制（settings、mappings、别名与文档）。
+  - **MongoDB → MongoDB**：原生 `mongodb-driver-sync` 连接，复制集合选项、索引与文档，`_id` 原样保留。
+  - **MongoDB → KingbaseES**：采样推断列后建表写入，嵌套文档与数组写成 TEXT 的 JSON，不展开为列。
+  - 凭据只存加密字段、页面不回显；**MongoDB URI 与 Kingbase JDBC URL 中禁止写密码**（Kingbase 还禁止 `user` / `password` 参数），测试连接与运行日志也不输出 URI。限制见 [已知限制](docs/known-limitations.md#11-专属迁移esopensearch--easysearchmongodb--mongodb--kingbasees)。
 - **分析型 / 搜索型引擎（同步源 + ETL）**：Apache Doris、ClickHouse、Apache Hive、Apache Impala、Elasticsearch、MongoDB。它们没有日志 CDC，因此**只做实时同步的源**，可选策略为轮询与全表比对，**从不作为目标**（不做建表与 upsert）；表一律按无主键读取，详见 [已知限制](docs/known-limitations.md#36-分析型--搜索型引擎作为同步源)。ETL 中它们既可以是源，也可以是目标（Elasticsearch 与 MongoDB 除外——这两个的 SQL 接口只读，只能作 ETL 源）。MongoDB 提供两条路径：**MongoDB** 预置走官方 Atlas SQL JDBC 驱动（支持 Atlas 与启用 SQL Interface 的 Enterprise Advanced，驱动约 40 MB 需自备）；**MongoDB（原生驱动）** 使用随包内置的 Java 驱动，任何 `mongod` 都能直连，填集合名与可选的 Extended JSON 过滤条件即可，不需要 SQL 或外部 jar。
 - **华为 GaussDB** 与 openGauss 是两个产品：驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`，方言归入 PostgreSQL 系。
 - **PolarDB / TDSQL 分版本**：MySQL 版有独立预置；PostgreSQL 版选 PostgreSQL；PolarDB Oracle 兼容版请用自定义类型。
@@ -699,7 +703,11 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 
 **ETL**：**同步任务 → ETL 任务**新建任务或批次 → 填写取数 SQL 与目标表 → 选择写模式与调度 → 启动。同源同目标的多个表建议建一个批次，共享连接与调度。
 
-**专属迁移**：**同步任务 → 专属迁移** → 管理连接（源 Elasticsearch / OpenSearch、目标 Easysearch）→ 选择迁移类型 → 勾选索引、目标命名与写入方式 → 先预检 → 保存后「立即运行」或启用 cron。它复制的是整个索引，不是持续同步；重复运行 OVERWRITE 可让目标收敛。
+**专属迁移**：**同步任务 → 专属迁移** → 管理连接 → 选择迁移类型 → 勾选对象、目标命名与写入方式 → 先预检 → 保存后「立即运行」或启用 cron。三种类型都只复制运行那一刻的数据，不是持续同步；重复运行 OVERWRITE 可让目标收敛。
+
+- **ES / OpenSearch → Easysearch**：源与目标都是搜索连接，勾选索引，复制 settings / mappings / alias 与文档。
+- **MongoDB → MongoDB**：源与目标都是 MongoDB 连接（`databaseName` 指定库），勾选集合，复制集合选项、索引与文档，`_id` 不变。同一集群跨库复制需要建两条连接记录——任务要求源连接与目标连接不是同一条。
+- **MongoDB → KingbaseES**：源是 MongoDB、目标是 KingbaseES 连接（填 schema，留空用当前 schema），勾选集合；按采样推断的列建表，`_id` 是主键，`upsertOnId` 打开后重复 `_id` 会被覆盖。
 
 **告警**：**配置管理 → 告警通知** → 填写 Webhook 地址、选择消息格式与分类、设置重复提醒间隔 → 保存后可发一条测试消息。
 

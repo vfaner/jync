@@ -39,8 +39,10 @@ class MigrationHomeViewTest {
     @MockBean private com.qqmu.jync.repository.MigrationRunRepository runRepository;
 
     @Test
-    void theLandingPageListsOnlyTheImplementedType() throws Exception {
+    void theLandingPageListsEveryTypeThatHasAHandler() throws Exception {
         when(registry.isRegistered(MigrationType.ES_TO_EASYSEARCH)).thenReturn(true);
+        when(registry.isRegistered(MigrationType.MONGODB_TO_MONGODB)).thenReturn(true);
+        when(registry.isRegistered(MigrationType.MONGODB_TO_KINGBASE)).thenReturn(true);
         MigrationTask task = new MigrationTask();
         task.setId(9L);
         when(taskService.findByType(MigrationType.ES_TO_EASYSEARCH)).thenReturn(List.of(task));
@@ -51,10 +53,10 @@ class MigrationHomeViewTest {
 
         assertThat(page).contains("data-role=\"type-grid\"")
                 .contains("href=\"/migrations/es-to-easysearch\"")
+                .contains("href=\"/migrations/mongodb-to-mongodb\"")
+                .contains("href=\"/migrations/mongodb-to-kingbase\"")
                 .contains("href=\"/migrations/connections\"")
-                .doesNotContain("data-role=\"type-coming-soon\"")
-                .doesNotContain("MongoDB → MongoDB")
-                .doesNotContain("MongoDB → KingbaseES");
+                .doesNotContain("data-role=\"type-coming-soon\"");
     }
 
     @Test

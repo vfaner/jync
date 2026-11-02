@@ -79,6 +79,8 @@ class EnglishUiLeakTest {
             "/etl", "/etl/new", "/etl/batches/new",
             "/migrations", "/migrations/es-to-easysearch",
             "/migrations/es-to-easysearch/new",
+            "/migrations/mongodb-to-mongodb", "/migrations/mongodb-to-mongodb/new",
+            "/migrations/mongodb-to-kingbase", "/migrations/mongodb-to-kingbase/new",
             "/migrations/connections", "/migrations/connections/new",
             "/databases", "/databases/new",
             "/ai", "/ai/new",

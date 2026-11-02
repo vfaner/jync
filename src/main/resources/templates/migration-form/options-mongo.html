@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="card" style="margin-top:16px" data-role="options-mongo" th:fragment="options">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#database"/></svg>
+            <span th:text="#{migration.form.options}">Migration options</span></h2>
+    </div>
+    <div class="card-body">
+
+        <div class="field">
+            <label for="opt-collectionsText" th:text="#{migration.opt.collections}">Collections</label>
+            <textarea class="input mono" id="opt-collectionsText" name="opt.collectionsText"
+                      rows="3" placeholder="orders, users"
+                      th:text="${options.get('collectionsText') != null ? options.get('collectionsText').asText('') : ''}"></textarea>
+            <div class="help">
+                <span th:text="#{migration.opt.collectionsHelp}">
+                    Comma or newline separated patterns. Leave blank for every non-system collection.
+                </span>
+                <button type="button" class="btn btn-ghost btn-sm" data-role="discover-indices"
+                        th:attr="data-url=@{/api/migrations/indices},
+                                 data-empty=#{migration.opt.discover.empty},
+                                 data-choose-source=#{migration.opt.discover.chooseSource}">
+                    <svg class="ico"><use href="#search"/></svg>
+                    <span th:text="#{migration.opt.discoverCollections}">List collections from the source</span>
+                </button>
+            </div>
+            <div class="small muted" data-role="discovered-indices" hidden></div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label for="opt-targetNaming" th:text="#{migration.opt.targetNaming}">Target name</label>
+                <select class="input" id="opt-targetNaming" name="opt.targetNaming">
+                    <option value="SAME"
+                            th:selected="${options.get('targetNaming') == null or options.get('targetNaming').asText('SAME') == 'SAME'}"
+                            th:text="#{migration.naming.SAME}">Same as source</option>
+                    <option value="PREFIX"
+                            th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asText('') == 'PREFIX'}"
+                            th:text="#{migration.naming.PREFIX}">Add a prefix</option>
+                    <option value="SUFFIX"
+                            th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asText('') == 'SUFFIX'}"
+                            th:text="#{migration.naming.SUFFIX}">Add a suffix</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="opt-targetPrefix" th:text="#{migration.opt.prefix}">Prefix</label>
+                <input type="text" class="input mono" id="opt-targetPrefix" name="opt.targetPrefix"
+                       th:value="${options.get('targetPrefix') != null ? options.get('targetPrefix').asText('') : ''}">
+            </div>
+            <div class="field">
+                <label for="opt-targetSuffix" th:text="#{migration.opt.suffix}">Suffix</label>
+                <input type="text" class="input mono" id="opt-targetSuffix" name="opt.targetSuffix"
+                       th:value="${options.get('targetSuffix') != null ? options.get('targetSuffix').asText('') : '_migrated'}">
+            </div>
+            <div class="field">
+                <label for="opt-writeMode" th:text="#{migration.opt.writeMode}">Write mode</label>
+                <select class="input" id="opt-writeMode" name="opt.writeMode">
+                    <option value="OVERWRITE"
+                            th:selected="${options.get('writeMode') == null or options.get('writeMode').asText('OVERWRITE') == 'OVERWRITE'}"
+                            th:text="#{migration.mongo.writeMode.OVERWRITE}">Delete and rebuild the collection</option>
+                    <option value="APPEND"
+                            th:selected="${options.get('writeMode') != null and options.get('writeMode').asText('') == 'APPEND'}"
+                            th:text="#{migration.mongo.writeMode.APPEND}">Add to the existing collection</option>
+                    <option value="FAIL_IF_EXISTS"
+                            th:selected="${options.get('writeMode') != null and options.get('writeMode').asText('') == 'FAIL_IF_EXISTS'}"
+                            th:text="#{migration.mongo.writeMode.FAIL_IF_EXISTS}">Fail if it exists</option>
+                </select>
+                <div class="help" th:text="#{migration.mongo.writeMode.help}">
+                    Overwrite deletes the target collection of the same name before copying.
+                </div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-copyCollectionOptions" name="opt.copyCollectionOptions" value="true"
+                           th:checked="${options.get('copyCollectionOptions') == null or options.get('copyCollectionOptions').asBoolean()}">
+                    <input type="hidden" name="opt.copyCollectionOptions" value="false">
+                    <span th:text="#{migration.opt.copyCollectionOptions}">Copy collection options</span>
+                </label>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-copyIndexes" name="opt.copyIndexes" value="true"
+                           th:checked="${options.get('copyIndexes') == null or options.get('copyIndexes').asBoolean()}">
+                    <input type="hidden" name="opt.copyIndexes" value="false">
+                    <span th:text="#{migration.opt.copyIndexes}">Copy indexes</span>
+                </label>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-copyDocuments" name="opt.copyDocuments" value="true"
+                           th:checked="${options.get('copyDocuments') == null or options.get('copyDocuments').asBoolean()}">
+                    <input type="hidden" name="opt.copyDocuments" value="false">
+                    <span th:text="#{migration.opt.copyDocuments}">Copy documents</span>
+                </label>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-continueOnError" name="opt.continueOnError" value="true"
+                           th:checked="${options.get('continueOnError') == null or options.get('continueOnError').asBoolean()}">
+                    <input type="hidden" name="opt.continueOnError" value="false">
+                    <span th:text="#{migration.opt.mongo.continueOnError}">Keep going after a failed collection</span>
+                </label>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-noCursorTimeout" name="opt.noCursorTimeout" value="true"
+                           th:checked="${options.get('noCursorTimeout') == null or options.get('noCursorTimeout').asBoolean()}">
+                    <input type="hidden" name="opt.noCursorTimeout" value="false">
+                    <span th:text="#{migration.opt.noCursorTimeout}">Keep the source cursor alive</span>
+                </label>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-verifyCount" name="opt.verifyCount" value="true"
+                           th:checked="${options.get('verifyCount') == null or options.get('verifyCount').asBoolean()}">
+                    <input type="hidden" name="opt.verifyCount" value="false">
+                    <span th:text="#{migration.opt.verifyCount}">Compare document counts afterwards</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label for="opt-batchSize" th:text="#{migration.opt.batchSize}">Batch size</label>
+                <input type="number" class="input" id="opt-batchSize" name="opt.batchSize"
+                       min="1" max="10000"
+                       th:value="${options.get('batchSize') != null ? options.get('batchSize').asText('1000') : '1000'}">
+            </div>
+            <div class="field">
+                <label for="opt-maxBatchBytes" th:text="#{migration.opt.maxBatchBytes}">Max batch bytes</label>
+                <input type="number" class="input" id="opt-maxBatchBytes" name="opt.maxBatchBytes"
+                       min="1048576" max="67108864"
+                       th:value="${options.get('maxBatchBytes') != null ? options.get('maxBatchBytes').asText('8388608') : '8388608'}">
+            </div>
+            <div class="field">
+                <label for="opt-verifySampleSize" th:text="#{migration.opt.verifySampleSize}">Verification sample</label>
+                <input type="number" class="input" id="opt-verifySampleSize"
+                       name="opt.verifySampleSize" min="0" max="1000"
+                       th:value="${options.get('verifySampleSize') != null ? options.get('verifySampleSize').asText('100') : '100'}">
+            </div>
+            <div class="field">
+                <label for="opt-maxCollections" th:text="#{migration.opt.maxCollections}">Maximum collections</label>
+                <input type="number" class="input" id="opt-maxCollections" name="opt.maxCollections"
+                       min="1" max="10000"
+                       th:value="${options.get('maxCollections') != null ? options.get('maxCollections').asText('200') : '200'}">
+            </div>
+        </div>
+
+    </div>
+</div>
+</body>
+</html>

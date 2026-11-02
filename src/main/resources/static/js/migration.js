@@ -41,7 +41,8 @@
       var form = button.closest('form');
       if (!form) return;
       var select = form.querySelector('select[name="sourceConnectionId"]');
-      var output = form.querySelector('textarea[name="opt.indicesText"]');
+      var output = form.querySelector(
+        'textarea[name="opt.indicesText"], textarea[name="opt.collectionsText"]');
       var list = form.querySelector('[data-role="discovered-indices"]');
       if (!select || !select.value) {
         JyncUI.dialog.notify(button.dataset.chooseSource, 'warn');
@@ -68,12 +69,12 @@
           return;
         }
         if (output) {
-          output.value = indices.map(function (row) { return row.index; }).join(',\n');
+          output.value = indices.map(function (row) { return row.name; }).join(',\n');
         }
         if (list) {
           list.hidden = false;
           text(list, indices.map(function (row) {
-            return row.index + ' · ' + row.docsCount + ' docs · ' + row.storeSize;
+            return row.name + ' · ' + row.docsCount + ' docs · ' + row.storeSize;
           }).join('\n'));
           list.style.whiteSpace = 'pre-line';
         }
@@ -99,6 +100,63 @@
     sync();
   }
 
+  /* ─── Connection kind: show the fields that product actually uses ─────────────── */
+
+  function bindConnectionKind() {
+    var kind = document.getElementById('kind');
+    if (!kind) return;
+    var baseUrl = document.getElementById('baseUrl');
+    var auth = document.querySelector('[data-role="migration-auth-type"]');
+    var database = document.querySelector('[data-role="database-name-field"]');
+    var schema = document.querySelector('[data-role="kingbase-only"]');
+    var extra = document.querySelector('[data-role="extra-params-field"]');
+    var tls = document.querySelector('[data-role="tls-field"]');
+    // Which authentication choices each product accepts. A disabled option is not submitted,
+    // so the selection falls back to the first allowed one.
+    var allowed = {
+      ELASTICSEARCH: ['NONE', 'BASIC', 'API_KEY'],
+      OPENSEARCH: ['NONE', 'BASIC', 'API_KEY'],
+      EASYSEARCH: ['NONE', 'BASIC', 'API_KEY'],
+      MONGODB: ['NONE', 'BASIC'],
+      KINGBASE: ['BASIC']
+    };
+
+    function show(node, visible) {
+      if (node) node.hidden = !visible;
+    }
+
+    function sync() {
+      var value = kind.value;
+      var mongo = value === 'MONGODB';
+      var kingbase = value === 'KINGBASE';
+      show(database, mongo || kingbase);
+      show(schema, kingbase);
+      show(extra, mongo || kingbase);
+      // TLS verification is an Elasticsearch-client setting; Mongo and JDBC configure it
+      // through the URI/driver parameters instead.
+      show(tls, !mongo && !kingbase);
+
+      if (baseUrl) {
+        var placeholder = mongo ? baseUrl.dataset.placeholderMongo
+          : kingbase ? baseUrl.dataset.placeholderKingbase
+            : baseUrl.dataset.placeholderEs;
+        if (placeholder) baseUrl.placeholder = placeholder;
+      }
+
+      if (auth) {
+        var choices = allowed[value] || allowed.ELASTICSEARCH;
+        for (var i = 0; i < auth.options.length; i++) {
+          auth.options[i].disabled = choices.indexOf(auth.options[i].value) < 0;
+        }
+        var selected = auth.options[auth.selectedIndex];
+        if (selected && selected.disabled) auth.value = choices[0];
+      }
+    }
+
+    kind.addEventListener('change', sync);
+    sync();
+  }
+
   /* ─── Scheduling: an enabled task needs a cron, so point at the field ──────────── */
 
   function bindScheduleHint() {
@@ -115,6 +173,7 @@
   }
 
   function start() {
+    bindConnectionKind();
     bindDiscovery();
     bindTargetNaming();
     bindScheduleHint();

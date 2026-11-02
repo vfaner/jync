@@ -11,7 +11,9 @@ import java.util.Arrays;
  */
 public enum MigrationType {
 
-    ES_TO_EASYSEARCH("es-to-easysearch", "migration.type.esToEasysearch.name", true);
+    ES_TO_EASYSEARCH("es-to-easysearch", "migration.type.esToEasysearch.name", true),
+    MONGODB_TO_MONGODB("mongodb-to-mongodb", "migration.type.mongoToMongo.name", true),
+    MONGODB_TO_KINGBASE("mongodb-to-kingbase", "migration.type.mongoToKingbase.name", true);
 
     private final String key;
     private final String messageKey;

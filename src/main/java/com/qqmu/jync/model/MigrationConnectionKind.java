@@ -4,5 +4,8 @@ package com.qqmu.jync.model;
 public enum MigrationConnectionKind {
     ELASTICSEARCH,
     OPENSEARCH,
-    EASYSEARCH
+    EASYSEARCH,
+    /** Native MongoDB (the bundled {@code mongodb-driver-sync}), never the Atlas SQL JDBC preset. */
+    MONGODB,
+    KINGBASE
 }
