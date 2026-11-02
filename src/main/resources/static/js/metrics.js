@@ -105,6 +105,10 @@
     return node;
   }
 
+  function clampY(value, low, high) {
+    return Math.max(low, Math.min(high, value));
+  }
+
   /** 刻度步长取整齐值：最大值除以四格后向上取到 1/2/5 × 10^n。 */
   function niceStep(value) {
     // 全零序列没有最大值可依；给 1 让轴画成 4/3/2/1/0，而不是四格都取整成同一个数。
@@ -258,9 +262,15 @@
         var p2 = segment[c + 1];
         var p0 = segment[c - 1] || p1;
         var p3 = segment[c + 2] || p2;
-        d += ' C' + (p1.x + (p2.x - p0.x) / 6) + ' ' + (p1.y + (p2.y - p0.y) / 6)
-          + ' ' + (p2.x - (p3.x - p1.x) / 6) + ' ' + (p2.y - (p3.y - p1.y) / 6)
-          + ' ' + p2.x + ' ' + p2.y;
+        // Catmull-Rom 的控制点借邻段切线，可能越过本段两端；夹进区间后，三次贝塞尔
+        //（始终落在控制点凸包内）就不会画到 0 以下，也不会冲过本段峰值。
+        var low = Math.min(p1.y, p2.y);
+        var high = Math.max(p1.y, p2.y);
+        var c1x = p1.x + (p2.x - p0.x) / 6;
+        var c1y = clampY(p1.y + (p2.y - p0.y) / 6, low, high);
+        var c2x = p2.x - (p3.x - p1.x) / 6;
+        var c2y = clampY(p2.y - (p3.y - p1.y) / 6, low, high);
+        d += ' C' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
       }
       var baseY = padT + plotH;
       svg.appendChild(el('path', {
@@ -452,6 +462,18 @@
     wrap.appendChild(legend);
   }
 
+  /* 变更日志表格用 changeType.* 的译文；占比图的服务端 label 是枚举名（INSERT …）。
+     模板把译文挂在 data-label-* 上，这里换掉，中文界面不直接露代码。 */
+  function localizedShare(slot, points) {
+    var out = [];
+    for (var i = 0; i < points.length; i++) {
+      var translated = slot.getAttribute('data-label-'
+        + String(points[i].label || '').toLowerCase());
+      out.push({ label: translated || points[i].label, value: points[i].value });
+    }
+    return out;
+  }
+
   /** 横向条形排行。points = [{label, value}]，已按服务端顺序（大的在前）。 */
   function bars(slot, points, opts) {
     opts = opts || {};
@@ -556,7 +578,7 @@
 
     var shareSlot = root.querySelector('[data-chart-share]');
     if (shareSlot) {
-      donut(shareSlot, (view && view.changeShare) || [], {
+      donut(shareSlot, localizedShare(shareSlot, (view && view.changeShare) || []), {
         caption: shareSlot.getAttribute('data-caption') || '',
         emptyText: shareSlot.getAttribute('data-empty') || ''
       });

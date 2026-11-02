@@ -106,7 +106,9 @@
                 </div>
                 <div class="card-body">
                     <div class="chart-host" data-chart-share
-                         th:attr="data-caption=#{metrics.donut.caption},data-empty=#{metrics.noChanges}"></div>
+                         th:attr="data-caption=#{metrics.donut.caption},data-empty=#{metrics.noChanges},
+                                  data-label-insert=#{changeType.INSERT},data-label-update=#{changeType.UPDATE},
+                                  data-label-delete=#{changeType.DELETE}"></div>
                 </div>
             </div>
             <div class="card" id="chart-hot-objects">

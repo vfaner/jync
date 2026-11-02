@@ -2789,7 +2789,14 @@
       return Number(point[series + suffix]) || 0;
     }
 
-    /** 折线转平滑曲线：Catmull-Rom 转三次贝塞尔；点少时退化成直线，不会画飞。 */
+    /**
+     * 折线转平滑曲线：Catmull-Rom 转三次贝塞尔；点少时退化成直线。
+     *
+     * <p>切线会借用相邻点，所以曲线可以越过它连接的两个采样：一段全 0 会被前后的峰值
+     * 拉下 0 轴，连续高点之间又会冲过最高值 —— 计数不可能为负，也不该比最大值还高。
+     * 把每个控制点的 y 夹进本段两端的区间，贝塞尔就落在两端点之间（曲线在控制点的
+     * 凸包内），平滑保留，多画出来的部分消失。
+     */
     function smoothPath(coords) {
       var d = 'M' + coords[0].x + ' ' + coords[0].y;
       for (var c = 0; c < coords.length - 1; c++) {
@@ -2797,13 +2804,19 @@
         var p1 = coords[c];
         var p2 = coords[c + 1];
         var p3 = coords[c + 2] || p2;
+        var low = Math.min(p1.y, p2.y);
+        var high = Math.max(p1.y, p2.y);
         var c1x = p1.x + (p2.x - p0.x) / 6;
-        var c1y = p1.y + (p2.y - p0.y) / 6;
+        var c1y = clampY(p1.y + (p2.y - p0.y) / 6, low, high);
         var c2x = p2.x - (p3.x - p1.x) / 6;
-        var c2y = p2.y - (p3.y - p1.y) / 6;
+        var c2y = clampY(p2.y - (p3.y - p1.y) / 6, low, high);
         d += ' C' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
       }
       return d;
+    }
+
+    function clampY(value, low, high) {
+      return Math.max(low, Math.min(high, value));
     }
 
     function draw() {
