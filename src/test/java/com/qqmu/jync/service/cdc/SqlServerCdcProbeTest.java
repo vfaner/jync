@@ -183,6 +183,33 @@ class SqlServerCdcProbeTest {
                 c -> c.getName().equals(CdcProbeResult.MSSQL_CAPTURE_INSTANCE));
     }
 
+    // —— ④ 角色检查:db_owner 拥有完整的变更数据访问权 ——
+
+    @Test
+    void dbOwnerHasFullChangeDataAccessEvenWithoutTheCdcRoles() throws SQLException {
+        // Microsoft 文档:成员属于 sysadmin 或 db_owner 的账号始终拥有变更数据的完整
+        // 访问权,@role_name 为 NULL 时更是只有这两类账号能读。常见的部署账号就是
+        // db_owner(非 sysadmin,也不在 cdc_Admin / cdc_reader)。旧探测漏掉 db_owner,
+        // 在完全可用的配置上给出「未授权」的假失败,还指引用户去建一个对读取毫无帮助
+        // 的角色。
+        ResultSet roleRs = mock(ResultSet.class);
+        when(roleRs.next()).thenReturn(true, false);
+        when(roleRs.getInt(1)).thenReturn(0); // cdc_Admin
+        when(roleRs.getInt(2)).thenReturn(0); // cdc_reader
+        when(roleRs.getInt(3)).thenReturn(0); // sysadmin
+        when(roleRs.getInt(4)).thenReturn(1); // db_owner
+        when(stmt.executeQuery(contains("IS_MEMBER"))).thenReturn(roleRs);
+
+        CdcProbeResult result = probe.probe(conn, List.of());
+
+        CdcProbeResult.Check role = result.getChecks().stream()
+                .filter(c -> c.getName().equals(CdcProbeResult.MSSQL_CDC_ROLE))
+                .findFirst().orElseThrow();
+        assertThat(role.isPassed()).isTrue();
+        assertThat(role.getDetail()).contains("db_owner=true");
+        verify(stmt).executeQuery(contains("IS_MEMBER('db_owner')"));
+    }
+
     // —— P1-9:Azure SQL DB(EngineEdition=5)不支持 CDC,必须明确失败并跳过 Agent 检查 ——
 
     private CdcProbeResult.Check agentCheck(CdcProbeResult result) {

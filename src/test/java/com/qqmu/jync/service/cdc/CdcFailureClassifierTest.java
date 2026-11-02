@@ -134,6 +134,19 @@ class CdcFailureClassifierTest {
     }
 
     @Test
+    void ora01284UnopenableArchivedLogClassifiesAsPurged() {
+        // V$ARCHIVED_LOG 保留着已被 RMAN 删除(DELETED=YES)或磁盘上已不可访问的归档行。
+        // 按 NEXT_CHANGE# 选中就说明它带着锚点之后、必须重放的变更;ADD_LOGFILE 抛
+        // ORA-01284,而重试面对的是同一份文件列表、同一次失败。归 TRANSIENT 会让项目
+        // 无限退避重试却永远追不上;按 PURGED park 才是可执行的处置(重建基线)。
+        // 与已归 PURGED 的 ORA-00308 "cannot open archived log" 同类。
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "ORA-01284: file /u01/app/oracle/fast_recovery_area/ORCL/archivelog/"
+                        + "1_42_1_1.log cannot be opened")))
+                .isEqualTo(CdcFailureClassifier.Kind.PURGED);
+    }
+
+    @Test
     void ora01466ClassifiesAsSchemaConflict() {
         // ORA-01466 "table definition has changed" = 挖掘期撞上在途 DDL。它从来不是
         // 认证问题——归到 AUTH_FAILURE 会把 DBA 引向查凭据的错误方向。独立 Kind。

@@ -22,7 +22,8 @@ import lombok.extern.slf4j.Slf4j;
  *   <li>database-level CDC enabled ({@code sys.databases.is_cdc_enabled});</li>
  *   <li>SQL Server Agent running (required for capture / cleanup jobs) — on Azure SQL
  *       Database (EngineEdition=5) this fails outright: CDC is unsupported there (P1-9);</li>
- *   <li>current user is in {@code cdc_admin} / {@code cdc_reader} (or {@code sysadmin});</li>
+ *   <li>current user is in {@code cdc_admin} / {@code cdc_reader}, or holds
+ *       {@code sysadmin} / {@code db_owner} (both have full change-data access);</li>
  *   <li>per-table capture instance exists in {@code cdc.change_tables}.</li>
  * </ol>
  */
@@ -146,22 +147,29 @@ public class SqlServerCdcProbe {
     // —— ④ CDC role ——
 
     private CdcProbeResult.Check checkCdcRole(Connection conn) {
+        // db_owner 是文档明确给出完整变更数据访问权的角色(@role_name 为 NULL 时更是只有
+        // 它与 sysadmin 能读)。只认 cdc_Admin/cdc_reader 会把最常见的部署账号
+        // (db_owner、非 sysadmin)判成未授权。
         String sql = "SELECT IS_MEMBER('cdc_Admin') AS is_admin, IS_MEMBER('cdc_reader') AS is_reader,"
-                + " IS_SRVROLEMEMBER('sysadmin') AS is_sa";
+                + " IS_SRVROLEMEMBER('sysadmin') AS is_sa, IS_MEMBER('db_owner') AS is_owner";
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(sql)) {
-            boolean admin = false, reader = false, sa = false;
+            boolean admin = false, reader = false, sa = false, owner = false;
             if (rs.next()) {
                 admin = rs.getInt(1) == 1;
                 reader = rs.getInt(2) == 1;
                 sa = rs.getInt(3) == 1;
+                owner = rs.getInt(4) == 1;
             }
-            boolean ok = admin || reader || sa;
-            String detail = "cdc_Admin=" + admin + ", cdc_reader=" + reader + ", sysadmin=" + sa;
+            boolean ok = admin || reader || sa || owner;
+            String detail = "cdc_Admin=" + admin + ", cdc_reader=" + reader + ", sysadmin=" + sa
+                    + ", db_owner=" + owner;
             return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, ok,
                     ok ? detail
-                            : detail + " — grant with: CREATE ROLE cdc_reader;"
-                                    + " ALTER ROLE cdc_reader ADD MEMBER [<user>];");
+                            : detail + " — add the login to the capture instance's @role_name"
+                                    + " (cdc_Admin/cdc_reader when used as @role_name), or make"
+                                    + " it a db_owner/sysadmin; @role_name NULL requires db_owner"
+                                    + " or sysadmin.");
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, false, msg(e));
         }

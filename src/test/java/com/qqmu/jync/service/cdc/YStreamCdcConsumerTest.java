@@ -581,6 +581,49 @@ class YStreamCdcConsumerTest {
         inOrder.verify(adapter).setAppliedPosition(pos(2));
     }
 
+    /**
+     * 位置只在目标提交之后前进。{@code lastSeen} 是「见过」的位置,不是「提交过」的位置:
+     * 上一轮在收到某事务的 DML、还没收到 COMMIT 时断开,它停在那些从未应用的行上。
+     * 下一轮从已提交锚点重新打开,若最先遇到的是不带位置的 COMMIT,沿用上一轮的
+     * {@code lastSeen} 就会把存储位置推过一段从未应用的数据——此时进程再崩一次,
+     * 重连就跳过这段数据。新一轮必须从锚点重新累积。
+     */
+    @Test
+    void aPositionlessCommitAfterAReconnectNeverAdoptsAPositionThePreviousStreamOnlySaw()
+            throws Exception {
+        SyncProperties props = new SyncProperties();
+        props.getCdc().setReconnectBackoffMs(1L);
+        props.getCdc().setReconnectBackoffMaxMs(1L);
+        YStreamCdcConsumer looping = new YStreamCdcConsumer(project(), lock, ctx,
+                positionStore, baselineService, taskStore, stateWriter, dataSourceManager,
+                stats, props, clientFactory, lifecycle, conn -> new FakeOps());
+        when(lifecycle.ensure(eq(PROJECT), anyList(), any()))
+                .thenReturn(new Outcome(SERVICE, ANCHOR, false));
+
+        // 第一轮:看到一行就被断开——该事务从未 COMMIT。
+        YStreamPosition seenButNeverCommitted = pos(2);
+        Deque<YStreamEvent> firstCycle = new ArrayDeque<>();
+        firstCycle.add(YStreamEvent.begin(pos(1)));
+        firstCycle.add(insert("ORDERS", row(1, "a"), seenButNeverCommitted));
+        YStreamClientAdapter first = failingAfter(firstCycle,
+                new SQLException("stream reset"));
+
+        // 第二轮:一个不带位置的 COMMIT(先于任何带位置的事件),随后致命收尾。
+        Deque<YStreamEvent> secondCycle = new ArrayDeque<>();
+        secondCycle.add(YStreamEvent.begin(null));
+        secondCycle.add(YStreamEvent.commit(null));
+        secondCycle.add(YStreamEvent.chunk("APP", "ORDERS", pos(9)));
+        YStreamClientAdapter second = adapter(secondCycle);
+
+        when(clientFactory.open(any(), any(), any())).thenReturn(first, second);
+
+        looping.run();
+
+        verify(positionStore, never())
+                .advanceLsn(PROJECT, YStreamPositionCodec.encode(seenButNeverCommitted));
+        verify(positionStore).advanceLsn(PROJECT, YStreamPositionCodec.encode(ANCHOR));
+    }
+
     @Test
     void aFatalStreamFailureParksTheProjectInsteadOfReconnecting() throws Exception {
         Deque<YStreamEvent> script = new ArrayDeque<>();
@@ -634,6 +677,31 @@ class YStreamCdcConsumerTest {
             @Override
             public void setAppliedPosition(YStreamPosition position) {
                 // the source's acknowledgement is not under test here
+            }
+
+            @Override
+            public void close() {
+                // nothing to release in the fake
+            }
+        };
+    }
+
+    /** Plays the script, then fails the stream the way a dropped connection would. */
+    private static YStreamClientAdapter failingAfter(Deque<YStreamEvent> script,
+                                                     Exception failure) {
+        return new YStreamClientAdapter() {
+            @Override
+            public YStreamEvent next() throws Exception {
+                YStreamEvent event = script.poll();
+                if (event == null) {
+                    throw failure;
+                }
+                return event;
+            }
+
+            @Override
+            public void setAppliedPosition(YStreamPosition position) {
+                // the acknowledgement is not under test here
             }
 
             @Override

@@ -199,6 +199,12 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                     currentAdapter = adapter;
                     // The stream opens AT this position: telling it so again is a no-op.
                     acknowledged = attachFrom;
+                    // lastSeen is a resume fallback, not a ledger: it records what this
+                    // stream only SAW, which may be a transaction that never committed.
+                    // Carrying it across a reconnect lets a positionless COMMIT push the
+                    // stored position past data this run never applied — a crash right
+                    // after would then skip that data. Each stream starts from its anchor.
+                    lastSeen = attachFrom;
                     stats.setConnected(true);
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());

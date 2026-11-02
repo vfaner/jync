@@ -71,6 +71,7 @@ public final class CdcFailureClassifier {
             if (message.contains("ora-01291")          // missing logfile
                     || message.contains("ora-00310")    // archived log sequence mismatch
                     || message.contains("ora-00308")    // cannot open archived log
+                    || message.contains("ora-01284")    // ADD_LOGFILE: file cannot be opened
                     || message.contains("ora-00313")    // open failed for log member
                     || message.contains("ora-00312")    // companion text of 00313
                     // P2-5: DBMS_LOGMNR.START_LOG_MNR raises ORA-01403 "no data found"
