@@ -94,6 +94,47 @@ class DataSyncServiceDeletionsTest {
     }
 
     @Test
+    void blankPaddedCharKeysAreNotADeletion() throws SQLException {
+        // MySQL returns CHAR values trimmed (PAD_CHAR_TO_FULL_LENGTH off), while Oracle, DB2
+        // and SQL Server return them blank-padded. The same logical key must render the same
+        // text on both sides, or every padded target row looks deleted at source.
+        exec(source, "CREATE TABLE PAD_T (K CHAR(10) PRIMARY KEY)");
+        exec(target, "CREATE TABLE PAD_T (K VARCHAR(10) PRIMARY KEY)");
+        exec(source, "INSERT INTO PAD_T VALUES ('A')");
+        exec(target, "INSERT INTO PAD_T VALUES ('A')");
+
+        int deleted = service.syncDeletions(source, target, table("PAD_T", "K", 1), ctx);
+
+        assertThat(deleted).isZero();
+        assertThat(count("PAD_T")).isEqualTo(1);
+    }
+
+    @Test
+    void blankPaddedCharKeysAreNotADeletionInTheChunkedPath() throws SQLException {
+        // Same disagreement, reached through the page-at-a-time comparison: the target key is
+        // trimmed and the source key comes back padded.
+        exec(source, "CREATE TABLE PAD_T (K CHAR(10) PRIMARY KEY)");
+        exec(target, "CREATE TABLE PAD_T (K VARCHAR(10) PRIMARY KEY)");
+        exec(source, "INSERT INTO PAD_T VALUES ('A')");
+        exec(target, "INSERT INTO PAD_T VALUES ('A')");
+
+        int deleted = service(chunkedProperties()).syncDeletions(source, target,
+                table("PAD_T", "K", 25_000L), ctx);
+
+        assertThat(deleted).isZero();
+        assertThat(count("PAD_T")).isEqualTo(1);
+    }
+
+    @Test
+    void trailingSpacesAreNotSignificantInAKeyText() {
+        // Fixed-width CHAR comparison ignores trailing blanks; a key rendered on one side as
+        // "A" and on the other as "A         " is the same key.
+        assertThat(DataSyncService.keyPartOf("A         ")).isEqualTo("A");
+        assertThat(DataSyncService.keyPartOf("A B ")).isEqualTo("A B");
+        assertThat(DataSyncService.keyPartOf("  A")).isEqualTo("  A");
+    }
+
+    @Test
     void rowsGenuinelyGoneFromSourceAreStillDeleted() throws SQLException {
         // Normalization must not turn the feature off: a real deletion still propagates.
         exec(source, "CREATE TABLE ORD (ID BIGINT PRIMARY KEY)");

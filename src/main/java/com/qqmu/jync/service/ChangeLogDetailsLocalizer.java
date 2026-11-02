@@ -76,6 +76,10 @@ public class ChangeLogDetailsLocalizer {
             "^Row count audit: target was missing (\\d+) row\\(s\\) already marked as synced"
                     + " \\((.*)\\)\\. (\\d+) row\\(s\\) re-copied by key; the cursor was kept and"
                     + " no reload was needed\\.$");
+    private static final Pattern AUDIT_SURPLUS = Pattern.compile(
+            "^Row count audit: target has (\\d+) row\\(s\\) more than the source \\((.*)\\)\\."
+                    + " Timestamp / identity polling cannot see physical deletes, so these rows"
+                    + " stay on the target until deletion sync or log-based CDC removes them\\.$");
     private static final Pattern AUDIT_COUNTS = Pattern.compile(
             "^source (\\d+) vs target (\\d+) at or below cursor (.*)$");
     private static final Pattern AUDIT_CAUSE_RELOAD = Pattern.compile(
@@ -399,6 +403,12 @@ public class ChangeLogDetailsLocalizer {
             String counts = auditCounts(m.group(2), locale);
             return counts == null ? null
                     : get(locale, "log.detail.data.auditByKey", m.group(1), counts, m.group(3));
+        }
+        m = AUDIT_SURPLUS.matcher(details);
+        if (m.matches()) {
+            String counts = auditCounts(m.group(2), locale);
+            return counts == null ? null
+                    : get(locale, "log.detail.data.auditSurplus", m.group(1), counts);
         }
         return null;
     }

@@ -108,6 +108,26 @@ class StructureSyncServiceIndexRetryTest {
     }
 
     @Test
+    void disablingIndexSyncClearsAQueuedIndexSoTheSnapshotCanConverge() throws SQLException {
+        // 前置:索引创建失败,进入重试队列。
+        TableMeta table = tableWithIndex("IDX_OFF");
+        ChangeEvent create = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,
+                "T", "table create", table);
+        structure.apply(flakyTarget, create, ctx);
+        assertThat(structure.hasPendingIndexes(7L, "T")).isTrue();
+
+        // 用户随后关掉索引同步:重试入口按 isSyncIndexes 关闭,队列再也不会被消费。
+        ctx.getConfig().setSyncIndexes(false);
+        // 引擎因此每轮删掉这张表的快照,下一轮把它当成新表重新检测并再次下发 CREATE。
+        StructureSyncService.ApplyOutcome outcome = structure.apply(flakyTarget, create, ctx);
+
+        assertThat(outcome.applied).isTrue();
+        // 留着这条永远消费不掉的队列项,会让引擎永远扣住快照:表被每轮当成新表重新
+        // CREATE、重新记日志。索引同步已关,它的重试语义也随之结束。
+        assertThat(structure.hasPendingIndexes(7L, "T")).isFalse();
+    }
+
+    @Test
     void evictProjectDropsTheRetryQueue() throws SQLException {
         TableMeta table = tableWithIndex("IDX_OTHER");
         ChangeEvent create = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE,

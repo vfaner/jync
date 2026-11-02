@@ -720,6 +720,14 @@ public class DataSyncService {
         public boolean isTargetShort() {
             return targetRows < sourceRows;
         }
+
+        /**
+         * True when the target holds rows the source no longer has inside the audited range —
+         * deletes the polling window cannot see, or rows written straight into the target.
+         */
+        public boolean isTargetSurplus() {
+            return targetRows > sourceRows;
+        }
     }
 
     /**
@@ -3827,6 +3835,19 @@ public class DataSyncService {
             return Long.toString(((java.time.LocalTime) value)
                     .atDate(java.time.LocalDate.of(1970, 1, 1))
                     .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        if (value instanceof CharSequence) {
+            // Fixed-width CHAR comes back blank-padded from Oracle, DB2 and SQL Server but
+            // trimmed from MySQL, and the same logical column may be declared CHAR on one
+            // side and VARCHAR on the other. SQL compares CHAR values with trailing blanks
+            // insignificant, so the padding must not make one key render as two; the
+            // comparison otherwise reads every padded target row as deleted at source.
+            String text = value.toString();
+            int end = text.length();
+            while (end > 0 && text.charAt(end - 1) == ' ') {
+                end--;
+            }
+            return text.substring(0, end);
         }
         return String.valueOf(value);
     }

@@ -268,6 +268,31 @@ class DefaultAlertSignalCollectorTest {
         assertThat(event.object()).isEqualTo("ORDERS");
     }
 
+    /**
+     * A target holding rows the source deleted is drift too, but nothing was repaired — the
+     * polling window simply cannot see the deletes. It must not reuse the repair wording
+     * ("automatically repaired"), or the alert lies about what happened.
+     */
+    @Test
+    void aSurplusAuditEntryBecomesItsOwnDataDriftEvent() {
+        when(projectRepository.findAllById(any())).thenReturn(List.of(project(1L, "orders")));
+        ChangeLog surplus = failure(1L, ObjectType.DATA, "ORDERS", ChangeType.INFO,
+                T0.minusSeconds(60));
+        surplus.setDetails("Row count audit: target has 1 row(s) more than the source (source 455"
+                + " vs target 456 at or below cursor 42). Timestamp / identity polling cannot"
+                + " see physical deletes, so these rows stay on the target until deletion sync"
+                + " or log-based CDC removes them.");
+        when(changeLogRepository.findByChangeTypeAndOccurredAtAfter(any(), any()))
+                .thenReturn(List.of(surplus));
+
+        AlertEvent event = only(collect(), com.qqmu.jync.model.AlertCategory.DATA_DRIFT);
+
+        assertThat(event.object()).isEqualTo("ORDERS");
+        assertThat(event.detailKey()).isEqualTo("alert.detail.dataSurplus");
+        assertThat(event.detailArgs()[0]).isEqualTo("ORDERS");
+        assertThat(event.detailArgs()[1]).isEqualTo(1L);
+    }
+
     @Test
     void threeFailedHealthChecksAreNeededBeforeAConnectionIsReported() {
         DatabaseConfig config = new DatabaseConfig();

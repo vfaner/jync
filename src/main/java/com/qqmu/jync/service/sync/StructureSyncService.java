@@ -364,6 +364,12 @@ public class StructureSyncService {
                 // was renamed and recreated).
                 pendingIndexes.remove(pendingKey(ctx.projectId(), table.getName()));
             }
+        } else {
+            // Index sync is off, so the retry path is closed too (SyncEngine gates it on the
+            // same switch). An entry queued while it was still on would never be consumed —
+            // and hasPendingIndexes would keep the table's snapshot deleted, making the next
+            // cycle re-detect the table as new and re-issue its CREATE forever.
+            pendingIndexes.remove(pendingKey(ctx.projectId(), table.getName()));
         }
         String detail = (created ? "Created table " : "Table already present: ") + targetTable
                 + (addedColumns.isEmpty() ? "" : ", added column(s) " + String.join(", ", addedColumns))

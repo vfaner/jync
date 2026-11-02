@@ -11,6 +11,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -289,7 +291,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         // collapse to the newest, or the same drift would be announced repeatedly.
         Map<String, ChangeLog> newest = new LinkedHashMap<>();
         for (ChangeLog row : rows) {
-            if (!isRowCountRepair(row)) {
+            if (!isRowCountAudit(row)) {
                 continue;
             }
             String key = row.getProjectId() + "|" + row.getObjectName();
@@ -300,24 +302,45 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         }
         Map<Long, String> names = projectNames(projectIdsOf(newest.values()));
         for (ChangeLog row : newest.values()) {
-            events.add(new AlertEvent(AlertCategory.DATA_DRIFT, row.getProjectId(),
-                    names.get(row.getProjectId()), row.getObjectName(),
-                    "alert.detail.dataDrift",
-                    new Object[]{row.getObjectName()}, row.getOccurredAt()));
+            Long surplus = surplusOf(row);
+            if (surplus == null) {
+                events.add(new AlertEvent(AlertCategory.DATA_DRIFT, row.getProjectId(),
+                        names.get(row.getProjectId()), row.getObjectName(),
+                        "alert.detail.dataDrift",
+                        new Object[]{row.getObjectName()}, row.getOccurredAt()));
+            } else {
+                // Nothing was repaired: the target is holding rows the source deleted, which
+                // polling will never remove on its own. Saying "automatically repaired" here
+                // would describe an action that did not happen.
+                events.add(new AlertEvent(AlertCategory.DATA_DRIFT, row.getProjectId(),
+                        names.get(row.getProjectId()), row.getObjectName(),
+                        "alert.detail.dataSurplus",
+                        new Object[]{row.getObjectName(), surplus}, row.getOccurredAt()));
+            }
         }
     }
 
+    /** "Row count audit: target has 3 row(s) more than the source (…)": the surplus size. */
+    private static final Pattern ROW_COUNT_SURPLUS = Pattern.compile(
+            "Row count audit: target has (\\d+) row\\(s\\) more than the source");
+
     /**
-     * Whether a change-log row describes a row-count repair.
+     * Whether a change-log row was written by the row-count audit.
      *
-     * <p>A repair reaches the log two ways: as an entry of its own when the reload wrote
+     * <p>An audit reaches the log two ways: as an entry of its own when the reload wrote
      * nothing, or as the cause appended after a reload's load counts. Only the first starts
      * with the audit's name, so the marker is matched anywhere in the details.
      */
-    private static boolean isRowCountRepair(ChangeLog row) {
+    private static boolean isRowCountAudit(ChangeLog row) {
         return row.getObjectType() == ObjectType.DATA
                 && row.getDetails() != null
                 && row.getDetails().toLowerCase(Locale.ROOT).contains("row count audit");
+    }
+
+    /** The surplus an audit entry reports, or {@code null} when it reports a repair. */
+    private static Long surplusOf(ChangeLog row) {
+        Matcher m = ROW_COUNT_SURPLUS.matcher(row.getDetails());
+        return m.find() ? Long.valueOf(m.group(1)) : null;
     }
 
     private static Set<Long> projectIdsOf(Iterable<ChangeLog> rows) {

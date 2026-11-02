@@ -208,6 +208,13 @@ class ChangeLogDetailsLocalizerTest {
                         + " needed.", ZH))
                 .isEqualTo("行数核对：目标库缺少 5 行已标记同步的行（源库 100 行，目标库 95 行，"
                         + "游标 42 及以下）。已按键重拷 5 行，游标保留，无需重载。");
+        assertThat(localizer.localize("Row count audit: target has 1 row(s) more than the source"
+                        + " (source 100 vs target 101 at or below cursor 42). Timestamp /"
+                        + " identity polling cannot see physical deletes, so these rows stay on"
+                        + " the target until deletion sync or log-based CDC removes them.", ZH))
+                .isEqualTo("行数核对：目标库比源库多 1 行（源库 100 行，目标库 101 行，"
+                        + "游标 42 及以下）。时间戳 / 自增轮询无法感知物理删除，"
+                        + "这些行要等到同步行删除或日志 CDC 才会消失。");
     }
 
     @Test

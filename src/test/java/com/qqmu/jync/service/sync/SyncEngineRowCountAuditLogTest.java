@@ -229,6 +229,63 @@ class SyncEngineRowCountAuditLogTest {
     }
 
     @Test
+    void aTargetHoldingRowsTheSourceDeletedIsReportedOnce() throws Exception {
+        // Polling cannot see physical deletes: they survive on the target and no window will
+        // ever remove them. The audit sees the surplus, so it says so — once per episode,
+        // not once per audit interval.
+        engine = new SyncEngine(dataSourceManager, changeDetector, cursorResolver, structureSync,
+                dataSync, stateWriter, auditEveryCycle());
+        when(dataSync.auditSyncedRowCounts(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new DataSyncService.RowCountAudit(455, 456));
+        stubLoad(0);
+
+        engine.runCycle(ctx(false));
+        Thread.sleep(5L);
+        engine.runCycle(ctx(false));
+
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(stateWriter, times(1)).recordLog(eq(PROJECT_ID), eq(ObjectType.DATA),
+                eq("ORDERS"), eq(ChangeType.INFO), message.capture(), eq(true), anyLong(), any());
+        assertTrue(message.getValue().contains("more than the source"), message.getValue());
+    }
+
+    @Test
+    void aSurplusIsNotReportedWhenThisCyclePropagatesDeletes() throws Exception {
+        // syncDeletes is on and the table is small enough to compare: the extra rows are
+        // about to be deleted by this very cycle, so calling them drift would be noise.
+        when(dataSync.auditSyncedRowCounts(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new DataSyncService.RowCountAudit(455, 456));
+        when(dataSync.deletionDetectionSkipReason(any(), any())).thenReturn(null);
+        when(dataSync.syncDeletions(any(), any(), any(), any())).thenReturn(1);
+        stubLoad(0);
+
+        engine.runCycle(ctx(true));
+
+        verify(stateWriter, never()).recordLog(any(), any(), any(), eq(ChangeType.INFO),
+                any(), anyBoolean(), anyLong(), any());
+    }
+
+    @Test
+    void aSurplusIsReportedWhenDeletionSyncCannotRunForTheTable() throws Exception {
+        // The operator asked for deletes, but this table is too large to compare: the rows
+        // stay, and the audit's surplus is the evidence that something needs to change.
+        when(dataSync.auditSyncedRowCounts(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new DataSyncService.RowCountAudit(455, 456));
+        when(dataSync.deletionDetectionSkipReason(any(), any()))
+                .thenReturn("it has about 900000 rows, over sync.full-compare-max-rows=500000");
+        when(dataSync.syncDeletions(any(), any(), any(), any())).thenReturn(0);
+        stubLoad(0);
+
+        engine.runCycle(ctx(true));
+
+        verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.DATA), eq("ORDERS"),
+                eq(ChangeType.INFO),
+                org.mockito.ArgumentMatchers.argThat(
+                        m -> m != null && m.contains("more than the source")),
+                eq(true), anyLong(), any());
+    }
+
+    @Test
     void anOrdinaryLoadCarriesNoAuditText() throws Exception {
         when(dataSync.auditSyncedRowCounts(any(), any(), any(), any(), any(), any()))
                 .thenReturn(null);
@@ -266,12 +323,24 @@ class SyncEngineRowCountAuditLogTest {
         when(dataSync.syncTable(any(), any(), any(), any(), any(), any())).thenReturn(load);
     }
 
+    /** Lets two cycles in a row reach the audit; the default one-minute throttle would skip it. */
+    private static SyncProperties auditEveryCycle() {
+        SyncProperties properties = new SyncProperties();
+        properties.setRowCountAuditIntervalMs(1L);
+        return properties;
+    }
+
     private SyncContext ctx() {
+        return ctx(false);
+    }
+
+    private SyncContext ctx(boolean syncDeletes) {
         SyncConfig config = new SyncConfig();
         config.setSyncStructure(false);
         config.setSyncData(true);
         config.setSyncViews(false);
         config.setSyncProcedures(false);
+        config.setSyncDeletes(syncDeletes);
         return SyncContext.builder()
                 .project(project)
                 .config(config)

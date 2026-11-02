@@ -88,11 +88,31 @@ class DataSyncServiceRowCountAuditTest {
     @Test
     void acceptsTargetHoldingExtraRows() throws SQLException {
         // Rows deleted at the source survive in the target when syncDeletes is off. The
-        // invariant the user asked for is source <= target, so a surplus is not a fault.
+        // invariant the user asked for is source <= target, so a surplus is not a fault —
+        // but it is a fact the caller can surface: polling cannot see the deletes.
         insert(source, 1, 3);
         insert(target, 1, 2, 3);
 
-        assertThat(audit("3").isTargetShort()).isFalse();
+        DataSyncService.RowCountAudit audit = audit("3");
+
+        assertThat(audit.isTargetShort()).isFalse();
+        assertThat(audit.isTargetSurplus()).isTrue();
+    }
+
+    @Test
+    void aMatchingTargetHasNoSurplus() throws SQLException {
+        insert(source, 1, 2, 3);
+        insert(target, 1, 2, 3);
+
+        assertThat(audit("3").isTargetSurplus()).isFalse();
+    }
+
+    @Test
+    void aShortTargetIsNotAlsoASurplus() throws SQLException {
+        insert(source, 1, 2, 3);
+        insert(target, 1);
+
+        assertThat(audit("3").isTargetSurplus()).isFalse();
     }
 
     @Test

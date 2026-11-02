@@ -65,6 +65,15 @@ public class SyncEngine {
     private final Map<String, Long> lastRowCountAudit = new ConcurrentHashMap<>();
 
     /**
+     * The surplus each table was last seen holding, keyed like {@code lastRowCountAudit}.
+     *
+     * <p>One report per episode: the first audit that sees the target holding rows the source
+     * deleted says so, later audits of the same still-growing surplus stay quiet, and the entry
+     * is dropped when the surplus clears so a later episode reports again.
+     */
+    private final Map<String, Long> lastRowCountSurplus = new ConcurrentHashMap<>();
+
+    /**
      * Tables already confirmed column-compatible with their source, keyed
      * {@code projectId:targetSchema:targetTableName} (upper-cased).
      *
@@ -1331,7 +1340,14 @@ public class SyncEngine {
             // Stamp only after the audit actually ran: a pre-written stamp would throttle
             // away the retry for a whole interval when the check itself errored.
             lastRowCountAudit.put(key, now);
-            if (audit == null || !audit.isTargetShort()) {
+            if (audit == null) {
+                return AuditedProgress.unrepaired(progress);
+            }
+            if (!audit.isTargetShort()) {
+                // A target holding rows the source deleted is not a repair case — there is
+                // nothing to copy back — but polling can never see those deletes, so the
+                // audit is the only place that can say they exist.
+                reportSurplus(key, table, audit, progress, ctx);
                 return AuditedProgress.unrepaired(progress);
             }
             long missing = audit.getSourceRows() - audit.getTargetRows();
@@ -1382,6 +1398,43 @@ public class SyncEngine {
             log.warn("Row count audit could not run for {}: {}", table.getName(), e.getMessage());
         }
         return AuditedProgress.unrepaired(progress);
+    }
+
+    /**
+     * Files one INFO entry when the target holds rows the source has deleted inside the audited
+     * range — the silent half of polling: the incremental window asks for changes above a
+     * watermark, so nothing will ever carry a DELETE.
+     *
+     * <p>One entry per episode (the map remembers the surplus until it clears). When deletion
+     * sync is enabled and this table is small enough to compare, the extra rows are about to
+     * be removed by the same cycle, so nothing is reported.
+     */
+    private void reportSurplus(String key, TableMeta table,
+                               DataSyncService.RowCountAudit audit, SyncProgress progress,
+                               SyncContext ctx) {
+        long surplus = audit.getTargetRows() - audit.getSourceRows();
+        if (surplus <= 0) {
+            lastRowCountSurplus.remove(key);
+            return;
+        }
+        if (ctx.getConfig().isSyncDeletes()
+                && dataSync.deletionDetectionSkipReason(table, ctx.getConfig()) == null) {
+            lastRowCountSurplus.remove(key);
+            return;
+        }
+        Long previous = lastRowCountSurplus.put(key, surplus);
+        if (previous != null && previous > 0) {
+            return;
+        }
+        String cursor = progress.getLastSyncValue();
+        String detail = "Row count audit: target has " + surplus + " row(s) more than the source"
+                + " (source " + audit.getSourceRows() + " vs target " + audit.getTargetRows()
+                + " at or below cursor " + cursor + "). Timestamp / identity polling cannot see"
+                + " physical deletes, so these rows stay on the target until deletion sync or"
+                + " log-based CDC removes them.";
+        log.warn("Project '{}': {}", ctx.projectName(), detail);
+        stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
+                ChangeType.INFO, detail, true, 0, (int) Math.min(surplus, Integer.MAX_VALUE));
     }
 
     /**
@@ -1544,6 +1597,7 @@ public class SyncEngine {
     public void evictProjectCaches(Long projectId) {
         String prefix = projectId + ":";
         lastRowCountAudit.keySet().removeIf(key -> key.startsWith(prefix));
+        lastRowCountSurplus.keySet().removeIf(key -> key.startsWith(prefix));
         verifiedTables.removeIf(key -> key.startsWith(prefix));
         warnedOversizedFullCompare.removeIf(key -> key.startsWith(prefix));
         warnedDeletionSkips.removeIf(key -> key.startsWith(prefix));
