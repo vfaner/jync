@@ -13,13 +13,21 @@ import lombok.extern.slf4j.Slf4j;
  * {@code AUTH_FAILURE} = fix credentials or grants, {@code SCHEMA_CONFLICT} = settle
  * the in-flight DDL (P2-13: previously mislabeled AUTH_FAILURE), {@code XA_ORDERING} =
  * the source interleaves XA branches in a way binlog capture cannot replay safely —
- * switch the project to polling or serialize the source's branches.
+ * switch the project to polling or serialize the source's branches, {@code SCHEMA_DRIFT} =
+ * MySQL row images no longer line up with the catalog — re-baseline.
  */
 @Slf4j
 public final class CdcFailureClassifier {
 
     public enum Kind {
         PURGED, SERVER_ID_CONFLICT, AUTH_FAILURE, SCHEMA_CONFLICT, XA_ORDERING,
+        /**
+         * MySQL binlog only: the row images this stream must decode were written with a
+         * column layout the consumer no longer has (a DDL ran after the resume position).
+         * Reconnecting replays the same images against the same wrong layout, so the project
+         * parks; the remedy is the one-click re-baseline.
+         */
+        SCHEMA_DRIFT,
         TRANSACTION_TOO_LARGE,
         /**
          * YStream only (v1.9.0): a source-side wall — chunked LOB rows, the 32-service
@@ -104,6 +112,11 @@ public final class CdcFailureClassifier {
             // XA branches, neither of which a retry can do.
             if (message.contains("unsupported xa transaction ordering")) {
                 return Kind.XA_ORDERING;
+            }
+            // A binlog row image whose layout no longer matches the catalog: retrying replays
+            // the same positional images into the same wrong columns. A human must re-baseline.
+            if (message.contains("cdc schema drift")) {
+                return Kind.SCHEMA_DRIFT;
             }
             // A transaction that exceeds the configured buffer cap: replaying it would
             // buffer the same rows again (previously until the heap died), so backoff

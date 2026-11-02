@@ -3,6 +3,15 @@ package com.qqmu.jync.service.cdc;
 /** Where the stream handler gets per-table bindings from; the consumer caches them. */
 public interface CdcTableMetaSupplier {
 
+    /**
+     * Called once per stream connection, before any event is delivered. The consumer passes
+     * the column layouts persisted with the resume position so the supplier can refuse a
+     * binding built from a catalog that no longer matches the row images it is about to
+     * replay ({@link CdcSchemaDrift}). Default no-op for suppliers that do not cache.
+     */
+    default void beginStream(String persistedLayoutSignatures) {
+    }
+
     /** Binding for a source table, cached; null when the table cannot be read (dropped mid-stream). */
     CdcTableBinding binding(String database, String table);
 

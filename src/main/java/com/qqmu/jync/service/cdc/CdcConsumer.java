@@ -7,6 +7,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
@@ -83,7 +84,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
 
     private final CdcEventApplier applier;
     private final CdcEventStreamHandler.TransactionSink sink;
-    private final CdcTableMetaSupplier supplier;
+    private final BindingSupplier supplier;
 
     /** Cross-thread stop flag: requestStop is called from manager/scheduler threads. */
     private volatile boolean running = true;
@@ -194,10 +195,14 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 }
                 lastFailure.set(null);
                 connectedAtNs.set(0L);                             // R3b:本轮连接的存活计时从零起
+                CdcPosition resume = positionStore.find(projectId).orElse(null);
                 BinaryLogClient client = clientFactory.createClient(
-                        ctx.getSourceConfig(), projectId,
-                        positionStore.find(projectId).orElse(null));
+                        ctx.getSourceConfig(), projectId, resume);
                 this.client = client;
+                // Row images are positional: tell the supplier which layouts the position was
+                // written with, so a binding built from a catalog that has since changed is
+                // refused instead of decoding values into the wrong columns.
+                supplier.beginStream(resume == null ? null : resume.getSchemaSignatures());
                 CdcEventStreamHandler handler = wire(client);      // handler + sink + lifecycle
                 try {
                     client.connect(properties.getCdc().getConnectTimeoutMs());
@@ -493,7 +498,8 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             ctx.requireLease();                                  // 丢租约 → 位点不动,接管方重放
             String file = mark.getFile() != null ? mark.getFile() : lastFile;
             if (file != null) {
-                positionStore.advance(projectId, file, mark.getPos(), mark.getGtidSet());
+                positionStore.advance(projectId, file, mark.getPos(), mark.getGtidSet(),
+                        layoutSignatures(changes), supplier.consumeDdlSeen());
                 stats.recordPosition(file, mark.getPos(), mark.getGtidSet());
                 lastFile = file;
             } else {
@@ -506,6 +512,25 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             stats.touchActivity();
             deserializationFailures.set(0);                      // 成功事务:清零连败计数
         };
+    }
+
+    /**
+     * The column layouts this transaction was decoded with, keyed by the binding's own
+     * database/table spelling. Persisted with the position so a later restart can prove the
+     * catalog still describes these row images; tables with no readable metadata contribute
+     * nothing (a null signature cannot be compared).
+     */
+    private static Map<String, String> layoutSignatures(
+            List<CdcEventStreamHandler.TableChange> changes) {
+        Map<String, String> layouts = new LinkedHashMap<>();
+        for (CdcEventStreamHandler.TableChange change : changes) {
+            String signature = change.binding.getLayoutSignature();
+            if (signature != null) {
+                layouts.put(change.binding.getDatabase() + "." + change.binding.getTable(),
+                        signature);
+            }
+        }
+        return layouts;
     }
 
     /**
@@ -524,6 +549,31 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         /** "db.table" (any case) -> binding; a case-insensitive TreeMap unifies spellings. */
         private final Map<String, CdcTableBinding> cache = Collections
                 .synchronizedMap(new TreeMap<>(String.CASE_INSENSITIVE_ORDER));
+
+        /**
+         * Layouts recorded with the resume position; empty until {@link #beginStream} runs.
+         * Case-insensitive for the same reason the binding cache is: the persisted spelling
+         * and the TABLE_MAP spelling may differ in case.
+         */
+        private Map<String, String> persistedLayouts = Collections.emptyMap();
+
+        /**
+         * Set by the first DDL this connection sees. A DDL Query event invalidates every
+         * cached binding and the binlog does not say which table it touched, so after one
+         * the catalog is known-newer than any earlier image — comparing it against the
+         * persisted layouts would flag tables the DDL never touched. Checks resume at the
+         * next connection, which reloads layouts from the position.
+         */
+        private boolean ddlSeen;
+
+        @Override
+        public void beginStream(String persistedLayoutSignatures) {
+            Map<String, String> decoded = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+            decoded.putAll(CdcPositionStore.decodeLayoutSignatures(persistedLayoutSignatures));
+            persistedLayouts = Collections.unmodifiableMap(decoded);
+            ddlSeen = false;
+            cache.clear();                       // 连接从位点重放:必须按当前 catalog 重读
+        }
 
         @Override
         public CdcTableBinding binding(String database, String table) {
@@ -548,6 +598,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 CdcTableBinding binding = CdcTableBinding.of(database, actual, meta,
                         ctx.getConfig().targetTableName(actual), details.charsets,
                         details.enums);
+                verifyLayoutAgainstPosition(binding);
                 cache.put(key, binding);
                 return binding;
             } catch (SQLException e) {
@@ -568,9 +619,45 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             // RuntimeExceptions propagate as-is through the same listener-failure path.
         }
 
+        /**
+         * Refuses a binding whose ordered column list no longer matches the layout the
+         * position was written with: the stream is about to replay row images that were
+         * encoded positionally against the old layout, and the values would land in the
+         * wrong columns — silently, since the count still matches for add/drop pairs.
+         *
+         * <p>Skipped when the table is unsupported (no PK: its rows are never decoded),
+         * when no layout was recorded for it, and after a DDL on this connection (see
+         * {@link #ddlSeen}). A null signature cannot be compared and passes.
+         */
+        private void verifyLayoutAgainstPosition(CdcTableBinding binding) {
+            if (ddlSeen || !binding.isApplicable() || binding.getLayoutSignature() == null) {
+                return;
+            }
+            String expected = persistedLayouts.get(
+                    binding.getDatabase() + "." + binding.getTable());
+            if (expected != null && !expected.equals(binding.getLayoutSignature())) {
+                throw CdcSchemaDrift.failure(binding.getDatabase(), binding.getTable(),
+                        "no longer matches the column layout recorded with the resume"
+                                + " position (a DDL ran while the consumer was not"
+                                + " streaming)");
+            }
+        }
+
+        /**
+         * True when a DDL has run since the last advance on this connection. The sink uses it
+         * to REPLACE the persisted layouts instead of merging: the DDL's target is unknown,
+         * so every untouched table's entry may now describe a layout that no longer exists.
+         */
+        boolean consumeDdlSeen() {
+            boolean seen = ddlSeen;
+            ddlSeen = false;
+            return seen;
+        }
+
         @Override
         public void invalidate(String database, String table) {
             if (database == null) {
+                ddlSeen = true;                                  // 之后的 catalog 已新于旧镜像
                 cache.clear();                                   // DDL:全清(Review Focus #1)
             } else {
                 cache.remove(database + "." + table);

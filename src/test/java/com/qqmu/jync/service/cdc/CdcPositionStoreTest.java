@@ -7,6 +7,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -173,5 +175,85 @@ class CdcPositionStoreTest {
         store.advance(1L, "mysql-bin.000007", 5000L, "uuid:1-90");
         verify(repository).save(position);
         assertThat(position.getGtidSet()).isEqualTo("uuid:1-90");
+    }
+
+    // —— 列布局签名:位点必须带上「本事务按什么列序解码」,重启才能发现 DDL 漂移 ——
+
+    private static String signature(char fill) {
+        return String.valueOf(fill).repeat(CdcPositionStore.LAYOUT_SIGNATURE_CHARS);
+    }
+
+    @Test
+    void layoutSignaturesRoundTripThroughAnyIdentifierCharacter() {
+        Map<String, String> layouts = new LinkedHashMap<>();
+        layouts.put("app.orders", signature('a'));
+        layouts.put("schema:odd.表.名", signature('b'));
+
+        String encoded = CdcPositionStore.encodeLayoutSignatures(layouts);
+
+        assertThat(CdcPositionStore.decodeLayoutSignatures(encoded)).isEqualTo(layouts);
+    }
+
+    @Test
+    void corruptLayoutTextDecodesToWhatIsStillReadable() {
+        String encoded = CdcPositionStore.encodeLayoutSignatures(
+                Map.of("app.orders", signature('a')));
+        assertThat(CdcPositionStore.decodeLayoutSignatures(encoded + "junk"))
+                .containsEntry("app.orders", signature('a'));
+        assertThat(CdcPositionStore.decodeLayoutSignatures("not-a-layout:text")).isEmpty();
+        assertThat(CdcPositionStore.decodeLayoutSignatures(null)).isEmpty();
+    }
+
+    @Test
+    void advanceMergesNewLayoutsAndKeepsTheOtherTables() {
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+        position.setSchemaSignatures(CdcPositionStore.encodeLayoutSignatures(
+                Map.of("app.orders", signature('a'))));
+
+        store.advance(1L, "mysql-bin.000007", 200L, null,
+                Map.of("app.items", signature('b')));
+
+        assertThat(CdcPositionStore.decodeLayoutSignatures(position.getSchemaSignatures()))
+                .containsEntry("app.orders", signature('a'))
+                .containsEntry("app.items", signature('b'));
+    }
+
+    @Test
+    void aDdlAdvanceDropsLayoutsItCanNoLongerVouchFor() {
+        // DDL 的目标表未知:未在本事务出现的表,其记录布局可能已经作废。保留它会让
+        // 重启把一个已经流过的 DDL 误判成漂移。
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+        position.setSchemaSignatures(CdcPositionStore.encodeLayoutSignatures(
+                Map.of("app.orders", signature('a'))));
+
+        store.advance(1L, "mysql-bin.000007", 200L, null,
+                Map.of("app.items", signature('b')), true);
+
+        assertThat(CdcPositionStore.decodeLayoutSignatures(position.getSchemaSignatures()))
+                .containsOnlyKeys("app.items");
+    }
+
+    @Test
+    void aRejectedRewindDoesNotRecordLayouts() {
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(500L);
+
+        store.advance(1L, "mysql-bin.000007", 400L, null,
+                Map.of("app.orders", signature('a')));
+
+        verify(repository, never()).save(any());
+        assertThat(position.getSchemaSignatures()).isNull();
+    }
+
+    @Test
+    void aBaselineStartForgetsTheLayoutsOfTheInterruptedRun() {
+        position.setSchemaSignatures(CdcPositionStore.encodeLayoutSignatures(
+                Map.of("app.orders", signature('a'))));
+
+        store.recordBaselineStart(1L, "mysql-bin.000008", 4L, null, 612001L);
+
+        assertThat(position.getSchemaSignatures()).isNull();
     }
 }

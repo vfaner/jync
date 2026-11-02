@@ -29,6 +29,7 @@ import com.github.shyiko.mysql.binlog.event.EventType;
 import com.github.shyiko.mysql.binlog.event.QueryEventData;
 import com.github.shyiko.mysql.binlog.event.RotateEventData;
 import com.github.shyiko.mysql.binlog.event.TableMapEventData;
+import com.github.shyiko.mysql.binlog.event.TableMapEventMetadata;
 import com.github.shyiko.mysql.binlog.event.UpdateRowsEventData;
 import com.github.shyiko.mysql.binlog.event.WriteRowsEventData;
 import com.github.shyiko.mysql.binlog.event.XidEventData;
@@ -121,6 +122,24 @@ class CdcEventStreamHandlerTest {
         handler.onEvent(event(EventType.TABLE_MAP, data, 100L));
     }
 
+    /**
+     * TABLE_MAP carrying the event-time layout: the column count always, the names only when
+     * the source runs with {@code binlog_row_metadata=FULL}.
+     */
+    private void tableMapWithLayout(long tableId, int columnCount, List<String> columnNames) {
+        TableMapEventData data = new TableMapEventData();
+        data.setTableId(tableId);
+        data.setDatabase("app");
+        data.setTable("orders");
+        data.setColumnTypes(new byte[columnCount]);
+        if (columnNames != null) {
+            TableMapEventMetadata metadata = new TableMapEventMetadata();
+            metadata.setColumnNames(columnNames);
+            data.setEventMetadata(metadata);
+        }
+        handler.onEvent(event(EventType.TABLE_MAP, data, 100L));
+    }
+
     private void write(long tableId, Serializable[]... rows) {
         WriteRowsEventData data = new WriteRowsEventData();
         data.setTableId(tableId);
@@ -136,6 +155,35 @@ class CdcEventStreamHandlerTest {
 
     private static Serializable[] row(long id, String name) {
         return new Serializable[] {id, name.getBytes(StandardCharsets.UTF_8)};
+    }
+
+    // —— DDL 漂移:行镜像按位置编码,事件期列数与当前 catalog 不符时必须停车,不能猜 ——
+
+    @Test
+    void aBinlogImageWithADifferentColumnCountParksInsteadOfMisdecoding() {
+        assertThatThrownBy(() -> tableMapWithLayout(11L, 3, null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(CdcSchemaDrift.MARKER)
+                .hasMessageContaining("3 columns");
+        assertThat(handler.takeFailure()).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void binlogColumnNamesInADifferentOrderPark() {
+        assertThatThrownBy(() -> tableMapWithLayout(11L, 2, List.of("name", "id")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(CdcSchemaDrift.MARKER)
+                .hasMessageContaining("'name'");
+    }
+
+    @Test
+    void binlogColumnNamesInTheSameOrderAreAcceptedRegardlessOfCase() {
+        tableMapWithLayout(11L, 2, List.of("ID", "Name"));
+        write(11L, row(1L, "a"));
+        xid(500L);
+
+        assertThat(sink.changes).hasSize(1);
+        assertThat(sink.changes.get(0).upserts()).hasSize(1);
     }
 
     @Test

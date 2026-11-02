@@ -57,6 +57,15 @@ class CdcFailureClassifierTest {
                 .isEqualTo(CdcFailureClassifier.Kind.XA_ORDERING);
     }
 
+    @Test
+    void aBinlogImageWithAStaleLayoutParksForARebaseline() {
+        // 行镜像按位置解码:列布局已对不上时重连只会把同样的镜像又写进错列。
+        assertThat(CdcFailureClassifier.classify(new IllegalStateException(
+                CdcSchemaDrift.MARKER + ": table app.orders has 3 columns in the binlog"
+                        + " image but 2 in the current schema; re-baseline the project")))
+                .isEqualTo(CdcFailureClassifier.Kind.SCHEMA_DRIFT);
+    }
+
     // —— 裁定 R3a:MySQL 8.0 GTID 续传被拒的新措辞必须归入 PURGED(致命,等人重建基线),
     // 否则按 TRANSIENT 无限重连,且撞上 R3b 前的 onConnect 清零就是 1s 热循环。——
 

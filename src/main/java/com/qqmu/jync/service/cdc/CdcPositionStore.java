@@ -2,6 +2,8 @@ package com.qqmu.jync.service.cdc;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,6 +50,9 @@ public class CdcPositionStore {
         position.setBinlogPos(pos);
         position.setGtidSet(gtidSet);
         position.setServerId(serverId);
+        // A baseline re-reads every table: whatever layouts the interrupted run recorded no
+        // longer describe the snapshot the next stream will decode.
+        position.setSchemaSignatures(null);
         position.setBaselineDone(false);
         position.setUpdatedAt(Instant.now());
         return repository.save(position);
@@ -77,6 +82,37 @@ public class CdcPositionStore {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advance(Long projectId, String file, long pos, String gtidSet) {
+        advance(projectId, file, pos, gtidSet, null, false);
+    }
+
+    /**
+     * Post-commit advance that also records the column layouts the committed transaction was
+     * decoded with. See {@link CdcPosition#getSchemaSignatures()} for why the position must
+     * carry them: a restart builds bindings from the catalog as it is now, and row images are
+     * positional.
+     *
+     * <p>Only tables in this transaction are replaced; another table's entry keeps describing
+     * the layout of the last transaction that touched it, which is exactly what a later
+     * binding check needs.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void advance(Long projectId, String file, long pos, String gtidSet,
+                        Map<String, String> layoutSignatures) {
+        advance(projectId, file, pos, gtidSet, layoutSignatures, false);
+    }
+
+    /**
+     * As above, with {@code replaceLayouts} saying whether the persisted per-table entries are
+     * still trustworthy. A DDL invalidates every binding at once but the binlog does not say
+     * which table it touched, so entries for untouched tables now describe a layout that no
+     * longer exists; they are dropped wholesale at the next advance (the next transaction
+     * re-records the tables it touches). Merging instead would make a later restart compare
+     * the new catalog against those obsolete entries and park a project over a DDL it already
+     * streamed past.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void advance(Long projectId, String file, long pos, String gtidSet,
+                        Map<String, String> layoutSignatures, boolean replaceLayouts) {
         Optional<CdcPosition> existing = repository.findByProjectId(projectId);
         if (!existing.isPresent()) {
             log.warn("CDC position for project {} not advanced to {}:{}: no position row"
@@ -103,8 +139,80 @@ public class CdcPositionStore {
         if (gtidSet != null) {
             position.setGtidSet(gtidSet);
         }
+        if (replaceLayouts) {
+            position.setSchemaSignatures(encodeLayoutSignatures(layoutSignatures));
+        } else {
+            mergeLayoutSignatures(position, layoutSignatures);
+        }
         position.setUpdatedAt(Instant.now());
         repository.save(position);
+    }
+
+    /** Length of one {@link CdcTableBinding#layoutSignature()} in the encoded text. */
+    static final int LAYOUT_SIGNATURE_CHARS = 64;
+
+    /**
+     * Encodes {@code "database.table" -> signature} so it survives any character a MySQL
+     * identifier may contain (including digits, colons and newlines): each entry is
+     * {@code <keyLength>:<key><64-char signature>}. Malformed input decodes to what it can —
+     * this text lives in the position row, and refusing to read it would stall every
+     * advance, not just the corrupted entry.
+     */
+    static String encodeLayoutSignatures(Map<String, String> signatures) {
+        if (signatures == null || signatures.isEmpty()) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder(signatures.size() * 96);
+        for (Map.Entry<String, String> entry : signatures.entrySet()) {
+            String key = entry.getKey();
+            String signature = entry.getValue();
+            if (key == null || key.length() > 4096 || signature == null
+                    || signature.length() != LAYOUT_SIGNATURE_CHARS) {
+                continue;
+            }
+            out.append(key.length()).append(':').append(key).append(signature);
+        }
+        return out.length() == 0 ? null : out.toString();
+    }
+
+    static Map<String, String> decodeLayoutSignatures(String encoded) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (encoded == null || encoded.isEmpty()) {
+            return out;
+        }
+        int i = 0;
+        while (i < encoded.length()) {
+            int colon = encoded.indexOf(':', i);
+            if (colon < 0) {
+                break;
+            }
+            int keyLength;
+            try {
+                keyLength = Integer.parseInt(encoded.substring(i, colon));
+            } catch (NumberFormatException e) {
+                break;                                       // corrupt: keep what is readable
+            }
+            int keyStart = colon + 1;
+            int signatureStart = keyStart + keyLength;
+            int signatureEnd = signatureStart + LAYOUT_SIGNATURE_CHARS;
+            if (keyLength < 0 || signatureEnd > encoded.length()) {
+                break;
+            }
+            out.put(encoded.substring(keyStart, signatureStart),
+                    encoded.substring(signatureStart, signatureEnd));
+            i = signatureEnd;
+        }
+        return out;
+    }
+
+    private static void mergeLayoutSignatures(CdcPosition position,
+                                              Map<String, String> signatures) {
+        if (signatures == null || signatures.isEmpty()) {
+            return;
+        }
+        Map<String, String> merged = decodeLayoutSignatures(position.getSchemaSignatures());
+        merged.putAll(signatures);
+        position.setSchemaSignatures(encodeLayoutSignatures(merged));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

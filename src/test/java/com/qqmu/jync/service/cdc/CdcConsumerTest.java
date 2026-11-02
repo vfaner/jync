@@ -53,6 +53,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
+import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
@@ -294,6 +295,102 @@ class CdcConsumerTest {
                 new CdcRuntimeStats(), new SyncProperties());
 
         assertThat(consumer.supplierForTest().binding("src", "gone")).isNull();
+    }
+
+    // —— DDL 漂移:重启时 catalog 可能已经不是位点写入时那套布局。行镜像按位置解码,
+    // 列序对不上就必须停车(一次重新基线),绝不能把值写进错列。——
+    //
+    // 记录的是「上次事务解码用的布局」;连接开始时拿它与当前 catalog 比,DDL 出现在
+    // 本次连接内时关掉比较(catalog 已确定新于旧镜像,handler 逐 TABLE_MAP 校验)。
+
+    private static TableMeta tableMeta(String... columnNames) {
+        TableMeta meta = new TableMeta();
+        meta.setName("orders");
+        for (String name : columnNames) {
+            ColumnMeta column = new ColumnMeta();
+            column.setName(name);
+            column.setJdbcType(Types.VARCHAR);
+            column.setPrimaryKey("id".equalsIgnoreCase(name));
+            meta.getColumns().add(column);
+        }
+        meta.getPrimaryKeys().add("id");
+        return meta;
+    }
+
+    private static String layoutOf(TableMeta meta) {
+        return CdcTableBinding.of("src", "orders", meta, "orders", null).getLayoutSignature();
+    }
+
+    private static CdcConsumer consumerSeeing(long projectId, TableMeta catalog)
+            throws SQLException {
+        Project project = project(projectId);
+        Connection conn = mock(Connection.class);
+        PreparedStatement ps = mock(PreparedStatement.class);
+        ResultSet rs = mock(ResultSet.class);
+        DataSourceManager dataSourceManager = mock(DataSourceManager.class);
+        when(dataSourceManager.getConnection(any())).thenReturn(conn);
+        when(conn.prepareStatement(anyString())).thenReturn(ps);
+        when(ps.executeQuery()).thenReturn(rs);
+        when(rs.next()).thenReturn(true, false, true, false);
+        when(rs.getString(1)).thenReturn("orders");
+        MetadataReader reader = mock(MetadataReader.class);
+        when(reader.readTable(conn, "src", "orders")).thenReturn(catalog);
+        SyncContext ctx = SyncContext.builder().project(project).config(new SyncConfig())
+                .sourceReader(reader).build();
+        return new CdcConsumer(project, mock(SyncLockService.LockHandle.class), ctx,
+                mock(BinlogClientFactory.class), mock(CdcPositionStore.class),
+                mock(CdcBaselineService.class), mock(SyncTaskStore.class),
+                mock(SyncStateWriter.class), dataSourceManager,
+                new CdcRuntimeStats(), new SyncProperties());
+    }
+
+    private static String persistedLayout(TableMeta asDecoded) {
+        return CdcPositionStore.encodeLayoutSignatures(
+                Map.of("src.orders", layoutOf(asDecoded)));
+    }
+
+    @Test
+    void aBindingThatStillMatchesTheResumeLayoutIsAccepted() throws Exception {
+        TableMeta catalog = tableMeta("id", "name");
+        CdcConsumer consumer = consumerSeeing(13L, catalog);
+        consumer.supplierForTest().beginStream(persistedLayout(tableMeta("id", "name")));
+
+        assertThat(consumer.supplierForTest().binding("src", "orders")).isNotNull();
+    }
+
+    @Test
+    void aCatalogThatChangedSinceTheResumePositionParksBeforeAnyRowIsDecoded()
+            throws Exception {
+        CdcConsumer consumer = consumerSeeing(14L, tableMeta("id", "name", "phone"));
+        consumer.supplierForTest().beginStream(persistedLayout(tableMeta("id", "name")));
+
+        assertThatThrownBy(() -> consumer.supplierForTest().binding("src", "orders"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(CdcSchemaDrift.MARKER)
+                .hasMessageContaining("src.orders");
+    }
+
+    @Test
+    void aDdlSeenOnThisConnectionLiftsTheComparison() throws Exception {
+        // DDL 之后 catalog 必然新于旧镜像;再比就会在 DDL 根本没碰的表上误报。
+        CdcConsumer consumer = consumerSeeing(15L, tableMeta("id", "name", "phone"));
+        consumer.supplierForTest().beginStream(persistedLayout(tableMeta("id", "name")));
+        consumer.supplierForTest().invalidate(null, null);
+
+        assertThat(consumer.supplierForTest().binding("src", "orders")).isNotNull();
+    }
+
+    @Test
+    void theNextConnectionRestoresTheComparison() throws Exception {
+        CdcConsumer consumer = consumerSeeing(16L, tableMeta("id", "name", "phone"));
+        consumer.supplierForTest().beginStream(persistedLayout(tableMeta("id", "name")));
+        consumer.supplierForTest().invalidate(null, null);
+        consumer.supplierForTest().binding("src", "orders");     // DDL 后:放行并缓存
+
+        consumer.supplierForTest().beginStream(persistedLayout(tableMeta("id", "name")));
+
+        assertThatThrownBy(() -> consumer.supplierForTest().binding("src", "orders"))
+                .hasMessageContaining(CdcSchemaDrift.MARKER);
     }
 
     // —— 裁定 R1(choke 路径端到端):handler 抛 → 自行断连 → consumer 先查 handler 失败

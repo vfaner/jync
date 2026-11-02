@@ -1,5 +1,8 @@
 package com.qqmu.jync.service.cdc;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +38,13 @@ public final class CdcTableBinding {
      */
     private final Map<String, CdcEnumDefinition> enumByUpperColumn;
     private final boolean applicable;
+    /**
+     * SHA-256 over the ordered column names this binding decodes with; {@code null} when the
+     * table could not be read. A binlog row image is positional, so this is the only thing
+     * that can tell a later restart "the catalog is no longer the schema those rows were
+     * written with" — see {@link CdcSchemaDrift}.
+     */
+    private final String layoutSignature;
 
     private CdcTableBinding(String database, String table, TableMeta meta, String targetTable,
                             Map<String, String> charsetByUpperColumn,
@@ -46,6 +56,7 @@ public final class CdcTableBinding {
         this.charsetByUpperColumn = charsetByUpperColumn;
         this.enumByUpperColumn = enumByUpperColumn;
         this.applicable = applicable;
+        this.layoutSignature = layoutSignature(meta);
     }
 
     public static CdcTableBinding of(String database, String table, TableMeta meta,
@@ -104,5 +115,39 @@ public final class CdcTableBinding {
                             column.getTypeName())));
         }
         return types;
+    }
+
+    /**
+     * Fingerprint of the ordered column list, case-folded (MySQL column names are
+     * case-insensitive). Names only on purpose: a type change does not move a positional
+     * value into another column, while add / drop / rename / reorder all change the ordered
+     * name list. Null when the table has no metadata.
+     */
+    static String layoutSignature(TableMeta meta) {
+        if (meta == null || meta.getColumns() == null) {
+            return null;
+        }
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required by every Java runtime", e);
+        }
+        for (ColumnMeta column : meta.getColumns()) {
+            String name = column == null || column.getName() == null
+                    ? "" : column.getName().toUpperCase(Locale.ROOT);
+            digest.update(name.getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+        }
+        return hex(digest.digest());
+    }
+
+    private static String hex(byte[] bytes) {
+        char[] out = new char[bytes.length * 2];
+        for (int i = 0; i < bytes.length; i++) {
+            out[i * 2] = Character.forDigit((bytes[i] >> 4) & 0xF, 16);
+            out[i * 2 + 1] = Character.forDigit(bytes[i] & 0xF, 16);
+        }
+        return new String(out);
     }
 }

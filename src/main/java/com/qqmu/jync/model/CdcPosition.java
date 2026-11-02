@@ -82,6 +82,20 @@ public class CdcPosition {
     @Column(name = "lsn", length = 64)
     private String lsn;
 
+    /**
+     * Per-table column layouts as of the last applied MySQL binlog transaction, encoded by
+     * {@code CdcPositionStore}: {@code <keyLength>:<database>.<table><sha256-hex>} repeated.
+     *
+     * <p>Binlog row images are positional. On restart the consumer reads the catalog as it is
+     * NOW, which is not necessarily the schema those images were written with; without this
+     * record a DDL that ran while the consumer was down silently puts values in the wrong
+     * columns. A mismatch parks the project and points at the re-baseline action. Null for
+     * every other capture strategy and for a position written before this column existed.
+     */
+    @Lob
+    @Column(name = "schema_signatures")
+    private String schemaSignatures;
+
     @Getter(AccessLevel.NONE) // the accessor below is isBaselineDone(), per the store contract
     @Column(name = "baseline_done", nullable = false)
     private Boolean baselineDone = false;

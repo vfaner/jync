@@ -18,6 +18,7 @@ import com.github.shyiko.mysql.binlog.event.EventHeaderV4;
 import com.github.shyiko.mysql.binlog.event.QueryEventData;
 import com.github.shyiko.mysql.binlog.event.RotateEventData;
 import com.github.shyiko.mysql.binlog.event.TableMapEventData;
+import com.github.shyiko.mysql.binlog.event.TableMapEventMetadata;
 import com.github.shyiko.mysql.binlog.event.UpdateRowsEventData;
 import com.github.shyiko.mysql.binlog.event.WriteRowsEventData;
 import com.qqmu.jync.dto.SyncConfig;
@@ -294,7 +295,47 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             bindings.remove(tableId);
             return;
         }
+        verifyImageMatchesBinding(data, binding);
         bindings.put(tableId, binding);
+    }
+
+    /**
+     * MySQL encodes row values by position. The binding comes from the live catalog, which is
+     * only guaranteed to describe the rows of a TABLE_MAP dated after the last DDL — a
+     * consumer resuming from an old position, or one that lags behind a DDL already executed
+     * on the source, would otherwise put values into the wrong columns silently. The
+     * TABLE_MAP carries the event-time column count always, and the event-time column names
+     * when the source runs with {@code binlog_row_metadata=FULL}; either disagreement parks
+     * the project instead of decoding it wrongly.
+     */
+    private static void verifyImageMatchesBinding(TableMapEventData data,
+                                                   CdcTableBinding binding) {
+        byte[] columnTypes = data.getColumnTypes();
+        int boundColumns = binding.getMeta().getColumns().size();
+        if (columnTypes != null && columnTypes.length != boundColumns) {
+            throw CdcSchemaDrift.failure(binding.getDatabase(), binding.getTable(),
+                    "has " + columnTypes.length + " columns in the binlog image but "
+                            + boundColumns + " in the current schema");
+        }
+        TableMapEventMetadata metadata = data.getEventMetadata();
+        List<String> imageNames = metadata == null ? null : metadata.getColumnNames();
+        if (imageNames == null || imageNames.isEmpty()) {
+            return;                       // binlog_row_metadata=MINIMAL: count is all we get
+        }
+        List<String> boundNames = binding.columnNames();
+        if (imageNames.size() != boundNames.size()) {
+            throw CdcSchemaDrift.failure(binding.getDatabase(), binding.getTable(),
+                    "has " + imageNames.size() + " named columns in the binlog image but "
+                            + boundNames.size() + " in the current schema");
+        }
+        for (int i = 0; i < imageNames.size(); i++) {
+            if (!imageNames.get(i).equalsIgnoreCase(boundNames.get(i))) {
+                throw CdcSchemaDrift.failure(binding.getDatabase(), binding.getTable(),
+                        "names column " + (i + 1) + " as '" + imageNames.get(i)
+                                + "' in the binlog image but '" + boundNames.get(i)
+                                + "' in the current schema");
+            }
+        }
     }
 
     /** Contract 2: after-images buffer as upserts; one poison row never stalls the stream. */
