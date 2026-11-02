@@ -40,8 +40,8 @@ class MySqlRuntimeMetricsReaderTest {
         Connection connection = connectionReturning(
                 new String[] {"Threads_connected", "12"},
                 new String[] {"Questions", "900000"},
-                new String[] {"Innodb_buffer_pool_read_requests", "9900"},
-                new String[] {"Innodb_buffer_pool_reads", "100"},
+                new String[] {"Innodb_buffer_pool_read_requests", "1000"},
+                new String[] {"Innodb_buffer_pool_reads", "10"},
                 new String[] {"Innodb_row_lock_current_waits", "3"});
 
         RuntimeMetricsReader.Reading reading = reader.read(connection);
@@ -50,6 +50,20 @@ class MySqlRuntimeMetricsReaderTest {
         assertThat(reading.counter()).isEqualTo(900000L);
         assertThat(reading.cacheHitPercent()).isEqualTo(99.0);
         assertThat(reading.lockWaits()).isEqualTo(3);
+    }
+
+    @Test
+    void theHitRateCountsTheDiskReadsInsideTheLogicalReads() throws SQLException {
+        // InnoDB counts a disk read as part of the read request that caused it: 500 of 1000
+        // requests served from disk is a 50% hit rate, not the 66.7% that treating the two
+        // counters as disjoint would produce.
+        Connection connection = connectionReturning(
+                new String[] {"Threads_connected", "7"},
+                new String[] {"Questions", "42"},
+                new String[] {"Innodb_buffer_pool_read_requests", "1000"},
+                new String[] {"Innodb_buffer_pool_reads", "500"});
+
+        assertThat(reader.read(connection).cacheHitPercent()).isEqualTo(50.0);
     }
 
     @Test

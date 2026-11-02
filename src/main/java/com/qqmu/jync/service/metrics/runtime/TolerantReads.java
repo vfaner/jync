@@ -80,10 +80,31 @@ final class TolerantReads {
         }
     }
 
+    /** Cache-served / (cache-served + disk) for disjoint counters (Postgres blks_hit/blks_read). */
     static Double hitPercent(Long hits, Long reads) {
         if (hits == null || reads == null || hits + reads <= 0) {
             return null;
         }
         return hits * 100.0 / (hits + reads);
+    }
+
+    /**
+     * Cache hit rate for counters that report logical reads and the physical reads inside
+     * them — MySQL InnoDB read requests, DB2 buffer-pool logical reads, and Oracle/YashanDB
+     * session logical reads all count a disk read as part of the logical read that caused
+     * it. The cache-served share is therefore {@code (logical - physical) / logical}; adding
+     * the two counters instead would report 67% for a 50% hit rate.
+     *
+     * <p>A missing counter leaves the rate unknown. So does a physical count above the
+     * logical count (Oracle direct-path reads bypass the buffer cache and are not session
+     * logical reads): the figures describe different traffic, and a negative percentage
+     * would be a claim rather than a measurement.
+     */
+    static Double hitPercentOfLogicalReads(Long logical, Long physical) {
+        if (logical == null || physical == null
+                || logical <= 0 || physical < 0 || physical > logical) {
+            return null;
+        }
+        return (logical - physical) * 100.0 / logical;
     }
 }

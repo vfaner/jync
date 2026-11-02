@@ -34,13 +34,23 @@ class Db2RuntimeMetricsReaderTest {
     @Test
     void theMonitorRowBecomesSessionsCounterAndHitRate() throws SQLException {
         RuntimeMetricsReader.Reading reading = reader.read(StubConnection.returning(
-                StubResultSet.of(new String[] {"5", "1000", "9900", "100"})));
+                StubResultSet.of(new String[] {"5", "1000", "1000", "10"})));
 
         assertThat(reading.sessions()).isEqualTo(5);
         assertThat(reading.counter()).isEqualTo(1000L);
         assertThat(reading.cacheHitPercent()).isEqualTo(99.0);
         // This query asks for no lock-wait figure, so the page shows "unknown" rather than 0.
         assertThat(reading.lockWaits()).isNull();
+    }
+
+    @Test
+    void theHitRateCountsThePhysicalReadsInsideTheLogicalReads() throws SQLException {
+        // A physical read is one of the logical reads that had to go to disk: 500 of 1000
+        // logical reads is a 50% hit rate, not 66.7%.
+        RuntimeMetricsReader.Reading reading = reader.read(StubConnection.returning(
+                StubResultSet.of(new String[] {"5", "1000", "1000", "500"})));
+
+        assertThat(reading.cacheHitPercent()).isEqualTo(50.0);
     }
 
     @Test

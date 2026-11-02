@@ -39,7 +39,8 @@ public class Db2RuntimeMetricsReader implements RuntimeMetricsReader {
             Long counter = TolerantReads.parseLong(rs.getString(2));
             Long hits = TolerantReads.parseLong(rs.getString(3));
             Long reads = TolerantReads.parseLong(rs.getString(4));
-            return new Reading(sessions, counter, TolerantReads.hitPercent(hits, reads), null);
+            return new Reading(sessions, counter,
+                    TolerantReads.hitPercentOfLogicalReads(hits, reads), null);
         }
     }
 

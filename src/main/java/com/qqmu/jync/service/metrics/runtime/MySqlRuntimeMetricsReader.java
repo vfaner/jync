@@ -48,7 +48,7 @@ public class MySqlRuntimeMetricsReader implements RuntimeMetricsReader {
         return new Reading(
                 intValue(status, "Threads_connected"),
                 number(status, "Questions"),
-                hitPercent(requests, reads),
+                TolerantReads.hitPercentOfLogicalReads(requests, reads),
                 intValue(status, "Innodb_row_lock_current_waits"));
     }
 
@@ -69,12 +69,5 @@ public class MySqlRuntimeMetricsReader implements RuntimeMetricsReader {
             log.debug("MySQL status {} is not numeric: {}", variable, raw);
             return null;
         }
-    }
-
-    private Double hitPercent(Long requests, Long reads) {
-        if (requests == null || reads == null || requests + reads <= 0) {
-            return null;
-        }
-        return requests * 100.0 / (requests + reads);
     }
 }

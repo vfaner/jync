@@ -39,8 +39,8 @@ class OracleRuntimeMetricsReaderTest {
                 StubResultSet.of(new String[] {"23"}),
                 StubResultSet.of(
                         new String[] {"execute count", "700000"},
-                        new String[] {"session logical reads", "99000"},
-                        new String[] {"physical reads", "1000"}),
+                        new String[] {"session logical reads", "1000"},
+                        new String[] {"physical reads", "10"}),
                 StubResultSet.of(new String[] {"2"})));
 
         assertThat(reading.sessions()).isEqualTo(23);
@@ -57,13 +57,28 @@ class OracleRuntimeMetricsReaderTest {
                 StubResultSet.of(new String[] {"27"}),
                 StubResultSet.of(
                         new String[] {"EXECUTE COUNT", "3701"},
-                        new String[] {"BUFFER GETS", "9900"},
-                        new String[] {"DISK READS", "100"}),
+                        new String[] {"BUFFER GETS", "1000"},
+                        new String[] {"DISK READS", "10"}),
                 StubResultSet.of(new String[] {"0"})));
 
         assertThat(reading.sessions()).isEqualTo(27);
         assertThat(reading.counter()).isEqualTo(3701L);
         assertThat(reading.cacheHitPercent()).isEqualTo(99.0);
+    }
+
+    @Test
+    void theHitRateCountsThePhysicalReadsInsideTheLogicalReads() throws SQLException {
+        // A physical read is one of the logical reads that missed the cache: 500 of 1000
+        // logical reads is a 50% hit rate, not the 66.7% that adding the two would give.
+        RuntimeMetricsReader.Reading reading = reader.read(StubConnection.returning(
+                StubResultSet.of(new String[] {"23"}),
+                StubResultSet.of(
+                        new String[] {"execute count", "700000"},
+                        new String[] {"session logical reads", "1000"},
+                        new String[] {"physical reads", "500"}),
+                StubResultSet.of(new String[] {"0"})));
+
+        assertThat(reading.cacheHitPercent()).isEqualTo(50.0);
     }
 
     @Test

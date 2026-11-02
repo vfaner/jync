@@ -83,7 +83,7 @@ public class OracleRuntimeMetricsReader implements RuntimeMetricsReader {
         if (stats == null) {
             return null;
         }
-        return TolerantReads.hitPercent(
+        return TolerantReads.hitPercentOfLogicalReads(
                 firstOf(stats, "SESSION LOGICAL READS", "BUFFER GETS"),
                 firstOf(stats, "PHYSICAL READS", "DISK READS"));
     }
