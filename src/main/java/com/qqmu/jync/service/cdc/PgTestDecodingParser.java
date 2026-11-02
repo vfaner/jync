@@ -636,10 +636,15 @@ public final class PgTestDecodingParser {
 
     /**
      * money is printed with the locale's decorations: {@code $9.99}, {@code -$1,234.56},
-     * {@code 1.234,56} (European style) or {@code ($0.50)} for negatives under some
-     * lc_monetary settings. Strip decorations, handle both . and , as decimal separators,
-     * honor parentheses for negatives, keep BigDecimal precision. Unparseable
-     * text propagates to {@link #coerceByType}'s catch → raw fallback.
+     * {@code 1.234,56 €} (European style, where '.' groups thousands and ',' is the decimal
+     * point) or {@code ($0.50)} for negatives under some lc_monetary settings.
+     *
+     * <p>The decimal point is the LAST '.' or ',' in the value; every earlier separator is
+     * thousands grouping. That one rule resolves both conventions — {@code $1,234.56} ends
+     * on '.', {@code 1.234,56} ends on ',' — without consulting the locale. money always
+     * carries its fraction digits (two in the usual locales), so a trailing separator is
+     * not a thousands marker. Unparseable text propagates to {@link #coerceByType}'s
+     * catch → raw fallback.
      */
     private static Object parseMoney(String raw) {
         String body = raw.trim();
@@ -648,25 +653,26 @@ public final class PgTestDecodingParser {
             body = body.substring(1, body.length() - 1);
         }
 
-        // Process characters, keep digits, minus sign, and one decimal separator
-        StringBuilder numeric = new StringBuilder();
-        boolean hasDecimal = false;
+        int lastSeparator = -1;
+        for (int i = 0; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (c == '.' || c == ',') {
+                lastSeparator = i;
+            }
+        }
 
+        StringBuilder numeric = new StringBuilder(body.length());
         for (int i = 0; i < body.length(); i++) {
             char c = body.charAt(i);
             if (c >= '0' && c <= '9') {
                 numeric.append(c);
             } else if (c == '-') {
-                // Minus sign indicates negative value
                 negative = true;
-            } else if ((c == '.' || c == ',') && !hasDecimal) {
-                // Use first decimal separator found as the decimal point
-                numeric.append('.'); // Convert all decimal separators to . for parsing
-                hasDecimal = true;
+            } else if (i == lastSeparator) {
+                numeric.append('.'); // the decimal point, whichever character the locale uses
             }
-            // Ignore all other characters (currency symbols, commas for thousands)
+            // Anything else is decoration: currency symbol, thousands marker, space.
         }
-
         java.math.BigDecimal value = new java.math.BigDecimal(numeric.toString());
         return negative ? value.negate() : value;
     }

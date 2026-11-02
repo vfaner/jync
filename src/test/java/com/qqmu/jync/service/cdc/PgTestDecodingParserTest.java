@@ -188,6 +188,20 @@ class PgTestDecodingParserTest {
     }
 
     @Test
+    void europeanMoneyUsesCommaAsTheDecimalPoint() {
+        // lc_monetary 为德语等欧洲格式时,PostgreSQL 把 money 渲染成 1.234,56 €——
+        // '.' 是千位分隔符、',' 才是小数点。旧解析只认 '.'、丢弃 ',',把 1.234,56
+        // 读成 1.23456(小两个数量级)。规则改为「最后一个 . 或 , 是小数点」后
+        // 两种地区格式都能还原。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: INSERT: a[money]:'1.234,56 €' b[money]:'-9,99 €'");
+        assertThat((java.math.BigDecimal) line.change.row.get("a"))
+                .isEqualByComparingTo("1234.56");
+        assertThat((java.math.BigDecimal) line.change.row.get("b"))
+                .isEqualByComparingTo("-9.99");
+    }
+
+    @Test
     void timestamptzParsesInstantWithUtcOffset() {
         PgTestDecodingParser.SlotLine line = parser.parse(
                 "table public.t: INSERT: a[timestamptz]:'2026-10-13 10:00:00+08'"
