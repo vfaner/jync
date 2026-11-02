@@ -216,3 +216,21 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 - **端点是现状快照，不是历史。** 每次抓取只读样本表里每个项目 / 每条连接的最新一行，重采样间隔沿用 `metrics.*`（进程与任务 60 秒、连接 300 秒），两次采样之间数值不变。历史交给 Prometheus 自己保存；Jync 的 7 天曲线仍只服务于页面。
 - **读不到的值是 `NaN`，不是 0。** 某项指标该产品不提供（例如 H2 没有库内指标）或本次采样失败时输出 `NaN`；`jync_connection_healthy` 固定为 0/1。告警规则请用 `jync_connection_healthy == 0` 而不是 `latency > 0`，`NaN` 会在比较中落空，正好避免把「没采到」误报成「正常」或「故障」。
 - **抓取不触碰源库。** 端点只读已存样本，不会在抓取时打开数据库连接；因此把 scrape 间隔调到 15 秒也不会给生产库增加会话。样本由后台采样任务照常生成，`metrics.enabled=false` 时端点只剩 `jync_up 1`。
+
+---
+
+## 11. 专属迁移（ES/OpenSearch → Easysearch）
+
+专属迁移是**手动或 cron 触发的一次性整索引复制**，不是实时同步，也不走 JDBC 能力矩阵。
+
+- **只复制运行那一刻的数据。** 运行结束后源端的新增、修改、删除不会被回放。需要目标与源一致时，用 `OVERWRITE` 重跑；`APPEND` 只按 `_id` upsert，不会删除源端已删除的文档。
+- **`OVERWRITE` 会先删除目标同名索引。** 这是破坏性操作：表单默认值与预检都会提示，首次对生产目标运行前务必先跑预检并确认索引名。
+- **`_source.enabled=false` 的索引无法迁移。** 没有 `_source` 就没有可写入目标文档；预检直接报 ERROR，不进入运行。
+- **部分 mapping 类型在 Easysearch 上语义不同或不受支持。** `knn_vector` / `dense_vector`、`sparse_vector`、`rank_features`、`rank_feature`、`flat_object`、`completion`、`search_as_you_type`、`percolator`、`join` 与 runtime fields 预检会 WARN；是否可用取决于目标产品的版本与插件，不要把它当成“一定能迁”。
+- **别名默认不复制。** 避免悄悄改变目标集群上已有别名的写入指向；需要时在任务参数里显式打开，冲突只记 WARN，不会让整次运行失败。
+- **行数校验要求源端静止。** `verifyCount` 比较源与目标的 `_count`；运行期间源端持续写入会让计数不等，从而把该索引判为失败。大索引请安排低峰期，或关闭计数校验。
+- **不复制目标端已有数据之外的历史。** 迁移按索引整体处理，没有索引级断点续传：失败后用 `OVERWRITE` 重跑收敛，或用 `APPEND` 幂等追加。
+- **索引数量与批量大小有上限。** 一次最多 `maxIndices`（默认 200）个索引，单个 bulk 请求受 `batchSize` 与 `maxBulkBytes` 约束；超大索引要调小批量并放宽连接超时，否则容易在目标端触发请求体或超时限制。
+- **运行锁是进程内的。** 与 ETL 一样，同一任务在单实例内不会重叠运行；多实例部署没有分布式租约，两个实例可能同时跑同一个任务。需要多实例时请自行保证同一任务只在一个实例上调度。
+- **Easysearch 兼容性基于 ES 7.x REST。** 实现使用 `_cat`、`_settings`、`_mapping`、`_alias`、`_search?scroll`、`_bulk`、`_count`、`_mget`、`_refresh`；CI 只对假服务与 Elasticsearch 兼容路径做过验证。上线前请用目标 Easysearch 版本试跑一次，重点看 settings 清理、mapping 类型与 `_bulk` 响应。
+- **搜索连接独立于数据库连接。** 账号、密码与 API Key 加密存储，页面不回显；关闭 TLS 校验会在审计日志留痕，且只应用于你自己控制的、使用自签名证书的目标。

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'migrations', 'migration.connections.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${form.id != null} ? #{migration.connections.edit} : #{migration.connections.new}">New connection</h1>
+            <p class="sub" th:text="#{migration.connections.formHint}">Test before saving.</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/migrations/connections}">
+                <svg class="ico"><use href="#arrow-left"/></svg>
+                <span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div style="max-width:820px">
+        <form method="post" id="migration-connection-form"
+              th:action="@{/migrations/connections/save}" th:object="${form}">
+            <input type="hidden" th:field="*{id}">
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#database"/></svg>
+                        <span th:text="#{migration.connections.connectionInfo}">Endpoint</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="name">
+                                <span th:text="#{common.name}">Name</span><span class="req">*</span>
+                            </label>
+                            <input type="text" class="input" id="name" th:field="*{name}"
+                                   required maxlength="128" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="kind">
+                                <span th:text="#{migration.connections.kind}">Product</span><span class="req">*</span>
+                            </label>
+                            <select class="select" id="kind" th:field="*{kind}" required>
+                                <option th:each="choice : ${kinds}" th:value="${choice.name()}"
+                                        th:text="#{${'migration.kind.' + choice.name()}}">Elasticsearch</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="baseUrl">
+                            <span th:text="#{migration.connections.baseUrl}">Base URL</span><span class="req">*</span>
+                        </label>
+                        <input type="text" class="input mono" id="baseUrl" th:field="*{baseUrl}"
+                               required maxlength="512" placeholder="http://127.0.0.1:9200"
+                               autocomplete="off">
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="authType">
+                                <span th:text="#{migration.connections.authType}">Authentication</span><span class="req">*</span>
+                            </label>
+                            <select class="select" id="authType" th:field="*{authType}"
+                                    data-role="migration-auth-type" required>
+                                <option th:each="choice : ${authTypes}" th:value="${choice.name()}"
+                                        th:text="#{${'migration.auth.' + choice.name()}}">Basic</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="username" th:text="#{migration.connections.username}">Username</label>
+                            <input type="text" class="input" id="username" th:field="*{username}"
+                                   maxlength="255" autocomplete="off">
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="rawPassword" th:text="#{migration.connections.password}">Password</label>
+                            <!--/* 密码从不回填；留空表示保留已存值 */-->
+                            <input type="password" class="input" id="rawPassword" name="rawPassword"
+                                   autocomplete="new-password">
+                            <div class="help" th:if="${form.id != null}"
+                                 th:text="#{migration.connections.passwordKeep}">Leave blank to keep.</div>
+                        </div>
+                        <div class="field">
+                            <label for="rawApiKey" th:text="#{migration.connections.apiKey}">API key</label>
+                            <!--/* 与密码同约定：只写不回显，可粘贴 id:key 或 Base64 */-->
+                            <input type="password" class="input" id="rawApiKey" name="rawApiKey"
+                                   autocomplete="new-password">
+                            <div class="help" th:if="${form.id != null}"
+                                 th:text="#{migration.connections.apiKeyKeep}">Leave blank to keep.</div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label class="switch">
+                            <input type="checkbox" th:field="*{verifyTls}">
+                            <span class="track"></span>
+                            <span class="switch-text"><strong th:text="#{migration.connections.verifyTls}">Verify TLS</strong></span>
+                        </label>
+                        <div class="help" th:text="#{migration.connections.verifyTlsHelp}">help</div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="connectTimeoutMs" th:text="#{migration.connections.connectTimeout}">Connect timeout</label>
+                            <input type="number" class="input" id="connectTimeoutMs"
+                                   th:field="*{connectTimeoutMs}" min="500" max="60000">
+                        </div>
+                        <div class="field">
+                            <label for="requestTimeoutMs" th:text="#{migration.connections.requestTimeout}">Request timeout</label>
+                            <input type="number" class="input" id="requestTimeoutMs"
+                                   th:field="*{requestTimeoutMs}" min="1000" max="600000">
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="description" th:text="#{migration.connections.description}">Description</label>
+                        <input type="text" class="input" id="description" th:field="*{description}"
+                               maxlength="512">
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body btn-row">
+                    <button type="submit" class="btn btn-primary">
+                        <svg class="ico"><use href="#check-lg"/></svg>
+                        <span th:text="#{common.save}">Save</span>
+                    </button>
+                    <button type="button" class="btn btn-ghost" data-role="test-conn"
+                            data-form="migration-connection-form"
+                            th:attr="data-action=@{/api/migrations/connections/test},
+                                     data-ok-key='migration.test.success',
+                                     data-fail-key='migration.test.failed'">
+                        <svg class="ico"><use href="#plug"/></svg>
+                        <span th:text="#{common.test}">Test</span>
+                    </button>
+                    <a class="btn btn-ghost" th:href="@{/migrations/connections}"
+                       th:text="#{common.cancel}">Cancel</a>
+                </div>
+            </div>
+
+            <div id="test-result" class="alert" hidden></div>
+        </form>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

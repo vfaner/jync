@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'migrations', 'migration.connections.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{migration.connections.title}">Dedicated migration connections</h1>
+            <p class="sub" th:text="#{migration.connections.listHint}">Separate from the JDBC connections used by sync and ETL.</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/migrations}">
+                <svg class="ico"><use href="#arrow-left"/></svg>
+                <span th:text="#{common.back}">Back</span>
+            </a>
+            <a class="btn btn-primary btn-sm" th:if="${isAdmin}"
+               th:href="@{/migrations/connections/new}">
+                <svg class="ico"><use href="#plus-lg"/></svg>
+                <span th:text="#{migration.connections.new}">New connection</span>
+            </a>
+        </div>
+    </div>
+
+    <div th:if="${isAdmin}" id="test-result" class="alert" hidden></div>
+
+    <div class="card">
+        <div class="card-head">
+            <h2>
+                <svg class="ico"><use href="#database"/></svg>
+                <span th:text="#{migration.connections.title}">Connections</span>
+                <span class="hint" th:text="'(' + ${connections.totalElements} + ')'">(0)</span>
+            </h2>
+        </div>
+        <div class="card-body tight">
+            <div th:if="${connections.empty}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#database"/></svg></div>
+                <h3 th:text="#{migration.connections.empty}">No connections yet.</h3>
+                <a class="btn btn-primary btn-sm" th:if="${isAdmin}"
+                   th:href="@{/migrations/connections/new}">
+                    <svg class="ico"><use href="#plus-lg"/></svg>
+                    <span th:text="#{migration.connections.new}">New connection</span>
+                </a>
+            </div>
+
+            <div th:unless="${connections.empty}" class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.name}">Name</th>
+                        <th th:text="#{migration.connections.kind}">Product</th>
+                        <th th:text="#{migration.connections.baseUrl}">Base URL</th>
+                        <th th:text="#{migration.connections.authType}">Authentication</th>
+                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="connection : ${connections.content}">
+                        <td style="font-weight:600" th:text="${connection.name}">es-prod</td>
+                        <td th:attr="data-kind=${connection.kind.name()}">
+                            <span class="badge badge-brand"
+                                  th:text="#{${'migration.kind.' + connection.kind.name()}}">Elasticsearch</span>
+                        </td>
+                        <td class="mono small" th:text="${connection.baseUrl}">http://127.0.0.1:9200</td>
+                        <td class="small"
+                            th:text="#{${'migration.auth.' + connection.authType.name()}}">Basic</td>
+                        <td th:if="${isAdmin}">
+                            <div class="btn-row" style="justify-content:flex-end">
+                                <form method="post" style="display:inline"
+                                      th:id="'migration-test-' + ${connection.id}">
+                                </form>
+                                <button type="button" class="btn-icon is-ok" data-role="test-conn"
+                                        th:attr="data-form='migration-test-' + ${connection.id},
+                                                 data-action=@{/api/migrations/connections/{id}/test(id=${connection.id})},
+                                                 data-ok-key='migration.test.success',
+                                                 data-fail-key='migration.test.failed'"
+                                        th:title="#{common.test}">
+                                    <svg class="ico"><use href="#plug"/></svg>
+                                </button>
+                                <a class="btn-icon" th:href="@{/migrations/connections/{id}/edit(id=${connection.id})}"
+                                   th:title="#{common.edit}"><svg class="ico"><use href="#pencil"/></svg></a>
+                                <form method="post" style="display:inline"
+                                      th:action="@{/migrations/connections/{id}/delete(id=${connection.id})}"
+                                      th:attr="data-confirm=#{common.confirm.delete(${connection.name})}">
+                                    <button type="submit" class="btn-icon is-danger" th:title="#{common.delete}">
+                                        <svg class="ico"><use href="#trash"/></svg>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card-foot pager-foot" th:if="${connections.totalPages > 1}">
+            <span class="small muted"
+                  th:text="#{log.page(${connections.number + 1}, ${connections.totalPages})}">Page 1 of 1</span>
+            <div class="pager-btns">
+                <a class="btn btn-ghost btn-sm" th:if="${!connections.first}"
+                   th:href="@{/migrations/connections(page=${connections.number - 1})}">
+                    <svg class="ico"><use href="#chevron-left"/></svg><span th:text="#{log.previous}">Previous</span>
+                </a>
+                <a class="btn btn-ghost btn-sm" th:if="${!connections.last}"
+                   th:href="@{/migrations/connections(page=${connections.number + 1})}">
+                    <span th:text="#{log.next}">Next</span><svg class="ico"><use href="#chevron-right"/></svg>
+                </a>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

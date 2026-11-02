@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'migrations', 'migration.form.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <!--/* 表单只做装配：通用字段、调度、类型专属参数各占一个片段。类型专属片段在
+           下面的 th:switch 里分派（Thymeleaf 3.0 不接受变量片段表达式），新增类型时
+           加一个 case 并复用同一个 handler。 */-->
+    <div class="page-head">
+        <div>
+            <h1 th:text="${task.id != null} ? #{migration.form.edit} : #{migration.form.new}">
+                New migration task
+            </h1>
+            <p class="sub" th:text="#{migration.form.hint}">
+                A dedicated migration copies whole indices; it is not a continuous sync.
+            </p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm"
+               th:href="@{/migrations/{type}(type=${type.key()})}">
+                <svg class="ico"><use href="#arrow-left"/></svg>
+                <span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div style="max-width:960px">
+        <form method="post" th:action="@{/migrations/{type}/save(type=${type.key()})}">
+            <input type="hidden" name="id" th:value="${task.id}">
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#arrow-left-right"/></svg>
+                        <span th:text="#{migration.form.basic}">Task</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="name" th:text="#{common.name}">Name</label>
+                            <input type="text" class="input" id="name" name="name"
+                                   maxlength="128" required th:value="${task.name}">
+                        </div>
+                        <div class="field">
+                            <label for="description" th:text="#{migration.description}">Description</label>
+                            <input type="text" class="input" id="description" name="description"
+                                   maxlength="512" th:value="${task.description}">
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="sourceConnectionId" th:text="#{migration.source}">Source</label>
+                            <select class="input" id="sourceConnectionId" name="sourceConnectionId" required>
+                                <option value="" th:text="#{migration.chooseConnection}">Choose a connection</option>
+                                <option th:each="connection : ${sourceConnections}"
+                                        th:value="${connection.id}"
+                                        th:selected="${task.sourceConnectionId != null and task.sourceConnectionId == connection.id}"
+                                        th:text="|${connection.name} · #{${'migration.kind.' + connection.kind.name()}}|">
+                                    source
+                                </option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="targetConnectionId" th:text="#{migration.target}">Target</label>
+                            <select class="input" id="targetConnectionId" name="targetConnectionId" required>
+                                <option value="" th:text="#{migration.chooseConnection}">Choose a connection</option>
+                                <option th:each="connection : ${targetConnections}"
+                                        th:value="${connection.id}"
+                                        th:selected="${task.targetConnectionId != null and task.targetConnectionId == connection.id}"
+                                        th:text="|${connection.name} · #{${'migration.kind.' + connection.kind.name()}}|">
+                                    target
+                                </option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!--/* 类型专属参数。Thymeleaf 3.0 会把 th:replace="${handler.optionsFragment}"
+                   当成模板名而不是片段表达式，所以这里用 th:switch 分派；新增类型时在
+                   这里加一个 case，并把类型专属参数放进 migration-form/ 下自己的片段。 */-->
+            <th:block th:switch="${task.type.name()}">
+                <th:block th:case="'ES_TO_EASYSEARCH'"
+                          th:replace="~{migration-form/options-es :: options}"/>
+            </th:block>
+
+            <div class="card" style="margin-top:16px">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#clock"/></svg>
+                        <span th:text="#{migration.form.schedule}">Schedule</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="cronExpression" th:text="#{migration.cron}">Cron expression</label>
+                            <input type="text" class="input" id="cronExpression" name="cronExpression"
+                                   maxlength="128" placeholder="0 0 2 * * *"
+                                   th:value="${task.cronExpression}">
+                            <div class="help" th:text="#{migration.cron.hint}">
+                                Leave blank for manual-only.
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="timeoutSeconds" th:text="#{migration.timeout}">Run timeout (seconds)</label>
+                            <input type="number" class="input" id="timeoutSeconds" name="timeoutSeconds"
+                                   min="0" th:value="${task.timeoutSeconds}">
+                            <div class="help" th:text="#{migration.timeout.hint}">
+                                Blank or 0 means no limit.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label class="check">
+                            <input type="checkbox" id="enabled" name="enabled"
+                                   th:checked="${task.enabled}">
+                            <span th:text="#{migration.schedule.enabled}">Run on this schedule</span>
+                        </label>
+                        <div class="help" th:text="#{migration.schedule.enabledHint}">
+                            Enabling requires a cron expression. Saving does not enable the task.
+                        </div>
+                    </div>
+
+                    <div class="btn-row">
+                        <button type="submit" class="btn btn-primary">
+                            <svg class="ico"><use href="#check-lg"/></svg>
+                            <span th:text="#{common.save}">Save</span>
+                        </button>
+                        <button type="submit" class="btn btn-ghost"
+                                th:formaction="@{/migrations/{type}/precheck(type=${type.key()})}">
+                            <svg class="ico"><use href="#search"/></svg>
+                            <span th:text="#{migration.precheck.run}">Precheck</span>
+                        </button>
+                        <a class="btn btn-ghost" th:href="@{/migrations/{type}(type=${type.key()})}"
+                           th:text="#{common.cancel}">Cancel</a>
+                    </div>
+                </div>
+            </div>
+        </form>
+
+        <th:block th:replace="~{migration-form/precheck :: card}"/>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag">
+    <script th:src="@{/js/migration.js(v=${appVersion})}"></script>
+</th:block>
+</body>
+</html>

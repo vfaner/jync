@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'migrations', 'migration.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{migration.title}">Dedicated migration</h1>
+            <p class="sub" th:text="#{migration.subtitle}">
+                One-off and scheduled copies between systems that speak their own protocols.
+            </p>
+        </div>
+        <div class="page-actions" th:if="${isAdmin}">
+            <a class="btn btn-ghost btn-sm" href="/migrations/connections"
+               th:href="@{/migrations/connections}">
+                <svg class="ico"><use href="#hdd-network"/></svg>
+                <span th:text="#{migration.manageConnections}">Manage connections</span>
+            </a>
+        </div>
+    </div>
+
+    <!--/* 每种迁移一张卡片。可用类型链接到自己的任务页；尚未实现的类型仍占据位置，
+           让用户知道路线图，但卡片不可点、也不渲染链接。 */-->
+    <div class="type-grid" data-role="type-grid">
+        <a class="type-card" data-role="type-card" th:each="card : ${cards}"
+           th:if="${card.available}"
+           th:href="@{/migrations/{key}(key=${card.type.key()})}">
+            <div class="type-card-head">
+                <svg class="ico"><use href="#arrow-left-right"/></svg>
+                <span th:text="#{${card.type.messageKey()}}">Elasticsearch → Easysearch</span>
+            </div>
+            <p th:text="#{${card.type.descriptionKey()}}">
+                Copy indices and documents.
+            </p>
+            <div class="type-route">
+                <span class="chip small"
+                      th:text="#{migration.type.taskCount(${card.taskCount})}">0 tasks</span>
+            </div>
+        </a>
+
+        <div class="type-card is-disabled" data-role="type-coming-soon"
+             th:unless="${card.available}" th:each="card : ${cards}">
+            <div class="type-card-head">
+                <svg class="ico"><use href="#arrow-left-right"/></svg>
+                <span th:text="#{${card.type.messageKey()}}">MongoDB → MongoDB</span>
+            </div>
+            <p th:text="#{${card.type.descriptionKey()}}">
+                Coming later.
+            </p>
+            <span class="badge badge-mute" th:text="#{migration.comingSoon}">Coming soon</span>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

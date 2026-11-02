@@ -56,10 +56,12 @@
             <a th:href="@{/dashboard}" th:classappend="${activeNav == 'dashboard'} ? 'active' : ''">
                 <svg class="ico"><use href="#speedometer2"/></svg><span th:text="#{nav.dashboard}">Dashboard</span>
             </a>
-            <!--/* 同步任务按工作方式分成两页：实时同步（原项目页）与 ETL（客户 SQL + 定时/
-                   手动）。两页都在同一组里，组本身点亮即可，不必同时高亮两个子项。 */-->
+            <!--/* 同步任务按工作方式分组：实时同步（原项目页）、ETL（客户 SQL + 定时/
+                   手动）与专属迁移（独立连接 + 整索引复制）。几页都在同一组里，组本身
+                   点亮即可，不必同时高亮多个子项。 */-->
             <div class="nav-group nav-links-group"
-                 th:classappend="${activeNav == 'projects' or activeNav == 'etl'} ? 'is-active' : ''">
+                 th:classappend="${activeNav == 'projects' or activeNav == 'etl'
+                                  or activeNav == 'migrations'} ? 'is-active' : ''">
                 <button type="button" class="nav-trigger nav-link-trigger"
                         aria-haspopup="true" aria-expanded="false">
                     <svg class="ico"><use href="#diagram-3"/></svg>
@@ -74,6 +76,10 @@
                     <a class="menu-item" th:href="@{/etl}">
                         <svg class="ico"><use href="#arrow-repeat"/></svg>
                         <span th:text="#{nav.etl}">ETL tasks</span>
+                    </a>
+                    <a class="menu-item" th:href="@{/migrations}">
+                        <svg class="ico"><use href="#arrow-left-right"/></svg>
+                        <span th:text="#{nav.migrations}">Dedicated migration</span>
                     </a>
                 </div>
             </div>

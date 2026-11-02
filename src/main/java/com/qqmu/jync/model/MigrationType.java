@@ -1,0 +1,52 @@
+package com.qqmu.jync.model;
+
+import java.util.Arrays;
+
+/**
+ * The migration types the dedicated-migration module can offer.
+ *
+ * <p>A type only appears as an actionable card when {@link #available()} is true and a matching
+ * {@code MigrationTypeHandler} is registered. Future types stay declared so the home page can
+ * advertise them without wiring an engine.
+ */
+public enum MigrationType {
+
+    ES_TO_EASYSEARCH("es-to-easysearch", "migration.type.esToEasysearch.name", true),
+    MONGODB_TO_MONGODB("mongodb-to-mongodb", "migration.type.mongodbToMongodb.name", false),
+    MONGODB_TO_KINGBASE("mongodb-to-kingbase", "migration.type.mongodbToKingbase.name", false);
+
+    private final String key;
+    private final String messageKey;
+    private final boolean available;
+
+    MigrationType(String key, String messageKey, boolean available) {
+        this.key = key;
+        this.messageKey = messageKey;
+        this.available = available;
+    }
+
+    /** URL segment used by the type-parameterized pages. */
+    public String key() {
+        return key;
+    }
+
+    public String messageKey() {
+        return messageKey;
+    }
+
+    /** The one-line description shown under the type's name on the landing card. */
+    public String descriptionKey() {
+        return messageKey + ".description";
+    }
+
+    public boolean available() {
+        return available;
+    }
+
+    public static MigrationType fromKey(String key) {
+        return Arrays.stream(values())
+                .filter(type -> type.key.equals(key))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown migration type: " + key));
+    }
+}

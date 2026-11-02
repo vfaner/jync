@@ -26,5 +26,13 @@ public enum AuditAction {
     /** A database connection was deleted. */
     DB_DELETE,
     /** Change-log history was cleared. */
-    CHANGELOG_CLEAR
+    CHANGELOG_CLEAR,
+    /** A dedicated-migration connection was created or updated. */
+    MIGRATION_CONNECTION_SAVE,
+    /** A dedicated-migration connection was deleted. */
+    MIGRATION_CONNECTION_DELETE,
+    /** A dedicated-migration task was created or updated. */
+    MIGRATION_TASK_SAVE,
+    /** A dedicated-migration task was deleted. */
+    MIGRATION_TASK_DELETE
 }

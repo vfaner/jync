@@ -186,7 +186,7 @@ class SecurityConfigTest {
     @Test
     void aViewerCanReadEveryListingPage() throws Exception {
         for (String page : new String[] {"/", "/projects", "/etl", "/databases", "/ai",
-                "/change-logs"}) {
+                "/change-logs", "/migrations", "/migrations/es-to-easysearch"}) {
             assertThat(statusOf(get(page).with(asViewer()))).as(page).isEqualTo(200);
         }
     }
@@ -220,10 +220,16 @@ class SecurityConfigTest {
         // HTML pages redirect to /?denied; API endpoints return 403.
         for (String page : new String[] {"/databases/new", "/projects/new", "/projects/bulk",
                 "/etl/new", "/etl/1/edit", "/etl/batches/new", "/etl/batches/1/edit",
-                "/ai/new"}) {
+                "/ai/new", "/migrations/es-to-easysearch/new",
+                "/migrations/es-to-easysearch/1/edit", "/migrations/connections",
+                "/migrations/connections/new", "/migrations/connections/1/edit"}) {
             assertThat(statusOf(get(page).with(asViewer()))).as(page).isEqualTo(302);
         }
         assertThat(statusOf(get("/api/databases/discover-drivers").with(asViewer())))
+                .isEqualTo(403);
+        // Index discovery dials the configured endpoint, so it is admin-only even though it
+        // only reads.
+        assertThat(statusOf(get("/api/migrations/indices").with(asViewer())))
                 .isEqualTo(403);
     }
 
@@ -568,7 +574,8 @@ class SecurityConfigTest {
     @Test
     void anAdminReachesTheFormPages() throws Exception {
         for (String page : new String[] {"/databases/new", "/projects/new", "/projects/bulk",
-                "/etl/new", "/etl/batches/new", "/ai/new"}) {
+                "/etl/new", "/etl/batches/new", "/ai/new",
+                "/migrations/es-to-easysearch/new", "/migrations/connections/new"}) {
             assertThat(statusOf(get(page).with(asAdmin()))).as(page).isEqualTo(200);
         }
     }

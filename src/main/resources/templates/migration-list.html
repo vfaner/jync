@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'migrations', 'migration.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{${type.messageKey()}}">Elasticsearch / OpenSearch → Easysearch</h1>
+            <p class="sub" th:text="#{${type.messageKey() + '.description'}}">
+                Copy indices and documents into an Easysearch cluster.
+            </p>
+        </div>
+        <div class="page-actions" th:if="${isAdmin}">
+            <a class="btn btn-ghost btn-sm" th:href="@{/migrations}">
+                <svg class="ico"><use href="#arrow-left"/></svg>
+                <span th:text="#{migration.title}">Dedicated migration</span>
+            </a>
+            <a class="btn btn-primary btn-sm" data-role="new-task"
+               th:href="@{/migrations/{type}/new(type=${type.key()})}">
+                <svg class="ico"><use href="#plus-lg"/></svg>
+                <span th:text="#{migration.new}">New migration task</span>
+            </a>
+        </div>
+    </div>
+
+    <div data-role="migration-tasks">
+        <div class="card">
+            <div class="card-body tight">
+                <div class="empty" data-role="migration-empty" th:if="${#lists.isEmpty(tasks)}">
+                    <div class="empty-ico"><svg class="ico"><use href="#arrow-left-right"/></svg></div>
+                    <h3 th:text="#{migration.empty}">No dedicated migration tasks yet.</h3>
+                    <p th:text="#{migration.emptyHint}">
+                        Create a task to copy whole indices into the target cluster.
+                    </p>
+                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}"
+                       th:href="@{/migrations/{type}/new(type=${type.key()})}">
+                        <svg class="ico"><use href="#plus-lg"/></svg>
+                        <span th:text="#{migration.new}">New migration task</span>
+                    </a>
+                </div>
+
+                <div class="tbl-wrap" th:unless="${#lists.isEmpty(tasks)}">
+                    <table class="tbl">
+                        <thead>
+                        <tr>
+                            <th th:text="#{common.name}">Name</th>
+                            <th th:text="#{migration.col.route}">Source → target</th>
+                            <th th:text="#{migration.col.schedule}">Schedule</th>
+                            <th th:text="#{common.status}">Status</th>
+                            <th th:text="#{migration.col.lastRun}">Last run</th>
+                            <th class="num" th:text="#{common.actions}">Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <tr th:each="task : ${tasks}">
+                            <td>
+                                <a class="truncate" style="font-weight:600"
+                                   th:href="@{/migrations/{type}/{id}(type=${type.key()}, id=${task.id})}"
+                                   th:title="${task.name}" th:text="${task.name}">nightly</a>
+                                <div class="small muted truncate" th:if="${task.description}"
+                                     th:text="${task.description}">description</div>
+                            </td>
+                            <td class="small"
+                                th:text="|${connectionNames.get(task.sourceConnectionId)} → ${connectionNames.get(task.targetConnectionId)}|">
+                                src → dst
+                            </td>
+                            <td class="small muted nowrap"
+                                th:text="${task.cronExpression != null and !#strings.isEmpty(task.cronExpression)
+                                         ? task.cronExpression : #messages.msg('migration.manual')}">Manual</td>
+                            <td>
+                                <span class="badge"
+                                      th:classappend="${task.enabled} ? 'badge-ok' : 'badge-mute'">
+                                    <span class="dot" th:classappend="${task.enabled} ? 'dot-live' : ''"></span>
+                                    <span th:text="${task.enabled} ? #{migration.status.scheduled} : #{migration.status.manual}">Scheduled</span>
+                                </span>
+                                <span class="badge badge-ok" th:if="${running[task.id]}"
+                                      th:text="#{migration.running}">Running</span>
+                            </td>
+                            <td>
+                                <div class="small muted nowrap"
+                                     th:text="${task.lastRunTime != null}
+                                              ? ${#temporals.format(task.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
+                                              : #{migration.never}">Never</div>
+                                <span class="badge"
+                                      th:if="${task.lastRunResult != null}"
+                                      th:classappend="${task.lastRunSuccess} ? 'badge-ok' : 'badge-danger'"
+                                      th:title="${task.lastRunResult}"
+                                      th:text="${#strings.abbreviate(task.lastRunResult, 60)}">result</span>
+                            </td>
+                            <td>
+                                <div class="btn-row" style="justify-content:flex-end">
+                                    <th:block th:if="${isAdmin}">
+                                        <form method="post" style="display:inline"
+                                              th:action="@{/migrations/{type}/{id}/run(type=${type.key()}, id=${task.id})}"
+                                              th:unless="${running[task.id]}">
+                                            <button type="submit" class="btn-icon is-ok"
+                                                    th:title="#{migration.run}">
+                                                <svg class="ico"><use href="#play-fill"/></svg>
+                                            </button>
+                                        </form>
+                                        <form method="post" style="display:inline"
+                                              data-role="cancel-run"
+                                              th:action="@{/migrations/{type}/{id}/cancel(type=${type.key()}, id=${task.id})}"
+                                              th:if="${running[task.id]}">
+                                            <button type="submit" class="btn-icon is-warn"
+                                                    th:title="#{migration.cancel}">
+                                                <svg class="ico"><use href="#pause-fill"/></svg>
+                                            </button>
+                                        </form>
+                                        <form method="post" style="display:inline"
+                                              th:action="@{/migrations/{type}/{id}/enable(type=${type.key()}, id=${task.id})}"
+                                              th:unless="${task.enabled}">
+                                            <button type="submit" class="btn-icon is-ok"
+                                                    th:disabled="${task.cronExpression == null or #strings.isEmpty(task.cronExpression)}"
+                                                    th:title="#{migration.enable}">
+                                                <svg class="ico"><use href="#arrow-clockwise"/></svg>
+                                            </button>
+                                        </form>
+                                        <form method="post" style="display:inline"
+                                              th:action="@{/migrations/{type}/{id}/disable(type=${type.key()}, id=${task.id})}"
+                                              th:if="${task.enabled}">
+                                            <button type="submit" class="btn-icon is-warn"
+                                                    th:title="#{migration.disable}">
+                                                <svg class="ico"><use href="#pause-fill"/></svg>
+                                            </button>
+                                        </form>
+                                        <a class="btn-icon"
+                                           th:href="@{/migrations/{type}/{id}/edit(type=${type.key()}, id=${task.id})}"
+                                           th:title="#{common.edit}">
+                                            <svg class="ico"><use href="#pencil"/></svg>
+                                        </a>
+                                        <form method="post" style="display:inline"
+                                              th:action="@{/migrations/{type}/{id}/delete(type=${type.key()}, id=${task.id})}"
+                                              th:attr="data-confirm=#{common.confirm.delete(${task.name})}">
+                                            <button type="submit" class="btn-icon is-danger"
+                                                    th:title="#{common.delete}">
+                                                <svg class="ico"><use href="#trash"/></svg>
+                                            </button>
+                                        </form>
+                                    </th:block>
+                                </div>
+                            </td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

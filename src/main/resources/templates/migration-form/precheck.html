@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="card" style="margin-top:16px" data-role="precheck-result"
+     th:fragment="card" th:if="${precheck != null}">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#list-check"/></svg>
+            <span th:text="#{migration.precheck.title}">Precheck result</span></h2>
+        <span class="badge" th:classappend="${precheck.passed()} ? 'badge-ok' : 'badge-danger'"
+              th:text="${precheck.passed()} ? #{migration.precheck.passed} : #{migration.precheck.failed}">
+            Passed
+        </span>
+    </div>
+    <div class="card-body tight">
+        <div class="empty" th:if="${#lists.isEmpty(precheck.checks)}">
+            <p th:text="#{migration.precheck.none}">Nothing was checked.</p>
+        </div>
+        <div class="alert" th:each="check : ${precheck.checks}"
+             th:classappend="'precheck-' + ${#strings.toLowerCase(check.level.name())}">
+            <svg class="ico" th:if="${check.level.name() == 'OK'}"><use href="#check-circle-fill"/></svg>
+            <svg class="ico" th:if="${check.level.name() == 'WARN'}"><use href="#exclamation-triangle-fill"/></svg>
+            <svg class="ico" th:if="${check.level.name() == 'ERROR'}"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body">
+                <div th:text="#{${check.code}}">check</div>
+                <div class="small muted" th:if="${check.detail}" th:text="${check.detail}">detail</div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

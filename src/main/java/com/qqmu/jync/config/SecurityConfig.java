@@ -83,6 +83,16 @@ public class SecurityConfig {
             // deeper, so /etl/*/edit does not cover it.
             "/etl/new", "/etl/*/edit",
             "/etl/batches/new", "/etl/batches/*/edit",
+            // Dedicated-migration tasks copy whole indices and can delete the target index
+            // in OVERWRITE mode; their forms, like every other configuration form, are
+            // admin-only. The landing pages and task details stay readable for viewers. The
+            // connection pages hold search-endpoint credentials, so they are locked too.
+            "/migrations/connections", "/migrations/connections/new",
+            "/migrations/connections/*/edit",
+            "/migrations/*/new", "/migrations/*/*/edit",
+            // Index discovery dials the configured search endpoint to list indices; advisory
+            // for the form, but still a call into another system, like the health dots.
+            "/api/migrations/indices",
             "/ai/new", "/ai/*/edit",
             // The external-authentication page holds the endpoints credentials are sent to and
             // the shared secret's configuration; a viewer has no use for it, and its Save button

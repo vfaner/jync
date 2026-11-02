@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'migrations', 'migration.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${task.name}">nightly</h1>
+            <p class="sub" th:if="${task.description}" th:text="${task.description}">description</p>
+            <p class="sub" th:unless="${task.description}"
+               th:text="#{${type.messageKey()}}">Elasticsearch → Easysearch</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm"
+               th:href="@{/migrations/{type}(type=${type.key()})}">
+                <svg class="ico"><use href="#arrow-left"/></svg>
+                <span th:text="#{migration.title}">Dedicated migration</span>
+            </a>
+            <th:block th:if="${isAdmin}">
+                <form method="post" style="display:inline"
+                      th:action="@{/migrations/{type}/{id}/run(type=${type.key()}, id=${task.id})}"
+                      th:unless="${running}">
+                    <button type="submit" class="btn btn-primary btn-sm">
+                        <svg class="ico"><use href="#play-fill"/></svg>
+                        <span th:text="#{migration.run}">Run now</span>
+                    </button>
+                </form>
+                <form method="post" style="display:inline" data-role="cancel-run"
+                      th:action="@{/migrations/{type}/{id}/cancel(type=${type.key()}, id=${task.id})}"
+                      th:if="${running}">
+                    <button type="submit" class="btn btn-ghost btn-sm">
+                        <svg class="ico"><use href="#pause-fill"/></svg>
+                        <span th:text="#{migration.cancel}">Cancel run</span>
+                    </button>
+                </form>
+                <a class="btn btn-ghost btn-sm"
+                   th:href="@{/migrations/{type}/{id}/edit(type=${type.key()}, id=${task.id})}">
+                    <svg class="ico"><use href="#pencil"/></svg>
+                    <span th:text="#{common.edit}">Edit</span>
+                </a>
+            </th:block>
+        </div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-head">
+                <h2><svg class="ico"><use href="#diagram-3"/></svg>
+                    <span th:text="#{migration.detail.summary}">Task</span></h2>
+            </div>
+            <div class="card-body">
+                <table class="tbl">
+                    <tbody>
+                    <tr>
+                        <td class="muted" th:text="#{migration.col.route}">Source → target</td>
+                        <td th:text="|${connectionNames.get(task.sourceConnectionId)} → ${connectionNames.get(task.targetConnectionId)}|">
+                            src → dst
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="muted" th:text="#{migration.col.schedule}">Schedule</td>
+                        <td class="mono"
+                            th:text="${task.cronExpression != null and !#strings.isEmpty(task.cronExpression)
+                                     ? task.cronExpression : #messages.msg('migration.manual')}">Manual</td>
+                    </tr>
+                    <tr>
+                        <td class="muted" th:text="#{common.status}">Status</td>
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${task.enabled} ? 'badge-ok' : 'badge-mute'">
+                                <span th:text="${task.enabled} ? #{migration.status.scheduled} : #{migration.status.manual}">Scheduled</span>
+                            </span>
+                            <span class="badge badge-ok" th:if="${running}"
+                                  th:text="#{migration.running}">Running</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="muted" th:text="#{migration.col.lastRun}">Last run</td>
+                        <td>
+                            <span class="small muted"
+                                  th:text="${task.lastRunTime != null}
+                                           ? ${#temporals.format(task.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
+                                           : #{migration.never}">Never</span>
+                            <span class="badge" th:if="${task.lastRunResult != null}"
+                                  th:classappend="${task.lastRunSuccess} ? 'badge-ok' : 'badge-danger'"
+                                  th:title="${task.lastRunResult}"
+                                  th:text="${#strings.abbreviate(task.lastRunResult, 80)}">result</span>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <h2><svg class="ico"><use href="#sliders"/></svg>
+                    <span th:text="#{migration.detail.options}">Options</span></h2>
+            </div>
+            <div class="card-body">
+                <pre class="mono small" style="white-space:pre-wrap"
+                     th:text="${task.optionsJson}">{"indicesText":"orders-*"}</pre>
+            </div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top:16px" data-role="run-history">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#clock-history"/></svg>
+                <span th:text="#{migration.detail.runs}">Run history</span></h2>
+        </div>
+        <div class="card-body tight">
+            <div class="empty" th:if="${#lists.isEmpty(runs)}">
+                <p th:text="#{migration.detail.noRuns}">This task has not run yet.</p>
+            </div>
+            <div class="tbl-wrap" th:unless="${#lists.isEmpty(runs)}">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{migration.detail.started}">Started</th>
+                        <th th:text="#{migration.detail.finished}">Finished</th>
+                        <th th:text="#{migration.run.status.label}">Status</th>
+                        <th th:text="#{migration.detail.trigger}">Trigger</th>
+                        <th th:text="#{migration.detail.indexProgress}">Indices</th>
+                        <th th:text="#{migration.detail.documents}">Documents</th>
+                        <th th:text="#{migration.detail.message}">Message</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="run : ${runs}">
+                        <td class="small muted nowrap"
+                            th:text="${#temporals.format(run.startedAt, 'yyyy-MM-dd HH:mm:ss')}">start</td>
+                        <td class="small muted nowrap"
+                            th:text="${run.finishedAt != null}
+                                     ? ${#temporals.format(run.finishedAt, 'yyyy-MM-dd HH:mm:ss')}
+                                     : #{migration.detail.running}">finish</td>
+                        <td>
+                            <span class="badge"
+                                  th:classappend="${run.status.name() == 'SUCCESS'} ? 'badge-ok'
+                                                  : (${run.status.name() == 'FAILED'} ? 'badge-danger' : 'badge-mute')"
+                                  th:text="#{${'migration.run.status.' + run.status.name()}}">SUCCESS</span>
+                        </td>
+                        <td class="small"
+                            th:text="#{${'migration.run.trigger.' + run.triggerType.name()}}">Manual</td>
+                        <td class="small"
+                            th:text="|${run.indicesSucceeded}/${run.indicesTotal}|">1/1</td>
+                        <td class="small"
+                            th:text="|${run.documentsRead} / ${run.documentsWritten}|">0 / 0</td>
+                        <td class="small" style="max-width:420px"
+                            th:text="${run.message}">message</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

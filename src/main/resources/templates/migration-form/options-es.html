@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div class="card" style="margin-top:16px" data-role="options-es" th:fragment="options">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#search"/></svg>
+            <span th:text="#{migration.form.options}">Migration options</span></h2>
+    </div>
+    <div class="card-body">
+
+        <div class="field">
+            <label for="opt-indicesText" th:text="#{migration.opt.indices}">Indices</label>
+            <textarea class="input mono" id="opt-indicesText" name="opt.indicesText"
+                      rows="3" placeholder="orders-*, users"
+                      th:text="${options.get('indicesText') != null ? options.get('indicesText').asText('') : ''}"></textarea>
+            <div class="help">
+                <span th:text="#{migration.opt.indicesHelp}">
+                    Comma or newline separated patterns. Leave blank for every non-system index.
+                </span>
+                <button type="button" class="btn btn-ghost btn-sm" data-role="discover-indices"
+                        th:attr="data-url=@{/api/migrations/indices},
+                                 data-empty=#{migration.opt.discover.empty},
+                                 data-choose-source=#{migration.opt.discover.chooseSource}">
+                    <svg class="ico"><use href="#search"/></svg>
+                    <span th:text="#{migration.opt.discover}">List indices from the source</span>
+                </button>
+            </div>
+            <div class="small muted" data-role="discovered-indices" hidden></div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label for="opt-targetNaming" th:text="#{migration.opt.targetNaming}">Target name</label>
+                <select class="input" id="opt-targetNaming" name="opt.targetNaming">
+                    <option value="SAME"
+                            th:selected="${options.get('targetNaming') == null or options.get('targetNaming').asText('SAME') == 'SAME'}"
+                            th:text="#{migration.naming.SAME}">Same as source</option>
+                    <option value="PREFIX"
+                            th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asText('') == 'PREFIX'}"
+                            th:text="#{migration.naming.PREFIX}">Add a prefix</option>
+                    <option value="SUFFIX"
+                            th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asText('') == 'SUFFIX'}"
+                            th:text="#{migration.naming.SUFFIX}">Add a suffix</option>
+                </select>
+            </div>
+            <div class="field">
+                <label for="opt-targetPrefix" th:text="#{migration.opt.prefix}">Prefix</label>
+                <input type="text" class="input mono" id="opt-targetPrefix" name="opt.targetPrefix"
+                       th:value="${options.get('targetPrefix') != null ? options.get('targetPrefix').asText('') : ''}">
+            </div>
+            <div class="field">
+                <label for="opt-targetSuffix" th:text="#{migration.opt.suffix}">Suffix</label>
+                <input type="text" class="input mono" id="opt-targetSuffix" name="opt.targetSuffix"
+                       th:value="${options.get('targetSuffix') != null ? options.get('targetSuffix').asText('') : '_migrated'}">
+            </div>
+            <div class="field">
+                <label for="opt-writeMode" th:text="#{migration.opt.writeMode}">Write mode</label>
+                <select class="input" id="opt-writeMode" name="opt.writeMode">
+                    <option value="OVERWRITE"
+                            th:selected="${options.get('writeMode') == null or options.get('writeMode').asText('OVERWRITE') == 'OVERWRITE'}"
+                            th:text="#{migration.writeMode.OVERWRITE}">Delete and rebuild</option>
+                    <option value="APPEND"
+                            th:selected="${options.get('writeMode') != null and options.get('writeMode').asText('') == 'APPEND'}"
+                            th:text="#{migration.writeMode.APPEND}">Add to the existing index</option>
+                    <option value="FAIL_IF_EXISTS"
+                            th:selected="${options.get('writeMode') != null and options.get('writeMode').asText('') == 'FAIL_IF_EXISTS'}"
+                            th:text="#{migration.writeMode.FAIL_IF_EXISTS}">Fail if it exists</option>
+                </select>
+                <div class="help" th:text="#{migration.opt.writeMode.help}">
+                    Overwrite deletes the target index of the same name before copying.
+                </div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-copySettings" name="opt.copySettings" value="true"
+                           th:checked="${options.get('copySettings') == null or options.get('copySettings').asBoolean()}">
+                    <input type="hidden" name="opt.copySettings" value="false">
+                    <span th:text="#{migration.opt.copySettings}">Copy settings</span>
+                </label>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-copyMappings" name="opt.copyMappings" value="true"
+                           th:checked="${options.get('copyMappings') == null or options.get('copyMappings').asBoolean()}">
+                    <input type="hidden" name="opt.copyMappings" value="false">
+                    <span th:text="#{migration.opt.copyMappings}">Copy mappings</span>
+                </label>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-copyAliases" name="opt.copyAliases" value="true"
+                           th:checked="${options.get('copyAliases') != null and options.get('copyAliases').asBoolean()}">
+                    <input type="hidden" name="opt.copyAliases" value="false">
+                    <span th:text="#{migration.opt.copyAliases}">Copy aliases</span>
+                </label>
+                <div class="help" th:text="#{migration.opt.copyAliasesHelp}">
+                    Off by default: changing aliases on the target can redirect live writes.
+                </div>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-continueOnError" name="opt.continueOnError" value="true"
+                           th:checked="${options.get('continueOnError') == null or options.get('continueOnError').asBoolean()}">
+                    <input type="hidden" name="opt.continueOnError" value="false">
+                    <span th:text="#{migration.opt.continueOnError}">Keep going after a failed index</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label for="opt-batchSize" th:text="#{migration.opt.batchSize}">Batch size</label>
+                <input type="number" class="input" id="opt-batchSize" name="opt.batchSize"
+                       min="1" max="10000"
+                       th:value="${options.get('batchSize') != null ? options.get('batchSize').asText('1000') : '1000'}">
+            </div>
+            <div class="field">
+                <label for="opt-maxBulkBytes" th:text="#{migration.opt.maxBulkBytes}">Max bulk bytes</label>
+                <input type="number" class="input" id="opt-maxBulkBytes" name="opt.maxBulkBytes"
+                       min="1048576" max="104857600"
+                       th:value="${options.get('maxBulkBytes') != null ? options.get('maxBulkBytes').asText('10485760') : '10485760'}">
+            </div>
+            <div class="field">
+                <label for="opt-scrollTtl" th:text="#{migration.opt.scrollTtl}">Scroll TTL</label>
+                <input type="text" class="input mono" id="opt-scrollTtl" name="opt.scrollTtl"
+                       placeholder="5m"
+                       th:value="${options.get('scrollTtl') != null ? options.get('scrollTtl').asText('5m') : '5m'}">
+            </div>
+            <div class="field">
+                <label for="opt-verifySampleSize" th:text="#{migration.opt.verifySampleSize}">Verification sample</label>
+                <input type="number" class="input" id="opt-verifySampleSize"
+                       name="opt.verifySampleSize" min="0" max="1000"
+                       th:value="${options.get('verifySampleSize') != null ? options.get('verifySampleSize').asText('100') : '100'}">
+            </div>
+            <div class="field">
+                <label for="opt-maxIndices" th:text="#{migration.opt.maxIndices}">Maximum indices</label>
+                <input type="number" class="input" id="opt-maxIndices" name="opt.maxIndices"
+                       min="1" max="1000"
+                       th:value="${options.get('maxIndices') != null ? options.get('maxIndices').asText('200') : '200'}">
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-verifyCount" name="opt.verifyCount" value="true"
+                           th:checked="${options.get('verifyCount') == null or options.get('verifyCount').asBoolean()}">
+                    <input type="hidden" name="opt.verifyCount" value="false">
+                    <span th:text="#{migration.opt.verifyCount}">Compare document counts afterwards</span>
+                </label>
+            </div>
+            <div class="field">
+                <label class="check">
+                    <input type="checkbox" id="opt-probeCompatibility" name="opt.probeCompatibility" value="true"
+                           th:checked="${options.get('probeCompatibility') == null or options.get('probeCompatibility').asBoolean()}">
+                    <input type="hidden" name="opt.probeCompatibility" value="false">
+                    <span th:text="#{migration.opt.probeCompatibility}">Probe target compatibility first</span>
+                </label>
+            </div>
+        </div>
+
+    </div>
+</div>
+</body>
+</html>
