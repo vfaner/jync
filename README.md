@@ -116,9 +116,14 @@
     <td align="center"><a href="docs/images/jync_lx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lx.png" alt="任务详情" width="100%"></a><br><sub><b>任务详情</b> · 对象、调度、性能、列清洗</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_cdc.png" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.png" alt="日志 CDC" width="100%"></a><br><sub><b>日志 CDC</b> · 位点 / 上次事件 / 吞吐 / 跳过计数</sub></td>
+    <td align="center"><a href="docs/images/jync_cdc.jpg" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.jpg" alt="日志 CDC" width="100%"></a><br><sub><b>日志 CDC</b> · 位点 / 上次事件 / 吞吐 / 跳过计数</sub></td>
     <td align="center"><a href="docs/images/jync_diaodu.png" target="_blank" rel="noopener"><img src="docs/images/jync_diaodu.png" alt="调度设置" width="100%"></a><br><sub><b>调度设置</b> · 轮询间隔或 Cron</sub></td>
     <td align="center"><a href="docs/images/jync_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xn.png" alt="全量加载性能" width="100%"></a><br><sub><b>全量加载性能</b> · 批量大小与并行度</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/images/jync_db_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_xn.png" alt="数据库性能" width="100%"></a><br><sub><b>数据库性能</b> · 延迟、可用率、库内指标与容量曲线</sub></td>
+    <td align="center"><a href="docs/images/jync_xiangmu_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_xn.png" alt="同步任务性能" width="100%"></a><br><sub><b>同步任务性能</b> · 同步行数、延迟、失败与变更构成</sub></td>
+    <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="核对行数" width="100%"></a><br><sub><b>核对行数</b> · 源 / 目标 COUNT 对比与差异标记</sub></td>
   </tr>
   <tr>
     <td align="center"><a href="docs/images/jync_lqx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lqx.png" alt="列清洗" width="100%"></a><br><sub><b>列清洗</b> · 按表按列配置，写入前生效</sub></td>
@@ -138,10 +143,9 @@
   <tr>
     <td align="center"><a href="docs/images/jync_system.png" target="_blank" rel="noopener"><img src="docs/images/jync_system.png" alt="系统信息" width="100%"></a><br><sub><b>系统信息</b> · 运行参数与版本</sub></td>
     <td align="center"><a href="docs/images/jync_xiangmu_batch.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_batch.png" alt="批量创建" width="100%"></a><br><sub><b>批量创建</b> · 按表大小分箱，一次建多个任务</sub></td>
-    <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="核对行数" width="100%"></a><br><sub><b>核对行数</b> · 源 / 目标 COUNT 对比与差异标记</sub></td>
+    <td align="center"><a href="docs/images/jync_kanban_anye.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_anye.png" alt="暗色主题" width="100%"></a><br><sub><b>暗色主题</b> · 整套配色一起切换</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_kanban_anye.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_anye.png" alt="暗色主题" width="100%"></a><br><sub><b>暗色主题</b> · 整套配色一起切换</sub></td>
     <td align="center"><a href="docs/images/jync_kanban_en.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_en.png" alt="英文界面" width="100%"></a><br><sub><b>英文界面</b> · 中 / EN 一键切换</sub></td>
     <td align="center"><a href="docs/images/jync_zishiying.png" target="_blank" rel="noopener"><img src="docs/images/jync_zishiying.png" alt="窄屏布局" width="100%"></a><br><sub><b>窄屏布局</b> · 导航收起，宽表横向滚动</sub></td>
   </tr>
@@ -294,6 +298,26 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 4. **确认批处理生效**：`rowsPerBatch` 应接近批量大小；长期不足一半说明驱动没有批处理或大字段在拆批。
 5. **生产库错峰**：与业务共享的库把并行度设为 1，批量保持 1000–2000；专用迁移窗口再逐步加并行（2–4），chunk 保持 5 万–20 万。
 
+### 性能曲线与采样配置
+
+全量日志回答"这一轮为什么慢"，性能页回答"过去一小时、一天、一周发生了什么"。两张页面上的曲线由后台采样器写入元数据库，打开页面时不临时查询目标库。
+
+| 设置 | 默认 | 作用 |
+|---|---|---|
+| `metrics.enabled` | `true` | 采样总开关；关闭后不再产生新样本，已存样本保留到过期清理 |
+| `metrics.retention-days` | `7` | 样本保留天数；`≤ 0` 不清理 |
+| `metrics.app-interval-ms` | `60000` | 进程 CPU / 堆 / GC 与主机资源采样间隔 |
+| `metrics.task-interval-ms` | `60000` | 每个同步任务的同步行数、延迟与失败次数采样间隔 |
+| `metrics.db-interval-ms` | `300000` | 连接健康与库内指标（会话、QPS、缓存命中率、锁等待）采样间隔；会打开到被监控库的会话 |
+| `metrics.db-initial-delay-ms` | `30000` | 首次连接采样延迟；重启后约 30 秒出数据，不必等满一个间隔 |
+| `metrics.capacity-interval-ms` | `3600000` | 表数 / 行数 / 占用空间统计间隔；目录统计只对 MySQL、Oracle、SQL Server、PostgreSQL、DB2 可用 |
+| `metrics.prometheus-token` | *(空)* | Prometheus 抓取令牌；为空时 `/api/metrics/prometheus` 返回 404 |
+
+- **数据库性能页**（管理员）：连接延迟与可用性、库内会话 / QPS / 缓存命中率 / 锁等待，以及表数、行数与占用空间曲线；可切换 1 小时 / 24 小时 / 7 天。
+- **同步任务性能页**：已同步行数、同步延迟、连续失败次数，以及"每个时间段的同步行数""变更类型占比""变更最多的表"。
+- **口径**：行数序列按每个时间桶内新增的同步行数求和；轮询任务的延迟按最近一次成功周期计时，CDC 按源提交时刻计时；没有采样的时间桶保持断线，不补零。
+- **开销与权限**：进程与任务采样是本地读取；连接采样会打开会话，库内指标读取数据库自身的统计视图，账号缺少某项权限时只影响对应指标。不需要时把 `metrics.enabled` 设为 `false`，不影响同步链路。
+
 ---
 
 <a name="schedule"></a>
@@ -350,7 +374,7 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 - **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时独立 `URLClassLoader` 加载；可指定方言家族（通用 / Oracle / MySQL / PostgreSQL / SQL Server / DB2 / SAP HANA）。
 - **驱动内置**：除 **GBase**、**神通**、**华为 GaussDB**、**SAP HANA**、**ClickHouse**、**Hive**、**Impala**、**Elasticsearch**、**MongoDB（Atlas SQL）** 外均随包内置。这些厂商未提供可再分发的官方构件（SAP ngdbc 虽已上架 Maven Central，许可证仍不允许再分发），需自备 jar 并填写路径；驱动类名与预设不同时可在同一张卡片覆盖。
 - **协议兼容预设**：万里 GreatDB、银联 UPDRDB、星环 KunDB 兼容 MySQL 协议；平安 RASESQL、东方金信 SeaboxSQL 兼容 PostgreSQL 协议，复用内置驱动与对应方言族。
-- **SAP HANA**：支持结构同步与轮询式数据同步（时间戳 / 主键增量），写入用 `UPSERT … WITH PRIMARY KEY`，视图与存储过程/函数用 `CREATE OR REPLACE` 重建。HANA 不公开事务日志，**真 CDC 需要 SAP SLT 或 SDI**，本工具不提供。
+- **SAP HANA**：独立方言家族，支持结构同步与轮询式数据同步（时间戳 / 主键增量），写入用 `UPSERT … WITH PRIMARY KEY`，分页走 `LIMIT / OFFSET`，视图与存储过程/函数用 `CREATE OR REPLACE` 重建，表注释走 `COMMENT ON`。HANA 不公开事务日志，**真 CDC 需要 SAP SLT 或 SDI**，本工具不提供。
 - **分析型 / 搜索型引擎（同步源 + ETL）**：Apache Doris、ClickHouse、Apache Hive、Apache Impala、Elasticsearch、MongoDB。它们没有日志 CDC，因此**只做实时同步的源**，可选策略为轮询与全表比对，**从不作为目标**（不做建表与 upsert）；表一律按无主键读取，详见 [已知限制](docs/known-limitations.md#36-分析型--搜索型引擎作为同步源)。ETL 中它们既可以是源，也可以是目标（Elasticsearch 与 MongoDB 除外——这两个的 SQL 接口只读，只能作 ETL 源）。MongoDB 提供两条路径：**MongoDB** 预置走官方 Atlas SQL JDBC 驱动（支持 Atlas 与启用 SQL Interface 的 Enterprise Advanced，驱动约 40 MB 需自备）；**MongoDB（原生驱动）** 使用随包内置的 Java 驱动，任何 `mongod` 都能直连，填集合名与可选的 Extended JSON 过滤条件即可，不需要 SQL 或外部 jar。
 - **华为 GaussDB** 与 openGauss 是两个产品：驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`，方言归入 PostgreSQL 系。
 - **PolarDB / TDSQL 分版本**：MySQL 版有独立预置；PostgreSQL 版选 PostgreSQL；PolarDB Oracle 兼容版请用自定义类型。
@@ -392,7 +416,7 @@ mvn clean package -DskipTests
 cp target/jync.jar /opt/jync/
 ```
 
-国内可用 Gitee：`git clone https://gitee.com/super_rgh/jync.git`。不跳过测试会执行约 3700 个用例。
+国内可用 Gitee：`git clone https://gitee.com/super_rgh/jync.git`。不跳过测试会执行约 4000 个用例。
 
 ### 生产配置
 
@@ -418,6 +442,15 @@ sync:
 
   # ai:
   #   enabled: false               # 内网 / 离线：关闭 AI 辅助
+
+metrics:
+  enabled: true                    # 性能采样总开关
+  retention-days: 7                # 样本保留天数
+  app-interval-ms: 60000           # 进程资源采样间隔
+  task-interval-ms: 60000          # 任务吞吐采样间隔
+  db-interval-ms: 300000           # 连接健康与库内指标（会打开会话）
+  capacity-interval-ms: 3600000    # 表 / 行 / 空间统计
+  prometheus-token: ""             # 为空时关闭 Prometheus 端点
 
 app:
   login:
@@ -612,6 +645,14 @@ HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时�
 | `sync.ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
 | `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求 |
 | `app.security.trusted-proxies` | *(空)* | 可信代理地址；同时决定网关头认证的可信来源 |
+| `metrics.enabled` | `true` | 性能采样总开关；关闭不影响同步链路 |
+| `metrics.retention-days` | `7` | 样本保留天数；`≤ 0` 不清理 |
+| `metrics.app-interval-ms` | `60000` | 进程资源采样间隔 |
+| `metrics.task-interval-ms` | `60000` | 同步任务吞吐与延迟采样间隔 |
+| `metrics.db-interval-ms` | `300000` | 连接健康与库内指标采样间隔 |
+| `metrics.db-initial-delay-ms` | `30000` | 首次连接采样延迟 |
+| `metrics.capacity-interval-ms` | `3600000` | 表数 / 行数 / 占用空间统计间隔 |
+| `metrics.prometheus-token` | *(空)* | Prometheus 抓取令牌；为空时端点返回 404 |
 
 > 连接密码、AI 密钥与告警 Webhook 地址以 AES-256 加密存储，`enc:` 前缀防止重复加密。密钥留空时首启自动生成。
 
@@ -744,7 +785,7 @@ com.qqmu.jync
 - **容器部署与运维**：[docs/deploy-container.md](docs/deploy-container.md)（环境变量、TLS、多实例、升级与排障）
 - **已知限制与边界**：[docs/known-limitations.md](docs/known-limitations.md)（CDC 边界、无主键表、大字段、过程转换）
 - **Oracle → 达梦迁移实战**：[docs/migration-harness-oracle-to-dm.md](docs/migration-harness-oracle-to-dm.md)
-- **项目介绍文章**：[docs/jync-article.md](docs/jync-article.md)
+- **项目文档（PDF）**：[产品介绍](https://jync.qqmu.com/docs/jync-overview.pdf) · [用户操作手册](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)
 - **版本记录**：[GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases) · [AtomGit 镜像](https://gitcode.com/vfaner/jync/releases)
 - **第三方驱动许可证**：[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
 
@@ -752,7 +793,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**3763 个测试：3762 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
+**4060 个测试：4059 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
 
 重点覆盖：
 

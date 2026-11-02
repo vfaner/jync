@@ -116,9 +116,14 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
     <td align="center"><a href="docs/images/jync_lx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lx.png" alt="Task detail" width="100%"></a><br><sub><b>Task detail</b> · objects, schedule, performance, cleansing</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_cdc.png" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.png" alt="Log CDC" width="100%"></a><br><sub><b>Log CDC</b> · position, last event, throughput, skip counters</sub></td>
+    <td align="center"><a href="docs/images/jync_cdc.jpg" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.jpg" alt="Log CDC" width="100%"></a><br><sub><b>Log CDC</b> · position, last event, throughput, skip counters</sub></td>
     <td align="center"><a href="docs/images/jync_diaodu.png" target="_blank" rel="noopener"><img src="docs/images/jync_diaodu.png" alt="Scheduling" width="100%"></a><br><sub><b>Scheduling</b> · polling interval or Cron</sub></td>
     <td align="center"><a href="docs/images/jync_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xn.png" alt="Full-load performance" width="100%"></a><br><sub><b>Full-load performance</b> · batch size and parallelism</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/images/jync_db_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_xn.png" alt="Database performance" width="100%"></a><br><sub><b>Database performance</b> · latency, availability, in-database figures and capacity curves</sub></td>
+    <td align="center"><a href="docs/images/jync_xiangmu_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_xn.png" alt="Sync-task performance" width="100%"></a><br><sub><b>Sync-task performance</b> · rows, lag, failures and change mix</sub></td>
+    <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="Row-count audit" width="100%"></a><br><sub><b>Row-count audit</b> · source/target COUNT comparison</sub></td>
   </tr>
   <tr>
     <td align="center"><a href="docs/images/jync_lqx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lqx.png" alt="Column cleansing" width="100%"></a><br><sub><b>Column cleansing</b> · per table and column, before writes</sub></td>
@@ -138,10 +143,9 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
   <tr>
     <td align="center"><a href="docs/images/jync_system.png" target="_blank" rel="noopener"><img src="docs/images/jync_system.png" alt="System info" width="100%"></a><br><sub><b>System info</b> · runtime parameters and version</sub></td>
     <td align="center"><a href="docs/images/jync_xiangmu_batch.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_batch.png" alt="Bulk creation" width="100%"></a><br><sub><b>Bulk creation</b> · bins by table size, creates many tasks</sub></td>
-    <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="Row-count audit" width="100%"></a><br><sub><b>Row-count audit</b> · source/target COUNT comparison</sub></td>
+    <td align="center"><a href="docs/images/jync_kanban_anye.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_anye.png" alt="Dark theme" width="100%"></a><br><sub><b>Dark theme</b> · the whole palette switches together</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_kanban_anye.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_anye.png" alt="Dark theme" width="100%"></a><br><sub><b>Dark theme</b> · the whole palette switches together</sub></td>
     <td align="center"><a href="docs/images/jync_kanban_en.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_en.png" alt="English UI" width="100%"></a><br><sub><b>English UI</b> · one-click language switch</sub></td>
     <td align="center"><a href="docs/images/jync_zishiying.png" target="_blank" rel="noopener"><img src="docs/images/jync_zishiying.png" alt="Narrow layout" width="100%"></a><br><sub><b>Narrow layout</b> · nav collapses, wide tables scroll</sub></td>
   </tr>
@@ -294,6 +298,26 @@ Single-host container, 500k-row Oracle table, batch 2000:
 4. **Confirm batching works**: `rowsPerBatch` should approach the batch size; persistently below half means the driver is not batching or LOBs are splitting batches.
 5. **Off-peak on production**: a shared database runs parallelism 1 with batches of 1000–2000; a dedicated migration window can go to 2–4 with chunks of 50k–200k.
 
+### Performance curves and sampling
+
+The full-load log answers "why was this round slow"; the performance pages answer "what happened in the last hour, day or week". Both pages read samples written to the metadata store by background samplers; opening a page does not query the monitored servers.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `metrics.enabled` | `true` | Master sampling switch; off produces no new samples, and stored samples remain until pruned |
+| `metrics.retention-days` | `7` | Days of history to keep; `≤ 0` disables pruning |
+| `metrics.app-interval-ms` | `60000` | Process CPU / heap / GC and host-resource sampling interval |
+| `metrics.task-interval-ms` | `60000` | Per-task rows, lag and failure sampling interval |
+| `metrics.db-interval-ms` | `300000` | Connection health and in-database figures (sessions, QPS, cache hit, lock waits); opens a session on the monitored server |
+| `metrics.db-initial-delay-ms` | `30000` | First connection sample delay; data appears about 30 s after a restart instead of a full interval |
+| `metrics.capacity-interval-ms` | `3600000` | Table / row / space sweep interval; catalog statistics exist for MySQL, Oracle, SQL Server, PostgreSQL and DB2 |
+| `metrics.prometheus-token` | *(empty)* | Prometheus scrape token; blank keeps `/api/metrics/prometheus` at 404 |
+
+- **Database performance** (admin): connection latency and availability, in-database sessions / QPS / cache hit / lock waits, plus table, row and space curves; switch between 1 h / 24 h / 7 days.
+- **Sync-task performance**: synced rows, lag, consecutive failures, and the "rows synced per interval", "change-type mix" and "busiest tables" panels.
+- **Semantics**: the rows series sums newly synced rows per bucket; polling tasks measure lag from the last successful cycle, CDC from the source commit time; buckets without a sample stay gaps rather than zeros.
+- **Cost and permissions**: process and task samples are local reads; a connection sample opens a session, and in-database figures read the server's own statistics views — a missing privilege only hides that figure. Set `metrics.enabled: false` to stop sampling without touching the sync path.
+
 ---
 
 <a name="schedule"></a>
@@ -350,7 +374,7 @@ Fixed rules apply to string columns **before rows are written to the target**; t
 - **Custom types**: JDBC URL, driver class and driver jar path, loaded at runtime in an isolated `URLClassLoader`; pick a dialect family (generic / Oracle / MySQL / PostgreSQL / SQL Server / DB2).
 - **Bundled drivers**: everything except **GBase**, **Oscar**, **Huawei GaussDB**, **SAP HANA**, **ClickHouse**, **Hive**, **Impala**, **Elasticsearch** and **MongoDB (Atlas SQL)** ships with the jar. Those vendors publish no redistributable artifact (SAP's ngdbc is on Maven Central but its licence still forbids redistribution), so supply the jar and path; the driver class can be overridden on the same card.
 - **Protocol-compatible presets**: GreatDB, UPDRDB and KunDB speak the MySQL protocol; RASESQL and SeaboxSQL speak the PostgreSQL protocol, reusing bundled drivers and dialect families.
-- **SAP HANA**: full structure sync and polling data sync (timestamp / primary-key increments), writing with `UPSERT … WITH PRIMARY KEY` and replacing views, procedures and functions with `CREATE OR REPLACE`. HANA does not expose its transaction log — **true CDC needs SAP SLT or SDI**, which this tool does not provide.
+- **SAP HANA**: its own dialect family; full structure sync and polling data sync (timestamp / primary-key increments), writing with `UPSERT … WITH PRIMARY KEY`, paging with `LIMIT / OFFSET`, replacing views, procedures and functions with `CREATE OR REPLACE`, and table comments with `COMMENT ON`. HANA does not expose its transaction log — **true CDC needs SAP SLT or SDI**, which this tool does not provide.
 - **Analytic / search engines (sync sources + ETL)**: Apache Doris, ClickHouse, Apache Hive, Apache Impala, Elasticsearch, MongoDB. They have no log-based CDC, so they are **real-time sync sources only** — polling or full compare, **never a target** (no table creation, no upsert); their tables are always read as keyless. See [Known limitations](docs/known-limitations.md) (§3.6). In ETL they can be either source or target, except Elasticsearch and MongoDB, whose SQL interfaces are read-only (ETL sources only). MongoDB has two paths: the **MongoDB** preset uses the official Atlas SQL JDBC driver (Atlas and Enterprise Advanced with the SQL Interface; about 40 MB, supplied by you); **MongoDB (native driver)** uses the bundled Java driver and connects to any `mongod`, taking a collection name and an optional Extended JSON filter — no SQL and no external jar.
 - **Huawei GaussDB** is a different product from openGauss: driver `com.huawei.gaussdb.jdbc.Driver`, URL prefix `jdbc:gaussdb://`, PostgreSQL dialect family.
 - **PolarDB / TDSQL editions**: MySQL editions have their own presets; PostgreSQL editions use PostgreSQL; PolarDB Oracle-compatible uses a custom type.
@@ -392,7 +416,7 @@ mvn clean package -DskipTests
 cp target/jync.jar /opt/jync/
 ```
 
-In mainland China use Gitee: `git clone https://gitee.com/super_rgh/jync.git`. Running the tests executes about 3,700 cases.
+In mainland China use Gitee: `git clone https://gitee.com/super_rgh/jync.git`. Running the tests executes about 4,000 cases.
 
 ### Production configuration
 
@@ -418,6 +442,15 @@ sync:
 
   # ai:
   #   enabled: false               # air-gapped / offline: disable AI assistance
+
+metrics:
+  enabled: true                    # master switch for performance sampling
+  retention-days: 7                # days of history to keep
+  app-interval-ms: 60000           # process-resource sampling
+  task-interval-ms: 60000          # per-task throughput sampling
+  db-interval-ms: 300000           # connection health and in-database figures (opens a session)
+  capacity-interval-ms: 3600000    # table / row / space sweep
+  prometheus-token: ""             # blank closes the Prometheus endpoint
 
 app:
   login:
@@ -613,6 +646,14 @@ Main settings in `application.yml` (`sync.*` prefix):
 | `sync.ai.enabled` | `true` | `false` removes AI menus and endpoints |
 | `app.update-check.enabled` | `true` | Version check; `false` makes no outbound calls |
 | `app.security.trusted-proxies` | *(empty)* | Trusted proxies; also the trust boundary of gateway-header SSO |
+| `metrics.enabled` | `true` | Master switch for performance sampling; off never touches the sync path |
+| `metrics.retention-days` | `7` | Days of samples to keep; `≤ 0` disables pruning |
+| `metrics.app-interval-ms` | `60000` | Process-resource sampling interval |
+| `metrics.task-interval-ms` | `60000` | Task throughput and lag sampling interval |
+| `metrics.db-interval-ms` | `300000` | Connection health and in-database figure interval |
+| `metrics.db-initial-delay-ms` | `30000` | Delay before the first connection sample |
+| `metrics.capacity-interval-ms` | `3600000` | Table / row / space sweep interval |
+| `metrics.prometheus-token` | *(empty)* | Prometheus scrape token; blank keeps the endpoint at 404 |
 
 > Connection passwords, AI keys and alert Webhook URLs are stored with AES-256; the `enc:` prefix prevents double encryption. A blank key is generated on first boot.
 
@@ -745,7 +786,7 @@ com.qqmu.jync
 - **Container deployment and operations**: [docs/deploy-container.md](docs/deploy-container.md) (environment variables, TLS, multi-instance, upgrades and troubleshooting)
 - **Known limitations**: [docs/known-limitations.md](docs/known-limitations.md) (CDC boundaries, keyless tables, LOBs, procedure conversion)
 - **Oracle → DM migration walkthrough**: [docs/migration-harness-oracle-to-dm.md](docs/migration-harness-oracle-to-dm.md)
-- **Project article**: [docs/jync-article.md](docs/jync-article.md)
+- **Project documents (PDF)**: [Product overview](https://jync.qqmu.com/docs/jync-overview.pdf) · [User guide](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [Deployment and operations](https://jync.qqmu.com/docs/jync-ops-guide.pdf)
 - **Release history**: [GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases) · [AtomGit mirror](https://gitcode.com/vfaner/jync/releases)
 - **Third-party driver licenses**: [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
 
@@ -753,7 +794,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**3,763 tests: 3,762 pass, and one Linux-only key-file permission case is skipped on macOS by environment.**
+**4,060 tests: 4,059 pass, and one Linux-only key-file permission case is skipped on macOS by environment.**
 
 Coverage highlights:
 
