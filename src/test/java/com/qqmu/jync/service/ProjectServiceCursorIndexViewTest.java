@@ -83,6 +83,7 @@ class ProjectServiceCursorIndexViewTest {
     @Mock private SyncStateWriter stateWriter;
     @Mock private CdcPositionStore positionStore;
     @Mock private com.qqmu.jync.repository.TaskMetricSampleRepository taskMetricSampleRepository;
+    @Mock private com.qqmu.jync.repository.AlertStateRepository alertStateRepository;
 
     private final SyncProperties properties = new SyncProperties();
 
@@ -96,7 +97,7 @@ class ProjectServiceCursorIndexViewTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                taskMetricSampleRepository, properties);
+                taskMetricSampleRepository, alertStateRepository, properties);
 
         Project project = new Project();
         project.setId(1L);

@@ -54,6 +54,18 @@ public final class EtlSqlSupport {
         return table;
     }
 
+    /**
+     * The key two configured targets are compared by: schema-qualified and case-folded.
+     *
+     * <p>Members created by a batch store the bare catalog name, but the task form lets an
+     * operator write {@code SCHEMA.table} (and on Oracle/DB2 the same table can be spelled in
+     * either case). Comparing the raw strings lets both spellings into one batch, where the
+     * two members then overwrite each other's rows.
+     */
+    static String targetKey(DatabaseConfig targetConfig, String configuredTable) {
+        return qualified(targetConfig, configuredTable).toUpperCase(java.util.Locale.ROOT);
+    }
+
     static boolean exists(Connection target, String qualifiedTable) {
         return exists(target, qualifiedTable, 0);
     }

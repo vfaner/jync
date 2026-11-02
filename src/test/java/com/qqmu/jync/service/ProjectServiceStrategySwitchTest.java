@@ -77,6 +77,7 @@ class ProjectServiceStrategySwitchTest {
     @Mock private SyncStateWriter stateWriter;
     @Mock private CdcPositionStore positionStore;
     @Mock private com.qqmu.jync.repository.TaskMetricSampleRepository taskMetricSampleRepository;
+    @Mock private com.qqmu.jync.repository.AlertStateRepository alertStateRepository;
 
     private ProjectService service;
 
@@ -86,7 +87,8 @@ class ProjectServiceStrategySwitchTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                taskMetricSampleRepository, new com.qqmu.jync.config.SyncProperties());
+                taskMetricSampleRepository, alertStateRepository,
+                new com.qqmu.jync.config.SyncProperties());
     }
 
     private Project mysqlProject(String currentStrategyJson) {

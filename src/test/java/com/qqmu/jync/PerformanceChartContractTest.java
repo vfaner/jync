@@ -43,6 +43,20 @@ class PerformanceChartContractTest {
     }
 
     @Test
+    @DisplayName("孤立采样点也要画出标记，不能因为连不成线就让整张图看起来没有数据")
+    void isolatedSamplesAreDrawnAsMarkers() throws Exception {
+        // 一次手动同步的两个采样点落在同一个小时桶里，行数序列只有一个非空桶。折线
+        // 至少要两个点才画得出来，孤立点如果只走折线路径，整张图就是空的——卡片上有
+        // 数字、图里却没有，看上去像采集失败。
+        String body = functionBody(read(JS), "function line(");
+
+        assertThat(body)
+                .as("要识别前后都没有相邻桶的孤立点")
+                .contains("var prev = m > 0 ? coords[m - 1] : null")
+                .contains("var next = m < coords.length - 1 ? coords[m + 1] : null");
+    }
+
+    @Test
     @DisplayName("变更类型占比图用页面上的译文，不直接显示 INSERT / UPDATE / DELETE")
     void theChangeShareLegendUsesTheTranslatedChangeNames() throws Exception {
         String js = read(JS);

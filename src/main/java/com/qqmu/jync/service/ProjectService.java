@@ -45,6 +45,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.repository.AlertStateRepository;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
@@ -108,6 +109,7 @@ public class ProjectService {
     private final SyncStateWriter stateWriter;
     private final CdcPositionStore positionStore;
     private final TaskMetricSampleRepository taskMetricSampleRepository;
+    private final AlertStateRepository alertStateRepository;
     private final SyncProperties properties;
 
     /**
@@ -145,6 +147,7 @@ public class ProjectService {
                           SyncStateWriter stateWriter,
                           CdcPositionStore positionStore,
                           TaskMetricSampleRepository taskMetricSampleRepository,
+                          AlertStateRepository alertStateRepository,
                           SyncProperties properties) {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
@@ -165,6 +168,7 @@ public class ProjectService {
         this.stateWriter = stateWriter;
         this.positionStore = positionStore;
         this.taskMetricSampleRepository = taskMetricSampleRepository;
+        this.alertStateRepository = alertStateRepository;
         this.properties = properties;
     }
 
@@ -1091,6 +1095,9 @@ public class ProjectService {
             // store with rows the (now unreachable) page could never show. Process samples
             // are deliberately not touched — they describe the JVM, not this project.
             taskMetricSampleRepository.deleteByProjectId(projectId);
+            // Alert state carries a project id but no foreign key. Left behind, a new project
+            // that reuses the id inherits the old silence/cooldown and may never alert again.
+            alertStateRepository.deleteByProjectId(projectId);
             projectRepository.deleteById(projectId);
             // Drop the runner's per-project state (queued rerun, attempt count, stop epoch,
             // heartbeat marker) so a reused id cannot inherit a ghost cycle.

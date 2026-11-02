@@ -57,6 +57,25 @@ public class SyncTaskStore {
     }
 
     /**
+     * Closes a manual run on a project that is not enabled.
+     *
+     * <p>{@link #markRunning} flipped a stopped project to RUNNING for the duration of the
+     * click; without this, the row stays RUNNING and the page keeps claiming a stopped
+     * project is syncing. ERROR is left alone: the hat is lifted by a human or by a run that
+     * actually succeeds, never by a bookkeeping close.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markStoppedUnlessError(Long projectId) {
+        taskRepository.findByProjectId(projectId).ifPresent(task -> {
+            if (task.getStatus() == TaskStatus.ERROR) {
+                return;
+            }
+            task.setStatus(TaskStatus.STOPPED);
+            taskRepository.save(task);
+        });
+    }
+
+    /**
      * Stores a cycle's summary.
      *
      * <p>The status only flips to {@code ERROR} after {@code sync.max-retries} consecutive

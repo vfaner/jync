@@ -426,6 +426,40 @@ class EtlRunnerTest {
         verify(connection).rollback();
     }
 
+    @Test
+    void aSourceThatCannotOpenIsBlamedOnTheSource() {
+        // The stage still said PROGRAM when the source connection was opened, so an
+        // unreachable source database was reported as a program error. The operator then
+        // hunts for a bad query instead of checking the source endpoint.
+        EtlRunner failing = new EtlRunner(
+                new SqlDialectFactory(List.of(), new GenericSqlDialect()), checkpoints,
+                (config, conns) -> {
+                    throw new SQLException("source refused");
+                });
+
+        EtlRunResult result = failing.run(task("SELECT 1", "dst", EtlWriteMode.APPEND),
+                source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.SOURCE);
+    }
+
+    @Test
+    void aTargetThatCannotOpenIsBlamedOnTheTarget() {
+        EtlRunner failing = new EtlRunner(
+                new SqlDialectFactory(List.of(), new GenericSqlDialect()), checkpoints,
+                (config, conns) -> mock(EtlSource.class));
+
+        EtlConnectionProvider targetDown = config -> {
+            throw new SQLException("target refused");
+        };
+        EtlRunResult result = failing.run(task("SELECT 1", "dst", EtlWriteMode.APPEND),
+                source, target, targetDown);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.TARGET);
+    }
+
     // --- helpers ------------------------------------------------------------------------
 
     private static EtlTask task(String sql, String table, EtlWriteMode mode) {

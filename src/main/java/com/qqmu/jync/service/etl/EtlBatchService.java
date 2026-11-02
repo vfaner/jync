@@ -103,8 +103,9 @@ public class EtlBatchService {
         List<String> chosen = requireSelection(tables);
         DatabaseConfig source = EtlTaskValidation.validateConnections(databaseConfigService,
                 form.getSourceDbId(), form.getTargetDbId());
+        DatabaseConfig target = targetConfig(form.getTargetDbId());
         ConnectionCatalogService.Tables catalog = catalogService.listTables(form.getSourceDbId());
-        List<String> ordered = validateTables(chosen, catalog, Set.of());
+        List<String> ordered = validateTables(chosen, catalog, Set.of(), target);
 
         EtlBatch batch = new EtlBatch();
         batch.setName(form.getName().trim());
@@ -130,13 +131,16 @@ public class EtlBatchService {
         List<String> chosen = requireSelection(tables);
         DatabaseConfig source = EtlTaskValidation.validateConnections(databaseConfigService,
                 batch.getSourceDbId(), batch.getTargetDbId());
+        DatabaseConfig target = targetConfig(batch.getTargetDbId());
         ConnectionCatalogService.Tables catalog = catalogService.listTables(batch.getSourceDbId());
 
         Set<String> taken = new LinkedHashSet<>();
         for (EtlTask member : taskRepository.findByBatchIdOrderByIdAsc(batchId)) {
-            taken.add(member.getTargetTable());
+            if (member.getTargetTable() != null) {
+                taken.add(EtlSqlSupport.targetKey(target, member.getTargetTable()));
+            }
         }
-        List<String> ordered = validateTables(chosen, catalog, taken);
+        List<String> ordered = validateTables(chosen, catalog, taken, target);
 
         List<EtlTask> created = buildMembers(batch, ordered, catalog.schema(), source);
         taskRepository.saveAll(created);
@@ -382,7 +386,8 @@ public class EtlBatchService {
      */
     private static List<String> validateTables(List<String> chosen,
                                                ConnectionCatalogService.Tables catalog,
-                                               Set<String> takenTargets) {
+                                               Set<String> takenTargets,
+                                               DatabaseConfig targetConfig) {
         List<String> known = catalog.tables() == null ? List.of() : catalog.tables();
         Set<String> knownSet = new LinkedHashSet<>(known);
 
@@ -396,12 +401,23 @@ public class EtlBatchService {
             throw new EtlBatchTableException("error.etl.batch.tables.invalid", invalid);
         }
 
-        List<String> existing = chosen.stream().filter(takenTargets::contains).toList();
+        // Resolve the target the same way the runner does. A member stored as "SCHEMA.a"
+        // and a catalog name "a" are the same physical table; comparing raw text would let
+        // both into the batch.
+        List<String> existing = chosen.stream()
+                .filter(name -> takenTargets.contains(
+                        EtlSqlSupport.targetKey(targetConfig, name)))
+                .toList();
         if (!existing.isEmpty()) {
             throw new EtlBatchTableException("error.etl.batch.tables.exists", existing);
         }
 
         return known.stream().filter(chosen::contains).toList();
+    }
+
+    private DatabaseConfig targetConfig(Long targetDbId) {
+        return databaseConfigService.findById(targetDbId)
+                .orElseThrow(() -> new IllegalArgumentException("error.etl.target.missing"));
     }
 
     private static boolean isUsableTargetTable(String name) {

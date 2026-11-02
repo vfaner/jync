@@ -293,6 +293,19 @@
     }
     flushSegment();
 
+    // 只有一两个采样点、或点的两侧都是空桶时连不成线段。孤立点必须单独画标记，
+    // 否则卡片上有数字、图里却是空白——一次手动同步的两个采样点就落在同一个小时桶里。
+    for (var m = 0; m < coords.length; m++) {
+      if (!coords[m]) continue;
+      var prev = m > 0 ? coords[m - 1] : null;
+      var next = m < coords.length - 1 ? coords[m + 1] : null;
+      if (prev || next) continue;
+      svg.appendChild(el('circle', {
+        cx: coords[m].x, cy: coords[m].y, r: 3.2,
+        fill: color, stroke: cssVar('--bg', '#fff'), 'stroke-width': 1.5
+      }));
+    }
+
     // 横轴：约每 1/5 一个刻度，标签是桶起点
     var stride = Math.max(1, Math.ceil(points.length / 5));
     for (var x = 0; x < points.length; x += stride) {

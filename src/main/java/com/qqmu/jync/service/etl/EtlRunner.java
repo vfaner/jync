@@ -78,8 +78,11 @@ public class EtlRunner {
                 checkpointStore.clear(task.getId());
             }
 
-            stage = Side.PROGRAM;
+            // Attribute each open to its own side: an unreachable source or target is a
+            // connection failure, not a defect in the task configuration (PROGRAM).
+            stage = Side.SOURCE;
             source = sourceFactory.open(sourceConfig, connections);
+            stage = Side.TARGET;
             target = connections.open(targetConfig);
             target.setAutoCommit(false);
 

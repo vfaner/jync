@@ -23,6 +23,7 @@ import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncTaskRepository;
 import com.qqmu.jync.service.connection.PoolContentionException;
+import com.qqmu.jync.service.metrics.MetricsSampler;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
 
@@ -49,7 +50,8 @@ class SyncTaskRunnerErrorHatTest {
         SyncProperties properties = new SyncProperties();
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
                 new SyncLockService(lockStore, properties, 8080),
-                new SyncTaskStore(taskRepository, properties), new PoolActivity(properties));
+                new SyncTaskStore(taskRepository, properties), new PoolActivity(properties),
+                mock(MetricsSampler.class));
 
         when(lockStore.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
         when(lockStore.renew(eq(1L), anyString(), anyLong())).thenReturn(true);

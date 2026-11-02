@@ -55,6 +55,51 @@ class SqlRedoParserTest {
         return c;
     }
 
+    /**
+     * A table created with quoted mixed-case identifiers. Oracle stores those names exactly
+     * as written, and LogMiner quotes them exactly in SQL_REDO; the binding carries the same
+     * mixed-case names from the data dictionary.
+     */
+    private static CdcTableBinding mixedCaseBinding() {
+        TableMeta meta = new TableMeta();
+        meta.setName("MixedT");
+        meta.setSchema("SRC");
+        meta.getColumns().add(col("Id", Types.BIGINT, true));
+        meta.getColumns().add(col("FullName", Types.VARCHAR, false));
+        meta.getPrimaryKeys().add("Id");
+        return CdcTableBinding.of("SRC", "MixedT", meta, "MixedT", Collections.emptyMap());
+    }
+
+    @Test
+    void quotedMixedCaseIdentifiersKeepTheirExactCase() {
+        // Up-casing the parsed identifiers turns "Id" into "ID", which is not a key of the
+        // binding ("Id"): every INSERT is refused as "column not in binding", and an UPDATE's
+        // WHERE never satisfies the PK check — a quoted-identifier table streams nothing at
+        // all while the task keeps reporting RUNNING.
+        CdcTableBinding binding = mixedCaseBinding();
+
+        SqlRedoParser.ParsedChange insert = parser.parse(SqlRedoParser.Op.INSERT,
+                "insert into \"SRC\".\"MixedT\"(\"Id\",\"FullName\") values ('1','a');", binding);
+        assertThat(insert.op).isEqualTo(SqlRedoParser.Op.INSERT);
+        assertThat(insert.row).containsOnlyKeys("Id", "FullName");
+        assertThat(insert.row.get("Id")).isEqualTo("1");
+
+        SqlRedoParser.ParsedChange update = parser.parse(SqlRedoParser.Op.UPDATE,
+                "update \"SRC\".\"MixedT\" set \"FullName\" = 'b'"
+                        + " where \"Id\" = '1' and \"FullName\" = 'a'"
+                        + " and ROWID = 'AAAR4TAAYAAAAAPAAA';", binding);
+        assertThat(update.op).isEqualTo(SqlRedoParser.Op.UPDATE);
+        assertThat(update.row).containsOnlyKeys("Id", "FullName");
+        assertThat(update.row.get("FullName")).isEqualTo("b");
+        assertThat(update.previousKey).containsOnlyKeys("Id");
+
+        SqlRedoParser.ParsedChange delete = parser.parse(SqlRedoParser.Op.DELETE,
+                "delete from \"SRC\".\"MixedT\" where \"Id\" = '1'"
+                        + " and ROWID = 'AAAR4TAAYAAAAAPAAA';", binding);
+        assertThat(delete.op).isEqualTo(SqlRedoParser.Op.DELETE);
+        assertThat(delete.row).containsOnlyKeys("Id");
+    }
+
     // —— 外联 LOB:LogMiner 的 SQL_REDO 里根本没有这一列 ——
     //
     // docker 实测(OracleToOpenGaussIT.streamedLobReachesANonOracleTarget):3000+ 字符的

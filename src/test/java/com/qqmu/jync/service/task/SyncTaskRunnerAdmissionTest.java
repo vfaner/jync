@@ -22,6 +22,7 @@ import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.metrics.MetricsSampler;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
 
@@ -49,7 +50,8 @@ class SyncTaskRunnerAdmissionTest {
         SyncProperties properties = new SyncProperties();
         poolActivity = new PoolActivity(properties);
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
-                new SyncLockService(lockStore, properties, 8080), taskStore, poolActivity);
+                new SyncLockService(lockStore, properties, 8080), taskStore, poolActivity,
+                mock(MetricsSampler.class));
 
         when(lockStore.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
         when(lockStore.renew(eq(1L), anyString(), anyLong())).thenReturn(true);

@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.bson.Document;
 
+import com.mongodb.MongoException;
 import com.qqmu.jync.service.etl.mongo.MongoCursorHandle;
 import com.qqmu.jync.service.etl.mongo.MongoResumeKeyCodec;
 import com.qqmu.jync.service.etl.mongo.MongoValueRenderer;
@@ -39,9 +40,18 @@ final class MongoEtlSourceCursor implements EtlSourceCursor {
 
     @Override
     public boolean next() {
-        boolean more = handle.next();
-        current = more ? handle.current() : null;
-        return more;
+        try {
+            boolean more = handle.next();
+            current = more ? handle.current() : null;
+            return more;
+        } catch (MongoException e) {
+            // The connection opened, so query() cannot classify this one: a server that goes
+            // away mid-stream surfaces from the cursor. Left raw, the runner's RuntimeException
+            // handler blames the program instead of the source the operator can act on.
+            throw new EtlSourceException("etl.precheck.mongo.source.error",
+                    e.getMessage() == null || e.getMessage().isBlank()
+                            ? e.getClass().getSimpleName() : e.getMessage(), e);
+        }
     }
 
     @Override

@@ -120,12 +120,33 @@ public class MetricsSampler {
         }
         Instant now = clock.instant();
         for (Project project : projectRepository.findByEnabledTrue()) {
-            try {
-                taskMetricRepository.save(taskSample(project.getId(), now));
-            } catch (Exception e) {
-                log.warn("Task metric sample failed for project {}: {}", project.getId(),
-                        e.getMessage());
-            }
+            writeTaskSample(project.getId(), now);
+        }
+    }
+
+    /**
+     * Samples one project on demand, for a run the periodic sampler cannot see.
+     *
+     * <p>{@link #sampleTasks()} only visits enabled projects. A manual 立即同步 on a stopped
+     * project moves rows without ever being sampled, so its performance page stayed empty
+     * however many rows the cycle moved. The runner takes a point before and after such a
+     * run through here.
+     *
+     * <p>Never throws: the caller is a sync cycle, and a metrics failure must not surface as
+     * a sync failure.
+     */
+    public void sampleProject(Long projectId) {
+        if (!properties.isEnabled()) {
+            return;
+        }
+        writeTaskSample(projectId, clock.instant());
+    }
+
+    private void writeTaskSample(Long projectId, Instant now) {
+        try {
+            taskMetricRepository.save(taskSample(projectId, now));
+        } catch (Exception e) {
+            log.warn("Task metric sample failed for project {}: {}", projectId, e.getMessage());
         }
     }
 

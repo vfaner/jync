@@ -266,8 +266,40 @@ class MetricsSamplerTaskTest {
 
         sampler.sampleTasks();
         sampler.sampleApp();
+        sampler.sampleProject(1L);
 
         verifyNoInteractions(projectRepository, taskMetricRepository, appMetricRepository);
+    }
+
+    /**
+     * 立即同步 deliberately runs one cycle on a stopped project. The periodic sampler only
+     * visits enabled projects, so without an on-demand point its performance page stays empty
+     * no matter how many rows the cycle moved.
+     */
+    @Test
+    void anOnDemandSampleRecordsAProjectThePeriodicSamplerWouldSkip() {
+        when(progressRepository.findByProjectId(7L))
+                .thenReturn(List.of(progress(7L, 10_000_052L)));
+        when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(7L))
+                .thenReturn(Optional.empty());
+
+        sampler.sampleProject(7L);
+
+        TaskMetricSample saved = savedTaskSample();
+        assertThat(saved.getProjectId()).isEqualTo(7L);
+        assertThat(saved.getRowsTotal()).isEqualTo(10_000_052L);
+        assertThat(saved.getSampledAt()).isEqualTo(NOW);
+    }
+
+    @Test
+    void anOnDemandSampleFailureIsContained() {
+        // Metrics are a sidecar: a broken sample must never reach the sync cycle.
+        when(progressRepository.findByProjectId(7L))
+                .thenThrow(new IllegalStateException("boom"));
+
+        assertThatCode(() -> sampler.sampleProject(7L)).doesNotThrowAnyException();
+
+        verifyNoInteractions(taskMetricRepository);
     }
 
     @Test

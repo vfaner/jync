@@ -25,6 +25,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.metrics.MetricsSampler;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
 
@@ -57,7 +58,8 @@ class SyncTaskRunnerStopTest {
         SyncLockStore lockStore = mock(SyncLockStore.class);
         SyncLockService lockService = new SyncLockService(lockStore, new SyncProperties(), 8080);
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
-                lockService, taskStore, new PoolActivity(new SyncProperties()));
+                lockService, taskStore, new PoolActivity(new SyncProperties()),
+                mock(MetricsSampler.class));
 
         when(lockStore.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
         when(lockStore.renew(eq(1L), anyString(), anyLong())).thenReturn(true);

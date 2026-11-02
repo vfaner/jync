@@ -17,6 +17,7 @@ import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.PoolContentionException;
+import com.qqmu.jync.service.metrics.MetricsSampler;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
 
@@ -44,6 +45,7 @@ public class SyncTaskRunner {
     private final SyncLockService lockService;
     private final SyncTaskStore taskStore;
     private final PoolActivity poolActivity;
+    private final MetricsSampler metricsSampler;
 
     /** Projects whose in-flight cycle should be followed by exactly one more cycle. */
     private final Set<Long> queuedReruns = ConcurrentHashMap.newKeySet();
@@ -95,13 +97,15 @@ public class SyncTaskRunner {
                           SyncEngine syncEngine,
                           SyncLockService lockService,
                           SyncTaskStore taskStore,
-                          PoolActivity poolActivity) {
+                          PoolActivity poolActivity,
+                          MetricsSampler metricsSampler) {
         this.projectRepository = projectRepository;
         this.contextFactory = contextFactory;
         this.syncEngine = syncEngine;
         this.lockService = lockService;
         this.taskStore = taskStore;
         this.poolActivity = poolActivity;
+        this.metricsSampler = metricsSampler;
     }
 
     /**
@@ -335,7 +339,18 @@ public class SyncTaskRunner {
         long stopEpoch = stopEpoch(project.getId());
         SyncContext ctx = null;
         SyncResult result;
+        // The periodic sampler only visits enabled projects. A manual run on a stopped project
+        // is invisible to it, and its performance page would stay empty however many rows the
+        // run moved; take the points here. Enabled projects are left to the sampler — one point
+        // per scheduled cycle would multiply the rows written to task_metric_sample.
+        boolean sampleHere = !Boolean.TRUE.equals(project.getEnabled());
         try {
+            if (sampleHere) {
+                // Before the cycle AND before markRunning: the baseline the closing point
+                // subtracts from. Taken after markRunning it would already carry the new
+                // start time, losing the interval between "started" and the first sample.
+                metricsSampler.sampleProject(project.getId());
+            }
             // markRunning lives INSIDE the try: throwing before it used to escape execute()
             // entirely, so runOnce never reached the queued-rerun drain.
             taskStore.markRunning(project.getId());
@@ -390,6 +405,25 @@ public class SyncTaskRunner {
         } catch (RuntimeException e) {
             log.error("Failed to record sync outcome for project '{}'",
                     project.getName(), e);
+        }
+        if (sampleHere) {
+            // Close the manual run before sampling: markRunning left the row RUNNING, and the
+            // closing point would otherwise record RUNNING for a project that is not enabled.
+            // A run that lost its lease must not touch the row at all — the instance that took
+            // the lease owns it now.
+            if (!result.isLockLost()) {
+                try {
+                    taskStore.markStoppedUnlessError(project.getId());
+                } catch (RuntimeException e) {
+                    // Sampling below must still happen: losing one point is worse than a
+                    // bookkeeping failure, which the next click overwrites anyway.
+                    log.error("Failed to close the manual sync of project '{}'",
+                            project.getName(), e);
+                }
+            }
+            // After the outcome is recorded, so the closing point carries this run's verdict
+            // and rows rather than the previous cycle's.
+            metricsSampler.sampleProject(project.getId());
         }
         if (result.hasChanges() || !result.isSuccess() || result.isDeferred()) {
             log.info("Sync of '{}' finished: {}", project.getName(), result.summary());

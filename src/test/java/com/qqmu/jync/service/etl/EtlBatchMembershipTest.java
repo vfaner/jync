@@ -160,6 +160,27 @@ class EtlBatchMembershipTest {
     }
 
     @Test
+    void addTablesRefusesASchemaQualifiedSpellingOfAnExistingTarget() {
+        EtlBatch batch = batch(5L);
+        when(batchRepository.findById(5L)).thenReturn(Optional.of(batch));
+        when(databaseConfigService.findById(1L)).thenReturn(Optional.of(config(1L)));
+        DatabaseConfig target = config(2L);
+        target.setSchemaName("s");
+        when(databaseConfigService.findById(2L)).thenReturn(Optional.of(target));
+        when(catalogService.listTables(1L))
+                .thenReturn(new ConnectionCatalogService.Tables("s", List.of("a", "b")));
+        EtlTask existing = member(7L, 5L, "s.a");
+        when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of(existing));
+
+        assertThatThrownBy(() -> service.addTables(5L, List.of("a")))
+                .isInstanceOf(EtlBatchTableException.class)
+                .hasMessage("error.etl.batch.tables.exists")
+                .satisfies(error -> assertThat(((EtlBatchTableException) error).names())
+                        .containsExactly("a"));
+        verify(taskRepository, never()).saveAll(any());
+    }
+
+    @Test
     void removingAMemberClearsItsCheckpointAndDeletesTheTask() {
         EtlBatch batch = batch(5L);
         EtlTask member = member(7L, 5L, "a");

@@ -86,6 +86,7 @@ class ProjectServiceTest {
     @Mock private com.qqmu.jync.service.sync.SyncStateWriter stateWriter;
     @Mock private com.qqmu.jync.service.cdc.CdcPositionStore positionStore;
     @Mock private com.qqmu.jync.repository.TaskMetricSampleRepository taskMetricSampleRepository;
+    @Mock private com.qqmu.jync.repository.AlertStateRepository alertStateRepository;
 
     private final com.qqmu.jync.config.SyncProperties properties =
             new com.qqmu.jync.config.SyncProperties();
@@ -98,7 +99,7 @@ class ProjectServiceTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                taskMetricSampleRepository, properties);
+                taskMetricSampleRepository, alertStateRepository, properties);
     }
 
     private Project project(Long id) {
@@ -337,6 +338,9 @@ class ProjectServiceTest {
         verify(checkpointRepository).deleteByProjectId(1L);
         verify(snapshotService).deleteAllForProject(1L);
         verify(changeLogRepository).deleteByProjectId(1L);
+        // Alert state is keyed by project id with no foreign key: left behind, a new project
+        // that reuses the id inherits the old silence/cooldown and may never alert again.
+        verify(alertStateRepository).deleteByProjectId(1L);
         verify(projectRepository).deleteById(1L);
         verify(lock).close();
         verify(auditService).record(eq(AuditAction.PROJECT_DELETE), contains("proj"));
@@ -548,7 +552,7 @@ class ProjectServiceTest {
                 new MetadataReaderFactory(java.util.List.of(familyReader)), snapshotService,
                 contextFactory, scheduler, taskRunner, taskStore, syncEngine, lockService,
                 auditService, cdcManager, stateWriter, positionStore, taskMetricSampleRepository,
-                properties);
+                alertStateRepository, properties);
 
         assertThat(service.listSourceObjects(1L).getTables()).containsExactly("pg_orders");
         assertThat(service.listTableColumns(1L, "pg_orders")).containsExactly("total");

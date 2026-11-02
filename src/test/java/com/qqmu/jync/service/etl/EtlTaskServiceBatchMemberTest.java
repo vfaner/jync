@@ -112,7 +112,31 @@ class EtlTaskServiceBatchMemberTest {
         stubConnections(1L);
         stubConnections(2L);
         when(taskRepository.findById(5L)).thenReturn(Optional.of(member(5L)));
-        when(taskRepository.existsByBatchIdAndTargetTableAndIdNot(9L, "dst", 5L)).thenReturn(true);
+        when(taskRepository.findByBatchIdOrderByIdAsc(9L))
+                .thenReturn(java.util.List.of(member(5L), member(6L)));
+
+        EtlTask edit = form(1L, 2L);
+        edit.setId(5L);
+
+        assertThatThrownBy(() -> service.save(edit))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.batch.duplicateTarget");
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void aMemberCannotShareAnotherMembersTargetTableThroughASchemaQualifiedSpelling() {
+        // The batch stores bare catalog names, but an operator may edit one member via the
+        // task form and write "SCHEMA.dst". A plain string comparison then misses that the
+        // next member's "dst" resolves to the same physical table, and two members overwrite
+        // each other's rows.
+        stubConnections(1L);
+        stubTargetSchema(2L, "SCHEMA");
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(member(5L)));
+        EtlTask sibling = member(6L);
+        sibling.setTargetTable("SCHEMA.dst");
+        when(taskRepository.findByBatchIdOrderByIdAsc(9L))
+                .thenReturn(java.util.List.of(member(5L), sibling));
 
         EtlTask edit = form(1L, 2L);
         edit.setId(5L);
@@ -143,6 +167,14 @@ class EtlTaskServiceBatchMemberTest {
         DatabaseConfig config = new DatabaseConfig();
         config.setId(id);
         config.setType(DatabaseType.MYSQL);
+        when(databaseConfigService.findById(id)).thenReturn(Optional.of(config));
+    }
+
+    private void stubTargetSchema(Long id, String schema) {
+        DatabaseConfig config = new DatabaseConfig();
+        config.setId(id);
+        config.setType(DatabaseType.MYSQL);
+        config.setSchemaName(schema);
         when(databaseConfigService.findById(id)).thenReturn(Optional.of(config));
     }
 

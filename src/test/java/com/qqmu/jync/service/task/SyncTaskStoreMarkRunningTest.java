@@ -57,4 +57,27 @@ class SyncTaskStoreMarkRunningTest {
 
         assertThat(task.getStatus()).isEqualTo(TaskStatus.RUNNING);
     }
+
+    @Test
+    void aFinishedManualRunReturnsTheTaskToStopped() {
+        // markRunning flipped a stopped project to RUNNING for the duration of the manual
+        // cycle; the status must go back once the round ends, or the page keeps saying
+        // "同步中" for a project nobody asked to enable.
+        task.setStatus(TaskStatus.RUNNING);
+
+        store.markStoppedUnlessError(1L);
+
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.STOPPED);
+    }
+
+    @Test
+    void aFinishedManualRunKeepsTheErrorHat() {
+        task.setStatus(TaskStatus.ERROR);
+        task.setLastSyncResult("CDC_FATAL");
+
+        store.markStoppedUnlessError(1L);
+
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.ERROR);
+        assertThat(task.getLastSyncResult()).isEqualTo("CDC_FATAL");
+    }
 }

@@ -28,6 +28,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.metrics.MetricsSampler;
 import com.qqmu.jync.service.sync.SyncEngine;
 
 /**
@@ -55,7 +56,8 @@ class SyncTaskRunnerRerunTest {
         taskStore = mock(SyncTaskStore.class);
         SyncLockService lockService = new SyncLockService(lockStore, new SyncProperties(), 8080);
         runner = new SyncTaskRunner(projectRepository, contextFactory, syncEngine,
-                lockService, taskStore, new PoolActivity(new SyncProperties()));
+                lockService, taskStore, new PoolActivity(new SyncProperties()),
+                mock(MetricsSampler.class));
 
         when(lockStore.acquire(eq(1L), anyString(), anyLong())).thenReturn(true);
         when(lockStore.renew(eq(1L), anyString(), anyLong())).thenReturn(true);
@@ -174,7 +176,7 @@ class SyncTaskRunnerRerunTest {
         });
         SyncTaskRunner local = new SyncTaskRunner(projectRepository,
                 mock(SyncContextFactory.class), engine, lockService, taskStore,
-                new PoolActivity(new SyncProperties()));
+                new PoolActivity(new SyncProperties()), mock(MetricsSampler.class));
         try {
             queuedReruns(local).add(9L);
             Method runClaimed = SyncTaskRunner.class.getDeclaredMethod(

@@ -15,7 +15,5 @@ public interface EtlTaskRepository extends JpaRepository<EtlTask, Long> {
 
     List<EtlTask> findByBatchIdOrderByIdAsc(Long batchId);
 
-    boolean existsByBatchIdAndTargetTableAndIdNot(Long batchId, String targetTable, Long id);
-
     long countByEnabledTrue();
 }

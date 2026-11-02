@@ -242,6 +242,27 @@ class MongoEtlSourceTest {
     }
 
     @Test
+    void aDriverFailureWhileStreamingIsASourceError() {
+        // The connection opened and the first batch was requested; the server then went away.
+        // The driver raises a MongoException from the cursor, and the runner's generic
+        // RuntimeException handler would report it as a program bug instead of the source
+        // failure the operator can actually act on.
+        MongoSocketOpenException dropped = new MongoSocketOpenException("connect refused",
+                new ServerAddress("localhost", 27017), new ConnectException("refused"));
+        when(handle.next()).thenThrow(dropped);
+        EtlSourceCursor cursor = source().query(task(EtlWriteMode.OVERWRITE, null), null);
+
+        assertThatThrownBy(cursor::next)
+                .isInstanceOf(EtlSourceException.class)
+                .satisfies(e -> {
+                    EtlSourceException failure = (EtlSourceException) e;
+                    assertThat(failure.messageKey())
+                            .isEqualTo("etl.precheck.mongo.source.error");
+                    assertThat(failure.getCause()).isSameAs(dropped);
+                });
+    }
+
+    @Test
     void probeReportsTheCollectionTheSampleAndTheResumeKey() {
         MongoEtlSource source = source();
         EtlTask task = task(EtlWriteMode.APPEND, "seq");

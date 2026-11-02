@@ -175,8 +175,11 @@ public class PrometheusMetricsService {
             String labels = connectionLabels(sample.getConnectionId(),
                     names.get(sample.getConnectionId()));
             sample(out, "jync_connection_healthy", labels, sample.isOk() ? "1" : "0");
+            // A failed probe still timed itself; exporting that as latency would claim a
+            // round-trip to a database that never answered. The healthy gauge already says
+            // the probe failed, so latency is unknown.
             sample(out, "jync_connection_latency_seconds", labels,
-                    seconds(sample.getLatencyMs()));
+                    sample.isOk() ? seconds(sample.getLatencyMs()) : "NaN");
             sample(out, "jync_connection_sessions", labels, number(sample.getSessions()));
             sample(out, "jync_connection_qps", labels, number(sample.getQps()));
             sample(out, "jync_connection_cache_hit_ratio", labels,

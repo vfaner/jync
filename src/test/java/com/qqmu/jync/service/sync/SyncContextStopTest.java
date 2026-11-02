@@ -51,4 +51,25 @@ class SyncContextStopTest {
 
         assertThatCode(ctx::requireLease).doesNotThrowAnyException();
     }
+
+    @Test
+    @DisplayName("a lost lease outranks a stop request, so the runner records a lock loss")
+    void aLostLeaseOutranksAStopRequest() {
+        // Both signals can be true at the same time: the user pressed stop while another
+        // instance took the lease over. The cycle must be classified as the lock loss —
+        // otherwise the runner records an ordinary stop and the task stays RUNNING/ERROR
+        // unlike every other lock-lost exit, and the "another instance took over" notice
+        // never reaches the page.
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("proj");
+        SyncContext ctx = SyncContext.builder()
+                .project(project)
+                .stopRequested(() -> true)
+                .lockRenewer(() -> false)
+                .build();
+
+        assertThatThrownBy(ctx::requireLease)
+                .isInstanceOf(LockLostException.class);
+    }
 }

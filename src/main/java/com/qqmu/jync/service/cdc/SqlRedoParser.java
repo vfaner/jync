@@ -42,7 +42,11 @@ public class SqlRedoParser {
 
     public static final class ParsedChange {
         public final Op op;
-        /** Upper-case column name → canonical value (null for SQL NULL). */
+        /**
+         * Column name exactly as the data dictionary reports it → canonical value (null for
+         * SQL NULL). Case must be preserved: a table created with quoted identifiers stores
+         * {@code "Id"}, and the binding — and therefore the applier — keys on that exact name.
+         */
         public final Map<String, Object> row;
         public final String unsupportedReason;
         /**
@@ -200,9 +204,8 @@ public class SqlRedoParser {
         // that moves the primary key must tell the consumer which key to delete.
         Map<String, Object> previousKey = new LinkedHashMap<>();
         for (String pk : binding.pkNames()) {
-            String upper = pk.toUpperCase(Locale.ROOT);
-            if (row.containsKey(upper)) {
-                previousKey.put(upper, row.get(upper));
+            if (row.containsKey(pk)) {
+                previousKey.put(pk, row.get(pk));
             }
         }
         // SET overrides the old image.
@@ -219,7 +222,7 @@ public class SqlRedoParser {
 
         // Validate WHERE contains all PK columns.
         for (String pk : binding.pkNames()) {
-            if (!whereCols.containsKey(pk.toUpperCase(Locale.ROOT))) {
+            if (!whereCols.containsKey(pk)) {
                 return ParsedChange.unsupported("update: where missing PK column " + pk);
             }
         }
@@ -277,7 +280,7 @@ public class SqlRedoParser {
                                                           Map<String, Object> row) {
         List<String> missing = new ArrayList<>();
         for (String column : binding.columnNames()) {
-            if (!row.containsKey(column.toUpperCase(Locale.ROOT))) {
+            if (!row.containsKey(column)) {
                 missing.add(column);
             }
         }
@@ -310,16 +313,15 @@ public class SqlRedoParser {
         Map<String, Integer> types = binding.typeByColumn();
         Map<String, Object> row = new LinkedHashMap<>();
         for (String pk : binding.pkNames()) {
-            String upper = pk.toUpperCase(Locale.ROOT);
-            String value = whereCols.get(upper);
+            String value = whereCols.get(pk);
             if (value == null) {
                 return ParsedChange.unsupported("delete: where missing PK column " + pk);
             }
-            Integer sqlType = types.get(upper);
+            Integer sqlType = types.get(pk);
             if (sqlType == null) {
                 return ParsedChange.unsupported("delete: PK column " + pk + " not in binding");
             }
-            row.put(upper, OracleLiteralConverters.convert(value, sqlType));
+            row.put(pk, OracleLiteralConverters.convert(value, sqlType));
         }
         return ParsedChange.of(Op.DELETE, row);
     }
@@ -393,7 +395,9 @@ public class SqlRedoParser {
 
     /**
      * Parse a column list like {@code ("ID","NAME","NOTE")} (or the part before VALUES
-     * for INSERT). Returns upper-case column names without the surrounding quotes.
+     * for INSERT). Returns column names without the surrounding quotes, with the exact case
+     * Oracle stored and LogMiner quoted — quoted identifiers are case-sensitive, and the
+     * binding keys on the same exact name.
      */
     static List<String> parseColumnList(String sql) {
         int open = sql.indexOf('(');
@@ -406,7 +410,7 @@ public class SqlRedoParser {
         for (String token : splitTopLevel(body, ',')) {
             String t = token.trim();
             if (t.startsWith("\"") && t.endsWith("\"")) {
-                out.add(t.substring(1, t.length() - 1).toUpperCase(Locale.ROOT));
+                out.add(t.substring(1, t.length() - 1));
             }
         }
         return out;
@@ -451,16 +455,17 @@ public class SqlRedoParser {
             String col = token.substring(0, eq).trim();
             String val = token.substring(eq + 1).trim();
             if (col.startsWith("\"") && col.endsWith("\"")) {
-                out.add(new Assignment(col.substring(1, col.length() - 1).toUpperCase(Locale.ROOT), val));
+                out.add(new Assignment(col.substring(1, col.length() - 1), val));
             }
         }
         return out;
     }
 
     /**
-     * Parse a WHERE clause into {@code upperColumnName → raw value literal}. ROWID
-     * entries are kept too (the caller decides to ignore them); quoted column names
-     * are upper-cased.
+     * Parse a WHERE clause into {@code exactColumnName → raw value literal}. ROWID entries
+     * are kept too (the caller decides to ignore them) and are always keyed {@code ROWID},
+     * because the identifier is a keyword, not a user-chosen column. Quoted column names keep
+     * their exact case.
      */
     static Map<String, String> parseWhereColumns(String wherePart) {
         Map<String, String> out = new LinkedHashMap<>();
@@ -484,7 +489,7 @@ public class SqlRedoParser {
             String col = c.substring(0, eq).trim();
             String val = c.substring(eq + 1).trim();
             if (col.startsWith("\"") && col.endsWith("\"")) {
-                out.put(col.substring(1, col.length() - 1).toUpperCase(Locale.ROOT), val);
+                out.put(col.substring(1, col.length() - 1), val);
             } else if (col.toUpperCase(Locale.ROOT).equals("ROWID")) {
                 out.put("ROWID", val);
             }
@@ -496,7 +501,7 @@ public class SqlRedoParser {
      * Recognize {@code "COL" IS NULL} — how LogMiner rebuilds a NULL value in a WHERE
      * old image (V$LOGMNR_CONTENTS.SQL_REDO samples render
      * {@code … and "COMMISSION_PCT" IS NULL …}; {@code = NULL} never appears, it would
-     * compare unknown). Returns the upper-case column name, or null for any other
+     * compare unknown). Returns the column name with its exact case, or null for any other
      * conjunct ({@code IS NOT NULL}, a predicate with an operator, …).
      */
     private static String nullPredicateColumn(String conjunct) {
@@ -520,8 +525,8 @@ public class SqlRedoParser {
             return null;
         }
 
-        // Remove quotes and convert to uppercase
-        return colPart.substring(1, colPart.length() - 1).toUpperCase(Locale.ROOT);
+        // Remove the surrounding quotes; the identifier's case is meaningful.
+        return colPart.substring(1, colPart.length() - 1);
     }
 
     // —— splitters that respect quotes, double-quotes and parentheses ——

@@ -205,15 +205,20 @@ public class SyncContext {
      * Renews the lease, aborting the run when it was lost, or earlier when the user asked
      * this run to stop. Both are safe points: every caller sits on a committed batch, so
      * nothing is left half-written by unwinding here.
+     *
+     * <p>The lease check comes first because both signals can be true at once: a stop
+     * pressed while another instance took the lease over is a lock loss, not an ordinary
+     * stop. Classifying it as a stop would record an outcome this instance no longer owns
+     * and hide the "another instance took over" notice.
      */
     public void requireLease() {
-        if (isStopRequested()) {
-            throw new StopRequestedException("Sync of project '" + projectName()
-                    + "' stopped by request; aborting at the next safe point");
-        }
         if (!renewLease()) {
             throw new LockLostException("Sync lock lost mid-run (lease expired or reclaimed by"
                     + " another instance); aborting before further writes");
+        }
+        if (isStopRequested()) {
+            throw new StopRequestedException("Sync of project '" + projectName()
+                    + "' stopped by request; aborting at the next safe point");
         }
     }
 }

@@ -114,10 +114,23 @@ public class EtlTaskService {
                     || !Objects.equals(entity.getTargetDbId(), form.getTargetDbId())) {
                 throw new IllegalArgumentException("error.etl.batch.connectionsLocked");
             }
-            if (form.getTargetTable() != null
-                    && taskRepository.existsByBatchIdAndTargetTableAndIdNot(
-                            entity.getBatchId(), form.getTargetTable().trim(), entity.getId())) {
-                throw new IllegalArgumentException("error.etl.batch.duplicateTarget");
+            if (form.getTargetTable() != null) {
+                // Compare the resolved target, not the typed text: a member may have been
+                // saved as "SCHEMA.dst" while this one says "dst", and both write the same
+                // physical table. Case is folded the same way in the batch service.
+                DatabaseConfig memberTarget = databaseConfigService
+                        .findById(entity.getTargetDbId())
+                        .orElseThrow(() -> new IllegalArgumentException("error.etl.target.missing"));
+                String requested = EtlSqlSupport.targetKey(memberTarget, form.getTargetTable());
+                boolean duplicate = taskRepository.findByBatchIdOrderByIdAsc(entity.getBatchId())
+                        .stream()
+                        .filter(sibling -> !Objects.equals(sibling.getId(), entity.getId()))
+                        .anyMatch(sibling -> sibling.getTargetTable() != null
+                                && requested.equals(EtlSqlSupport.targetKey(
+                                        memberTarget, sibling.getTargetTable())));
+                if (duplicate) {
+                    throw new IllegalArgumentException("error.etl.batch.duplicateTarget");
+                }
             }
         }
 

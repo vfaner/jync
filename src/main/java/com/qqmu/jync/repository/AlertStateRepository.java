@@ -13,4 +13,10 @@ public interface AlertStateRepository extends JpaRepository<AlertState, Long> {
     Optional<AlertState> findByCategoryAndProjectIdAndObjectKey(AlertCategory category,
                                                                 Long projectId,
                                                                 String objectKey);
+
+    /**
+     * Removes every alert state owned by a project. Connection-wide rows store {@code 0}, so
+     * a positive project id never touches them.
+     */
+    void deleteByProjectId(Long projectId);
 }

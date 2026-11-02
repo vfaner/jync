@@ -163,6 +163,30 @@ class PrometheusMetricsServiceTest {
     }
 
     @Test
+    void aFailedProbeReportsNoLatency() {
+        // A probe that could not connect still carries the time it spent failing. Exporting
+        // that as latency makes the scrape claim a 30 s round-trip to a database that never
+        // answered — an alert rule on latency then fires for the wrong reason.
+        DatabaseConfig config = new DatabaseConfig();
+        config.setId(10L);
+        config.setName("prod-mysql");
+        when(configRepository.findAll()).thenReturn(List.of(config));
+        DbMetricSample sample = new DbMetricSample();
+        sample.setConnectionId(10L);
+        sample.setSampledAt(SAMPLED_AT);
+        sample.setOk(false);
+        sample.setLatencyMs(30_000L);
+        when(dbSamples.findLatestPerConnection()).thenReturn(List.of(sample));
+
+        String body = service.scrape();
+
+        String labels = "{connection=\"prod-mysql\",connection_id=\"10\"}";
+        assertThat(body)
+                .contains("jync_connection_healthy" + labels + " 0")
+                .contains("jync_connection_latency_seconds" + labels + " NaN");
+    }
+
+    @Test
     void labelValuesAreEscaped() {
         Project project = new Project();
         project.setId(1L);
