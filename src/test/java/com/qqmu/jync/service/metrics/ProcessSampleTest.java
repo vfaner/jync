@@ -44,20 +44,41 @@ class ProcessSampleTest {
     void memoryAndDiskAreTurnedIntoPercentages() {
         // 1 GiB used of 2 GiB total, and 250 MiB of 1 GiB.
         ProcessSample sample = ProcessSample.of(
-                new SystemMetrics.Snapshot(10, 1.5, 2, 42, 1024L * 1024 * 1024, 2L * 1024 * 1024 * 1024,
-                        256L * 1024 * 1024, 1024L * 1024 * 1024, "/data"),
+                new SystemMetrics.Snapshot(10, 1.5, 2, 42, -1, 1024L * 1024 * 1024,
+                        2L * 1024 * 1024 * 1024, 256L * 1024 * 1024, 1024L * 1024 * 1024, "/data"),
                 1000, 2000, 500, 12, 1, 2);
 
-        assertThat(sample.cpuPercent()).isEqualTo(42);
         assertThat(sample.sysLoadPercent()).isEqualTo(10);
         assertThat(sample.sysMemPercent()).isEqualTo(50);
         assertThat(sample.diskPercent()).isEqualTo(25);
     }
 
+    /**
+     * The card is labelled 进程 CPU: it must show the JVM's own share of the CPU. The host
+     * figure (42% here) belongs to the dashboard's host gauge, not to this row.
+     */
+    @Test
+    void theProcessCpuFigureIsTheJvmsOwnLoad() {
+        ProcessSample sample = ProcessSample.of(
+                new SystemMetrics.Snapshot(10, 1.5, 2, 42, 7, 0, 0, 0, 0, "/data"),
+                1000, 2000, 500, 12, 1, 2);
+
+        assertThat(sample.cpuPercent()).isEqualTo(7);
+    }
+
+    @Test
+    void anUnreadableProcessCpuStaysUnknownEvenWhenTheHostCpuIsKnown() {
+        ProcessSample sample = ProcessSample.of(
+                new SystemMetrics.Snapshot(10, 1.5, 2, 42, -1, 0, 0, 0, 0, "/data"),
+                1000, 2000, 500, 12, 1, 2);
+
+        assertThat(sample.cpuPercent()).isNull();
+    }
+
     @Test
     void aZeroTotalDoesNotDivideByZero() {
         ProcessSample sample = ProcessSample.of(
-                new SystemMetrics.Snapshot(-1, -1, 1, -1, 0, 0, 0, 0, null),
+                new SystemMetrics.Snapshot(-1, -1, 1, -1, -1, 0, 0, 0, 0, null),
                 1000, 2000, 500, 12, 1, 2);
 
         assertThat(sample.sysMemPercent()).isNull();

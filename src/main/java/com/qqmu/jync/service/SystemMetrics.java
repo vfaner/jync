@@ -65,6 +65,7 @@ public class SystemMetrics {
         double loadPercent = -1;
         double loadAverage = -1;
         double cpuPercent = -1;
+        double processCpuPercent = -1;
         long memoryUsed = -1;
         long memoryTotal = -1;
         int cores = 1;
@@ -80,7 +81,11 @@ public class SystemMetrics {
 
         if (os instanceof com.sun.management.OperatingSystemMXBean extended) {
             try {
+                // getCpuLoad() is the whole machine; getProcessCpuLoad() is this JVM. Both
+                // are reported — the dashboard gauge wants the host, the 进程 CPU row on the
+                // performance pages must show what Jync itself is burning.
                 cpuPercent = percentOf(extended.getCpuLoad());
+                processCpuPercent = percentOf(extended.getProcessCpuLoad());
                 long total = extended.getTotalMemorySize();
                 // 已用 = 总量 − 可回收量。JVM 的 free 只是"完全空闲页"，macOS 和 Linux 都会
                 // 把缓存页算进去，空闲机器上也能读成 95% 已用；平台能给出可回收量时优先用它。
@@ -93,6 +98,7 @@ public class SystemMetrics {
                 }
             } catch (RuntimeException e) {
                 cpuPercent = -1;
+                processCpuPercent = -1;
                 memoryUsed = -1;
                 memoryTotal = -1;
             }
@@ -115,7 +121,8 @@ public class SystemMetrics {
         }
 
         return new Snapshot(loadPercent, loadAverage, cores,
-                cpuPercent, memoryUsed, memoryTotal, diskUsed, diskTotal, volumePath());
+                cpuPercent, processCpuPercent, memoryUsed, memoryTotal, diskUsed, diskTotal,
+                volumePath());
     }
 
     /**
@@ -305,15 +312,18 @@ public class SystemMetrics {
      *
      * <p>{@code loadAverage} is the raw one-minute figure the ring's percentage is derived
      * from — uptime's number, which is what an operator compares against the core count.
-     * {@code volumePath} names the volume the disk figures came from, spelled as configured,
-     * so the page never leaves the reader guessing between {@code /}, a data directory and a
-     * separate disk.
+     * {@code cpuPercent} is the whole machine, {@code processCpuPercent} this JVM alone; the
+     * two differ by an order of magnitude on a busy host, so the performance pages must use
+     * the process figure. {@code volumePath} names the volume the disk figures came from,
+     * spelled as configured, so the page never leaves the reader guessing between {@code /},
+     * a data directory and a separate disk.
      */
     public record Snapshot(double loadPercent, double loadAverage, int cores, double cpuPercent,
-                           long memoryUsedBytes, long memoryTotalBytes,
+                           double processCpuPercent, long memoryUsedBytes, long memoryTotalBytes,
                            long diskUsedBytes, long diskTotalBytes, String volumePath) {
 
-        public static final Snapshot UNKNOWN = new Snapshot(-1, -1, 0, -1, -1, -1, -1, -1, null);
+        public static final Snapshot UNKNOWN =
+                new Snapshot(-1, -1, 0, -1, -1, -1, -1, -1, -1, null);
 
         public String loadText() {
             return percentText(loadPercent);

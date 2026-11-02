@@ -17,6 +17,11 @@ import com.qqmu.jync.model.DatabaseType;
  * performance counters. Nothing in the DMVs is a plain cumulative statement count, so the
  * counter is the sum of cached plans' {@code execution_count} — it can fall back when a
  * plan is evicted, and the sampler already treats a falling counter as "unknown".
+ *
+ * <p>{@code Buffer cache hit ratio} is a fraction counter: its {@code cntr_value} is the
+ * numerator and {@code Buffer cache hit ratio base} holds the denominator. The reader must
+ * divide one by the other — the raw numerator is a page count in the millions, so showing it
+ * as a percentage pins the chart at 100%.
  */
 class SqlServerRuntimeMetricsReaderTest {
 
@@ -36,15 +41,17 @@ class SqlServerRuntimeMetricsReaderTest {
 
     @Test
     void theDmvRowsBecomeSessionsCounterHitRateAndLocks() throws SQLException {
+        // raw counters, exactly as sys.dm_os_performance_counters stores them:
+        // 90000 hits out of 100000 lookups → 90%, not the 90000 that gets clamped to 100.
         RuntimeMetricsReader.Reading reading = reader.read(StubConnection.returning(
                 StubResultSet.of(new String[] {"23"}),
                 StubResultSet.of(new String[] {"900000"}),
-                StubResultSet.of(new String[] {"97.5"}),
+                StubResultSet.of(new String[] {"90000", "100000"}),
                 StubResultSet.of(new String[] {"2"})));
 
         assertThat(reading.sessions()).isEqualTo(23);
         assertThat(reading.counter()).isEqualTo(900000L);
-        assertThat(reading.cacheHitPercent()).isEqualTo(97.5);
+        assertThat(reading.cacheHitPercent()).isEqualTo(90.0);
         assertThat(reading.lockWaits()).isEqualTo(2);
     }
 
@@ -53,7 +60,7 @@ class SqlServerRuntimeMetricsReaderTest {
         Connection connection = StubConnection.returning(
                 StubConnection.statement(StubResultSet.of(new String[] {"23"})),
                 StubConnection.statement(StubResultSet.of(new String[] {"900000"})),
-                StubConnection.statement(StubResultSet.of(new String[] {"97.5"})),
+                StubConnection.statement(StubResultSet.of(new String[] {"90000", "100000"})),
                 StubConnection.denied(
                         new SQLException("The user does not have permission to perform this action")));
 
@@ -61,6 +68,7 @@ class SqlServerRuntimeMetricsReaderTest {
 
         assertThat(reading.sessions()).isEqualTo(23);
         assertThat(reading.counter()).isEqualTo(900000L);
+        assertThat(reading.cacheHitPercent()).isEqualTo(90.0);
         assertThat(reading.lockWaits()).isNull();
     }
 
@@ -70,11 +78,30 @@ class SqlServerRuntimeMetricsReaderTest {
         RuntimeMetricsReader.Reading reading = reader.read(StubConnection.returning(
                 StubResultSet.of(new String[] {"23"}),
                 StubResultSet.of(new String[] {null}),
-                StubResultSet.of(new String[] {"97.5"}),
+                StubResultSet.of(new String[] {"90000", "100000"}),
                 StubResultSet.of(new String[] {"0"})));
 
         assertThat(reading.counter()).isNull();
-        assertThat(reading.cacheHitPercent()).isEqualTo(97.5);
+        assertThat(reading.cacheHitPercent()).isEqualTo(90.0);
+    }
+
+    @Test
+    void aZeroOrBlankBaseCounterLeavesTheHitRateUnknown() throws SQLException {
+        // The base counter is zero after a reset, or the row matched but its cell is NULL:
+        // the ratio is undefined, and "unknown" is honest where 0% or 100% would not be.
+        RuntimeMetricsReader.Reading zeroBase = reader.read(StubConnection.returning(
+                StubResultSet.of(new String[] {"23"}),
+                StubResultSet.of(new String[] {"1"}),
+                StubResultSet.of(new String[] {"90000", "0"}),
+                StubResultSet.of(new String[] {"0"})));
+        assertThat(zeroBase.cacheHitPercent()).isNull();
+
+        RuntimeMetricsReader.Reading blankBase = reader.read(StubConnection.returning(
+                StubResultSet.of(new String[] {"23"}),
+                StubResultSet.of(new String[] {"1"}),
+                StubResultSet.of(new String[] {"90000", null}),
+                StubResultSet.of(new String[] {"0"})));
+        assertThat(blankBase.cacheHitPercent()).isNull();
     }
 
     @Test

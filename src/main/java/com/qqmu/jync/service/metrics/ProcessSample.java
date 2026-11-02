@@ -37,8 +37,8 @@ public record ProcessSample(Double cpuPercent, Long heapUsed, Long heapMax, Long
 
     static ProcessSample of(SystemMetrics.Snapshot snapshot, long heapUsed, long heapMax,
                             long nonheapUsed, int threads, long gcCount, long gcTimeMs) {
-        return new ProcessSample(percent(snapshot.cpuPercent()), heapUsed, heapMax, nonheapUsed,
-                threads, gcCount, gcTimeMs, percent(snapshot.loadPercent()),
+        return new ProcessSample(percent(snapshot.processCpuPercent()), heapUsed, heapMax,
+                nonheapUsed, threads, gcCount, gcTimeMs, percent(snapshot.loadPercent()),
                 ratio(snapshot.memoryUsedBytes(), snapshot.memoryTotalBytes()),
                 ratio(snapshot.diskUsedBytes(), snapshot.diskTotalBytes()));
     }

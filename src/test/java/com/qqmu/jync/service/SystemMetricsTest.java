@@ -71,6 +71,38 @@ class SystemMetricsTest {
     }
 
     /**
+     * Two different figures: the dashboard's host gauge shows the whole machine, while the
+     * 进程 CPU row on the performance pages must show what this JVM itself is burning.
+     * {@code getCpuLoad()} is the former; {@code getProcessCpuLoad()} the latter.
+     */
+    @Test
+    void processCpuComesFromTheProcessCounterNotTheSystemWideOne() {
+        com.sun.management.OperatingSystemMXBean os =
+                mock(com.sun.management.OperatingSystemMXBean.class);
+        when(os.getCpuLoad()).thenReturn(0.63);
+        when(os.getProcessCpuLoad()).thenReturn(0.05);
+
+        SystemMetrics.Snapshot snapshot = new SystemMetrics("jdbc:h2:file:./data/jync", Paths.get("."))
+                .snapshot(os, null, -1);
+
+        assertThat(snapshot.cpuPercent()).isEqualTo(63.0);
+        assertThat(snapshot.processCpuPercent()).isEqualTo(5.0);
+    }
+
+    @Test
+    void anUnsupportedProcessCounterIsReportedAsUnknownNotZero() {
+        com.sun.management.OperatingSystemMXBean os =
+                mock(com.sun.management.OperatingSystemMXBean.class);
+        when(os.getCpuLoad()).thenReturn(0.63);
+        when(os.getProcessCpuLoad()).thenReturn(-1.0);
+
+        SystemMetrics.Snapshot snapshot = new SystemMetrics("jdbc:h2:file:./data/jync", Paths.get("."))
+                .snapshot(os, null, -1);
+
+        assertThat(snapshot.processCpuPercent()).isNegative();
+    }
+
+    /**
      * The JVM's free-page count is not what an operator means by 已用: macOS and Linux keep
      * almost every page in cache, so the raw figure reads ~95% on an idle machine. When the
      * platform can report what is actually reclaimable, that is the number the gauge uses.
@@ -235,7 +267,7 @@ class SystemMetricsTest {
     @Test
     void textAndToneFormatForTheCard() {
         SystemMetrics.Snapshot snapshot = new SystemMetrics.Snapshot(
-                50.0, 4.0, 8, 63.0, 2 * GIB, 4 * GIB, 95 * GIB, 100 * GIB, null);
+                50.0, 4.0, 8, 63.0, -1, 2 * GIB, 4 * GIB, 95 * GIB, 100 * GIB, null);
 
         assertThat(snapshot.loadText()).isEqualTo("50%");
         assertThat(snapshot.cpuText()).isEqualTo("63%");

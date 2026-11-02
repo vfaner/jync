@@ -41,7 +41,7 @@ class DashboardGaugesViewTest {
     private static final long GIB = 1024L * 1024 * 1024;
 
     private static final SystemMetrics.Snapshot SAMPLE = new SystemMetrics.Snapshot(
-            50.0, 4.0, 8, 63.0, 14 * GIB, 16 * GIB, 95 * GIB, 100 * GIB, "./data");
+            50.0, 4.0, 8, 63.0, -1, 14 * GIB, 16 * GIB, 95 * GIB, 100 * GIB, "./data");
 
     @Autowired
     private MockMvc mvc;
