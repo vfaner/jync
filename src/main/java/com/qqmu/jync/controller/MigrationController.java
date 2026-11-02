@@ -224,6 +224,9 @@ public class MigrationController {
         if (resolved == null) {
             return "redirect:/migrations";
         }
+        if (taskForType(resolved, id, flash) == null) {
+            return "redirect:/migrations/" + type;
+        }
         try {
             if (taskService.submit(id, MigrationRunTrigger.MANUAL)) {
                 flash.addFlashAttribute("message", "msg.migration.started");
@@ -242,6 +245,9 @@ public class MigrationController {
         MigrationType resolved = resolve(type, flash);
         if (resolved == null) {
             return "redirect:/migrations";
+        }
+        if (taskForType(resolved, id, flash) == null) {
+            return "redirect:/migrations/" + type;
         }
         if (taskService.cancel(id)) {
             flash.addFlashAttribute("message", "msg.migration.cancelling");
@@ -270,6 +276,9 @@ public class MigrationController {
         if (resolved == null) {
             return "redirect:/migrations";
         }
+        if (taskForType(resolved, id, flash) == null) {
+            return "redirect:/migrations/" + type;
+        }
         try {
             taskService.delete(id);
             flash.addFlashAttribute("message", "msg.migration.deleted");
@@ -285,6 +294,9 @@ public class MigrationController {
         if (resolved == null) {
             return "redirect:/migrations";
         }
+        if (taskForType(resolved, id, flash) == null) {
+            return "redirect:/migrations/" + type;
+        }
         try {
             taskService.setEnabled(id, enabled);
             flash.addFlashAttribute("message",
@@ -293,6 +305,21 @@ public class MigrationController {
             flash.addFlashAttribute("error", e.getMessage());
         }
         return "redirect:/migrations/" + type + "/" + id;
+    }
+
+    /**
+     * A write action carries the type in its URL; the task must actually belong there. Loading it
+     * first keeps a stale link or a hand-edited type segment from running, cancelling, toggling
+     * or deleting another type's task — and from writing a run row for an id that no longer
+     * exists.
+     */
+    private MigrationTask taskForType(MigrationType type, Long id, RedirectAttributes flash) {
+        MigrationTask task = taskService.findById(id).orElse(null);
+        if (task == null || task.getType() != type) {
+            flash.addFlashAttribute("error", "error.migration.not.found");
+            return null;
+        }
+        return task;
     }
 
     private void addFormOptions(Model model, MigrationType type, MigrationTypeHandler handler,

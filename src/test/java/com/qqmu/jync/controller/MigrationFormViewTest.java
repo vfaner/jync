@@ -93,6 +93,18 @@ class MigrationFormViewTest {
     }
 
     @Test
+    void theScheduleHelpTextMatchesWhatSavingActuallyDoes() throws Exception {
+        String page = mvc.perform(get("/migrations/es-to-easysearch/new").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // save() applies the checkbox and schedules the task right after commit, so the old
+        // "Saving does not enable the task" help text told users the opposite of the truth.
+        assertThat(page).contains("Saving with this box checked enables the schedule immediately")
+                .doesNotContain("Saving does not enable the task");
+    }
+
+    @Test
     void theEditFormPrefillsStoredOptionsAndScheduling() throws Exception {
         MigrationTask task = new MigrationTask();
         task.setId(9L);

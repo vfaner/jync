@@ -321,7 +321,7 @@ class MigrationTaskServiceTest {
                 .hasMessage("error.migration.queue.full");
 
         verify(guard).release(9L);
-        verify(runStore).fail(100L, 9L, "error.migration.queue.full");
+        verify(runStore).fail(100L, 9L, "error.migration.queue.full", "queue full");
     }
 
     @Test
@@ -339,7 +339,8 @@ class MigrationTaskServiceTest {
         assertThat(service.submit(9L, MigrationRunTrigger.MANUAL)).isTrue();
 
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
-        verify(runStore).fail(eq(100L), eq(9L), message.capture());
+        verify(runStore).fail(eq(100L), eq(9L), message.capture(),
+                eq("crashed outside the engine"));
         assertThat(message.getValue()).contains("crashed outside the engine").contains("boom");
         verify(guard).release(9L);
     }

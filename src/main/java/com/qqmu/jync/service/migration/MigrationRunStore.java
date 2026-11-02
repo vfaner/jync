@@ -2,12 +2,16 @@ package com.qqmu.jync.service.migration;
 
 import java.time.Instant;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.model.MigrationRun;
 import com.qqmu.jync.model.MigrationRunStatus;
 import com.qqmu.jync.model.MigrationRunTrigger;
+import com.qqmu.jync.model.MigrationTask;
 import com.qqmu.jync.repository.MigrationRunRepository;
 import com.qqmu.jync.repository.MigrationTaskRepository;
 
@@ -20,6 +24,8 @@ import com.qqmu.jync.repository.MigrationTaskRepository;
  */
 @Service
 public class MigrationRunStore {
+
+    private static final Logger log = LoggerFactory.getLogger(MigrationRunStore.class);
 
     private final MigrationRunRepository runRepository;
     private final MigrationTaskRepository taskRepository;
@@ -55,10 +61,13 @@ public class MigrationRunStore {
         });
     }
 
-    @Transactional
     public void finish(Long runId, Long taskId, MigrationRunResult result) {
         MigrationRunStatus status = statusOf(result);
         Instant finishedAt = Instant.now();
+        // The run row is the record of truth and is written first, in its own transaction. The
+        // task summary below is a convenience for the list badge: a concurrent edit bumps the
+        // task's @Version, and it must not roll the run row back — that would let the crash
+        // handler rewrite a completed migration as FAILED and drop its counters.
         runRepository.findById(runId).ifPresent(run -> {
             run.setStatus(status);
             run.setFinishedAt(finishedAt);
@@ -70,17 +79,18 @@ public class MigrationRunStore {
             run.setMessage(result.message());
             runRepository.save(run);
         });
-        taskRepository.findById(taskId).ifPresent(task -> {
-            task.setLastRunTime(finishedAt);
-            task.setLastRunSuccess(status == MigrationRunStatus.SUCCESS);
-            task.setLastRunResult(summary(status, result));
-            taskRepository.save(task);
-        });
+        updateTaskSummary(taskId, finishedAt, status == MigrationRunStatus.SUCCESS,
+                summary(status, result));
     }
 
-    /** Records a crash the engine could not describe itself. */
-    @Transactional
-    public void fail(Long runId, Long taskId, String message) {
+    /**
+     * Records a crash the engine could not describe itself.
+     *
+     * <p>The run row keeps {@code message}, which may be an i18n key so the history can show it
+     * in the viewer's language. The task summary is plain text rendered directly in the list
+     * badge, so it gets {@code summary} instead of the key.
+     */
+    public void fail(Long runId, Long taskId, String message, String summary) {
         Instant finishedAt = Instant.now();
         runRepository.findById(runId).ifPresent(run -> {
             run.setStatus(MigrationRunStatus.FAILED);
@@ -88,12 +98,35 @@ public class MigrationRunStore {
             run.setMessage(message);
             runRepository.save(run);
         });
-        taskRepository.findById(taskId).ifPresent(task -> {
+        updateTaskSummary(taskId, finishedAt, false,
+                summary == null || summary.isBlank() ? "FAILED" : "FAILED " + summary);
+    }
+
+    /**
+     * Writes the latest-run summary onto the task row, retrying once with a freshly loaded row.
+     * If the concurrent edit still wins, the summary is skipped: the run row already holds the
+     * outcome, and failing the whole bookkeeping here would turn a finished run into a crash.
+     */
+    private void updateTaskSummary(Long taskId, Instant finishedAt, boolean success,
+                                   String latestSummary) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            MigrationTask task = taskRepository.findById(taskId).orElse(null);
+            if (task == null) {
+                return;
+            }
             task.setLastRunTime(finishedAt);
-            task.setLastRunSuccess(false);
-            task.setLastRunResult("FAILED " + message);
-            taskRepository.save(task);
-        });
+            task.setLastRunSuccess(success);
+            task.setLastRunResult(latestSummary);
+            try {
+                taskRepository.save(task);
+                return;
+            } catch (OptimisticLockingFailureException e) {
+                // Someone edited or toggled the task while this run was finishing; re-read and
+                // try once more, which is what keeps their edit and this summary both intact.
+            }
+        }
+        log.warn("Could not update the last-run summary of migration task {}: the row kept "
+                + "changing while the run finished; the run history keeps the outcome", taskId);
     }
 
     private static MigrationRunStatus statusOf(MigrationRunResult result) {

@@ -67,6 +67,23 @@ class MigrationDetailViewTest {
     }
 
     @Test
+    void aStoredMessageKeyIsShownAsTextNotAsTheKey() throws Exception {
+        when(taskService.findById(9L)).thenReturn(Optional.of(task()));
+        when(taskService.isRunning(9L)).thenReturn(false);
+        when(runRepository.findTop50ByMigrationTaskIdOrderByStartedAtDesc(9L))
+                .thenReturn(List.of(run(MigrationRunStatus.INTERRUPTED,
+                        "error.migration.interrupted")));
+        when(registry.isRegistered(MigrationType.ES_TO_EASYSEARCH)).thenReturn(true);
+
+        String page = mvc.perform(get("/migrations/es-to-easysearch/9").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("The run was interrupted when the application stopped.")
+                .doesNotContain("error.migration.interrupted");
+    }
+
+    @Test
     void aRunningTaskOffersCancelInsteadOfRun() throws Exception {
         when(taskService.findById(9L)).thenReturn(Optional.of(task()));
         when(taskService.isRunning(9L)).thenReturn(true);

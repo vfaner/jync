@@ -139,6 +139,20 @@ class EsToEasysearchEngineTest {
     }
 
     @Test
+    void aPatternThatMatchesNothingFailsTheRunInsteadOfReportingSuccess() throws Exception {
+        // A typo in the pattern used to end as "SUCCESS indices=0/0": the list badge said the
+        // migration worked while nothing had been copied.
+        stubCat();
+
+        MigrationRunResult result = run(options("{}"));
+
+        assertThat(result.success()).as(result.toString()).isFalse();
+        assertThat(result.cancelled()).isFalse();
+        assertThat(result.indicesTotal()).isZero();
+        assertThat(result.message()).contains("no indices matched");
+    }
+
+    @Test
     void overwriteDeletesRebuildsAndCopiesEveryPagePreservingIdAndRouting() throws Exception {
         stubCat("orders");
         stubSourceIndex("orders");

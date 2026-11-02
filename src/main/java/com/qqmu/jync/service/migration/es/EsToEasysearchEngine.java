@@ -127,7 +127,10 @@ final class EsToEasysearchEngine {
             }
         }
 
-        return new MigrationRunResult(!cancelled && failed == 0, cancelled, indices.size(),
+        // An empty match is a failure, not a no-op: the usual cause is a mistyped pattern, and
+        // reporting SUCCESS 0/0 would tell the user the migration worked when nothing was copied.
+        return new MigrationRunResult(!cancelled && failed == 0 && !indices.isEmpty(),
+                cancelled, indices.size(),
                 succeeded, failed, documentsRead, documentsWritten,
                 messages.isEmpty() ? null : String.join("; ", messages), results);
     }

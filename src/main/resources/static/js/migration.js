@@ -21,6 +21,14 @@
         return response.json().catch(function () {
           return { success: false, message: 'HTTP ' + response.status };
         });
+      })
+      .catch(function (err) {
+        // fetch rejects when the server is unreachable; without this the caller's .then never
+        // runs and the button stays disabled. Same network/other split as app.js.
+        return {
+          success: false,
+          message: err instanceof TypeError ? 'error.network' : 'error.unexpected'
+        };
       });
   }
 
@@ -46,7 +54,9 @@
       requestJson(url).then(function (payload) {
         button.disabled = false;
         if (!payload || !payload.success) {
-          JyncUI.dialog.notify((payload && payload.message) || 'error.unexpected', 'danger');
+          // JyncDialog renders the text verbatim; the API answers with an i18n key.
+          JyncUI.dialog.notify(
+            JyncUI.t((payload && payload.message) || 'error.unexpected'), 'danger');
           return;
         }
         var indices = payload.indices || [];

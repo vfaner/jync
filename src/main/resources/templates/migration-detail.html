@@ -149,7 +149,8 @@
                         <td class="small"
                             th:text="|${run.documentsRead} / ${run.documentsWritten}|">0 / 0</td>
                         <td class="small" style="max-width:420px"
-                            th:text="${run.message}">message</td>
+                            th:text="${run.message != null
+                                     ? (#messages.msgOrNull(run.message) ?: run.message) : ''}">message</td>
                     </tr>
                     </tbody>
                 </table>

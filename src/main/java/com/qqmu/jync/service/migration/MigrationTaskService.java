@@ -196,7 +196,8 @@ public class MigrationTaskService {
                 try {
                     execute(id, run.getId());
                 } catch (RuntimeException e) {
-                    runStore.fail(run.getId(), id, "crashed outside the engine: " + e);
+                    runStore.fail(run.getId(), id, "crashed outside the engine: " + e,
+                            "crashed outside the engine");
                 } finally {
                     guard.release(id);
                 }
@@ -204,7 +205,7 @@ public class MigrationTaskService {
             return true;
         } catch (RejectedExecutionException e) {
             guard.release(id);
-            runStore.fail(run.getId(), id, "error.migration.queue.full");
+            runStore.fail(run.getId(), id, "error.migration.queue.full", "queue full");
             throw new IllegalStateException("error.migration.queue.full");
         } catch (RuntimeException e) {
             guard.release(id);

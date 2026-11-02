@@ -3,6 +3,7 @@ package com.qqmu.jync.service.migration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,6 +17,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import com.qqmu.jync.model.MigrationRun;
 import com.qqmu.jync.model.MigrationRunStatus;
@@ -98,6 +101,45 @@ class MigrationRunStoreTest {
     }
 
     @Test
+    void aConcurrentTaskEditIsRetriedWithAFreshRow() {
+        MigrationRun run = running(100L, 9L);
+        MigrationTask stale = task(9L);
+        MigrationTask fresh = task(9L);
+        when(runRepository.findById(100L)).thenReturn(Optional.of(run));
+        when(taskRepository.findById(9L))
+                .thenReturn(Optional.of(stale), Optional.of(fresh));
+        when(taskRepository.save(stale))
+                .thenThrow(new ObjectOptimisticLockingFailureException(MigrationTask.class, 9L));
+
+        store.finish(100L, 9L, new MigrationRunResult(true, false, 1, 1, 0, 2, 2,
+                null, List.of()));
+
+        assertThat(run.getStatus()).isEqualTo(MigrationRunStatus.SUCCESS);
+        verify(taskRepository, times(2)).save(any(MigrationTask.class));
+        assertThat(fresh.getLastRunSuccess()).isTrue();
+        assertThat(fresh.getLastRunResult()).contains("SUCCESS");
+    }
+
+    @Test
+    void aTaskThatKeepsConflictingDoesNotTurnASuccessfulRunIntoAFailure() {
+        MigrationRun run = running(100L, 9L);
+        when(runRepository.findById(100L)).thenReturn(Optional.of(run));
+        when(taskRepository.findById(9L)).thenReturn(Optional.of(task(9L)));
+        when(taskRepository.save(any(MigrationTask.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException(MigrationTask.class, 9L));
+
+        // The run row is already committed as SUCCESS; the outer crash handler must not see an
+        // exception here, or it would rewrite this completed migration as FAILED and drop the
+        // counters. Losing only the list badge is the accepted trade-off.
+        store.finish(100L, 9L, new MigrationRunResult(true, false, 1, 1, 0, 2, 2,
+                null, List.of()));
+
+        assertThat(run.getStatus()).isEqualTo(MigrationRunStatus.SUCCESS);
+        assertThat(run.getDocumentsWritten()).isEqualTo(2);
+        verify(runRepository).save(run);
+    }
+
+    @Test
     void aTaskDeletedDuringTheRunStillKeepsItsRunHistory() {
         MigrationRun run = running(100L, 9L);
         when(runRepository.findById(100L)).thenReturn(Optional.of(run));
@@ -133,11 +175,29 @@ class MigrationRunStoreTest {
         MigrationRun run = running(100L, 9L);
         when(runRepository.findById(100L)).thenReturn(Optional.of(run));
 
-        store.fail(100L, 9L, "crashed outside the engine: boom");
+        store.fail(100L, 9L, "crashed outside the engine: boom",
+                "crashed outside the engine");
 
         assertThat(run.getStatus()).isEqualTo(MigrationRunStatus.FAILED);
         assertThat(run.getMessage()).contains("crashed outside the engine");
         assertThat(run.getFinishedAt()).isNotNull();
+    }
+
+    @Test
+    void failKeepsTheLatestSummaryFreeOfAMessageKey() {
+        MigrationRun run = running(100L, 9L);
+        MigrationTask task = task(9L);
+        when(runRepository.findById(100L)).thenReturn(Optional.of(run));
+        when(taskRepository.findById(9L)).thenReturn(Optional.of(task));
+
+        store.fail(100L, 9L, "error.migration.queue.full", "queue full");
+
+        // The run row keeps the key so the history can render it in the viewer's language;
+        // the task summary is plain text shown in the list badge, so a key here would leak
+        // "error.migration.queue.full" into the UI (and into the title tooltip).
+        assertThat(run.getMessage()).isEqualTo("error.migration.queue.full");
+        assertThat(task.getLastRunResult()).isEqualTo("FAILED queue full");
+        assertThat(task.getLastRunSuccess()).isFalse();
     }
 
     private static MigrationRun running(long id, long taskId) {
