@@ -25,10 +25,10 @@ class MigrationModelTest {
     }
 
     @Test
-    void onlyTheImplementedTypeIsAvailable() {
+    void onlyTheImplementedTypeIsDeclared() {
+        assertThat(MigrationType.values())
+                .containsExactly(MigrationType.ES_TO_EASYSEARCH);
         assertThat(MigrationType.ES_TO_EASYSEARCH.available()).isTrue();
-        assertThat(MigrationType.MONGODB_TO_MONGODB.available()).isFalse();
-        assertThat(MigrationType.MONGODB_TO_KINGBASE.available()).isFalse();
     }
 
     @Test

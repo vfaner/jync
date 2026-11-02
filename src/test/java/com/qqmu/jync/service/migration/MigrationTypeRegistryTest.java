@@ -74,7 +74,6 @@ class MigrationTypeRegistryTest {
                 List.of(handler(MigrationType.ES_TO_EASYSEARCH)));
 
         assertThat(registry.find(MigrationType.ES_TO_EASYSEARCH)).isPresent();
-        assertThat(registry.find(MigrationType.MONGODB_TO_MONGODB)).isEmpty();
     }
 
     @Test
@@ -86,11 +85,4 @@ class MigrationTypeRegistryTest {
                 .hasMessageContaining("Duplicate");
     }
 
-    @Test
-    void aHandlerForAnUnavailableTypeIsRejectedAtStartup() {
-        assertThatThrownBy(() -> new MigrationTypeRegistry(
-                List.of(handler(MigrationType.MONGODB_TO_MONGODB))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("not available");
-    }
 }

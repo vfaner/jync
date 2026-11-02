@@ -6,14 +6,12 @@ import java.util.Arrays;
  * The migration types the dedicated-migration module can offer.
  *
  * <p>A type only appears as an actionable card when {@link #available()} is true and a matching
- * {@code MigrationTypeHandler} is registered. Future types stay declared so the home page can
- * advertise them without wiring an engine.
+ * {@code MigrationTypeHandler} is registered. A future type can be declared with
+ * {@code available=false} so the home page advertises it without wiring an engine.
  */
 public enum MigrationType {
 
-    ES_TO_EASYSEARCH("es-to-easysearch", "migration.type.esToEasysearch.name", true),
-    MONGODB_TO_MONGODB("mongodb-to-mongodb", "migration.type.mongodbToMongodb.name", false),
-    MONGODB_TO_KINGBASE("mongodb-to-kingbase", "migration.type.mongodbToKingbase.name", false);
+    ES_TO_EASYSEARCH("es-to-easysearch", "migration.type.esToEasysearch.name", true);
 
     private final String key;
     private final String messageKey;

@@ -81,7 +81,6 @@ class MigrationRepositoryTest {
         MigrationConnection target = connection("easysearch", MigrationConnectionKind.EASYSEARCH);
         MigrationTask first = task(MigrationType.ES_TO_EASYSEARCH, source.getId(), target.getId(), true);
         MigrationTask second = task(MigrationType.ES_TO_EASYSEARCH, source.getId(), target.getId(), false);
-        task(MigrationType.MONGODB_TO_MONGODB, source.getId(), target.getId(), true);
 
         assertThat(taskRepository.findByTypeOrderByIdDesc(MigrationType.ES_TO_EASYSEARCH))
                 .extracting(MigrationTask::getId)
