@@ -69,6 +69,13 @@ server:
         # http://localhost deployment keeps working out of the box.
         secure: ${JYN_COOKIE_SECURE:false}
 
+metrics:
+  # Prometheus scrape endpoint at /api/metrics/prometheus. The endpoint is closed while this
+  # token is blank; set it (JYN_METRICS_TOKEN) to allow a scraper to read it:
+  #   authorization: {type: Bearer, credentials: <token>}
+  # The token is the only gate — scrapers cannot hold a Jync session.
+  prometheus-token: ${JYN_METRICS_TOKEN:}
+
 app:
   # The banner reads this; @project.version@ is filtered from pom.xml at build time,
   # so the startup banner follows the POM without a second place to edit.

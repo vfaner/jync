@@ -20,6 +20,14 @@ public interface DbMetricSampleRepository extends JpaRepository<DbMetricSample, 
     /** The latest probe decides the status badge and whether the page shows its red banner. */
     Optional<DbMetricSample> findTopByConnectionIdOrderBySampledAtDesc(Long connectionId);
 
+    /**
+     * The newest row of every connection in one query. The Prometheus scrape runs on a
+     * short interval, so a lookup per connection would multiply by the size of the list.
+     */
+    @Query("select s from DbMetricSample s where s.id in "
+            + "(select max(m.id) from DbMetricSample m group by m.connectionId)")
+    List<DbMetricSample> findLatestPerConnection();
+
     /** Bulk, not a derived delete: a derived delete loads every row before removing it. */
     @Modifying
     @Query("delete from DbMetricSample s where s.connectionId = :id")

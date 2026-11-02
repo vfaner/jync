@@ -52,7 +52,11 @@ public class SecurityConfig {
     /** Paths that must work before anyone has signed in. */
     private static final String[] PUBLIC = {
             "/login", "/login/local", "/sso/entry",
-            "/css/**", "/js/**", "/vendor/**", "/assets/**", "/favicon.ico"
+            "/css/**", "/js/**", "/vendor/**", "/assets/**", "/favicon.ico",
+            // A Prometheus server cannot hold a session. The controller itself demands the
+            // bearer token and closes the path when the token is unset, so "public" here
+            // means "outside form login", not "unauthenticated".
+            "/api/metrics/prometheus"
     };
 
     /**

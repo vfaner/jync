@@ -41,4 +41,10 @@ public class MetricsProperties {
 
     /** Interval for the table/row/space sweep, which is the expensive one. */
     private long capacityIntervalMs = 3_600_000L;
+
+    /**
+     * Bearer token for {@code GET /api/metrics/prometheus}. Blank (the default) keeps the
+     * endpoint closed: a stock installation must not expose project and connection names.
+     */
+    private String prometheusToken = "";
 }

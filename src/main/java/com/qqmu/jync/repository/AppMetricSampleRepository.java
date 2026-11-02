@@ -2,6 +2,7 @@ package com.qqmu.jync.repository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -14,6 +15,9 @@ import com.qqmu.jync.model.AppMetricSample;
 public interface AppMetricSampleRepository extends JpaRepository<AppMetricSample, Long> {
 
     List<AppMetricSample> findBySampledAtAfterOrderBySampledAtAsc(Instant after);
+
+    /** The newest process sample, for the Prometheus scrape. */
+    Optional<AppMetricSample> findTopByOrderBySampledAtDesc();
 
     /** Process samples belong to the JVM, not to a project, so only retention removes them. */
     @Modifying

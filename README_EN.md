@@ -87,7 +87,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 | Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
 | Alerting | Webhook pushes for sync failures, stuck polling, projects not running, CDC stalls, data drift, unhealthy connections and PG slot backlog; generic JSON / DingTalk / WeCom / Feishu; cooldown and recovery notices; encrypted address storage |
 | Reliability | Idempotent upsert, checkpoint resume, database leases, at-least-once delivery, automatic catch-up after downtime |
-| Observability | Dashboard, change log, audit log, system log, per-table throughput log and CDC status panel, on-demand row-count audit, database and task performance charts (7-day history) |
+| Observability | Dashboard, change log, audit log, system log, per-table throughput log and CDC status panel, on-demand row-count audit, database and task performance charts (7-day history), optional Prometheus scrape endpoint (Bearer token, off by default) |
 | Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout usable on phones; local accounts plus three SSO modes |
 
 > **ETL batches:** each table stays its own ETL task, keeping its extraction SQL, target table, write mode, checkpoint and run history. A batch only puts tables that share a source and target under one schedule: a run opens a single source/target connection pair, executes the members in order, and keeps going when one member fails. Source and target are locked once the batch is created, and members no longer carry a schedule of their own; tick tables from the source catalog to generate `select *` members and rewrite each SQL afterwards.
@@ -695,7 +695,7 @@ Procedural control flow cannot be translated reliably by text replacement. **AI 
 | Domestic databases | **DM / Kingbase / OceanBase and 10+ more as first-class citizens** | Partial | Partial | Partial | Partial |
 | Source intrusion | **Read-only by default**; CDC needs replication rights but stays read-only | binlog / WAL required | Read-only | Read-only | Read-only |
 | Resume / idempotency | **Persistent cursor + keyed upsert + checkpoints** | Offsets | Not applicable | Partial | Not applicable |
-| Alerting and observability | **Seven fault categories over Webhook, dashboard, change / audit / system logs** | External monitoring stack | None | Logs | Client notifications |
+| Alerting and observability | **Seven fault categories over Webhook, dashboard, change / audit / system logs, Prometheus scrape endpoint** | External monitoring stack | None | Logs | Client notifications |
 | Operating cost | **One process** | Streaming platform + consumers | External scheduler | Repository + scheduler | Client tasks / manual |
 
 **Main differences**

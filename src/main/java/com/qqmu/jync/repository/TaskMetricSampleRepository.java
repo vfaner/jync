@@ -20,6 +20,14 @@ public interface TaskMetricSampleRepository extends JpaRepository<TaskMetricSamp
     /** The previous sample, so the sampler can turn a running total into a per-minute delta. */
     Optional<TaskMetricSample> findTopByProjectIdOrderBySampledAtDesc(Long projectId);
 
+    /**
+     * The newest row of every project in one query. The Prometheus scrape runs on a short
+     * interval, so a lookup per project would multiply by the size of the project list.
+     */
+    @Query("select s from TaskMetricSample s where s.id in "
+            + "(select max(m.id) from TaskMetricSample m group by m.projectId)")
+    List<TaskMetricSample> findLatestPerProject();
+
     /** Bulk, not a derived delete: a derived delete loads every row before removing it. */
     @Modifying
     @Query("delete from TaskMetricSample s where s.projectId = :id")
