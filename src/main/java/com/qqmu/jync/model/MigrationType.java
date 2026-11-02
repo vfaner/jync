@@ -36,7 +36,12 @@ public enum MigrationType {
 
     /** The one-line description shown under the type's name on the landing card. */
     public String descriptionKey() {
-        return messageKey + ".description";
+        // The constants hold the name key; the description sits beside it under the same
+        // prefix, not nested under the name key.
+        String base = messageKey.endsWith(".name")
+                ? messageKey.substring(0, messageKey.length() - ".name".length())
+                : messageKey;
+        return base + ".description";
     }
 
     public boolean available() {

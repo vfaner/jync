@@ -62,6 +62,20 @@ class MigrationListViewTest {
     }
 
     @Test
+    void theListDescribesTheTypeWithoutAMissingKeyPlaceholder() throws Exception {
+        when(registry.isRegistered(MigrationType.ES_TO_EASYSEARCH)).thenReturn(true);
+        when(taskService.findByType(MigrationType.ES_TO_EASYSEARCH)).thenReturn(List.of());
+
+        String page = mvc.perform(get("/migrations/es-to-easysearch").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The description key sits beside the name key, not under it; building it by hand
+        // rendered ??migration.type.esToEasysearch.name.description_zh_CN?? on the page.
+        assertThat(page).contains("Copy whole indices").doesNotContain("??");
+    }
+
+    @Test
     void aViewerGetsTheRowsButNoMutatingForms() throws Exception {
         when(registry.isRegistered(MigrationType.ES_TO_EASYSEARCH)).thenReturn(true);
         when(taskService.findByType(MigrationType.ES_TO_EASYSEARCH))
@@ -76,6 +90,20 @@ class MigrationListViewTest {
                 .doesNotContain("/migrations/es-to-easysearch/9/run")
                 .doesNotContain("/migrations/es-to-easysearch/9/delete")
                 .doesNotContain("/migrations/es-to-easysearch/new");
+    }
+
+    @Test
+    void aTaskWithoutACronShowsTheManualLabelNotAMissingKey() throws Exception {
+        when(registry.isRegistered(MigrationType.ES_TO_EASYSEARCH)).thenReturn(true);
+        when(taskService.findByType(MigrationType.ES_TO_EASYSEARCH))
+                .thenReturn(List.of(task(11L, "on-demand", null)));
+        when(taskService.isRunning(11L)).thenReturn(false);
+
+        String page = mvc.perform(get("/migrations/es-to-easysearch").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("Manual").doesNotContain("??");
     }
 
     @Test
