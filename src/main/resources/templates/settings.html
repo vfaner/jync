@@ -623,6 +623,25 @@
         </div>
     </div>
 
+    <!--/* 一键诊断包：仅管理员可见，POST 下载 zip；CSRF 由 Thymeleaf 表单自动注入。 */-->
+    <div class="card" th:if="${isAdmin}">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#download"/></svg>
+                <span th:text="#{settings.diagnostics}">Diagnostics bundle</span></h2>
+            <span class="hint" th:text="#{settings.diagnosticsHint}">For support</span>
+        </div>
+        <div class="card-body">
+            <p class="small soft" style="margin:0 0 16px;max-width:1080px"
+               th:text="#{settings.diagnosticsNote}">note</p>
+            <form method="post" th:action="@{/api/diagnostics/bundle}">
+                <button type="submit" class="btn btn-primary btn-sm">
+                    <svg class="ico"><use href="#download"/></svg>
+                    <span th:text="#{settings.diagnosticsDownload}">Download bundle</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
     <!--/* 升级弹窗（仅管理员渲染）：选下载源 → 下载并替换 jync.jar（旧文件保留 .bak）→
          选择立即重启或稍后手动重启。交互逻辑在 app.js 的 bindUpgrade()，
          服务端只渲染结构与文案；接口地址经 th:data-* 带上 context-path。 */-->

@@ -186,6 +186,30 @@ public class SyncProperties {
     private long rowCountAuditIntervalMs = 60_000L;
 
     /**
+     * Shortest gap between two content audits of the same table; {@code 0} disables the audit.
+     *
+     * <p>Row-count auditing only proves that the target has at least as many rows as the
+     * source delivered. A content audit samples keys across the synced range and compares the
+     * projected values column by column, so a row updated in place at the source but never
+     * re-delivered — the blind spot of an identity cursor — shows up as a mismatch. It reads
+     * two small key sets, not the whole table, but it still costs a sampling query and two
+     * point reads per audited table.
+     */
+    private long contentAuditIntervalMs = 15 * 60_000L;
+
+    /** Keys sampled per content audit; clamped to 2..200. */
+    private int contentAuditSampleSize = 50;
+
+    /** Source row estimate above which a table is skipped by the content audit; 0 disables it. */
+    private long contentAuditMaxRows = 2_000_000L;
+
+    /** Tables audited per sync cycle; 0 removes the cap. */
+    private int contentAuditMaxTablesPerCycle = 1;
+
+    /** Statement timeout for each content-audit query, in seconds. */
+    private int contentAuditTimeoutSeconds = 60;
+
+    /**
      * Size at which the bookkeeping {@code COUNT(*)} probes stop running when the cursor
      * column is not indexed; {@code 0} keeps every probe running.
      *

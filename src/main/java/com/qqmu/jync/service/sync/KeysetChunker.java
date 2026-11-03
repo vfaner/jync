@@ -236,6 +236,23 @@ public final class KeysetChunker {
                                        List<String> pkColumns, List<List<Object>> keys,
                                        CursorStrategy strategy, Object upperBound,
                                        List<Object> paramsOut) {
+        return keysSelectSql(dialect, schema, table, pkColumns, null, keys, strategy,
+                upperBound, paramsOut);
+    }
+
+    /**
+     * As the seven-argument form, but selecting only {@code selectColumns} (null keeps
+     * {@code SELECT *}).
+     *
+     * <p>The content audit uses this to keep LOB/JSON/geometry columns off the wire entirely:
+     * fetching them only to decide they are not comparable would pay the transfer cost for
+     * nothing, and on some drivers would also materialize the whole value.
+     */
+    public static String keysSelectSql(SqlDialect dialect, String schema, String table,
+                                       List<String> pkColumns, List<String> selectColumns,
+                                       List<List<Object>> keys,
+                                       CursorStrategy strategy, Object upperBound,
+                                       List<Object> paramsOut) {
         if (keys == null || keys.isEmpty()) {
             throw new IllegalArgumentException("A key fetch needs at least one key");
         }
@@ -272,8 +289,19 @@ public final class KeysetChunker {
             }
             match.append(')');
         }
-        StringBuilder sql = new StringBuilder("SELECT * FROM ")
-                .append(dialect.qualify(schema, table)).append(" WHERE ").append(match);
+        StringBuilder sql = new StringBuilder("SELECT ");
+        if (selectColumns == null || selectColumns.isEmpty()) {
+            sql.append('*');
+        } else {
+            for (int i = 0; i < selectColumns.size(); i++) {
+                if (i > 0) {
+                    sql.append(", ");
+                }
+                sql.append(dialect.quoteIdentifier(selectColumns.get(i)));
+            }
+        }
+        sql.append(" FROM ").append(dialect.qualify(schema, table))
+                .append(" WHERE ").append(match);
         appendCursorBound(sql, dialect, strategy, upperBound, paramsOut);
         return sql.toString();
     }

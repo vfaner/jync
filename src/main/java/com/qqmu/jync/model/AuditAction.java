@@ -27,6 +27,8 @@ public enum AuditAction {
     DB_DELETE,
     /** Change-log history was cleared. */
     CHANGELOG_CLEAR,
+    /** A diagnostics bundle was exported, including logs and configuration shape. */
+    DIAGNOSTICS_EXPORT,
     /** A dedicated-migration connection was created or updated. */
     MIGRATION_CONNECTION_SAVE,
     /** A dedicated-migration connection was deleted. */

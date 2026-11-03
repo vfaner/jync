@@ -54,6 +54,17 @@ class ProjectLockViewTest {
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
 
+    /** The lock row's markup, from its label to the closing {@code </dd>}. */
+    private static String lockRow(String page) {
+        int text = page.indexOf("上一轮残留");
+        assertThat(text).as("leftover-lease wording must be rendered").isPositive();
+        int start = page.lastIndexOf("<dt", text);
+        int end = page.indexOf("</dd>", text);
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        return page.substring(start, end);
+    }
+
     private static RequestPostProcessor as(UserRole role) {
         AppUser user = new AppUser();
         user.setId(1L);
@@ -146,7 +157,10 @@ class ProjectLockViewTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(page).contains("上一轮残留");
-        assertThat(page).doesNotContain("badge-danger");
+        // Scope the colour assertion to the lock row: the precheck modal on the same page
+        // has its own (hidden) danger badge for ERROR checks, which says nothing about
+        // whether this lease is painted as a problem.
+        assertThat(lockRow(page)).doesNotContain("badge-danger");
         assertThat(page).doesNotContain("force-unlock");
     }
 

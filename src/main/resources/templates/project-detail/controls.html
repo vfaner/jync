@@ -133,6 +133,15 @@
                 <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
                 <span th:text="#{cdc.rebaseline.button}">Rebuild baseline</span>
             </button>
+            <!--/* 同步前检查：只读排练下一轮（连通性、待执行 DDL、目标形状、轮询/CDC），
+                   不建表、不写快照、不推进游标。接口会连两侧数据库，因此仅管理员可见。 */-->
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-role="precheck-open" data-reload="false"
+                    th:attr="data-action=@{/api/projects/{id}/precheck(id=${project.id})},
+                             title=#{precheck.hint}">
+                <svg class="ico"><use href="#check-lg"/></svg>
+                <span th:text="#{precheck.open}">Pre-sync check</span>
+            </button>
             <!--/* CDC 任务的进度行不参与续流,清空进度是空操作;全量重载的入口是
                    旁边的「重建基线」。服务端同样会拒绝,这里只是不去点一个死按钮。 */-->
             <button type="button" class="btn btn-outline-danger btn-sm"

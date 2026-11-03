@@ -251,12 +251,12 @@ final class JdbcEtlSource implements EtlSource {
 
     /**
      * Connector/J only streams when the fetch size is {@link Integer#MIN_VALUE}; a positive
-     * value buffers the whole result in the driver. Everything else takes a normal fetch size.
+     * value buffers the whole result in the driver. MariaDB's own Connector/J rejects the
+     * sentinel and streams on the normal value, so the product — not the family — decides.
      */
     private int fetchSize() {
         DatabaseType type = config == null ? null : config.effectiveType();
-        return type != null && type.getFamily() == DatabaseType.DialectFamily.MYSQL
-                ? Integer.MIN_VALUE : FETCH_SIZE;
+        return type != null && type.needsConnectorJStreamingSentinel() ? Integer.MIN_VALUE : FETCH_SIZE;
     }
 
     private static void bindResumeKey(PreparedStatement statement, EtlCheckpointValue checkpoint)

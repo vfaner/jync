@@ -14,13 +14,13 @@ package com.qqmu.jync.service.cdc;
  * which rebuilds from the current schema and resumes at the tail instead of replaying across
  * the DDL.
  */
-final class CdcSchemaDrift {
+public final class CdcSchemaDrift {
 
     /**
      * Message fragment {@link CdcFailureClassifier} matches. Lower-cased comparison, so the
      * spelling here must survive {@code toLowerCase}.
      */
-    static final String MARKER = "CDC schema drift";
+    public static final String MARKER = "CDC schema drift";
 
     private CdcSchemaDrift() {
     }

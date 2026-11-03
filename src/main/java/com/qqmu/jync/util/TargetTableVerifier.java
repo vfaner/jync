@@ -87,6 +87,58 @@ public final class TargetTableVerifier {
     }
 
     /**
+     * Whether the target has a table of this name at all.
+     *
+     * <p>A missing table and a table with the wrong shape need different remedies, so the
+     * caller asks this before {@link #verify}: with structure sync on, the first is repaired
+     * by creating it while the second may need a human decision. The lookup follows the same
+     * catalog/schema convention as {@link #readTargetColumns}.
+     */
+    public static boolean tableExists(Connection conn, String schema, String tableName,
+                                      DatabaseType targetType) throws SQLException {
+        if (tableName == null || tableName.isBlank()) {
+            return false;
+        }
+        boolean oracleFamily = isOracleFamily(targetType);
+        String lookupSchema = normalizeSchema(schema);
+        boolean mysqlFamily = targetType != null
+                && targetType.getFamily() == DatabaseType.DialectFamily.MYSQL;
+        String catalog = mysqlFamily ? lookupSchema : null;
+        String schemaPattern = mysqlFamily ? null : lookupSchema;
+        String lookupTable = foldIfOracle(oracleFamily, tableName);
+        try (ResultSet rs = conn.getMetaData().getTables(catalog, schemaPattern, lookupTable,
+                new String[] {"TABLE"})) {
+            while (rs.next()) {
+                String reported = rs.getString("TABLE_NAME");
+                if (reported != null && reported.equalsIgnoreCase(tableName)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Target column names keyed by upper-cased name, so a source column can be mapped to the
+     * spelling the target dictionary reports (Oracle folds unquoted identifiers to upper
+     * case; MySQL keeps the configured case on case-sensitive servers).
+     */
+    public static Map<String, String> columnNamesByUpperName(Connection conn, String schema,
+                                                             String tableName,
+                                                             DatabaseType targetType)
+            throws SQLException {
+        boolean oracleFamily = isOracleFamily(targetType);
+        Map<String, TargetColumn> columns = readTargetColumns(conn,
+                foldIfOracle(oracleFamily, normalizeSchema(schema)),
+                foldIfOracle(oracleFamily, tableName), targetType);
+        Map<String, String> names = new LinkedHashMap<>();
+        for (Map.Entry<String, TargetColumn> e : columns.entrySet()) {
+            names.put(e.getKey(), e.getValue().name());
+        }
+        return names;
+    }
+
+    /**
      * Source columns the target table does not have, in source order.
      *
      * <p>This is the additive half of a shape mismatch, reported separately because it is the

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* 同步前检查：只读排练下一轮，不建表、不写快照、不推进游标。检查结果按严重级别
+       分组，ERROR 仍是一次成功的预检（HTTP 200），页面只负责把它展示出来。 */-->
+<th:block th:fragment="modal" th:remove="tag">
+<div class="modal" id="precheck-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:if="${isAdmin}"
+     th:attr="aria-label=#{precheck.title}">
+    <div class="modal-mask" data-close-modal="precheck-modal"></div>
+    <div class="modal-dialog preview-dialog">
+        <button type="button" class="modal-close" data-close-modal="precheck-modal"
+                th:attr="aria-label=#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 th:text="#{precheck.title}">Pre-sync check</h3>
+            <p id="precheck-summary" class="small muted"
+               th:text="#{precheck.idle}">Not checked yet</p>
+            <p class="small muted" th:text="#{precheck.hint}">Hint</p>
+            <p class="small muted" th:text="#{precheck.readOnly}">Read-only</p>
+        </div>
+        <div id="precheck-body" class="preview-body">
+            <p id="precheck-empty" class="muted small" th:text="#{precheck.empty}">No checks</p>
+            <div class="precheck-group is-hidden" data-precheck-group="ERROR">
+                <h4 class="small"><span class="badge badge-danger"
+                        th:text="#{precheck.severity.ERROR}">Error</span></h4>
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{precheck.object}">Object</th>
+                        <th th:text="#{precheck.message}">Result</th>
+                        <th th:text="#{precheck.detail}">Detail</th>
+                    </tr>
+                    </thead>
+                    <tbody data-role="precheck-rows"></tbody>
+                </table>
+            </div>
+            <div class="precheck-group is-hidden" data-precheck-group="WARN">
+                <h4 class="small"><span class="badge badge-warn"
+                        th:text="#{precheck.severity.WARN}">Warning</span></h4>
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{precheck.object}">Object</th>
+                        <th th:text="#{precheck.message}">Result</th>
+                        <th th:text="#{precheck.detail}">Detail</th>
+                    </tr>
+                    </thead>
+                    <tbody data-role="precheck-rows"></tbody>
+                </table>
+            </div>
+            <div class="precheck-group is-hidden" data-precheck-group="OK">
+                <h4 class="small"><span class="badge badge-ok"
+                        th:text="#{precheck.severity.OK}">OK</span></h4>
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{precheck.object}">Object</th>
+                        <th th:text="#{precheck.message}">Result</th>
+                        <th th:text="#{precheck.detail}">Detail</th>
+                    </tr>
+                    </thead>
+                    <tbody data-role="precheck-rows"></tbody>
+                </table>
+            </div>
+            <div class="precheck-group is-hidden" data-precheck-group="SKIP">
+                <h4 class="small"><span class="badge badge-mute"
+                        th:text="#{precheck.severity.SKIP}">Skipped</span></h4>
+                <table class="tbl dense">
+                    <thead>
+                    <tr>
+                        <th th:text="#{precheck.object}">Object</th>
+                        <th th:text="#{precheck.message}">Result</th>
+                        <th th:text="#{precheck.detail}">Detail</th>
+                    </tr>
+                    </thead>
+                    <tbody data-role="precheck-rows"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-primary btn-sm"
+                    id="precheck-run" th:text="#{precheck.run}">Run check</button>
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-close-modal="precheck-modal"
+                    th:text="#{common.close}">Close</button>
+        </div>
+    </div>
+</div>
+</th:block>
+</body>
+</html>

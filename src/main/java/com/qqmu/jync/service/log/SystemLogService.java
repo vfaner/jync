@@ -169,6 +169,60 @@ public class SystemLogService {
         return new LogQueryResult(new ArrayList<>(tail), matched, truncated, null);
     }
 
+    /**
+     * The last {@code maxLines} lines of the live log, unescaped, for the diagnostics bundle.
+     *
+     * <p>Same whitelist and path containment as {@link #query}, but no HTML escaping and no
+     * level/keyword filter: the text is written into a {@code .txt} entry, not rendered.
+     */
+    public List<String> rawTail(int maxLines, long maxBytes) {
+        return rawTail(baseName(), maxLines, maxBytes);
+    }
+
+    /** Package-visible so a test can exercise the whitelist against real files. */
+    List<String> rawTail(String fileName, int maxLines, long maxBytes) {
+        String name = StringUtils.hasText(fileName) ? fileName.trim() : baseName();
+        if (name.contains("/") || name.contains("\\") || name.startsWith("..")) {
+            return List.of();
+        }
+        String base = baseName();
+        if (!isLogFile(name, base)) {
+            return List.of();
+        }
+        Path file = resolveInsideLogDir(name);
+        if (file == null || !Files.isRegularFile(file) || maxLines <= 0) {
+            return List.of();
+        }
+
+        long startOffset = 0;
+        try {
+            if (!name.endsWith(".gz") && maxBytes > 0) {
+                long size = Files.size(file);
+                if (size > maxBytes) {
+                    startOffset = size - maxBytes;
+                }
+            }
+            Deque<String> tail = new ArrayDeque<>();
+            try (BufferedReader reader = open(file, startOffset)) {
+                if (startOffset > 0) {
+                    // The offset can land mid-line; the fragment is not a log record.
+                    reader.readLine();
+                }
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    tail.addLast(line);
+                    if (tail.size() > maxLines) {
+                        tail.removeFirst();
+                    }
+                }
+            }
+            return new ArrayList<>(tail);
+        } catch (IOException ex) {
+            log.warn("Cannot read log file {}: {}", name, ex.toString());
+            return List.of();
+        }
+    }
+
     private static boolean isLogFile(String name, String base) {
         return name.equals(base) || (name.startsWith(base + ".") && !name.endsWith(".tmp"));
     }

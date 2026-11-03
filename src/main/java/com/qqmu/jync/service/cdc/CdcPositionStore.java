@@ -37,6 +37,18 @@ public class CdcPositionStore {
         return repository.findByProjectId(projectId);
     }
 
+    /**
+     * The persisted per-table layouts, decoded. Empty when the project has no position row
+     * or the row predates the column — the precheck reports that as "no layout recorded"
+     * rather than treating every table as drifted.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public Map<String, String> layoutSignatures(Long projectId) {
+        return repository.findByProjectId(projectId)
+                .map(position -> decodeLayoutSignatures(position.getSchemaSignatures()))
+                .orElseGet(java.util.Collections::emptyMap);
+    }
+
     /** Upsert the start-of-baseline position; baselineDone resets to false. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CdcPosition recordBaselineStart(Long projectId, String file, long pos,

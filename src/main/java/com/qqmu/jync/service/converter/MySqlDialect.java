@@ -78,10 +78,29 @@ public class MySqlDialect extends AbstractSqlDialect {
     }
 
     /**
-     * MySQL Connector/J — and the MySQL-protocol forks this family covers (MariaDB,
-     * OceanBase, TiDB, GBase) — only stream a result set row-by-row when the fetch size
-     * is {@code Integer.MIN_VALUE}; any other value silently buffers the whole set in
-     * the client, which a multi-million-row full load would not survive.
+     * Whether reads through this dialect need Connector/J's streaming sentinel. The
+     * {@link DatabaseType} handed to {@link #forProduct(DatabaseType)} decides: every
+     * MySQL-family preset except MariaDB connects through Connector/J.
+     */
+    private final boolean connectorJSentinel;
+
+    public MySqlDialect() {
+        this(true);
+    }
+
+    private MySqlDialect(boolean connectorJSentinel) {
+        this.connectorJSentinel = connectorJSentinel;
+    }
+
+    /**
+     * MySQL Connector/J — and the MySQL-protocol forks this family covers (OceanBase, TiDB,
+     * GBase) — only stream a result set row-by-row when the fetch size is
+     * {@code Integer.MIN_VALUE}; any other value silently buffers the whole set in the
+     * client, which a multi-million-row full load would not survive.
+     *
+     * <p>MariaDB is not one of them at the wire level: its own Connector/J rejects any
+     * negative fetch size outright ("invalid fetch size") and streams on an ordinary
+     * positive one, so {@link #forProduct(DatabaseType)} drops the sentinel for it.
      *
      * <p>Streaming requires a forward-only, read-only statement (the default here) and
      * blocks the connection for other statements until the result set closes — safe in
@@ -90,7 +109,12 @@ public class MySqlDialect extends AbstractSqlDialect {
      */
     @Override
     public int streamingFetchSize(int configured) {
-        return Integer.MIN_VALUE;
+        return connectorJSentinel ? Integer.MIN_VALUE : configured;
+    }
+
+    @Override
+    public SqlDialect forProduct(DatabaseType type) {
+        return new MySqlDialect(type == null || type.needsConnectorJStreamingSentinel());
     }
 
     @Override

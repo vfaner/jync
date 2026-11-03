@@ -75,6 +75,19 @@ class DefaultPasswordBannerViewTest {
                 .andReturn().getResponse().getContentAsString();
     }
 
+    /**
+     * The banner element only. The page also embeds the JS message bundle, whose legitimate
+     * placeholders ("{0} sampled, ...") must not trip the "parameter was not resolved"
+     * assertion below.
+     */
+    private static String banner(String html) {
+        int start = html.indexOf("id=\"default-pw-banner\"");
+        assertThat(start).as("default-pw-banner must be rendered").isPositive();
+        int end = html.indexOf("</div>", start);
+        assertThat(end).isGreaterThan(start);
+        return html.substring(start, end);
+    }
+
     @Test
     void theBannerNamesTheSignedInAccountAndNoOther() throws Exception {
         String html = render(as("admin", true), "zh-CN");
@@ -82,7 +95,8 @@ class DefaultPasswordBannerViewTest {
         assertThat(html).contains("default-pw-banner");
         // The point of the parameter: the warning is about *this* account, so the name has to be
         // in the sentence. A broken message parameter would silently render a literal "{0}".
-        assertThat(html).contains("admin").doesNotContain("{0}");
+        assertThat(html).contains("admin");
+        assertThat(banner(html)).doesNotContain("{0}");
         // The old copy claimed both seeded accounts were still on the default, which is a guess
         // dressed up as a fact -- the flag only knows about the account that just signed in.
         assertThat(html).doesNotContain("两个账号");
@@ -94,7 +108,8 @@ class DefaultPasswordBannerViewTest {
         String html = render(as("viewer-account", true), "en-US");
 
         assertThat(html).contains("default-pw-banner");
-        assertThat(html).contains("viewer-account").doesNotContain("{0}");
+        assertThat(html).contains("viewer-account");
+        assertThat(banner(html)).doesNotContain("{0}");
         assertThat(html).doesNotContain("Both accounts");
         assertThat(html).doesNotContain("??");
     }

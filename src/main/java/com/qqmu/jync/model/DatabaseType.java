@@ -41,7 +41,11 @@ public enum DatabaseType {
             3306, DialectFamily.MYSQL),
 
     MARIADB("db.type.MARIADB", "org.mariadb.jdbc.Driver",
-            "jdbc:mariadb://%s:%d/%s",
+            // useAffectedRows: the driver's default (found rows) answers 1 for an
+            // ON DUPLICATE KEY UPDATE that changed nothing, which the safety margin's
+            // replay would report as an update every idle cycle; affected-rows semantics
+            // answer 0 and also give the 1-insert / 2-update classification.
+            "jdbc:mariadb://%s:%d/%s?useAffectedRows=true",
             3306, DialectFamily.MYSQL),
 
     /**
@@ -489,17 +493,27 @@ public enum DatabaseType {
      *
      * <p>Every other target here answers 1 for both cases — PostgreSQL's
      * {@code ON CONFLICT DO UPDATE} and the {@code MERGE} statements used by Oracle, SQL Server
-     * and DB2 all rewrite the row without saying whether it was already there. MariaDB is
-     * excluded deliberately: its driver has its own affected-rows handling that has not been
-     * verified here, and guessing wrong would mislabel unchanged rows as inserts, which is
-     * worse than declining to classify them.
+     * and DB2 all rewrite the row without saying whether it was already there. MariaDB
+     * qualifies through its own Connector/J, which the preset URL also points at
+     * affected-rows semantics (verified by {@code MariaDbPollingIT}).
      */
     public boolean upsertCountsDistinguishInsertFromUpdate() {
-        // Every preset that reuses Connector/J with the same URL flags qualifies: TiDB,
-        // GoldenDB, TDSQL, PolarDB and the three domestic MySQL-compatible presets all
-        // carry useAffectedRows=true, so ON DUPLICATE KEY UPDATE reports 1/2/0 exactly like
-        // MySQL. MariaDB keeps its own driver and no such flag, so it stays unclassified.
+        // Every preset whose URL carries useAffectedRows=true qualifies: TiDB, GoldenDB,
+        // TDSQL, PolarDB, the three domestic MySQL-compatible presets and MariaDB all report
+        // 1/2/0 from ON DUPLICATE KEY UPDATE exactly like MySQL.
         return urlTemplate != null && urlTemplate.contains("useAffectedRows=true");
+    }
+
+    /**
+     * Whether the bundled driver for this preset is MySQL Connector/J, whose result-set
+     * streaming requires the {@link Integer#MIN_VALUE} fetch-size sentinel.
+     *
+     * <p>MariaDB is the exception: it has its own Connector/J, which rejects any negative
+     * fetch size with "invalid fetch size" and streams on an ordinary positive one. The
+     * rule lives here rather than in a dialect because it follows the driver, not the SQL.
+     */
+    public boolean needsConnectorJStreamingSentinel() {
+        return this != MARIADB && getFamily() == DialectFamily.MYSQL;
     }
 
     public static DatabaseType fromName(String name) {

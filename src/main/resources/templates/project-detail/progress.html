@@ -147,6 +147,17 @@
                             <svg class="ico"><use href="#eye"/></svg>
                             <span th:text="#{preview.target}">Target</span>
                         </button>
+                        <!--/* 内容校验：按主键抽样比对源/目标的行值，只报告不修复。会读两侧
+                               数据库的值，因此仅管理员可见。 */-->
+                        <button type="button" class="btn btn-ghost btn-xs"
+                                data-role="content-audit"
+                                th:if="${isAdmin}"
+                                th:attr="data-table=${p.objectName},
+                                         data-action=@{/api/projects/{id}/content-audit(id=${project.id})},
+                                         title=#{contentAudit.hint}">
+                            <svg class="ico"><use href="#search"/></svg>
+                            <span th:text="#{contentAudit.open}">Check content</span>
+                        </button>
                     </td>
                 </tr>
                 </tbody>
@@ -256,6 +267,33 @@
                     id="row-count-stop" th:text="#{rowcount.stop}">Stop</button>
             <button type="button" class="btn btn-ghost btn-sm"
                     data-close-modal="row-count-modal"
+                    th:text="#{common.close}">Close</button>
+        </div>
+    </div>
+</div>
+
+<!--/* 内容校验弹窗：一次只校验进度行对应的那张表，结果由 app.js 按接口返回填充。
+       页面只渲染空壳；表名、列名与原因都在 JS 里用 textContent 写入。 */-->
+<div class="modal" id="content-audit-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:if="${isAdmin and !#lists.isEmpty(progressList)}"
+     th:attr="aria-label=#{contentAudit.title}">
+    <div class="modal-mask" data-close-modal="content-audit-modal"></div>
+    <div class="modal-dialog preview-dialog">
+        <button type="button" class="modal-close" data-close-modal="content-audit-modal"
+                th:attr="aria-label=#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 th:text="#{contentAudit.title}">Content check</h3>
+            <p id="content-audit-subject" class="small mono"></p>
+            <p id="content-audit-summary" class="small muted"
+               th:text="#{contentAudit.idle}">Not checked</p>
+            <p class="small muted" th:text="#{contentAudit.hint}">Hint</p>
+        </div>
+        <div id="content-audit-body" class="preview-body"></div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-close-modal="content-audit-modal"
                     th:text="#{common.close}">Close</button>
         </div>
     </div>

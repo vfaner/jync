@@ -111,6 +111,20 @@ class JdbcEtlSourceTest {
         cursor.close();
     }
 
+    /**
+     * MariaDB Connector/J 3.x throws "invalid fetch size" on the Connector/J sentinel;
+     * only Connector/J itself needs it. MariaDB streams on the ordinary fetch size.
+     */
+    @Test
+    void usesANormalFetchSizeForMariaDb() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.MARIADB);
+
+        EtlSourceCursor cursor = source.query(task(EtlWriteMode.OVERWRITE, null), null);
+
+        verify(statement).setFetchSize(1000);
+        cursor.close();
+    }
+
     @Test
     void usesANormalFetchSizeForEverythingElse() throws SQLException {
         JdbcEtlSource source = source(DatabaseType.H2);

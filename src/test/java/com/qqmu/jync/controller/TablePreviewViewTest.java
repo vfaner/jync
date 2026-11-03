@@ -146,6 +146,46 @@ class TablePreviewViewTest {
     }
 
     @Test
+    void anAdminSeesTheContentAuditButtonAndItsModal() throws Exception {
+        String html = render();
+
+        assertThat(html).contains("data-role=\"content-audit\"");
+        assertThat(html).contains("data-action=\"/api/projects/1/content-audit\"");
+        assertThat(html).contains("id=\"content-audit-modal\"");
+        assertThat(html).contains("id=\"content-audit-body\"");
+        assertThat(html).contains(">Check content</span>");
+        assertThat(html).doesNotContain("??contentAudit");
+    }
+
+    /**
+     * The audit reads row values from both configured databases; a viewer must not be
+     * offered a control that would always come back 403.
+     */
+    @Test
+    void aViewerGetsNeitherTheContentAuditButtonNorTheModal() throws Exception {
+        String html = render(asViewer());
+
+        assertThat(html).doesNotContain("data-role=\"content-audit\"");
+        assertThat(html).doesNotContain("id=\"content-audit-modal\"");
+    }
+
+    /**
+     * app.js resolves the status, labels and skip reasons through {@code t()} at runtime;
+     * a key missing from the dictionary silently shows the raw key to the user.
+     */
+    @Test
+    void theContentAuditLabelsAreInTheJsDictionary() throws Exception {
+        String html = render();
+
+        assertThat(html).contains("'contentAudit.running': \"Sampling rows and comparing values...\"");
+        assertThat(html).contains("'contentAudit.status.MISMATCH': \"Content differs\"");
+        assertThat(html).contains("'contentAudit.reason.never-synced': "
+                + "\"This table has no sync record yet; run a sync first\"");
+        assertThat(html).contains("'contentAudit.summary': "
+                + "\"{0} sampled, {1} matched, {2} differ, {3} missing on target\"");
+    }
+
+    @Test
     void theProgressTableDropsTheCursorWatermarkAndLifetimeRowCounter() throws Exception {
         String html = render();
 

@@ -13,7 +13,7 @@
 
     <groupId>com.qqmu.jync</groupId>
     <artifactId>jync</artifactId>
-    <version>1.11.0</version>
+    <version>1.12.0</version>
     <name>Jync</name>
     <description>Jync (捷同) - real-time heterogeneous database structure and data synchronization in a single JAR</description>
 
@@ -329,6 +329,55 @@
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>1.21.3</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- MariaDB 11.4: the second MySQL-protocol product in the matrix, and the one the
+             driver is bundled for but no container IT covered before v1.12.0. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mariadb</artifactId>
+            <version>1.21.3</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- ClickHouse 24.8 LTS source. The image is deliberately not bundled by the app;
+             the test brings its own JDBC driver exactly like a user would. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>clickhouse</artifactId>
+            <version>1.21.3</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- ClickHouse JDBC is not shipped in the application (the vendor allows no
+             redistribution). Test scope only: DriverPresence sees it on the test classpath,
+             so the ClickHouse IT can connect without a user-supplied jar. Verified against
+             Maven Central before pinning. -->
+        <dependency>
+            <groupId>com.clickhouse</groupId>
+            <artifactId>clickhouse-jdbc</artifactId>
+            <version>0.11.0</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- clickhouse-jdbc 0.11.0 is built against HttpClient 5.6, while Spring Boot's BOM
+             pins 5.1.4 — which lacks ConnectionConfig and fails on the first connect. The
+             driver is a test fixture only, so the fix is scoped to test dependencies: a
+             direct dependency outranks the BOM-managed transitive one for the driver alone
+             and leaves the application's own jars untouched. -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+            <version>5.6.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents.core5</groupId>
+            <artifactId>httpcore5</artifactId>
+            <version>5.4.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents.core5</groupId>
+            <artifactId>httpcore5-h2</artifactId>
+            <version>5.4.3</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

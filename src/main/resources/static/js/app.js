@@ -1751,6 +1751,227 @@
     });
   }
 
+  /* ─── 内容校验 ──────────────────────────────────────────── */
+
+  /**
+   * 「内容校验」：按主键抽样比对源/目标的行值，只报告差异，不修复目标表。
+   *
+   * 每次只校验按钮所在行的一张表；接口是 POST（会读两侧数据库的行值），走 postJson
+   * 自动带 CSRF。表名、列名、原因全部经 textContent 写入。
+   */
+  function bindContentAudit(btn) {
+    var modal = document.getElementById('content-audit-modal');
+    var body = document.getElementById('content-audit-body');
+    var summary = document.getElementById('content-audit-summary');
+    var subject = document.getElementById('content-audit-subject');
+    if (!modal || !body || !btn.dataset.action) { return; }
+    var busy = false;
+
+    function reasonText(detail) {
+      if (!detail) { return ''; }
+      var key = 'contentAudit.reason.' + detail;
+      var text = t(key);
+      return text === key ? detail : text;
+    }
+
+    function statusClass(status) {
+      if (status === 'OK') { return 'badge badge-ok'; }
+      if (status === 'MISMATCH') { return 'badge badge-warn'; }
+      if (status === 'ERROR') { return 'badge badge-danger'; }
+      return 'badge badge-mute';
+    }
+
+    function addRow(tbody, label, value) {
+      var tr = document.createElement('tr');
+      var th = document.createElement('th');
+      th.textContent = t(label);
+      var td = document.createElement('td');
+      td.textContent = value == null ? '' : String(value);
+      tr.appendChild(th);
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+
+    function format(template, values) {
+      var text = template || '';
+      values.forEach(function (value, index) {
+        text = text.replace('{' + index + '}', value == null ? 0 : value);
+      });
+      return text;
+    }
+
+    function render(result, message) {
+      body.innerHTML = '';
+      if (!result) {
+        summary.textContent = message || t('contentAudit.status.ERROR');
+        return;
+      }
+      var table = document.createElement('table');
+      table.className = 'tbl dense';
+      var tbody = document.createElement('tbody');
+
+      var resultRow = document.createElement('tr');
+      var resultTh = document.createElement('th');
+      resultTh.textContent = t('contentAudit.result');
+      var resultTd = document.createElement('td');
+      var badge = document.createElement('span');
+      badge.className = statusClass(result.status);
+      badge.textContent = t('contentAudit.status.' + (result.status || 'ERROR'));
+      resultTd.appendChild(badge);
+      resultRow.appendChild(resultTh);
+      resultRow.appendChild(resultTd);
+      tbody.appendChild(resultRow);
+
+      if (result.status === 'OK' || result.status === 'MISMATCH') {
+        addRow(tbody, 'contentAudit.summary', format(t('contentAudit.summary'), [
+          result.sampled, result.matched, result.mismatched, result.missingOnTarget]));
+        if (result.mismatchColumns && result.mismatchColumns.length) {
+          addRow(tbody, 'contentAudit.columns', result.mismatchColumns.join(', '));
+        }
+        addRow(tbody, 'contentAudit.skippedColumns', result.skippedColumns || 0);
+      } else {
+        addRow(tbody, 'contentAudit.detail', reasonText(result.detail));
+      }
+      table.appendChild(tbody);
+      body.appendChild(table);
+      summary.textContent = t('contentAudit.status.' + (result.status || 'ERROR'))
+          + ' · ' + (result.elapsedMs || 0) + ' ms';
+    }
+
+    btn.addEventListener('click', function () {
+      if (busy) { return; }
+      busy = true;
+      btn.disabled = true;
+      if (subject) { subject.textContent = btn.dataset.table || ''; }
+      body.innerHTML = '';
+      if (summary) { summary.textContent = t('contentAudit.running'); }
+      setModalOpen('content-audit-modal', true);
+      var url = btn.dataset.action + '?table=' + encodeURIComponent(btn.dataset.table || '');
+      postJson(url, null, false).then(function (payload) {
+        if (!payload.success) {
+          render(null, t(payload.message || 'error.unexpected'));
+          return;
+        }
+        render(payload.contentAudit || null, null);
+      }).catch(function () {
+        render(null, t('error.unexpected'));
+      }).then(function () {
+        busy = false;
+        btn.disabled = false;
+      });
+    });
+  }
+
+  /**
+   * 同步前检查：模态框里的「运行检查」调用只读预检接口，按严重级别分组渲染。
+   * 结果里的 detail 来自库表名/错误文本，一律用 textContent 写入，不拼 HTML。
+   */
+  function bindPrecheck(btn) {
+    var modal = document.getElementById('precheck-modal');
+    if (!modal) { return; }
+    var runBtn = document.getElementById('precheck-run');
+    var summary = document.getElementById('precheck-summary');
+    var empty = document.getElementById('precheck-empty');
+    var groups = modal.querySelectorAll('[data-precheck-group]');
+
+    function clear() {
+      groups.forEach(function (group) {
+        group.classList.add('is-hidden');
+        var rows = group.querySelector('[data-role="precheck-rows"]');
+        if (rows) { rows.textContent = ''; }
+      });
+    }
+
+    function statusText(report) {
+      var counts = { ERROR: 0, WARN: 0, OK: 0, SKIP: 0 };
+      (report.checks || []).forEach(function (check) {
+        counts[check.severity] = (counts[check.severity] || 0) + 1;
+      });
+      var verdict = t(report.passed ? 'precheck.passed' : 'precheck.failed');
+      var countsText = t('precheck.summary')
+          .replace('{0}', counts.ERROR)
+          .replace('{1}', counts.WARN)
+          .replace('{2}', counts.OK)
+          .replace('{3}', counts.SKIP);
+      return verdict + ' · ' + countsText;
+    }
+
+    function render(report) {
+      clear();
+      var checks = report.checks || [];
+      if (!checks.length) {
+        if (empty) { empty.classList.remove('is-hidden'); }
+      } else if (empty) {
+        empty.classList.add('is-hidden');
+      }
+      checks.forEach(function (check) {
+        var group = modal.querySelector(
+            '[data-precheck-group="' + check.severity + '"]');
+        if (!group) { return; }
+        var tbody = group.querySelector('[data-role="precheck-rows"]');
+        if (!tbody) { return; }
+        var row = document.createElement('tr');
+
+        var objectCell = document.createElement('td');
+        objectCell.className = 'mono';
+        objectCell.textContent = check.objectName
+            ? (check.objectType ? check.objectType + ' · ' + check.objectName
+                : check.objectName)
+            : (check.objectType || '');
+        var messageCell = document.createElement('td');
+        messageCell.textContent = t(check.messageKey);
+        var detailCell = document.createElement('td');
+        detailCell.className = 'small muted';
+        detailCell.textContent = check.detail || '';
+
+        row.appendChild(objectCell);
+        row.appendChild(messageCell);
+        row.appendChild(detailCell);
+        tbody.appendChild(row);
+        group.classList.remove('is-hidden');
+      });
+      if (summary) {
+        summary.className = report.passed ? 'badge badge-ok' : 'badge badge-danger';
+        summary.textContent = statusText(report);
+      }
+    }
+
+    function setBusy(busy) {
+      if (!runBtn) { return; }
+      runBtn.disabled = busy;
+      runBtn.textContent = t(busy ? 'precheck.running' : 'precheck.run');
+    }
+
+    function run() {
+      if (!btn.dataset.action) { return; }
+      setBusy(true);
+      if (summary) {
+        summary.className = 'small muted';
+        summary.textContent = t('precheck.running');
+      }
+      getJson(btn.dataset.action).then(function (payload) {
+        if (!payload.success) {
+          throw new Error(payload.message || 'error.unexpected');
+        }
+        render(payload.precheck || {});
+      }).catch(function () {
+        clear();
+        if (empty) { empty.classList.add('is-hidden'); }
+        if (summary) {
+          summary.className = 'badge badge-danger';
+          summary.textContent = t('precheck.error');
+        }
+      }).then(function () {
+        setBusy(false);
+      });
+    }
+
+    btn.addEventListener('click', function () {
+      setModalOpen('precheck-modal', true);
+    });
+    if (runBtn) { runBtn.addEventListener('click', run); }
+  }
+
   function bindTablePreview(btn) {
     btn.addEventListener('click', function () {
       var side = btn.dataset.side === 'target' ? 'target' : 'source';
@@ -4013,6 +4234,8 @@
       .forEach(bindCursorInput);
     document.querySelectorAll('[data-role="column-rule-form"]').forEach(bindColumnRuleForm);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
+    document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);
+    document.querySelectorAll('[data-role="precheck-open"]').forEach(bindPrecheck);
     document.querySelectorAll('[data-role="preview"]').forEach(bindTablePreview);
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);

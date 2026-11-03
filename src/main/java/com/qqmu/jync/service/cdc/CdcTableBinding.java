@@ -123,7 +123,7 @@ public final class CdcTableBinding {
      * value into another column, while add / drop / rename / reorder all change the ordered
      * name list. Null when the table has no metadata.
      */
-    static String layoutSignature(TableMeta meta) {
+    public static String layoutSignature(TableMeta meta) {
         if (meta == null || meta.getColumns() == null) {
             return null;
         }

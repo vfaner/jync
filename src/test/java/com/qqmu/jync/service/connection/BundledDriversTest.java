@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.Set;
@@ -41,6 +43,13 @@ class BundledDriversTest {
         for (DatabaseType type : DatabaseType.values()) {
             boolean present = DriverPresence.isPresent(type.getDriverClassName());
             if (EXTERNAL.contains(type)) {
+                // ClickHouse is present here only because ClickHouseSourceIT needs the
+                // driver on the test classpath; the dependency is test-scoped, so Maven
+                // never puts it in the distribution. clickHouseDriverStaysTestScoped
+                // guards that scope — without it this exemption would hide a real leak.
+                if (type == DatabaseType.CLICKHOUSE && present) {
+                    continue;
+                }
                 assertFalse(present,
                         type + " 未获再分发授权,不应出现在 classpath 上,必须由用户提供 jar");
             } else {
@@ -48,6 +57,23 @@ class BundledDriversTest {
                         type + " 的驱动类不在 classpath 上,检查 pom.xml 是否漏掉驱动依赖");
             }
         }
+    }
+
+    /**
+     * The matrix IT needs the ClickHouse driver, but the distribution must not: the vendor
+     * allows no redistribution. Test scope is what enforces that; if someone promotes the
+     * dependency to compile/runtime, this test fails before the jar ships.
+     */
+    @Test
+    @DisplayName("ClickHouse JDBC 只作为测试夹具,不得进入发行包")
+    void clickHouseDriverStaysTestScoped() throws Exception {
+        String pom = Files.readString(Path.of("pom.xml"));
+        int start = pom.indexOf("<artifactId>clickhouse-jdbc</artifactId>");
+        assertTrue(start > 0, "pom.xml 里找不到 clickhouse-jdbc 依赖");
+        int end = pom.indexOf("</dependency>", start);
+        assertTrue(end > start, "clickhouse-jdbc 依赖块不完整");
+        assertTrue(pom.substring(start, end).contains("<scope>test</scope>"),
+                "clickhouse-jdbc 必须保持 test scope,否则会随发行包分发");
     }
 
     @Test

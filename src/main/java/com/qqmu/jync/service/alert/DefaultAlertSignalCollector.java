@@ -291,7 +291,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         // collapse to the newest, or the same drift would be announced repeatedly.
         Map<String, ChangeLog> newest = new LinkedHashMap<>();
         for (ChangeLog row : rows) {
-            if (!isRowCountAudit(row)) {
+            if (!isRowCountAudit(row) && !isContentAudit(row)) {
                 continue;
             }
             String key = row.getProjectId() + "|" + row.getObjectName();
@@ -302,6 +302,16 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         }
         Map<Long, String> names = projectNames(projectIdsOf(newest.values()));
         for (ChangeLog row : newest.values()) {
+            if (isContentAudit(row)) {
+                Long differing = contentDriftRowsOf(row);
+                events.add(new AlertEvent(AlertCategory.DATA_DRIFT, row.getProjectId(),
+                        names.get(row.getProjectId()), row.getObjectName(),
+                        "alert.detail.contentDrift",
+                        new Object[]{row.getObjectName(),
+                                differing == null ? 0L : differing},
+                        row.getOccurredAt()));
+                continue;
+            }
             Long surplus = surplusOf(row);
             if (surplus == null) {
                 events.add(new AlertEvent(AlertCategory.DATA_DRIFT, row.getProjectId(),
@@ -323,6 +333,25 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
     /** "Row count audit: target has 3 row(s) more than the source (…)": the surplus size. */
     private static final Pattern ROW_COUNT_SURPLUS = Pattern.compile(
             "Row count audit: target has (\\d+) row\\(s\\) more than the source");
+
+    /**
+     * "Content audit: table ORDERS: 50 sampled, 3 row(s) differ (columns: …)": the number of
+     * sampled rows whose values differ. The audit never repairs, so the count is the whole
+     * message.
+     */
+    private static final Pattern CONTENT_DRIFT = Pattern.compile(
+            "^Content audit: table .*: (\\d+) sampled, (\\d+) row\\(s\\) differ");
+
+    private static boolean isContentAudit(ChangeLog row) {
+        return row.getObjectType() == ObjectType.TABLE
+                && row.getDetails() != null
+                && row.getDetails().startsWith("Content audit: table ");
+    }
+
+    private static Long contentDriftRowsOf(ChangeLog row) {
+        Matcher m = CONTENT_DRIFT.matcher(row.getDetails());
+        return m.find() ? Long.valueOf(m.group(2)) : null;
+    }
 
     /**
      * Whether a change-log row was written by the row-count audit.

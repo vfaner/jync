@@ -293,6 +293,48 @@ class DefaultAlertSignalCollectorTest {
         assertThat(event.detailArgs()[1]).isEqualTo(1L);
     }
 
+    /**
+     * The content audit reports rows whose count is right but whose values differ. It is drift
+     * too, but not a row-count repair: saying "automatically repaired" would be false, and the
+     * row-count wording is tied to an action this audit deliberately does not take.
+     */
+    @Test
+    void aContentAuditMismatchBecomesAContentDriftEvent() {
+        when(projectRepository.findAllById(any())).thenReturn(List.of(project(1L, "orders")));
+        ChangeLog drift = failure(1L, ObjectType.TABLE, "ORDERS", ChangeType.INFO,
+                T0.minusSeconds(60));
+        drift.setDetails("Content audit: table ORDERS: 50 sampled, 3 row(s) differ"
+                + " (columns: NAME, FLAG)");
+        when(changeLogRepository.findByChangeTypeAndOccurredAtAfter(any(), any()))
+                .thenReturn(List.of(drift));
+
+        AlertEvent event = only(collect(), com.qqmu.jync.model.AlertCategory.DATA_DRIFT);
+
+        assertThat(event.object()).isEqualTo("ORDERS");
+        assertThat(event.detailKey()).isEqualTo("alert.detail.contentDrift");
+        assertThat(event.detailArgs()[0]).isEqualTo("ORDERS");
+        assertThat(event.detailArgs()[1]).isEqualTo(3L);
+    }
+
+    @Test
+    void aContentAuditEntryIsNotReportedAsARowCountRepair() {
+        when(projectRepository.findAllById(any())).thenReturn(List.of(project(1L, "orders")));
+        ChangeLog drift = failure(1L, ObjectType.TABLE, "ORDERS", ChangeType.INFO,
+                T0.minusSeconds(60));
+        drift.setDetails("Content audit: table ORDERS: 50 sampled, 3 row(s) differ"
+                + " (columns: NAME)");
+        ChangeLog ordinary = failure(1L, ObjectType.TABLE, "ITEMS", ChangeType.INFO,
+                T0.minusSeconds(30));
+        ordinary.setDetails("50 row(s) inserted");
+        when(changeLogRepository.findByChangeTypeAndOccurredAtAfter(any(), any()))
+                .thenReturn(List.of(drift, ordinary));
+
+        AlertEvent event = only(collect(), com.qqmu.jync.model.AlertCategory.DATA_DRIFT);
+
+        assertThat(event.detailKey()).isNotEqualTo("alert.detail.dataDrift");
+        assertThat(event.detailKey()).isNotEqualTo("alert.detail.dataSurplus");
+    }
+
     @Test
     void threeFailedHealthChecksAreNeededBeforeAConnectionIsReported() {
         DatabaseConfig config = new DatabaseConfig();

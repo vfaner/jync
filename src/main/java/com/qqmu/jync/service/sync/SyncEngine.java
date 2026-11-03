@@ -13,6 +13,7 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
@@ -20,6 +21,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.ChangeEvent;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.SyncResult;
+import com.qqmu.jync.dto.TableContentAudit;
 import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CaptureStrategy;
@@ -55,6 +57,11 @@ public class SyncEngine {
     private final DataSyncService dataSync;
     private final SyncStateWriter stateWriter;
     private final SyncProperties properties;
+    /**
+     * Null only on the hand-built engine of the older unit tests. Production wiring always
+     * supplies it; a test that wants the audit uses the full constructor and a mock.
+     */
+    private final ContentAuditService contentAudit;
 
     /**
      * When each table's row counts were last audited, keyed by {@code projectId:tableName}.
@@ -106,13 +113,15 @@ public class SyncEngine {
      */
     private final Set<String> warnedDeletionSkips = ConcurrentHashMap.newKeySet();
 
+    @Autowired
     public SyncEngine(DataSourceManager dataSourceManager,
                       ChangeDetector changeDetector,
                       CursorStrategyResolver cursorResolver,
                       StructureSyncService structureSync,
                       DataSyncService dataSync,
                       SyncStateWriter stateWriter,
-                      SyncProperties properties) {
+                      SyncProperties properties,
+                      ContentAuditService contentAudit) {
         this.dataSourceManager = dataSourceManager;
         this.changeDetector = changeDetector;
         this.cursorResolver = cursorResolver;
@@ -120,6 +129,22 @@ public class SyncEngine {
         this.dataSync = dataSync;
         this.stateWriter = stateWriter;
         this.properties = properties;
+        this.contentAudit = contentAudit;
+    }
+
+    /**
+     * Construction without the content audit, kept for the many engine tests that assert on
+     * other behavior and would otherwise pay for a real audit on every successful table.
+     */
+    SyncEngine(DataSourceManager dataSourceManager,
+               ChangeDetector changeDetector,
+               CursorStrategyResolver cursorResolver,
+               StructureSyncService structureSync,
+               DataSyncService dataSync,
+               SyncStateWriter stateWriter,
+               SyncProperties properties) {
+        this(dataSourceManager, changeDetector, cursorResolver, structureSync, dataSync,
+                stateWriter, properties, null);
     }
 
     /**
@@ -215,7 +240,10 @@ public class SyncEngine {
             warnOversizedFullCompareTables(sourceMeta, ctx);
 
             if (ctx.getConfig().isSyncData()) {
-                syncData(sourceMeta, sourceConn, targetConn, ctx, result, blockedTables);
+                ContentAuditService.CycleBudget auditBudget = contentAudit == null
+                        ? null : contentAudit.newCycleBudget();
+                syncData(sourceMeta, sourceConn, targetConn, ctx, result, blockedTables,
+                        auditBudget);
             }
 
         } catch (PoolContentionException e) {
@@ -278,7 +306,7 @@ public class SyncEngine {
                 || !ctx.getTargetDialect().supportsConstraintToggle();
     }
 
-    private DatabaseMeta readSourceMetadata(Connection sourceConn, SyncContext ctx)
+    DatabaseMeta readSourceMetadata(Connection sourceConn, SyncContext ctx)
             throws SQLException {
         List<String> tables = selection(ctx.getConfig().getTables(),
                 ctx.getConfig().isObjectSelectionExplicit());
@@ -880,7 +908,8 @@ public class SyncEngine {
 
     /** Synchronizes rows for every selected table, one table at a time. */
     private void syncData(DatabaseMeta sourceMeta, Connection sourceConn, Connection targetConn,
-                          SyncContext ctx, SyncResult result, Set<String> blockedTables)
+                          SyncContext ctx, SyncResult result, Set<String> blockedTables,
+                          ContentAuditService.CycleBudget auditBudget)
             throws SQLException {
         // CDC 项目的数据只允许从基线全量 + binlog 回放两条路进目标库:常规轮询周期若也
         // 跑数据阶段,会和流式回放双写同一张表,DELETE 语义直接冲突(B6/B8)。
@@ -956,7 +985,7 @@ public class SyncEngine {
                 ctx.requireLease();
                 try {
                     syncOneTable(table, source, target, ctx, result, blockedTables,
-                            knownTargetTables);
+                            knownTargetTables, auditBudget);
                 } catch (StopRequestedException | LockLostException | PoolContentionException e) {
                     // Not a table failure: the whole cycle must stop here (a pool that ran
                     // dry mid-table defers the run, it does not fail the table).
@@ -1078,7 +1107,8 @@ public class SyncEngine {
 
     private void syncOneTable(TableMeta table, Connection sourceConn, Connection targetConn,
                               SyncContext ctx, SyncResult result, Set<String> blockedTables,
-                              Set<String> knownTargetTables) {
+                              Set<String> knownTargetTables,
+                              ContentAuditService.CycleBudget auditBudget) {
         long tableStart = System.currentTimeMillis();
         SyncProgress progress = stateWriter.loadOrCreateProgress(ctx.projectId(), table.getName());
         CursorStrategy strategy = cursorResolver.resolve(table, ctx.getConfig());
@@ -1278,6 +1308,12 @@ public class SyncEngine {
                     deleted);
         }
 
+        // The cursor has advanced and every write of this table has committed, so the rows the
+        // cursor claims to have delivered can now be read back on both sides. The audit is a
+        // diagnostic: it never changes this table's result, and runContentAudit swallows its
+        // failures for the same reason.
+        runContentAudit(sourceConn, targetConn, table, strategy, progress, ctx, auditBudget);
+
         // Keep the table snapshot current even when only data moved, so a later structural
         // diff is not confused by a stale shape. Two guards:
         // - structure sync must be on. Refreshing while it is off would silently mark every
@@ -1296,6 +1332,30 @@ public class SyncEngine {
             } else {
                 stateWriter.saveSnapshot(ctx.projectId(), ObjectType.TABLE, table.getName(), table);
             }
+        }
+    }
+
+    /**
+     * Runs the content audit for one table that just committed, on the boundary between the
+     * data phase and the snapshot refresh.
+     *
+     * <p>The audit compares the rows the cursor now claims to have delivered. It is isolated
+     * twice: the service folds query failures into its result, and the call is additionally
+     * wrapped so an unexpected runtime failure of the audit itself cannot turn a successful
+     * table into a failed cycle.
+     */
+    private void runContentAudit(Connection sourceConn, Connection targetConn, TableMeta table,
+            CursorStrategy strategy, SyncProgress progress, SyncContext ctx,
+            ContentAuditService.CycleBudget auditBudget) {
+        if (contentAudit == null) {
+            return;
+        }
+        try {
+            TableContentAudit audit = contentAudit.maybeAudit(sourceConn, targetConn, table,
+                    strategy, progress, ctx, auditBudget);
+            contentAudit.record(ctx, audit);
+        } catch (RuntimeException e) {
+            log.warn("Content audit of {} failed: {}", table.getName(), e.getMessage());
         }
     }
 
@@ -1602,5 +1662,8 @@ public class SyncEngine {
         warnedOversizedFullCompare.removeIf(key -> key.startsWith(prefix));
         warnedDeletionSkips.removeIf(key -> key.startsWith(prefix));
         structureSync.evictProject(projectId);
+        if (contentAudit != null) {
+            contentAudit.evictProject(projectId);
+        }
     }
 }

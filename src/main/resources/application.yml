@@ -180,6 +180,16 @@ sync:
   # holds every row the cursor claims to have delivered. Set to 0 to disable.
   # Costs one COUNT(*) per side per table, hence the throttle.
   row-count-audit-interval-ms: 60000
+  # Content audit: sample keys across the synced range and compare the projected values on
+  # both sides, catching rows whose count is right but whose content differs. 0 disables it.
+  content-audit-interval-ms: 900000
+  # Keys sampled per audit (clamped to 2..200); each one costs one point lookup on each side.
+  content-audit-sample-size: 50
+  # Tables whose source row estimate exceeds this are skipped (0 removes the ceiling).
+  content-audit-max-rows: 2000000
+  # Tables audited per sync cycle; 0 removes the cap.
+  content-audit-max-tables-per-cycle: 1
+  content-audit-timeout-seconds: 60
   # Largest drift the audit repairs by key (walk the audited key range, upsert only the
   # missing rows, keep the cursor) before falling back to clearing the cursor and
   # reloading the whole table. 0 disables the targeted repair. A shortfall this small

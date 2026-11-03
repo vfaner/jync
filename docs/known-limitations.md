@@ -87,7 +87,19 @@ Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB（Atlas SQL）六�
 - **一律按无主键读取。** 这些驱动报告的"主键"其实是排序键或索引信息，不是唯一约束。信它会让增量计划按一个表无法兑现的键推进，目标端的 upsert 还会把源里不同的行折叠成一行——静默丢数据。因此它们的表按无主键处理：**轮询看不到 UPDATE / DELETE，只追加新行**。
 - **分页能力分两档。** ClickHouse 与 Doris 支持 `LIMIT n OFFSET m`，无主键大表可按偏移分块并行读取；Hive、Impala、Elasticsearch 与 MongoDB 只有 `LIMIT`，无主键表只能单次流式读取（内存与耗时随表增长）。这是沿用 "无法验证就不启用 OFFSET" 的既有策略。
 - **Elasticsearch 的取数上限。** 受 `index.max_result_window`（默认 1 万）约束，超大索引要么调服务端参数，要么只同步窗口内的数据。
-- **驱动行为未在真实服务端验证。** ClickHouse、Elasticsearch、Doris 可拉起容器验证连接与分页；Hive、Impala 与 MongoDB Atlas SQL 在本地无法验证，只有单元测试覆盖的 SQL 形状。上线前请先对目标版本做一次连通与全量试跑。
+- **真实验证覆盖不完整。** v1.12.0 起 ClickHouse 24.8（仅源）在自动化容器里验证了元数据读取、无主键 OFFSET 分块全量、目标建表与空转；MariaDB 11.4 作为源/目标的轮询也进入容器套件。Doris（仅源）与 Elasticsearch SQL（仅源，需自备 X-Pack SQL JDBC）是环境门控测试，本次未运行；Hive、Impala 与 MongoDB Atlas SQL 在本地无法验证，只有单元测试覆盖的 SQL 形状。逐产品的版本、驱动、验证级别与命令见[真实数据库验证矩阵](verification-matrix.md)。上线前仍请对目标版本做一次连通与全量试跑。
+
+### 3.7 内容级校验
+
+v1.12.0 起，增量表在同步成功后会**按主键抽样比对源与目标的行值**，用来发现"行数相同但内容不同"（更新丢失、截断、字符集或类型转换错误）。它只报告，不修复。
+
+- **抽样，不是全表。** 用窗口函数按主键把游标范围内的行分成 N 个桶，每桶取一个键，再按这些键分别读源与目标。默认每表 50 行（`sync.content-audit-sample-size`，范围 2–200）。源端不支持窗口函数或键不可排序时返回 `SKIPPED`，不会退化成 `ORDER BY … LIMIT`（那会总取同一头几行）。
+- **默认节流。** 间隔 `sync.content-audit-interval-ms`（默认 15 分钟，`0` 关闭），每个同步周期最多 1 张表（`sync.content-audit-max-tables-per-cycle`），单次查询超时 `sync.content-audit-timeout-seconds`（默认 60 秒）；源行数估计超过 `sync.content-audit-max-rows`（默认 200 万）时整表跳过。
+- **不是所有表都能比。** 要求：同步数据、增量策略且游标不是伪列、首次全量已完成、表有主键、主键列没有列清洗规则（否则目标里存的是清洗后的键，回源定位不到）、目标表存在且不缺列、游标列有索引或表未超过 `max-unindexed-scan-rows`。无主键表、`FULL_COMPARE`、ETL 与专属迁移不走这项校验。
+- **不可比列排除。** LOB、JSON、XML、几何等没有稳定等值比较语义的列会被排除，并在结果里计入 `skippedColumns`；主键、游标与清洗涉及的列仍按原值比较。数字、时间戳、日期、`OffsetDateTime`、`byte[]` 与 Boolean 会先规范化，字符串按原值比较。
+- **只报告。** 发现差异时写一条 INFO 变更记录（前缀 `Content audit: table …`）并发 `DATA_DRIFT` 告警；同一项目同一张表的相同指纹（差异行数 + 目标缺失行数 + 差异列集合）只记一次，避免恒等游标表反复刷屏。目标端的外部触发器、手工转换或历史数据都会表现为差异，因此**不会自动覆盖目标**。
+- **成本。** 每次校验在源与目标各做一次索引扫描（取样本键）加一次按键批量读取；大表或索引缺失时可能明显增加 IO。手工"检查内容"按钮绕过间隔，但仍遵守上述资格与行数上限。
+- **已知盲区。** 恒等游标（自增列作为游标）看不到已有行的更新，抽样只能发现"被同步过的行值不对"，不能发现"从未进入增量窗口的更新"——后者仍需行数审计、全表比对或日志 CDC。
 
 ---
 

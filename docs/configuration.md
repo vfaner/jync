@@ -80,6 +80,13 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 | `sync.ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
 | `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求 |
 | `metrics.enabled` | `true` | 性能采样总开关，关闭不影响同步链路 |
+| `sync.content-audit-interval-ms` | `900000` | 内容级校验间隔（15 分钟）；`0` 关闭。手工「检查内容」不受此值限制 |
+| `sync.content-audit-sample-size` | `50` | 每表抽样行数，范围 2–200 |
+| `sync.content-audit-max-rows` | `2000000` | 源行数估计超过此值的表跳过内容校验；`0` 不设上限 |
+| `sync.content-audit-max-tables-per-cycle` | `1` | 每个同步周期最多校验的表数；`0` 不限制 |
+| `sync.content-audit-timeout-seconds` | `60` | 单次内容校验查询的语句超时（秒） |
+
+> 内容校验只报告差异，不修复目标。它要求表有主键、走增量策略、首次全量已完成，并默认排除 LOB/JSON/XML 等不可比列；抽样与排除规则见[已知限制](known-limitations.md) 3.7 节。
 
 日志 CDC 相关（不启用 CDC 可忽略）：
 

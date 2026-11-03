@@ -196,7 +196,8 @@ com.qqmu.jync
 
 - **配置、调度与调优**：[docs/configuration.md](docs/configuration.md)（`sync.*` / `sync.cdc.*` 键、调度规则、列清洗、CDC 前提与性能参数）
 - **容器部署与运维**：[docs/deploy-container.md](docs/deploy-container.md)（环境变量、TLS、多实例、升级与排障）
-- **已知限制与边界**：[docs/known-limitations.md](docs/known-limitations.md)（CDC 边界、无主键表、大字段、过程转换）
+- **已知限制与边界**：[docs/known-limitations.md](docs/known-limitations.md)（CDC 边界、无主键表、大字段、内容校验、过程转换）
+- **真实数据库验证矩阵**：[docs/verification-matrix.md](docs/verification-matrix.md)（每个产品验证到哪一步：版本/镜像、驱动、策略、验证级别与运行命令）
 
 ```bash
 mvn test

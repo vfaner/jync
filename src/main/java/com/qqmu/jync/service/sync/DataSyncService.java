@@ -803,7 +803,7 @@ public class DataSyncService {
      * unsynced row just above the bound can only inflate the TARGET side, which the one-sided
      * test ignores by design.
      */
-    private Object auditedBound(Connection targetConn, SyncContext ctx, TableMeta table,
+    Object auditedBound(Connection targetConn, SyncContext ctx, TableMeta table,
                                 CursorStrategy strategy, Object cursor) {
         Object bound = cursor;
         if (cursor instanceof Timestamp) {
@@ -1286,7 +1286,7 @@ public class DataSyncService {
      * sync.max-unindexed-scan-rows}: an unknown answer on either dimension keeps the old
      * behavior, because a skipped audit on a table that needed one loses drift detection.
      */
-    private boolean bookkeepingCountWouldScan(Connection conn, TableMeta table,
+    boolean bookkeepingCountWouldScan(Connection conn, TableMeta table,
                                               CursorStrategy strategy, SyncContext ctx,
                                               String what) {
         long ceiling = properties.getMaxUnindexedScanRows();
@@ -1327,7 +1327,7 @@ public class DataSyncService {
     }
 
     /** The table's row estimate, fetching one only when the metadata does not carry it. */
-    private Long rowEstimate(Connection conn, TableMeta table, SyncContext ctx) {
+    Long rowEstimate(Connection conn, TableMeta table, SyncContext ctx) {
         if (table.getApproximateRowCount() != null) {
             return table.getApproximateRowCount();
         }
@@ -2957,19 +2957,37 @@ public class DataSyncService {
      *         functions, as on MySQL 5.7). The caller falls back to the sequential model on
      *         null rather than failing the load.
      */
-    private List<List<Object>> sampleKeyBoundaries(Connection sourceConn, TableMeta table,
+    List<List<Object>> sampleKeyBoundaries(Connection sourceConn, TableMeta table,
                                                    CursorStrategy strategy, Object upperBound,
                                                    SyncContext ctx, int parallelism)
             throws SQLException {
+        try {
+            // One bucket per worker: NTILE returns exactly one boundary row per bucket, and
+            // sampledRanges turns m boundaries into m ranges, so parallelism + 1 buckets would
+            // run one worker more than the operator asked for — and one more than the
+            // connection pool reserved for it.
+            return sampleKeys(sourceConn, table, strategy, upperBound, ctx, parallelism);
+        } catch (SQLException e) {
+            log.info("Source cannot split {} on sampled key boundaries ({});"
+                    + " loading it sequentially in chunks", table.getName(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * The sampling query itself, without the full-load fallback: the first key of every
+     * bucket, in key order. Shared by the chunked full load (where a product that rejects
+     * window functions must fall back to sequential ranges) and the content audit (where the
+     * same rejection just skips this table's audit this cycle).
+     */
+    List<List<Object>> sampleKeys(Connection sourceConn, TableMeta table,
+                                  CursorStrategy strategy, Object upperBound,
+                                  SyncContext ctx, int buckets) throws SQLException {
         List<String> pkColumns = table.getPrimaryKeys();
         List<Object> params = new ArrayList<>();
-        // One bucket per worker: NTILE returns exactly one boundary row per bucket, and
-        // sampledRanges turns m boundaries into m ranges, so parallelism + 1 buckets would
-        // run one worker more than the operator asked for — and one more than the connection
-        // pool reserved for it.
         String sql = KeysetChunker.sampledBoundarySql(ctx.getSourceDialect(),
                 ctx.getSourceSchema(), table.getName(), pkColumns, strategy, upperBound,
-                parallelism, params);
+                buckets, params);
         List<List<Object>> boundaries = new ArrayList<>();
         try (PreparedStatement st = sourceConn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
@@ -2985,10 +3003,6 @@ public class DataSyncService {
                     boundaries.add(key);
                 }
             }
-        } catch (SQLException e) {
-            log.info("Source cannot split {} on sampled key boundaries ({});"
-                    + " loading it sequentially in chunks", table.getName(), e.getMessage());
-            return null;
         }
         return boundaries;
     }
