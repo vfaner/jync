@@ -34,13 +34,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ChunkCheckpoint;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
@@ -57,6 +60,7 @@ import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.PgLogicalCdcConsumer;
 import com.qqmu.jync.service.cdc.YStreamServiceAdmin;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.converter.SqlBodyConverter;
 import com.qqmu.jync.service.metadata.CursorIndexProbe;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
@@ -1294,6 +1298,132 @@ public class ProjectService {
             log.debug("Cannot inspect cursor-column indexes for project {}: {}",
                     projectId, e.toString());
             return Set.of();
+        }
+    }
+
+    /**
+     * Views and routines whose body uses {@code ||} as string concatenation when the target
+     * would read it as logical OR, for the detail page's warning.
+     *
+     * <p>Oracle, PostgreSQL and SQL Server join strings with {@code ||}. MySQL and every
+     * product in its family (GoldenDB, TDSQL, PolarDB, OceanBase, TiDB …) parse the same
+     * token as logical OR unless {@code PIPES_AS_CONCAT} is set. Structure sync hands the
+     * body through unchanged, so the target object is created successfully and only returns
+     * the wrong rows afterwards — 0/1 instead of the joined text. The page names the objects
+     * so an override can be supplied before the first run, which is the only moment the
+     * mistake is cheap to fix.
+     *
+     * <p>Only checked when the source and target families actually disagree, and only for
+     * the categories structure sync would write. An object with a saved DDL override counts
+     * as reviewed: the override is what runs, and it is checked instead of the source body.
+     *
+     * <p>Advisory, and it never fails the page: an unreachable source, an unreadable body or
+     * a failed listing leaves the affected object unflagged.
+     */
+    public List<StringConcatWarning> findStringConcatenationWarnings(Long projectId) {
+        try {
+            Project project = require(projectId);
+            if (project.getSourceDbId() == null || project.getTargetDbId() == null) {
+                return List.of();
+            }
+            DatabaseConfig source = databaseConfigRepository.findById(project.getSourceDbId())
+                    .orElseThrow(() -> new IllegalStateException("error.connection.missing"));
+            DatabaseConfig target = databaseConfigRepository.findById(project.getTargetDbId())
+                    .orElse(null);
+            if (target == null
+                    || target.resolvedFamily() != DatabaseType.DialectFamily.MYSQL
+                    || source.resolvedFamily() == DatabaseType.DialectFamily.MYSQL) {
+                return List.of();
+            }
+            SyncConfig config = loadConfig(project);
+            boolean viewWork = config.isSyncViews()
+                    && selectsAny(config.getViews(), config.isObjectSelectionExplicit());
+            boolean procedureWork = config.isSyncProcedures()
+                    && selectsAny(config.getProcedures(), config.isObjectSelectionExplicit());
+            if (!viewWork && !procedureWork) {
+                return List.of();
+            }
+
+            MetadataReader reader =
+                    readerFactory.forType(source.getType(), source.resolvedFamily());
+            List<StringConcatWarning> warnings = new ArrayList<>();
+            try (Connection conn = dataSourceManager.getConnection(source)) {
+                String schema = source.getSchemaName() != null
+                        && !source.getSchemaName().isBlank()
+                                ? source.getSchemaName() : reader.resolveDefaultSchema(conn);
+                if (viewWork) {
+                    for (String name : reader.listViewNames(conn, schema)) {
+                        if (!config.includesView(name)) {
+                            continue;
+                        }
+                        String body = config.ddlOverride("VIEW", name);
+                        if (body == null || body.isBlank()) {
+                            body = viewDefinition(reader, conn, schema, name);
+                        }
+                        if (SqlBodyConverter.containsStringConcatenation(body)) {
+                            warnings.add(new StringConcatWarning(ObjectType.VIEW, name));
+                        }
+                    }
+                }
+                if (procedureWork) {
+                    for (String name : reader.listProcedureNames(conn, schema)) {
+                        if (!config.includesProcedure(name)) {
+                            continue;
+                        }
+                        String body = config.ddlOverride("PROCEDURE", name);
+                        if (body == null || body.isBlank()) {
+                            body = procedureDefinition(reader, conn, schema, name);
+                        }
+                        if (SqlBodyConverter.containsStringConcatenation(body)) {
+                            warnings.add(new StringConcatWarning(ObjectType.PROCEDURE, name));
+                        }
+                    }
+                }
+            }
+            return warnings;
+        } catch (SQLException | RuntimeException e) {
+            // Keep the driver detail server-side; the page simply shows no warning.
+            log.debug("Cannot inspect '||' usage for project {}: {}", projectId, e.toString());
+            return List.of();
+        }
+    }
+
+    /** One object whose {@code ||} the target reads as logical OR. */
+    public record StringConcatWarning(ObjectType objectType, String objectName) {
+
+        public ObjectType getObjectType() {
+            return objectType;
+        }
+
+        public String getObjectName() {
+            return objectName;
+        }
+    }
+
+    /** Whether an explicit selection can still name any object of this kind. */
+    private static boolean selectsAny(Set<String> selection, boolean explicit) {
+        return !explicit || !selection.isEmpty();
+    }
+
+    private String viewDefinition(MetadataReader reader, Connection conn, String schema,
+                                  String name) {
+        try {
+            ViewMeta meta = reader.readView(conn, schema, name);
+            return meta == null ? null : meta.getDefinition();
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Cannot read view '{}' for the '||' warning: {}", name, e.toString());
+            return null;
+        }
+    }
+
+    private String procedureDefinition(MetadataReader reader, Connection conn, String schema,
+                                       String name) {
+        try {
+            ProcedureMeta meta = reader.readProcedure(conn, schema, name);
+            return meta == null ? null : meta.getDefinition();
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Cannot read routine '{}' for the '||' warning: {}", name, e.toString());
+            return null;
         }
     }
 

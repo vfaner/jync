@@ -315,4 +315,56 @@ class SqlBodyConverterTest {
         assertThat(out).contains("FROM DUAL");
         assertThat(out).contains("'FROM X'");
     }
+
+    // --- Detecting '||' as code, not as text ------------------------------------------
+
+    /**
+     * Oracle joins strings with {@code ||}. A MySQL-family target reads the same token as
+     * logical OR, so the object is created successfully but returns 0/1 — a silent wrong
+     * answer. The page warns only when the operator can still act on it.
+     */
+    @Test
+    void unquotedPipesAreStringConcatenation() {
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT first_name || ' ' || last_name FROM users")).isTrue();
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT a||b FROM t")).isTrue();
+    }
+
+    @Test
+    void pipesInsideAStringLiteralAreJustText() {
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT 'a||b' AS note FROM t")).isFalse();
+        // A doubled quote keeps the rest of the literal inside it.
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT 'it''s a||b' AS note FROM t")).isFalse();
+    }
+
+    @Test
+    void pipesInsideADoubleQuotedIdentifierAreNotCode() {
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT \"a||b\" FROM t")).isFalse();
+    }
+
+    @Test
+    void commentedOutPipesAreNotCode() {
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT a, b -- c || d\nFROM t")).isFalse();
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT a, /* c || d */ b FROM t")).isFalse();
+    }
+
+    @Test
+    void aSinglePipeIsNotConcatenation() {
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT a | b FROM t")).isFalse();
+        assertThat(SqlBodyConverter.containsStringConcatenation(null)).isFalse();
+        assertThat(SqlBodyConverter.containsStringConcatenation("  ")).isFalse();
+    }
+
+    @Test
+    void anUnterminatedLiteralSwallowsTheRest() {
+        assertThat(SqlBodyConverter.containsStringConcatenation(
+                "SELECT 'a || b FROM t")).isFalse();
+    }
 }

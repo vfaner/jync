@@ -37,6 +37,25 @@
     <div class="alert-body" th:text="${#messages.msgOrNull(sourceWarning) ?: sourceWarning}">warning</div>
 </div>
 
+<!-- 源端用 || 拼接字符串、目标是 MySQL 家族时，目标库把它读成逻辑或：视图/过程能建成功，
+     结果却是 0/1。逐个点名，方便在转换复审里补 CONCAT 的 DDL 覆盖。 -->
+<div th:if="${stringConcatWarnings != null and !#lists.isEmpty(stringConcatWarnings)}"
+     class="alert alert-warn">
+    <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+    <div class="alert-body">
+        <strong th:text="#{project.pipe.title}">warning</strong>
+        <div th:text="#{project.pipe.body}">body</div>
+        <ul>
+            <li th:each="w : ${stringConcatWarnings}">
+                <span th:text="${w.objectType.name() == 'VIEW'} ? #{conversion.views} : #{conversion.procedure}">View</span>：
+                <span class="mono" th:text="${w.objectName}">NAME</span>
+            </li>
+        </ul>
+        <a th:href="@{/projects/{id}/conversions(id=${project.id})}"
+           th:text="#{project.pipe.open}">Open Conversion Review</a>
+    </div>
+</div>
+
 <!-- 全量比对每轮整表读写：显式选择会绕过自动解析的行数上限，即使没超上限，短间隔下
      也可能过重。两类表都先在这里说明代价；无主键表不在列表内（只做一次种子）。 -->
 <div th:if="${fullCompareLoad != null and !fullCompareLoad.empty}" class="alert alert-warn">

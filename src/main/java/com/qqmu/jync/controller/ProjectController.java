@@ -388,6 +388,17 @@ public class ProjectController {
         }
         model.addAttribute("fullCompareLoad", fullCompareLoad);
 
+        // Oracle-style '||' concatenation is logical OR on MySQL-family targets: the view or
+        // routine is created and only returns the wrong rows afterwards. Name the objects
+        // here, where an override can still be supplied before the first run. Advisory — a
+        // source that cannot answer loses the warning, not the page.
+        try {
+            model.addAttribute("stringConcatWarnings",
+                    projectService.findStringConcatenationWarnings(id));
+        } catch (RuntimeException e) {
+            log.debug("Could not inspect '||' usage for project {}: {}", id, e.toString());
+        }
+
         // --- CDC status panel (C3) ------------------------------------------------------
         // Keyed off the STORED strategy, not selectedStrategy: a merely-recommended CDC
         // card (probe passed on a pristine POLLING project) has no position and no

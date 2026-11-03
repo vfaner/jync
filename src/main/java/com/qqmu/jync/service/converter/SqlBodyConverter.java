@@ -263,13 +263,84 @@ public class SqlBodyConverter {
         if (to == DatabaseType.DialectFamily.MYSQL && from != DatabaseType.DialectFamily.MYSQL) {
             // MySQL treats || as logical OR unless PIPES_AS_CONCAT is set, which would
             // silently produce wrong results. Flag it rather than mistranslate.
-            if (sql.contains("||")) {
+            if (containsStringConcatenation(sql)) {
                 log.warn("SQL body uses '||' string concatenation, which MySQL reads as "
                         + "logical OR. Review the converted object and supply a manual "
                         + "override if the semantics differ.");
             }
         }
         return sql;
+    }
+
+    /**
+     * Whether the body contains an unquoted {@code ||}, i.e. string concatenation in the
+     * Oracle/PostgreSQL/SQL Server sense rather than text in a literal or a comment.
+     *
+     * <p>Used both for the conversion log and for the project page's pre-run warning when
+     * the target is in the MySQL family: those products read the same token as logical OR,
+     * so the object is created but returns 0/1 — a wrong answer instead of an error.
+     *
+     * <p>Single-quoted strings (including a doubled quote), double-quoted identifiers and
+     * literals, {@code --} line comments and {@code /* *}{@code /} block comments are
+     * skipped. Product-specific quoting such as Oracle's {@code q'[...]'} or PostgreSQL's
+     * dollar quotes is not modelled; a pipe inside one of those can only produce a warning,
+     * never a rewrite, so the conservative miss is acceptable.
+     */
+    public static boolean containsStringConcatenation(String sql) {
+        if (sql == null || sql.isEmpty()) {
+            return false;
+        }
+        boolean inSingle = false;
+        boolean inDouble = false;
+        boolean inLineComment = false;
+        boolean inBlockComment = false;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            char next = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
+            if (inLineComment) {
+                if (c == '\n' || c == '\r') {
+                    inLineComment = false;
+                }
+                continue;
+            }
+            if (inBlockComment) {
+                if (c == '*' && next == '/') {
+                    inBlockComment = false;
+                    i++;
+                }
+                continue;
+            }
+            if (inSingle) {
+                if (c == '\'' && next == '\'') {
+                    i++; // a doubled quote stays inside the literal
+                } else if (c == '\'') {
+                    inSingle = false;
+                }
+                continue;
+            }
+            if (inDouble) {
+                if (c == '"' && next == '"') {
+                    i++;
+                } else if (c == '"') {
+                    inDouble = false;
+                }
+                continue;
+            }
+            if (c == '-' && next == '-') {
+                inLineComment = true;
+                i++;
+            } else if (c == '/' && next == '*') {
+                inBlockComment = true;
+                i++;
+            } else if (c == '\'') {
+                inSingle = true;
+            } else if (c == '"') {
+                inDouble = true;
+            } else if (c == '|' && next == '|') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
