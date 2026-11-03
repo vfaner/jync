@@ -1335,6 +1335,11 @@ table.tbl a.truncate { display: block; }
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding: 12px 14px; font-size: 12.5px; line-height: 1.7; color: var(--ink-soft);
 }
+.donate-note p { margin: 0; }
+.donate-board {
+  font-weight: 600; color: var(--brand); text-decoration: none; white-space: nowrap;
+}
+.donate-board:hover { text-decoration: underline; }
 .donate-actions {
   display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 16px;
 }

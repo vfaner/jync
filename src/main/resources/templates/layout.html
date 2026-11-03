@@ -444,7 +444,15 @@
         </div>
         <div class="qr-tip" id="donate-tip" th:text="#{donate.hint.wechat}">Scan with WeChat</div>
 
-        <p class="donate-note" th:text="#{donate.note}">Tipping is completely optional.</p>
+        <!--/* 提示框内的链接直达官网赞助页：榜单与鸣谢都在那里，本地不重复维护。 */-->
+        <div class="donate-note">
+            <p>
+                <span th:text="#{donate.note}">Tipping is completely optional.</span>
+                <a class="donate-board" th:if="${!#strings.isEmpty(siteUrl)}"
+                   th:href="|${siteUrl}/donate.html|"
+                   target="_blank" rel="noopener noreferrer" th:text="#{donate.board}">See sponsors →</a>
+            </p>
+        </div>
 
         <div class="donate-actions">
             <a class="btn btn-primary btn-sm" th:href="${githubUrl}"

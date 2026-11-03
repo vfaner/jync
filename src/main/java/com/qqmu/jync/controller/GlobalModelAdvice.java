@@ -32,6 +32,7 @@ public class GlobalModelAdvice {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'xxx");
 
     private final String githubUrl;
+    private final String siteUrl;
     private final SyncProperties properties;
     private final ObjectProvider<BuildProperties> buildProperties;
     private final boolean updateCheckEnabled;
@@ -39,19 +40,23 @@ public class GlobalModelAdvice {
 
     @Autowired
     public GlobalModelAdvice(@Value("${app.github-url}") String githubUrl,
+                             @Value("${app.site-url:}") String siteUrl,
                              SyncProperties properties,
                              ObjectProvider<BuildProperties> buildProperties,
                              @Value("${app.update-check.enabled:true}") boolean updateCheckEnabled) {
-        this(githubUrl, properties, buildProperties, updateCheckEnabled, ZoneId.systemDefault());
+        this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled,
+                ZoneId.systemDefault());
     }
 
     /** Test seam: the display zone is pinned so the rendered stamp does not depend on the JVM. */
     GlobalModelAdvice(String githubUrl,
+                      String siteUrl,
                       SyncProperties properties,
                       ObjectProvider<BuildProperties> buildProperties,
                       boolean updateCheckEnabled,
                       ZoneId buildTimeZone) {
         this.githubUrl = githubUrl;
+        this.siteUrl = siteUrl;
         this.properties = properties;
         this.buildProperties = buildProperties;
         this.updateCheckEnabled = updateCheckEnabled;
@@ -114,6 +119,12 @@ public class GlobalModelAdvice {
     @ModelAttribute("githubUrl")
     public String githubUrl() {
         return githubUrl;
+    }
+
+    /** Official site root, used by the donate dialog to link to the public sponsor board. */
+    @ModelAttribute("siteUrl")
+    public String siteUrl() {
+        return siteUrl;
     }
 
     /**

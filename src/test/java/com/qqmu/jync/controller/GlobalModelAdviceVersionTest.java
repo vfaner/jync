@@ -26,8 +26,8 @@ class GlobalModelAdviceVersionTest {
 
     private GlobalModelAdvice adviceWith(BuildProperties props, ZoneId zone) {
         return new GlobalModelAdvice(
-                "https://github.com/vfaner/jync", new SyncProperties(), providerOf(props), true,
-                zone);
+                "https://github.com/vfaner/jync", "https://jync.qqmu.com", new SyncProperties(),
+                providerOf(props), true, zone);
     }
 
     /** Minimal ObjectProvider view: fixed instance or nothing, no bean factory involved. */
