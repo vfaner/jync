@@ -568,38 +568,130 @@
    * 「保存并执行」：把表单序列化 POST 到配置端点再执行原动作。走表单编码而不是
    * 原生 submit，页面不刷新，动作才能接着跑；CSRF 双保险 —— Thymeleaf 注入的
    * 隐藏域随 FormData 带上，meta 令牌也补进请求头（与 postJson 同款）。
+   *
+   * <p>服务端对带 {@code X-Jync-Ajax} 的提交返回 JSON 而不是 PRG 重定向，所以这里
+   * 不再跟随重定向解析整页 HTML（那等于为一次保存重新渲染包含上万张表的详情页）。
    */
   function saveConfigThen(done) {
-    var headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    postConfigForm().then(function (p) {
+      if (!p) { return; }                       // 会话过期，页面正在重载
+      if (!p.ok) { throw new Error(p.message || 'HTTP ' + p.status); }
+      applySavedConfig(p);
+      // 策略切换的服务端 reload 提示在这里被有意忽略：动作本身带 data-reload，
+      // 跑完会整页刷新；先刷新一次再执行动作反而会让「保存并执行」什么都没执行。
+      done();
+    }).catch(function (err) {
+      JyncDialog.alert(t('dirty.saveFailed') + ' ' + describeError(err), 'danger');
+    });
+  }
+
+  /** 配置表单以 AJAX 方式提交，解析服务端 JSON；会话/非 JSON 响应直接整页重载。 */
+  function postConfigForm() {
+    var headers = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+      // 命中共用路径上带该头的映射，拿到 JSON 而不是 302。
+      'X-Jync-Ajax': '1'
+    };
     var token = document.querySelector('meta[name="_csrf"]');
     var header = document.querySelector('meta[name="_csrf_header"]');
     if (token && header && token.content && header.content) {
       headers[header.content] = token.content;
     }
-    fetch(configForm.getAttribute('action'), {
+    return fetch(configForm.getAttribute('action'), {
       method: 'POST',
       headers: headers,
       body: new URLSearchParams(new FormData(configForm)).toString()
     }).then(function (response) {
-      // 会话过期与 postJson 同策略：重载当前 URL，由安全层自己重定向
-      if (response.status === 401) { window.location.reload(); return null; }
-      if (!response.ok) { throw new Error('HTTP ' + response.status); }
-      // 配置端点是 PRG：校验失败也 302 回详情页（错误进 flash），fetch 跟随
-      // 重定向后同样是 200。真成功与否要看响应 HTML 里有没有错误横幅 ——
-      // 与 bindCdcRefresh 同款 DOMParser 用法。
-      return response.text().then(function (html) {
-        var doc = new DOMParser().parseFromString(html, 'text/html');
-        var errBody = doc.querySelector('main.shell > .alert-danger .alert-body');
-        if (errBody) { throw new Error(errBody.textContent.trim()); }
-        configDirty = false;
-        setDirtyBadge(false);
-        done();
+      var type = response.headers.get('Content-Type') || '';
+      // 会话过期会被安全层重定向到登录页（fetch 跟随后是 200 HTML）；其余非 JSON
+      // 响应也说明页面已经不可信。重载当前 URL，由安全层/详情页展示真实状态。
+      if (response.status === 401 || type.indexOf('application/json') < 0) {
+        window.location.reload();
+        return null;
+      }
+      return response.json().then(function (p) {
+        p.status = response.status;
+        return p;
+      });
+    });
+  }
+
+  /**
+   * 保存成功后同步页面状态：清掉「未保存」徽标、把刚保存的策略记为基线、按服务端
+   * 结论刷新启动/立即同步的可用性。勾选框与目标表名保持用户眼前的样子，不重建页面。
+   */
+  function applySavedConfig(p) {
+    configDirty = false;
+    setDirtyBadge(false);
+    var picked = configForm.querySelector('input[name=captureStrategy]:checked');
+    if (picked) { configForm.setAttribute('data-original-strategy', picked.value); }
+    applyNoSyncWork(p.noSyncWork);
+  }
+
+  /** 显式全不选或轮询选项全关时，启动/立即同步只会空跑：禁用并挂上服务端给的原因。 */
+  function applyNoSyncWork(reason) {
+    document.querySelectorAll('[data-role="api-btn"]').forEach(function (btn) {
+      var action = btn.getAttribute('data-action') || '';
+      if (!CONFIG_DISABLE_ON_NO_WORK.test(action)) { return; }
+      if (!btn.hasAttribute('data-default-title')) {
+        btn.setAttribute('data-default-title', btn.getAttribute('title') || '');
+      }
+      btn.disabled = !!reason;
+      btn.setAttribute('title', reason || btn.getAttribute('data-default-title'));
+    });
+  }
+
+  /** 保存按钮：后台保存，成功后只更新徽标/按钮状态，页面不刷新。 */
+  function saveConfigAjax() {
+    var saveBtn = document.querySelector('button[form="config-form"]');
+    var task = function () {
+      return postConfigForm().then(function (p) {
+        if (!p) { return null; }
+        if (!p.ok) { throw new Error(p.message || 'HTTP ' + p.status); }
+        applySavedConfig(p);
+        if (p.reload) {
+          // 捕获策略真的切换了：CDC 面板与全量比对横幅要跟着服务端状态出现/消失，
+          // 这块只有整页渲染能给。只在这一种情况下刷新。
+          window.location.reload();
+          return null;
+        }
+        JyncDialog.auto(p.message || t('msg.config.saved'), 'ok');
         return null;
       });
-    }).catch(function (err) {
+    };
+    var promise = saveBtn ? withBusy(saveBtn, busyLabel(saveBtn), task) : task();
+    promise.catch(function (err) {
       JyncDialog.alert(t('dirty.saveFailed') + ' ' + describeError(err), 'danger');
     });
   }
+
+  /**
+   * 配置表单的唯一提交入口。B8 的「切换到日志 CDC」确认框也收在这里：文案
+   * （cdc.switch.confirm）明示两个后果——①目标库全量重建、②源库 DELETE 从此会同步
+   * 删除目标数据（轮询看不到 DELETE）。data-original-strategy 是「已保存」策略：就绪
+   * 探测推荐的勾选尚未落库，首次保存它同样属于一次真实的策略切换，必须看到确认。
+   * 只有「值变了且新值是任一日志 CDC（isLogCdcStrategy，与后端 isLogCdc() 同口径）」
+   * 才拦截。确认后走同一条 AJAX 保存路径，不再用 form.submit()（程序化提交绕过本
+   * 监听器，会退回整页刷新）。
+   */
+  function bindConfigSave() {
+    if (!configForm) { return; }
+    configForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var picked = configForm.querySelector('input[name=captureStrategy]:checked');
+      var original = configForm.getAttribute('data-original-strategy');
+      if (picked && original && picked.value !== original
+          && isLogCdcStrategy(picked.value)) {
+        JyncDialog.confirm(t('cdc.switch.confirm'), saveConfigAjax);
+        return;
+      }
+      saveConfigAjax();
+    });
+  }
+
+  /** 运行控制里受「为空的配置」影响的动作（重建基线属于 CDC，不在此列）。 */
+  var CONFIG_DISABLE_ON_NO_WORK = /\/(start|sync-now)(\?|$)/;
 
   function showDirtyChoice(next) {
     // 项目运行中保存按钮被服务端禁用（配置锁定），此时不提供「保存并执行」，
@@ -3891,6 +3983,7 @@
     document.querySelectorAll('[data-batch-tables]').forEach(bindBatchTablePicker);
     bindInstantTips();
     initConfigDirtyTracking();
+    bindConfigSave();
 
     // B9：顶部 Flash 横幅统一转成居中弹窗 —— 成功用自动消失的轻卡片，
     // 错误/无权限用必须点击的阻塞弹窗。读完文案即移除原 .alert 节点，
@@ -3974,29 +4067,6 @@
     document.addEventListener('change', function (e) {
       var el = e.target;
       if (el && el.matches && el.matches('.strategy-card input')) { syncStrategyPicks(); }
-    });
-
-    // B8：切到日志 CDC 前的确认框。文案（cdc.switch.confirm）明示两个后果——
-    // ①目标库全量重建、②源库 DELETE 从此会同步删除目标数据（轮询看不到
-    // DELETE）。data-original-strategy 是「已保存」策略：就绪探测推荐的勾选
-    // 尚未落库，首次保存它同样属于一次真实的策略切换，必须看到这个确认。
-    // 只有「值变了且新值是任一日志 CDC（isLogCdcStrategy，与后端 isLogCdc()
-    // 同口径）」才拦截。
-    document.querySelectorAll('form[data-original-strategy]').forEach(function (form) {
-      form.addEventListener('submit', function (e) {
-        var original = form.getAttribute('data-original-strategy');
-        var picked = form.querySelector('input[name=captureStrategy]:checked');
-        if (!picked) { return; }
-        var isLogCdc = isLogCdcStrategy(picked.value);
-        if (picked.value !== original && isLogCdc) {
-          // 异步弹窗：先拦下本次提交，确认后 form.submit() 程序化重提 ——
-          // 不再触发 submit 监听器，无循环；约束校验在事件发出前已通过。
-          e.preventDefault();
-          JyncDialog.confirm(t('cdc.switch.confirm'), function () {
-            form.submit();
-          });
-        }
-      });
     });
 
     // 策略联动隐藏：日志 CDC 模式下，轮询专属字段（调度卡片、每表游标列）是死配置，

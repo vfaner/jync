@@ -54,6 +54,11 @@ spring:
 
 server:
   port: 8080
+  tomcat:
+    # 对象选择面板：上万张表全选时，表单体可能超过容器默认的 2 MB —— URL 编码把
+    # 中文表名放大到 9 字节/字，而每张已勾选的表会提交 tables、mappingSource、
+    # mappingTarget 三个字段。参数个数上限见 FormParameterLimitConfig。
+    max-http-form-post-size: 8MB
   servlet:
     context-path: /
     encoding:

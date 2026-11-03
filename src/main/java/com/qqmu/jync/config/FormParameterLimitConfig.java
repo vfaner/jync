@@ -17,9 +17,10 @@ import org.springframework.context.annotation.Configuration;
  * selected" — the user's selection disappears after a save and reload.
  *
  * <p>The limit is a memory guard, not a security boundary: the request body is still capped
- * by {@code server.tomcat.max-http-form-post-size} (2 MB by default, enough for well over
- * 30,000 table rows). 200,000 parameters leaves room for schemas with tens of thousands of
- * objects while keeping the worst-case map bounded.
+ * by {@code server.tomcat.max-http-form-post-size}, raised to 8 MB in {@code application.yml}
+ * because URL encoding inflates a CJK identifier to 9 bytes per character. 200,000
+ * parameters leaves room for schemas with tens of thousands of objects while keeping the
+ * worst-case map bounded.
  */
 @Configuration
 public class FormParameterLimitConfig {

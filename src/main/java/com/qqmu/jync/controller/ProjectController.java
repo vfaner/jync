@@ -5,9 +5,12 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +19,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.config.I18nConfig;
@@ -24,6 +28,7 @@ import com.qqmu.jync.dto.ColumnRule;
 import com.qqmu.jync.dto.ColumnRuleType;
 import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.dto.SyncConfigForm;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ConnectionRole;
@@ -493,62 +498,99 @@ public class ProjectController {
         return "project-detail/cdc-status :: cdc-card";
     }
 
-    /** Saves the object selection and sync options. */
+    /** Header value that routes a save to the JSON answer instead of the PRG redirect. */
+    static final String AJAX_SAVE_HEADER = "X-Jync-Ajax=1";
+
+    /**
+     * Saves the object selection and sync options (plain form POST).
+     *
+     * <p>The detail page has a background twin, {@link #saveConfigAjax}; both run
+     * {@link #applyConfig}, so the two entry points cannot drift apart field by field.
+     * This variant keeps the PRG redirect and flash banner for clients without JavaScript
+     * and for direct posts.
+     */
     @PostMapping("/{id}/config")
-    public String saveConfig(@PathVariable Long id,
-                            @RequestParam(required = false) List<String> tables,
-                            @RequestParam(required = false) List<String> views,
-                            @RequestParam(required = false) List<String> procedures,
-                            // 同步对象面板里每张表一行的目标表名:隐藏的 mappingSource 与
-                            // 输入框 mappingTarget 按文档顺序成对提交。
-                            @RequestParam(required = false) List<String> mappingSource,
-                            @RequestParam(required = false) List<String> mappingTarget,
-                            @RequestParam(defaultValue = "false") boolean syncStructure,
-                            @RequestParam(defaultValue = "false") boolean syncData,
-                            @RequestParam(defaultValue = "false") boolean syncIndexes,
-                            @RequestParam(defaultValue = "false") boolean syncViews,
-                            @RequestParam(defaultValue = "false") boolean syncProcedures,
-                            @RequestParam(defaultValue = "false") boolean allowDrop,
-                            @RequestParam(defaultValue = "false") boolean syncDeletes,
-                            @RequestParam(defaultValue = "false") boolean disableTargetConstraints,
-                            @RequestParam(defaultValue = "false") boolean truncateBeforeInitialLoad,
-                            @RequestParam(required = false) Long pollIntervalMs,
-                            @RequestParam(required = false) String cronExpression,
-                            @RequestParam(required = false) Integer batchSize,
-                            @RequestParam(required = false) Integer fullLoadParallelism,
-                            @RequestParam(defaultValue = "false") boolean customSchedule,
-                            // Set by the form whenever the object pickers were rendered: it is
-                            // what turns an empty submission from "never configured" into
-                            // "the user unchecked everything".
-                            @RequestParam(defaultValue = "false") boolean objectSelectionExplicit,
-                            @RequestParam(name = "captureStrategy", required = false)
-                                    String captureStrategy,
-                            @RequestParam(required = false) Long cdcIdlePollMs,
+    public String saveConfig(@PathVariable Long id, @ModelAttribute SyncConfigForm form,
                             RedirectAttributes flash) {
+        ConfigSaveOutcome outcome = applyConfig(id, form);
+        if (outcome.error() != null) {
+            flash.addFlashAttribute("error", outcome.error());
+        }
+        if (outcome.message() != null) {
+            flash.addFlashAttribute("message", outcome.message());
+        }
+        return "redirect:/projects/" + id;
+    }
+
+    /**
+     * Background save for the detail page: JSON instead of a redirect.
+     *
+     * <p>A window reload after saving re-runs {@code listSourceObjects} against the live
+     * source (thousands of tables on a large schema), discards the scroll position, and
+     * re-renders a page the user did not leave. The answer carries what the page cannot
+     * infer locally: the localized result, whether start/sync-now have work
+     * ({@code noSyncWork}), and whether the page must re-render anyway because the capture
+     * strategy moved the CDC panel on or off it ({@code reload}).
+     */
+    @PostMapping(value = "/{id}/config", headers = AJAX_SAVE_HEADER)
+    @ResponseBody
+    public ResponseEntity<Map<String, Object>> saveConfigAjax(
+            @PathVariable Long id, @ModelAttribute SyncConfigForm form) {
+        ConfigSaveOutcome outcome = applyConfig(id, form);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", outcome.error() == null);
+        String key = outcome.error() != null ? outcome.error() : outcome.message();
+        if (key != null) {
+            body.put("message", localize(key));
+        }
+        body.put("reload", outcome.reload());
+        if (outcome.noSyncWork() != null) {
+            body.put("noSyncWork", outcome.noSyncWork());
+        }
+        return ResponseEntity
+                .status(outcome.error() == null ? HttpStatus.OK : HttpStatus.BAD_REQUEST)
+                .body(body);
+    }
+
+    /** What one save produced, before it becomes a redirect or a JSON body. */
+    private record ConfigSaveOutcome(String error, String message, boolean reload,
+                                     String noSyncWork) {
+        static ConfigSaveOutcome error(String key) {
+            return new ConfigSaveOutcome(key, null, false, null);
+        }
+    }
+
+    /**
+     * Applies a submitted configuration. Shared by the form and AJAX mappings, it returns
+     * i18n keys rather than writing flash attributes so neither caller has to guess.
+     */
+    private ConfigSaveOutcome applyConfig(Long id, SyncConfigForm form) {
         try {
             var project = projectService.findById(id)
                     .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
             // 运行中的项目不允许改配置:改完要下次启动才生效,运行中改完看不到反馈。
             // 前端 fieldset 已经 disabled,这层是防直接 POST 的兜底。
             if (Boolean.TRUE.equals(project.getEnabled())) {
-                flash.addFlashAttribute("error", "error.project.stop.before.config");
-                return "redirect:/projects/" + id;
+                return ConfigSaveOutcome.error("error.project.stop.before.config");
             }
             SyncConfig config = projectService.loadConfig(project);
 
             // The strategy radio is normalized up front: an unknown value is flagged and
             // dropped (the stored strategy stays), but must not fail the rest of the form.
+            String captureStrategy = form.getCaptureStrategy();
             String strategyParam = null;
-            boolean strategyRejected = false;
+            String strategyError = null;
             if (captureStrategy != null && !captureStrategy.isBlank()) {
                 try {
                     strategyParam = CaptureStrategy.valueOf(captureStrategy.trim()).name();
                 } catch (IllegalArgumentException e) {
-                    strategyRejected = true;
-                    flash.addFlashAttribute("error", "error.project.strategy.invalid");
+                    strategyError = "error.project.strategy.invalid";
                 }
             }
 
+            List<String> tables = form.getTables();
+            List<String> views = form.getViews();
+            List<String> procedures = form.getProcedures();
             // Object selection. An empty submission is ambiguous, so the form tells us which
             // reading it is:
             //  - flag present: the pickers were rendered and this is the user's full choice.
@@ -556,7 +598,7 @@ public class ProjectController {
             //  - flag absent: the source listing failed, or an old/direct client posted. An
             //    empty payload then carries NO selection information, so the stored sets are
             //    kept instead of being silently wiped to "sync nothing".
-            if (objectSelectionExplicit) {
+            if (form.isObjectSelectionExplicit()) {
                 config.setTables(tables == null ? new LinkedHashSet<>() : new LinkedHashSet<>(tables));
                 config.setViews(views == null ? new LinkedHashSet<>() : new LinkedHashSet<>(views));
                 config.setProcedures(procedures == null ? new LinkedHashSet<>()
@@ -575,59 +617,82 @@ public class ProjectController {
             // 来源——源库列举失败/旧客户端提交,此时不能把已存映射清空;面板渲染了但
             // 所有行都没勾选,此时 mappingSource 同样缺席(未勾选行不提交映射),而
             // 提交的映射仍是完整事实,已存映射必须一起清掉。
-            if (mappingSource != null || objectSelectionExplicit) {
+            List<String> mappingSource = form.getMappingSource();
+            if (mappingSource != null || form.isObjectSelectionExplicit()) {
                 config.setTableNameMapping(readTableNameMapping(
                         mappingSource == null ? List.of() : mappingSource,
-                        mappingTarget == null ? List.of() : mappingTarget,
+                        form.getMappingTarget() == null ? List.of() : form.getMappingTarget(),
                         config));
             }
             // CDC 空闲轮询间隔:留空=引擎默认;给值就不得低于安全下限,
             // 否则等于对源库做紧密挖掘会话循环(读侧还有一层兜底 clamp)。
+            Long cdcIdlePollMs = form.getCdcIdlePollMs();
             if (cdcIdlePollMs != null && cdcIdlePollMs < CdcReconnectBackoff.MIN_IDLE_POLL_MS) {
-                flash.addFlashAttribute("error", "error.project.cdc.idle.poll.too.small");
-                return "redirect:/projects/" + id;
+                return ConfigSaveOutcome.error("error.project.cdc.idle.poll.too.small");
             }
 
-            config.setSyncStructure(syncStructure);
-            config.setSyncData(syncData);
-            config.setSyncIndexes(syncIndexes);
-            config.setSyncViews(syncViews);
-            config.setSyncProcedures(syncProcedures);
-            config.setAllowDrop(allowDrop);
-            config.setSyncDeletes(syncDeletes);
-            config.setDisableTargetConstraints(disableTargetConstraints);
-            config.setTruncateBeforeInitialLoad(truncateBeforeInitialLoad);
+            config.setSyncStructure(form.isSyncStructure());
+            config.setSyncData(form.isSyncData());
+            config.setSyncIndexes(form.isSyncIndexes());
+            config.setSyncViews(form.isSyncViews());
+            config.setSyncProcedures(form.isSyncProcedures());
+            config.setAllowDrop(form.isAllowDrop());
+            config.setSyncDeletes(form.isSyncDeletes());
+            config.setDisableTargetConstraints(form.isDisableTargetConstraints());
+            config.setTruncateBeforeInitialLoad(form.isTruncateBeforeInitialLoad());
             // 自定义调度开关:关闭时清空调度的两个字段,让引擎回退到全局默认值。
             // 开启时透传表单值(空字符串 → null,保持"留空=默认"语义)。
-            if (customSchedule) {
-                config.setPollIntervalMs(pollIntervalMs);
-                config.setCronExpression(cronExpression == null || cronExpression.isBlank()
-                        ? null : cronExpression.trim());
+            if (form.isCustomSchedule()) {
+                config.setPollIntervalMs(form.getPollIntervalMs());
+                String cron = form.getCronExpression();
+                config.setCronExpression(cron == null || cron.isBlank() ? null : cron.trim());
             } else {
                 config.setPollIntervalMs(null);
                 config.setCronExpression(null);
             }
             // 加载性能与调度无关(CDC 项目的基线全量同样吃这两个值),因此不受上面开关影响。
             // 留空 → null = 用全局默认;越界在服务端收敛到边界并记账,绝不静默接受。
-            config.setBatchSize(clampFullLoadBatchSize(batchSize));
-            config.setFullLoadParallelism(clampFullLoadParallelism(fullLoadParallelism));
+            config.setBatchSize(clampFullLoadBatchSize(form.getBatchSize()));
+            config.setFullLoadParallelism(
+                    clampFullLoadParallelism(form.getFullLoadParallelism()));
             // 与自定义调度无关:三个轮询式日志 CDC 引擎(LogMiner/PG/SQLServer)
             // 的空闲休眠;留空回退引擎默认。binlog 引擎不轮询,忽略此值。
             config.setCdcIdlePollMs(cdcIdlePollMs);
 
             CaptureStrategy before = config.getCaptureStrategyOrDefault();
             projectService.saveConfig(id, config, strategyParam);
-            if (!strategyRejected) {
-                // A real switch gets its own confirmation copy: the C2 side effects
-                // (reload, consumer start/stop) make it more than a settings save.
-                flash.addFlashAttribute("message",
-                        strategyParam != null && !strategyParam.equals(before.name())
-                                ? "msg.project.strategy.switched" : "msg.config.saved");
-            }
+            // A real switch gets its own confirmation copy: the C2 side effects (reload,
+            // consumer start/stop) make it more than a settings save. The page must also
+            // re-render: the CDC panel and the full-compare banner follow the saved
+            // strategy, not the radio the user just clicked.
+            boolean switched = strategyParam != null && !strategyParam.equals(before.name());
+            String message = strategyError != null ? null
+                    : (switched ? "msg.project.strategy.switched" : "msg.config.saved");
+            return new ConfigSaveOutcome(strategyError, message, switched,
+                    noSyncWorkMessage(config));
         } catch (IllegalArgumentException | IllegalStateException e) {
-            flash.addFlashAttribute("error", e.getMessage());
+            return ConfigSaveOutcome.error(e.getMessage());
         }
-        return "redirect:/projects/" + id;
+    }
+
+    /**
+     * Resolves a save's message key for the JSON answer the same way the layout resolves a
+     * flash banner: a plain key becomes its translation, and {@code key:context} keeps the
+     * context readable after the localized prefix. An unknown key is shown as-is.
+     */
+    private String localize(String key) {
+        Locale locale = LocaleContextHolder.getLocale();
+        int colon = key.indexOf(':');
+        if (colon < 0) {
+            return messages.get(key, locale);
+        }
+        String headKey = key.substring(0, colon);
+        String head = messages.get(headKey, locale);
+        if (head.equals(headKey)) {
+            return key;
+        }
+        String context = key.substring(colon + 1).trim();
+        return context.isEmpty() ? head : head + " " + context;
     }
 
     /**

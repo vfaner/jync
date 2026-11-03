@@ -101,6 +101,7 @@
                     data-role="api-btn" data-reload="true"
                     th:title="${noSyncWorkMessage != null} ? ${noSyncWorkMessage} : #{project.startHelp}"
                     th:attr="data-action=@{/api/projects/{id}/start(id=${project.id})},
+                             data-default-title=#{project.startHelp},
                              data-busy-text=#{common.loading}">
                 <svg class="ico"><use href="#play-fill"/></svg><span th:text="#{project.start}">Start</span>
             </button>
@@ -120,6 +121,7 @@
                     data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
                     th:title="${noSyncWorkMessage != null} ? ${noSyncWorkMessage}"
                     th:attr="data-action=@{/api/projects/{id}/sync-now(id=${project.id})},
+                             data-default-title='',
                              data-busy-text=#{common.loading}">
                 <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{project.syncNow}">Sync now</span>
             </button>
