@@ -9,9 +9,9 @@
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
 
-![Jync · Heterogeneous Database Real-Time Sync](https://jync.qqmu.com/images/jync_xl.webp)
+![Jync · Heterogeneous Database Real-Time Sync](docs/images/jync.png)
 
-An out-of-the-box web application that keeps **structure and data** in sync between **heterogeneous databases**: start one jar, pick **34 built-in database types (plus custom types)** in a browser, and a sync or ETL pipeline is running — six of them (Doris, ClickHouse, Hive, Impala, Elasticsearch, MongoDB) are analytic engines usable as real-time sync **sources** (polling / full compare only) and in ETL. No Kafka, no Flink, no ZooKeeper, and not a line of job code.
+An out-of-the-box web application that keeps **structure and data** in sync between **heterogeneous databases**: start one jar, pick **34 built-in database types (plus custom types)** in a browser, and a sync or ETL pipeline is running — search and document data additionally gets three **dedicated migration** chains that skip JDBC (Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB, MongoDB → KingbaseES). Six of those types (Doris, ClickHouse, Hive, Impala, Elasticsearch, MongoDB) are analytic engines usable as real-time sync **sources** (polling / full compare only) and in ETL. No Kafka, no Flink, no ZooKeeper, and not a line of job code.
 
 - **Zero external dependencies**: a Spring Boot monolith with Thymeleaf server-side rendering, Quartz and an embedded H2 metadata store. Runs air-gapped.
 - **Full load is not a bulk query import**: keyset chunking, in-table parallelism, streamed result sets, per-chunk commits and checkpoints — single-table throughput reaches the **hundreds of thousands of rows per second** range.
@@ -19,6 +19,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 - **Structure travels with data**: missing tables, indexes, views and procedures are created automatically, with built-in dialect type mapping and function conversion.
 - **Resumable by design**: crashes, network drops and killed processes resume from the last checkpoint; every write is idempotent, and changes made while Jync was down are caught up on restart.
 - **Failures reach you**: seven fault categories — sync failures, CDC stalls, data drift and more — can be pushed to DingTalk, WeCom, Feishu or a custom Webhook.
+- **Dedicated migration too**: Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES copy whole indexes or collections over their own connection model, outside JDBC, leaving sync and ETL untouched.
 
 | Resource | Link |
 |---|---|
@@ -264,15 +265,15 @@ Fixed rules apply to string columns **before rows are written to the target**; t
 <a name="databases"></a>
 ## Supported databases
 
-**34 built-in types**, 25 of them with bundled drivers. The map below is from the website: sources on the left, the two engines in the middle, targets on the right; each chip carries the modes it supports. Click it for the full reference.
+**34 built-in types**, 25 of them with bundled drivers. The map below is from the website: the upper part is the JDBC real-time sync / ETL matrix (sources → two engines → targets), the bottom is the separate **dedicated migration** chain; click it for the full reference.
 
-[![Database capability map: sources, sync engines and targets](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
+[![Database capability map and dedicated migration chains](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
 
 - **Custom types**: JDBC URL, driver class and driver jar path, loaded at runtime in an isolated `URLClassLoader`; pick a dialect family (generic / Oracle / MySQL / PostgreSQL / SQL Server / DB2 / SAP HANA).
 - **Bundled drivers**: everything except **GBase, Oscar, Huawei GaussDB, SAP HANA, ClickHouse, Hive, Impala, Elasticsearch and MongoDB (Atlas SQL)** ships with the jar. Those vendors publish no redistributable artifact, so supply the jar and path; the driver class can be overridden on the same card.
 - **Protocol-compatible presets**: GreatDB, UPDRDB and KunDB speak the MySQL protocol; RASESQL and SeaboxSQL speak the PostgreSQL protocol, reusing bundled drivers and dialect families.
 - **Analytic / search engines**: Doris, ClickHouse, Hive, Impala, Elasticsearch and MongoDB have no log-based CDC, so they are **real-time sync sources only** (polling / full compare) and **never targets**; in ETL all but Elasticsearch and MongoDB can be written. MongoDB has two paths: the Atlas SQL JDBC preset and the bundled native driver.
-- **Dedicated migration is not JDBC**: Elasticsearch/OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES use dedicated connections and tasks, outside the capability matrix above; credentials live in encrypted fields only, and no password is allowed inside a MongoDB URI or Kingbase JDBC URL. See [Known limitations](docs/known-limitations.md#11-专属迁移esopensearch--easysearchmongodb--mongodb--kingbasees).
+- **Dedicated migration is not JDBC**: Elasticsearch/OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES use dedicated connections and tasks, outside the capability matrix above; the chains are on the [website's database page](https://jync.qqmu.com/database.html#dedicated-migration), credentials live in encrypted fields only, and no password is allowed inside a MongoDB URI or Kingbase JDBC URL. See [Known limitations](docs/known-limitations.md#11-专属迁移esopensearch--easysearchmongodb--mongodb--kingbasees).
 - The GaussDB vs openGauss distinction, TDSQL / PolarDB editions and HANA's CDC limits are covered on the [website's database page](https://jync.qqmu.com/database.html); driver versions and licences are in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ---
@@ -361,6 +362,25 @@ The most-used `sync.*` keys in `application.yml` (full reference: [User Guide (P
 | `sync.ai.enabled` | `true` | `false` removes the AI menu and endpoint |
 | `app.update-check.enabled` | `true` | New-version check; `false` makes no outbound request |
 | `metrics.enabled` | `true` | Sampling master switch; does not affect the sync path |
+
+Log-based CDC settings (ignore them unless CDC is enabled):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `sync.cdc.server-id-offset` | `612000` | Fake MySQL replica server-id base; id = offset + task id |
+| `sync.cdc.lock-ttl-ms` | `30000` | CDC consumer lease |
+| `sync.cdc.supervise-interval-ms` | `10000` | CDC lease supervision period |
+| `sync.cdc.connect-timeout-ms` | `10000` | Timeout for connecting to the source |
+| `sync.cdc.reconnect-backoff-ms` | `1000` | Initial reconnect backoff |
+| `sync.cdc.reconnect-backoff-max-ms` | `60000` | Reconnect backoff ceiling |
+| `sync.cdc.max-transaction-rows` / `max-transaction-bytes` | `1000000` / `512 MiB` | Per-source-transaction buffer cap; exceeding it parks the stream; `0` unlimited |
+| `sync.cdc.logminer.batch-size` | `10000` | LogMiner rows per batch |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner idle sleep |
+| `sync.cdc.logminer.missing-lob-policy` | `skip` | Out-of-line LOB that cannot be restored: `skip` counts and continues, `fail` parks |
+| `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL logical decoding idle sleep |
+| `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | Panel warning for WAL held by a slot (4 GiB) |
+| `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC idle sleep |
+| `sync.cdc.change-window-ms` | `10000` | CDC change-log aggregation window; `0` off |
 
 > Connection passwords, AI keys and alert webhook URLs are stored with AES-256 encryption and an `enc:` prefix that prevents double encryption. When the key is left empty, the first start generates it into `data/<db>.key`.
 
@@ -479,6 +499,7 @@ com.qqmu.jync
 │   ├── sync         SyncEngine, DataSyncService, StructureSyncService, DdlExecutor
 │   ├── cdc          binlog / LogMiner / PG / SQL Server / YStream consumers
 │   ├── etl          extraction, write modes, checkpoints, batches
+│   ├── migration    dedicated migration: connection adapters, ES/OpenSearch → Easysearch, MongoDB → MongoDB / KingbaseES
 │   ├── alert        fault collection, evaluation, Webhook delivery
 │   ├── task         Quartz scheduling, three-layer locks, context assembly, startup recovery
 │   ├── lob          streamed LOB reads, binding and spilling
@@ -490,6 +511,7 @@ com.qqmu.jync
 - **Transactions**: cursor advancement and lock acquisition use `REQUIRES_NEW` so they do not roll back with data writes.
 - **Schedule reconciliation**: in multi-instance deployments every node aligns its local Quartz schedules with the enabled flags in the shared store.
 - **Alert state**: fault lifecycles live in the database, so nodes and failovers share one clock.
+- **Chain isolation**: sync and ETL use JDBC connections and tasks; dedicated migration has its own connection model (search / MongoDB / KingbaseES adapters validate endpoints and credentials per kind) and its own run records, so it never touches the JDBC pools or the JDBC capability matrix.
 
 ---
 
@@ -507,7 +529,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**4,433 tests: 4,432 pass, and one Linux-only key-file permission case is skipped on macOS by environment.**
+**4,439 tests: 4,438 pass, and one Linux-only key-file permission case is skipped on macOS by environment.**
 
 Coverage highlights:
 

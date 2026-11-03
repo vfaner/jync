@@ -9,15 +9,16 @@
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
 
-![Jync 捷同 · 异构数据库实时同步工具](https://jync.qqmu.com/images/jync_xl.webp)
+![Jync 捷同 · 异构数据库实时同步工具](docs/images/jync.png)
 
-在**异构数据库**之间持续同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点选即可在内置的 **34 种数据库（另支持自定义类型）** 之间建立同步或 ETL 链路；其中 Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 六种分析型引擎可作为实时同步的**源**（仅轮询 / 全表比对），也可用于 ETL。不需要 Kafka、Flink、ZooKeeper，也不需要编写一行作业代码。
+在**异构数据库**之间持续同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点选即可在内置的 **34 种数据库（另支持自定义类型）** 之间建立同步或 ETL 链路；搜索与文档型数据另有三条不走 JDBC 的**专属迁移**链路（Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES）。其中 Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 六种分析型引擎可作为实时同步的**源**（仅轮询 / 全表比对），也可用于 ETL。不需要 Kafka、Flink、ZooKeeper，也不需要编写一行作业代码。
 
 - **零外部依赖**：Spring Boot 单体 + Thymeleaf 服务端渲染 + Quartz + H2 内嵌元数据库，内网离线可用。
 - **全量不是批量查询导入**：主键 keyset 分块、单表内并行、结果集流式读取、逐块提交与检查点，单表吞吐可达 **20 万行/秒量级**。
 - **增量只有一条索引查询**：默认轮询模式只读游标之后的变化，一个只读账号即可；六类源库可切换日志 CDC，做到秒级延迟。
 - **结构与数据一起走**：目标库缺失时自动建表 / 索引 / 视图 / 存储过程，内置各方言类型映射与函数转换。
 - **可靠续传**：停机、断网、进程被杀都能从检查点继续，写入全部幂等，停机期间源库的变更重启后自动补齐。
+- **另有专属迁移**：Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES 三条链路不走 JDBC，用独立的连接模型整库复制索引或集合，与实时同步、ETL 互不影响。
 - **出了问题会通知你**：同步失败、CDC 停摆、数据漂移等七类故障可推送到钉钉、企业微信、飞书或自定义 Webhook。
 
 | 资源 | 地址 |
@@ -264,15 +265,15 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 <a name="databases"></a>
 ## 支持的数据库
 
-内置 **34 种**预设类型，其中二十五种驱动随包内置。下图是官网的数据库能力地图：左侧数据源、中间两种引擎、右侧目标，卡片标签标明它可参与的模式；点图可看完整说明。
+内置 **34 种**预设类型，其中二十五种驱动随包内置。下图是官网的数据库能力地图：上半部分是 JDBC 的实时同步 / ETL 矩阵（数据源 → 两种引擎 → 目标库），底部是独立的**专属迁移**链路；点图可看完整说明。
 
-[![数据库能力地图：数据源、同步引擎与目标库](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
+[![数据库能力地图与专属迁移链路](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
 
 - **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时用独立 `URLClassLoader` 加载；可指定方言家族（通用 / Oracle / MySQL / PostgreSQL / SQL Server / DB2 / SAP HANA）。
 - **驱动内置**：除 **GBase、神通 Oscar、华为 GaussDB、SAP HANA、ClickHouse、Hive、Impala、Elasticsearch、MongoDB（Atlas SQL）** 外均随包内置；这些厂商的构件不可再分发，需自备 jar 并填写路径，驱动类名与预设不同时可在同一张卡片覆盖。
 - **协议兼容预设**：万里 GreatDB、银联 UPDRDB、星环 KunDB 兼容 MySQL；平安 RASESQL、东方金信 SeaboxSQL 兼容 PostgreSQL，复用内置驱动与对应方言族。
 - **分析型 / 搜索型引擎**：Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 没有日志 CDC，**只作实时同步的源**（轮询 / 全表比对），从不作为目标；ETL 中除 Elasticsearch 与 MongoDB 外都可写入。MongoDB 有 Atlas SQL JDBC 与随包内置的原生驱动两条路径。
-- **专属迁移不走 JDBC**：Elasticsearch/OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES 由独立的「专属连接」与迁移任务完成，不进入上面的能力矩阵；凭据只存加密字段，MongoDB URI 与 Kingbase JDBC URL 禁止写密码。边界见[已知限制](docs/known-limitations.md#11-专属迁移esopensearch--easysearchmongodb--mongodb--kingbasees)。
+- **专属迁移不走 JDBC**：Elasticsearch/OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES 由独立的「专属连接」与迁移任务完成，不进入上面的能力矩阵；链路见[官网数据库页](https://jync.qqmu.com/database.html#dedicated-migration)，凭据只存加密字段，MongoDB URI 与 Kingbase JDBC URL 禁止写密码，边界见[已知限制](docs/known-limitations.md#11-专属迁移esopensearch--easysearchmongodb--mongodb--kingbasees)。
 - GaussDB 与 openGauss 的区别、TDSQL / PolarDB 的分版本、HANA 的 CDC 限制等选型细节，见[官网数据库页](https://jync.qqmu.com/database.html)；驱动版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 
 ---
@@ -361,6 +362,25 @@ sync:
 | `sync.ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
 | `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求 |
 | `metrics.enabled` | `true` | 性能采样总开关，关闭不影响同步链路 |
+
+日志 CDC 相关（不启用 CDC 可忽略）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `sync.cdc.server-id-offset` | `612000` | MySQL 假 replica server id 基数，实际 id = 偏移 + 任务 ID |
+| `sync.cdc.lock-ttl-ms` | `30000` | CDC 消费者租约时长 |
+| `sync.cdc.supervise-interval-ms` | `10000` | 各节点巡检并抢占 CDC 租约的周期 |
+| `sync.cdc.connect-timeout-ms` | `10000` | 连接源库的超时时间 |
+| `sync.cdc.reconnect-backoff-ms` | `1000` | 断线重连的初始退避 |
+| `sync.cdc.reconnect-backoff-max-ms` | `60000` | 断线重连的退避上限 |
+| `sync.cdc.max-transaction-rows` / `max-transaction-bytes` | `1000000` / `512 MiB` | 单个源事务的缓冲上限，超限按非瞬态失败停车；`0` 不限 |
+| `sync.cdc.logminer.batch-size` | `10000` | LogMiner 单批行数 |
+| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 真空闲休眠 |
+| `sync.cdc.logminer.missing-lob-policy` | `skip` | 行外 LOB 无法还原时：`skip` 计数继续，`fail` 停车 |
+| `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL 逻辑解码真空闲休眠 |
+| `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | 复制槽滞留 WAL 的面板告警阈值（4 GiB） |
+| `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲休眠 |
+| `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口；`0` 关闭 |
 
 > 连接密码、AI 密钥与告警 Webhook 地址以 AES-256 加密存储，`enc:` 前缀防止重复加密；密钥留空时首启自动生成并写入 `data/<库名>.key`。
 
@@ -479,6 +499,7 @@ com.qqmu.jync
 │   ├── sync         SyncEngine、DataSyncService、StructureSyncService、DdlExecutor
 │   ├── cdc          binlog / LogMiner / PG / SQL Server / YStream 消费者
 │   ├── etl          取数、写模式、检查点、批次
+│   ├── migration    专属迁移：连接适配器、ES/OpenSearch → Easysearch、MongoDB → MongoDB / KingbaseES
 │   ├── alert        故障采集、评估、Webhook 推送
 │   ├── task         Quartz 调度、三层锁、上下文装配、启动恢复
 │   ├── lob          大字段流式读取、绑定与落盘
@@ -490,6 +511,7 @@ com.qqmu.jync
 - **事务语义**：游标推进与锁获取使用 `REQUIRES_NEW`，避免与数据写入同事务回滚。
 - **调度对账**：多实例部署时，每个节点把本地 Quartz 调度与共享库中的启用标志对齐。
 - **告警状态**：故障的起止状态存数据库，多节点与故障切换共用同一个时钟。
+- **链路隔离**：实时同步与 ETL 走 JDBC 连接与任务；专属迁移有自己的连接模型（搜索 / MongoDB / KingbaseES 适配器按 kind 校验端点与凭据）和运行记录，不占用 JDBC 连接池，也不进入 JDBC 能力矩阵。
 
 ---
 
@@ -507,7 +529,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**4433 个测试：4432 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
+**4439 个测试：4438 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
 
 重点覆盖：
 
