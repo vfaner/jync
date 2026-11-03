@@ -1,6 +1,6 @@
 # Jync 捷同 · 容器化部署指南（Docker / Kubernetes）
 
-本文覆盖镜像构建、单机 Docker / Compose 部署、Kubernetes（Kustomize）部署、多实例横向扩容与升级排障。裸机 jar 部署见 [README 的部署步骤](../README.md#部署步骤)。
+本文覆盖镜像构建、单机 Docker / Compose 部署、Kubernetes（Kustomize）部署、多实例横向扩容与升级排障。裸机 jar 部署见 [README 的快速开始](../README.md#deploy)。
 
 ## 1. 镜像
 
