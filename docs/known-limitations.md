@@ -271,4 +271,4 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 - **建表类型受共享 PostgreSQL 方言约束。** ObjectId → VARCHAR(24)，String → TEXT，整数 / 长整数 / 浮点 / 小数 / 布尔 / 日期按 BSON 类型映射，Binary → BYTEA。PostgreSQL 的 `BYTEA` 参数必须用 `setBytes` 绑定（驱动已处理），不要把二进制列改写成 `oid`。
 - **KingbaseES 连接安全。** 仅支持 BASIC 认证，账号与密码只存加密字段；**JDBC URL 与 extraParams 中禁止出现 `user` / `password`**，服务端会拒绝。`schemaName` 留空使用连接的当前 schema；schema 与表名按 63 字节校验，所有 DDL/DML 都经方言引用标识符。目标 schema 不存在时预检报 ERROR（`migration.precheck.schema.missing`），不会隐式建 schema。
 - **没有跨集合事务。** 每个集合的 DDL 立即提交、数据按批提交；某一集合失败不会回滚其他集合，`continueOnError` 打开时继续处理下一个集合，最终整体计 FAILED。
-- **真库验证范围。** CI 用 PostgreSQL 16 容器验证共享方言（建表、类型、INSERT、`ON CONFLICT`、回滚），真实 KingbaseES 走可选的环境变量集成测试（`JYNC_KINGBASE_IT_URL` 等）；上线前请用目标版本试跑一次，重点看类型映射、schema 与标识符大写规则。
+- **真库验证范围。** CI 用 PostgreSQL 16 容器验证共享方言（建表、类型、INSERT、`ON CONFLICT`、回滚），真实 KingbaseES 走可选的环境变量集成测试（`JYNC_KINGBASE_IT_URL` 等）。已在 **KingbaseES V9R1C1B25** 的 PostgreSQL 与 Oracle 两种兼容模式下跑通建表、带 SQL NULL 的批量插入、计数、`ON CONFLICT` upsert、`_id` 存在性检查与删表。**更老的 V8R3 不兼容随包内置的 9.x 驱动**：该版本的目录只有 `SYS_CATALOG`、没有 `PG_CATALOG` 兼容视图，驱动的元数据查询会报 `PG_CATALOG.PG_namespace` 不存在；请升级到 V9（或厂商支持的更新版本）。上线前仍建议用目标版本试跑一次，重点看类型映射、schema 与标识符大写规则。

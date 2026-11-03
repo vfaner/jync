@@ -7,6 +7,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.Arrays;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -55,7 +56,8 @@ class KingbaseLiveIT {
                 try (KingbaseTableWriter.BatchWriter batch =
                              writer.openBatch(TABLE, table, false)) {
                     batch.add(List.of("a", "first", 3));
-                    batch.add(List.of("b", null, 5));
+                    // List.of rejects null elements; the writer must see a bound SQL NULL.
+                    batch.add(Arrays.asList("b", null, 5));
                     assertThat(batch.flush()).isEqualTo(2);
                 }
                 assertThat(writer.countRows(TABLE)).isEqualTo(2);
@@ -65,7 +67,8 @@ class KingbaseLiveIT {
                     batch.add(List.of("a", "updated", 9));
                     batch.flush();
                 }
-                assertThat(writer.countRows(TABLE)).isEqualTo(1);
+                // Upserting "a" updates in place; "b" is untouched, so the table still holds two.
+                assertThat(writer.countRows(TABLE)).isEqualTo(2);
                 assertThat(queryLong(connection,
                         "SELECT qty FROM " + writer.qualified(TABLE)
                                 + " WHERE \"_id\" = 'a'")).isEqualTo(9);
