@@ -9,7 +9,7 @@
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
 
-![Jync · Heterogeneous Database Real-Time Sync](docs/images/jync.png)
+![Jync · Heterogeneous Database Real-Time Sync](https://jync.qqmu.com/images/jync_xl.webp)
 
 An out-of-the-box web application that keeps **structure and data** in sync between **heterogeneous databases**: start one jar, pick **34 built-in database types (plus custom types)** in a browser, and a sync or ETL pipeline is running — six of them (Doris, ClickHouse, Hive, Impala, Elasticsearch, MongoDB) are analytic engines usable as real-time sync **sources** (polling / full compare only) and in ETL. No Kafka, no Flink, no ZooKeeper, and not a line of job code.
 
@@ -27,6 +27,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | **Mirror (AtomGit)** | [gitcode.com/vfaner/jync](https://gitcode.com/vfaner/jync) |
 | **Website** | [jync.qqmu.com](https://jync.qqmu.com) |
 | **Video walkthrough** | [Bilibili · 14 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+| **Docs** | [User Guide](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [Overview](https://jync.qqmu.com/docs/jync-overview.pdf) |
 
 > AtomGit (gitcode.com) is a synced mirror of the code and release assets; downloads, issues and pull requests are handled on GitHub / Gitee.
 
@@ -38,12 +39,12 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 - [Capabilities](#features)
 - [Screens](#screenshots)
 - [Sync engine: full load, incremental and log CDC](#engine)
-- [Full-load performance and tuning](#performance)
+- [Performance tuning](#performance)
 - [Scheduling](#schedule)
 - [Column cleansing](#cleansing)
 - [Supported databases](#databases)
-- [Deployment](#deploy)
-- [Configuration reference](#config)
+- [Quick start](#deploy)
+- [Common settings](#config)
 - [Sign-in, roles and SSO](#auth)
 - [Workflow](#workflow)
 - [AI-assisted conversion (optional)](#ai)
@@ -102,62 +103,25 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 
 <table>
   <tr>
-    <td align="center" width="33%"><a href="docs/images/jync_kanban.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban.png" alt="Dashboard" width="100%"></a><br><sub><b>Dashboard</b> · resources, tasks and 24h trends</sub></td>
-    <td align="center" width="33%"><a href="docs/images/jync_xiangmu.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu.png" alt="Real-time sync tasks" width="100%"></a><br><sub><b>Real-time sync tasks</b> · status, last sync and details</sub></td>
-    <td align="center" width="33%"><a href="docs/images/jync_db.png" target="_blank" rel="noopener"><img src="docs/images/jync_db.png" alt="Connections" width="100%"></a><br><sub><b>Connections</b> · source and target side by side</sub></td>
+    <td align="center" width="33%"><a href="https://jync.qqmu.com/images/jync_kanban.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_kanban.webp" alt="Kanban" width="100%"></a><br><sub><b>Kanban</b> · resources, tasks and a 24h trend</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_xiangmu.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_xiangmu.webp" alt="Sync tasks" width="100%"></a><br><sub><b>Sync tasks</b> · state, last sync and details</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_db.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_db.webp" alt="Connections" width="100%"></a><br><sub><b>Connections</b> · source and target side by side</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_xiangmu_etl.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_etl.png" alt="ETL tasks" width="100%"></a><br><sub><b>ETL tasks</b> · batches and standalone tasks</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_etl_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_etl_add.png" alt="New ETL task" width="100%"></a><br><sub><b>New ETL task</b> · extraction SQL, target table, write mode</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_etl_batch.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_etl_batch.png" alt="ETL batch" width="100%"></a><br><sub><b>ETL batch</b> · one schedule and one connection pair</sub></td>
+    <td align="center" width="33%"><a href="https://jync.qqmu.com/images/jync_cdc.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_cdc.webp" alt="Log CDC" width="100%"></a><br><sub><b>Log CDC</b> · position, last event, throughput, skips</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_xiangmu_xn.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_xiangmu_xn.webp" alt="Task performance" width="100%"></a><br><sub><b>Task performance</b> · rows, latency, failures and change mix</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_lqx.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_lqx.webp" alt="Column cleansing" width="100%"></a><br><sub><b>Column cleansing</b> · per table and column, before write</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_db_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_add.png" alt="New connection" width="100%"></a><br><sub><b>New connection</b> · 34 presets, test before saving</sub></td>
-    <td align="center"><a href="docs/images/jync_celue.png" target="_blank" rel="noopener"><img src="docs/images/jync_celue.png" alt="Capture strategy" width="100%"></a><br><sub><b>Capture strategy</b> · polling, full compare or log CDC</sub></td>
-    <td align="center"><a href="docs/images/jync_lx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lx.png" alt="Task detail" width="100%"></a><br><sub><b>Task detail</b> · objects, schedule, performance, cleansing</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_cdc.jpg" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.jpg" alt="Log CDC" width="100%"></a><br><sub><b>Log CDC</b> · position, last event, throughput, skip counters</sub></td>
-    <td align="center"><a href="docs/images/jync_diaodu.png" target="_blank" rel="noopener"><img src="docs/images/jync_diaodu.png" alt="Scheduling" width="100%"></a><br><sub><b>Scheduling</b> · polling interval or Cron</sub></td>
-    <td align="center"><a href="docs/images/jync_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xn.png" alt="Full-load performance" width="100%"></a><br><sub><b>Full-load performance</b> · batch size and parallelism</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_db_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_xn.png" alt="Database performance" width="100%"></a><br><sub><b>Database performance</b> · latency, availability, in-database figures and capacity curves</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_xn.png" alt="Sync-task performance" width="100%"></a><br><sub><b>Sync-task performance</b> · rows, lag, failures and change mix</sub></td>
-    <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="Row-count audit" width="100%"></a><br><sub><b>Row-count audit</b> · source/target COUNT comparison</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_lqx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lqx.png" alt="Column cleansing" width="100%"></a><br><sub><b>Column cleansing</b> · per table and column, before writes</sub></td>
-    <td align="center"><a href="docs/images/jync_data_yulan.png" target="_blank" rel="noopener"><img src="docs/images/jync_data_yulan.png" alt="Data preview" width="100%"></a><br><sub><b>Data preview</b> · first 100 rows on each side</sub></td>
-    <td align="center"><a href="docs/images/jync_log.png" target="_blank" rel="noopener"><img src="docs/images/jync_log.png" alt="Change log" width="100%"></a><br><sub><b>Change log</b> · object, type, rows, elapsed</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_warn.png" target="_blank" rel="noopener"><img src="docs/images/jync_warn.png" alt="Alert notifications" width="100%"></a><br><sub><b>Alert notifications</b> · Webhook, format, categories, cooldown</sub></td>
-    <td align="center"><a href="docs/images/jync_shenji.png" target="_blank" rel="noopener"><img src="docs/images/jync_shenji.png" alt="Audit log" width="100%"></a><br><sub><b>Audit log</b> · sign-ins and operations</sub></td>
-    <td align="center"><a href="docs/images/jync_sys_log.png" target="_blank" rel="noopener"><img src="docs/images/jync_sys_log.png" alt="System log" width="100%"></a><br><sub><b>System log</b> · file, level and keyword search</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_renzheng.png" target="_blank" rel="noopener"><img src="docs/images/jync_renzheng.png" alt="External authentication" width="100%"></a><br><sub><b>External authentication</b> · credentials, gateway header, ticket</sub></td>
-    <td align="center"><a href="docs/images/jync_ai.png" target="_blank" rel="noopener"><img src="docs/images/jync_ai.png" alt="AI settings" width="100%"></a><br><sub><b>AI settings</b> · several providers, one enabled</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_suoyin_ai.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_suoyin_ai.png" alt="AI draft" width="100%"></a><br><sub><b>AI draft</b> · candidate streams into the editor</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_system.png" target="_blank" rel="noopener"><img src="docs/images/jync_system.png" alt="System info" width="100%"></a><br><sub><b>System info</b> · runtime parameters and version</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_batch.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_batch.png" alt="Bulk creation" width="100%"></a><br><sub><b>Bulk creation</b> · bins by table size, creates many tasks</sub></td>
-    <td align="center"><a href="docs/images/jync_kanban_anye.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_anye.png" alt="Dark theme" width="100%"></a><br><sub><b>Dark theme</b> · the whole palette switches together</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_kanban_en.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_en.png" alt="English UI" width="100%"></a><br><sub><b>English UI</b> · one-click language switch</sub></td>
-    <td align="center"><a href="docs/images/jync_zishiying.png" target="_blank" rel="noopener"><img src="docs/images/jync_zishiying.png" alt="Narrow layout" width="100%"></a><br><sub><b>Narrow layout</b> · nav collapses, wide tables scroll</sub></td>
+    <td align="center" width="33%"><a href="https://jync.qqmu.com/images/jync_warn.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_warn.webp" alt="Alerting" width="100%"></a><br><sub><b>Alerting</b> · webhook, format, categories and cooldown</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_xiangmu_suoyin_ai.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_xiangmu_suoyin_ai.webp" alt="AI draft" width="100%"></a><br><sub><b>AI draft</b> · candidate SQL streams into the editor</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_kanban_anye.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_kanban_anye.webp" alt="Dark theme" width="100%"></a><br><sub><b>Dark theme</b> · the whole palette switches together</sub></td>
   </tr>
 </table>
 
-> Screenshots open at full resolution in a new tab; Gitee adds its built-in image zoom.
->
-> The row-count audit runs only after you confirm it: tables are checked one at a time with `COUNT(*)` on each side, 15-second timeout per side; missing tables, timeouts and other errors are marked separately and one side's failure does not hide the other's result.
+> Screenshots are hosted on the website; the README keeps nine. The rest (ETL, batch create, audit, system logs, English UI …) are on the [features page](https://jync.qqmu.com/features.html).
 
 ---
-
 <a name="engine"></a>
 ## Sync engine: full load, incremental and log CDC
 
@@ -228,96 +192,26 @@ On a single-host container benchmark (500k-row Oracle table), full load measured
 ---
 
 <a name="performance"></a>
-## Full-load performance and tuning
+## Performance tuning
 
-A full load happens once but often decides the length of the migration window. Jync prints one throughput line per table and per parallel worker, splitting "slow" into three actionable shares.
-
-### Reading the throughput line
+The full load prints one throughput line per table per worker, splitting "slow" into three actionable shares:
 
 ```text
 table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s rows/s=216000.0 read=38% write=52% commit=10% batches=250 rowsPerBatch=2000
 ```
 
-| Field | Meaning | How to read it |
-|---|---|---|
-| `table` / `thread` | Table and worker thread | One line per worker when parallel; the thread is named `full-load-orders` |
-| `rows` / `changed` | Rows read / rows actually written | A gap means a re-read comparison; rounds with `changed=0` stay at DEBUG |
-| `elapsed` / `rows/s` | Elapsed time and throughput | The main metric for comparing rounds and settings |
-| `read%` | Source fetch + row mapping share | High means the source cursor, network or mapping is the bottleneck |
-| `write%` | Cleansing + binding + `addBatch` + `executeBatch` share (excluding commit) | High means target writes, constraints or LOB binding is the bottleneck |
-| `commit%` | Target `COMMIT` wait share | High means redo, standby sync or disk latency is the bottleneck |
-| `batches` / `rowsPerBatch` | Batch count / rows per batch | `rowsPerBatch` near the configured size means the driver really batches |
+High `read%` points at the source cursor or network; high `write%` at target constraints, indexes or LOBs; high `commit%` at redo or disk latency — raise the batch first. Four settings cover most cases:
 
-`read% + write% + commit%` add up to 100%. Only rounds with `rows >= 1000` and `changed > 0` log at INFO; small and unchanged rounds drop to DEBUG.
+| Setting | Default | Suggested | What it does |
+|---|---|---|---|
+| `sync.full-load-batch-size` | `2000` | 1000–5000 | Rows per batch; larger means fewer commits, higher rollback and memory cost |
+| `sync.full-load-fetch-size` | `2000` | 1000–5000 | Source result-set batch; lower it for wide LOB tables |
+| `sync.full-load-parallelism` | `2` | 1–4 | Workers per table, bounded by the pool; 1→2 gives the largest gain |
+| `sync.chunk-size` | `100000` | 50k–200k | Rows per chunk, and the most a crash can re-read |
 
-### Find the bottleneck before changing settings
+Measured on one container with a 500k-row Oracle table: empty-table `INSERT` ≈ 211k rows/s (`MERGE` ≈ 84k); parallelism 1 / 2 / 4 gives 117k / 184k / 216k rows/s; deferring secondary indexes is about 47% faster. The numbers show direction only — disk, network, row width and concurrent load decide the rest.
 
-| Symptom | Usual cause | First move |
-|---|---|---|
-| `commit%` is the largest | Slow target redo, slow disk, Data Guard sync transport, oversized transaction | Raise batch 2000 → 5000 to commit less often; check storage and standby; keep indexes deferred |
-| `write%` is the largest | Target binding / network round trips / FK and index maintenance / LOBs | Batch 2000 → 5000; suspend target FKs during the load; inspect LOB binding and indexes |
-| `read%` is the largest | Source full or wide scans, unindexed cursor, busy source | Index the cursor column; raise fetch to 2000–5000 (no effect on MySQL sources); parallelism 1 → 2 → 4; schedule off-peak |
-| `rowsPerBatch` is persistently below half the batch size | The driver does not batch, or LOBs force single-row commits | Check driver version and LOB configuration; confirm the byte budget is not filled by one value |
-| None is high but `rows/s` is low | High network RTT, small batches, single thread | Keep the batch at 1000 or more; parallelism 1 → 2 (~+57%); check link latency |
-
-### How to set the parameters
-
-| Setting | Default | Allowed range (hard limit) | Advice | Effect and trade-off |
-|---|---|---|---|---|
-| `sync.full-load-batch-size` | `2000` | **1–20000**, clamped to 20000; task-level ≤ 0 means unset | **1000–5000**; 500–2000 for wide tables or LOBs | Rows per batch. Larger batches commit less and run faster; past 5000 gains flatten while rollback and memory costs grow |
-| `sync.full-load-fetch-size` | `2000` | **1–20000**, clamped to 20000 | **1000–5000**; 100–1000 for LOB tables; 1–10 when a single value exceeds 1MB | Source result-set batch, read side only. Lower it under memory pressure; MySQL sources always stream and ignore it |
-| `sync.full-load-parallelism` | `2` | **1–8**, capped by the pool (below); task-level ≤ 0 means unset | **1–4**; 1 on shared production, 2–4 in a dedicated migration window | Workers per table. 1→2 helps most; 2→4 adds ~15–20%; beyond that mostly loads both databases |
-| `sync.chunk-size` | `100000` | **≥ 1**; `0` or negative disables chunking; no upper limit | **50000–200000**; avoid below 10000 or above 500000 | Rows per chunk, and the most a crash re-reads. Too small adds boundary queries and checkpoint writes; too large lengthens re-reads and source transactions |
-| `sync.max-pool-size` | `5` | No upper limit, treated as at least 2 | **5–10**; derive from parallelism, below | Connection-pool cap per database. Each worker holds one source and one target connection; a small pool only queues |
-| `sync.initial-load-insert-first` | `true` | on / off | on | Empty targets take INSERT instead of upsert; tables with rows still use the idempotent upsert |
-| `sync.defer-secondary-indexes` | `true` | on / off | on | Non-unique secondary indexes are created after the load; primary and unique indexes are always immediate |
-| Suspend target FKs during load | on | on / off | on | A task-level option that avoids constraint failures from write order and row-by-row checks |
-
-**Parallelism and the pool**: when source and target are distinct connection configurations, `max-pool-size` must be **≥ parallelism + 1** (the main path holds one source and one target connection); when both sides share one configuration, it must be **≥ 2 × parallelism + 2**. With the default pool of 5, that allows up to 4 workers in the first case and 1 in the second. The effective parallelism is `min(configured, 8, what the pool admits)`, and the log says so when it is lowered. When several tasks share one configuration, the remaining slots are divided among the active tasks.
-
-**Out-of-range behavior**: batch or fetch above 20000 and parallelism above 8 are clamped, not rejected, and the log notes it; `chunk-size ≤ 0` disables chunking and the table falls back to one streamed read (parallelism then has no effect).
-
-**Scope**: these settings affect first full loads and baseline rebuilds only, never incremental polling or CDC replay. Global values live in `application.yml`; batch size and parallelism can be overridden per task on the "Full-load performance" card (blank inherits the global value), and the rest are read-only globals.
-
-### Measured baseline
-
-Single-host container, 500k-row Oracle table, batch 2000:
-
-| Scenario | Configuration | Result |
-|---|---|---|
-| Empty-target write mode | `MERGE` vs `INSERT` | ~84k rows/s vs **211k rows/s** |
-| Single-table parallelism | 1 / 2 / 4 workers | 117k / 184k / **216k rows/s** |
-| Secondary indexes | Maintained while writing vs built after | 11.1s vs **5.9s + 0.5s** (~47% faster) |
-
-> The baseline shows the direction of each setting, not a promise. Actual throughput depends on disks, network, driver versions, table width and concurrent load on both sides.
-
-### Tuning procedure
-
-1. **Take a single-table baseline**: parallelism 1, batch 2000; note `rows/s` and the `read/write/commit` shares.
-2. **Look at the largest share**: `commit%` → raise batch from 2000 to 5000 first; `write%` → inspect target constraints, indexes and LOBs; `read%` → inspect the source cursor and scan range, then raise fetch to 5000.
-3. **Then add parallelism**: confirm the pool is large enough (distinct configurations `max-pool-size ≥ parallelism + 1`, shared `≥ 2 × parallelism + 2`), go from 2 to 4, change one variable at a time and re-read the log; past 4 returns fall off sharply.
-4. **Confirm batching works**: `rowsPerBatch` should approach the batch size; persistently below half means the driver is not batching or LOBs are splitting batches.
-5. **Off-peak on production**: a shared database runs parallelism 1 with batches of 1000–2000; a dedicated migration window can go to 2–4 with chunks of 50k–200k.
-
-### Performance curves and sampling
-
-The full-load log answers "why was this round slow"; the performance pages answer "what happened in the last hour, day or week". Both pages read samples written to the metadata store by background samplers; opening a page does not query the monitored servers.
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `metrics.enabled` | `true` | Master sampling switch; off produces no new samples, and stored samples remain until pruned |
-| `metrics.retention-days` | `7` | Days of history to keep; `≤ 0` disables pruning |
-| `metrics.app-interval-ms` | `60000` | Process CPU / heap / GC and host-resource sampling interval |
-| `metrics.task-interval-ms` | `60000` | Per-task rows, lag and failure sampling interval |
-| `metrics.db-interval-ms` | `300000` | Connection health and in-database figures (sessions, QPS, cache hit, lock waits); opens a session on the monitored server |
-| `metrics.db-initial-delay-ms` | `30000` | First connection sample delay; data appears about 30 s after a restart instead of a full interval |
-| `metrics.capacity-interval-ms` | `3600000` | Table / row / space sweep interval; catalog statistics exist for MySQL, Oracle, SQL Server, PostgreSQL and DB2 |
-| `metrics.prometheus-token` | *(empty)* | Prometheus scrape token; blank keeps `/api/metrics/prometheus` at 404 |
-
-- **Database performance** (admin): connection latency and availability, in-database sessions / QPS / cache hit / lock waits, plus table, row and space curves; switch between 1 h / 24 h / 7 days.
-- **Sync-task performance**: synced rows, lag, consecutive failures, and the "rows synced per interval", "change-type mix" and "busiest tables" panels.
-- **Semantics**: the rows series sums newly synced rows per bucket; polling tasks measure lag from the last successful cycle, CDC from the source commit time; buckets without a sample stay gaps rather than zeros.
-- **Cost and permissions**: process and task samples are local reads; a connection sample opens a session, and in-database figures read the server's own statistics views — a missing privilege only hides that figure. Set `metrics.enabled: false` to stop sampling without touching the sync path.
+> Full log-field reference, bottleneck table, pool constraints and a step-by-step procedure: [Operations Guide (PDF)](https://jync.qqmu.com/docs/jync-ops-guide.pdf). Performance curves and sampling: [User Guide (PDF)](https://jync.qqmu.com/docs/jync-user-guide.pdf).
 
 ---
 
@@ -370,135 +264,61 @@ Fixed rules apply to string columns **before rows are written to the target**; t
 <a name="databases"></a>
 ## Supported databases
 
-**34 built-in types**: MySQL, MariaDB, Oracle, SQL Server, DB2, PostgreSQL, openGauss, **Huawei GaussDB**, **DM (达梦)**, **Kingbase**, **OceanBase**, **TiDB**, **ZTE GoldenDB**, **Tencent TDSQL (MySQL edition)**, **Alibaba PolarDB (MySQL edition)**, **GreatDB**, **UPDRDB**, **KunDB**, **RASESQL**, **SeaboxSQL**, **Highgo**, **Vastbase**, **YashanDB**, **GBase**, **Oscar**, **Apache Doris**, **SAP HANA**, **ClickHouse**, **Apache Hive**, **Apache Impala**, **Elasticsearch**, **MongoDB**, **MongoDB (native driver)**, H2.
+**34 built-in types**, 25 of them with bundled drivers. The map below is from the website: sources on the left, the two engines in the middle, targets on the right; each chip carries the modes it supports. Click it for the full reference.
 
-- **Custom types**: JDBC URL, driver class and driver jar path, loaded at runtime in an isolated `URLClassLoader`; pick a dialect family (generic / Oracle / MySQL / PostgreSQL / SQL Server / DB2).
-- **Bundled drivers**: everything except **GBase**, **Oscar**, **Huawei GaussDB**, **SAP HANA**, **ClickHouse**, **Hive**, **Impala**, **Elasticsearch** and **MongoDB (Atlas SQL)** ships with the jar. Those vendors publish no redistributable artifact (SAP's ngdbc is on Maven Central but its licence still forbids redistribution), so supply the jar and path; the driver class can be overridden on the same card.
+[![Database capability map: sources, sync engines and targets](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
+
+- **Custom types**: JDBC URL, driver class and driver jar path, loaded at runtime in an isolated `URLClassLoader`; pick a dialect family (generic / Oracle / MySQL / PostgreSQL / SQL Server / DB2 / SAP HANA).
+- **Bundled drivers**: everything except **GBase, Oscar, Huawei GaussDB, SAP HANA, ClickHouse, Hive, Impala, Elasticsearch and MongoDB (Atlas SQL)** ships with the jar. Those vendors publish no redistributable artifact, so supply the jar and path; the driver class can be overridden on the same card.
 - **Protocol-compatible presets**: GreatDB, UPDRDB and KunDB speak the MySQL protocol; RASESQL and SeaboxSQL speak the PostgreSQL protocol, reusing bundled drivers and dialect families.
-- **SAP HANA**: its own dialect family; full structure sync and polling data sync (timestamp / primary-key increments), writing with `UPSERT … WITH PRIMARY KEY`, paging with `LIMIT / OFFSET`, replacing views, procedures and functions with `CREATE OR REPLACE`, and table comments with `COMMENT ON`. HANA does not expose its transaction log — **true CDC needs SAP SLT or SDI**, which this tool does not provide.
-- **Dedicated migration is not JDBC**: none of Easysearch, MongoDB or KingbaseES appears as a `DatabaseType` in the real-time sync or ETL capability matrix for this feature. Each direction uses its own dedicated connection and task to copy whole objects once, independent of the JDBC connections, sync tasks and ETL tasks above.
-  - **Elasticsearch / OpenSearch → Easysearch**: search connections plus whole-index copying (settings, mappings, aliases and documents).
-  - **MongoDB → MongoDB**: native `mongodb-driver-sync` connections; collection options, indexes and documents are copied with `_id` unchanged.
-  - **MongoDB → KingbaseES**: columns are inferred from a sample, then a table is created and filled; nested documents and arrays become JSON text in a TEXT column and are not expanded into columns.
-  - Credentials live only in encrypted fields and are never echoed back; **MongoDB URIs and Kingbase JDBC URLs must not contain a password** (Kingbase also forbids `user` / `password` parameters), and neither connection tests nor run logs print the URI. See [Known limitations](docs/known-limitations.md#11-dedicated-migration-es--opensearch--easysearch-mongodb--mongodb-mongodb--kingbasees).
-- **Analytic / search engines (sync sources + ETL)**: Apache Doris, ClickHouse, Apache Hive, Apache Impala, Elasticsearch, MongoDB. They have no log-based CDC, so they are **real-time sync sources only** — polling or full compare, **never a target** (no table creation, no upsert); their tables are always read as keyless. See [Known limitations](docs/known-limitations.md) (§3.6). In ETL they can be either source or target, except Elasticsearch and MongoDB, whose SQL interfaces are read-only (ETL sources only). MongoDB has two paths: the **MongoDB** preset uses the official Atlas SQL JDBC driver (Atlas and Enterprise Advanced with the SQL Interface; about 40 MB, supplied by you); **MongoDB (native driver)** uses the bundled Java driver and connects to any `mongod`, taking a collection name and an optional Extended JSON filter — no SQL and no external jar.
-- **Huawei GaussDB** is a different product from openGauss: driver `com.huawei.gaussdb.jdbc.Driver`, URL prefix `jdbc:gaussdb://`, PostgreSQL dialect family.
-- **PolarDB / TDSQL editions**: MySQL editions have their own presets; PostgreSQL editions use PostgreSQL; PolarDB Oracle-compatible uses a custom type.
-- Driver versions and licenses: [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+- **Analytic / search engines**: Doris, ClickHouse, Hive, Impala, Elasticsearch and MongoDB have no log-based CDC, so they are **real-time sync sources only** (polling / full compare) and **never targets**; in ETL all but Elasticsearch and MongoDB can be written. MongoDB has two paths: the Atlas SQL JDBC preset and the bundled native driver.
+- **Dedicated migration is not JDBC**: Elasticsearch/OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES use dedicated connections and tasks, outside the capability matrix above; credentials live in encrypted fields only, and no password is allowed inside a MongoDB URI or Kingbase JDBC URL. See [Known limitations](docs/known-limitations.md#11-专属迁移esopensearch--easysearchmongodb--mongodb--kingbasees).
+- The GaussDB vs openGauss distinction, TDSQL / PolarDB editions and HANA's CDC limits are covered on the [website's database page](https://jync.qqmu.com/database.html); driver versions and licences are in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ---
 
 <a name="deploy"></a>
-## Deployment
+## Quick start
 
 ### Requirements
 
 | Item | Requirement |
 |---|---|
 | JDK | **17+** |
-| Maven | 3.6+ (source build only) |
 | Port | `8080` by default |
-| Memory / disk | Heap ≥ 512MB recommended, 1GB free; size the heap for the largest LOB when syncing LOBs |
-| Working directory | Must be fixed: `./data` (metadata store and key) and `./logs` are created relative to the process working directory |
+| Memory / disk | Heap ≥ 512 MB recommended, 1 GB free; LOB sync scales with the largest value |
+| Working directory | Fixed: `./data` (metadata store and key) and `./logs` are created relative to it |
 
-The first start creates `./data` and `./logs`. **Do not start from different directories**: "my settings disappeared" means it connected to another empty metadata store.
+The first start creates `./data` and `./logs` in the working directory. **Do not start from different directories** — each one gets its own empty metadata store, and the saved configuration looks lost.
 
-```bash
-sudo mkdir -p /opt/jync && sudo chown -R jync:jync /opt/jync && cd /opt/jync
-```
-
-Suggested layout: `jync.jar`, `application.yml`, `data/` (H2 metadata store and `<db>.key`, back both up), `logs/`.
-
-### Get the jar
+### Get and run
 
 - GitHub: <https://github.com/vfaner/jync/releases/latest>
 - Gitee: <https://gitee.com/super_rgh/jync/releases/latest>
-- AtomGit (mirror): <https://gitcode.com/vfaner/jync/releases/latest>
+- From source: `mvn clean package -DskipTests`, output `target/jync.jar`
 
 ```bash
-git clone https://github.com/vfaner/jync.git
-cd jync
-mvn clean package -DskipTests
-cp target/jync.jar /opt/jync/
-```
-
-In mainland China use Gitee: `git clone https://gitee.com/super_rgh/jync.git`. Running the tests executes about 4,000 cases.
-
-### Production configuration
-
-Create `application.yml` next to the jar:
-
-```yaml
-server:
-  port: 8080
-
-sync:
-  poll-interval: 2000              # global polling interval (ms)
-  batch-size: 500                  # incremental / CDC replay batch (live traffic: keep small)
-  fetch-size: 1000                 # incremental result-set batch
-  full-load-batch-size: 2000       # first full load only: rows per batch (1-20000, 1000-5000 advised)
-  full-load-fetch-size: 2000       # first full load only: source fetch size (1-20000)
-  full-load-parallelism: 2         # full-load workers (1-8, 1-4 advised, capped by the pool)
-  chunk-size: 100000               # full-load rows per chunk (50k-200k advised; 0 disables chunking)
-  initial-load-insert-first: true  # INSERT into empty targets instead of upsert
-  defer-secondary-indexes: true    # build non-unique secondary indexes after the load
-  max-pool-size: 5                 # per-database pool cap (5-10 advised; must fit the parallelism)
-  crypto-password: ""              # blank = generated on first boot into data/<db>.key
-  crypto-salt: ""                  # blank = same; set both to manage the key yourself
-
-  # ai:
-  #   enabled: false               # air-gapped / offline: disable AI assistance
-
-metrics:
-  enabled: true                    # master switch for performance sampling
-  retention-days: 7                # days of history to keep
-  app-interval-ms: 60000           # process-resource sampling
-  task-interval-ms: 60000          # per-task throughput sampling
-  db-interval-ms: 300000           # connection health and in-database figures (opens a session)
-  capacity-interval-ms: 3600000    # table / row / space sweep
-  prometheus-token: ""             # blank closes the Prometheus endpoint
-
-app:
-  login:
-    # Escape hatch: if external authentication becomes unreachable after local login is
-    # disabled, start once with this true (or JYN_RESET_LOGIN=true) to re-enable and save
-    # local login; set it back to false afterwards.
-    reset-on-startup: false
-  # air-gapped / offline: disable version checks
-  # update-check:
-  #   enabled: false
-```
-
-**External metadata store (optional)**
-
-To drop the H2 file store, point `spring.datasource.*` at an existing database before startup; tables are created by `ddl-auto: update` on first boot:
-
-| Metadata store | Driver class | Example URL |
-|---|---|---|
-| H2 (default) | `org.h2.Driver` | `jdbc:h2:file:./data/jync;MODE=MySQL;AUTO_SERVER=TRUE` |
-| MySQL 8 | `com.mysql.cj.jdbc.Driver` | `jdbc:mysql://db:3306/jync?useUnicode=true&characterEncoding=utf8` |
-| PostgreSQL 16 | `org.postgresql.Driver` | `jdbc:postgresql://db:5432/jync` |
-| Oracle 23 | `oracle.jdbc.OracleDriver` | `jdbc:oracle:thin:@//db:1521/FREEPDB1` |
-
-The `SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` / `SPRING_DATASOURCE_DRIVER_CLASS_NAME` environment variables work too. Key points:
-
-- **Create the database first**: MySQL needs `CREATE DATABASE jync DEFAULT CHARACTER SET utf8mb4;`; the others can be empty. JDBC drivers are bundled.
-- **Set `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT` explicitly**: a generated key lives in the local `<db>.key` file, which an external store does not have.
-- **Verified scope**: MySQL 8, PostgreSQL 16 and Oracle 23 have real-database contract tests; SQL Server and domestic databases have not been verified as metadata stores, so validate in a test environment with the same driver before production.
-- **Changing the store is not a migration**: connections, tasks, cursors and checkpoints from the old H2 store do not come along.
-- **Multi-replica requirement**: H2 `AUTO_SERVER=TRUE` only shares within one host; cross-host instances require an external metadata store.
-
-Start command:
-
-```bash
-cd /opt/jync
+mkdir -p /opt/jync && cd /opt/jync
 java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
   -jar jync.jar --spring.config.additional-location=file:./application.yml
 ```
 
-> ⚠️ Use `--spring.config.additional-location` (layered override). The replacing `spring.config.location` drops the jar's built-in configuration: the login page shows `??login.title_zh_CN??` and a fresh deployment creates no tables.
+> ⚠️ Use `--spring.config.additional-location` (layered override). The replacing form `spring.config.location` drops the jar's built-in settings — the login page then shows `??login.title_en_US??` and a fresh deployment creates no tables.
 >
-> 🕐 `-Duser.timezone` also decides Cron evaluation. Pin it when the server defaults to UTC.
+> 🕐 `-Duser.timezone` also decides how Cron expressions are evaluated. Set it explicitly when the host defaults to UTC.
+
+Minimal `application.yml`:
+
+```yaml
+server:
+  port: 8080
+sync:
+  poll-interval: 2000
+  full-load-parallelism: 2
+  max-pool-size: 5
+  crypto-password: ""   # empty = generated on first start, stored in data/<db>.key
+  crypto-salt: ""
+```
 
 ### First sign-in
 
@@ -509,159 +329,40 @@ Open `http://<server>:8080`:
 | `admin` | Administrator | `123456` |
 | `view` | Viewer | `123456` |
 
-**Change the password at first sign-in**: until then only the change-password page is available. Passwords are stored with BCrypt.
+**Change the password immediately after the first sign-in**; until then only the change-password page is reachable. Passwords are stored with BCrypt.
 
-### systemd service
+### Production deployment
 
-`/etc/systemd/system/jync.service`:
+Production settings, an external metadata store, systemd, Docker / Kubernetes, reverse proxy and HTTPS, upgrade/backup and air-gapped installation are covered in:
 
-```ini
-[Unit]
-Description=Jync heterogeneous database sync
-After=network-online.target
-Wants=network-online.target
+- [Operations Guide (PDF)](https://jync.qqmu.com/docs/jync-ops-guide.pdf)
+- The website's [deployment page](https://jync.qqmu.com/deploy.html)
+- [Container deployment notes](docs/deploy-container.md) in this repository
 
-[Service]
-Type=simple
-User=jync
-Group=jync
-WorkingDirectory=/opt/jync
-ExecStart=/usr/bin/java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
-  -jar /opt/jync/jync.jar --spring.config.additional-location=file:/opt/jync/application.yml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload && sudo systemctl enable --now jync
-```
-
-### Docker and Kubernetes
-
-```bash
-docker build -t jync:1.11.0 .
-docker run -d --name jync -p 8080:8080 \
-  -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.11.0
-```
-
-Or `docker compose up -d --build`. The runtime image contains only a JRE, runs as non-root and has a built-in `HEALTHCHECK`; metadata and logs land in the host `./data` and `./logs`, so rebuilding the image loses nothing.
-
-```bash
-docker build -t registry.example.com/qqmu/jync:1.11.0 .
-docker push registry.example.com/qqmu/jync:1.11.0
-kubectl apply -k deploy/k8s/
-```
-
-The manifests default to `jync:1.11.0`; change registry and tag with the `images` transform in `kustomization.yaml`. The Service is `ClusterIP`, so use `port-forward` or an Ingress outside the cluster. The H2 metadata store lives on a `ReadWriteOnce` PVC, so **replicas must stay at 1**; switch to an external MySQL / PostgreSQL metadata store before scaling out.
-
-### Reverse proxy and HTTPS
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name jync.example.com;
-    ssl_certificate     /etc/nginx/certs/jync.crt;
-    ssl_certificate_key /etc/nginx/certs/jync.key;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
-    }
-}
-```
-
-Set `JYN_COOKIE_SECURE=true` for HTTPS. With gateway-header SSO, add the gateway to `app.security.trusted-proxies` and make sure it strips identity headers sent by clients.
-
-### Upgrade and backup
-
-1. Stop the service and back up `./data` (including `<db>.key`), `./logs` and `application.yml`.
-2. Replace `jync.jar` and restart; the schema evolves through `ddl-auto: update`.
-3. Changes made at the source during downtime are caught up by incremental sync or CDC.
-4. Administrators can also use the version check and one-click upgrade on the System info page; the old jar is kept as `jync.jar.bak` and the restart script carries over the current JVM and program arguments (JDWP debug arguments excepted).
-
-> 🔐 Back up `<db>.key` together with the metadata store. Without the key, stored connection passwords, AI keys and alert URLs cannot be decrypted and must be re-entered.
-
-### Air-gapped and offline
-
-- `sync.ai.enabled=false`: hides the AI menu and blocks AI drafts before any request.
-- `app.update-check.enabled=false`: no GitHub / Gitee calls; the upgrade entry disappears too.
-- Alerting only calls out after you configure and enable a Webhook.
-- All static assets are local; no CDN or webfont.
+> 🔐 Back up `./data` (including `<db>.key`), `./logs` and `application.yml` before upgrading. Without the key, saved connection passwords, AI keys and alert URLs cannot be decrypted and must be re-entered.
 
 ---
 
 <a name="config"></a>
-## Configuration reference
+## Common settings
 
-Main settings in `application.yml` (`sync.*` prefix):
+The most-used `sync.*` keys in `application.yml` (full reference: [User Guide (PDF)](https://jync.qqmu.com/docs/jync-user-guide.pdf)):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `sync.poll-interval` | `2000` | Global polling interval (ms) |
-| `sync.batch-size` | `500` | JDBC batch for incremental polling and CDC replay |
-| `sync.fetch-size` | `1000` | Incremental result-set batch |
-| `sync.full-load-batch-size` | `2000` | First full load only: rows per batch, 1–20000 |
-| `sync.full-load-fetch-size` | `2000` | First full load only: source fetch size, 1–20000 |
-| `sync.full-load-parallelism` | `2` | Workers per table, 1–8, capped by the pool |
-| `sync.chunk-size` | `100000` | Rows per chunk; `0` disables chunking |
-| `sync.initial-load-insert-first` | `true` | INSERT into empty targets instead of upsert |
-| `sync.defer-secondary-indexes` | `true` | Build non-unique secondary indexes after the load |
-| `sync.max-pool-size` | `5` | Pool cap per database; also limits parallelism |
-| `sync.pool-wait-ms` | `10000` | Wait before yielding a cycle when the pool is full |
-| `sync.safety-lag-ms` | `1000` | Timestamp watermark lag |
-| `sync.full-compare-max-rows` | `20000` | Automatic full-compare row ceiling |
-| `sync.delete-compare-max-rows` | `0` | Chunked delete-comparison ceiling; `0` off |
-| `sync.row-count-audit-interval-ms` | `60000` | Row-count audit interval; `0` off |
-| `sync.row-count-repair-max-rows` | `1000` | Key-based repair ceiling before clearing the cursor and reloading; `0` off |
-| `sync.max-unindexed-scan-rows` | `1000000` | Ceiling for probes on unindexed cursor columns; past it probes stop and one warning is logged; `0` off |
-| `sync.stuck-threshold-ms` | `1800000` | No-progress time before a cycle counts as stuck; `0` off |
-| `sync.lock-ttl-ms` | `300000` | Sync lock lease |
-| `sync.reconcile-interval-ms` | `30000` | Multi-instance schedule reconciliation period |
-| `sync.query-timeout-seconds` | `300` | Data-plane statement timeout; `0` off |
-| `sync.copy-timeout-seconds` | `1800` | Row-copy (window query and watermark MAX) timeout; `0` off |
-| `sync.metadata-query-timeout-seconds` | `60` | Metadata enumeration statement timeout |
-| `sync.shutdown-wait-ms` | `20000` | Grace period for in-flight cycles at shutdown |
-| `sync.change-log-retention-days` | `30` | Change-log retention |
-| `sync.lob.streaming-enabled` | `true` | Master switch for streamed LOB I/O |
-| `sync.lob.inline-max-bytes` | `65536` | LOB values up to this size stay in heap |
-| `sync.lob.cdc-spill-threshold-bytes` | `1048576` | CDC transaction-buffer values above this spill to disk |
-| `sync.lob.spill-max-bytes` / `spill-retention-hours` | `1 GiB` / `24` | Spill total cap and leftover cleanup |
-| `sync.cdc.server-id-offset` | `612000` | Fake MySQL replica server-id base; id = offset + task id |
-| `sync.cdc.lock-ttl-ms` | `30000` | CDC consumer lease |
-| `sync.cdc.supervise-interval-ms` | `10000` | CDC lease supervision period |
-| `sync.cdc.connect-timeout-ms` | `10000` | Timeout for connecting to the source |
-| `sync.cdc.reconnect-backoff-ms` | `1000` | Initial reconnect backoff |
-| `sync.cdc.reconnect-backoff-max-ms` | `60000` | Reconnect backoff ceiling |
-| `sync.cdc.max-transaction-rows` / `max-transaction-bytes` | `1000000` / `512 MiB` | Per-source-transaction buffer cap; exceeding it parks the stream; `0` unlimited |
-| `sync.cdc.logminer.batch-size` | `10000` | LogMiner rows per batch |
-| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner idle sleep |
-| `sync.cdc.logminer.missing-lob-policy` | `skip` | Out-of-line LOB that cannot be restored: `skip` counts and continues, `fail` parks |
-| `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL logical decoding idle sleep |
-| `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | Panel warning for WAL held by a slot (4 GiB) |
-| `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC idle sleep |
-| `sync.cdc.change-window-ms` | `10000` | CDC change-log aggregation window; `0` off |
-| `sync.alert.evaluate-interval-ms` / `initial-delay-ms` | `60000` / `45000` | Alert evaluation period and first delay |
-| `sync.crypto-password` / `sync.crypto-salt` | *(generated when blank)* | Encryption key for passwords and alert URLs |
-| `sync.ai.enabled` | `true` | `false` removes AI menus and endpoints |
-| `app.update-check.enabled` | `true` | Version check; `false` makes no outbound calls |
-| `app.security.trusted-proxies` | *(empty)* | Trusted proxies; also the trust boundary of gateway-header SSO |
-| `metrics.enabled` | `true` | Master switch for performance sampling; off never touches the sync path |
-| `metrics.retention-days` | `7` | Days of samples to keep; `≤ 0` disables pruning |
-| `metrics.app-interval-ms` | `60000` | Process-resource sampling interval |
-| `metrics.task-interval-ms` | `60000` | Task throughput and lag sampling interval |
-| `metrics.db-interval-ms` | `300000` | Connection health and in-database figure interval |
-| `metrics.db-initial-delay-ms` | `30000` | Delay before the first connection sample |
-| `metrics.capacity-interval-ms` | `3600000` | Table / row / space sweep interval |
-| `metrics.prometheus-token` | *(empty)* | Prometheus scrape token; blank keeps the endpoint at 404 |
+| `sync.poll-interval` | `2000` | Global poll interval (ms) |
+| `sync.batch-size` | `500` | JDBC batch rows for incremental polling and CDC replay |
+| `sync.fetch-size` | `1000` | Incremental result-set fetch size |
+| `sync.full-load-batch-size` | `2000` | Rows per batch during the first full load |
+| `sync.full-load-parallelism` | `2` | Full-load workers per table, bounded by the pool |
+| `sync.chunk-size` | `100000` | Rows per full-load chunk; `0` disables chunking |
+| `sync.max-pool-size` | `5` | Connection-pool ceiling per database |
+| `sync.crypto-password` / `crypto-salt` | generated when empty | Encryption keys for credentials and alert URLs |
+| `sync.ai.enabled` | `true` | `false` removes the AI menu and endpoint |
+| `app.update-check.enabled` | `true` | New-version check; `false` makes no outbound request |
+| `metrics.enabled` | `true` | Sampling master switch; does not affect the sync path |
 
-> Connection passwords, AI keys and alert Webhook URLs are stored with AES-256; the `enc:` prefix prevents double encryption. A blank key is generated on first boot.
+> Connection passwords, AI keys and alert webhook URLs are stored with AES-256 encryption and an `enc:` prefix that prevents double encryption. When the key is left empty, the first start generates it into `data/<db>.key`.
 
 ---
 
@@ -806,7 +507,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**4,415 tests: 4,414 pass, and one Linux-only key-file permission case is skipped on macOS by environment.**
+**4,433 tests: 4,432 pass, and one Linux-only key-file permission case is skipped on macOS by environment.**
 
 Coverage highlights:
 

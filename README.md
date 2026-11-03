@@ -9,7 +9,7 @@
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
 
-![Jync 捷同 · 异构数据库实时同步工具](docs/images/jync.png)
+![Jync 捷同 · 异构数据库实时同步工具](https://jync.qqmu.com/images/jync_xl.webp)
 
 在**异构数据库**之间持续同步**结构与数据**的开箱即用 Web 应用：单个 jar 启动，浏览器点选即可在内置的 **34 种数据库（另支持自定义类型）** 之间建立同步或 ETL 链路；其中 Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 六种分析型引擎可作为实时同步的**源**（仅轮询 / 全表比对），也可用于 ETL。不需要 Kafka、Flink、ZooKeeper，也不需要编写一行作业代码。
 
@@ -27,6 +27,7 @@
 | **镜像（AtomGit）** | [gitcode.com/vfaner/jync](https://gitcode.com/vfaner/jync) |
 | **官网** | [jync.qqmu.com](https://jync.qqmu.com) |
 | **视频演示** | [Bilibili · 14 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+| **文档** | [用户操作手册](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [产品介绍](https://jync.qqmu.com/docs/jync-overview.pdf) |
 
 > AtomGit（gitcode.com）是代码与发布包的同步镜像；下载、问题反馈与 PR 以 GitHub / Gitee 为准。
 
@@ -38,12 +39,12 @@
 - [核心能力](#features)
 - [界面速览](#screenshots)
 - [同步引擎：全量、增量与日志 CDC](#engine)
-- [全量加载性能与调优](#performance)
+- [性能调优](#performance)
 - [调度设置](#schedule)
 - [列清洗](#cleansing)
 - [支持的数据库](#databases)
-- [部署](#deploy)
-- [配置项](#config)
+- [快速开始](#deploy)
+- [常用配置](#config)
 - [登录、权限与统一认证](#auth)
 - [使用流程](#workflow)
 - [AI 辅助转换（可选）](#ai)
@@ -102,62 +103,25 @@
 
 <table>
   <tr>
-    <td align="center" width="33%"><a href="docs/images/jync_kanban.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban.png" alt="看板" width="100%"></a><br><sub><b>看板</b> · 资源、任务与 24h 趋势</sub></td>
-    <td align="center" width="33%"><a href="docs/images/jync_xiangmu.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu.png" alt="实时同步任务" width="100%"></a><br><sub><b>实时同步任务</b> · 状态、上次同步与详情</sub></td>
-    <td align="center" width="33%"><a href="docs/images/jync_db.png" target="_blank" rel="noopener"><img src="docs/images/jync_db.png" alt="连接管理" width="100%"></a><br><sub><b>连接管理</b> · 源 / 目标分栏</sub></td>
+    <td align="center" width="33%"><a href="https://jync.qqmu.com/images/jync_kanban.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_kanban.webp" alt="看板" width="100%"></a><br><sub><b>看板</b> · 资源、任务与 24h 趋势</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_xiangmu.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_xiangmu.webp" alt="实时同步任务" width="100%"></a><br><sub><b>实时同步任务</b> · 状态、上次同步与详情</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_db.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_db.webp" alt="连接管理" width="100%"></a><br><sub><b>连接管理</b> · 源 / 目标分栏</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_xiangmu_etl.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_etl.png" alt="ETL 任务" width="100%"></a><br><sub><b>ETL 任务</b> · 批次与单表任务分区展示</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_etl_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_etl_add.png" alt="新建 ETL 任务" width="100%"></a><br><sub><b>新建 ETL 任务</b> · 取数 SQL、目标表与写模式</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_etl_batch.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_etl_batch.png" alt="ETL 批次" width="100%"></a><br><sub><b>ETL 批次</b> · 一组表共享一条调度与一对连接</sub></td>
+    <td align="center" width="33%"><a href="https://jync.qqmu.com/images/jync_cdc.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_cdc.webp" alt="日志 CDC" width="100%"></a><br><sub><b>日志 CDC</b> · 位点 / 上次事件 / 吞吐 / 跳过计数</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_xiangmu_xn.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_xiangmu_xn.webp" alt="同步任务性能" width="100%"></a><br><sub><b>同步任务性能</b> · 同步行数、延迟、失败与变更构成</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_lqx.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_lqx.webp" alt="列清洗" width="100%"></a><br><sub><b>列清洗</b> · 按表按列配置，写入前生效</sub></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/jync_db_add.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_add.png" alt="新增连接" width="100%"></a><br><sub><b>新增连接</b> · 34 种预置类型，测通再保存</sub></td>
-    <td align="center"><a href="docs/images/jync_celue.png" target="_blank" rel="noopener"><img src="docs/images/jync_celue.png" alt="捕获策略" width="100%"></a><br><sub><b>捕获策略</b> · 轮询 / 全量比对 / 日志 CDC</sub></td>
-    <td align="center"><a href="docs/images/jync_lx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lx.png" alt="任务详情" width="100%"></a><br><sub><b>任务详情</b> · 对象、调度、性能、列清洗</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_cdc.jpg" target="_blank" rel="noopener"><img src="docs/images/jync_cdc.jpg" alt="日志 CDC" width="100%"></a><br><sub><b>日志 CDC</b> · 位点 / 上次事件 / 吞吐 / 跳过计数</sub></td>
-    <td align="center"><a href="docs/images/jync_diaodu.png" target="_blank" rel="noopener"><img src="docs/images/jync_diaodu.png" alt="调度设置" width="100%"></a><br><sub><b>调度设置</b> · 轮询间隔或 Cron</sub></td>
-    <td align="center"><a href="docs/images/jync_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xn.png" alt="全量加载性能" width="100%"></a><br><sub><b>全量加载性能</b> · 批量大小与并行度</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_db_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_db_xn.png" alt="数据库性能" width="100%"></a><br><sub><b>数据库性能</b> · 延迟、可用率、库内指标与容量曲线</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_xn.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_xn.png" alt="同步任务性能" width="100%"></a><br><sub><b>同步任务性能</b> · 同步行数、延迟、失败与变更构成</sub></td>
-    <td align="center"><a href="docs/images/jync_check.png" target="_blank" rel="noopener"><img src="docs/images/jync_check.png" alt="核对行数" width="100%"></a><br><sub><b>核对行数</b> · 源 / 目标 COUNT 对比与差异标记</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_lqx.png" target="_blank" rel="noopener"><img src="docs/images/jync_lqx.png" alt="列清洗" width="100%"></a><br><sub><b>列清洗</b> · 按表按列配置，写入前生效</sub></td>
-    <td align="center"><a href="docs/images/jync_data_yulan.png" target="_blank" rel="noopener"><img src="docs/images/jync_data_yulan.png" alt="数据预览" width="100%"></a><br><sub><b>数据预览</b> · 源 / 目标前 100 行</sub></td>
-    <td align="center"><a href="docs/images/jync_log.png" target="_blank" rel="noopener"><img src="docs/images/jync_log.png" alt="变更日志" width="100%"></a><br><sub><b>变更日志</b> · 对象 / 类型 / 行数 / 耗时</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_warn.png" target="_blank" rel="noopener"><img src="docs/images/jync_warn.png" alt="告警通知" width="100%"></a><br><sub><b>告警通知</b> · Webhook 地址、格式、分类与冷却</sub></td>
-    <td align="center"><a href="docs/images/jync_shenji.png" target="_blank" rel="noopener"><img src="docs/images/jync_shenji.png" alt="审计日志" width="100%"></a><br><sub><b>审计日志</b> · 登录与操作留痕</sub></td>
-    <td align="center"><a href="docs/images/jync_sys_log.png" target="_blank" rel="noopener"><img src="docs/images/jync_sys_log.png" alt="系统日志" width="100%"></a><br><sub><b>系统日志</b> · 文件 / 级别 / 关键字检索</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_renzheng.png" target="_blank" rel="noopener"><img src="docs/images/jync_renzheng.png" alt="外部认证" width="100%"></a><br><sub><b>外部认证</b> · 账号密码 / 网关头 / 票据</sub></td>
-    <td align="center"><a href="docs/images/jync_ai.png" target="_blank" rel="noopener"><img src="docs/images/jync_ai.png" alt="AI 配置" width="100%"></a><br><sub><b>AI 配置</b> · 多供应商，同时只启用一个</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_suoyin_ai.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_suoyin_ai.png" alt="AI 起草" width="100%"></a><br><sub><b>AI 起草</b> · 候选 SQL 流式进编辑器</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_system.png" target="_blank" rel="noopener"><img src="docs/images/jync_system.png" alt="系统信息" width="100%"></a><br><sub><b>系统信息</b> · 运行参数与版本</sub></td>
-    <td align="center"><a href="docs/images/jync_xiangmu_batch.png" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu_batch.png" alt="批量创建" width="100%"></a><br><sub><b>批量创建</b> · 按表大小分箱，一次建多个任务</sub></td>
-    <td align="center"><a href="docs/images/jync_kanban_anye.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_anye.png" alt="暗色主题" width="100%"></a><br><sub><b>暗色主题</b> · 整套配色一起切换</sub></td>
-  </tr>
-  <tr>
-    <td align="center"><a href="docs/images/jync_kanban_en.png" target="_blank" rel="noopener"><img src="docs/images/jync_kanban_en.png" alt="英文界面" width="100%"></a><br><sub><b>英文界面</b> · 中 / EN 一键切换</sub></td>
-    <td align="center"><a href="docs/images/jync_zishiying.png" target="_blank" rel="noopener"><img src="docs/images/jync_zishiying.png" alt="窄屏布局" width="100%"></a><br><sub><b>窄屏布局</b> · 导航收起，宽表横向滚动</sub></td>
+    <td align="center" width="33%"><a href="https://jync.qqmu.com/images/jync_warn.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_warn.webp" alt="告警通知" width="100%"></a><br><sub><b>告警通知</b> · Webhook 地址、格式、分类与冷却</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_xiangmu_suoyin_ai.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_xiangmu_suoyin_ai.webp" alt="AI 起草" width="100%"></a><br><sub><b>AI 起草</b> · 候选 SQL 流式进编辑器</sub></td>
+    <td align="center"><a href="https://jync.qqmu.com/images/jync_kanban_anye.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_kanban_anye.webp" alt="暗色主题" width="100%"></a><br><sub><b>暗色主题</b> · 整套配色一起切换</sub></td>
   </tr>
 </table>
 
-> 截图为高分辨率原图，点击会在新标签页打开原图；Gitee 上还会叠加内置的图片放大预览。
->
-> 「核对行数」只在你确认后执行：逐表串行查询源 / 目标 `COUNT(*)`，单侧 15 秒超时；缺表、超时与其他异常分别标记，一侧失败不影响另一侧结果。
+> 截图托管在官网，正文只保留 9 张；其余界面（ETL、批量创建、审计、系统日志、英文界面等）见[官网功能页](https://jync.qqmu.com/features.html)。
 
 ---
-
 <a name="engine"></a>
 ## 同步引擎：全量、增量与日志 CDC
 
@@ -228,96 +192,26 @@ SELECT ... FROM t WHERE cursor > :last AND cursor <= :watermark
 ---
 
 <a name="performance"></a>
-## 全量加载性能与调优
+## 性能调优
 
-全量只发生一次，但往往决定整个迁移窗口的长度。Jync 为每张表、每个并行 worker 打印一行吞吐日志，把"慢"拆成可操作的三个占比。
-
-### 吞吐日志怎么看
+全量阶段每张表、每个 worker 打印一行吞吐日志，把"慢"拆成三个可操作的占比：
 
 ```text
 table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s rows/s=216000.0 read=38% write=52% commit=10% batches=250 rowsPerBatch=2000
 ```
 
-| 字段 | 含义 | 怎么读 |
-|---|---|---|
-| `table` / `thread` | 表名与执行线程 | 并行时每个 worker 各打一行，线程名形如 `full-load-orders` |
-| `rows` / `changed` | 读取行数 / 实际写入行数 | 两者不同说明本轮是重读比对；`changed=0` 的轮次不会打 INFO |
-| `elapsed` / `rows/s` | 耗时与吞吐 | 跨轮次、跨调参对比的主指标 |
-| `read%` | 源库取数 + 行映射占比 | 偏高说明源库游标、网络或映射是瓶颈 |
-| `write%` | 清洗 + 绑定 + `addBatch` + `executeBatch` 占比（不含提交） | 偏高说明目标库写入、约束或大字段绑定是瓶颈 |
-| `commit%` | 目标库 `COMMIT` 等待占比 | 偏高说明 redo、备库同步或磁盘延迟是瓶颈 |
-| `batches` / `rowsPerBatch` | 批次数 / 每批实际行数 | `rowsPerBatch` 接近批量大小才说明驱动真的在批处理 |
+`read%` 高先查源库游标与网络；`write%` 高先查目标库约束、索引与大字段；`commit%` 高先加大批量减少提交次数。多数场景只需调这四个参数：
 
-`read% + write% + commit%` 合计 100%。只有 `rows >= 1000` 且 `changed > 0` 的轮次打 INFO，小窗口与无变化的轮次降到 DEBUG，避免刷屏。
+| 参数 | 默认 | 建议 | 作用 |
+|---|---|---|---|
+| `sync.full-load-batch-size` | `2000` | 1000–5000 | 每批行数；越大提交越少，回滚与内存成本越高 |
+| `sync.full-load-fetch-size` | `2000` | 1000–5000 | 源端结果集批量；大字段表调小 |
+| `sync.full-load-parallelism` | `2` | 1–4 | 单表并行 worker，受连接池约束；1→2 收益最大 |
+| `sync.chunk-size` | `100000` | 5 万–20 万 | 每块行数，也是崩溃后最多重读的行数 |
 
-### 先判断瓶颈，再调参数
+容器单机 50 万行实测：空表 `INSERT` 约 21 万行/秒（`MERGE` 约 8.4 万）；并行度 1 / 2 / 4 对应 11.7 万 / 18.4 万 / 21.6 万行/秒；延迟建二级索引约快 47%。基准只说明方向，实际取决于磁盘、网络、表宽与并发负载。
 
-| 现象 | 通常原因 | 优先处理 |
-|---|---|---|
-| `commit%` 是三者中最大 | 目标库 redo 慢、磁盘慢、Data Guard 同步传输、事务过大 | 批量 2000 → 5000 减少提交次数；确认存储与备库；保持延迟建索引 |
-| `write%` 最大 | 目标库绑定 / 网络往返 / 外键与索引维护 / 大字段 | 批量 2000 → 5000；写入期间关闭目标外键；检查大字段绑定与索引 |
-| `read%` 最大 | 源库全表或大范围扫描、游标无索引、源库繁忙 | 确认游标列有索引；fetch 提到 2000–5000（MySQL 源不生效）；并行度 1 → 2 → 4；错峰执行 |
-| `rowsPerBatch` 长期不足批量的一半 | 驱动没有真正批处理，或大字段被单行提交 | 检查驱动版本与 LOB 配置；确认批次预算未被单值占满 |
-| 三项都不高但 `rows/s` 低 | 网络 RTT 高、批次太小、单线程 | 批量不低于 1000；并行度 1 → 2（基准约 +57%）；检查链路延迟 |
-
-### 参数怎么调
-
-| 参数 | 默认 | 可取值范围（硬限制） | 建议 | 作用与取舍 |
-|---|---|---|---|---|
-| `sync.full-load-batch-size` | `2000` | **1–20000**，超出截断到 20000；任务级 ≤ 0 视为未设置 | **1000–5000**；宽表或大字段 500–2000 | 每批行数。批次越大提交越少、越快；超过 5000 后提速趋缓，回滚与内存成本继续上升 |
-| `sync.full-load-fetch-size` | `2000` | **1–20000**，超出截断到 20000 | **1000–5000**；大字段表 100–1000；单值超 1MB 时 1–10 | 源库结果集批量，只影响源端读取。内存紧张时调小；MySQL 源固定流式读取，此值不生效 |
-| `sync.full-load-parallelism` | `2` | **1–8**，且受连接池约束（见下）；任务级 ≤ 0 视为未设置 | **1–4**；共享生产库 1，专用迁移窗口 2–4 | 单表并行 worker 数。1→2 提升最明显，2→4 约再快 15–20%，再往上主要是加压源库与目标库 |
-| `sync.chunk-size` | `100000` | **≥ 1**；`0` 或负数关闭分块；无上限 | **50000–200000**；不建议低于 10000 或高于 500000 | 每块行数，也是崩溃后最多重读的行数。过小则边界查询与检查点更频繁，过大则重读与长事务变长 |
-| `sync.max-pool-size` | `5` | 无上限，内部至少按 2 计 | **5–10**；按并行度反算，见下 | 每个数据库的连接池上限。worker 各占源、目标一条连接，池不够时只会排队 |
-| `sync.initial-load-insert-first` | `true` | 开 / 关 | 开 | 空表用 INSERT 代替 upsert；已有数据的表仍走幂等 upsert |
-| `sync.defer-secondary-indexes` | `true` | 开 / 关 | 开 | 非唯一二级索引延到全量完成后建；主键与唯一索引始终立即创建 |
-| `写入期间暂停目标外键` | 开 | 开 / 关 | 开 | 任务级选项，避免写入顺序导致的约束失败，也减少逐行约束检查 |
-
-**并行度与连接池的硬关系**：源库与目标库是两份不同的连接配置时，`max-pool-size` 必须 **≥ 并行度 + 1**（主流程占源、目标各一条）；两侧共用同一份连接配置时，必须 **≥ 2 × 并行度 + 2**。默认池 5 时，前者最多 4 个 worker，后者最多 1 个。并行度最终取 `min(配置值, 8, 池能容纳的 worker 数)`，被压低时日志会提示。同一连接配置上多个任务同时运行时，剩余席位按活跃任务数均分。
-
-**超出范围的行为**：批次、fetch 超过 20000 或并行度超过 8 不会报错，而是截断到上限并在日志中提示；`chunk-size ≤ 0` 则关闭分块，整表退回单次流式读取（此时并行度不生效）。
-
-**作用范围**：以上参数只影响首次全量与重建基线，不改变增量轮询与 CDC 回放。全局值写在 `application.yml`；批次与并行度可在任务详情页的"全量加载性能"卡片按任务覆盖（留空用全局值），其余参数只读全局配置。
-
-### 实测基准
-
-容器单机、50 万行 Oracle 表，批量 2000：
-
-| 场景 | 配置 | 结果 |
-|---|---|---|
-| 空表全量写入方式 | `MERGE` vs `INSERT` | 约 8.4 万行/秒 vs **21.1 万行/秒** |
-| 单表并行度 | 1 / 2 / 4 worker | 11.7 万 / 18.4 万 / **21.6 万行/秒** |
-| 二级索引 | 边写边维护 vs 全量后创建 | 11.1s vs **5.9s + 0.5s**（约快 47%） |
-
-> 基准用于说明参数方向，不是承诺值。实际吞吐取决于源库与目标库的磁盘、网络、驱动版本、表宽与并发负载。
-
-### 调优步骤
-
-1. **先跑单表基线**：并行度 1、批量 2000，记下 `rows/s` 与 `read/write/commit` 占比。
-2. **看最大占比**：`commit%` 最大先把批量 2000 提到 5000；`write%` 最大先查目标库约束、索引与大字段；`read%` 最大先查源库游标与扫描范围，再把 fetch 提到 5000。
-3. **再加并行度**：确认连接池足够后，从 2 加到 4，每次只改一个变量并重新看日志；4 以上收益明显递减。
-4. **确认批处理生效**：`rowsPerBatch` 应接近批量大小；长期不足一半说明驱动没有批处理或大字段在拆批。
-5. **生产库错峰**：与业务共享的库把并行度设为 1，批量保持 1000–2000；专用迁移窗口再逐步加并行（2–4），chunk 保持 5 万–20 万。
-
-### 性能曲线与采样配置
-
-全量日志回答"这一轮为什么慢"，性能页回答"过去一小时、一天、一周发生了什么"。两张页面上的曲线由后台采样器写入元数据库，打开页面时不临时查询目标库。
-
-| 设置 | 默认 | 作用 |
-|---|---|---|
-| `metrics.enabled` | `true` | 采样总开关；关闭后不再产生新样本，已存样本保留到过期清理 |
-| `metrics.retention-days` | `7` | 样本保留天数；`≤ 0` 不清理 |
-| `metrics.app-interval-ms` | `60000` | 进程 CPU / 堆 / GC 与主机资源采样间隔 |
-| `metrics.task-interval-ms` | `60000` | 每个同步任务的同步行数、延迟与失败次数采样间隔 |
-| `metrics.db-interval-ms` | `300000` | 连接健康与库内指标（会话、QPS、缓存命中率、锁等待）采样间隔；会打开到被监控库的会话 |
-| `metrics.db-initial-delay-ms` | `30000` | 首次连接采样延迟；重启后约 30 秒出数据，不必等满一个间隔 |
-| `metrics.capacity-interval-ms` | `3600000` | 表数 / 行数 / 占用空间统计间隔；目录统计只对 MySQL、Oracle、SQL Server、PostgreSQL、DB2 可用 |
-| `metrics.prometheus-token` | *(空)* | Prometheus 抓取令牌；为空时 `/api/metrics/prometheus` 返回 404 |
-
-- **数据库性能页**（管理员）：连接延迟与可用性、库内会话 / QPS / 缓存命中率 / 锁等待，以及表数、行数与占用空间曲线；可切换 1 小时 / 24 小时 / 7 天。
-- **同步任务性能页**：已同步行数、同步延迟、连续失败次数，以及"每个时间段的同步行数""变更类型占比""变更最多的表"。
-- **口径**：行数序列按每个时间桶内新增的同步行数求和；轮询任务的延迟按最近一次成功周期计时，CDC 按源提交时刻计时；没有采样的时间桶保持断线，不补零。
-- **开销与权限**：进程与任务采样是本地读取；连接采样会打开会话，库内指标读取数据库自身的统计视图，账号缺少某项权限时只影响对应指标。不需要时把 `metrics.enabled` 设为 `false`，不影响同步链路。
+> 完整的日志字段说明、瓶颈判断表、连接池硬约束与分步调优见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)；性能曲线与采样配置见[用户操作手册](https://jync.qqmu.com/docs/jync-user-guide.pdf)。
 
 ---
 
@@ -370,134 +264,61 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 <a name="databases"></a>
 ## 支持的数据库
 
-内置 **34 种**：MySQL、MariaDB、Oracle、SQL Server、DB2、PostgreSQL、openGauss、**华为 GaussDB**、**达梦**、**人大金仓**、**OceanBase**、**TiDB**、**中兴 GoldenDB**、**腾讯 TDSQL（MySQL 版）**、**阿里 PolarDB（MySQL 版）**、**万里 GreatDB**、**银联 UPDRDB**、**星环 KunDB**、**平安 RASESQL**、**东方金信 SeaboxSQL**、**瀚高**、**海量 Vastbase**、**崖山**、**南大通用 GBase**、**神通 Oscar**、**Apache Doris**、**SAP HANA**、**ClickHouse**、**Apache Hive**、**Apache Impala**、**Elasticsearch**、**MongoDB**、**MongoDB（原生驱动）**、H2。
+内置 **34 种**预设类型，其中二十五种驱动随包内置。下图是官网的数据库能力地图：左侧数据源、中间两种引擎、右侧目标，卡片标签标明它可参与的模式；点图可看完整说明。
 
-- **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时独立 `URLClassLoader` 加载；可指定方言家族（通用 / Oracle / MySQL / PostgreSQL / SQL Server / DB2 / SAP HANA）。
-- **驱动内置**：除 **GBase**、**神通**、**华为 GaussDB**、**SAP HANA**、**ClickHouse**、**Hive**、**Impala**、**Elasticsearch**、**MongoDB（Atlas SQL）** 外均随包内置。这些厂商未提供可再分发的官方构件（SAP ngdbc 虽已上架 Maven Central，许可证仍不允许再分发），需自备 jar 并填写路径；驱动类名与预设不同时可在同一张卡片覆盖。
-- **协议兼容预设**：万里 GreatDB、银联 UPDRDB、星环 KunDB 兼容 MySQL 协议；平安 RASESQL、东方金信 SeaboxSQL 兼容 PostgreSQL 协议，复用内置驱动与对应方言族。
-- **SAP HANA**：独立方言家族，支持结构同步与轮询式数据同步（时间戳 / 主键增量），写入用 `UPSERT … WITH PRIMARY KEY`，分页走 `LIMIT / OFFSET`，视图与存储过程/函数用 `CREATE OR REPLACE` 重建，表注释走 `COMMENT ON`。HANA 不公开事务日志，**真 CDC 需要 SAP SLT 或 SDI**，本工具不提供。
-- **专属迁移不走 JDBC**：Easysearch、MongoDB、KingbaseES 的专属迁移都不作为 `DatabaseType` 出现在实时同步或 ETL 的能力矩阵里。它们由「专属连接」和专属任务完成一次性的整对象复制，与上面的 JDBC 连接、同步任务、ETL 任务互不影响。
-  - **Elasticsearch / OpenSearch → Easysearch**：搜索连接 + 整索引复制（settings、mappings、别名与文档）。
-  - **MongoDB → MongoDB**：原生 `mongodb-driver-sync` 连接，复制集合选项、索引与文档，`_id` 原样保留。
-  - **MongoDB → KingbaseES**：采样推断列后建表写入，嵌套文档与数组写成 TEXT 的 JSON，不展开为列。
-  - 凭据只存加密字段、页面不回显；**MongoDB URI 与 Kingbase JDBC URL 中禁止写密码**（Kingbase 还禁止 `user` / `password` 参数），测试连接与运行日志也不输出 URI。限制见 [已知限制](docs/known-limitations.md#11-专属迁移esopensearch--easysearchmongodb--mongodb--kingbasees)。
-- **分析型 / 搜索型引擎（同步源 + ETL）**：Apache Doris、ClickHouse、Apache Hive、Apache Impala、Elasticsearch、MongoDB。它们没有日志 CDC，因此**只做实时同步的源**，可选策略为轮询与全表比对，**从不作为目标**（不做建表与 upsert）；表一律按无主键读取，详见 [已知限制](docs/known-limitations.md#36-分析型--搜索型引擎作为同步源)。ETL 中它们既可以是源，也可以是目标（Elasticsearch 与 MongoDB 除外——这两个的 SQL 接口只读，只能作 ETL 源）。MongoDB 提供两条路径：**MongoDB** 预置走官方 Atlas SQL JDBC 驱动（支持 Atlas 与启用 SQL Interface 的 Enterprise Advanced，驱动约 40 MB 需自备）；**MongoDB（原生驱动）** 使用随包内置的 Java 驱动，任何 `mongod` 都能直连，填集合名与可选的 Extended JSON 过滤条件即可，不需要 SQL 或外部 jar。
-- **华为 GaussDB** 与 openGauss 是两个产品：驱动 `com.huawei.gaussdb.jdbc.Driver`、URL 前缀 `jdbc:gaussdb://`，方言归入 PostgreSQL 系。
-- **PolarDB / TDSQL 分版本**：MySQL 版有独立预置；PostgreSQL 版选 PostgreSQL；PolarDB Oracle 兼容版请用自定义类型。
-- 驱动版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
+[![数据库能力地图：数据源、同步引擎与目标库](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
+
+- **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时用独立 `URLClassLoader` 加载；可指定方言家族（通用 / Oracle / MySQL / PostgreSQL / SQL Server / DB2 / SAP HANA）。
+- **驱动内置**：除 **GBase、神通 Oscar、华为 GaussDB、SAP HANA、ClickHouse、Hive、Impala、Elasticsearch、MongoDB（Atlas SQL）** 外均随包内置；这些厂商的构件不可再分发，需自备 jar 并填写路径，驱动类名与预设不同时可在同一张卡片覆盖。
+- **协议兼容预设**：万里 GreatDB、银联 UPDRDB、星环 KunDB 兼容 MySQL；平安 RASESQL、东方金信 SeaboxSQL 兼容 PostgreSQL，复用内置驱动与对应方言族。
+- **分析型 / 搜索型引擎**：Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 没有日志 CDC，**只作实时同步的源**（轮询 / 全表比对），从不作为目标；ETL 中除 Elasticsearch 与 MongoDB 外都可写入。MongoDB 有 Atlas SQL JDBC 与随包内置的原生驱动两条路径。
+- **专属迁移不走 JDBC**：Elasticsearch/OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES 由独立的「专属连接」与迁移任务完成，不进入上面的能力矩阵；凭据只存加密字段，MongoDB URI 与 Kingbase JDBC URL 禁止写密码。边界见[已知限制](docs/known-limitations.md#11-专属迁移esopensearch--easysearchmongodb--mongodb--kingbasees)。
+- GaussDB 与 openGauss 的区别、TDSQL / PolarDB 的分版本、HANA 的 CDC 限制等选型细节，见[官网数据库页](https://jync.qqmu.com/database.html)；驱动版本与许可证见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 
 ---
 
 <a name="deploy"></a>
-## 部署
+## 快速开始
 
 ### 环境要求
 
 | 项 | 要求 |
 |---|---|
 | JDK | **17+** |
-| Maven | 3.6+（仅源码编译需要） |
 | 端口 | 默认 `8080` |
 | 内存 / 磁盘 | 建议堆 ≥ 512MB，预留 1GB；大字段同步按最大单值放大堆 |
 | 工作目录 | 必须固定：`./data`（元数据库与密钥）与 `./logs` 相对进程工作目录生成 |
 
-首次启动会在工作目录创建 `./data` 与 `./logs`。**不要在不同目录反复启动**，否则会看到"配置都不见了"——实际是连到了另一个空的元数据库。
+首次启动会在工作目录创建 `./data` 与 `./logs`。**不要在不同目录反复启动**，否则会连到另一个空的元数据库，看起来像"配置都不见了"。
 
-```bash
-sudo mkdir -p /opt/jync && sudo chown -R jync:jync /opt/jync && cd /opt/jync
-```
-
-建议的目录结构：`jync.jar`、`application.yml`、`data/`（H2 元数据库与 `<库名>.key`，必须备份）、`logs/`。
-
-### 获取 jar
+### 获取并启动
 
 - GitHub：<https://github.com/vfaner/jync/releases/latest>
 - Gitee：<https://gitee.com/super_rgh/jync/releases/latest>
-- AtomGit（镜像）：<https://gitcode.com/vfaner/jync/releases/latest>
+- 源码编译：`mvn clean package -DskipTests`，产物 `target/jync.jar`
 
 ```bash
-git clone https://github.com/vfaner/jync.git
-cd jync
-mvn clean package -DskipTests
-cp target/jync.jar /opt/jync/
-```
-
-国内可用 Gitee：`git clone https://gitee.com/super_rgh/jync.git`。不跳过测试会执行约 4000 个用例。
-
-### 生产配置
-
-在 jar 同级目录创建 `application.yml`：
-
-```yaml
-server:
-  port: 8080
-
-sync:
-  poll-interval: 2000              # 全局轮询间隔（毫秒）
-  batch-size: 500                  # 增量 / CDC 回放每批行数（在线流量，保持小）
-  fetch-size: 1000                 # 增量读取结果集批量
-  full-load-batch-size: 2000       # 仅首次全量：每批行数（1-20000，建议 1000-5000）
-  full-load-fetch-size: 2000       # 仅首次全量：源端结果集批量（1-20000）
-  full-load-parallelism: 2         # 全量并行 worker 数（1-8，建议 1-4，受连接池约束）
-  chunk-size: 100000               # 全量每块行数（建议 5 万-20 万；0 关闭分块）
-  initial-load-insert-first: true  # 空表用 INSERT 代替 upsert
-  defer-secondary-indexes: true    # 全量完成后再建非唯一二级索引
-  max-pool-size: 5                 # 每库连接池上限（建议 5-10，须容纳并行度）
-  crypto-password: ""              # 留空 = 全新库首启自动生成，保存到 data/<库名>.key
-  crypto-salt: ""                  # 留空 = 同上；需要自管密钥再显式填写
-
-  # ai:
-  #   enabled: false               # 内网 / 离线：关闭 AI 辅助
-
-metrics:
-  enabled: true                    # 性能采样总开关
-  retention-days: 7                # 样本保留天数
-  app-interval-ms: 60000           # 进程资源采样间隔
-  task-interval-ms: 60000          # 任务吞吐采样间隔
-  db-interval-ms: 300000           # 连接健康与库内指标（会打开会话）
-  capacity-interval-ms: 3600000    # 表 / 行 / 空间统计
-  prometheus-token: ""             # 为空时关闭 Prometheus 端点
-
-app:
-  login:
-    # 应急通道：关闭本地登录后若外部认证不可用，设为 true（或启动时加
-    # JYN_RESET_LOGIN=true）启动一次，会重新开启本地登录并保存；修好后改回 false。
-    reset-on-startup: false
-  # 内网 / 离线：关闭版本检查
-  # update-check:
-  #   enabled: false
-```
-
-**外部元数据库（可选）**
-
-不想要 H2 文件库时，启动前把 `spring.datasource.*` 指向已有数据库即可，表结构由 `ddl-auto: update` 在首启自动创建：
-
-| 元数据库 | 驱动类 | URL 示例 |
-|---|---|---|
-| H2（默认） | `org.h2.Driver` | `jdbc:h2:file:./data/jync;MODE=MySQL;AUTO_SERVER=TRUE` |
-| MySQL 8 | `com.mysql.cj.jdbc.Driver` | `jdbc:mysql://db:3306/jync?useUnicode=true&characterEncoding=utf8` |
-| PostgreSQL 16 | `org.postgresql.Driver` | `jdbc:postgresql://db:5432/jync` |
-| Oracle 23 | `oracle.jdbc.OracleDriver` | `jdbc:oracle:thin:@//db:1521/FREEPDB1` |
-
-也可用 `SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` / `SPRING_DATASOURCE_DRIVER_CLASS_NAME` 环境变量覆盖。要点：
-
-- **先建库**：MySQL 用 `CREATE DATABASE jync DEFAULT CHARACTER SET utf8mb4;`；其余类型建空库即可。JDBC 驱动已随包内置。
-- **必须显式设置 `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT`**：自动生成的密钥依附于本地 `<库名>.key`，外部元数据库场景没有这个文件。
-- **已验证范围**：MySQL 8、PostgreSQL 16、Oracle 23 有真实数据库契约测试；SQL Server 与国产库未逐一实测为元数据库，上生产前请先在测试环境用同一驱动启动验证。
-- **换库不是迁移**：改用外部元数据库等于从一份空元数据开始，原 H2 里的连接、任务、游标与检查点不会自动带过去。
-- **多副本的前提**：H2 的 `AUTO_SERVER=TRUE` 只能同机多进程共享；跨主机多实例必须使用外部元数据库。
-
-启动命令：
-
-```bash
-cd /opt/jync
+mkdir -p /opt/jync && cd /opt/jync
 java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
   -jar jync.jar --spring.config.additional-location=file:./application.yml
 ```
 
 > ⚠️ 必须使用 `--spring.config.additional-location`（叠加覆盖）。替换式的 `spring.config.location` 会丢掉 jar 内置配置，症状是登录页显示 `??login.title_zh_CN??`、全新部署不建表。
 >
-> 🕐 `-Duser.timezone` 同时决定 Cron 的求值时区。服务器默认是 UTC 时，务必显式指定。
+> 🕐 `-Duser.timezone` 同时决定 Cron 的求值时区；服务器默认是 UTC 时务必显式指定。
+
+最小 `application.yml`：
+
+```yaml
+server:
+  port: 8080
+sync:
+  poll-interval: 2000
+  full-load-parallelism: 2
+  max-pool-size: 5
+  crypto-password: ""   # 留空自动生成，保存到 data/<库名>.key
+  crypto-salt: ""
+```
 
 ### 首次登录
 
@@ -510,157 +331,38 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
 
 **首次登录后必须修改密码**：未修改前只能停留在改密页；密码使用 BCrypt 存储。
 
-### 注册为系统服务
+### 部署到生产
 
-`/etc/systemd/system/jync.service`：
+生产配置、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份与内网离线部署的完整步骤见：
 
-```ini
-[Unit]
-Description=Jync heterogeneous database sync
-After=network-online.target
-Wants=network-online.target
+- [部署与运维手册（PDF）](https://jync.qqmu.com/docs/jync-ops-guide.pdf)
+- 官网[部署页](https://jync.qqmu.com/deploy.html)
+- 仓库内[容器部署说明](docs/deploy-container.md)
 
-[Service]
-Type=simple
-User=jync
-Group=jync
-WorkingDirectory=/opt/jync
-ExecStart=/usr/bin/java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
-  -jar /opt/jync/jync.jar --spring.config.additional-location=file:/opt/jync/application.yml
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload && sudo systemctl enable --now jync
-```
-
-### Docker 与 Kubernetes
-
-```bash
-docker build -t jync:1.11.0 .
-docker run -d --name jync -p 8080:8080 \
-  -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-  -e TZ=Asia/Shanghai --restart unless-stopped jync:1.11.0
-```
-
-或 `docker compose up -d --build`。运行镜像仅含 JRE，非 root 运行，内置 `HEALTHCHECK`；元数据与日志落在宿主机 `./data`、`./logs`，重建镜像不丢数据。
-
-```bash
-docker build -t registry.example.com/qqmu/jync:1.11.0 .
-docker push registry.example.com/qqmu/jync:1.11.0
-kubectl apply -k deploy/k8s/
-```
-
-清单默认镜像 `jync:1.11.0`，可用 `kustomization.yaml` 的 `images` 变换改仓库与 tag。Service 为 `ClusterIP`，集群外访问用 `port-forward` 或配置 Ingress。H2 元数据库是 `ReadWriteOnce` PVC，**副本数必须为 1**；需要多副本时先把元数据库换成外部 MySQL / PostgreSQL。
-
-### 反向代理与 HTTPS
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name jync.example.com;
-    ssl_certificate     /etc/nginx/certs/jync.crt;
-    ssl_certificate_key /etc/nginx/certs/jync.key;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
-    }
-}
-```
-
-HTTPS 部署请设置 `JYN_COOKIE_SECURE=true`。使用网关头统一认证时，还必须把网关地址加入 `app.security.trusted-proxies`，并确保网关剥离客户端伪造的身份头。
-
-### 升级与备份
-
-1. 停止服务，备份 `./data`（连同 `<库名>.key`）、`./logs` 与 `application.yml`。
-2. 用新版 `jync.jar` 替换旧文件并重启；表结构随 `ddl-auto: update` 自动演进。
-3. 停机期间源库发生的变更，重启后由增量或 CDC 自动补齐。
-4. 管理员也可在"系统信息"页使用内置版本检查与一键升级，旧 jar 保留为 `jync.jar.bak`；重启脚本会带上当前进程的 JVM 参数与程序参数（JDWP 调试参数除外）。
-
-> 🔐 `<库名>.key` 与元数据库必须成对备份。密钥丢失后，已保存的连接密码、AI 密钥与告警地址将无法解密，只能重新填写。
-
-### 内网与离线
-
-- `sync.ai.enabled=false`：隐藏 AI 菜单，AI 起草在发请求前直接拦截。
-- `app.update-check.enabled=false`：不再访问 GitHub / Gitee，升级入口同步隐藏。
-- 告警只在你配置 Webhook 并启用后才会发出请求；不配置则完全不外联。
-- 所有静态资源本地化，不使用 CDN 与 webfont。
+> 🔐 升级前备份 `./data`（连同 `<库名>.key`）、`./logs` 与 `application.yml`。密钥丢失后，已保存的连接密码、AI 密钥与告警地址将无法解密，只能重新填写。
 
 ---
 
 <a name="config"></a>
-## 配置项
+## 常用配置
 
-`application.yml` 的主要配置（`sync.*` 前缀）：
+`application.yml` 中最常用的 `sync.*` 键（完整清单见[用户操作手册](https://jync.qqmu.com/docs/jync-user-guide.pdf)）：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `sync.poll-interval` | `2000` | 全局轮询间隔（毫秒） |
 | `sync.batch-size` | `500` | 增量轮询与 CDC 回放的 JDBC 批次行数 |
 | `sync.fetch-size` | `1000` | 增量读取的结果集批量 |
-| `sync.full-load-batch-size` | `2000` | 仅首次全量：每批行数，范围 1–20000 |
-| `sync.full-load-fetch-size` | `2000` | 仅首次全量：源端结果集批量，范围 1–20000 |
-| `sync.full-load-parallelism` | `2` | 单表全量并行 worker 数，范围 1–8，受连接池约束 |
+| `sync.full-load-batch-size` | `2000` | 首次全量每批行数 |
+| `sync.full-load-parallelism` | `2` | 单表全量并行 worker 数，受连接池约束 |
 | `sync.chunk-size` | `100000` | 全量每块行数；`0` 关闭分块 |
-| `sync.initial-load-insert-first` | `true` | 空目标表用 INSERT 代替 upsert |
-| `sync.defer-secondary-indexes` | `true` | 非唯一二级索引延到全量完成后创建 |
-| `sync.max-pool-size` | `5` | 每个数据库连接池上限；并行度会被池上限反过来限制 |
-| `sync.pool-wait-ms` | `10000` | 池被占满时等待时长，超时则本轮退让到下一周期 |
-| `sync.safety-lag-ms` | `1000` | 时间戳水位线回退量 |
-| `sync.full-compare-max-rows` | `20000` | 自动选用全表比对的行数上限 |
-| `sync.delete-compare-max-rows` | `0` | 分块删除比对的行数上限；`0` 关闭 |
-| `sync.row-count-audit-interval-ms` | `60000` | 行数审计间隔；`0` 关闭 |
-| `sync.row-count-repair-max-rows` | `1000` | 审计发现缺行时按主键补齐的上限；超出则清空游标整表重载；`0` 关闭 |
-| `sync.max-unindexed-scan-rows` | `1000000` | 无索引游标列的探测上限；超过后停止 COUNT 探测并只告警一次；`0` 关闭 |
-| `sync.stuck-threshold-ms` | `1800000` | 轮询多久无进展视为卡死并告警；`0` 关闭 |
-| `sync.lock-ttl-ms` | `300000` | 同步锁租约时长 |
-| `sync.reconcile-interval-ms` | `30000` | 多实例调度对账周期 |
-| `sync.query-timeout-seconds` | `300` | 数据面语句超时；`0` 关闭 |
-| `sync.copy-timeout-seconds` | `1800` | 行拷贝（窗口查询与水位线 MAX）超时；`0` 关闭 |
-| `sync.metadata-query-timeout-seconds` | `60` | 元数据枚举语句超时 |
-| `sync.shutdown-wait-ms` | `20000` | 停机时等待在途轮次的宽限期 |
-| `sync.change-log-retention-days` | `30` | 变更日志保留天数 |
-| `sync.lob.streaming-enabled` | `true` | 大字段流式读写总开关 |
-| `sync.lob.inline-max-bytes` | `65536` | 不超过该字节数的大字段值留在堆内存 |
-| `sync.lob.cdc-spill-threshold-bytes` | `1048576` | CDC 事务缓冲中超过该值的 LOB 先落盘 |
-| `sync.lob.spill-max-bytes` / `spill-retention-hours` | `1 GiB` / `24` | 落盘总量上限与残留清理 |
-| `sync.cdc.server-id-offset` | `612000` | MySQL 假 replica server id 基数，实际 id = 偏移 + 任务 ID |
-| `sync.cdc.lock-ttl-ms` | `30000` | CDC 消费者租约时长 |
-| `sync.cdc.supervise-interval-ms` | `10000` | 各节点巡检并抢占 CDC 租约的周期 |
-| `sync.cdc.connect-timeout-ms` | `10000` | 连接源库的超时时间 |
-| `sync.cdc.reconnect-backoff-ms` | `1000` | 断线重连的初始退避 |
-| `sync.cdc.reconnect-backoff-max-ms` | `60000` | 断线重连的退避上限 |
-| `sync.cdc.max-transaction-rows` / `max-transaction-bytes` | `1000000` / `512 MiB` | 单个源事务的缓冲上限，超限按非瞬态失败停车；`0` 不限 |
-| `sync.cdc.logminer.batch-size` | `10000` | LogMiner 单批行数 |
-| `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 真空闲休眠 |
-| `sync.cdc.logminer.missing-lob-policy` | `skip` | 行外 LOB 无法还原时：`skip` 计数继续，`fail` 停车 |
-| `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL 逻辑解码真空闲休眠 |
-| `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | 复制槽滞留 WAL 的面板告警阈值（4 GiB） |
-| `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲休眠 |
-| `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口；`0` 关闭 |
-| `sync.alert.evaluate-interval-ms` / `initial-delay-ms` | `60000` / `45000` | 告警评估周期与首次延迟 |
-| `sync.crypto-password` / `sync.crypto-salt` | *(留空自动生成)* | 连接密码与告警地址的加密密钥 |
+| `sync.max-pool-size` | `5` | 每个数据库连接池上限 |
+| `sync.crypto-password` / `crypto-salt` | 留空自动生成 | 连接密码与告警地址的加密密钥 |
 | `sync.ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
 | `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求 |
-| `app.security.trusted-proxies` | *(空)* | 可信代理地址；同时决定网关头认证的可信来源 |
-| `metrics.enabled` | `true` | 性能采样总开关；关闭不影响同步链路 |
-| `metrics.retention-days` | `7` | 样本保留天数；`≤ 0` 不清理 |
-| `metrics.app-interval-ms` | `60000` | 进程资源采样间隔 |
-| `metrics.task-interval-ms` | `60000` | 同步任务吞吐与延迟采样间隔 |
-| `metrics.db-interval-ms` | `300000` | 连接健康与库内指标采样间隔 |
-| `metrics.db-initial-delay-ms` | `30000` | 首次连接采样延迟 |
-| `metrics.capacity-interval-ms` | `3600000` | 表数 / 行数 / 占用空间统计间隔 |
-| `metrics.prometheus-token` | *(空)* | Prometheus 抓取令牌；为空时端点返回 404 |
+| `metrics.enabled` | `true` | 性能采样总开关，关闭不影响同步链路 |
 
-> 连接密码、AI 密钥与告警 Webhook 地址以 AES-256 加密存储，`enc:` 前缀防止重复加密。密钥留空时首启自动生成。
+> 连接密码、AI 密钥与告警 Webhook 地址以 AES-256 加密存储，`enc:` 前缀防止重复加密；密钥留空时首启自动生成并写入 `data/<库名>.key`。
 
 ---
 
@@ -805,7 +507,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**4415 个测试：4414 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
+**4433 个测试：4432 通过，1 个仅限 Linux 的密钥文件权限用例在 macOS 上按环境跳过。**
 
 重点覆盖：
 
