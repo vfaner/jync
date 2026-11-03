@@ -619,7 +619,8 @@
 
   /**
    * 保存成功后同步页面状态：清掉「未保存」徽标、把刚保存的策略记为基线、按服务端
-   * 结论刷新启动/立即同步的可用性。勾选框与目标表名保持用户眼前的样子，不重建页面。
+   * 结论刷新启动/立即同步的可用性，并把对象选择面板排版成服务端会渲染的样子。
+   * 只移动/清空已有节点，不重建列表。
    */
   function applySavedConfig(p) {
     configDirty = false;
@@ -627,6 +628,57 @@
     var picked = configForm.querySelector('input[name=captureStrategy]:checked');
     if (picked) { configForm.setAttribute('data-original-strategy', picked.value); }
     applyNoSyncWork(p.noSyncWork);
+    reorderPickers();
+  }
+
+  /**
+   * 按「已勾选在前」重排每个对象选择列表，与详情页服务端渲染的顺序
+   * （ProjectService.selectedFirst）同口径：先勾选组、再其余，组内保持原顺序。
+   *
+   * <p>AJAX 保存不重渲染页面，而服务端排版用的正是刚保存的选择；不在这里补一遍，
+   * 用户点完保存看到的还是改动前的顺序，只能手动刷新才「生效」。只对保存成功调用：
+   * 点勾选时重排会让行在光标下跳动。
+   *
+   * <p>appendChild 移动的是现有节点，事件监听、输入框内容与勾选状态都原样保留；
+   * 列表头（.map-head）不在 .pick 里，位置不动。
+   */
+  function reorderPickers() {
+    document.querySelectorAll('[data-role="picker"]').forEach(function (panel) {
+      var list = panel.querySelector('.picker-list');
+      if (!list) { return; }
+      var rows = Array.prototype.slice.call(list.children).filter(function (el) {
+        return el.classList.contains('pick');
+      });
+      var chosen = rows.filter(isPicked);
+      var rest = rows.filter(function (row) { return !isPicked(row); });
+      var sorted = chosen.concat(rest);
+      var moved = sorted.some(function (row, i) { return row !== rows[i]; });
+      sorted.forEach(function (row) { list.appendChild(row); });
+      // 列表是 260px 的内部滚动区：顺序变了而滚动位置不动，用户看到的是完全
+      // 不同的几行。滚动到顶部展示勾选组；顺序没变（只改了别的配置）就别动，
+      // 免得在浏览深处时被无故拉回。
+      if (moved) { list.scrollTop = 0; }
+      normalizeSavedMappings(panel);
+    });
+  }
+
+  function isPicked(row) {
+    var box = row.querySelector('input[type="checkbox"]');
+    return !!(box && box.checked);
+  }
+
+  /**
+   * 目标表名回落到服务端真正保存的值：未勾选的行不提交映射，同名映射也按「保持
+   * 源表名」丢弃（ProjectService.normalizeTableNameMapping），这两类在刷新后的页面上
+   * 都显示为空输入框 + 源表名占位符。保存后不刷新，这里补上同样的显示。
+   */
+  function normalizeSavedMappings(panel) {
+    panel.querySelectorAll('.map-row').forEach(function (row) {
+      var target = row.querySelector('.map-target');
+      if (!target) { return; }
+      var source = target.getAttribute('data-source') || '';
+      if (!isPicked(row) || target.value === source) { target.value = ''; }
+    });
   }
 
   /** 显式全不选或轮询选项全关时，启动/立即同步只会空跑：禁用并挂上服务端给的原因。 */
