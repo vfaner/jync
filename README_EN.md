@@ -8,8 +8,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
+[![Gitee star](https://gitee.com/super_rgh/jync/badge/star.svg?theme=dark)](https://gitee.com/super_rgh/jync)
+[![Gitee fork](https://gitee.com/super_rgh/jync/badge/fork.svg?theme=dark)](https://gitee.com/super_rgh/jync)
 
-![Jync · Heterogeneous Database Real-Time Sync](docs/images/jync.png)
+![Jync · Heterogeneous Database Real-Time Sync](docs/images/jync.webp)
 
 An out-of-the-box web application that keeps **structure and data** in sync between **heterogeneous databases**: start one jar, pick **34 built-in database types (plus custom types)** in a browser, and a sync or ETL pipeline is running — search and document data additionally gets three **dedicated migration** chains that skip JDBC (Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB, MongoDB → KingbaseES). No Kafka, no Flink, no ZooKeeper, and not a line of job code.
 
@@ -18,36 +20,17 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 - **Incremental is one indexed query**: the default polling mode reads only rows past the cursor, so one read-only account is enough. Six source families can switch to log CDC for second-level latency.
 - **Structure travels with data**: missing tables, indexes, views and procedures are created automatically, with built-in dialect type mapping and function conversion.
 - **Resumable by design**: crashes, network drops and killed processes resume from the last checkpoint; every write is idempotent, and changes made while Jync was down are caught up on restart.
-- **Failures reach you**: seven fault categories — sync failures, CDC stalls, data drift and more — can be pushed to DingTalk, WeCom, Feishu or a custom Webhook.
 - **Dedicated migration too**: Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES copy whole indexes or collections over their own connection model, outside JDBC, leaving sync and ETL untouched.
+- **Failures reach you**: seven fault categories — sync failures, CDC stalls, data drift and more — can be pushed to DingTalk, WeCom, Feishu or a custom Webhook.
 
 | Resource | Link |
 |---|---|
-| **Download (GitHub)** | [github.com/vfaner/jync/releases/latest](https://github.com/vfaner/jync/releases/latest) |
-| **Download (Gitee)** | [gitee.com/super_rgh/jync/releases/latest](https://gitee.com/super_rgh/jync/releases/latest) |
-| **Mirror (AtomGit)** | [gitcode.com/vfaner/jync](https://gitcode.com/vfaner/jync) |
-| **Website** | [jync.qqmu.com](https://jync.qqmu.com) |
-| **Video walkthrough** | [Bilibili · 14 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
-| **Docs** | [User Guide](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [Overview](https://jync.qqmu.com/docs/jync-overview.pdf) |
+| **Download** | [Gitee release](https://gitee.com/super_rgh/jync/releases/latest) · [GitHub Releases](https://github.com/vfaner/jync/releases/latest) |
+| **Docs** | [Website](https://jync.qqmu.com) · [User Guide](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [Overview](https://jync.qqmu.com/docs/jync-overview.pdf) |
+| **Demo** | [Bilibili · 14 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
+| **Mirror** | [AtomGit (gitcode.com)](https://gitcode.com/vfaner/jync) — synced code and release assets, for faster access in mainland China |
 
-> AtomGit (gitcode.com) is a synced mirror of the code and release assets; downloads, issues and pull requests are handled on GitHub / Gitee.
-
----
-
-## Contents
-
-- [Background](#background)
-- [Capabilities](#features)
-- [Screens](#screenshots)
-- [Sync engine](#engine)
-- [Supported databases](#databases)
-- [Quick start](#deploy)
-- [Workflow](#workflow)
-- [Comparison with existing tools](#comparison)
-- [Architecture and stack](#architecture)
-- [Docs and tests](#docs)
-- [Contributing](#contributing)
-- [License](#license)
+> Downloads, issues and pull requests belong on Gitee / GitHub; AtomGit is a read-only mirror.
 
 ---
 
@@ -57,10 +40,6 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 When a public-sector or enterprise system moves from MySQL, Oracle or SQL Server to a domestic database such as DM (达梦), Kingbase or OceanBase, the migration rarely ends when the data is copied. Old and new systems run side by side, cutover happens in batches, and read-only archives coexist with live services — all of which require the two databases to **stay consistent for weeks or months**.
 
 Existing tools always leave one gap. Commercial sync products are licensed per node, with long procurement cycles and high cost. Log-based tools such as Debezium and Flink CDC are capable, but require Kafka, Flink and job orchestration before the first row moves. DataX and Kettle excel at one-off transfers, but do not own long-running incremental sync, structure synchronization or resume-from-checkpoint. **Jync turns that logic into a product**: one jar, a browser for connections, tables, scheduling and start/stop, and no scripts or message queues to operate. It is open source under MIT and fully self-hostable.
-
-- **One jar**: metadata store, scheduler and web UI included — run it on an isolated network.
-- **Minutes to first sync**: connections can be tested before saving, objects are checkboxes, and every setting has a default.
-- **Domestic databases first**: DM, Kingbase, OceanBase, TiDB and GaussDB have dedicated dialects.
 
 ---
 
@@ -80,6 +59,20 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 | Alerting | Webhook pushes for sync failures, stuck polling, projects not running, CDC stalls, data drift, unhealthy connections and PG slot backlog; DingTalk / WeCom / Feishu / generic JSON; cooldown and recovery notices |
 | Reliability and observability | Idempotent upsert, checkpoint resume, database leases, at-least-once; dashboard, change / audit / system logs, performance charts, optional Prometheus scrape endpoint |
 | Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout; local accounts plus three SSO modes |
+
+---
+
+<a name="databases"></a>
+## Supported databases
+
+**34 built-in types**, 25 of them with bundled drivers. The map below is from the website: the upper part is the JDBC real-time sync / ETL matrix, the bottom is the separate **dedicated migration** chain; click it for the full reference.
+
+[![Database capability map and dedicated migration chains](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
+
+- **Custom types**: JDBC URL, driver class and driver jar path, loaded at runtime in an isolated `URLClassLoader`; pick a dialect family.
+- **Bundled drivers**: GBase, Oscar, Huawei GaussDB, SAP HANA, ClickHouse, Hive, Impala, Elasticsearch and MongoDB (Atlas SQL) publish no redistributable artifact, so supply the jar and path; the driver class can be overridden on the same card.
+- **Analytic / search engines**: Doris, ClickHouse, Hive, Impala, Elasticsearch and MongoDB have no log-based CDC, so they are **real-time sync sources only** (polling / full compare); in ETL all but Elasticsearch and MongoDB can be written.
+- **Dedicated migration is not JDBC**: the three chains use dedicated connections and tasks, outside the capability matrix above; boundaries are in [Known limitations](docs/known-limitations.md). The GaussDB vs openGauss distinction, TDSQL / PolarDB editions and HANA's CDC limits are on the [website's database page](https://jync.qqmu.com/database.html).
 
 ---
 
@@ -120,20 +113,6 @@ A single-host container benchmark (500k-row Oracle table) measured **216k rows/s
 
 ---
 
-<a name="databases"></a>
-## Supported databases
-
-**34 built-in types**, 25 of them with bundled drivers. The map below is from the website: the upper part is the JDBC real-time sync / ETL matrix, the bottom is the separate **dedicated migration** chain; click it for the full reference.
-
-[![Database capability map and dedicated migration chains](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
-
-- **Custom types**: JDBC URL, driver class and driver jar path, loaded at runtime in an isolated `URLClassLoader`; pick a dialect family.
-- **Bundled drivers**: GBase, Oscar, Huawei GaussDB, SAP HANA, ClickHouse, Hive, Impala, Elasticsearch and MongoDB (Atlas SQL) publish no redistributable artifact, so supply the jar and path; the driver class can be overridden on the same card.
-- **Analytic / search engines**: Doris, ClickHouse, Hive, Impala, Elasticsearch and MongoDB have no log-based CDC, so they are **real-time sync sources only** (polling / full compare); in ETL all but Elasticsearch and MongoDB can be written.
-- **Dedicated migration is not JDBC**: the three chains use dedicated connections and tasks, outside the capability matrix above; boundaries are in [Known limitations](docs/known-limitations.md). The GaussDB vs openGauss distinction, TDSQL / PolarDB editions and HANA's CDC limits are on the [website's database page](https://jync.qqmu.com/database.html).
-
----
-
 <a name="deploy"></a>
 ## Quick start
 
@@ -144,7 +123,7 @@ A single-host container benchmark (500k-row Oracle table) measured **216k rows/s
 | Memory / disk | Heap ≥ 512 MB recommended, 1 GB free; LOB sync scales with the largest value |
 | Working directory | Fixed: `./data` (metadata store and key) and `./logs` are created relative to it |
 
-Download `jync.jar` from [GitHub Releases](https://github.com/vfaner/jync/releases/latest) or [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest); build from source with `mvn clean package -DskipTests` (output `target/jync.jar`).
+Download `jync.jar` from [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) or [GitHub Releases](https://github.com/vfaner/jync/releases/latest); build from source with `mvn clean package -DskipTests` (output `target/jync.jar`).
 
 ```bash
 mkdir -p /opt/jync && cd /opt/jync
@@ -193,26 +172,6 @@ Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `
 
 ---
 
-<a name="comparison"></a>
-## Comparison with existing tools
-
-> Scope: as of 2026-10, only the "out-of-the-box continuous heterogeneous sync" overlap; each tool is stronger in its own place. A fuller comparison is at <https://jync.qqmu.com/compare.html>.
-
-| Dimension | **Jync** | Debezium + Kafka | DataX | Kettle |
-|---|---|---|---|---|
-| Deployment | **One jar** | Kafka + Connect + ZK | Client scripts | Desktop + repository |
-| Configuration | **Web UI** | YAML / REST + consumer code | JSON jobs | Graphical ETL |
-| Time to first sync | **Minutes** | Days: Kafka stack first | Hours: hand-written JSON | Days: job model first |
-| Continuous incremental | **Polling / Cron + six log CDC engines** | Log-based | Not applicable | Partial (self-scheduled) |
-| Structure sync | **Tables / indexes / views / procedures created automatically** | Partial; sink code required | Pre-create tables | Partial |
-| Domestic databases | **DM / Kingbase / OceanBase and 10+ more as first-class citizens** | Partial | Partial | Partial |
-| Source intrusion | **Read-only by default**; CDC needs replication rights but stays read-only | binlog / WAL required | Read-only | Read-only |
-| Operating cost | **One process** | Streaming platform + consumers | External scheduler | Repository + scheduler |
-
-**Main differences**: one jar against a streaming stack; minutes to first sync; structure travels with data; built for domestic databases; full load is resumable and observable too.
-
----
-
 <a name="architecture"></a>
 ## Architecture and stack
 
@@ -220,19 +179,12 @@ Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `
 
 ```text
 com.qqmu.jync
-├── config           i18n, Quartz, Jackson, SecurityConfig, SyncProperties
-├── controller       MVC; controller/api exposes REST endpoints
+├── config / controller / dto / model / repository   configuration, MVC and data model
 ├── service
-│   ├── connection   connection management, driver loading and tests
-│   ├── metadata     dialect metadata readers + snapshots
-│   ├── converter    SqlDialect, type mapping, SQL body conversion
-│   ├── sync         full-load / incremental engines, structure sync, DDL execution
-│   ├── cdc          binlog / LogMiner / PG / SQL Server / YStream consumers
-│   ├── etl          extraction, write modes, checkpoints, batches
-│   ├── migration    dedicated migration: connection adapters and three chains
-│   ├── alert / task / lob / ai   alerting, scheduling and locks, LOBs, AI drafting
-│   └── ...
-├── model / repository / dto / util
+│   ├── connection / metadata / converter            connections, metadata, dialect conversion
+│   ├── sync / cdc / etl / migration                 the four data paths
+│   └── alert / task / lob / ai                      alerting, scheduling and locks, LOBs, AI
+└── util                                             utilities
 ```
 
 - **Three-layer lock**: Quartz `@DisallowConcurrentExecution` → per-task JVM `ReentrantLock` → database lease (across restarts and instances).
@@ -246,14 +198,12 @@ com.qqmu.jync
 - **Configuration, scheduling and tuning**: [docs/configuration.md](docs/configuration.md) (`sync.*` / `sync.cdc.*` keys, scheduling rules, column cleansing, CDC prerequisites and performance settings; in Chinese)
 - **Container deployment and operations**: [docs/deploy-container.md](docs/deploy-container.md)
 - **Known limitations**: [docs/known-limitations.md](docs/known-limitations.md)
-- **Project documents (PDF)**: [Overview](https://jync.qqmu.com/docs/jync-overview.pdf) · [User guide](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [Deployment and operations](https://jync.qqmu.com/docs/jync-ops-guide.pdf)
-- **Release history**: [GitHub Releases](https://github.com/vfaner/jync/releases) · [Gitee Releases](https://gitee.com/super_rgh/jync/releases) · [Third-party licenses](THIRD_PARTY_LICENSES.md)
 
 ```bash
 mvn test
 ```
 
-**4,439 tests: 4,438 pass, and one Linux-only key-file permission case is skipped on macOS by environment.** Coverage spans dialect and SQL rewriting, full load and resume, CDC prerequisites and position discipline for six engines, ETL and alerting, security (encrypted storage, viewer POST rejection, CSRF), UI i18n, and the dual-channel upgrade fallback.
+**The suite covers dialect and SQL rewriting, full load and resume, CDC prerequisites and position discipline for six engines, ETL and alerting, security (encrypted storage, viewer POST rejection, CSRF), UI i18n, and the dual-channel upgrade fallback.**
 
 Real-database integration tests (`*IT`, excluded from the default suite, require Docker): Oracle 23ai parallel full load with `ROWDEPENDENCIES`; MySQL 8 binlog baseline → streaming, crash rerun, 100k-row consistency and fault injection. Run with `-Dapi.version=1.44` (Docker Engine ≥ 29).
 
@@ -264,14 +214,19 @@ Real-database integration tests (`*IT`, excluded from the default suite, require
 
 | Channel | Account |
 |------|------|
-| QQ | [817094](https://wpa.qq.com/msgrd?v=3&uin=817094&site=qq&menu=yes) |
-| QQ | [2912167928](https://wpa.qq.com/msgrd?v=3&uin=2912167928&site=qq&menu=yes) |
+| QQ | [817094](https://wpa.qq.com/msgrd?v=3&uin=817094&site=qq&menu=yes) / [2912167928](https://wpa.qq.com/msgrd?v=3&uin=2912167928&site=qq&menu=yes) |
 | QQ group | [426669837 · 沐沐开源工坊](https://qun.qq.com/universal-share/share?ac=1&authKey=xm%2BfgdraFGDpH8GHkV4DbuMjArg6BsPdNnXKUqcWvFXI1ocS56TcioSRYOVBvn5Q&busi_data=eyJncm91cENvZGUiOiI0MjY2Njk4MzciLCJ0b2tlbiI6Ind0V1pMYlVieXJkQmtnMVgveUFsOHFnbFhTd28wUE03dy9uVUErVExBdnlkMENnMis0UmhqWlJjcURzRHFnUEMiLCJ1aW4iOiI4MTcwOTQifQ%3D%3D&data=tZVIfZoO6N9QWSJE6ZbdZR15OmuLpSVucid5TicWYaMgb9Go1B975NZk0iZOo69AEzXQ4XucFtenImLltzFI5w&svctype=4&tempid=h5_group_info) |
 | WeChat | qqmu66 |
 | Email | [vfaner@88.com](mailto:vfaner@88.com) |
 | Website | <https://jync.qqmu.com> |
 
 Issues, feature requests and pull requests are welcome through any channel above. If Jync helps you, a **Star** ⭐ is appreciated.
+
+### Sponsorship
+
+[![Supporters list](https://img.shields.io/badge/Donate-Supporters-ff69b4.svg)](https://jync.qqmu.com/donate.html)
+
+Every Jync feature is free and open source. If it saved you time, use the button above to buy me a coffee; leave a note when sponsoring and you will be listed among the supporters.
 
 ---
 
