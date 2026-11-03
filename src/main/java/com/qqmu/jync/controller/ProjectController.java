@@ -571,11 +571,15 @@ public class ProjectController {
                 config.setProcedures(procedures == null ? new LinkedHashSet<>()
                         : new LinkedHashSet<>(procedures));
             }
-            // 表名映射:只有面板真的渲染了这些行(mappingSource 在场)才按提交内容整体
-            // 替换。字段缺席表示源库列举失败或旧客户端提交,此时不能把已存映射清空。
-            if (mappingSource != null) {
-                config.setTableNameMapping(
-                        readTableNameMapping(mappingSource, mappingTarget, config));
+            // 表名映射:只有面板真的渲染了这些行才按提交内容整体替换。字段缺席有两种
+            // 来源——源库列举失败/旧客户端提交,此时不能把已存映射清空;面板渲染了但
+            // 所有行都没勾选,此时 mappingSource 同样缺席(未勾选行不提交映射),而
+            // 提交的映射仍是完整事实,已存映射必须一起清掉。
+            if (mappingSource != null || objectSelectionExplicit) {
+                config.setTableNameMapping(readTableNameMapping(
+                        mappingSource == null ? List.of() : mappingSource,
+                        mappingTarget == null ? List.of() : mappingTarget,
+                        config));
             }
             // CDC 空闲轮询间隔:留空=引擎默认;给值就不得低于安全下限,
             // 否则等于对源库做紧密挖掘会话循环(读侧还有一层兜底 clamp)。

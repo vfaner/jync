@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -1224,11 +1225,15 @@ public class ProjectService {
             String schema = source.getSchemaName() != null && !source.getSchemaName().isBlank()
                     ? source.getSchemaName()
                     : reader.resolveDefaultSchema(conn);
+            SyncConfig config = loadConfig(project);
             SourceObjects objects = new SourceObjects();
             objects.schema = schema;
-            objects.tables = reader.listTableNames(conn, schema);
-            objects.views = reader.listViewNames(conn, schema);
-            objects.procedures = reader.listProcedureNames(conn, schema);
+            objects.tables = selectedFirst(reader.listTableNames(conn, schema),
+                    config::includesTable);
+            objects.views = selectedFirst(reader.listViewNames(conn, schema),
+                    config::includesView);
+            objects.procedures = selectedFirst(reader.listProcedureNames(conn, schema),
+                    config::includesProcedure);
             return objects;
         } catch (SQLException e) {
             // Keep the driver's raw detail server-side; callers only surface the message key.
@@ -1236,6 +1241,27 @@ public class ProjectService {
                     project.getName(), e.toString());
             throw new IllegalStateException("error.source.objects.read.failed", e);
         }
+    }
+
+    /**
+     * Moves the objects already selected in the saved config to the front of the picker,
+     * preserving the reader's order inside each group.
+     *
+     * <p>A schema can hold thousands of objects, and the saved selection is what the user
+     * comes back to edit; leaving it scattered through the dictionary order means scrolling
+     * past every other table to find the handful that are actually synced.
+     */
+    private static List<String> selectedFirst(List<String> names, Predicate<String> selected) {
+        if (names == null || names.size() < 2) {
+            return names;
+        }
+        List<String> chosen = new ArrayList<>(names.size());
+        List<String> rest = new ArrayList<>(names.size());
+        for (String name : names) {
+            (selected.test(name) ? chosen : rest).add(name);
+        }
+        chosen.addAll(rest);
+        return chosen;
     }
 
     /**

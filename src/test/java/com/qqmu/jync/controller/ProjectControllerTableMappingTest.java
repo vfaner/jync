@@ -112,6 +112,23 @@ class ProjectControllerTableMappingTest {
     }
 
     @Test
+    void clearingEverySelectionAlsoClearsTheStoredMapping() throws Exception {
+        SyncConfig stored = stubConfig();
+        stored.getTableNameMapping().put("orders", "orders_legacy");
+
+        // 所有行都没勾选时，未勾选行的 mappingSource 与目标表名输入框都被禁用、不提交。
+        // 但面板渲染过(objectSelectionExplicit=true)，提交的映射就是完整事实：
+        // 已存映射必须跟着清掉，否则下次重新勾选会悄悄沿用旧目标表名。
+        mvc.perform(post("/projects/1/config").with(csrf())
+                        .param("objectSelectionExplicit", "true")
+                        .param("syncStructure", "true")
+                        .param("syncData", "true"))
+                .andExpect(status().is3xxRedirection());
+
+        assertThat(savedConfig().getTableNameMapping()).isEmpty();
+    }
+
+    @Test
     void aMissingMappingPayloadKeepsTheStoredMapping() throws Exception {
         SyncConfig stored = stubConfig();
         stored.getTableNameMapping().put("orders", "orders_legacy");

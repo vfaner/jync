@@ -546,6 +546,7 @@ class ProjectServiceTest {
         column.setName("total");
         table.getColumns().add(column);
         when(familyReader.readTable(conn, "public", "pg_orders")).thenReturn(table);
+        when(contextFactory.parseConfig(p)).thenReturn(new SyncConfig());
 
         service = new ProjectService(projectRepository, databaseConfigRepository,
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
@@ -556,6 +557,50 @@ class ProjectServiceTest {
 
         assertThat(service.listSourceObjects(1L).getTables()).containsExactly("pg_orders");
         assertThat(service.listTableColumns(1L, "pg_orders")).containsExactly("total");
+    }
+
+    @Test
+    void sourcePickersListSelectedObjectsFirst() throws Exception {
+        // A schema with thousands of tables renders every object in the picker. The saved
+        // selection has to lead: otherwise the tables the user actually chose sit thousands
+        // of rows down the list, behind whatever the source dictionary returned first.
+        Project p = project(1L);
+        p.setSourceDbId(10L);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(p));
+
+        com.qqmu.jync.model.DatabaseConfig source = new com.qqmu.jync.model.DatabaseConfig();
+        source.setId(10L);
+        source.setType(com.qqmu.jync.model.DatabaseType.POSTGRESQL);
+        when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(source));
+
+        java.sql.Connection conn = mock(java.sql.Connection.class);
+        when(dataSourceManager.getConnection(source)).thenReturn(conn);
+
+        com.qqmu.jync.service.metadata.MetadataReader reader =
+                mock(com.qqmu.jync.service.metadata.MetadataReader.class);
+        when(readerFactory.forType(any(), any())).thenReturn(reader);
+        when(reader.resolveDefaultSchema(conn)).thenReturn("public");
+        when(reader.listTableNames(conn, "public"))
+                .thenReturn(java.util.List.of("alpha", "beta", "gamma"));
+        when(reader.listViewNames(conn, "public"))
+                .thenReturn(java.util.List.of("v_alpha", "v_beta"));
+        when(reader.listProcedureNames(conn, "public"))
+                .thenReturn(java.util.List.of("p_alpha", "p_beta"));
+
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("gamma")));
+        config.setViews(new java.util.LinkedHashSet<>(java.util.List.of("v_beta")));
+        config.setProcedures(new java.util.LinkedHashSet<>(java.util.List.of("p_beta")));
+        config.setObjectSelectionExplicit(true);
+        when(contextFactory.parseConfig(p)).thenReturn(config);
+
+        ProjectService.SourceObjects objects = service.listSourceObjects(1L);
+
+        // Selected first, then the untouched reader order — never re-sorted alphabetically,
+        // so a user who remembers "the third row" does not see it move between saves.
+        assertThat(objects.getTables()).containsExactly("gamma", "alpha", "beta");
+        assertThat(objects.getViews()).containsExactly("v_beta", "v_alpha");
+        assertThat(objects.getProcedures()).containsExactly("p_beta", "p_alpha");
     }
 
     // --- force unlock ------------------------------------------------------------------------

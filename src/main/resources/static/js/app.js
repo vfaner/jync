@@ -730,7 +730,14 @@
       // 所以统一在这里刷新，而不是各自监听。
       panel.querySelectorAll('.map-row').forEach(function (row) {
         var cb = row.querySelector('input[type="checkbox"]');
-        row.classList.toggle('is-unchecked', !(cb && cb.checked));
+        var on = !!(cb && cb.checked);
+        row.classList.toggle('is-unchecked', !on);
+        // 未勾选的行不提交映射。服务端已按已保存的选择渲染 disabled，这里负责
+        // 单点/全选/清空之后同步；几千张表时每一行都提交两个字段会越过容器的
+        // 请求参数上限，排在后面的勾选被静默丢弃。
+        row.querySelectorAll('input[name="mappingSource"], .map-target').forEach(function (el) {
+          el.disabled = !on;
+        });
       });
       if (!counter) return;
       var n = 0;

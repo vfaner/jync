@@ -46,18 +46,23 @@
                     <span aria-hidden="true"></span>
                     <span th:text="#{project.tableMap.target}">Target</span>
                 </div>
+                <!--/* 未勾选的行不提交映射:每一行都带 mappingSource + mappingTarget 时,
+                       几千张表的源库光这两个字段就超过容器的请求参数上限,超出的勾选
+                       会被静默丢弃(见 app.js 与保存逻辑)。目标表名只对勾选的表有意义。 */-->
                 <div class="pick map-row" th:each="tbl : ${sourceObjects.tables}"
-                     th:with="mapped=${config.targetTableName(tbl)}">
+                     th:with="selected=${config.includesTable(tbl)},
+                              mapped=${config.targetTableName(tbl)}">
                     <label class="map-source">
                         <input type="checkbox" name="tables" th:value="${tbl}"
-                               th:checked="${config.includesTable(tbl)}">
+                               th:checked="${selected}">
                         <span th:text="${tbl}">table</span>
                     </label>
                     <span class="map-arrow" aria-hidden="true"></span>
-                    <input type="hidden" name="mappingSource" th:value="${tbl}">
+                    <input type="hidden" name="mappingSource" th:value="${tbl}"
+                           th:disabled="${!selected}">
                     <input type="text" class="input map-target" name="mappingTarget"
                            maxlength="128" th:value="${mapped == tbl ? '' : mapped}"
-                           th:placeholder="${tbl}"
+                           th:placeholder="${tbl}" th:disabled="${!selected}"
                            th:attr="data-source=${tbl}">
                 </div>
             </div>

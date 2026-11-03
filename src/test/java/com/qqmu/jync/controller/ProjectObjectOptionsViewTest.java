@@ -196,6 +196,61 @@ class ProjectObjectOptionsViewTest {
         assertCheckedAndEnabled(page, "syncProcedures");
     }
 
+    /**
+     * The parameter count is what breaks big schemas: every table row used to submit both
+     * {@code mappingSource} and {@code mappingTarget}, so a 9,000-table source posted ~18,000
+     * parameters — past Tomcat's 10,000 default. The rows the user did not tick carry no
+     * mapping, so they must not submit anything at all.
+     */
+    @Test
+    void uncheckedTableRowsDoNotSubmitTheirMappingFields() throws Exception {
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("proj");
+        project.setEnabled(false);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(List.of("BETA")));
+        config.setObjectSelectionExplicit(true);
+        when(projectService.findById(1L)).thenReturn(Optional.of(project));
+        when(projectService.loadConfig(project)).thenReturn(config);
+        when(databaseConfigService.findAll()).thenReturn(List.of());
+        when(projectService.findTask(1L)).thenReturn(Optional.empty());
+        when(projectService.findProgress(1L)).thenReturn(List.of());
+        when(projectService.isScheduled(1L)).thenReturn(false);
+        when(projectService.listSourceObjects(1L))
+                .thenReturn(objectsWith(List.of("ALPHA", "BETA"), List.of(), List.of()));
+
+        String page = renderDetail();
+
+        String uncheckedRow = rowForSource(page, "ALPHA");
+        assertThat(inputIn(uncheckedRow, "mappingSource")).contains("disabled=\"disabled\"");
+        assertThat(inputIn(uncheckedRow, "mappingTarget")).contains("disabled=\"disabled\"");
+        String checkedRow = rowForSource(page, "BETA");
+        assertThat(inputIn(checkedRow, "mappingSource")).doesNotContain("disabled");
+        assertThat(inputIn(checkedRow, "mappingTarget")).doesNotContain("disabled");
+    }
+
+    /** The one {@code .pick.map-row} block that renders {@code source} as its target field. */
+    private static String rowForSource(String page, String source) {
+        int at = page.indexOf("data-source=\"" + source + "\"");
+        assertThat(at).as("row for %s exists", source).isPositive();
+        int start = page.lastIndexOf("<div class=\"pick map-row\"", at);
+        int end = page.indexOf("</div>", at);
+        assertThat(start).as("row start for %s", source).isPositive();
+        assertThat(end).as("row end for %s", source).isGreaterThan(at);
+        return page.substring(start, end + "</div>".length());
+    }
+
+    private static String inputIn(String block, String name) {
+        int at = block.indexOf("name=\"" + name + "\"");
+        assertThat(at).as("input %s in row", name).isPositive();
+        int start = block.lastIndexOf("<input", at);
+        int end = block.indexOf(">", at);
+        assertThat(start).isPositive();
+        assertThat(end).isGreaterThan(at);
+        return block.substring(start, end + 1);
+    }
+
     @Test
     void objectListingFailureKeepsSwitchesUntouched() throws Exception {
         Project project = new Project();
