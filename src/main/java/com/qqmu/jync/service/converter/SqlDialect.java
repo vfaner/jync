@@ -216,6 +216,20 @@ public interface SqlDialect {
      */
     String mapType(ColumnMeta column, DatabaseType sourceType);
 
+    /**
+     * Adapts a type declaration as produced by {@link #mapType} (a DDL column type) into a
+     * type name legal inside {@code CAST(expr AS type)} for this product.
+     *
+     * <p>Most dialects accept the same type names in both positions. MySQL does not: its
+     * CAST allowlist is CHAR/NCHAR (not VARCHAR), SIGNED/UNSIGNED (not INT/BIGINT),
+     * DATETIME (not TIMESTAMP), BINARY (not VARBINARY) and so on. Returns {@code null} when
+     * the declaration has no CAST form at all (e.g. ENUM, YEAR), so callers block instead
+     * of emitting SQL the target rejects.
+     */
+    default String castType(String declaration) {
+        return declaration;
+    }
+
     String getCreateTableSql(TableMeta table, String targetSchema, String targetTable,
                              DatabaseType sourceType);
 

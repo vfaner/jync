@@ -189,6 +189,27 @@ public class SqlServerDialect extends AbstractSqlDialect {
         return "GETDATE()";
     }
 
+    /**
+     * T5: GETDATE() returns a datetime rounded to 1/300 second. On a DATETIME2 column that
+     * silently loses the precision the column was chosen for, so the default must use
+     * SYSDATETIME() (and SYSDATETIMEOFFSET() for the offset type), which carry full
+     * fractional-second precision.
+     */
+    @Override
+    protected String adjustDefaultForType(String renderedDefault, String targetType) {
+        if (renderedDefault == null) {
+            return null;
+        }
+        String type = targetType.trim().toUpperCase(java.util.Locale.ROOT);
+        if (type.startsWith("DATETIMEOFFSET")) {
+            return "SYSDATETIMEOFFSET()";
+        }
+        if (type.startsWith("DATETIME2")) {
+            return "SYSDATETIME()";
+        }
+        return renderedDefault;
+    }
+
     @Override
     public String getModifyColumnSql(String schema, String table, ColumnMeta column,
                                      DatabaseType sourceType) {
@@ -246,7 +267,7 @@ public class SqlServerDialect extends AbstractSqlDialect {
             String params = procedure.getParameters().stream()
                     .filter(p -> !"RETURN".equalsIgnoreCase(p.getMode()))
                     .map(p -> "@" + stripAt(p.getName()) + " " + p.getTypeName()
-                            + ("OUT".equalsIgnoreCase(p.getMode()) ? " OUTPUT" : ""))
+                            + ("OUT".equalsIgnoreCase(p.getMode()) || "INOUT".equalsIgnoreCase(p.getMode()) ? " OUTPUT" : ""))
                     .collect(Collectors.joining(", "));
             stmts.add("CREATE " + (isFunction ? "FUNCTION " : "PROCEDURE ")
                     + qualify(schema, procedure.getName()) + " (" + params + ")\nAS\n" + trimmed);

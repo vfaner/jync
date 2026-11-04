@@ -14,11 +14,14 @@ import com.qqmu.jync.dto.ChangeEvent;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.IndexMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
+import com.qqmu.jync.dto.meta.ProcedureMeta.ParamMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.ChangeType;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.service.converter.DdlHeader;
+import com.qqmu.jync.service.converter.RoutineTypeMapper;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.util.JdbcUtil;
@@ -38,6 +41,8 @@ import lombok.extern.slf4j.Slf4j;
 public class StructureSyncService {
 
     private final SqlBodyConverter bodyConverter;
+
+    private final RoutineTypeMapper routineTypeMapper;
 
     /**
      * Secondary indexes whose creation failed while a table was being created, keyed
@@ -60,8 +65,16 @@ public class StructureSyncService {
     private record PendingIndex(IndexMeta index, TableMeta sourceTable) {
     }
 
-    public StructureSyncService(SqlBodyConverter bodyConverter) {
+    /** Test convenience: routine types are mapped with a default {@link RoutineTypeMapper}. */
+    StructureSyncService(SqlBodyConverter bodyConverter) {
+        this(bodyConverter, new RoutineTypeMapper());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public StructureSyncService(SqlBodyConverter bodyConverter,
+                                RoutineTypeMapper routineTypeMapper) {
         this.bodyConverter = bodyConverter;
+        this.routineTypeMapper = routineTypeMapper;
     }
 
     /**
@@ -555,8 +568,16 @@ public class StructureSyncService {
             translated.setName(view.getName());
             translated.setSchema(ctx.getTargetSchema());
             String body = bodyConverter.extractViewBody(view.getDefinition());
-            translated.setDefinition(bodyConverter.convert(body, ctx.effectiveSourceType(),
-                    ctx.effectiveTargetType()));
+            SqlBodyConverter.ConversionResult conversion = bodyConverter.convert(body,
+                    ctx.effectiveSourceType(), ctx.effectiveTargetType());
+            if (conversion.blocked()) {
+                // Emitting the DDL would create an object that compiles but returns different
+                // data; refuse and say precisely what to change instead.
+                return ApplyOutcome.failed("Automatic conversion of view " + view.getName()
+                        + " is not safe: " + String.join("; ", conversion.blockingReasons())
+                        + ". Fix the source object or provide a DDL override.");
+            }
+            translated.setDefinition(conversion.sql());
             statements = dialect.getCreateViewSql(translated, ctx.getTargetSchema(),
                     ctx.effectiveSourceType());
         }
@@ -624,10 +645,56 @@ public class StructureSyncService {
             translated.setName(proc.getName());
             translated.setSchema(ctx.getTargetSchema());
             translated.setRoutineType(proc.getRoutineType());
-            translated.setReturnType(proc.getReturnType());
-            translated.setParameters(proc.getParameters());
-            translated.setDefinition(bodyConverter.convert(proc.getDefinition(),
-                    ctx.effectiveSourceType(), ctx.effectiveTargetType()));
+
+            // Map parameter types: vendor spellings -> target dialect using routineTypeMapper
+            List<ParamMeta> mappedParams = new ArrayList<>();
+            for (ParamMeta param : proc.getParameters()) {
+                String typeName = param.getTypeName();
+                Integer size = param.getSize();
+                RoutineTypeMapper.Mapping mapped = routineTypeMapper.map(typeName, size,
+                        ctx.effectiveSourceType(), dialect);
+
+                if (dialect.family() != ctx.effectiveSourceType().getFamily() && !mapped.resolved()) {
+                    // Cross-family parameter type with no recognized mapping: keep the raw name
+                    // verbatim, and warn the user if this is problematic for the target.
+                    log.warn("Routine {} parameter {} uses unrecognized type {} for cross-family"
+                                    + " conversion; the target dialect may reject it",
+                            proc.getName(), param.getName(), typeName);
+                }
+                ParamMeta copy = new ParamMeta();
+                copy.setName(param.getName());
+                copy.setMode(param.getMode());
+                copy.setTypeName(mapped.typeName());
+                copy.setSize(size);
+                copy.setOrdinalPosition(param.getOrdinalPosition());
+                mappedParams.add(copy);
+            }
+            translated.setParameters(mappedParams);
+
+            // Map return type for functions; fail if it cannot be resolved
+            if (translated.isFunction()) {
+                String returnType = proc.getReturnType();
+                RoutineTypeMapper.Mapping mappedReturn = routineTypeMapper.map(
+                        returnType, null, ctx.effectiveSourceType(), dialect);
+
+                if (!mappedReturn.resolved()) {
+                    return ApplyOutcome.failed("Function " + proc.getName()
+                            + " has an unresolvable return type '" + returnType
+                            + "'; provide a DDL override or fix the source object.");
+                }
+                translated.setReturnType(mappedReturn.typeName());
+            }
+
+            SqlBodyConverter.ConversionResult conversion = bodyConverter.convertProcedure(
+                    proc.getDefinition(), ctx.effectiveSourceType(),
+                    ctx.effectiveTargetType());
+            if (conversion.blocked()) {
+                return ApplyOutcome.failed("Automatic conversion of " + proc.getRoutineType()
+                        + " " + proc.getName() + " is not safe: "
+                        + String.join("; ", conversion.blockingReasons())
+                        + ". Fix the source object or provide a DDL override.");
+            }
+            translated.setDefinition(conversion.sql());
             statements = dialect.getCreateProcedureSql(translated, ctx.getTargetSchema(),
                     ctx.effectiveSourceType());
         }

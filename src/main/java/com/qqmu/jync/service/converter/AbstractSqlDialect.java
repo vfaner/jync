@@ -548,6 +548,8 @@ public abstract class AbstractSqlDialect implements SqlDialect {
             log.debug("Skipping the default of column {}: {} does not accept one",
                     col.getName(), type);
             def = null;
+        } else {
+            def = adjustDefaultForType(def, type);
         }
         String defaultClause = def == null ? null : " DEFAULT " + def;
 
@@ -582,6 +584,18 @@ public abstract class AbstractSqlDialect implements SqlDialect {
      */
     protected boolean defaultClauseAllowed(String targetType) {
         return true;
+    }
+
+    /**
+     * Rewrites an already-rendered default so it matches the rendered target type.
+     *
+     * <p>Examples handled per product: MySQL's DATE columns cannot hold a
+     * CURRENT_TIMESTAMP default (it becomes the {@code (CURRENT_DATE)} expression form),
+     * and SQL Server's DATETIME2 needs SYSDATETIME() rather than the datetime-precision
+     * GETDATE() the portable renderer produced. Null input passes through.
+     */
+    protected String adjustDefaultForType(String renderedDefault, String targetType) {
+        return renderedDefault;
     }
 
     /**
@@ -666,7 +680,18 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         }
         // Already a literal or a function call the target is likely to understand.
         if (trimmed.startsWith("'") || trimmed.startsWith("\"")) {
-            return normalizeQuotedDefault(trimmed);
+            String quoted = normalizeQuotedDefault(trimmed);
+            // T3: a MySQL zero date is not a date on any other product (and PostgreSQL/Oracle/
+            // SQL Server reject it), so drop the default on temporal columns for non-MySQL
+            // targets. On a VARCHAR column the same text is just an ordinary string literal.
+            if (family() != DatabaseType.DialectFamily.MYSQL
+                    && isTemporalType(column.getJdbcType())
+                    && ZERO_DATE_LITERAL.matcher(quoted).matches()) {
+                log.debug("Dropping non-portable MySQL zero-date default for column {}",
+                        column.getName());
+                return null;
+            }
+            return quoted;
         }
         if (isCurrentTimestampDefault(upper)) {
             return currentTimestampFunction();
@@ -681,6 +706,18 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         // Losing a default is recoverable; a failed CREATE TABLE blocks the whole table.
         log.debug("Skipping non-portable default for column {}: {}", column.getName(), trimmed);
         return null;
+    }
+
+    /** MySQL zero date, optionally with an all-zero time portion (and fractional zeros). */
+    private static final java.util.regex.Pattern ZERO_DATE_LITERAL =
+            java.util.regex.Pattern.compile(
+                    "'0000-00-00(?: 00:00:00(?:\\.0+)?)?'");
+
+    private static boolean isTemporalType(int jdbcType) {
+        return jdbcType == Types.DATE || jdbcType == Types.TIME
+                || jdbcType == Types.TIMESTAMP
+                || jdbcType == Types.TIME_WITH_TIMEZONE
+                || jdbcType == Types.TIMESTAMP_WITH_TIMEZONE;
     }
 
     /** Converts a double-quoted default (PostgreSQL style) into single quotes. */

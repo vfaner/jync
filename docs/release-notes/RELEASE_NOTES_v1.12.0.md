@@ -22,11 +22,13 @@ v1.12.0 不加新的数据源类型，把重点放在「同步之前能预判、
 - **MariaDB 空转误报更新**：MariaDB 驱动默认返回「found rows」，`ON DUPLICATE KEY UPDATE` 即使没有改动也返回 1，安全滞后重放会把每个空转周期都记成一次更新。预设 URL 增加 `useAffectedRows=true` 后，插入/更新/未变分别返回 1/2/0，行数审计与结果计数恢复准确。
 - **MariaDB 流式读取**：此前面向 MySQL 家族统一使用 `Integer.MIN_VALUE` 作为 fetch size，MariaDB 驱动会直接报 `invalid fetch size`；现在只对 MySQL Connector/J 使用哨兵，MariaDB 用普通正数流式读取，ETL 与同步共用同一判定。
 - **内容校验的日期比较**：修正 `TIMESTAMP` / `DATETIME` 在不同驱动下带时区偏移导致的误判，统一按墙钟时间比较。
+- **视图 / 存储过程方言改写补漏**：Oracle `DECODE` / `NVL2` 改写为标准 `CASE`；`FETCH FIRST` / `OFFSET … FETCH` 与 MySQL `LIMIT` 双向分页改写现在覆盖子查询与分号结尾；`CONVERT` 改写为 `CAST` 时会同步映射类型名；MySQL `WITH ROLLUP` 改写为标准 `ROLLUP(...)`；`TRUE` / `FALSE` 在 Oracle、SQL Server 上改写为 `1` / `0`。跨方言族的过程化例程正文（变量、游标、循环、条件/异常处理）不再机械 mangling，而是与 PostgreSQL `::`、带样式的 SQL Server `CONVERT`、字符集 `CONVERT … USING`、目标方言没有的 JSON 访问符、SQL Server 裸 `FETCH FIRST`、Oracle 旧式外连接等无法保证等价的写法一起**阻断并提示 DDL 覆盖**，而不是生成可能执行但结果错误的 SQL。
+- **建表字段特性按方言替换**：MySQL 8.4 与 PostgreSQL 16 实测均拒绝 DECIMAL/NUMERIC 自增，这类列按精度提升到 TINYINT/SMALLINT/INT/BIGINT（PG 为 SERIAL/BIGSERIAL）；纯 `DATE` 列上的当前时间默认值改为 `(CURRENT_DATE)`；MySQL `'0000-00-00'` 默认值在其他产品的时间列上丢弃；SQL Server `DATETIME2` / `DATETIMEOFFSET` 默认函数改用 `SYSDATETIME()` / `SYSDATETIMEOFFSET()`。HANA 按官方文档保留 scale 0 的 `DECIMAL(p,0)` identity、正数 scale 提升到整数段；该 identity 规则本轮未在真 HANA 实例重跑。
 
 ## 提醒
 
 - **内容校验是抽样，不是全表哈希。** 它要求表有主键、走增量策略、首次全量已完成，主键列不能有清洗规则；无主键表、`FULL_COMPARE`、ETL 与专属迁移不走这项校验。恒等游标看不到已有行的更新，这类盲区仍需行数审计、全表比对或日志 CDC。详见[已知限制 3.7](../known-limitations.md)。
 - **预检不是一次真实同步。** 它只比较源与快照、检查目标形状，不替代一次实际 cycle；CDC 探测可能较慢，页面会显示运行态。
 - **诊断包按敏感文件处理。** 白名单与脱敏是尽力而为，日志和变更详情里仍可能出现未知格式的业务敏感文本；不要把诊断包直接贴到公开渠道。
-- **验证范围以矩阵为准。** MariaDB 11.4 与 ClickHouse 24.8 在 Docker 下自动验证；Doris、Elasticsearch SQL、KingbaseES、YashanDB 的环境门控测试本次未运行，不能据此宣称这些版本已全部验证。ClickHouse JDBC 仍不随包分发。
+- **验证范围以矩阵为准。** MariaDB 11.4 与 ClickHouse 24.8 在 Docker 下自动验证；Doris、Elasticsearch SQL、KingbaseES、YashanDB 的环境门控测试本次未运行，不能据此宣称这些版本已全部验证。HANA 的基础 DDL/分页/upsert 已于 2026-11-01 在 HANA Express 2.00.082 实测，但 DECIMAL identity 的精度/标度规则只按官方文档处理，v1.12.0 未真库重跑。ClickHouse JDBC 仍不随包分发。
 - 本次无破坏性变更，替换 `jync.jar` 重启即可；升级前备份 `./data` 与 `application.yml`。

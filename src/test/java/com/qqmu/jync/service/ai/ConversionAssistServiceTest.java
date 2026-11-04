@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
@@ -30,6 +31,8 @@ import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.converter.MySqlDialect;
+import com.qqmu.jync.service.converter.RoutineTypeMapper;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
@@ -72,7 +75,7 @@ class ConversionAssistServiceTest {
         service = new ConversionAssistService(projectRepository, databaseConfigRepository,
                 projectService, dataSourceManager, readerFactory,
                 mock(SqlDialectFactory.class), mock(SqlBodyConverter.class),
-                mock(AiSqlAssistant.class), validator, providerService);
+                mock(AiSqlAssistant.class), validator, providerService, new RoutineTypeMapper());
 
         project = new Project();
         project.setId(1L);
@@ -469,7 +472,8 @@ class ConversionAssistServiceTest {
 
         SqlBodyConverter bodyConverter = mock(SqlBodyConverter.class);
         when(bodyConverter.extractViewBody(any())).thenReturn("SELECT 1 FROM DUAL");
-        when(bodyConverter.convert(any(), any(), any())).thenReturn("SELECT 1");
+        when(bodyConverter.convert(any(), any(), any()))
+                .thenReturn(new SqlBodyConverter.ConversionResult("SELECT 1", List.of()));
         SqlDialect dialect = mock(SqlDialect.class);
         when(dialect.getCreateViewSql(any(), any(), any()))
                 .thenReturn(List.of("CREATE VIEW V_SALES AS SELECT 1"));
@@ -479,7 +483,7 @@ class ConversionAssistServiceTest {
         when(dialectFactory.forType(any(), any(), any())).thenReturn(dialect);
         service = new ConversionAssistService(projectRepository, databaseConfigRepository,
                 projectService, dataSourceManager, readerFactory, dialectFactory,
-                bodyConverter, mock(AiSqlAssistant.class), validator, providerService);
+                bodyConverter, mock(AiSqlAssistant.class), validator, providerService, new RoutineTypeMapper());
 
         ConversionAssistService.Detail detail = service.load(1L, "VIEW", "V_SALES");
 
@@ -521,7 +525,7 @@ class ConversionAssistServiceTest {
         when(dialectFactory.forType(any(), any(), any())).thenReturn(dialect);
         service = new ConversionAssistService(projectRepository, databaseConfigRepository,
                 projectService, dataSourceManager, readerFactory, dialectFactory,
-                mock(SqlBodyConverter.class), assistant, validator, providerService);
+                passthroughBodyConverter(), assistant, validator, providerService, new RoutineTypeMapper());
 
         service.draft(1L, "VIEW", "V_SALES");
 
@@ -565,7 +569,7 @@ class ConversionAssistServiceTest {
         when(dialectFactory.forType(any(), any(), any())).thenReturn(dialect);
         service = new ConversionAssistService(projectRepository, databaseConfigRepository,
                 projectService, dataSourceManager, readerFactory, dialectFactory,
-                mock(SqlBodyConverter.class), assistant, validator, providerService);
+                passthroughBodyConverter(), assistant, validator, providerService, new RoutineTypeMapper());
 
         AiProvider provider = new AiProvider();
         provider.setId(7L);
@@ -609,8 +613,8 @@ class ConversionAssistServiceTest {
         when(dialectFactory.forType(any(), any(), any())).thenReturn(dialect);
         service = new ConversionAssistService(projectRepository, databaseConfigRepository,
                 projectService, dataSourceManager, readerFactory, dialectFactory,
-                mock(SqlBodyConverter.class), mock(AiSqlAssistant.class), validator,
-                providerService);
+                passthroughBodyConverter(), mock(AiSqlAssistant.class), validator,
+                providerService, new RoutineTypeMapper());
 
         service.load(1L, "VIEW", "V_SALES");
 
@@ -619,5 +623,44 @@ class ConversionAssistServiceTest {
         // "APP" exists only on the source. Writing it into the mechanical statement fabricates
         // a target schema, and an override saved from that statement then targets it.
         assertThat(schema.getValue()).isEqualTo("cee");
+    }
+
+    /** A mock whose convert simply passes the body through, as same-family conversion would. */
+    @Test
+    @DisplayName("the mechanical routine preview carries target-dialect parameter/return types")
+    void theMechanicalRoutinePreviewCarriesTargetDialectTypes() throws Exception {
+        // An Oracle function: VARCHAR2(100) parameter, NUMBER(10,2) return, bare body.
+        ProcedureMeta proc = new ProcedureMeta();
+        proc.setRoutineType("FUNCTION");
+        proc.setName("F_TAX");
+        proc.setReturnType("NUMBER(10,2)");
+        proc.setDefinition("RETURN 1");
+        ProcedureMeta.ParamMeta param = new ProcedureMeta.ParamMeta();
+        param.setName("P_NOTE");
+        param.setMode("IN");
+        param.setTypeName("VARCHAR2(100)");
+        proc.setParameters(List.of(param));
+        when(reader.readProcedure(any(), any(), eq("F_TAX"))).thenReturn(proc);
+
+        // Real MySQL dialect + real converter + real type mapper: the preview must be built
+        // from the same calls structure sync runs, not a simplified re-implementation.
+        SqlDialectFactory dialectFactory = mock(SqlDialectFactory.class);
+        when(dialectFactory.forType(any(), any(), any())).thenReturn(new MySqlDialect());
+        service = new ConversionAssistService(projectRepository, databaseConfigRepository,
+                projectService, dataSourceManager, readerFactory, dialectFactory,
+                new SqlBodyConverter(), mock(AiSqlAssistant.class), validator, providerService,
+                new RoutineTypeMapper());
+
+        ConversionAssistService.Detail detail = service.load(1L, "FUNCTION", "F_TAX");
+
+        assertThat(detail.getMechanicalSql()).contains("VARCHAR(100)").contains("DECIMAL(10,2)");
+        assertThat(detail.getMechanicalSql()).doesNotContain("VARCHAR2");
+    }
+
+    private static SqlBodyConverter passthroughBodyConverter() {
+        SqlBodyConverter converter = mock(SqlBodyConverter.class);
+        when(converter.convert(any(), any(), any())).thenAnswer(invocation ->
+                new SqlBodyConverter.ConversionResult(invocation.getArgument(0), List.of()));
+        return converter;
     }
 }

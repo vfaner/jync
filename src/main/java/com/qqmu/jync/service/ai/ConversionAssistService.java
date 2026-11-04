@@ -24,6 +24,7 @@ import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.converter.DdlHeader;
+import com.qqmu.jync.service.converter.RoutineTypeMapper;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
@@ -66,6 +67,7 @@ public class ConversionAssistService {
     private final MetadataReaderFactory readerFactory;
     private final SqlDialectFactory dialectFactory;
     private final SqlBodyConverter bodyConverter;
+    private final RoutineTypeMapper routineTypeMapper;
     private final AiSqlAssistant assistant;
     private final CandidateValidator validator;
     private final AiProviderService providerService;
@@ -79,7 +81,8 @@ public class ConversionAssistService {
                                    SqlBodyConverter bodyConverter,
                                    AiSqlAssistant assistant,
                                    CandidateValidator validator,
-                                   AiProviderService providerService) {
+                                   AiProviderService providerService,
+                                   RoutineTypeMapper routineTypeMapper) {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
         this.projectService = projectService;
@@ -87,6 +90,7 @@ public class ConversionAssistService {
         this.readerFactory = readerFactory;
         this.dialectFactory = dialectFactory;
         this.bodyConverter = bodyConverter;
+        this.routineTypeMapper = routineTypeMapper;
         this.assistant = assistant;
         this.validator = validator;
         this.providerService = providerService;
@@ -230,11 +234,15 @@ public class ConversionAssistService {
         translated.setName(view.getName());
         translated.setSchema(targetSchema);
         String body = bodyConverter.extractViewBody(view.getDefinition());
-        translated.setDefinition(bodyConverter.convert(body, sourceType, targetType));
+        translated.setDefinition(bodyConverter.convert(body, sourceType, targetType).sql());
         return lastStatement(dialect.getCreateViewSql(translated, targetSchema, sourceType));
     }
 
-    /** As {@link #mechanicalView}, mirroring {@code StructureSyncService.applyProcedure}. */
+    /**
+     * As {@link #mechanicalView}, mirroring {@code StructureSyncService.applyProcedure},
+     * including its parameter/return type mapping — otherwise the preview shows a header the
+     * sync path would never run.
+     */
     private String mechanicalProcedure(ProcedureMeta proc, String targetSchema,
                                        DatabaseType sourceType, DatabaseType targetType,
                                        SqlDialect dialect) {
@@ -242,9 +250,32 @@ public class ConversionAssistService {
         translated.setName(proc.getName());
         translated.setSchema(targetSchema);
         translated.setRoutineType(proc.getRoutineType());
-        translated.setReturnType(proc.getReturnType());
-        translated.setParameters(proc.getParameters());
-        translated.setDefinition(bodyConverter.convert(proc.getDefinition(), sourceType, targetType));
+
+        List<ProcedureMeta.ParamMeta> mappedParams = new java.util.ArrayList<>();
+        for (ProcedureMeta.ParamMeta param : proc.getParameters()) {
+            RoutineTypeMapper.Mapping mapped = routineTypeMapper.map(param.getTypeName(),
+                    param.getSize(), sourceType, dialect);
+            ProcedureMeta.ParamMeta copy = new ProcedureMeta.ParamMeta();
+            copy.setName(param.getName());
+            copy.setMode(param.getMode());
+            copy.setTypeName(mapped.typeName());
+            copy.setSize(param.getSize());
+            copy.setOrdinalPosition(param.getOrdinalPosition());
+            mappedParams.add(copy);
+        }
+        translated.setParameters(mappedParams);
+
+        if (translated.isFunction()) {
+            // Read-only preview: render the mapped type (or the portable fallback the mapper
+            // chose); unlike the apply path, nothing is blocked here.
+            translated.setReturnType(routineTypeMapper.map(proc.getReturnType(), null,
+                    sourceType, dialect).typeName());
+        }
+
+        // Mirror StructureSyncService's routine-specific path: procedural cross-family bodies
+        // carry the same blocking marker they will hit when synchronization is attempted.
+        translated.setDefinition(bodyConverter.convertProcedure(proc.getDefinition(), sourceType,
+                targetType).sql());
         return lastStatement(dialect.getCreateProcedureSql(translated, targetSchema, sourceType));
     }
 

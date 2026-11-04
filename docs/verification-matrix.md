@@ -19,8 +19,8 @@
 
 | 产品 | 角色 | 测试版本 / 镜像 | 驱动 | 已验证策略 | 验证级别 | 最后验证 | 备注 |
 |---|---|---|---|---|---|---|---|
-| PostgreSQL | 源 + 目标 | `postgres:16`、`postgres:16-alpine` | `org.postgresql:postgresql`（Boot 管理） | 全量、时间戳/主键轮询、upsert、行数审计、内容校验、PG 逻辑 CDC、元数据库 | 自动化容器 | v1.11.0 及以前持续回归 | 目标端类型/主键/LOB 行为由多组 IT 覆盖 |
-| MySQL | 源 + 目标 | `mysql:8.0` | `mysql:mysql-connector-java:8.0.33` | 全量、轮询、upsert、binlog CDC、元数据库 | 自动化容器 | v1.11.0 及以前持续回归 | binlog CDC 有独立容器套件 |
+| PostgreSQL | 源 + 目标 | `postgres:16`、`postgres:16-alpine` | `org.postgresql:postgresql`（Boot 管理） | 全量、时间戳/主键轮询、upsert、行数审计、内容校验、PG 逻辑 CDC、元数据库；16 实测拒绝非整数 identity | 自动化容器 + 手工探针 | 自动化套件 v1.11.0 起持续回归；identity 探针 **2026-11-04（v1.12.0）** | 目标端类型/主键/LOB 行为由多组 IT 覆盖；DECIMAL/NUMERIC identity 报 "identity column type must be smallint, integer, or bigint" |
+| MySQL | 源 + 目标 | `mysql:8.0`（自动化）；`mysql:8.4.11`（本机探针，仅 identity DDL） | `mysql:mysql-connector-java:8.0.33` | 全量、轮询、upsert、binlog CDC、元数据库；8.4.11 实测拒绝 DECIMAL/NUMERIC `AUTO_INCREMENT` | 自动化容器 + 手工探针 | 自动化套件 v1.11.0 起持续回归；identity 探针 **2026-11-04（v1.12.0）** | binlog CDC 有独立容器套件；8.4 对任意 DECIMAL 自增报 ER_WRONG_FIELD_SPEC (1063) |
 | MariaDB | 源 + 目标 | `mariadb:11.4` | `org.mariadb.jdbc:mariadb-java-client`（Boot 管理） | 全量、时间戳轮询、更新送达、空转不写入、内容校验 | 自动化容器 | **2026-11-03（v1.12.0）** | `MariaDbPollingIT`；驱动用普通正数 fetch size 流式读取，URL 带 `useAffectedRows=true` |
 | Oracle | 源 + 目标 | `gvenzl/oracle-free:23`；`gvenzl/oracle-xe:11-slim`（目标标识列场景） | `com.oracle.database.jdbc:ojdbc8` | 全量、轮询、upsert、LogMiner CDC、LOB、元数据库、11g 目标 DDL 兼容 | 自动化容器 | v1.11.0 及以前持续回归 | 23 Free 在 arm64 原生运行；11 XE 用 amd64 模拟 |
 | SQL Server | 源 + 目标 | `mcr.microsoft.com/mssql/server:2022-latest` | `com.microsoft.sqlserver:mssql-jdbc` | 全量、CDC 源、目标写入（含 LOB） | 自动化容器 | v1.11.0 及以前持续回归 | |
@@ -30,6 +30,7 @@
 | KingbaseES | 源 + 目标 | 由使用者提供（无公开镜像） | `cn.com.kingbase:kingbase8:9.0.1.jre7`（内置） | 轮询建表与行送达、空转不重复；专属迁移建表/upsert | 环境门控 | 历史真库 V9R1C1B25（专属迁移）；轮询 IT 本次未运行 | `KingbasePollingIT` + `KingbaseLiveIT`；V8R3 与内置 9.x 驱动不兼容 |
 | YashanDB | 源 + 目标 | 由使用者提供（无公开镜像） | `com.yashandb:yashandb-jdbc:1.9.27`（内置） | 轮询建表与行送达；YStream CDC 需单独探测 | 环境门控 | 本次未运行 | `YashanDbPollingIT`；本测试**不宣称** YStream CDC 已验证 |
 | Elasticsearch SQL | 仅源 | 由使用者提供（集群 + X-Pack SQL JDBC jar） | 用户自备 `customJarPath`（如 `org.elasticsearch.xpack.sql.jdbc.EsDriver`） | 简单索引全量到 JDBC 目标 | 手工 / 环境门控 | 本次未运行 | `ElasticsearchSqlSourceIT`；驱动不在 Maven Central，缺 jar 时 `assumeTrue` 跳过 |
+| SAP HANA | 源 + 目标 | HANA Express 2.00.082（手工实例） | `com.sap.db:ngdbc`（已在 Maven Central，不随包再分发） | 结构同步、LIMIT/OFFSET、`UPSERT … WITH PRIMARY KEY`、轮询；真 CDC 不支持 | 手工 | 2026-11-01 spike；v1.12.0 未重跑 | 基本 DDL/分页/upsert 已实测；**DECIMAL identity 规则未真库验证**：按官方文档保留 scale 0 的 `DECIMAL(p,0)`，正数 scale 强制提升到整数段 |
 | H2 | 仅元数据 | 内嵌 | `com.h2database:h2` | Jync 元数据库启动/迁移 | 自动化（单元/上下文测试） | v1.11.0 及以前持续回归 | 不作为同步源或目标 |
 | MongoDB（原生驱动） | 仅 ETL/专属迁移源 | `mongo:6` | `org.mongodb:mongodb-driver-sync` | ETL 取数、Mongo → Mongo、Mongo → KingbaseES | 自动化容器 | v1.11.0 | 不参与 JDBC 实时同步矩阵 |
 

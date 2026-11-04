@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.converter;
 
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -222,6 +223,129 @@ public class MySqlDialect extends AbstractSqlDialect {
     protected String jsonType() {
         // Native JSON: PG json/jsonb text is valid JSON input.
         return "JSON";
+    }
+
+    /** Splits a mapped declaration into its base name and up to two parenthesized numbers. */
+    private static final Pattern CAST_TYPE_HEAD = Pattern.compile(
+            "^([A-Z ]+?)(?:\\s*\\(\\s*(\\d+)\\s*(?:,\\s*(\\d+)\\s*)?\\))?\\s*$");
+
+    /**
+     * T1: MySQL accepts AUTO_INCREMENT only on integer (and floating) types. An Oracle NUMBER
+     * or SQL Server DECIMAL identity maps to DECIMAL, which MySQL rejects with
+     * ER_WRONG_FIELD_SPEC (1063); force the smallest integer band covering the declared
+     * precision. An unconstrained NUMBER (no precision) is treated as 19 digits/BIGINT.
+     */
+    @Override
+    protected String autoIncrementColumnType(ColumnMeta col, DatabaseType sourceType) {
+        int jdbcType = col.getJdbcType();
+        if (jdbcType != Types.NUMERIC && jdbcType != Types.DECIMAL) {
+            return null;
+        }
+        int digits = col.getSize() == null ? 19 : col.getSize();
+        // Bands follow the signed integer maxima: 2 digits fit TINYINT(127), 4 fit
+        // SMALLINT(32767), 9 fit INT(2.1e9), anything wider BIGINT.
+        if (digits <= 2) {
+            return "TINYINT";
+        }
+        if (digits <= 4) {
+            return "SMALLINT";
+        }
+        if (digits <= 9) {
+            return "INT";
+        }
+        return "BIGINT";
+    }
+
+    /**
+     * T2: MySQL allows a CURRENT_TIMESTAMP default only on TIMESTAMP/DATETIME. A DATE column
+     * whose source default was SYSDATE/GETDATE() must carry the parenthesized expression
+     * form CURRENT_DATE (MySQL 8.0.13+) instead, which is ER_INVALID_DEFAULT (1067) otherwise.
+     */
+    @Override
+    protected String adjustDefaultForType(String renderedDefault, String targetType) {
+        if (renderedDefault != null && "DATE".equalsIgnoreCase(targetType.trim())
+                && renderedDefault.trim().toUpperCase(Locale.ROOT)
+                        .startsWith("CURRENT_TIMESTAMP")) {
+            return "(CURRENT_DATE)";
+        }
+        return renderedDefault;
+    }
+
+    /**
+     * MySQL's {@code CAST(... AS type)} accepts a fixed allowlist that does not match column
+     * DDL: no VARCHAR (CHAR/NCHAR instead), no INT/BIGINT (SIGNED/UNSIGNED), no TIMESTAMP
+     * (DATETIME), no VARBINARY (BINARY, and the width is mandatory because bare BINARY means
+     * BINARY(1)). LOB/JSON text becomes a width-less CHAR, which returns the full value on
+     * the supported versions.
+     */
+    @Override
+    public String castType(String declaration) {
+        if (declaration == null || declaration.isBlank()) {
+            return null;
+        }
+        String t = declaration.trim().toUpperCase(Locale.ROOT).replaceAll("\\s+", " ");
+        boolean unsigned = false;
+        if (t.endsWith(" UNSIGNED")) {
+            unsigned = true;
+            t = t.substring(0, t.length() - " UNSIGNED".length()).trim();
+        }
+        Matcher m = CAST_TYPE_HEAD.matcher(t);
+        if (!m.matches()) {
+            return null;
+        }
+        String base = m.group(1).trim();
+        String width = m.group(2);
+        String scale = m.group(3);
+        switch (base) {
+            case "VARCHAR", "CHAR VARYING", "CHARACTER VARYING", "CHAR", "CHARACTER" -> {
+                return charCastType("CHAR", width);
+            }
+            case "NVARCHAR", "NATIONAL CHAR VARYING", "NATIONAL CHARACTER VARYING",
+                    "NCHAR", "NATIONAL CHAR", "NATIONAL CHARACTER" -> {
+                return charCastType("NCHAR", width);
+            }
+            case "TINYTEXT", "MEDIUMTEXT", "LONGTEXT", "TEXT", "CLOB", "NCLOB",
+                    "LONG", "NTEXT", "JSON" -> {
+                return "CHAR";
+            }
+            case "TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "BIGINT",
+                    "BIT", "BOOLEAN", "BOOL" -> {
+                return unsigned ? "UNSIGNED" : "SIGNED";
+            }
+            case "DECIMAL", "DEC", "NUMERIC", "FIXED" -> {
+                return "DECIMAL" + (width == null ? ""
+                        : "(" + width + (scale == null ? "" : "," + scale) + ")");
+            }
+            case "FLOAT", "REAL", "DOUBLE", "DOUBLE PRECISION" -> {
+                // Accepted spellings on MySQL 8.0.17+; the mapper renders only FLOAT/DOUBLE.
+                return base;
+            }
+            case "DATE" -> {
+                return "DATE";
+            }
+            case "TIME" -> {
+                return "TIME";
+            }
+            case "TIMESTAMP", "DATETIME", "SMALLDATETIME" -> {
+                return "DATETIME" + (width == null ? "" : "(" + width + ")");
+            }
+            case "BINARY", "VARBINARY", "BINARY VARYING" -> {
+                return width == null ? null : "BINARY(" + width + ")";
+            }
+            default -> {
+                // ENUM, SET, YEAR, UUID, GEOMETRY and friends have no CAST form.
+                return null;
+            }
+        }
+    }
+
+    /** CHAR(N)/NCHAR(N) in a MySQL CAST caps the width at 255; a width-less form is legal. */
+    private static String charCastType(String name, String width) {
+        if (width == null) {
+            return name;
+        }
+        int n = Integer.parseInt(width);
+        return n > 255 ? null : name + "(" + n + ")";
     }
 
     @Override
@@ -709,8 +833,14 @@ public class MySqlDialect extends AbstractSqlDialect {
                 .append(qualify(schema, proc.getName()))
                 .append('(').append(params).append(')');
         if (isFunction) {
-            String ret = proc.getReturnType() == null ? "VARCHAR(255)" : proc.getReturnType();
-            sb.append("\nRETURNS ").append(ret).append("\nDETERMINISTIC");
+            String ret = proc.getReturnType();
+            // If no return type was mapped by RoutineTypeMapper, block the apply path instead
+            // of falling back to VARCHAR(255) silently. The conversion check already did that.
+            if (ret != null) {
+                sb.append("\nRETURNS ").append(ret);
+            }
+            // Omit DETERMINISTIC: MySQL only requires it for functions with non-deterministic
+            // behavior (not a safe default for automatically converted routines).
         }
         return sb.toString();
     }
