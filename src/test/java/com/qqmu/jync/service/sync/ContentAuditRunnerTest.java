@@ -222,6 +222,20 @@ class ContentAuditRunnerTest {
         }
     }
 
+    @Test
+    void auditProjectReportsAnUnexpectedReaderFailureInsteadOfThrowing() throws SQLException {
+        when(progressRepository.findByProjectIdAndObjectTypeAndObjectName(
+                PROJECT_ID, ObjectType.TABLE, "ORDERS")).thenReturn(Optional.of(progress));
+        when(sourceReader.readTable(sourceConn, null, "ORDERS"))
+                .thenThrow(new IllegalStateException("metadata unavailable"));
+
+        TableContentAudit result = runner.auditProject(PROJECT_ID, "ORDERS");
+
+        assertThat(result.status()).isEqualTo(TableContentAudit.Status.ERROR);
+        assertThat(result.table()).isEqualTo("ORDERS");
+        assertThat(result.detail()).contains("metadata unavailable");
+    }
+
     private static TableContentAudit ok() {
         return new TableContentAudit("ORDERS", TableContentAudit.Status.OK, 2, 2, 0, 0, 0,
                 List.of(), null, 3L);

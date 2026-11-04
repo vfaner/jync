@@ -108,26 +108,39 @@ final class DriverMongoMigrationGateway implements MongoMigrationGateway {
         if (documents.isEmpty()) {
             return new BulkInsertResult(0, 0);
         }
-        try {
-            int inserted = database.getCollection(collection)
-                    .insertMany(documents, new InsertManyOptions().ordered(ordered))
-                    .getInsertedIds().size();
-            return new BulkInsertResult(inserted, 0);
-        } catch (MongoBulkWriteException e) {
-            if (e.getWriteConcernError() != null) {
-                // A write-concern failure means the server may not have durably accepted the
-                // batch; reporting its duplicate errors as "skipped" would claim success.
-                throw e;
-            }
-            int duplicates = 0;
-            for (BulkWriteError error : e.getWriteErrors()) {
-                if (!isDuplicateKey(error)) {
+        MongoCollection<Document> target = database.getCollection(collection);
+        int inserted = 0;
+        int duplicates = 0;
+        int next = 0;
+        while (next < documents.size()) {
+            List<Document> batch = documents.subList(next, documents.size());
+            try {
+                inserted += target.insertMany(batch, new InsertManyOptions().ordered(ordered))
+                        .getInsertedIds().size();
+                return new BulkInsertResult(inserted, duplicates);
+            } catch (MongoBulkWriteException e) {
+                if (e.getWriteConcernError() != null) {
+                    // A write-concern failure means the server may not have durably accepted the
+                    // batch; reporting its duplicate errors as "skipped" would claim success.
                     throw e;
                 }
-                duplicates++;
+                for (BulkWriteError error : e.getWriteErrors()) {
+                    if (!isDuplicateKey(error)) {
+                        throw e;
+                    }
+                }
+                inserted += e.getWriteResult().getInsertedCount();
+                duplicates += e.getWriteErrors().size();
+                if (!ordered || e.getWriteErrors().isEmpty()) {
+                    return new BulkInsertResult(inserted, duplicates);
+                }
+                // An ordered insert stops at the first failing document, so the rest of the
+                // batch was never attempted. Resume right after it instead of dropping those
+                // documents; capped collections keep source order, so the retry stays ordered.
+                next += Math.max(e.getWriteErrors().get(0).getIndex(), 0) + 1;
             }
-            return new BulkInsertResult(e.getWriteResult().getInsertedCount(), duplicates);
         }
+        return new BulkInsertResult(inserted, duplicates);
     }
 
     @Override

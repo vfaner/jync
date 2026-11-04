@@ -93,7 +93,10 @@ public class ContentAuditRunner {
                     strategy, progress, ctx);
             record(ctx, result);
             return result;
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
+            // The reader and the connection pool can fail with unchecked exceptions too. The
+            // button reports the table's audit status, so they belong in an ERROR result
+            // rather than in a 500 from the controller.
             log.debug("Manual content audit of {} failed: {}", table, e.toString());
             return TableContentAudit.error(table, e.getMessage(), elapsed(started));
         }

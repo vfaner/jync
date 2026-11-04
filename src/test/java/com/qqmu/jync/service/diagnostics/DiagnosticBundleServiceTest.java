@@ -208,6 +208,20 @@ class DiagnosticBundleServiceTest {
     }
 
     @Test
+    void syncSettingsIncludeTheContentAuditKnobs() throws Exception {
+        Map<String, String> entries = entries(service().build());
+        JsonNode settings = mapper.readTree(entries.get("config/sync-settings.json"));
+
+        // The bundle is the support engineer's snapshot of runtime behaviour; a v1.12.0
+        // feature that is missing here cannot be reasoned about from the bundle alone.
+        assertThat(settings.get("contentAuditIntervalMs").asLong()).isEqualTo(900_000L);
+        assertThat(settings.get("contentAuditSampleSize").asInt()).isEqualTo(50);
+        assertThat(settings.get("contentAuditMaxRows").asLong()).isEqualTo(2_000_000L);
+        assertThat(settings.get("contentAuditMaxTablesPerCycle").asInt()).isEqualTo(1);
+        assertThat(settings.get("contentAuditTimeoutSeconds").asInt()).isEqualTo(60);
+    }
+
+    @Test
     void noSeededSecretReachesAnyEntry() throws Exception {
         DiagnosticBundleService.DiagnosticBundle bundle = service().build();
         Map<String, String> entries = entries(bundle);

@@ -5,12 +5,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Map;
 
 import org.bson.BsonDocument;
+import org.bson.BsonInt32;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,6 +31,7 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.InsertManyOptions;
+import com.mongodb.client.result.InsertManyResult;
 
 @SuppressWarnings("unchecked")
 class DriverMongoMigrationGatewayTest {
@@ -170,6 +174,29 @@ class DriverMongoMigrationGatewayTest {
         assertThat(gateway.listIndexes("orders")).containsExactlyElementsOf(indexes);
     }
 
+    @Test
+    void orderedInsertRetriesAfterADuplicateSoTheRestOfTheBatchIsNotDropped() {
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(database.getCollection("orders")).thenReturn(collection);
+        List<Document> documents = List.of(
+                new Document("_id", 1), new Document("_id", 2), new Document("_id", 3));
+        MongoBulkWriteException failure = bulkFailure(11000, 1, 1);
+        when(collection.insertMany(eq(documents), any(InsertManyOptions.class)))
+                .thenThrow(failure);
+        List<Document> remainder = List.of(documents.get(2));
+        when(collection.insertMany(eq(remainder), any(InsertManyOptions.class)))
+                .thenReturn(InsertManyResult.acknowledged(Map.of(0, new BsonInt32(3))));
+
+        BulkInsertResult result = gateway.insertMany("orders", documents, true);
+
+        assertThat(result).isEqualTo(new BulkInsertResult(2, 1));
+        ArgumentCaptor<InsertManyOptions> options = ArgumentCaptor.forClass(InsertManyOptions.class);
+        verify(collection, times(2))
+                .insertMany(ArgumentMatchers.<List<Document>>any(), options.capture());
+        assertThat(options.getAllValues())
+                .allSatisfy(option -> assertThat(option.isOrdered()).isTrue());
+    }
+
     private static MongoBulkWriteException duplicateKeyFailure(int inserted) {
         return bulkFailure(11000, inserted);
     }
@@ -180,9 +207,18 @@ class DriverMongoMigrationGatewayTest {
 
     private static MongoBulkWriteException bulkFailure(int code, int inserted,
                                                        WriteConcernError concern) {
+        return bulkFailure(code, inserted, 0, concern);
+    }
+
+    private static MongoBulkWriteException bulkFailure(int code, int inserted, int index) {
+        return bulkFailure(code, inserted, index, null);
+    }
+
+    private static MongoBulkWriteException bulkFailure(int code, int inserted, int index,
+                                                       WriteConcernError concern) {
         BulkWriteResult writeResult = mock(BulkWriteResult.class);
         when(writeResult.getInsertedCount()).thenReturn(inserted);
-        BulkWriteError error = new BulkWriteError(code, "write error", new BsonDocument(), 0);
+        BulkWriteError error = new BulkWriteError(code, "write error", new BsonDocument(), index);
         return new MongoBulkWriteException(writeResult, List.of(error), concern,
                 new ServerAddress());
     }

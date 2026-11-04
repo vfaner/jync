@@ -235,6 +235,12 @@ public class DiagnosticBundleService {
         settings.put("rowCountAuditIntervalMs", properties.getRowCountAuditIntervalMs());
         settings.put("maxUnindexedScanRows", properties.getMaxUnindexedScanRows());
         settings.put("rowCountRepairMaxRows", properties.getRowCountRepairMaxRows());
+        settings.put("contentAuditIntervalMs", properties.getContentAuditIntervalMs());
+        settings.put("contentAuditSampleSize", properties.getContentAuditSampleSize());
+        settings.put("contentAuditMaxRows", properties.getContentAuditMaxRows());
+        settings.put("contentAuditMaxTablesPerCycle",
+                properties.getContentAuditMaxTablesPerCycle());
+        settings.put("contentAuditTimeoutSeconds", properties.getContentAuditTimeoutSeconds());
         settings.put("queryTimeoutSeconds", properties.getQueryTimeoutSeconds());
         settings.put("copyTimeoutSeconds", properties.getCopyTimeoutSeconds());
         settings.put("metadataQueryTimeoutSeconds", properties.getMetadataQueryTimeoutSeconds());
