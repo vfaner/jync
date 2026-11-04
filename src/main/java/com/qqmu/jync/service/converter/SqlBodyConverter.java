@@ -142,6 +142,8 @@ public class SqlBodyConverter {
         toDb2.put("SYSDATE", "CURRENT TIMESTAMP");
         toDb2.put("GETDATE", "CURRENT TIMESTAMP");
         toDb2.put("NOW", "CURRENT TIMESTAMP");
+        // DB2 has no LEN; LENGTH is its character-counting spelling.
+        toDb2.put("LEN", "LENGTH");
         toDb2.put("CEILING", "CEIL");
         toDb2.put("REPLICATE", "REPEAT");
         toDb2.put("RANDOM", "RAND");
@@ -233,6 +235,7 @@ public class SqlBodyConverter {
         result = convertIdentifierQuotes(result, from, to);
         result = convertConcatenation(result, from, to);
         result = convertMysqlIsNullPredicate(result, from, to);
+        result = rewriteEomonthMonthOffset(result, from, to);
         result = convertFunctions(result, from, to);
         CastRewrite cast = rewriteCastAndConvert(result, sourceType, targetType);
         result = cast.sql();
@@ -1444,6 +1447,9 @@ public class SqlBodyConverter {
             // NOW(fsp) needs a precision-aware replacement before the plain name rule, which
             // would otherwise leave a dangling precision (SYSDATE(6), GETDATE()(6)).
             String result = rewriteNowPrecision(code, to);
+            // MySQL's LENGTH counts bytes and CHAR_LENGTH characters; the same names mean the
+            // opposite on several targets, so the meaning is translated before the name maps.
+            result = rewriteMysqlLengthFunctions(result, from, to);
             // Only the empty RAND() call maps to PostgreSQL's RANDOM(); a seeded RAND(seed)
             // would become RANDOM(seed), which PostgreSQL rejects, so leave it for loud failure.
             if (to == DatabaseType.DialectFamily.POSTGRES) {
@@ -1478,6 +1484,110 @@ public class SqlBodyConverter {
     /** {@code NOW(3)} and friends — the precision argument must not survive a plain rename. */
     private static final Pattern NOW_WITH_PRECISION = Pattern.compile(
             "(?i)\\bNOW\\s*\\(\\s*(\\d+)\\s*\\)");
+
+    /**
+     * MySQL's {@code LENGTH} counts bytes, while the identically named function on Oracle,
+     * HANA and PostgreSQL counts characters; {@code CHAR_LENGTH} is the mirror image — the
+     * target families' byte-length function has a different name, and Oracle and SQL Server
+     * do not define {@code CHAR_LENGTH} at all. A plain rename therefore either returned a
+     * different number for every non-ASCII value or emitted a call the target rejects.
+     *
+     * <p>Only a MySQL source needs this: every other family's {@code LENGTH} already counts
+     * characters, which is what the targets' own {@code LENGTH}/{@code LEN} do. DB2's LENGTH
+     * is character-counting too, so a MySQL byte length keeps its name there — there is no
+     * byte-length scalar that also preserves the source's charset semantics.
+     */
+    private String rewriteMysqlLengthFunctions(String code, DatabaseType.DialectFamily from,
+                                               DatabaseType.DialectFamily to) {
+        if (from != DatabaseType.DialectFamily.MYSQL) {
+            return code;
+        }
+        String result = code;
+        switch (to) {
+            case ORACLE, HANA -> {
+                result = replaceFunctionWord(result, "LENGTH", "LENGTHB");
+                result = replaceFunctionWord(result, "CHAR_LENGTH", "LENGTH");
+                result = replaceFunctionWord(result, "CHARACTER_LENGTH", "LENGTH");
+            }
+            case POSTGRES -> result = replaceFunctionWord(result, "LENGTH", "OCTET_LENGTH");
+            case SQLSERVER -> {
+                result = replaceFunctionWord(result, "LENGTH", "DATALENGTH");
+                result = replaceFunctionWord(result, "CHAR_LENGTH", "LEN");
+                result = replaceFunctionWord(result, "CHARACTER_LENGTH", "LEN");
+            }
+            case DB2 -> {
+                result = replaceFunctionWord(result, "CHAR_LENGTH", "LENGTH");
+                result = replaceFunctionWord(result, "CHARACTER_LENGTH", "LENGTH");
+            }
+            default -> { }
+        }
+        return result;
+    }
+
+    private static String replaceFunctionWord(String sql, String from, String to) {
+        return sql.replaceAll("(?i)\\b" + java.util.regex.Pattern.quote(from) + "\\b",
+                java.util.regex.Matcher.quoteReplacement(to));
+    }
+
+    /** A SQL Server {@code EOMONTH(date, months)} call and its target-specific equivalent. */
+    private record LastDayRewrite(int start, int end, String replacement) {
+    }
+
+    private static final Pattern EOMONTH_CALL =
+            Pattern.compile("(?i)\\bEOMONTH\\s*\\(");
+
+    /**
+     * SQL Server's {@code EOMONTH(date, months)} takes an optional month offset; the LAST_DAY
+     * function on MySQL, Oracle, DB2 and HANA takes exactly one argument. Renaming the call
+     * without moving the offset produced {@code LAST_DAY(d, 1)}, which every one of those
+     * targets rejects — so the offset becomes month arithmetic instead:
+     * {@code LAST_DAY(DATE_ADD(d, INTERVAL n MONTH))} on MySQL and
+     * {@code LAST_DAY(ADD_MONTHS(d, n))} elsewhere. The one-argument call is left for the
+     * plain name map.
+     */
+    String rewriteEomonthMonthOffset(String sql, DatabaseType.DialectFamily from,
+                                     DatabaseType.DialectFamily to) {
+        if (to != DatabaseType.DialectFamily.MYSQL
+                && to != DatabaseType.DialectFamily.ORACLE
+                && to != DatabaseType.DialectFamily.DB2
+                && to != DatabaseType.DialectFamily.HANA) {
+            return sql;
+        }
+        String masked = maskNonCode(sql, from, to);
+        java.util.regex.Matcher m = EOMONTH_CALL.matcher(masked);
+        java.util.List<LastDayRewrite> rewrites = new ArrayList<>();
+        while (m.find()) {
+            int open = masked.indexOf('(', m.start());
+            int close = open < 0 ? -1 : findCloseParen(sql, open, from);
+            if (close < 0) {
+                continue;
+            }
+            java.util.List<String> args = splitTopLevelArguments(
+                    sql.substring(open + 1, close), from);
+            if (args.size() != 2) {
+                continue;
+            }
+            String date = args.get(0).trim();
+            String months = args.get(1).trim();
+            if (date.isEmpty() || months.isEmpty()) {
+                continue;
+            }
+            String replacement = to == DatabaseType.DialectFamily.MYSQL
+                    ? "LAST_DAY(DATE_ADD(" + date + ", INTERVAL " + months + " MONTH))"
+                    : "LAST_DAY(ADD_MONTHS(" + date + ", " + months + "))";
+            rewrites.add(new LastDayRewrite(m.start(), close + 1, replacement));
+        }
+        if (rewrites.isEmpty()) {
+            return sql;
+        }
+        // Replace from the end so earlier offsets stay valid as the text length changes.
+        StringBuilder out = new StringBuilder(sql);
+        for (int i = rewrites.size() - 1; i >= 0; i--) {
+            LastDayRewrite rewrite = rewrites.get(i);
+            out.replace(rewrite.start(), rewrite.end(), rewrite.replacement());
+        }
+        return out.toString();
+    }
 
     /**
      * Replaces precision-qualified {@code NOW(fsp)} calls for the two families whose entry

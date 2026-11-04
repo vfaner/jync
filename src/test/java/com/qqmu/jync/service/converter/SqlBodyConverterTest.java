@@ -580,6 +580,41 @@ class SqlBodyConverterTest {
         assertThat(out.replace("CHAR_LENGTH", "")).doesNotContain("LENGTH(");
     }
 
+    // --- MySQL measures LENGTH in bytes and CHAR_LENGTH in characters ----------------
+
+    /**
+     * MySQL's LENGTH returns bytes; the same name on Oracle, PostgreSQL, SQL Server and HANA
+     * counts characters, so a straight rename silently changed every non-ASCII result. The
+     * reverse holds for CHAR_LENGTH, which those families do not even define (Oracle and
+     * SQL Server reject the call outright). Each keeps its own meaning here.
+     */
+    @Test
+    void mysqlLengthKeepsByteSemanticsAndCharLengthKeepsCharacterSemantics() {
+        assertThat(conv("SELECT LENGTH(x) FROM t", DatabaseType.MYSQL, DatabaseType.ORACLE))
+                .contains("LENGTHB(x)");
+        assertThat(conv("SELECT LENGTH(x) FROM t", DatabaseType.MYSQL, DatabaseType.HANA))
+                .contains("LENGTHB(x)");
+        assertThat(conv("SELECT LENGTH(x) FROM t", DatabaseType.MYSQL, DatabaseType.POSTGRESQL))
+                .contains("OCTET_LENGTH(x)");
+        assertThat(conv("SELECT LENGTH(x) FROM t", DatabaseType.MYSQL, DatabaseType.SQLSERVER))
+                .contains("DATALENGTH(x)");
+
+        assertThat(conv("SELECT CHAR_LENGTH(x) FROM t", DatabaseType.MYSQL, DatabaseType.ORACLE))
+                .contains("LENGTH(x)");
+        assertThat(conv("SELECT CHAR_LENGTH(x) FROM t", DatabaseType.MYSQL, DatabaseType.HANA))
+                .contains("LENGTH(x)");
+        assertThat(conv("SELECT CHAR_LENGTH(x) FROM t", DatabaseType.MYSQL, DatabaseType.DB2))
+                .contains("LENGTH(x)");
+        assertThat(conv("SELECT CHAR_LENGTH(x) FROM t", DatabaseType.MYSQL, DatabaseType.SQLSERVER))
+                .contains("LEN(x)");
+        // PostgreSQL defines both spellings with the same split, so they stay untouched.
+        assertThat(conv("SELECT CHAR_LENGTH(x) FROM t",
+                DatabaseType.MYSQL, DatabaseType.POSTGRESQL)).contains("CHAR_LENGTH(x)");
+        // A literal that spells the function name is text, not a call.
+        assertThat(conv("SELECT 'LENGTH(x)' AS note FROM t",
+                DatabaseType.MYSQL, DatabaseType.ORACLE)).contains("'LENGTH(x)'");
+    }
+
     // --- MySQL one-argument ISNULL is a predicate, not a null-coalescing call ---------
 
     /**
@@ -774,6 +809,37 @@ class SqlBodyConverterTest {
                 DatabaseType.SQLSERVER, DatabaseType.ORACLE)).contains("LAST_DAY(d)");
         assertThat(conv("SELECT LAST_DAY(d) FROM t",
                 DatabaseType.ORACLE, DatabaseType.SQLSERVER)).contains("EOMONTH(d)");
+    }
+
+    /**
+     * SQL Server's {@code EOMONTH(date, months)} has an optional second argument; the target
+     * LAST_DAY functions take exactly one. A plain rename produced {@code LAST_DAY(d, 1)},
+     * which every non-SQL-Server family rejects, so the offset has to move into the argument.
+     */
+    @Test
+    void twoArgumentEomonthMovesTheMonthOffsetIntoTheArgument() {
+        assertThat(conv("SELECT EOMONTH(d, 1) FROM t",
+                DatabaseType.SQLSERVER, DatabaseType.ORACLE))
+                .contains("LAST_DAY(ADD_MONTHS(d, 1))");
+        assertThat(conv("SELECT EOMONTH(d, -1) FROM t",
+                DatabaseType.SQLSERVER, DatabaseType.MYSQL))
+                .contains("LAST_DAY(DATE_ADD(d, INTERVAL -1 MONTH))");
+        assertThat(conv("SELECT EOMONTH(d, 2) FROM t",
+                DatabaseType.SQLSERVER, DatabaseType.DB2))
+                .contains("LAST_DAY(ADD_MONTHS(d, 2))");
+        assertThat(conv("SELECT EOMONTH(d, 2) FROM t",
+                DatabaseType.SQLSERVER, DatabaseType.HANA))
+                .contains("LAST_DAY(ADD_MONTHS(d, 2))");
+        // A comma nested inside the first argument is not the argument separator.
+        assertThat(conv("SELECT EOMONTH(COALESCE(d1, d2), 1) FROM t",
+                DatabaseType.SQLSERVER, DatabaseType.ORACLE))
+                .contains("LAST_DAY(ADD_MONTHS(COALESCE(d1, d2), 1))");
+    }
+
+    @Test
+    void db2LenIsRenamedToItsLengthFunction() {
+        assertThat(conv("SELECT LEN(x) FROM t",
+                DatabaseType.SQLSERVER, DatabaseType.DB2)).contains("LENGTH(x)");
     }
 
     @Test

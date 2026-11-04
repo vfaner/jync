@@ -152,6 +152,24 @@ public abstract class AbstractSqlDialect implements SqlDialect {
             return jsonType();
         }
 
+        // MySQL's unsigned integers arrive with their signed JDBC width (TINYINT UNSIGNED
+        // is Types.TINYINT, SMALLINT UNSIGNED is Types.SMALLINT, INT UNSIGNED is
+        // Types.INTEGER), so the switch below would emit a column with half the source's
+        // range and every value above the signed maximum would fail at insert. One band up
+        // covers the full range; a MySQL-family target keeps the native unsigned spelling
+        // instead. BIGINT UNSIGNED keeps its own decimal widening below.
+        String unsignedInteger = mysqlUnsignedIntegerSpelling(c, sourceType);
+        if (unsignedInteger != null) {
+            if (family() == DatabaseType.DialectFamily.MYSQL) {
+                return unsignedInteger;
+            }
+            return switch (unsignedInteger) {
+                case "TINYINT UNSIGNED" -> smallIntType();
+                case "SMALLINT UNSIGNED" -> intType();
+                default -> bigIntType();
+            };
+        }
+
         switch (jdbcType) {
             case Types.BIT: {
                 // BIT(1) is a boolean; MySQL's BIT(n>1) is an n-bit UNSIGNED integer the
@@ -347,6 +365,40 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         }
         String name = c.getTypeName().trim().toUpperCase(Locale.ROOT);
         return name.startsWith("BIGINT") && name.contains("UNSIGNED");
+    }
+
+    /**
+     * The declared unsigned spelling of a MySQL-family integer column, or null when the
+     * column is signed, comes from another family, or is an unsigned BIGINT (which needs the
+     * decimal widening handled separately because 2^64-1 exceeds even a signed BIGINT).
+     *
+     * <p>The driver-reported JDBC type must match the declared width: an older Connector/J
+     * reports INT UNSIGNED as {@link Types#BIGINT}, and that column's range already fits a
+     * signed BIGINT, so re-widening it would be a needless type change.
+     */
+    private static String mysqlUnsignedIntegerSpelling(ColumnMeta c, DatabaseType sourceType) {
+        if (sourceType == null
+                || sourceType.getFamily() != DatabaseType.DialectFamily.MYSQL
+                || c.getTypeName() == null) {
+            return null;
+        }
+        String name = c.getTypeName().trim().toUpperCase(Locale.ROOT).replaceAll("\\s+", " ");
+        if (!name.contains("UNSIGNED")) {
+            return null;
+        }
+        int jdbcType = c.getJdbcType();
+        if (jdbcType == Types.TINYINT && name.startsWith("TINYINT")) {
+            return "TINYINT UNSIGNED";
+        }
+        if (jdbcType == Types.SMALLINT && name.startsWith("SMALLINT")) {
+            return "SMALLINT UNSIGNED";
+        }
+        if (jdbcType == Types.INTEGER
+                && (name.startsWith("INT") || name.startsWith("INTEGER")
+                    || name.startsWith("MEDIUMINT"))) {
+            return name.startsWith("MEDIUMINT") ? "MEDIUMINT UNSIGNED" : "INT UNSIGNED";
+        }
+        return null;
     }
 
     protected abstract String floatType();
