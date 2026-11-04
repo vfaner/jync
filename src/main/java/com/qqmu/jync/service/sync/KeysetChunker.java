@@ -354,10 +354,11 @@ public final class KeysetChunker {
     private static String cursorPredicate(SqlDialect dialect, CursorStrategy strategy,
                                           Object upperBound, List<Object> paramsOut) {
         String cursor = sqlRef(dialect, strategy);
+        String placeholder = dialect.comparisonPlaceholder(strategy.getJdbcType());
         paramsOut.add(upperBound);
         return strategy.isPseudoColumn()
-                ? cursor + " <= ?"
-                : cursor + " <= ? OR " + cursor + " IS NULL";
+                ? cursor + " <= " + placeholder
+                : cursor + " <= " + placeholder + " OR " + cursor + " IS NULL";
     }
 
     /**
@@ -452,7 +453,8 @@ public final class KeysetChunker {
                 .append(dialect.qualify(schema, table));
         if (upperBound != null && strategy != null && strategy.getColumn() != null) {
             String cursor = sqlRef(dialect, strategy);
-            inner.append(" WHERE (").append(cursor).append(" <= ?");
+            inner.append(" WHERE (").append(cursor).append(" <= ")
+                    .append(dialect.comparisonPlaceholder(strategy.getJdbcType()));
             if (!strategy.isPseudoColumn()) {
                 inner.append(" OR ").append(cursor).append(" IS NULL");
             }

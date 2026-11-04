@@ -998,6 +998,16 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         return "?";
     }
 
+    /**
+     * A comparison bound needs the same decoration as an assignment bind: the driver decides
+     * the parameter type from the placeholder alone, and a string TIME cursor compared
+     * against a PostgreSQL {@code time} column would otherwise fail on every cycle.
+     */
+    @Override
+    public String comparisonPlaceholder(Integer jdbcType) {
+        return placeholderFor(jdbcType);
+    }
+
     protected String quotedList(List<String> names) {
         return names.stream().map(this::quoteIdentifier).collect(Collectors.joining(", "));
     }

@@ -182,6 +182,38 @@ class SqlDialectTest {
         assertThat(oracle.mapType(ts, DatabaseType.POSTGRESQL)).isEqualTo("TIMESTAMP");
     }
 
+    @Test
+    void timeColumnsKeepFractionalSecondsOnMySqlTargets() {
+        ColumnMeta time = column("shift", "TIME", Types.TIME, 8);
+        // Plain TIME means scale 0 in MySQL, so the fraction of every synced value would be
+        // truncated — the same loss DATETIME(6) exists to avoid. PostgreSQL and SQL Server
+        // TIME already carry fractional seconds by default.
+        assertThat(mysql.mapType(time, DatabaseType.POSTGRESQL)).isEqualTo("TIME(6)");
+        assertThat(mysql.mapType(time, DatabaseType.MYSQL)).isEqualTo("TIME(6)");
+    }
+
+    @Test
+    void timeCastKeepsFractionalPrecisionOnMySql() {
+        // CAST(? AS TIME) without a precision rounds the bound value to whole seconds,
+        // undoing what the TIME(6) column mapping just preserved.
+        assertThat(mysql.castType("TIME(6)")).isEqualTo("TIME(6)");
+        assertThat(mysql.castType("TIME")).isEqualTo("TIME");
+    }
+
+    @Test
+    void cursorParametersAreCastOnlyWhereTheDriverCannotInferTheType() {
+        // A fractional TIME watermark is persisted and re-bound as text (ruling R5). pgjdbc
+        // has no type to infer for a bare ? in "slot <= ?", so the comparison fails with
+        // "operator does not exist: time without time zone > character varying" on every
+        // cycle. MySQL and SQL Server convert the literal themselves.
+        assertThat(postgres.comparisonPlaceholder(Types.TIME)).isEqualTo("?::time");
+        assertThat(postgres.comparisonPlaceholder(Types.TIME_WITH_TIMEZONE))
+                .isEqualTo("?::timetz");
+        assertThat(mysql.comparisonPlaceholder(Types.TIME)).isEqualTo("?");
+        assertThat(sqlServer.comparisonPlaceholder(Types.TIME)).isEqualTo("?");
+        assertThat(postgres.comparisonPlaceholder(Types.BIGINT)).isEqualTo("?");
+    }
+
     // --- Identifier quoting -----------------------------------------------------------
 
     @Test
@@ -418,8 +450,8 @@ class SqlDialectTest {
         assertThat(new OpenGaussDialect().mapType(tz, DatabaseType.POSTGRESQL))
                 .isEqualTo("TIME WITH TIME ZONE");
         // Targets without a TIME ZONE type keep the plain time mapping (offset dropped,
-        // but the DDL stays legal).
-        assertThat(mysql.mapType(tz, DatabaseType.POSTGRESQL)).isEqualTo("TIME");
+        // but the DDL stays legal and the fractional seconds survive).
+        assertThat(mysql.mapType(tz, DatabaseType.POSTGRESQL)).isEqualTo("TIME(6)");
     }
 
     @Test

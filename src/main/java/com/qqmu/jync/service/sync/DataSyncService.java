@@ -383,15 +383,17 @@ public class DataSyncService {
         // Bound the read by the same watermark, so the load and the cursor agree exactly.
         if (watermark != null) {
             String quotedCursor = KeysetChunker.sqlRef(sourceDialect, strategy);
+            String placeholder = sourceDialect.comparisonPlaceholder(strategy.getJdbcType());
             if (strategy.isPseudoColumn()) {
                 // ORA_ROWSCN is never NULL; quoting the pseudo-column would be a syntax error.
-                selectSql += " WHERE " + quotedCursor + " <= ?";
+                selectSql += " WHERE " + quotedCursor + " <= " + placeholder;
             } else {
                 // NULL cursor rows fall outside every window comparison. Pull them in with the
                 // bounded rows so they are not silently lost: on a keyed table the incremental
                 // path keeps re-delivering them (the upsert absorbs the replay), while here in
                 // the seed they are delivered exactly once even for a keyless table.
-                selectSql += " WHERE " + quotedCursor + " <= ? OR " + quotedCursor + " IS NULL";
+                selectSql += " WHERE " + quotedCursor + " <= " + placeholder
+                        + " OR " + quotedCursor + " IS NULL";
             }
         }
 
@@ -502,12 +504,14 @@ public class DataSyncService {
 
         SqlDialect sourceDialect = ctx.getSourceDialect();
         String cursorCol = KeysetChunker.sqlRef(sourceDialect, strategy);
+        String cursorPlaceholder = sourceDialect.comparisonPlaceholder(strategy.getJdbcType());
         // Half-open lower bound, closed upper bound: each row is delivered exactly once per
         // window, and the closed upper bound is what makes the window immune to concurrent
         // writes arriving mid-read.
         String selectSql = "SELECT * FROM "
                 + sourceDialect.qualify(ctx.getSourceSchema(), table.getName())
-                + " WHERE (" + cursorCol + " > ? AND " + cursorCol + " <= ?)";
+                + " WHERE (" + cursorCol + " > " + cursorPlaceholder
+                + " AND " + cursorCol + " <= " + cursorPlaceholder + ")";
         if (strategy.isPseudoColumn()) {
             // ORA_ROWSCN is never NULL: no margin rows to re-deliver and no keyless-table
             // warning to raise.
@@ -776,15 +780,17 @@ public class DataSyncService {
         Object bound = auditedBound(targetConn, ctx, table, strategy, cursor);
 
         SqlDialect sourceDialect = ctx.getSourceDialect();
-        long sourceRows = countAtOrBelow(sourceConn,
+        long sourceRows = countAtOrBelow(sourceConn, sourceDialect,
                 sourceDialect.qualify(ctx.getSourceSchema(), table.getName()),
-                sourceDialect.quoteIdentifier(strategy.getColumn()), bound);
+                sourceDialect.quoteIdentifier(strategy.getColumn()), bound,
+                strategy.getJdbcType());
 
-        long targetRows = countAtOrBelow(targetConn,
+        long targetRows = countAtOrBelow(targetConn, targetDialect,
                 targetDialect.qualify(ctx.getTargetSchema(), targetTable),
                 // Column names are copied verbatim from the source, so the cursor column is
                 // spelled the same on both sides; only the quoting differs.
-                targetDialect.quoteIdentifier(strategy.getColumn()), bound);
+                targetDialect.quoteIdentifier(strategy.getColumn()), bound,
+                strategy.getJdbcType());
 
         return new RowCountAudit(sourceRows, targetRows);
     }
@@ -1222,9 +1228,11 @@ public class DataSyncService {
         return remainder == 0 ? ts : Timestamp.from(ts.toInstant().minusNanos(remainder));
     }
 
-    private long countAtOrBelow(Connection conn, String qualifiedTable, String quotedColumn,
-                                Object cursor) throws SQLException {
-        String sql = "SELECT COUNT(*) FROM " + qualifiedTable + " WHERE " + quotedColumn + " <= ?";
+    private long countAtOrBelow(Connection conn, SqlDialect dialect, String qualifiedTable,
+                                String quotedColumn, Object cursor, int jdbcType)
+            throws SQLException {
+        String sql = "SELECT COUNT(*) FROM " + qualifiedTable + " WHERE " + quotedColumn
+                + " <= " + dialect.comparisonPlaceholder(jdbcType);
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             ps.setObject(1, cursor);
@@ -3122,7 +3130,8 @@ public class DataSyncService {
         List<Object> params = new ArrayList<>();
         if (upperBound != null && strategy != null && strategy.getColumn() != null) {
             String cursor = KeysetChunker.sqlRef(dialect, strategy);
-            sql.append(" WHERE (").append(cursor).append(" <= ?");
+            sql.append(" WHERE (").append(cursor).append(" <= ")
+                    .append(dialect.comparisonPlaceholder(strategy.getJdbcType()));
             if (!strategy.isPseudoColumn()) {
                 sql.append(" OR ").append(cursor).append(" IS NULL");
             }

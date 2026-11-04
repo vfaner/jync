@@ -518,6 +518,22 @@ public interface SqlDialect {
         return this;
     }
 
+    /**
+     * Placeholder for a value the SQL <em>compares</em> a column against, such as the
+     * watermark in {@code cursor <= ?}. Plain {@code ?} unless the driver cannot infer the
+     * parameter's type from the comparison alone.
+     *
+     * <p>PostgreSQL is the case that matters: a fractional TIME cursor is persisted and
+     * re-bound as text (ruling R5), and pgjdbc sends a bare {@code ?} against a {@code time}
+     * column as VARCHAR, which the server rejects with "operator does not exist: time
+     * without time zone > character varying". The cast is not needed where the value is
+     * written into a column (the type comes from the INSERT), only where it bounds a
+     * predicate.
+     */
+    default String comparisonPlaceholder(Integer jdbcType) {
+        return "?";
+    }
+
     String getTruncateSql(String schema, String table);
 
     /** Renders a literal for a DEFAULT clause, quoting only when the type needs it. */

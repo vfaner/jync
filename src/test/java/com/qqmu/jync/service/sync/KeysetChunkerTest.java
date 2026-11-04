@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.converter.OracleDialect;
+import com.qqmu.jync.service.converter.PostgresDialect;
 import com.qqmu.jync.service.converter.SqlServerDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
@@ -130,6 +131,26 @@ class KeysetChunkerTest {
         assertThat(sql).doesNotContain("\"ORA_ROWSCN\"");
         assertThat(sql).doesNotContain("IS NULL");
         assertThat(params).containsExactly(7, 1234567L);
+    }
+
+    @Test
+    void postgresCastsAFractionalTimeWatermarkOnEveryPagedRead() {
+        CursorStrategy time = CursorStrategy.timestamp("SLOT", Types.TIME, "explicit cursor");
+
+        // TIME watermarks with fractional seconds are stored and re-bound as text. A bare ?
+        // would arrive at PostgreSQL as VARCHAR and the comparison would fail every cycle
+        // with "operator does not exist: time without time zone > character varying".
+        List<Object> pageParams = new ArrayList<>();
+        String page = KeysetChunker.pageSql(new PostgresDialect(), "public", "EVENTS",
+                List.of("ID"), List.of(41), null, time, "12:34:56.789012", 10, pageParams);
+        assertThat(page).contains("(\"SLOT\" <= ?::time OR \"SLOT\" IS NULL)");
+        assertThat(pageParams).containsExactly(41, "12:34:56.789012");
+
+        List<Object> sampledParams = new ArrayList<>();
+        String sampled = KeysetChunker.sampledBoundarySql(new PostgresDialect(), "public",
+                "EVENTS", List.of("ID"), time, "12:34:56.789012", 4, sampledParams);
+        assertThat(sampled).contains("(\"SLOT\" <= ?::time OR \"SLOT\" IS NULL)");
+        assertThat(sampledParams).containsExactly("12:34:56.789012");
     }
 
     @Test

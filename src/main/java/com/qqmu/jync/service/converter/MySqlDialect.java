@@ -187,7 +187,10 @@ public class MySqlDialect extends AbstractSqlDialect {
 
     @Override
     protected String timeType() {
-        return "TIME";
+        // Same reason as timestampType(): bare TIME means scale 0 in MySQL, so a
+        // fractional-second value from PostgreSQL, SQL Server or a MySQL TIME(6) source
+        // would be truncated on every synced row.
+        return "TIME(6)";
     }
 
     @Override
@@ -324,7 +327,9 @@ public class MySqlDialect extends AbstractSqlDialect {
                 return "DATE";
             }
             case "TIME" -> {
-                return "TIME";
+                // Keep the fractional precision the column mapping asked for; a bare TIME
+                // cast would silently round the bound value to whole seconds.
+                return "TIME" + (width == null ? "" : "(" + width + ")");
             }
             case "TIMESTAMP", "DATETIME", "SMALLDATETIME" -> {
                 return "DATETIME" + (width == null ? "" : "(" + width + ")");
