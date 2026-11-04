@@ -19,6 +19,12 @@
 - **建表字段方言替换**：DECIMAL / NUMERIC 自增列按精度提升为整数类型（PG 用 SERIAL）；`DATE` 当前时间默认、MySQL 零日期、SQL Server 高精度时间默认函数按目标库规则改写。
 - **DB2 数据同步失败（SQL0418 / SQLSTATE=42610）**：MERGE 的无类型参数标记在 ON / UPDATE / INSERT 三处分别解析、类型不一致时被 DB2 拒绝；现按目标列声明统一加 CAST 固定类型，全量、增量与 CDC 均生效。
 - **千万级大表首次全量反复重试无法完成**：源表持续增长时每次重试都按当前主键范围重新切分并行区间，与上次的检查点对不上而整表重载；现按已记录的区间续跑，新增行只在尾部追加，改并行度也不再重来。
+- **capped 集合有序插入丢批**：MongoDB → MongoDB 在 APPEND 模式下遇到重复 `_id` 会中止整批，失败位置之后的文档既未写入也不计入重复，而行数校验仍会通过；现从失败位置继续有序重试，保留插入顺序并跳过重复文档。
+- **手工内容校验偶发 500**：读取表结构或连接池抛 `RuntimeException` 时异常直接冒到控制器；现与 `SQLException` 一样落到 200 + ERROR 结果，符合接口约定。
+- **诊断包配置缺项**：`config/sync-settings.json` 补上 v1.12.0 新增的内容校验五项配置，排障时能看出相应行为差异。
+- **TIME 精度截断**：MySQL 目标的 TIME 改为 `TIME(6)`，源端 PostgreSQL / SQL Server / MySQL 的小数秒不再在每一行被静默截断；建表与 `CAST` 同步保留精度。
+- **PostgreSQL 时间游标轮询卡死**：带小数秒的 TIME 游标占位符改为按 JDBC 类型加 `::time` / `::timestamptz` 等转换，避免 pgjdbc 绑成 VARCHAR 后比较报错——此前该表每个周期都失败、水位永远推进不了。全量播种、增量窗口、键集分页、抽样边界与行数审计全部接入。
+- **跨方言转换补充**：二参 `EOMONTH` 的月份偏移、DB2 `LEN → LENGTH`、MySQL `LENGTH` / `CHAR_LENGTH` 的字节与字符语义；MySQL 无符号整型在非 MySQL 目标按位宽扩大一档，MySQL 系目标保留原生 `UNSIGNED`，避免插入溢出。
 
 ---
 
