@@ -150,12 +150,141 @@ class DataSyncServiceParallelLoadTest {
         verify(checkpoints).deleteByProjectIdAndTableName(7L, "ITEMS");
     }
 
+    /**
+     * The reported production failure: a source of more than ten million rows that keeps
+     * growing. The split used to be recomputed from the current MIN/MAX on every attempt, so
+     * one appended row shifted every boundary of the arithmetic split, the recorded ranges no
+     * longer matched, and the whole table was dropped and reloaded — on every retry, forever.
+     * The recorded split must be reused instead, with its tail extended to the new MAX.
+     */
     @Test
-    void changedParallelismDiscardsStaleRangeCheckpoints() throws SQLException {
+    void aSourceThatGrewBetweenAttemptsResumesInsteadOfReloading() throws SQLException {
+        createItems(12);
+        // Split taken over [1,8] as (0,4] (4,8]; range 0 finished, range 1 stopped after id 6.
+        exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'),"
+                + " (5,'e'), (6,'f')");
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "ITEMS", 0, 1, "[4]", 2,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, 0L, 4L),
+                new ChunkCheckpoint(7L, "ITEMS", 1, 0, "[6]", 2,
+                        ChunkCheckpoint.STATUS_CHUNK, 4L, 8L)));
+        DataSyncService service = service(2, 2);
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(DataSyncService.class);
+        DataSyncService.TableSyncResult result;
+        try {
+            result = service.syncTable(
+                    source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+        } finally {
+            LogCapture.detach(DataSyncService.class, logs);
+        }
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        // Only 7..12 are read: the finished range and the six copied rows are kept.
+        assertThat(result.getRowsWritten()).isEqualTo(6);
+        assertThat(count(target, "ITEMS")).isEqualTo(12);
+        assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                .noneMatch(m -> m.startsWith("Discarding"));
+    }
+
+    /**
+     * When the last recorded range had already finished, it cannot simply be widened: its
+     * RANGE_DONE marker covers only the old upper edge. The rows above it are read by one
+     * appended range instead, so they are delivered by this attempt rather than left to a
+     * later cycle.
+     */
+    @Test
+    void rowsAddedAfterTheLastRangeFinishedAreReadByAnAppendedRange() throws SQLException {
+        createItems(12);
+        exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'),"
+                + " (5,'e'), (6,'f'), (7,'g'), (8,'h')");
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "ITEMS", 0, 1, "[4]", 2,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, 0L, 4L),
+                new ChunkCheckpoint(7L, "ITEMS", 1, 1, "[8]", 2,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, 4L, 8L)));
+        DataSyncService service = service(2, 2);
+
+        DataSyncService.TableSyncResult result = service.syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(result.getRowsWritten()).isEqualTo(4);
+        assertThat(count(target, "ITEMS")).isEqualTo(12);
+    }
+
+    /**
+     * A range that wrote no checkpoint at all (an empty slice, or a worker the failed attempt
+     * never got to) leaves a hole between its recorded neighbours. The hole is covered by one
+     * fresh range instead of invalidating the whole layout.
+     */
+    @Test
+    void aRangeThatWroteNothingIsCoveredByTheGapBetweenItsNeighbours() throws SQLException {
         createItems(10);
-        // Checkpoints from a 3-way split (0,4] (4,8] (8,10]. This run uses 2 workers, whose
-        // ranges are (0,5] (5,10]: range 0's old RANGE_DONE would skip ids 5 entirely, and
-        // range 1's old boundary [8] would skip 6-8. Both must be discarded, not trusted.
+        exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'), (9,'i')");
+        // 3-way split over [1,10]: (0,4] (4,8] (8,10]. Range 1 wrote nothing.
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "ITEMS", 0, 1, "[4]", 2,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, 0L, 4L),
+                new ChunkCheckpoint(7L, "ITEMS", 2, 0, "[9]", 1,
+                        ChunkCheckpoint.STATUS_CHUNK, 8L, 10L)));
+        DataSyncService service = service(2, 2);
+
+        DataSyncService.TableSyncResult result = service.syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        // 5..8 refill the hole, 10 finishes range 2; ids 1..4 and 9 are already there.
+        assertThat(result.getRowsWritten()).isEqualTo(5);
+        assertThat(count(target, "ITEMS")).isEqualTo(10);
+    }
+
+    /**
+     * The same growth problem for a sampled (non-integral key) split: its boundaries are
+     * re-sampled on every attempt and move as soon as the data changes, so a text-keyed table
+     * could never resume either. The recorded boundary tuples are reused, and the missing
+     * unbounded tail is read by one appended range.
+     */
+    @Test
+    void aGrownTextKeyResumesItsSampledSplit() throws SQLException {
+        exec(source, "CREATE TABLE ITEMS (ID VARCHAR(20) PRIMARY KEY, NAME VARCHAR(50))");
+        exec(target, "CREATE TABLE ITEMS (ID VARCHAR(20) PRIMARY KEY, NAME VARCHAR(50))");
+        StringBuilder insert = new StringBuilder("INSERT INTO ITEMS VALUES ");
+        for (int i = 1; i <= 10; i++) {
+            insert.append(i > 1 ? ", " : "").append("('").append(key(i)).append("', 'v")
+                    .append(i).append("')");
+        }
+        exec(source, insert.toString());
+        exec(target, "INSERT INTO ITEMS VALUES ('" + key(1) + "','v1'), ('" + key(2) + "','v2'),"
+                + " ('" + key(3) + "','v3'), ('" + key(4) + "','v4'), ('" + key(5) + "','v5')");
+        // Sampled split (unbounded, k04] (k04, k07] (k07, unbounded]; the third wrote nothing.
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "ITEMS", 0, 1, "[\"" + key(4) + "\"]", 2,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, null, null, null,
+                        "[\"" + key(4) + "\"]"),
+                new ChunkCheckpoint(7L, "ITEMS", 1, 0, "[\"" + key(5) + "\"]", 1,
+                        ChunkCheckpoint.STATUS_CHUNK, null, null,
+                        "[\"" + key(4) + "\"]", "[\"" + key(7) + "\"]")));
+
+        DataSyncService.TableSyncResult result = service(4, 2).syncTable(
+                source, target, textItemsMeta(), CursorStrategy.none("full load only"),
+                new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        // k06..k07 finish range 1, k08..k10 are the appended unbounded tail.
+        assertThat(result.getRowsWritten()).isEqualTo(5);
+        assertThat(count(target, "ITEMS")).isEqualTo(10);
+    }
+
+    /**
+     * Scaling the project down must not throw away a load in progress. The recorded ranges
+     * stay disjoint whatever the configured worker count, so they are reused as recorded —
+     * the new value takes effect for the next load, not by restarting this one.
+     */
+    @Test
+    void aChangedParallelismResumesTheRecordedSplit() throws SQLException {
+        createItems(10);
+        // Checkpoints from a 3-way split (0,4] (4,8] (8,10]; this project now asks for 2.
         exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d'),"
                 + " (5,'e'), (6,'f'), (7,'g'), (8,'h')");
         when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
@@ -169,18 +298,16 @@ class DataSyncServiceParallelLoadTest {
                 source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
 
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
-        // Stale checkpoints mean a full re-read; upserts keep the already-written rows.
-        assertThat(result.getRowsWritten()).isEqualTo(10);
+        // Range 0 is done and range 1 continues after id 8; only 9 and 10 are read.
+        assertThat(result.getRowsWritten()).isEqualTo(2);
         assertThat(count(target, "ITEMS")).isEqualTo(10);
-        // Once for the discard, once when the reload completes.
-        verify(checkpoints, atLeastOnce()).deleteByProjectIdAndTableName(7L, "ITEMS");
+        verify(checkpoints).deleteByProjectIdAndTableName(7L, "ITEMS");
     }
 
     @Test
-    void shiftedKeySpanDiscardsStaleRangeCheckpoints() throws SQLException {
+    void aRecordedFirstRangeKeepsItsProgressWhenTheSpanGrows() throws SQLException {
         createItems(10);
-        // Same 2-way split, but recorded when the span ended at a different upper bound:
-        // trusting (0,4] as if it were (0,5] would leave id 5 unread.
+        // The split was taken when the table held ids 1..8 and only range 0 (0,4] finished.
         exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d')");
         when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
                 new ChunkCheckpoint(7L, "ITEMS", 0, 1, null, 0,
@@ -188,6 +315,32 @@ class DataSyncServiceParallelLoadTest {
         DataSyncService service = service(2, 2);
 
         DataSyncService.TableSyncResult result = service.syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        // The recorded (0,4] is kept and the rest is read by an appended range.
+        assertThat(result.getRowsWritten()).isEqualTo(6);
+        assertThat(count(target, "ITEMS")).isEqualTo(10);
+        verify(checkpoints).deleteByProjectIdAndTableName(7L, "ITEMS");
+    }
+
+    /**
+     * The reuse above is only as safe as the recorded layout is coherent. Two different
+     * splits written over each other give one index two slices, and then nothing recorded
+     * proves which rows were copied — the table must be reloaded instead of trusting it.
+     */
+    @Test
+    void anIncoherentRecordedLayoutIsDiscardedNotTrusted() throws SQLException {
+        createItems(10);
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS")).thenReturn(List.of(
+                new ChunkCheckpoint(7L, "ITEMS", 0, 1, "[4]", 2,
+                        ChunkCheckpoint.STATUS_RANGE_DONE, 0L, 4L),
+                new ChunkCheckpoint(7L, "ITEMS", 1, 0, "[6]", 2,
+                        ChunkCheckpoint.STATUS_CHUNK, 5L, 9L),
+                new ChunkCheckpoint(7L, "ITEMS", 1, 1, "[7]", 2,
+                        ChunkCheckpoint.STATUS_CHUNK, 4L, 8L)));
+
+        DataSyncService.TableSyncResult result = service(2, 2).syncTable(
                 source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
 
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
@@ -674,6 +827,26 @@ class DataSyncServiceParallelLoadTest {
         name.setName("NAME");
         name.setJdbcType(Types.VARCHAR);
 
+        TableMeta table = new TableMeta();
+        table.setName("ITEMS");
+        table.setPrimaryKeys(List.of("ID"));
+        table.setColumns(List.of(id, name));
+        return table;
+    }
+
+    /** Zero-padded so lexical and numeric order agree; sampled splits order by the raw key. */
+    private static String key(int i) {
+        return String.format("k%02d", i);
+    }
+
+    /** ITEMS whose single-column PK is a text key, split through sampled boundaries. */
+    private static TableMeta textItemsMeta() {
+        ColumnMeta id = new ColumnMeta();
+        id.setName("ID");
+        id.setJdbcType(Types.VARCHAR);
+        ColumnMeta name = new ColumnMeta();
+        name.setName("NAME");
+        name.setJdbcType(Types.VARCHAR);
         TableMeta table = new TableMeta();
         table.setName("ITEMS");
         table.setPrimaryKeys(List.of("ID"));

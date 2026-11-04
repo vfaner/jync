@@ -2680,6 +2680,7 @@ public class DataSyncService {
                                         int parallelism, boolean insertFirst) throws SQLException {
         List<KeyRange> ranges;
         String split;
+        List<ChunkCheckpoint> usable;
         if (hasIntegralLeadingKey(table)) {
             String pk = table.getPrimaryKeys().get(0);
             long[] bounds = readPkBounds(sourceConn, table, pk, strategy, upperBound, ctx);
@@ -2688,42 +2689,59 @@ public class DataSyncService {
                 // path finalizes an empty load.
                 return finalizeEmptyLoad(table, strategy, watermark, ctx, result);
             }
-            List<long[]> splitRanges = splitRanges(bounds[0], bounds[1], parallelism);
-            if (splitRanges == null) {
-                // Key span too wide to split without overflow; sequential chunking handles
-                // any span.
-                return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
-                        strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+            List<KeyRange> resumed = resumeRangeLayout(saved, table, bounds[1]);
+            if (resumed != null) {
+                ranges = resumed;
+                usable = saved;
+                split = "resumed layout";
+            } else {
+                List<long[]> splitRanges = splitRanges(bounds[0], bounds[1], parallelism);
+                if (splitRanges == null) {
+                    // Key span too wide to split without overflow; sequential chunking handles
+                    // any span.
+                    return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
+                            strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+                }
+                ranges = new ArrayList<>(splitRanges.size());
+                for (long[] r : splitRanges) {
+                    ranges.add(KeyRange.numeric(r[0], r[1]));
+                }
+                usable = validRangeCheckpoints(saved, ranges, table, ctx);
+                split = "key span [" + bounds[0] + ", " + bounds[1] + "]";
             }
-            ranges = new ArrayList<>(splitRanges.size());
-            for (long[] r : splitRanges) {
-                ranges.add(KeyRange.numeric(r[0], r[1]));
-            }
-            split = "key span [" + bounds[0] + ", " + bounds[1] + "]";
         } else {
-            List<List<Object>> boundaries = sampleKeyBoundaries(sourceConn, table, strategy,
-                    upperBound, ctx, parallelism);
-            if (boundaries == null) {
-                // The product rejected the sampling query (no window functions).
-                return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
-                        strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+            // The recorded layout is consulted before sampling: re-sampling is an extra scan
+            // and would move every boundary anyway.
+            List<KeyRange> resumed = resumeRangeLayout(saved, table, null);
+            if (resumed != null) {
+                ranges = resumed;
+                usable = saved;
+                split = "resumed layout";
+            } else {
+                List<List<Object>> boundaries = sampleKeyBoundaries(sourceConn, table, strategy,
+                        upperBound, ctx, parallelism);
+                if (boundaries == null) {
+                    // The product rejected the sampling query (no window functions).
+                    return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
+                            strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+                }
+                if (boundaries.isEmpty()) {
+                    return finalizeEmptyLoad(table, strategy, watermark, ctx, result);
+                }
+                ranges = sampledRanges(boundaries);
+                if (ranges.size() <= 1) {
+                    // One row, or every sampled row landing in the same slice: nothing to split.
+                    return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
+                            strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+                }
+                usable = validRangeCheckpoints(saved, ranges, table, ctx);
+                split = "sampled " + boundaries.size() + " key buckets";
             }
-            if (boundaries.isEmpty()) {
-                return finalizeEmptyLoad(table, strategy, watermark, ctx, result);
-            }
-            ranges = sampledRanges(boundaries);
-            if (ranges.size() <= 1) {
-                // One row, or every sampled row landing in the same slice: nothing to split.
-                return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
-                        strategy, watermark, upperBound, ctx, result, saved, insertFirst);
-            }
-            split = "sampled " + boundaries.size() + " key buckets";
         }
-        // The split is recomputed on every attempt from the current parallelism and the
-        // source's current MIN/MAX (or sampled boundaries). A saved range index without its
-        // bounds cannot prove it covers the range it is now mapped onto; trusting it can skip
-        // whole slices, so a mismatch is a full reload.
-        List<ChunkCheckpoint> usable = validRangeCheckpoints(saved, ranges, table, ctx);
+        if (!usable.isEmpty()) {
+            log.info("Resuming the {}-range split recorded for {} by an earlier attempt;"
+                    + " {} checkpoint(s) kept", ranges.size(), table.getName(), usable.size());
+        }
         // One worker per range, so the range count is the worker count: a key span narrower
         // than the split yields fewer ranges than the configured parallelism, and naming the
         // configured value would claim workers that never ran. The requested value is still
@@ -3077,6 +3095,16 @@ public class DataSyncService {
         String upperKeyJson() {
             return !numericBounds && upper != null ? KeysetChunker.encodePk(upper) : null;
         }
+
+        /** This slice with a different upper edge, of the same kind as the current one. */
+        KeyRange withUpper(List<Object> newUpper) {
+            return new KeyRange(lower, newUpper, numericBounds);
+        }
+
+        /** A fresh slice starting where this one ends, up to {@code newUpper}. */
+        KeyRange after(List<Object> newUpper) {
+            return new KeyRange(upper, newUpper, numericBounds);
+        }
     }
 
     /**
@@ -3194,6 +3222,181 @@ public class DataSyncService {
                 + " (parallelism or MIN/MAX); reloading the table", saved.size(), table.getName());
         checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
         return List.of();
+    }
+
+    /**
+     * Rebuilds the range layout recorded by an earlier attempt, or returns null when those
+     * checkpoints cannot be trusted and a split has to be computed from the current bounds.
+     *
+     * <p>The split used to be recomputed from the current MIN/MAX (or freshly sampled
+     * boundaries) on every attempt and compared with what was recorded. A table that keeps
+     * growing moves MAX between attempts, which shifts <em>every</em> arithmetic boundary —
+     * so each retry looked stale, the whole table was reloaded, and a table of tens of
+     * millions of rows under continuous writes could never finish. A checkpoint's stored
+     * bounds are what its chunk was actually written for, so they stay valid as long as they
+     * still partition the key span: growth is absorbed at the tail, where the last range is
+     * extended (its newest chunk simply continues) or, when it already finished, one range is
+     * appended after it.
+     *
+     * <p>Trust requires one coherent layout: indices start at 0, every index agrees with
+     * itself, adjacent recorded ranges meet edge to edge, and all checkpoints carry the same
+     * kind of bounds. A mixed set — an older attempt's ranges written over this one, a
+     * sequential or keyless checkpoint — is rejected, and the caller falls back to the
+     * computed split, which discards and reloads.
+     *
+     * @param currentMax inclusive upper edge of the span visible now, or null for a sampled
+     *                   split, whose last range is unbounded above already
+     */
+    private List<KeyRange> resumeRangeLayout(List<ChunkCheckpoint> saved, TableMeta table,
+                                             Long currentMax) {
+        if (saved.isEmpty()) {
+            return null;
+        }
+        boolean numeric = false;
+        boolean sampled = false;
+        java.util.TreeMap<Integer, List<ChunkCheckpoint>> byIndex = new java.util.TreeMap<>();
+        for (ChunkCheckpoint c : saved) {
+            Integer index = c.getRangeIndex();
+            if (index == null || index < 0 || index > MAX_RESUMABLE_RANGES
+                    || ChunkCheckpoint.STATUS_KEYLESS_CHUNK.equals(c.getStatus())) {
+                return null;
+            }
+            numeric |= c.getRangeLower() != null || c.getRangeUpper() != null;
+            sampled |= c.getRangeLowerKey() != null || c.getRangeUpperKey() != null;
+            byIndex.computeIfAbsent(index, k -> new ArrayList<>()).add(c);
+        }
+        if (numeric == sampled || !byIndex.containsKey(0)) {
+            // Neither kind of bound is a sequential or keyless checkpoint; both means two
+            // layouts were written over each other; without index 0 the head of the span is
+            // unaccounted for.
+            return null;
+        }
+        int lastIndex = byIndex.lastKey();
+        KeyRange[] recorded = new KeyRange[lastIndex + 1];
+        for (Map.Entry<Integer, List<ChunkCheckpoint>> entry : byIndex.entrySet()) {
+            KeyRange range = recordedRange(entry.getValue(), numeric,
+                    entry.getKey() == lastIndex, table);
+            if (range == null) {
+                return null;
+            }
+            recorded[entry.getKey()] = range;
+        }
+        for (int index = 1; index < recorded.length; index++) {
+            if (recorded[index - 1] != null && recorded[index] != null
+                    && !meetsAtEdge(recorded[index - 1], recorded[index], numeric)) {
+                return null;
+            }
+        }
+        // An index that wrote nothing (an empty slice, or a worker the failed attempt never
+        // got to) leaves a hole; one fresh range covers the gap to its recorded neighbour.
+        List<KeyRange> ranges = new ArrayList<>(recorded.length + 1);
+        for (int index = 0; index < recorded.length; index++) {
+            if (recorded[index] != null) {
+                ranges.add(recorded[index]);
+                continue;
+            }
+            ranges.add(ranges.get(index - 1).after(recorded[nextRecorded(recorded, index)].lower));
+        }
+        KeyRange tail = ranges.get(ranges.size() - 1);
+        if (numeric) {
+            if (currentMax != null && tail.upperLong() < currentMax) {
+                ChunkCheckpoint newest = newest(byIndex.get(lastIndex));
+                if (ChunkCheckpoint.STATUS_RANGE_DONE.equals(newest.getStatus())) {
+                    // The finished marker only vouches for the old upper edge; the rows above
+                    // it get a range of their own.
+                    ranges.add(KeyRange.numeric(tail.upperLong(), currentMax));
+                } else {
+                    ranges.set(ranges.size() - 1, tail.withUpper(List.of((Object) currentMax)));
+                }
+            }
+        } else if (tail.upper != null) {
+            // The recorded last range was a middle one: everything after it wrote nothing.
+            // A sampled split's real last range is unbounded above.
+            ranges.add(KeyRange.sampled(tail.upper, null));
+        }
+        return ranges;
+    }
+
+    /**
+     * One recorded index's slice, or null when its checkpoints disagree. The lower edge is
+     * the slice's identity, so it must be identical everywhere; the upper edge may differ
+     * only for a numeric tail, whose bounds this loader widens to the current MAX between
+     * attempts — the widest recorded edge is the one to continue from.
+     */
+    private static KeyRange recordedRange(List<ChunkCheckpoint> checkpoints, boolean numeric,
+                                          boolean tail, TableMeta table) {
+        if (numeric) {
+            Long lower = null;
+            Long upper = null;
+            for (ChunkCheckpoint c : checkpoints) {
+                Long l = c.getRangeLower();
+                Long u = c.getRangeUpper();
+                if (l == null || u == null) {
+                    return null;
+                }
+                if (lower == null) {
+                    lower = l;
+                    upper = u;
+                    continue;
+                }
+                if (!lower.equals(l)) {
+                    return null;
+                }
+                if (tail) {
+                    upper = Math.max(upper, u);
+                } else if (!upper.equals(u)) {
+                    return null;
+                }
+            }
+            return KeyRange.numeric(lower, upper);
+        }
+        String lowerKey = null;
+        String upperKey = null;
+        for (int i = 0; i < checkpoints.size(); i++) {
+            ChunkCheckpoint c = checkpoints.get(i);
+            if (i == 0) {
+                lowerKey = c.getRangeLowerKey();
+                upperKey = c.getRangeUpperKey();
+            } else if (!java.util.Objects.equals(lowerKey, c.getRangeLowerKey())
+                    || !java.util.Objects.equals(upperKey, c.getRangeUpperKey())) {
+                return null;
+            }
+        }
+        List<Integer> pkTypes = pkJdbcTypes(table);
+        return KeyRange.sampled(decodeBound(lowerKey, pkTypes), decodeBound(upperKey, pkTypes));
+    }
+
+    /** True when {@code next} starts exactly where {@code previous} ended. */
+    private static boolean meetsAtEdge(KeyRange previous, KeyRange next, boolean numeric) {
+        if (numeric) {
+            return previous.upperLong().equals(next.lowerLong());
+        }
+        return java.util.Objects.equals(previous.upper, next.lower);
+    }
+
+    private static List<Object> decodeBound(String boundJson, List<Integer> pkTypes) {
+        return boundJson == null ? null : KeysetChunker.decodePk(boundJson, pkTypes);
+    }
+
+    /** The first recorded index after {@code from}; index 0 always exists, so one does. */
+    private static int nextRecorded(KeyRange[] recorded, int from) {
+        for (int i = from + 1; i < recorded.length; i++) {
+            if (recorded[i] != null) {
+                return i;
+            }
+        }
+        throw new IllegalStateException("No recorded range after index " + from);
+    }
+
+    /** The newest checkpoint of one range index — the one a resume starts from. */
+    private static ChunkCheckpoint newest(List<ChunkCheckpoint> checkpoints) {
+        ChunkCheckpoint newest = null;
+        for (ChunkCheckpoint c : checkpoints) {
+            if (newest == null || c.getChunkIndex() > newest.getChunkIndex()) {
+                newest = c;
+            }
+        }
+        return newest;
     }
 
     /** Reads a range's resume state from the table's checkpoints (newest chunk wins). */
@@ -3390,6 +3593,13 @@ public class DataSyncService {
 
     /** Bind-parameter budget per statement: Oracle's IN list stops at 1000 expressions. */
     private static final int DELETION_MAX_PARAMS = 900;
+
+    /**
+     * Upper bound on a recorded range index a resumed load will honour. A parallel split
+     * never numbers beyond a handful; anything larger is a corrupted row, and spawning one
+     * worker per index would be worse than reloading the table.
+     */
+    private static final int MAX_RESUMABLE_RANGES = 64;
 
     /**
      * Why deletion detection cannot run for this table, or {@code null} when it can.
