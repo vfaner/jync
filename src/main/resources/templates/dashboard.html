@@ -361,14 +361,6 @@
        看板共用同一份脚本；root 找不到（访客、默认口令账号）就什么都不做，不会去请求
        那个管理员专属的接口。 */-->
 <script th:src="@{/js/metrics.js(v=${appVersion})}"></script>
-<script>
-    (function () {
-        var root = document.getElementById('process-block');
-        if (root && window.JyncMetrics) {
-            window.JyncMetrics.bind(root);
-        }
-    })();
-</script>
 </th:block>
 
 <!--/* 10 秒一次的轮询取两块内容：统计卡 + 任务概览。两块在页面上不在同一层，包不进

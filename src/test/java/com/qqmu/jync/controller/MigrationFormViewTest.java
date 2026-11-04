@@ -67,7 +67,6 @@ class MigrationFormViewTest {
         when(handler.sourceKinds()).thenReturn(Set.of(MigrationConnectionKind.ELASTICSEARCH,
                 MigrationConnectionKind.OPENSEARCH));
         when(handler.targetKinds()).thenReturn(Set.of(MigrationConnectionKind.EASYSEARCH));
-        when(handler.optionsFragment()).thenReturn("~{migration-form/options-es :: options}");
         when(handler.defaultOptions()).thenReturn(defaults());
         when(handler.parseOptions(any())).thenReturn(defaults());
         when(connectionService.findAll()).thenReturn(List.of(

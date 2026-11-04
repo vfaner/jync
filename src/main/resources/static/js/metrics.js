@@ -15,14 +15,13 @@
      文档顺序中的第一个，导致项目页所有曲线（吞吐 / 延迟 / 失败）的面积都染成第一张图的颜色。 */
   var gradientSeq = 0;
 
-  function cssVar(name, fallback) {
-    var value = getComputedStyle(document.documentElement).getPropertyValue(name);
-    return (value && value.replace(/^\s+|\s+$/g, '')) || fallback;
-  }
-
-  function group3(n) {
-    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  }
+  /* 图表公共工具（charts.js）：配色、刻度、平滑曲线与看板趋势图共用。 */
+  var Charts = window.JyncCharts || {};
+  var cssVar = Charts.cssVar;
+  var group3 = Charts.group3;
+  var el = Charts.el;
+  var niceStep = Charts.niceStep;
+  var smoothPath = Charts.smoothPath;
 
   function formatNumber(value, digits) {
     if (value === null || value === undefined || isNaN(value)) return '—';
@@ -93,33 +92,6 @@
       text += ' ' + group3(lower) + ' ' + BYTE_UNITS[unit - 1];
     }
     return text;
-  }
-
-  function el(tag, attrs) {
-    var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (var key in attrs) {
-      if (Object.prototype.hasOwnProperty.call(attrs, key)) {
-        node.setAttribute(key, attrs[key]);
-      }
-    }
-    return node;
-  }
-
-  function clampY(value, low, high) {
-    return Math.max(low, Math.min(high, value));
-  }
-
-  /** 刻度步长取整齐值：最大值除以四格后向上取到 1/2/5 × 10^n。 */
-  function niceStep(value) {
-    // 全零序列没有最大值可依；给 1 让轴画成 4/3/2/1/0，而不是四格都取整成同一个数。
-    if (!(value > 0)) return 1;
-    var raw = value / 4;
-    var exp = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
-    var steps = [1, 2, 5, 10];
-    for (var i = 0; i < steps.length; i++) {
-      if (steps[i] * exp >= raw) return steps[i] * exp;
-    }
-    return 10 * exp;
   }
 
   /**
@@ -256,22 +228,7 @@
     var segment = [];
     function flushSegment() {
       if (segment.length < 2) { segment = []; return; }
-      var d = 'M' + segment[0].x + ' ' + segment[0].y;
-      for (var c = 0; c < segment.length - 1; c++) {
-        var p1 = segment[c];
-        var p2 = segment[c + 1];
-        var p0 = segment[c - 1] || p1;
-        var p3 = segment[c + 2] || p2;
-        // Catmull-Rom 的控制点借邻段切线，可能越过本段两端；夹进区间后，三次贝塞尔
-        //（始终落在控制点凸包内）就不会画到 0 以下，也不会冲过本段峰值。
-        var low = Math.min(p1.y, p2.y);
-        var high = Math.max(p1.y, p2.y);
-        var c1x = p1.x + (p2.x - p0.x) / 6;
-        var c1y = clampY(p1.y + (p2.y - p0.y) / 6, low, high);
-        var c2x = p2.x - (p3.x - p1.x) / 6;
-        var c2y = clampY(p2.y - (p3.y - p1.y) / 6, low, high);
-        d += ' C' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
-      }
+      var d = smoothPath(segment);
       var baseY = padT + plotH;
       svg.appendChild(el('path', {
         d: d + ' L' + segment[segment.length - 1].x + ' ' + baseY
@@ -745,4 +702,19 @@
 
   /* 模板只用得上 bind —— 三种图由它按 data-chart* 属性自行选择，不是公开 API。 */
   window.JyncMetrics = { bind: bind };
+
+  /* 三种页面都在 root 上声明 data-metrics-url，脚本引入即自动挂载；
+     页面不再各写一段相同的引导代码。root 不存在（访客、默认口令账号）时什么也不做。 */
+  function autoBind() {
+    var roots = document.querySelectorAll('[data-metrics-url]');
+    for (var i = 0; i < roots.length; i++) {
+      bind(roots[i]);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', autoBind);
+  } else {
+    autoBind();
+  }
 })();

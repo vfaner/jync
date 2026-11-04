@@ -55,11 +55,6 @@ public class MongoToMongoHandler implements MigrationTypeHandler {
     }
 
     @Override
-    public String optionsFragment() {
-        return "~{migration-form/options-mongo :: options}";
-    }
-
-    @Override
     public JsonNode defaultOptions() {
         return MongoToMongoOptions.parse(JSON.createObjectNode()).toJson();
     }

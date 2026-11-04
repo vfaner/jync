@@ -29,30 +29,7 @@
         </div>
 
         <div class="grid-2">
-            <div class="field">
-                <label for="opt-targetNaming" th:text="#{migration.opt.targetNaming}">Target name</label>
-                <select class="input" id="opt-targetNaming" name="opt.targetNaming">
-                    <option value="SAME"
-                            th:selected="${options.get('targetNaming') == null or options.get('targetNaming').asText('SAME') == 'SAME'}"
-                            th:text="#{migration.naming.SAME}">Same as source</option>
-                    <option value="PREFIX"
-                            th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asText('') == 'PREFIX'}"
-                            th:text="#{migration.naming.PREFIX}">Add a prefix</option>
-                    <option value="SUFFIX"
-                            th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asText('') == 'SUFFIX'}"
-                            th:text="#{migration.naming.SUFFIX}">Add a suffix</option>
-                </select>
-            </div>
-            <div class="field">
-                <label for="opt-targetPrefix" th:text="#{migration.opt.prefix}">Prefix</label>
-                <input type="text" class="input mono" id="opt-targetPrefix" name="opt.targetPrefix"
-                       th:value="${options.get('targetPrefix') != null ? options.get('targetPrefix').asText('') : ''}">
-            </div>
-            <div class="field">
-                <label for="opt-targetSuffix" th:text="#{migration.opt.suffix}">Suffix</label>
-                <input type="text" class="input mono" id="opt-targetSuffix" name="opt.targetSuffix"
-                       th:value="${options.get('targetSuffix') != null ? options.get('targetSuffix').asText('') : '_migrated'}">
-            </div>
+            <th:block th:replace="~{migration-form/options-common :: namingFields(${options}, '_migrated')}"></th:block>
             <div class="field">
                 <label for="opt-writeMode" th:text="#{migration.opt.writeMode}">Write mode</label>
                 <select class="input" id="opt-writeMode" name="opt.writeMode">

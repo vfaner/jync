@@ -15,12 +15,12 @@ import org.junit.jupiter.api.Test;
  * of zero hours before a peak sags below the zero line, and a flat top bulges above the
  * highest sample — the chart then claims changes that never happened.
  *
- * <p>The browser-side check (the curve visibly stays between 0 and the top tick) lives in
- * the manual pass; this holds the contract the curve helper must keep.
+ * <p>曲线 helper 现由看板与性能页共用（charts.js）；这里守住它自身的夹取契约，浏览器侧
+ * 的目视检查（曲线确实落在 0 与轴顶之间）仍在手工回归里做。
  */
 class DashboardActivityChartCurveTest {
 
-    private static final Path JS = Path.of("src/main/resources/static/js/app.js");
+    private static final Path JS = Path.of("src/main/resources/static/js/charts.js");
 
     @Test
     @DisplayName("平滑曲线的控制点夹在本段取值区间内，不会画到 0 以下或冲过最高点")

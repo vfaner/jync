@@ -125,14 +125,6 @@
 
 <th:block th:fragment="scripts" th:remove="tag">
 <script th:src="@{/js/metrics.js(v=${appVersion})}"></script>
-<script>
-    (function () {
-        var root = document.getElementById('metrics-root');
-        if (root && window.JyncMetrics) {
-            window.JyncMetrics.bind(root);
-        }
-    })();
-</script>
 </th:block>
 </body>
 </html>

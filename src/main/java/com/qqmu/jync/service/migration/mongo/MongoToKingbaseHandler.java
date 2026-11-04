@@ -71,11 +71,6 @@ public class MongoToKingbaseHandler implements MigrationTypeHandler {
     }
 
     @Override
-    public String optionsFragment() {
-        return "~{migration-form/options-mongo-kingbase :: options}";
-    }
-
-    @Override
     public JsonNode defaultOptions() {
         return MongoToKingbaseOptions.parse(JSON.createObjectNode()).toJson();
     }

@@ -36,11 +36,6 @@ class MigrationTypeRegistryTest {
             }
 
             @Override
-            public String optionsFragment() {
-                return "~{migration-form/options-es :: options}";
-            }
-
-            @Override
             public JsonNode defaultOptions() {
                 return JsonNodeFactory.instance.objectNode();
             }

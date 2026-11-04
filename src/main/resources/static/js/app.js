@@ -8,6 +8,14 @@
   /* 服务端返回的是 i18n key，布局里把解析好的文案挂在这里 */
   var messages = window.JyncMessages || {};
 
+  /* 图表公共工具（charts.js）：配色、刻度、平滑曲线两处共用，各自只保留数据绑定。 */
+  var charts = window.JyncCharts || {};
+  var cssVar = charts.cssVar;
+  var group3 = charts.group3;
+  var el = charts.el;
+  var niceTop = charts.niceTop;
+  var smoothPath = charts.smoothPath;
+
   function t(key) {
     if (!key) return '';
     return messages[key] || key;
@@ -3113,39 +3121,6 @@
     var data = null;
     var tip = null;
 
-    function cssVar(name, fallback) {
-      var value = getComputedStyle(document.documentElement).getPropertyValue(name);
-      return (value && value.replace(/^\s+|\s+$/g, '')) || fallback;
-    }
-
-    function group3(n) {
-      var text = String(n);
-      return text.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    }
-
-    function el(tag, attrs) {
-      var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
-      for (var key in attrs) {
-        if (Object.prototype.hasOwnProperty.call(attrs, key)) {
-          node.setAttribute(key, attrs[key]);
-        }
-      }
-      return node;
-    }
-
-    // 轴顶取整齐的刻度：先把最大值除以四格，再向上取到 1/2/5 × 10^n，
-    // 这样四条刻度线是 0/10/20/30/40，而不是 13/25/38 这种除不尽的值。
-    function niceTop(value) {
-      if (value <= 0) return 0;
-      var raw = value / 4;
-      var exp = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
-      var steps = [1, 2, 5, 10];
-      for (var i = 0; i < steps.length; i++) {
-        if (steps[i] * exp >= raw) return steps[i] * exp * 4;
-      }
-      return 10 * exp * 4;
-    }
-
     function clearChart() {
       var svg = slot.querySelector('svg');
       if (svg) slot.removeChild(svg);
@@ -3159,36 +3134,6 @@
     function valueAt(point, series) {
       var suffix = metric === 'rows' ? 'Rows' : 'Changes';
       return Number(point[series + suffix]) || 0;
-    }
-
-    /**
-     * 折线转平滑曲线：Catmull-Rom 转三次贝塞尔；点少时退化成直线。
-     *
-     * <p>切线会借用相邻点，所以曲线可以越过它连接的两个采样：一段全 0 会被前后的峰值
-     * 拉下 0 轴，连续高点之间又会冲过最高值 —— 计数不可能为负，也不该比最大值还高。
-     * 把每个控制点的 y 夹进本段两端的区间，贝塞尔就落在两端点之间（曲线在控制点的
-     * 凸包内），平滑保留，多画出来的部分消失。
-     */
-    function smoothPath(coords) {
-      var d = 'M' + coords[0].x + ' ' + coords[0].y;
-      for (var c = 0; c < coords.length - 1; c++) {
-        var p0 = coords[c - 1] || coords[c];
-        var p1 = coords[c];
-        var p2 = coords[c + 1];
-        var p3 = coords[c + 2] || p2;
-        var low = Math.min(p1.y, p2.y);
-        var high = Math.max(p1.y, p2.y);
-        var c1x = p1.x + (p2.x - p0.x) / 6;
-        var c1y = clampY(p1.y + (p2.y - p0.y) / 6, low, high);
-        var c2x = p2.x - (p3.x - p1.x) / 6;
-        var c2y = clampY(p2.y - (p3.y - p1.y) / 6, low, high);
-        d += ' C' + c1x + ' ' + c1y + ' ' + c2x + ' ' + c2y + ' ' + p2.x + ' ' + p2.y;
-      }
-      return d;
-    }
-
-    function clampY(value, low, high) {
-      return Math.max(low, Math.min(high, value));
     }
 
     function draw() {

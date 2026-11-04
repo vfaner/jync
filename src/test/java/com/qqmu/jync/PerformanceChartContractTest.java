@@ -26,20 +26,14 @@ class PerformanceChartContractTest {
             Path.of("src/main/resources/templates/project-performance.html");
 
     @Test
-    @DisplayName("性能折线的控制点夹在本段取值区间内，不会画到 0 以下或冲过最高点")
+    @DisplayName("性能折线走与看板同一份夹取过的平滑曲线，不另写一套")
     void thePerformanceCurveStaysBetweenTheSamplesItJoins() throws Exception {
         String body = functionBody(read(JS), "function flushSegment(");
 
         assertThat(body)
-                .as("下控制点要夹进本段的取值区间")
-                .contains("c1y = clampY(");
-        assertThat(body)
-                .as("上控制点也要夹（下降段和平顶段都会过冲）")
-                .contains("c2y = clampY(");
-        assertThat(body)
-                .as("夹取区间就是本段两端的 y")
-                .contains("Math.min(p1.y, p2.y)")
-                .contains("Math.max(p1.y, p2.y)");
+                .as("分段绘制必须复用 charts.js 的 smoothPath（其夹取契约由看板测试守住）")
+                .contains("smoothPath(segment)")
+                .doesNotContain("c1y =");
     }
 
     @Test

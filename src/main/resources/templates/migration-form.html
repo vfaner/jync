@@ -78,9 +78,10 @@
                 </div>
             </div>
 
-            <!--/* 类型专属参数。Thymeleaf 3.0 会把 th:replace="${handler.optionsFragment}"
-                   当成模板名而不是片段表达式，所以这里用 th:switch 分派；新增类型时在
-                   这里加一个 case，并把类型专属参数放进 migration-form/ 下自己的片段。
+            <!--/* 类型专属参数。Thymeleaf 3.0 不支持把片段表达式当变量传给 th:replace
+                   （th:replace="${...}" 会被当成模板名），所以这里按类型名 th:switch 分派。
+                   新增迁移类型时必须在这里补一个 case，并把类型专属参数放进
+                   migration-form/ 下自己的片段，否则表单会缺少参数区。
                    th:replace 必须放在内层元素上：它与 th:case 同处一个标签时先于
                    th:case 执行，会把每个 case 的片段都渲染出来。 */-->
             <th:block th:switch="${task.type.name()}">

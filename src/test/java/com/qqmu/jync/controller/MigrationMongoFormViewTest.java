@@ -77,8 +77,7 @@ class MigrationMongoFormViewTest {
     void theMongoToMongoFormRendersItsOwnOptionsAndOnlyMongoConnections() throws Exception {
         stub(MigrationType.MONGODB_TO_MONGODB,
                 Set.of(MigrationConnectionKind.MONGODB),
-                Set.of(MigrationConnectionKind.MONGODB),
-                "~{migration-form/options-mongo :: options}", mongoToMongoDefaults());
+                Set.of(MigrationConnectionKind.MONGODB), mongoToMongoDefaults());
 
         String page = mvc.perform(get("/migrations/mongodb-to-mongodb/new").with(asAdmin()))
                 .andExpect(status().isOk())
@@ -104,8 +103,7 @@ class MigrationMongoFormViewTest {
     void theMongoToKingbaseFormRendersItsOwnOptionsAndFiltersEachSide() throws Exception {
         stub(MigrationType.MONGODB_TO_KINGBASE,
                 Set.of(MigrationConnectionKind.MONGODB),
-                Set.of(MigrationConnectionKind.KINGBASE),
-                "~{migration-form/options-mongo-kingbase :: options}", kingbaseDefaults());
+                Set.of(MigrationConnectionKind.KINGBASE), kingbaseDefaults());
 
         String page = mvc.perform(get("/migrations/mongodb-to-kingbase/new").with(asAdmin()))
                 .andExpect(status().isOk())
@@ -126,14 +124,13 @@ class MigrationMongoFormViewTest {
     }
 
     private void stub(MigrationType type, Set<MigrationConnectionKind> sourceKinds,
-                      Set<MigrationConnectionKind> targetKinds, String fragment,
+                      Set<MigrationConnectionKind> targetKinds,
                       ObjectNode defaults) {
         when(registry.isRegistered(type)).thenReturn(true);
         when(registry.find(type)).thenReturn(Optional.of(handler));
         when(handler.type()).thenReturn(type);
         when(handler.sourceKinds()).thenReturn(sourceKinds);
         when(handler.targetKinds()).thenReturn(targetKinds);
-        when(handler.optionsFragment()).thenReturn(fragment);
         when(handler.defaultOptions()).thenReturn(defaults);
         when(handler.parseOptions(any())).thenReturn(defaults);
     }

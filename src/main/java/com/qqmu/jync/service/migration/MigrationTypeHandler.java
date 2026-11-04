@@ -24,9 +24,6 @@ public interface MigrationTypeHandler {
 
     Set<MigrationConnectionKind> targetKinds();
 
-    /** Full Thymeleaf fragment expression, e.g. {@code ~{migration-form/options-es :: options}}. */
-    String optionsFragment();
-
     JsonNode defaultOptions();
 
     /** Form {@code opt.*} parameters to canonical JSON; throws an i18n key on invalid input. */

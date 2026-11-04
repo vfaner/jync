@@ -63,11 +63,6 @@ public class EsToEasysearchHandler implements MigrationTypeHandler {
     }
 
     @Override
-    public String optionsFragment() {
-        return "~{migration-form/options-es :: options}";
-    }
-
-    @Override
     public JsonNode defaultOptions() {
         return EsToEasysearchOptions.parse(JSON.createObjectNode()).toJson();
     }
