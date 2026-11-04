@@ -33,7 +33,7 @@ class ChangeLogServiceAuditTest {
         verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
                 contains("42"));
         verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
-                contains("entire history"));
+                contains("@scope:all"));
     }
 
     @Test
@@ -44,7 +44,7 @@ class ChangeLogServiceAuditTest {
         service.clear(7L, false);
 
         verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
-                contains("project 7"));
+                contains("@scope:project:7"));
         verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
                 contains("3"));
     }

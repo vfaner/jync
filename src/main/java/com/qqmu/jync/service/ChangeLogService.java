@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.repository.ChangeLogRepository;
 
@@ -68,10 +69,10 @@ public class ChangeLogService {
                     ? repository.deleteByProjectId(projectId)
                     : repository.deleteAllBulk();
         }
-        String scope = projectId != null
-                ? " change-log entries of project " + projectId
-                : " change-log entries (entire history)";
-        auditService.record(AuditAction.CHANGELOG_CLEAR, "Cleared " + removed
-                + (failedOnly ? " failed" : "") + scope);
+        auditService.record(AuditAction.CHANGELOG_CLEAR,
+                AuditDetail.of("audit.detail.changelogClear", String.valueOf(removed),
+                        failedOnly ? "@failedOnly:true" : "@failedOnly:false",
+                        projectId != null
+                                ? "@scope:project:" + projectId : "@scope:all"));
     }
 }

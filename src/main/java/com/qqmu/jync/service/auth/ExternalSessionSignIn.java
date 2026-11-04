@@ -18,7 +18,8 @@ import org.springframework.stereotype.Component;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
-import com.qqmu.jync.util.ClientIpResolver;
+import com.qqmu.jync.service.audit.AuditDetail;
+import com.qqmu.jync.util.AuditOrigin;
 
 /**
  * The one place that turns a verified external identity into a session.
@@ -56,7 +57,8 @@ public class ExternalSessionSignIn {
         new HttpSessionSecurityContextRepository().saveContext(context, request, response);
 
         auditService.record(AuditAction.LOGIN,
-                "Signed in from " + ClientIpResolver.resolve(request) + " via " + method,
+                AuditDetail.of("audit.detail.loginVia", AuditOrigin.of(request),
+                        "@method:" + method.toLowerCase(java.util.Locale.ROOT)),
                 username);
         return principal;
     }

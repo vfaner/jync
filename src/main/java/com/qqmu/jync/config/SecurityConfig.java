@@ -10,6 +10,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.AccountExpiredException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.CredentialsExpiredException;
+import org.springframework.security.authentication.DisabledException;
+import org.springframework.security.authentication.InternalAuthenticationServiceException;
+import org.springframework.security.authentication.LockedException;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -25,6 +31,7 @@ import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.auth.ExternalSessionSignIn;
 import com.qqmu.jync.service.auth.ForcePasswordChangeFilter;
 import com.qqmu.jync.service.auth.LoginAttemptService;
@@ -32,6 +39,7 @@ import com.qqmu.jync.service.auth.LoginLockoutFilter;
 import com.qqmu.jync.service.auth.SsoHeaderAuthenticationFilter;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
+import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
 import com.qqmu.jync.util.CryptoUtil;
 
@@ -297,7 +305,7 @@ public class SecurityConfig {
             // Audit before the redirect: a failure here must not lose the sign-in record,
             // and the delegate commits the response.
             auditService.record(AuditAction.LOGIN,
-                    "Signed in from " + ClientIpResolver.resolve(request),
+                    AuditDetail.of("audit.detail.login", AuditOrigin.of(request)),
                     authentication.getName());
             // The seeded password is public; land on the home page, where the layout opens the
             // change-password modal and refuses to close it, instead of the saved request, which
@@ -325,8 +333,8 @@ public class SecurityConfig {
             // The typed-in username is attacker-controlled; the audit service sanitizes and
             // caps it before it becomes a row.
             auditService.record(AuditAction.LOGIN_FAILED,
-                    exception.getClass().getSimpleName() + " from "
-                            + ClientIpResolver.resolve(request),
+                    AuditDetail.of("audit.detail.loginFailed",
+                            failureReason(exception), AuditOrigin.of(request)),
                     request.getParameter("username"));
             // The local form's own page, not /login: under external authentication /login may
             // redirect to the portal, which would swallow the error message entirely.
@@ -334,6 +342,27 @@ public class SecurityConfig {
                     ? "/login/local?locked" : "/login/local?error";
             response.sendRedirect(request.getContextPath() + target);
         };
+    }
+
+    /** Stable, localizable slug for the login failure shown in the audit trail. */
+    private static String failureReason(RuntimeException exception) {
+        String slug;
+        if (exception instanceof BadCredentialsException) {
+            slug = "bad-credentials";
+        } else if (exception instanceof LockedException) {
+            slug = "locked";
+        } else if (exception instanceof DisabledException) {
+            slug = "disabled";
+        } else if (exception instanceof AccountExpiredException) {
+            slug = "account-expired";
+        } else if (exception instanceof CredentialsExpiredException) {
+            slug = "credentials-expired";
+        } else if (exception instanceof InternalAuthenticationServiceException) {
+            slug = "service-unavailable";
+        } else {
+            slug = "other";
+        }
+        return "@reason:" + slug;
     }
 
     /**

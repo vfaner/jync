@@ -34,6 +34,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -365,7 +366,8 @@ public class ProjectService {
         // Inside the same transaction: the audit row commits with the change it describes
         // and rolls back with it, so the trail never claims a save that did not happen.
         auditService.record(AuditAction.PROJECT_SAVE,
-                (isNew ? "Created" : "Updated") + " project '" + saved.getName() + "'");
+                AuditDetail.of("audit.detail.projectSave",
+                        isNew ? "@created" : "@updated", saved.getName()));
 
         // Keep the schedule consistent with the flag on every save, not just on start/stop.
         afterCommit(saved.getId(), "reschedule", () -> scheduler.reschedule(saved));
@@ -553,7 +555,9 @@ public class ProjectService {
             // rows would silently vanish (observed live: audit missing after the C2
             // sequence ran), and a consumer-start failure would swallow the trail too.
             auditService.record(AuditAction.PROJECT_CAPTURE_SWITCH,
-                    "project " + saved.getId() + ": " + from + " -> " + to);
+                    AuditDetail.of("audit.detail.captureSwitch",
+                            String.valueOf(saved.getId()),
+                            "@strategy:" + from, "@strategy:" + to));
             changeLogRepository.save(ChangeLog.of(saved.getId(), ObjectType.PROJECT,
                     saved.getName(), ChangeType.UPDATE,
                     "capture strategy: " + from + " -> " + to));
@@ -1042,7 +1046,8 @@ public class ProjectService {
         changeLogRepository.save(entry);
         // The change log for this project can itself be cleared later; the admin audit
         // trail is append-only, so the force-unlock record outlives it.
-        auditService.record(AuditAction.PROJECT_FORCE_UNLOCK, detail);
+        auditService.record(AuditAction.PROJECT_FORCE_UNLOCK,
+                AuditDetail.of("audit.detail.forceUnlock", actor, previousOwner, previousExpiry));
         log.warn("Project '{}': {}", project.getName(), detail);
     }
 
@@ -1108,7 +1113,7 @@ public class ProjectService {
             // heartbeat marker) so a reused id cannot inherit a ghost cycle.
             taskRunner.forget(projectId);
             auditService.record(AuditAction.PROJECT_DELETE,
-                    "Deleted project '" + project.getName() + "' and all its sync state");
+                    AuditDetail.of("audit.detail.projectDelete", project.getName()));
         }
         log.info("Deleted project '{}' and all its sync state", project.getName());
     }

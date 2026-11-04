@@ -47,7 +47,7 @@
                                                    ? 'badge-warn' : 'badge-mute'))"
                                   th:text="#{'audit.action.' + ${an}}">Action</span>
                         </td>
-                        <td><div class="wrap-detail muted" th:text="${e.detail ?: ''}">detail</div></td>
+                        <td><div class="wrap-detail muted" th:text="${details[e.id] ?: ''}">detail</div></td>
                     </tr>
                     </tbody>
                 </table>

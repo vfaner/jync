@@ -158,7 +158,9 @@ class ProjectServiceStrategySwitchTest {
         order.verify(taskStore).markCdcRunning(1L);       // 摘旧 ERROR 帽子
         order.verify(cdcManager).ensureStarted(any());
         verify(auditService).record(eq(AuditAction.PROJECT_CAPTURE_SWITCH),
-                contains("POLLING -> BINLOG_CDC"));
+                contains("@strategy:POLLING"));
+        verify(auditService).record(eq(AuditAction.PROJECT_CAPTURE_SWITCH),
+                contains("@strategy:BINLOG_CDC"));
     }
 
     /**
@@ -185,7 +187,9 @@ class ProjectServiceStrategySwitchTest {
         verify(taskStore, never()).markCdcRunning(anyLong());
         verify(cdcManager, never()).ensureStarted(any());
         verify(auditService).record(eq(AuditAction.PROJECT_CAPTURE_SWITCH),
-                contains("POLLING -> BINLOG_CDC"));
+                contains("@strategy:POLLING"));
+        verify(auditService).record(eq(AuditAction.PROJECT_CAPTURE_SWITCH),
+                contains("@strategy:BINLOG_CDC"));
     }
 
     @Test
@@ -200,7 +204,9 @@ class ProjectServiceStrategySwitchTest {
         order.verify(scheduler).reschedule(any());
         verify(positionStore, never()).delete(anyLong()); // C2:CDC→轮询保留位点
         verify(auditService).record(eq(AuditAction.PROJECT_CAPTURE_SWITCH),
-                contains("BINLOG_CDC -> POLLING"));
+                contains("@strategy:BINLOG_CDC"));
+        verify(auditService).record(eq(AuditAction.PROJECT_CAPTURE_SWITCH),
+                contains("@strategy:POLLING"));
     }
 
     /**

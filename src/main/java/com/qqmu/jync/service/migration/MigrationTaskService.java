@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.dto.MigrationTaskForm;
 import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationRun;
 import com.qqmu.jync.model.MigrationRunTrigger;
@@ -143,8 +144,9 @@ public class MigrationTaskService {
 
         MigrationTask saved = taskRepository.save(entity);
         auditService.record(AuditAction.MIGRATION_TASK_SAVE,
-                (isNew ? "Created" : "Updated") + " dedicated-migration task '"
-                        + saved.getName() + "' (" + saved.getType() + ")");
+                AuditDetail.of("audit.detail.migrationTaskSave",
+                        isNew ? "@created" : "@updated", saved.getName(),
+                        "@msg:" + saved.getType().messageKey()));
         events.publishEvent(new MigrationTaskChangedEvent(saved.getId(), false));
         return saved;
     }
@@ -171,8 +173,8 @@ public class MigrationTaskService {
         }
         taskRepository.deleteById(id);
         auditService.record(AuditAction.MIGRATION_TASK_DELETE,
-                "Deleted dedicated-migration task '" + task.getName() + "' ("
-                        + task.getType() + ")");
+                AuditDetail.of("audit.detail.migrationTaskDelete", task.getName(),
+                        "@msg:" + task.getType().messageKey()));
         events.publishEvent(new MigrationTaskChangedEvent(id, true));
     }
 

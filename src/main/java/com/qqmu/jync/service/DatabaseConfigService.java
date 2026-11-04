@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -158,8 +159,10 @@ public class DatabaseConfigService {
         dataSourceManager.evict(saved.getId());
         // Names and types only — never the password, encrypted or raw, and no host details
         // beyond what the connection's own name already says.
-        auditService.record(AuditAction.DB_SAVE, (isNew ? "Created" : "Updated")
-                + " connection '" + saved.getName() + "' (" + saved.getType() + ")");
+        auditService.record(AuditAction.DB_SAVE,
+                AuditDetail.of("audit.detail.dbSave",
+                        isNew ? "@created" : "@updated", saved.getName(),
+                        "@type:" + saved.getType()));
         log.info("Saved database connection '{}' ({})", saved.getName(), saved.getType());
         return saved;
     }
@@ -264,7 +267,8 @@ public class DatabaseConfigService {
         metricSampleRepository.deleteByConnectionId(id);
         repository.deleteById(id);
         auditService.record(AuditAction.DB_DELETE,
-                "Deleted connection '" + victim.getName() + "' (" + victim.getType() + ")");
+                AuditDetail.of("audit.detail.dbDelete", victim.getName(),
+                        "@type:" + victim.getType()));
         log.info("Deleted database connection {}", id);
     }
 

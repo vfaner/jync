@@ -40,7 +40,8 @@ class ChangeLogServiceClearScopeTest {
         verify(repository).deleteByProjectIdAndSuccessFalse(7L);
         verify(repository, never()).deleteByProjectId(any());
         verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR), contains("2"));
-        verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR), contains("failed"));
+        verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
+                contains("@failedOnly:true"));
     }
 
     @Test

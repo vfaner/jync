@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionAuthType;
 import com.qqmu.jync.repository.MigrationConnectionRepository;
@@ -137,12 +138,12 @@ public class MigrationConnectionService {
         MigrationConnection saved = connections.save(entity);
         boolean isNew = form.getId() == null;
         auditService.record(AuditAction.MIGRATION_CONNECTION_SAVE,
-                (isNew ? "Created" : "Updated") + " dedicated-migration connection '"
-                        + saved.getName() + "' (" + saved.getKind() + ")");
+                AuditDetail.of("audit.detail.migrationConnectionSave",
+                        isNew ? "@created" : "@updated", saved.getName(),
+                        "@kind:" + saved.getKind()));
         if (!saved.isVerifyTls()) {
             auditService.record(AuditAction.MIGRATION_CONNECTION_SAVE,
-                    "TLS verification disabled for dedicated-migration connection '"
-                            + saved.getName() + "'");
+                    AuditDetail.of("audit.detail.migrationConnectionTls", saved.getName()));
         }
         log.info("Saved dedicated-migration connection '{}' ({})", saved.getName(),
                 saved.getKind());
@@ -216,8 +217,8 @@ public class MigrationConnectionService {
         }
         connections.deleteById(id);
         auditService.record(AuditAction.MIGRATION_CONNECTION_DELETE,
-                "Deleted dedicated-migration connection '" + victim.getName() + "' ("
-                        + victim.getKind() + ")");
+                AuditDetail.of("audit.detail.migrationConnectionDelete", victim.getName(),
+                        "@kind:" + victim.getKind()));
         log.info("Deleted dedicated-migration connection {}", id);
     }
 

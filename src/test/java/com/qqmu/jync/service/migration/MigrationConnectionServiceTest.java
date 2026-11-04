@@ -3,12 +3,14 @@ package com.qqmu.jync.service.migration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.support.ResourceBundleMessageSource;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,6 +31,7 @@ import com.qqmu.jync.model.MigrationConnectionKind;
 import com.qqmu.jync.repository.MigrationConnectionRepository;
 import com.qqmu.jync.repository.MigrationTaskRepository;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.audit.AuditDetailRenderer;
 import com.qqmu.jync.service.migration.connection.MigrationConnectionAdapterRegistry;
 import com.qqmu.jync.service.migration.connection.MigrationConnectionTestResult;
 import com.qqmu.jync.service.migration.connection.MigrationDiscoveryItem;
@@ -70,6 +74,15 @@ class MigrationConnectionServiceTest {
         return form;
     }
 
+    /** Renders recorded details with the real bundles, the way the audit page does. */
+    private static AuditDetailRenderer renderer() {
+        ResourceBundleMessageSource source = new ResourceBundleMessageSource();
+        source.setBasenames("i18n/messages");
+        source.setDefaultEncoding("UTF-8");
+        source.setFallbackToSystemLocale(false);
+        return new AuditDetailRenderer(source);
+    }
+
     private MigrationConnection stored(long id, String passwordEnc) {
         MigrationConnection connection = new MigrationConnection();
         connection.setId(id);
@@ -104,8 +117,14 @@ class MigrationConnectionServiceTest {
         assertThat(saved.getPasswordEnc()).isEqualTo("enc:cipher");
         assertThat(saved.getApiKeyEnc()).isNull();
         assertThat(saved.getBaseUrl()).isEqualTo("http://127.0.0.1:9200");
-        verify(auditService).record(AuditAction.MIGRATION_CONNECTION_SAVE,
-                "Created dedicated-migration connection 'es-prod' (ELASTICSEARCH)");
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(auditService).record(eq(AuditAction.MIGRATION_CONNECTION_SAVE),
+                detail.capture());
+        assertThat(renderer().render(detail.getValue(), Locale.ENGLISH))
+                .isEqualTo("Created dedicated-migration connection 'es-prod'"
+                        + " (Elasticsearch)");
+        assertThat(renderer().render(detail.getValue(), Locale.SIMPLIFIED_CHINESE))
+                .isEqualTo("新建专属迁移连接「es-prod」（Elasticsearch）");
     }
 
     @Test
@@ -265,8 +284,12 @@ class MigrationConnectionServiceTest {
         service.delete(3L);
 
         verify(connections).deleteById(3L);
-        verify(auditService).record(AuditAction.MIGRATION_CONNECTION_DELETE,
-                "Deleted dedicated-migration connection 'es-prod' (ELASTICSEARCH)");
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(auditService).record(eq(AuditAction.MIGRATION_CONNECTION_DELETE),
+                detail.capture());
+        assertThat(renderer().render(detail.getValue(), Locale.ENGLISH))
+                .isEqualTo("Deleted dedicated-migration connection 'es-prod'"
+                        + " (Elasticsearch)");
     }
 
     @Test

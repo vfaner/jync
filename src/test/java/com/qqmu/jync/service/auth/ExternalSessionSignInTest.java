@@ -48,7 +48,8 @@ class ExternalSessionSignInTest {
         assertThat(principal.isExternal()).isTrue();
         assertThat(principal.isUsingDefaultPassword()).isFalse();
         assertThat(principal.getRole()).isEqualTo(UserRole.VIEWER);
-        verify(auditService).record(eq(AuditAction.LOGIN), contains("via HEADER"), eq("alice"));
+        verify(auditService).record(eq(AuditAction.LOGIN), contains("@method:header"),
+                eq("alice"));
     }
 
     @Test

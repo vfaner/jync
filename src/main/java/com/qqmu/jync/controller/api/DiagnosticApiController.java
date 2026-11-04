@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.diagnostics.DiagnosticBundleService;
 import com.qqmu.jync.service.diagnostics.DiagnosticBundleService.DiagnosticBundle;
 import com.qqmu.jync.service.diagnostics.DiagnosticBundleService.DiagnosticBundleTooLargeException;
@@ -50,7 +51,8 @@ public class DiagnosticApiController {
         }
 
         auditService.record(AuditAction.DIAGNOSTICS_EXPORT,
-                "diagnostics bundle: " + bundle.entryCount() + " entries");
+                AuditDetail.of("audit.detail.diagnosticsExport",
+                        String.valueOf(bundle.entryCount())));
 
         return ResponseEntity.ok()
                 .contentType(ZIP)

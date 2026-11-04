@@ -16,7 +16,9 @@ import com.qqmu.jync.service.auth.ExternalSessionSignIn;
 import com.qqmu.jync.service.auth.TicketAttemptLimiter;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 import com.qqmu.jync.service.auth.oa.OaAuthResult;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.auth.oa.TicketValidationClient;
+import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
 
 /**
@@ -71,8 +73,8 @@ public class SsoEntryController {
             attemptLimiter.recordFailure(clientIp);
             // The ticket itself is a credential: it never reaches the audit row.
             auditService.record(AuditAction.LOGIN_FAILED,
-                    "Ticket sign-in from " + clientIp
-                            + " (" + result.getErrorKey() + ")", "sso");
+                    AuditDetail.of("audit.detail.ticketFailed", AuditOrigin.of(request),
+                            "@msg:" + result.getErrorKey()), "sso");
             return "redirect:/login?ticketError";
         }
         attemptLimiter.recordSuccess(clientIp);

@@ -34,7 +34,6 @@
 
 ---
 
-<a name="background"></a>
 ## 项目背景
 
 政企系统从 MySQL、Oracle、SQL Server 迁移到达梦、金仓、OceanBase 等国产数据库时，迁移往往不是一次性搬完：新旧系统双轨运行、分批割接、历史库只读共存，都要求两个库在数周甚至数月里**持续保持一致**。
@@ -43,7 +42,6 @@
 
 ---
 
-<a name="features"></a>
 ## 核心能力
 
 | 分类 | 能力 |
@@ -62,7 +60,6 @@
 
 ---
 
-<a name="databases"></a>
 ## 支持的数据库
 
 内置 **34 种**预设类型，其中 25 种驱动随包内置。下图是官网的数据库能力地图：上半部分是 JDBC 的实时同步 / ETL 矩阵，底部是独立的**专属迁移**链路；点图可看完整说明。
@@ -76,7 +73,6 @@
 
 ---
 
-<a name="screenshots"></a>
 ## 界面速览
 
 <table>
@@ -91,7 +87,6 @@
 
 ---
 
-<a name="engine"></a>
 ## 同步引擎
 
 Jync 有三条数据通路，分别解决"第一次怎么搬""之后怎么追""如何做到秒级"：
@@ -112,7 +107,6 @@ Jync 有三条数据通路，分别解决"第一次怎么搬""之后怎么追""�
 
 ---
 
-<a name="deploy"></a>
 ## 快速开始
 
 | 项 | 要求 |
@@ -153,7 +147,6 @@ sync:
 
 ---
 
-<a name="workflow"></a>
 ## 使用流程
 
 1. **数据库连接** → 新建源 / 目标连接 → "测试连接"确认可用。
@@ -171,7 +164,6 @@ sync:
 
 ---
 
-<a name="architecture"></a>
 ## 架构与技术栈
 
 **技术栈**：Java 17 · Spring Boot 2.7 · Spring Data JPA / Hibernate · Quartz · H2 / MySQL / PostgreSQL 元数据库 · Thymeleaf 服务端渲染 · 原生 JavaScript（无 CDN、无前端构建）。
@@ -191,7 +183,6 @@ com.qqmu.jync
 
 ---
 
-<a name="docs"></a>
 ## 文档与测试
 
 - **配置、调度与调优**：[docs/configuration.md](docs/configuration.md)（`sync.*` / `sync.cdc.*` 键、调度规则、列清洗、CDC 前提与性能参数）
@@ -209,7 +200,6 @@ mvn test
 
 ---
 
-<a name="contributing"></a>
 ## 参与贡献
 
 | 渠道 | 账号 |
@@ -230,7 +220,6 @@ Jync 全部能力免费开源。如果它帮到了你，欢迎点上面的按钮
 
 ---
 
-<a name="license"></a>
 ## 许可证
 
 [MIT License](LICENSE)，商业与非商业用途均可。内置第三方 JDBC 驱动各自适用原厂许可证，见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。

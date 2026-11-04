@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -341,7 +342,8 @@ public class CdcOperationsService {
         changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
                 fresh.getName(), ChangeType.INFO, trail));
         auditService.record(AuditAction.PROJECT_CDC_REBASELINE,
-                "project " + projectId + ": " + trail);
+                AuditDetail.of("audit.detail.cdcRebaseline", String.valueOf(projectId),
+                        "@rebaseline:" + (restarted ? "rebuilt" : "reset")));
         return restarted;
     }
 

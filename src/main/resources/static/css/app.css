@@ -315,8 +315,6 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .btn-sm { padding: 6px 12px; font-size: 13px; border-radius: 8px; }
 .btn-xs { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 
-/* 图标按钮组：表格行内操作 */
-.btn-row { display: inline-flex; gap: 5px; }
 .btn-icon {
   width: 30px; height: 30px; padding: 0; border-radius: 8px;
   border: 1px solid var(--line); background: var(--bg); color: var(--ink-soft);

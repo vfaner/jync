@@ -16,7 +16,9 @@ import com.qqmu.jync.service.auth.ExternalSessionSignIn;
 import com.qqmu.jync.service.auth.LoginAttemptService;
 import com.qqmu.jync.service.auth.oa.OaAuthClient;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.auth.oa.OaAuthResult;
+import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
 
 import lombok.extern.slf4j.Slf4j;
@@ -78,7 +80,7 @@ public class OaLoginController {
             attemptService.recordFailure(key);
             // The typed username is attacker-controlled; the audit service sanitizes and caps it.
             auditService.record(AuditAction.LOGIN_FAILED,
-                    "OA sign-in from " + ClientIpResolver.resolve(request), username);
+                    AuditDetail.of("audit.detail.oaFailed", AuditOrigin.of(request)), username);
             return "redirect:/login?oaError";
         }
 

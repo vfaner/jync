@@ -34,7 +34,6 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 
 ---
 
-<a name="background"></a>
 ## Background
 
 When a public-sector or enterprise system moves from MySQL, Oracle or SQL Server to a domestic database such as DM (达梦), Kingbase or OceanBase, the migration rarely ends when the data is copied. Old and new systems run side by side, cutover happens in batches, and read-only archives coexist with live services — all of which require the two databases to **stay consistent for weeks or months**.
@@ -43,7 +42,6 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 
 ---
 
-<a name="features"></a>
 ## Capabilities
 
 | Area | What Jync does |
@@ -62,7 +60,6 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 
 ---
 
-<a name="databases"></a>
 ## Supported databases
 
 **34 built-in types**, 25 of them with bundled drivers. The map below is from the website: the upper part is the JDBC real-time sync / ETL matrix, the bottom is the separate **dedicated migration** chain; click it for the full reference.
@@ -76,7 +73,6 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 
 ---
 
-<a name="screenshots"></a>
 ## Screens
 
 <table>
@@ -91,7 +87,6 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 
 ---
 
-<a name="engine"></a>
 ## Sync engine
 
 There are three data paths: **how the first copy moves**, **how changes are followed afterwards**, and **how to reach second-level latency**:
@@ -113,7 +108,6 @@ A single-host container benchmark (500k-row Oracle table) measured **216k rows/s
 
 ---
 
-<a name="deploy"></a>
 ## Quick start
 
 | Item | Requirement |
@@ -154,7 +148,6 @@ Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `
 
 ---
 
-<a name="workflow"></a>
 ## Workflow
 
 1. **Connections** → create source / target connections → "Test connection" before saving.
@@ -172,7 +165,6 @@ Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `
 
 ---
 
-<a name="architecture"></a>
 ## Architecture and stack
 
 **Stack**: Java 17 · Spring Boot 2.7 · Spring Data JPA / Hibernate · Quartz · H2 / MySQL / PostgreSQL metadata store · Thymeleaf server-side rendering · vanilla JavaScript (no CDN, no front-end build).
@@ -192,7 +184,6 @@ com.qqmu.jync
 
 ---
 
-<a name="docs"></a>
 ## Docs and tests
 
 - **Configuration, scheduling and tuning**: [docs/configuration.md](docs/configuration.md) (`sync.*` / `sync.cdc.*` keys, scheduling rules, column cleansing, CDC prerequisites and performance settings; in Chinese)
@@ -209,7 +200,6 @@ Real-database integration tests (`*IT`, excluded from the default suite, require
 
 ---
 
-<a name="contributing"></a>
 ## Contributing
 
 | Channel | Account |
@@ -230,7 +220,6 @@ Every Jync feature is free and open source. If it saved you time, use the button
 
 ---
 
-<a name="license"></a>
 ## License
 
 [MIT License](LICENSE), for commercial and non-commercial use. Bundled third-party JDBC drivers keep their vendors' licenses; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

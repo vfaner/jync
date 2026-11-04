@@ -26,6 +26,7 @@ import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.AuditEvent;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.audit.AuditDetailRenderer;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 
 /**
@@ -37,7 +38,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
  * Role enforcement lives in SecurityConfigTest; this slice signs in as ADMIN throughout.
  */
 @WebMvcTest(AuditController.class)
-@Import(GlobalModelAdvice.class)
+@Import({GlobalModelAdvice.class, AuditDetailRenderer.class})
 @TestPropertySource(properties = "app.github-url=https://example.com/repo")
 class AuditControllerViewTest {
 
@@ -64,9 +65,14 @@ class AuditControllerViewTest {
     @Test
     void rowsRenderActorDetailAndALocalizedActionBadge() throws Exception {
         when(auditService.count()).thenReturn(2L);
-        when(auditService.page(anyInt(), anyInt())).thenReturn(new PageImpl<>(List.of(
-                AuditEvent.of("admin", AuditAction.LOGIN_FAILED, "BadCredentials from 10.0.0.9"),
-                AuditEvent.of("admin", AuditAction.CHANGELOG_CLEAR, "Cleared 42 entries"))));
+        AuditEvent failedLogin = AuditEvent.of("admin", AuditAction.LOGIN_FAILED,
+                "BadCredentials from 10.0.0.9");
+        failedLogin.setId(1L);
+        AuditEvent cleared = AuditEvent.of("admin", AuditAction.CHANGELOG_CLEAR,
+                "Cleared 42 entries");
+        cleared.setId(2L);
+        when(auditService.page(anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(List.of(failedLogin, cleared)));
 
         String page = render();
 
@@ -94,8 +100,11 @@ class AuditControllerViewTest {
     @Test
     void thePageOffersNoWayToRemoveAnEntry() throws Exception {
         when(auditService.count()).thenReturn(1L);
-        when(auditService.page(anyInt(), anyInt())).thenReturn(new PageImpl<>(List.of(
-                AuditEvent.of("admin", AuditAction.LOGIN, "Signed in from 127.0.0.1"))));
+        AuditEvent login = AuditEvent.of("admin", AuditAction.LOGIN,
+                "Signed in from 127.0.0.1");
+        login.setId(1L);
+        when(auditService.page(anyInt(), anyInt()))
+                .thenReturn(new PageImpl<>(List.of(login)));
 
         String page = render();
 
