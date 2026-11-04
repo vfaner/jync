@@ -193,6 +193,8 @@ class SqlServerCdcConsumerFailureEscalationTest {
                 .thenReturn("MERGE INTO orders ...");
         when(dialect.getUpsertSql(any(), any(), any(), any(), any()))
                 .thenReturn("MERGE INTO orders ...");
+        when(dialect.getUpsertSql(any(), any(), any(), any(), any(), anyBoolean(), any()))
+                .thenReturn("MERGE INTO orders ...");
         when(dialect.upsertBindOrder(any(), any()))
                 .thenAnswer(inv -> inv.getArgument(0));
         when(ctx.getTargetDialect()).thenReturn(dialect);

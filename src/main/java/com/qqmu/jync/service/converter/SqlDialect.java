@@ -372,6 +372,28 @@ public interface SqlDialect {
     }
 
     /**
+     * As the guarded typed variant, plus {@code columnTypeDeclarations}: a per-column DDL type
+     * declaration as produced by {@link #mapType} (then {@link #castType}), which dialects that
+     * type their parameter markers wrap each placeholder with, e.g.
+     * {@code CAST(? AS VARCHAR(36))}.
+     *
+     * <p>DB2's MERGE feeds each {@code USING (VALUES ...)} marker to several consumers at once
+     * (the ON predicate, WHEN MATCHED UPDATE and WHEN NOT MATCHED INSERT). An untyped marker is
+     * resolved once per consumer, and when two resolutions disagree DB2 fails the statement with
+     * SQL0418 / SQLSTATE 42610 ("&lt;column&gt; already resolved to different type"). The cast
+     * pins the marker to one type. A null or missing declaration leaves that column's marker
+     * untyped, which the other dialects want.
+     */
+    default String getUpsertSql(String schema, String table, List<String> columns,
+                                List<String> pkColumns,
+                                java.util.Map<String, Integer> columnJdbcTypes,
+                                boolean guardUnchangedRows,
+                                java.util.Map<String, String> columnTypeDeclarations) {
+        return getUpsertSql(schema, table, columns, pkColumns, columnJdbcTypes,
+                guardUnchangedRows);
+    }
+
+    /**
      * The order in which values must be bound to the statement from
      * {@link #getUpsertSql}. Dialects that repeat values (for example a MERGE that names
      * them in both the USING clause and the UPDATE clause) return a longer list.

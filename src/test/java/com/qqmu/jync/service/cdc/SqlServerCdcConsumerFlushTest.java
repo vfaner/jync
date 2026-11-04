@@ -2,6 +2,7 @@ package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -124,9 +125,12 @@ class SqlServerCdcConsumerFlushTest {
         SqlDialect dialect = mock(SqlDialect.class);
         when(dialect.getUpsertSql(any(), any(), anyList(), anyList()))
                 .thenReturn("MERGE INTO t1 ...");
-        // CdcEventApplier calls the 5-arg overload (typed placeholders); an unstubbed mock
+        // CdcEventApplier calls the typed overloads (5-arg / 7-arg); an unstubbed mock
         // method returns null, which then reaches prepareStatement(null).
         when(dialect.getUpsertSql(any(), any(), anyList(), anyList(), any()))
+                .thenReturn("MERGE INTO t1 ...");
+        when(dialect.getUpsertSql(any(), any(), anyList(), anyList(), any(),
+                anyBoolean(), any()))
                 .thenReturn("MERGE INTO t1 ...");
         when(dialect.upsertBindOrder(anyList(), anyList()))
                 .thenAnswer(inv -> inv.getArgument(0));

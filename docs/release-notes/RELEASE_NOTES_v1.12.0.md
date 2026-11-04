@@ -24,6 +24,7 @@ v1.12.0 不加新的数据源类型，把重点放在「同步之前能预判、
 - **内容校验的日期比较**：修正 `TIMESTAMP` / `DATETIME` 在不同驱动下带时区偏移导致的误判，统一按墙钟时间比较。
 - **视图 / 存储过程方言改写补漏**：Oracle `DECODE` / `NVL2` 改写为标准 `CASE`；`FETCH FIRST` / `OFFSET … FETCH` 与 MySQL `LIMIT` 双向分页改写现在覆盖子查询与分号结尾；`CONVERT` 改写为 `CAST` 时会同步映射类型名；MySQL `WITH ROLLUP` 改写为标准 `ROLLUP(...)`；`TRUE` / `FALSE` 在 Oracle、SQL Server 上改写为 `1` / `0`。跨方言族的过程化例程正文（变量、游标、循环、条件/异常处理）不再机械 mangling，而是与 PostgreSQL `::`、带样式的 SQL Server `CONVERT`、字符集 `CONVERT … USING`、目标方言没有的 JSON 访问符、SQL Server 裸 `FETCH FIRST`、Oracle 旧式外连接等无法保证等价的写法一起**阻断并提示 DDL 覆盖**，而不是生成可能执行但结果错误的 SQL。
 - **建表字段特性按方言替换**：MySQL 8.4 与 PostgreSQL 16 实测均拒绝 DECIMAL/NUMERIC 自增，这类列按精度提升到 TINYINT/SMALLINT/INT/BIGINT（PG 为 SERIAL/BIGSERIAL）；纯 `DATE` 列上的当前时间默认值改为 `(CURRENT_DATE)`；MySQL `'0000-00-00'` 默认值在其他产品的时间列上丢弃；SQL Server `DATETIME2` / `DATETIMEOFFSET` 默认函数改用 `SYSDATETIME()` / `SYSDATETIMEOFFSET()`。HANA 按官方文档保留 scale 0 的 `DECIMAL(p,0)` identity、正数 scale 提升到整数段；该 identity 规则本轮未在真 HANA 实例重跑。
+- **DB2 MERGE 参数标记类型冲突（SQL0418 / SQLSTATE=42610）**：全量、增量与 CDC 回放写入 DB2 时，`MERGE INTO … USING (VALUES (?…))` 里的无类型参数标记会分别在 ON 匹配条件、WHEN MATCHED 更新、WHEN NOT MATCHED 插入三个上下文中独立解析类型，解析不一致时 DB2 直接报 `-418`（如 `FCS already resolved to different type`），数据同步失败。现在每个标记按目标列的 DDL 声明包成 `CAST(? AS <类型>)` 固定类型，无声明的列仍保留无类型标记；普通 INSERT（无主键表）不受影响。
 
 ## 提醒
 

@@ -1505,6 +1505,9 @@ public class DataSyncService {
                     metaByColumn.put(column.getName().toUpperCase(java.util.Locale.ROOT), column);
                 }
                 Map<String, Integer> typeByColumn = new HashMap<>();
+                // Target-dialect DDL declarations per result column, so dialects whose upsert
+                // needs typed markers (DB2 MERGE, SQL0418) can wrap each placeholder in CAST.
+                Map<String, String> declarationByColumn = new HashMap<>();
                 for (int i = 0; i < columns.size(); i++) {
                     int effectiveType = effectiveTargetType(ctx.effectiveSourceType(), jdbcTypes.get(i),
                             typeNames.get(i), md.getPrecision(i + 1));
@@ -1512,6 +1515,14 @@ public class DataSyncService {
                             columns.get(i).toUpperCase(java.util.Locale.ROOT));
                     typeByColumn.put(columns.get(i), bindTypeFor(targetDialect, columnMeta,
                             ctx.effectiveSourceType(), effectiveType, typeNames.get(i)));
+                    if (columnMeta != null) {
+                        String mapped = targetDialect.mapType(columnMeta,
+                                ctx.effectiveSourceType());
+                        String castable = mapped == null ? null : targetDialect.castType(mapped);
+                        if (castable != null) {
+                            declarationByColumn.put(columns.get(i), castable);
+                        }
+                    }
                 }
 
                 // An INSERT has no match clause, so the key columns only decide that shape —
@@ -1522,7 +1533,7 @@ public class DataSyncService {
                 boolean canGuard = canGuardUnchangedRows(targetConn, ctx, targetTable, columns,
                         pkColumns);
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
-                        columns, statementKeys, typeByColumn, canGuard);
+                        columns, statementKeys, typeByColumn, canGuard, declarationByColumn);
                 List<String> bindOrder = targetDialect.upsertBindOrder(columns, statementKeys);
 
                 boolean emulateUpsert = pkColumns.isEmpty()

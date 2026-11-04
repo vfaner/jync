@@ -118,6 +118,26 @@ public final class CdcTableBinding {
     }
 
     /**
+     * Target-dialect DDL declaration per column, mirroring {@link #typeByColumn}. Dialects
+     * whose native upsert needs typed parameter markers (DB2 MERGE: untyped markers are
+     * re-resolved across the ON / UPDATE / INSERT contexts and disagree, SQL0418 / 42610)
+     * wrap each placeholder in {@code CAST(? AS <declaration>)}. Columns the dialect maps
+     * to nothing castable are simply absent from the map and keep an untyped marker.
+     */
+    public Map<String, String> declarationByColumn(SqlDialect targetDialect,
+                                                   DatabaseType sourceType) {
+        Map<String, String> declarations = new LinkedHashMap<>();
+        for (ColumnMeta column : meta.getColumns()) {
+            String mapped = targetDialect.mapType(column, sourceType);
+            String castable = mapped == null ? null : targetDialect.castType(mapped);
+            if (castable != null) {
+                declarations.put(column.getName(), castable);
+            }
+        }
+        return declarations;
+    }
+
+    /**
      * Fingerprint of the ordered column list, case-folded (MySQL column names are
      * case-insensitive). Names only on purpose: a type change does not move a positional
      * value into another column, while add / drop / rename / reorder all change the ordered

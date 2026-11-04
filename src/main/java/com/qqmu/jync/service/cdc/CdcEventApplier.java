@@ -133,8 +133,14 @@ public final class CdcEventApplier {
         List<String> columns = binding.columnNames();
         List<String> pkColumns = binding.pkNames();
         Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType());
+        // Same typed-marker support as the polling write path: DB2 MERGE re-resolves
+        // untyped markers across ON/UPDATE/INSERT and fails with SQL0418 when the contexts
+        // disagree; other dialects ignore the extra argument.
+        Map<String, String> declarations = binding.declarationByColumn(
+                ctx.getTargetDialect(), ctx.effectiveSourceType());
         String sql = ctx.getTargetDialect().getUpsertSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns, types);
+                ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns, types,
+                false, declarations);
         List<String> bindOrder = ctx.getTargetDialect().upsertBindOrder(columns, pkColumns);
         // Temporary LOBs live until the batch is executed; they are freed right after.
         LobBinder.Tracker lobTracker = LobBinder.newTracker();

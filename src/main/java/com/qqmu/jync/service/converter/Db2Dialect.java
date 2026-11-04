@@ -203,6 +203,16 @@ public class Db2Dialect extends AbstractSqlDialect {
         return true;
     }
 
+    /** A {@code USING (VALUES ...)} marker wrapped in CAST when a declaration is known. */
+    private static String typedMarker(String column,
+                                      java.util.Map<String, String> typeDeclarations) {
+        if (typeDeclarations == null) {
+            return "?";
+        }
+        String declaration = typeDeclarations.get(column);
+        return declaration == null ? "?" : "CAST(? AS " + declaration + ")";
+    }
+
     /** DB2 MERGE, with the row source built from a VALUES list over SYSIBM.SYSDUMMY1. */
     @Override
     public String getUpsertSql(String schema, String table, List<String> columns,
@@ -220,6 +230,14 @@ public class Db2Dialect extends AbstractSqlDialect {
     public String getUpsertSql(String schema, String table, List<String> columns,
                                List<String> pkColumns, java.util.Map<String, Integer> types,
                                boolean guardUnchangedRows) {
+        return getUpsertSql(schema, table, columns, pkColumns, types, guardUnchangedRows, null);
+    }
+
+    @Override
+    public String getUpsertSql(String schema, String table, List<String> columns,
+                               List<String> pkColumns, java.util.Map<String, Integer> types,
+                               boolean guardUnchangedRows,
+                               java.util.Map<String, String> typeDeclarations) {
         if (pkColumns == null || pkColumns.isEmpty()) {
             return "INSERT INTO " + qualify(schema, table) + " (" + quotedList(columns)
                     + ") VALUES (" + placeholders(columns.size()) + ")";
@@ -229,9 +247,16 @@ public class Db2Dialect extends AbstractSqlDialect {
                 .collect(Collectors.joining(" AND "));
         List<String> updatable = nonKeyColumns(columns, pkColumns);
 
+        // Every USING-row marker feeds the ON predicate plus the UPDATE and INSERT branches.
+        // Untyped markers get re-resolved in each of those contexts and disagree across them
+        // (SQL0418 / SQLSTATE 42610), so pin each one to its declared type (see SqlDialect).
+        String sourceRow = columns.stream()
+                .map(c -> typedMarker(c, typeDeclarations))
+                .collect(Collectors.joining(", "));
+
         StringBuilder sb = new StringBuilder();
         sb.append("MERGE INTO ").append(qualify(schema, table)).append(" AS t USING (VALUES (")
-                .append(placeholders(columns.size())).append(")) AS s (")
+                .append(sourceRow).append(")) AS s (")
                 .append(quotedList(columns)).append(") ON ").append(onClause);
         if (!updatable.isEmpty()) {
             String updates = updatable.stream()
