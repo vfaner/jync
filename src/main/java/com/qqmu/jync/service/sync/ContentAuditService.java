@@ -79,13 +79,23 @@ public class ContentAuditService {
      * Scheduled entry point: runs at most one audit per project per configured interval, and
      * at most {@code content-audit-max-tables-per-cycle} tables per cycle.
      *
-     * @return null when the interval or the cycle budget suppresses the audit this time
+     * @return a SKIPPED audit for an ineligible table (without touching the slot or the
+     *         interval), or null only when the interval or the cycle budget suppresses it
      */
     public TableContentAudit maybeAudit(Connection sourceConn, Connection targetConn,
             TableMeta table, CursorStrategy strategy, SyncProgress progress, SyncContext ctx,
             CycleBudget budget) {
+        long started = System.currentTimeMillis();
         if (properties.getContentAuditIntervalMs() <= 0) {
             return null;
+        }
+        // Eligibility before the slot and the interval: an ineligible table that spent the
+        // single per-cycle slot and refreshed the 15-minute clock would starve every later
+        // eligible table, permanently when its metadata sorts first.
+        String tableName = table == null ? "?" : table.getName();
+        String ineligible = ineligibleReason(table, strategy, progress, ctx);
+        if (ineligible != null) {
+            return TableContentAudit.skipped(tableName, ineligible, elapsed(started));
         }
         Long projectId = projectKey(ctx);
         long now = System.currentTimeMillis();

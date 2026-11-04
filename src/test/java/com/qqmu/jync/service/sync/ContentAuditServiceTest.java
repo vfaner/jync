@@ -330,6 +330,27 @@ class ContentAuditServiceTest {
     }
 
     @Test
+    void ineligibleTableDoesNotConsumeTheCycleSlotOrRefreshInterval() throws SQLException {
+        insert(source, 1, "a", true);
+        insert(target, 1, "a", true);
+        ContentAuditService.CycleBudget budget = service.newCycleBudget();
+
+        // A keyless table can never be audited; its answer is SKIPPED and it must leave
+        // both the per-cycle slot and the per-project interval untouched.
+        TableMeta noKey = tableMeta("NOKEY", column("NAME", Types.VARCHAR, "VARCHAR"));
+        noKey.setPrimaryKeys(List.of());
+        TableContentAudit skipped = service.maybeAudit(source, target, noKey, IDENTITY,
+                progress("1"), ctx, budget);
+        assertThat(skipped.status()).isEqualTo(Status.SKIPPED);
+        assertThat(skipped.detail()).isEqualTo("no-primary-key");
+
+        // An eligible table later in the same cycle still gets audited: under the old
+        // ordering the skipped table had spent the single slot and refreshed the interval.
+        assertThat(service.maybeAudit(source, target, table, IDENTITY, progress("1"), ctx, budget))
+                .isNotNull();
+    }
+
+    @Test
     void onlyMismatchesAreRecordedAndOnlyOncePerFingerprint() throws SQLException {
         insert(source, 1, "source-new", true);
         insert(target, 1, "target-old", true);
