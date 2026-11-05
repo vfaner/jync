@@ -32,6 +32,7 @@ import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
+import com.qqmu.jync.service.projection.redis.RedisProjectionPolicy;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -88,7 +89,8 @@ class ProjectServiceStrategySwitchTest {
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
                 taskMetricSampleRepository, alertStateRepository,
-                new com.qqmu.jync.config.SyncProperties());
+                new com.qqmu.jync.config.SyncProperties(),
+                mock(RedisProjectionPolicy.class));
     }
 
     private Project mysqlProject(String currentStrategyJson) {

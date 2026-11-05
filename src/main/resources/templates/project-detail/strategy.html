@@ -10,13 +10,17 @@
     </div>
     <div class="card-body">
         <div class="strategy-pick" th:with="sel=${selectedStrategy}">
-            <label class="strategy-card" th:classappend="${sel == 'POLLING'} ? 'picked'">
+            <!-- 缓存目标只能走日志 CDC：轮询/全量比对会整表重读，且没有 DDL 可同步，
+                 展示出来只会让用户选到一个服务端必然拒绝的策略。 -->
+            <label class="strategy-card" th:if="${!isRedisTarget}"
+                   th:classappend="${sel == 'POLLING'} ? 'picked'">
                 <input type="radio" name="captureStrategy" value="POLLING"
                        th:checked="${sel == 'POLLING'}">
                 <span class="strategy-name" th:text="#{project.strategy.polling.name}">Polling</span>
                 <span class="strategy-desc" th:text="#{project.strategy.polling.desc}">desc</span>
             </label>
-            <label class="strategy-card" th:classappend="${sel == 'FULL_COMPARE'} ? 'picked'">
+            <label class="strategy-card" th:if="${!isRedisTarget}"
+                   th:classappend="${sel == 'FULL_COMPARE'} ? 'picked'">
                 <input type="radio" name="captureStrategy" value="FULL_COMPARE"
                        th:checked="${sel == 'FULL_COMPARE'}">
                 <span class="strategy-name" th:text="#{project.strategy.fullcompare.name}">Full compare</span>

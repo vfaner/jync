@@ -256,4 +256,74 @@ class CdcPositionStoreTest {
 
         assertThat(position.getSchemaSignatures()).isNull();
     }
+
+    @Test
+    void aBaselineStartKeepsTheProjectionSignatureUntilTheBaselineCompletes() {
+        // The signature describes the keys that are in Redis NOW. A baseline that has only
+        // just anchored has not rewritten them yet, so dropping the signature here loses the
+        // only record of their type if the load then fails or is stopped — and the next
+        // value-format change reaches the keys unannounced. A completed cache baseline
+        // replaces the signature with the contract it actually wrote.
+        position.setProjectionSignature("JSON|jync:1:");
+
+        store.recordBaselineStart(1L, "mysql-bin.000008", 4L, null, 612001L);
+
+        assertThat(position.getProjectionSignature()).isEqualTo("JSON|jync:1:");
+        assertThat(position.isBaselineDone()).isFalse();
+    }
+
+    @Test
+    void aTargetSwitchClearsTheAnchorButKeepsTheProjectionSignature() {
+        // A kind switch (Redis <-> database) replaces the destination: the anchor and the
+        // column layouts describe a target this project no longer writes to. The projection
+        // signature does not — it describes the keys this project wrote into Redis, and the
+        // switch leaves them untouched. Keeping it is what lets start refuse a value-format
+        // change made during a Redis -> JDBC -> Redis round trip instead of answering
+        // WRONGTYPE from the baseline.
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(900L);
+        position.setGtidSet("uuid:1-5");
+        position.setServerId(612001L);
+        position.setScn(42L);
+        position.setLsn("0/16B3748");
+        position.setSchemaSignatures(CdcPositionStore.encodeLayoutSignatures(
+                Map.of("app.orders", signature('a'))));
+        position.setProjectionSignature("HASH|jync:1:");
+        position.setBaselineDone(true);
+
+        store.resetAnchorKeepingProjectionSignature(1L);
+
+        assertThat(position.getBinlogFile()).isNull();
+        assertThat(position.getBinlogPos()).isNull();
+        assertThat(position.getGtidSet()).isNull();
+        assertThat(position.getServerId()).isNull();
+        assertThat(position.getScn()).isNull();
+        assertThat(position.getLsn()).isNull();
+        assertThat(position.getSchemaSignatures()).isNull();
+        assertThat(position.isBaselineDone()).isFalse();
+        assertThat(position.getProjectionSignature()).isEqualTo("HASH|jync:1:");
+        verify(repository).save(position);
+    }
+
+    @Test
+    void aDatabaseBaselineDoesNotEraseTheRedisContract() {
+        // A JDBC baseline never touches Redis, so the contract of the keys still sitting in
+        // the cache remains true. Clearing it on completion is how a former Redis project
+        // lost the guard after one JDBC run.
+        position.setProjectionSignature("HASH|jync:1:");
+
+        store.markBaselineDone(1L);
+
+        assertThat(position.isBaselineDone()).isTrue();
+        assertThat(position.getProjectionSignature()).isEqualTo("HASH|jync:1:");
+    }
+
+    @Test
+    void resettingAMissingPositionRowIsANoOp() {
+        when(repository.findByProjectId(2L)).thenReturn(Optional.empty());
+
+        store.resetAnchorKeepingProjectionSignature(2L); // must not throw
+
+        verify(repository, never()).save(any());
+    }
 }

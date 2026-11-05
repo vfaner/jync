@@ -3,7 +3,6 @@ package com.qqmu.jync.service.sync;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
@@ -41,6 +40,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
+import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
 /**
@@ -92,10 +92,14 @@ class ContentAuditServiceTest {
 
     @AfterEach
     void tearDown() throws SQLException {
-        exec(source, "DROP ALL OBJECTS");
-        exec(target, "DROP ALL OBJECTS");
-        source.close();
-        target.close();
+        // One test closes the connections on purpose to prove the audit does no database
+        // work; dropping objects on a closed connection would only report that as an error.
+        for (Connection conn : new Connection[] {source, target}) {
+            if (conn != null && !conn.isClosed()) {
+                exec(conn, "DROP ALL OBJECTS");
+                conn.close();
+            }
+        }
     }
 
     @Test
@@ -252,6 +256,38 @@ class ContentAuditServiceTest {
         ctx.getConfig().setSyncData(false);
 
         assertThat(auditNow("1").detail()).isEqualTo("not-sync-data");
+    }
+
+    @Test
+    void skipsWithoutSamplingWhenTheSourceHasNoWindowFunctions() throws SQLException {
+        // MySQL 5.7 rejects NTILE outright. Asking it and catching the error would cost a
+        // round-trip per table per cycle; the dialect already knows.
+        insert(source, 1, "a", true);
+        ctx = ctx.toBuilder()
+                .sourceDialect(new MySqlDialect().withServerMajorVersion(5)
+                        .forProduct(DatabaseType.MYSQL))
+                .build();
+
+        assertThat(auditNow("1").detail()).isEqualTo("sampling-unsupported");
+    }
+
+    @Test
+    void theWindowFunctionSkipCostsNoDatabaseRoundTrip() throws SQLException {
+        // The dialect answers from the version alone, so the skip belongs with the other
+        // eligibility checks: before the audit estimates rows, checks indexes or reads the
+        // target's shape. Closed connections make any such work fail, so a correct
+        // implementation still reports the skip instead of an error.
+        ctx = ctx.toBuilder()
+                .sourceDialect(new MySqlDialect().withServerMajorVersion(5)
+                        .forProduct(DatabaseType.MYSQL))
+                .build();
+        source.close();
+        target.close();
+
+        TableContentAudit result = auditNow("1");
+
+        assertThat(result.status()).isEqualTo(Status.SKIPPED);
+        assertThat(result.detail()).isEqualTo("sampling-unsupported");
     }
 
     @Test

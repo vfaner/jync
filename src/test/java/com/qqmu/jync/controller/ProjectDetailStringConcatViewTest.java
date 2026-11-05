@@ -34,6 +34,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * The project page names the views and routines whose {@code ||} will mean logical OR on the
@@ -55,6 +56,7 @@ class ProjectDetailStringConcatViewTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     @Test
     void theAffectedObjectsAreNamedOnThePage() throws Exception {

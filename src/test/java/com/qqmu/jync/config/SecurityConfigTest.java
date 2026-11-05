@@ -225,7 +225,8 @@ class SecurityConfigTest {
                 "/migrations/es-to-easysearch/1/edit",
                 "/migrations/mongodb-to-mongodb/new",
                 "/migrations/mongodb-to-kingbase/new", "/migrations/connections",
-                "/migrations/connections/new", "/migrations/connections/1/edit"}) {
+                "/migrations/connections/new", "/migrations/connections/1/edit",
+                "/redis/targets", "/redis/targets/new", "/redis/targets/1/edit"}) {
             assertThat(statusOf(get(page).with(asViewer()))).as(page).isEqualTo(302);
         }
         assertThat(statusOf(get("/api/databases/discover-drivers").with(asViewer())))
@@ -582,7 +583,8 @@ class SecurityConfigTest {
                 "/etl/new", "/etl/batches/new", "/ai/new",
                 "/migrations/es-to-easysearch/new",
                 "/migrations/mongodb-to-mongodb/new",
-                "/migrations/mongodb-to-kingbase/new", "/migrations/connections/new"}) {
+                "/migrations/mongodb-to-kingbase/new", "/migrations/connections/new",
+                "/redis/targets", "/redis/targets/new"}) {
             assertThat(statusOf(get(page).with(asAdmin()))).as(page).isEqualTo(200);
         }
     }

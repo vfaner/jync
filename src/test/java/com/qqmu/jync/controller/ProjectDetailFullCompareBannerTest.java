@@ -33,6 +33,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * The yellow FULL_COMPARE load warning on the task detail page.
@@ -52,6 +53,7 @@ class ProjectDetailFullCompareBannerTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     private static RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();

@@ -97,6 +97,9 @@ public class SecurityConfig {
             // connection pages hold search-endpoint credentials, so they are locked too.
             "/migrations/connections", "/migrations/connections/new",
             "/migrations/connections/*/edit",
+            // Redis targets hold connection credentials and are edited by admins only; the
+            // list is a configuration page too, like every other connection listing.
+            "/redis/targets", "/redis/targets/new", "/redis/targets/*/edit",
             "/migrations/*/new", "/migrations/*/*/edit",
             // Index discovery dials the configured search endpoint to list indices; advisory
             // for the form, but still a call into another system, like the health dots.

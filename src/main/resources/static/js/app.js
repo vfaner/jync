@@ -521,6 +521,60 @@
     });
   }
 
+  /**
+   * Redis 缓存重建按钮。
+   *
+   * 与 api-btn 的唯一差别是 sweep 参数：是否先清空本项目前缀下的键，由页面上的
+   * 开关在「点击时」决定，而 api-btn 的 data-action 是渲染时写死的。其余行为沿用
+   * 同一套约定 —— 危险操作先二次确认、请求中保持加载态、成功 toast 后刷新页面
+   * （按钮保持加载态直到刷新，避免文案闪回原样）。
+   */
+  function bindRedisRebuild(btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (btn.disabled) { return; }
+      var sweep = document.getElementById('redis-rebuild-sweep');
+      var sweeping = !!(sweep && sweep.checked);
+      var url = btn.dataset.action + (sweeping ? '?sweep=true' : '');
+      var confirmText = sweeping ? btn.dataset.confirmSweep : btn.dataset.confirm;
+
+      var run = function () {
+        var original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = busyLabel(btn);
+        postJson(url).then(function (payload) {
+          if (payload.success) {
+            var summary = '';
+            if (payload.tables !== undefined && payload.tables !== null) {
+              summary = t('msg.redis.rebuild.summary')
+                .replace('{0}', String(payload.tables))
+                .replace('{1}', String(payload.rows))
+                .replace('{2}', String(payload.sweptKeys));
+            }
+            var text = t(payload.message) + (summary ? ' — ' + summary : '');
+            toast(text, 'ok');
+            if (btn.dataset.reload === 'true') {
+              setTimeout(function () { window.location.reload(); }, 850);
+              return;
+            }
+            btn.disabled = false;
+            btn.innerHTML = original;
+            return;
+          }
+          toast(t(payload.message), 'danger');
+          btn.disabled = false;
+          btn.innerHTML = original;
+        }).catch(function (err) {
+          toast(describeError(err), 'danger');
+          btn.disabled = false;
+          btn.innerHTML = original;
+        });
+      };
+
+      if (confirmText) { JyncDialog.confirm(confirmText, run); } else { run(); }
+    });
+  }
+
   /* ─── B9：项目配置的未保存修改 ────────────────────────────────────────
    * 运行控制按钮（启动 / 立即同步 / 重建基线）执行的都是服务端「已保存」的
    * 配置。用户改了表单没点保存就直接点按钮时，旧行为是静默按旧配置跑，用户
@@ -4164,6 +4218,7 @@
 
   document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('[data-role="api-btn"]').forEach(bindActionButton);
+    document.querySelectorAll('[data-role="redis-rebuild"]').forEach(bindRedisRebuild);
     document.querySelectorAll('[data-role="test-conn"]').forEach(bindConnectionTest);
     document.querySelectorAll('[data-role="picker"]').forEach(bindPicker);
     document.querySelectorAll('[data-role="find-drivers"]').forEach(bindDriverDiscovery);

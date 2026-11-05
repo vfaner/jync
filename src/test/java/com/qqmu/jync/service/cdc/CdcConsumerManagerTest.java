@@ -31,6 +31,8 @@ import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncTaskRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.projection.redis.RedisProjectionWriter;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncContextFactory;
@@ -55,6 +57,8 @@ class CdcConsumerManagerTest {
     private DataSourceManager dataSourceManager;
     private YStreamClientFactory yStreamClientFactory;
     private YStreamServiceLifecycle yStreamLifecycle;
+    private RedisTargetService redisTargets;
+    private RedisProjectionWriter redisProjectionWriter;
     private CdcConsumerManager manager;
     private SyncLockService.LockHandle lock;
     private RecordingStarter starter;
@@ -108,6 +112,8 @@ class CdcConsumerManagerTest {
         dataSourceManager = mock(DataSourceManager.class);
         yStreamClientFactory = mock(YStreamClientFactory.class);
         yStreamLifecycle = mock(YStreamServiceLifecycle.class);
+        redisTargets = mock(RedisTargetService.class);
+        redisProjectionWriter = mock(RedisProjectionWriter.class);
         lock = mock(SyncLockService.LockHandle.class);
         when(lock.owner()).thenReturn("host:1:feed");
         // R1(控制器裁定):消费者在重连循环顶部先 renew()——false 即安静退出。测试里
@@ -124,7 +130,7 @@ class CdcConsumerManagerTest {
         manager = new CdcConsumerManager(projectRepository, taskRepository, lockService,
                 contextFactory, clientFactory, positionStore, baselineService, taskStore,
                 stateWriter, dataSourceManager, new SyncProperties(), starter, sessionFactory,
-                yStreamClientFactory, yStreamLifecycle);
+                yStreamClientFactory, yStreamLifecycle, redisTargets, redisProjectionWriter);
     }
 
     @Test
@@ -139,7 +145,7 @@ class CdcConsumerManagerTest {
                     return new Thread(consumer, name);
                 }, (source, startScn, batchSize) -> {
                     throw new UnsupportedOperationException();
-                }, yStreamClientFactory, yStreamLifecycle);
+                }, yStreamClientFactory, yStreamLifecycle, redisTargets, redisProjectionWriter);
         when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
 
         ystream.ensureStarted(projectWithStrategy(9L, true, CaptureStrategy.YSTREAM_CDC));
@@ -440,7 +446,7 @@ class CdcConsumerManagerTest {
                 (consumer, threadName) -> new Thread(consumer, threadName),
                 (source, startScn, batchSize) -> {
                     throw new UnsupportedOperationException();
-                }, yStreamClientFactory, yStreamLifecycle); // 从不 start → isAlive()==false
+                }, yStreamClientFactory, yStreamLifecycle, redisTargets, redisProjectionWriter); // 从不 start → isAlive()==false
         when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
         when(taskRepository.findByProjectId(9L)).thenReturn(Optional.empty());
         Project project = cdcProject(9L, true);

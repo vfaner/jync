@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/*
+  The two connection kinds share one navigation entry but nothing else. This fragment is the
+  only thing both pages have in common: two links and which one is current. It deliberately
+  carries no business fields — the JDBC list/form and the Redis list/form stay in their own
+  templates.
+*/-->
+<nav th:fragment="tabs(active)" class="conn-tabs" data-role="connection-tabs"
+     th:attr="aria-label=#{conn.tabs.label}">
+    <a class="conn-tab" data-tab="jdbc" th:href="@{/databases}"
+       th:attr="aria-current=${active == 'jdbc' ? 'page' : null}"
+       th:text="#{conn.tabs.jdbc}">Database connections</a>
+    <a class="conn-tab" data-tab="redis" th:href="@{/redis/targets}"
+       th:attr="aria-current=${active == 'redis' ? 'page' : null}"
+       th:text="#{conn.tabs.redis}">Redis targets</a>
+</nav>
+</body>
+</html>

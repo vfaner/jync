@@ -31,6 +31,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * 同步失败的提示语。
@@ -53,6 +54,7 @@ class SyncFailureNoticeViewTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     private RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();

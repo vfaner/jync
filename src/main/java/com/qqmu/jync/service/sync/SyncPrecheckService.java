@@ -23,6 +23,8 @@ import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.RedisTarget;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
@@ -34,6 +36,8 @@ import com.qqmu.jync.service.metadata.CursorIndexProbe;
 import com.qqmu.jync.service.monitor.ChangeDetector;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 import com.qqmu.jync.service.monitor.CursorStrategyResolver;
+import com.qqmu.jync.service.projection.redis.RedisPrecheckService;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 import com.qqmu.jync.service.task.SyncContextFactory;
 import com.qqmu.jync.util.TargetTableVerifier;
 
@@ -66,6 +70,8 @@ public class SyncPrecheckService {
     private final CdcOperationsService cdcOperations;
     private final CdcPositionStore cdcPositions;
     private final SyncProperties properties;
+    private final RedisTargetService redisTargets;
+    private final RedisPrecheckService redisPrecheck;
 
     public SyncPrecheckService(ProjectRepository projectRepository,
                                SyncContextFactory contextFactory,
@@ -75,7 +81,9 @@ public class SyncPrecheckService {
                                CursorStrategyResolver cursorResolver,
                                CdcOperationsService cdcOperations,
                                CdcPositionStore cdcPositions,
-                               SyncProperties properties) {
+                               SyncProperties properties,
+                               RedisTargetService redisTargets,
+                               RedisPrecheckService redisPrecheck) {
         this.projectRepository = projectRepository;
         this.contextFactory = contextFactory;
         this.dataSourceManager = dataSourceManager;
@@ -85,12 +93,17 @@ public class SyncPrecheckService {
         this.cdcOperations = cdcOperations;
         this.cdcPositions = cdcPositions;
         this.properties = properties;
+        this.redisTargets = redisTargets;
+        this.redisPrecheck = redisPrecheck;
     }
 
     public PrecheckReport precheck(Long projectId) {
         long started = System.nanoTime();
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+            return redisReport(project, started);
+        }
         List<PrecheckReport.Check> checks = new ArrayList<>();
 
         SyncContext ctx;
@@ -146,6 +159,26 @@ public class SyncPrecheckService {
             closeQuietly(targetConn);
         }
         return report(project, checks, started);
+    }
+
+    /**
+     * A cache target has nothing in common with the database rehearsal — no target connection,
+     * no DDL, no target columns — so it gets its own checks and never instantiates a JDBC
+     * context. A project whose target row has disappeared is reported, not thrown: the report
+     * is a result, and this is exactly the condition it exists to name.
+     */
+    private PrecheckReport redisReport(Project project, long startedNanos) {
+        List<PrecheckReport.Check> checks = new ArrayList<>();
+        RedisTarget target = project.getTargetRedisId() == null ? null
+                : redisTargets.find(project.getTargetRedisId()).orElse(null);
+        if (target == null) {
+            checks.add(error("redis.target", PROJECT, project.getName(),
+                    "precheck.redis.targetMissing", null));
+        } else {
+            checks.addAll(redisPrecheck.precheck(project, target,
+                    contextFactory.parseConfig(project)));
+        }
+        return report(project, checks, startedNanos);
     }
 
     /**

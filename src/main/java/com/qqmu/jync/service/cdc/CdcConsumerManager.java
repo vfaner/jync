@@ -17,11 +17,14 @@ import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncTaskRepository;
 import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.projection.redis.RedisProjectionWriter;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncContextFactory;
@@ -98,6 +101,8 @@ public class CdcConsumerManager {
     private final LogMinerSessionFactory logMinerSessionFactory;
     private final YStreamClientFactory yStreamClientFactory;
     private final YStreamServiceLifecycle yStreamLifecycle;
+    private final RedisTargetService redisTargets;
+    private final RedisProjectionWriter redisProjectionWriter;
 
     /** projectId -> live consumer of THIS node. Absent = not owned here (other node or stopped). */
     private final Map<Long, Registration> registry = new ConcurrentHashMap<>();
@@ -136,11 +141,13 @@ public class CdcConsumerManager {
                               SyncProperties properties,
                               LogMinerSessionFactory logMinerSessionFactory,
                               YStreamClientFactory yStreamClientFactory,
-                              YStreamServiceLifecycle yStreamLifecycle) {
+                              YStreamServiceLifecycle yStreamLifecycle,
+                              RedisTargetService redisTargets,
+                              RedisProjectionWriter redisProjectionWriter) {
         this(projectRepository, taskRepository, lockService, contextFactory, clientFactory,
                 positionStore, baselineService, taskStore, stateWriter, dataSourceManager,
                 properties, DEFAULT_STARTER, logMinerSessionFactory, yStreamClientFactory,
-                yStreamLifecycle);
+                yStreamLifecycle, redisTargets, redisProjectionWriter);
     }
 
     public CdcConsumerManager(ProjectRepository projectRepository,
@@ -157,7 +164,9 @@ public class CdcConsumerManager {
                               ConsumerStarter starter,
                               LogMinerSessionFactory logMinerSessionFactory,
                               YStreamClientFactory yStreamClientFactory,
-                              YStreamServiceLifecycle yStreamLifecycle) {
+                              YStreamServiceLifecycle yStreamLifecycle,
+                              RedisTargetService redisTargets,
+                              RedisProjectionWriter redisProjectionWriter) {
         this.projectRepository = projectRepository;
         this.taskRepository = taskRepository;
         this.lockService = lockService;
@@ -173,6 +182,8 @@ public class CdcConsumerManager {
         this.logMinerSessionFactory = logMinerSessionFactory;
         this.yStreamClientFactory = yStreamClientFactory;
         this.yStreamLifecycle = yStreamLifecycle;
+        this.redisTargets = redisTargets;
+        this.redisProjectionWriter = redisProjectionWriter;
     }
 
     /**
@@ -238,7 +249,11 @@ public class CdcConsumerManager {
             // schemas and can wait out a connect timeout. It must NOT run under the
             // monitor: ensureStopped is synchronized, so a UI stop would otherwise queue
             // behind an unreachable database.
-            SyncContext ctx = contextFactory.build(project, lock.owner(), lock::renew);
+            // A Redis target has no JDBC endpoint to resolve, so the ordinary build (which
+            // insists on a target database) cannot serve it. Same lock wiring, source side only.
+            SyncContext ctx = project.getTargetKindOrDefault() == SyncTargetKind.REDIS
+                    ? contextFactory.buildForRedis(project, lock.owner(), lock::renew, null)
+                    : contextFactory.build(project, lock.owner(), lock::renew);
             CaptureStrategy strategy = strategyOf(project);
             CdcRuntimeStats stats = new CdcRuntimeStats();
             ManagedCdcConsumer consumer = consumerFor(project, lock, ctx, strategy, stats);
@@ -299,29 +314,35 @@ public class CdcConsumerManager {
     private ManagedCdcConsumer consumerFor(Project project, SyncLockService.LockHandle lock,
                                            SyncContext ctx, CaptureStrategy strategy,
                                            CdcRuntimeStats stats) {
+        // One factory per consumer run, shared by whichever engine the strategy picks: it
+        // carries this run's stats and statement timeout, and it is the single place that
+        // knows a cache target is not a JDBC target.
+        CdcTargetTransactionFactory targetTransactions = new CdcTargetTransactionFactory(
+                stats, properties.getQueryTimeoutSeconds(), redisTargets, redisProjectionWriter);
         if (strategy == CaptureStrategy.LOGMINER_CDC) {
             return new LogMinerCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
-                    stats, properties, logMinerSessionFactory);
+                    stats, properties, logMinerSessionFactory, targetTransactions);
         }
         if (strategy == CaptureStrategy.PG_LOGICAL_CDC) {
             return new PgLogicalCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
-                    stats, properties);
+                    stats, properties, targetTransactions);
         }
         if (strategy == CaptureStrategy.SQLSERVER_CDC) {
             return new SqlServerCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
-                    stats, properties);
+                    stats, properties, targetTransactions);
         }
         if (strategy == CaptureStrategy.YSTREAM_CDC) {
             return new YStreamCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
-                    stats, properties, yStreamClientFactory, yStreamLifecycle);
+                    stats, properties, yStreamClientFactory, yStreamLifecycle,
+                    JdbcYStreamServiceOps::new, targetTransactions);
         }
         return new CdcConsumer(project, lock, ctx, clientFactory,
                 positionStore, baselineService, taskStore, stateWriter,
-                dataSourceManager, stats, properties);
+                dataSourceManager, stats, properties, targetTransactions);
     }
 
     /**

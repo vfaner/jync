@@ -237,6 +237,14 @@ public class ContentAuditService {
                 }
             }
         }
+        // Last, because it describes the connection rather than the table: a missing key or a
+        // pending baseline load is the more useful explanation when both apply. Still early
+        // enough to skip the row estimate, the index check and the target shape reads that a
+        // MySQL 5.7 source would make us throw away — it cannot parse the sampling query.
+        if (ctx.getSourceDialect() != null
+                && !ctx.getSourceDialect().supportsWindowFunctions()) {
+            return "sampling-unsupported";
+        }
         return null;
     }
 
@@ -277,8 +285,8 @@ public class ContentAuditService {
                 nonKeyColumns.add(column.getName());
             }
         }
-        Set<String> excluded = nonComparable(sourceConn, targetConn, table, targetTable,
-                nonKeyColumns, ctx);
+        Set<String> excluded = nonComparable(targetConn, table, targetTable, nonKeyColumns,
+                ctx);
         List<String> comparable = new ArrayList<>(table.getPrimaryKeys());
         for (String column : nonKeyColumns) {
             if (!excluded.contains(column.toUpperCase(Locale.ROOT))) {
@@ -294,9 +302,10 @@ public class ContentAuditService {
         try {
             keys = dataSync.sampleKeys(sourceConn, table, strategy, bound, ctx, sampleSize);
         } catch (SQLException e) {
-            // Products without window functions (MySQL 5.7 and some embedded engines) cannot
-            // split the key range. Degrading to ORDER BY ... LIMIT would sample the oldest
-            // rows only, which is exactly where drift is least likely; skipping is honest.
+            // A source whose version could not be resolved — or a fork that rejects the
+            // grammar — still lands here. Degrading to ORDER BY ... LIMIT would sample the
+            // oldest rows only, which is exactly where drift is least likely; skipping is
+            // honest. Known MySQL 5.7 never gets this far: ineligibleReason answers first.
             log.info("Content audit of {} skipped: source cannot sample keys ({})",
                     tableName, e.getMessage());
             return TableContentAudit.skipped(tableName, "sampling-unsupported",
@@ -367,9 +376,8 @@ public class ContentAuditService {
      * says {@code =} is undefined (LOB, JSON, XML, geometry), or the source JDBC type is one
      * of the streaming/large family whose value is not worth materialising for a spot check.
      */
-    private Set<String> nonComparable(Connection sourceConn, Connection targetConn,
-            TableMeta table, String targetTable, List<String> candidates, SyncContext ctx)
-            throws SQLException {
+    private Set<String> nonComparable(Connection targetConn, TableMeta table,
+            String targetTable, List<String> candidates, SyncContext ctx) throws SQLException {
         Set<String> excluded = new HashSet<>();
         for (String column : TargetTableVerifier.uncomparableColumns(targetConn,
                 ctx.getTargetSchema(), targetTable, ctx.getTargetType(), candidates)) {

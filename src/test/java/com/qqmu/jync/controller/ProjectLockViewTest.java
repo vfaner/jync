@@ -33,6 +33,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * Lock visibility on the project detail page.
@@ -53,6 +54,7 @@ class ProjectLockViewTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     /** The lock row's markup, from its label to the closing {@code </dd>}. */
     private static String lockRow(String page) {

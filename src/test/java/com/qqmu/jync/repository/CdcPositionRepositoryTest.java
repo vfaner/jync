@@ -50,13 +50,37 @@ class CdcPositionRepositoryTest {
     @Test
     void markBaselineDoneAndAdvancePersist() {
         store.recordBaselineStart(11L, "mysql-bin.000001", 4L, "uuid:1-2", 612011L);
-        store.markBaselineDone(11L);
+        store.markBaselineDone(11L, "JSON|jync:11:");
         store.advance(11L, "mysql-bin.000001", 900L, "uuid:1-9");
 
         CdcPosition pos = store.find(11L).orElseThrow();
         assertThat(pos.isBaselineDone()).isTrue();
         assertThat(pos.getBinlogPos()).isEqualTo(900L);
         assertThat(pos.getGtidSet()).isEqualTo("uuid:1-9");
+        assertThat(pos.getProjectionSignature()).isEqualTo("JSON|jync:11:");
+    }
+
+    @Test
+    void aNewBaselineKeepsTheOldSignatureUntilACacheBaselineCompletes() {
+        // The signature describes the keys that are in Redis NOW, and an anchored-but-not-done
+        // baseline has not rewritten them yet. Dropping it at the start lost the only record of
+        // their type whenever the load failed or was stopped, so a later value-format change
+        // reached the keys unannounced (WRONGTYPE). Only a completed cache baseline replaces
+        // the signature — with the contract it actually wrote.
+        store.recordBaselineStart(15L, "mysql-bin.000001", 4L, null, 612015L);
+        store.markBaselineDone(15L, "JSON|jync:15:");
+
+        store.recordBaselineStart(15L, "mysql-bin.000002", 8L, null, 612015L);
+
+        CdcPosition restarted = store.find(15L).orElseThrow();
+        assertThat(restarted.isBaselineDone()).isFalse();
+        assertThat(restarted.getProjectionSignature()).isEqualTo("JSON|jync:15:");
+
+        // A database baseline completes through the no-argument variant: it must leave the
+        // Redis contract alone, because that baseline never touched the cache.
+        store.markBaselineDone(15L);
+        assertThat(store.find(15L).orElseThrow().getProjectionSignature())
+                .isEqualTo("JSON|jync:15:");
     }
 
     @Test

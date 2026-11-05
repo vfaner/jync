@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'databases', 'redis.targets.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="#{redis.targets.title}">Redis targets</h1>
+            <p class="sub" th:text="#{redis.targets.listHint}">Cache endpoints for real-time projection. Never used as a source.</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/redis/targets/new}">
+                <svg class="ico"><use href="#plus-lg"/></svg>
+                <span th:text="#{redis.targets.new}">New Redis target</span>
+            </a>
+        </div>
+    </div>
+
+    <div th:replace="~{connections/tabs :: tabs('redis')}"></div>
+
+    <div class="card">
+        <div class="card-head">
+            <h2>
+                <svg class="ico"><use href="#database"/></svg>
+                <span th:text="#{redis.targets.title}">Redis targets</span>
+                <span class="hint" th:text="'(' + ${#lists.size(targets)} + ')'">(0)</span>
+            </h2>
+        </div>
+        <div class="card-body tight">
+            <div th:if="${#lists.isEmpty(targets)}" class="empty">
+                <div class="empty-ico"><svg class="ico"><use href="#database"/></svg></div>
+                <h3 th:text="#{redis.targets.empty}">No Redis targets yet.</h3>
+                <a class="btn btn-primary btn-sm" th:if="${isAdmin}"
+                   th:href="@{/redis/targets/new}">
+                    <svg class="ico"><use href="#plus-lg"/></svg>
+                    <span th:text="#{redis.targets.new}">New Redis target</span>
+                </a>
+            </div>
+
+            <div th:unless="${#lists.isEmpty(targets)}" class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                    <tr>
+                        <th th:text="#{common.name}">Name</th>
+                        <th th:text="#{redis.targets.host}">Host</th>
+                        <th th:text="#{redis.targets.mode}">Mode</th>
+                        <th th:text="#{redis.targets.tls}">TLS</th>
+                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="target : ${targets}">
+                        <td style="font-weight:600" th:text="${target.name}">cache-1</td>
+                        <td class="mono small"
+                            th:text="${target.host} + ':' + ${target.port}">127.0.0.1:6379</td>
+                        <td>
+                            <span class="badge badge-brand" th:if="${target.clusterMode}"
+                                  th:text="#{redis.targets.mode.cluster}">Cluster</span>
+                            <span class="badge badge-brand" th:unless="${target.clusterMode}"
+                                  th:text="#{redis.targets.mode.standalone}">Standalone</span>
+                        </td>
+                        <td class="small"
+                            th:text="${target.tlsEnabled} ? #{redis.targets.tls.on} : #{redis.targets.tls.off}">Off</td>
+                        <td th:if="${isAdmin}">
+                            <div class="btn-row" style="justify-content:flex-end">
+                                <a class="btn-icon"
+                                   th:href="@{/redis/targets/{id}/edit(id=${target.id})}"
+                                   th:title="#{common.edit}">
+                                    <svg class="ico"><use href="#pencil"/></svg>
+                                </a>
+                                <form method="post" style="display:inline"
+                                      th:action="@{/redis/targets/{id}/delete(id=${target.id})}"
+                                      th:attr="data-confirm=#{common.confirm.delete(${target.name})}">
+                                    <button type="submit" class="btn-icon is-danger"
+                                            th:title="#{common.delete}">
+                                        <svg class="ico"><use href="#trash"/></svg>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

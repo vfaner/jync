@@ -13,7 +13,7 @@
 
     <groupId>com.qqmu.jync</groupId>
     <artifactId>jync</artifactId>
-    <version>1.12.0</version>
+    <version>1.13.0</version>
     <name>Jync</name>
     <description>Jync (捷同) - real-time heterogeneous database structure and data synchronization in a single JAR</description>
 
@@ -105,6 +105,15 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- Redis client for the cache-projection target. Deliberately not the Spring Data
+             Redis starter: nothing here should be auto-configured or repo-scanned, and the
+             target is written through the CDC sinks, not through a RedisRepository. The
+             version comes from the Boot BOM. -->
+        <dependency>
+            <groupId>io.lettuce</groupId>
+            <artifactId>lettuce-core</artifactId>
         </dependency>
 
         <!-- Tool's own metadata store -->

@@ -48,4 +48,15 @@ public class SyncConfigForm {
 
     private String captureStrategy;
     private Long cdcIdlePollMs;
+
+    // --- Redis cache projection (rendered only when the target kind is REDIS) ---------------
+    // Kept flat like the rest of this form: the template submits what it renders, and the
+    // controller decides whether these values mean anything for the project's target kind.
+    private String keyPrefix;
+    private String valueFormat;
+    private Long ttlSeconds;
+    /** Comma-separated column names; a cache row omits them. */
+    private String excludedColumns;
+    private Integer maxValueBytes;
+    private Integer maxCommandsPerTransaction;
 }

@@ -152,12 +152,25 @@ public interface SqlDialect {
     }
 
     /**
-     * Returns a dialect instance configured for the connected target server's major version,
-     * or {@code this} when the dialect's SQL is version-independent. Used for products whose
-     * identity syntax changed across releases (Oracle 12c introduced AS IDENTITY).
+     * Returns a dialect instance configured for the connected server's major version, or
+     * {@code this} when the dialect's SQL is version-independent. The version comes from the
+     * side the dialect serves — a target's identity syntax changed across releases (Oracle
+     * 12c introduced AS IDENTITY), and a source's decides whether keys can be sampled.
      */
     default SqlDialect withServerMajorVersion(Integer majorVersion) {
         return this;
+    }
+
+    /**
+     * Whether the connected server accepts window functions ({@code NTILE}, {@code ROW_NUMBER}),
+     * which is how a full load splits a table into key ranges. MySQL 5.7 rejects the statement
+     * with a syntax error, so every table of such a source would pay a failing query and fall
+     * back to the sequential load; a dialect that knows its server's version answers false up
+     * front. Unknown versions answer true: attempting once is cheaper than silently dropping
+     * parallelism on a server that does support them.
+     */
+    default boolean supportsWindowFunctions() {
+        return true;
     }
 
     /**

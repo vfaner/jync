@@ -90,7 +90,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
     private final YStreamServiceLifecycle lifecycle;
     private final YStreamServiceOpsFactory opsFactory;
 
-    private final CdcEventApplier applier;
+    private final CdcTargetTransactionFactory targetTransactions;
     private final YStreamTransactionAssembler tx = new YStreamTransactionAssembler();
     private final CdcTransactionBudget budget;
     private final CdcChangeWindowLogger windowLogger;
@@ -123,7 +123,8 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                               YStreamServiceLifecycle lifecycle) {
         this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
                 dataSourceManager, stats, properties, clientFactory, lifecycle,
-                JdbcYStreamServiceOps::new);
+                JdbcYStreamServiceOps::new,
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
     }
 
     YStreamCdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,
@@ -133,6 +134,19 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                        SyncProperties properties, YStreamClientFactory clientFactory,
                        YStreamServiceLifecycle lifecycle,
                        YStreamServiceOpsFactory opsFactory) {
+        this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
+                dataSourceManager, stats, properties, clientFactory, lifecycle, opsFactory,
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+    }
+
+    YStreamCdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,
+                       CdcPositionStore positionStore, CdcBaselineService baselineService,
+                       SyncTaskStore taskStore, SyncStateWriter stateWriter,
+                       DataSourceManager dataSourceManager, CdcRuntimeStats stats,
+                       SyncProperties properties, YStreamClientFactory clientFactory,
+                       YStreamServiceLifecycle lifecycle,
+                       YStreamServiceOpsFactory opsFactory,
+                       CdcTargetTransactionFactory targetTransactions) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -146,7 +160,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         this.clientFactory = clientFactory;
         this.lifecycle = lifecycle;
         this.opsFactory = opsFactory;
-        this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
+        this.targetTransactions = targetTransactions;
         this.budget = CdcTransactionBudget.from(properties);
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
                 taskStore, properties.getCdc().getChangeWindowMs());
@@ -632,41 +646,24 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         YStreamPosition position = event.position() != null ? event.position() : lastSeen;
         int rows = committed.size();
         if (!committed.isEmpty()) {
-            Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
-            boolean originalAutoCommit = true;
+            // Opening the connection stays outside the try so a failure to borrow one keeps
+            // its old classification (transient) instead of feeding the apply-failure cap.
+            CdcTargetTransaction target = targetTransactions.open(project, ctx);
             try {
-                originalAutoCommit = target.getAutoCommit();
-                target.setAutoCommit(false);
                 for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e
                         : committed.upserts().entrySet()) {
-                    applier.applyUpserts(target, e.getKey(), e.getValue());
+                    target.applyUpserts(e.getKey(), e.getValue());
                 }
                 for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e
                         : committed.deletes().entrySet()) {
-                    applier.applyDeletes(target, e.getKey(), e.getValue());
+                    target.applyDeletes(e.getKey(), e.getValue());
                 }
                 target.commit();
             } catch (RuntimeException | SQLException e) {
                 applyFailedThisCycle = true;   // only target write failures feed the cap
-                try {
-                    target.rollback();
-                } catch (SQLException ignored) {
-                    // the commit failed; the rollback is a courtesy
-                }
                 throw e;
             } finally {
-                try {
-                    if (originalAutoCommit) {
-                        target.setAutoCommit(true);
-                    }
-                } catch (SQLException ignored) {
-                    // returning the connection to the pool is what matters
-                }
-                try {
-                    target.close();
-                } catch (SQLException ignored) {
-                    // ditto
-                }
+                target.close();
             }
         }
         ctx.requireLease();

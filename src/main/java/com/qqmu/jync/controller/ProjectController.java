@@ -27,6 +27,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.ColumnRule;
 import com.qqmu.jync.dto.ColumnRuleType;
 import com.qqmu.jync.dto.Pager;
+import com.qqmu.jync.dto.RedisProjectionConfig;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.SyncConfigForm;
 import com.qqmu.jync.model.CaptureStrategy;
@@ -34,6 +35,8 @@ import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.RedisTarget;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.DatabaseConfigService;
@@ -45,6 +48,8 @@ import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.cdc.CdcReconnectBackoff;
 import com.qqmu.jync.service.cdc.CdcRuntimeStats;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
+import com.qqmu.jync.service.projection.redis.RedisValueFormat;
 import com.qqmu.jync.service.task.FullLoadCapacity;
 
 import lombok.extern.slf4j.Slf4j;
@@ -63,6 +68,7 @@ public class ProjectController {
     private final CdcOperationsService cdcOperationsService;
     private final CdcConsumerManager cdcConsumerManager;
     private final CdcPositionStore cdcPositionStore;
+    private final RedisTargetService redisTargetService;
     private final I18nConfig.MessageSourceAccessorHolder messages;
     private final SyncProperties properties;
 
@@ -71,6 +77,7 @@ public class ProjectController {
                             CdcOperationsService cdcOperationsService,
                             CdcConsumerManager cdcConsumerManager,
                             CdcPositionStore cdcPositionStore,
+                            RedisTargetService redisTargetService,
                             I18nConfig.MessageSourceAccessorHolder messages,
                             SyncProperties properties) {
         this.projectService = projectService;
@@ -78,6 +85,7 @@ public class ProjectController {
         this.cdcOperationsService = cdcOperationsService;
         this.cdcConsumerManager = cdcConsumerManager;
         this.cdcPositionStore = cdcPositionStore;
+        this.redisTargetService = redisTargetService;
         this.messages = messages;
         this.properties = properties;
     }
@@ -133,6 +141,7 @@ public class ProjectController {
         }
         model.addAttribute("project", project);
         addDatabaseOptions(model, project);
+        addRedisOptions(model);
         return "project-form";
     }
 
@@ -171,6 +180,7 @@ public class ProjectController {
             // verdict up front so the user does not fill in a whole edit that cannot save.
             model.addAttribute("topologyLocked", projectService.isRunning(project));
             addDatabaseOptions(model, project);
+            addRedisOptions(model);
             return "project-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.project.not.found");
@@ -188,6 +198,14 @@ public class ProjectController {
                 optionsForRole(ConnectionRole.SOURCE, project.getSourceDbId()));
         model.addAttribute("targetDatabases",
                 optionsForRole(ConnectionRole.TARGET, project.getTargetDbId()));
+    }
+
+    /**
+     * Redis endpoints are not {@link DatabaseConfig}s and carry no role: they are always a
+     * sync target, never a source, so the form gets them as one flat list.
+     */
+    private void addRedisOptions(Model model) {
+        model.addAttribute("redisTargets", redisTargetService.findAll());
     }
 
     private List<DatabaseConfig> optionsForRole(ConnectionRole role, Long selectedId) {
@@ -248,6 +266,15 @@ public class ProjectController {
 
         model.addAttribute("project", project);
         model.addAttribute("config", config);
+        // A Redis target is a cache projection, not a database: the page renders the
+        // projection card and the table picker, and skips every JDBC-only card. The target
+        // id is resolved here rather than in the template so a stale id cannot 500 the page.
+        boolean isRedisTarget = project.getTargetKindOrDefault() == SyncTargetKind.REDIS;
+        model.addAttribute("isRedisTarget", isRedisTarget);
+        RedisTarget redisTarget = isRedisTarget && project.getTargetRedisId() != null
+                ? redisTargetService.find(project.getTargetRedisId()).orElse(null)
+                : null;
+        model.addAttribute("redisTarget", redisTarget);
         // Drives the disabled state of start/sync-now plus the reason shown on the page.
         model.addAttribute("noSyncWorkMessage", noSyncWorkMessage(config));
         SyncTask task = projectService.findTask(id).orElse(null);
@@ -385,11 +412,13 @@ public class ProjectController {
         // cycle instead of letting the source load explain it. A snapshot read failure must
         // not take the page down — the banner is advisory.
         ProjectService.FullCompareLoadReport fullCompareLoad = null;
-        try {
-            fullCompareLoad = projectService.inspectFullCompareLoad(id, config);
-        } catch (RuntimeException e) {
-            log.debug("Could not estimate FULL_COMPARE load for project {}: {}",
-                    id, e.toString());
+        if (!isRedisTarget) {
+            try {
+                fullCompareLoad = projectService.inspectFullCompareLoad(id, config);
+            } catch (RuntimeException e) {
+                log.debug("Could not estimate FULL_COMPARE load for project {}: {}",
+                        id, e.toString());
+            }
         }
         model.addAttribute("fullCompareLoad", fullCompareLoad);
 
@@ -397,11 +426,13 @@ public class ProjectController {
         // routine is created and only returns the wrong rows afterwards. Name the objects
         // here, where an override can still be supplied before the first run. Advisory — a
         // source that cannot answer loses the warning, not the page.
-        try {
-            model.addAttribute("stringConcatWarnings",
-                    projectService.findStringConcatenationWarnings(id));
-        } catch (RuntimeException e) {
-            log.debug("Could not inspect '||' usage for project {}: {}", id, e.toString());
+        if (!isRedisTarget) {
+            try {
+                model.addAttribute("stringConcatWarnings",
+                        projectService.findStringConcatenationWarnings(id));
+            } catch (RuntimeException e) {
+                log.debug("Could not inspect '||' usage for project {}: {}", id, e.toString());
+            }
         }
 
         // --- CDC status panel (C3) ------------------------------------------------------
@@ -659,6 +690,15 @@ public class ProjectController {
             // 的空闲休眠;留空回退引擎默认。binlog 引擎不轮询,忽略此值。
             config.setCdcIdlePollMs(cdcIdlePollMs);
 
+            // The projection card is rendered only for a Redis target; the fields it submits
+            // are meaningless (and must not be stored) for a database project.
+            if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+                String invalidProjection = applyRedisProjection(form, config, project.getId());
+                if (invalidProjection != null) {
+                    return ConfigSaveOutcome.error(invalidProjection);
+                }
+            }
+
             CaptureStrategy before = config.getCaptureStrategyOrDefault();
             projectService.saveConfig(id, config, strategyParam);
             // A real switch gets its own confirmation copy: the C2 side effects (reload,
@@ -673,6 +713,59 @@ public class ProjectController {
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ConfigSaveOutcome.error(e.getMessage());
         }
+    }
+
+    /**
+     * Copies the Redis projection inputs onto the config.
+     *
+     * <p>Bounds (prefix shape, TTL, value size, command count) are enforced once in
+     * {@code RedisProjectionPolicy}; this method only maps the flat form fields. A value the
+     * enum cannot parse is refused here, because the policy has no vocabulary for it.
+     *
+     * @return the i18n key of the first invalid value, or null when the projection is usable
+     */
+    private static String applyRedisProjection(SyncConfigForm form, SyncConfig config,
+                                               Long projectId) {
+        RedisProjectionConfig projection = config.getRedisProjection();
+        if (projection == null) {
+            projection = RedisProjectionConfig.defaultFor(projectId);
+            config.setRedisProjection(projection);
+        }
+        if (form.getKeyPrefix() != null) {
+            projection.setKeyPrefix(form.getKeyPrefix());
+        }
+        if (form.getValueFormat() != null && !form.getValueFormat().isBlank()) {
+            try {
+                projection.setValueFormat(RedisValueFormat.valueOf(form.getValueFormat().trim()));
+            } catch (IllegalArgumentException e) {
+                return "error.project.redis.valueFormat.invalid";
+            }
+        }
+        if (form.getTtlSeconds() != null) {
+            projection.setTtlSeconds(form.getTtlSeconds());
+        }
+        if (form.getMaxValueBytes() != null) {
+            projection.setMaxValueBytes(form.getMaxValueBytes());
+        }
+        if (form.getMaxCommandsPerTransaction() != null) {
+            projection.setMaxCommandsPerTransaction(form.getMaxCommandsPerTransaction());
+        }
+        if (form.getExcludedColumns() != null) {
+            projection.setExcludedColumns(splitColumns(form.getExcludedColumns()));
+        }
+        return null;
+    }
+
+    /** Comma-separated column list from one text input; blank entries are ignored. */
+    private static java.util.Set<String> splitColumns(String raw) {
+        java.util.Set<String> columns = new LinkedHashSet<>();
+        for (String part : raw.split(",")) {
+            String column = part.trim();
+            if (!column.isEmpty()) {
+                columns.add(column);
+            }
+        }
+        return columns;
     }
 
     /**

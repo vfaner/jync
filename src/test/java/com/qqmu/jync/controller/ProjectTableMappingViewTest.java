@@ -25,6 +25,7 @@ import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * 同步对象面板的「源表 → 目标表」行：左侧勾选框、中间虚线箭头、右侧目标表名输入框。
@@ -43,6 +44,7 @@ class ProjectTableMappingViewTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     private void stubDetail(List<String> tables, SyncConfig config) {
         Project project = new Project();

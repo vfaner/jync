@@ -24,6 +24,7 @@ import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * 同步选项开关随源库对象清单收敛:某一类对象成功列举且确认为空时,对应开关必须默认关闭
@@ -45,6 +46,7 @@ class ProjectObjectOptionsViewTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     /** 与 ProjectControllerStrategyTest.stubDetail(null) 等价的最小详情页桩:无数据源,
      *  因此不会触发 CDC 探测;SyncConfig 全默认(五个开关皆 true)。 */

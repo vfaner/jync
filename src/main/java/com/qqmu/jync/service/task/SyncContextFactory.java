@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.dto.RedisProjectionConfig;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -15,6 +16,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.connection.OracleVersionResolver;
+import com.qqmu.jync.service.connection.ServerVersionResolver;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
@@ -33,6 +35,7 @@ public class SyncContextFactory {
     private final MetadataReaderFactory readerFactory;
     private final SqlDialectFactory dialectFactory;
     private final OracleVersionResolver oracleVersionResolver;
+    private final ServerVersionResolver serverVersionResolver;
     private final SyncProperties properties;
     private final ObjectMapper objectMapper;
     private final PoolActivity poolActivity;
@@ -42,6 +45,7 @@ public class SyncContextFactory {
                               MetadataReaderFactory readerFactory,
                               SqlDialectFactory dialectFactory,
                               OracleVersionResolver oracleVersionResolver,
+                              ServerVersionResolver serverVersionResolver,
                               SyncProperties properties,
                               ObjectMapper objectMapper,
                               PoolActivity poolActivity) {
@@ -50,6 +54,7 @@ public class SyncContextFactory {
         this.readerFactory = readerFactory;
         this.dialectFactory = dialectFactory;
         this.oracleVersionResolver = oracleVersionResolver;
+        this.serverVersionResolver = serverVersionResolver;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.poolActivity = poolActivity;
@@ -97,12 +102,15 @@ public class SyncContextFactory {
 
         String sourceSchema = resolveSchema(source, sourceReader);
         String targetSchema = resolveSchema(target, targetReader);
-        // Dialect version for the real product: effective (product vs COMPATIBLE) major,
-        // downgraded to the pre-12 emulation when a live grammar probe shows the server does
-        // not actually accept AS IDENTITY. DM/YashanDB are routed by the dialect factory
-        // itself, not by this number.
+        // The source only needs its version for the full load's key sampling (MySQL-family
+        // window functions), so the Oracle grammar probe stays target-only as before.
+        Integer sourceMajorVersion = serverVersionResolver.majorVersion(source);
+        // The target's DDL does vary by Oracle version: effective (product vs COMPATIBLE)
+        // major, downgraded to the pre-12 emulation when a live grammar probe shows the
+        // server does not actually accept AS IDENTITY. DM/YashanDB are routed by the dialect
+        // factory itself, not by this number.
         Integer targetMajorVersion = targetFamily == DatabaseType.DialectFamily.ORACLE
-                ? resolveDialectVersion(target) : null;
+                ? resolveDialectVersion(target) : serverVersionResolver.majorVersion(target);
 
         // Incremental windows and CDC replay commit in front of live applications, so they
         // keep the global batch budget; the project's own batchSize now tunes the full load
@@ -127,7 +135,8 @@ public class SyncContextFactory {
                 .targetSchema(targetSchema)
                 .sourceReader(sourceReader)
                 .targetReader(targetReader)
-                .sourceDialect(dialectFactory.forType(source.getType(), null, sourceFamily))
+                .sourceDialect(dialectFactory.forType(source.getType(), sourceMajorVersion,
+                                sourceFamily))
                 .targetDialect(dialectFactory.forType(target.getType(), targetMajorVersion,
                                 targetFamily)
                         // sync.lob.oracle-empty-string-as-empty-clob reaches every bind path
@@ -156,6 +165,67 @@ public class SyncContextFactory {
                         return dataSourceManager.getConnectionOrDefer(config);
                     }
                 })
+                .build();
+    }
+
+    /**
+     * A source-only context for read-only tools whose project has no JDBC target.
+     *
+     * <p>A Redis cache projection has no target database to resolve, and demanding one here
+     * would fail every Redis project before its precheck ran. The target side stays null:
+     * callers of this method only read source metadata, which does not consult it.
+     */
+    public SyncContext buildSourceOnly(Project project, SyncConfig config) {
+        if (project.getSourceDbId() == null) {
+            throw new IllegalStateException(
+                    "Project '" + project.getName() + "' has no source database configured");
+        }
+        DatabaseConfig source = databaseConfigRepository.findById(project.getSourceDbId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Source database config " + project.getSourceDbId()
+                                + " no longer exists"));
+
+        DatabaseType.DialectFamily sourceFamily = source.resolvedFamily();
+        MetadataReader sourceReader = readerFactory.forType(source.getType(), sourceFamily);
+        Integer sourceMajorVersion = serverVersionResolver.majorVersion(source);
+
+        return SyncContext.builder()
+                .project(project)
+                .config(config)
+                .sourceConfig(source)
+                .sourceType(source.getType())
+                .sourceFamily(sourceFamily)
+                .sourceSchema(resolveSchema(source, sourceReader))
+                .sourceReader(sourceReader)
+                .sourceDialect(dialectFactory.forType(source.getType(), sourceMajorVersion,
+                        sourceFamily))
+                .batchSize(properties.getBatchSize())
+                .build();
+    }
+
+    /**
+     * A source-only context for a Redis target: the cache is not a JDBC endpoint, so there is
+     * no target side to resolve and no connection provider to hand out. The caller (the Redis
+     * baseline) reads the source and writes Redis through its own target service.
+     *
+     * <p>Deliberately does not apply the CDC baseline defaults: the structure/index switches
+     * they turn on describe a database target and mean nothing for a cache.
+     */
+    public SyncContext buildForRedis(Project project, String lockOwner,
+                                     BooleanSupplier lockRenewer, BooleanSupplier stopRequested) {
+        SyncConfig config = parseConfig(project);
+        if (config.getRedisProjection() == null && project.getId() != null) {
+            // Switching a project's target to Redis copies its stored config verbatim, so the
+            // row may have no projection contract until the settings page is saved. Start
+            // persists the documented default; a rebuild or consumer that runs first must not
+            // die on the internal "Redis projection settings are missing" message, and the
+            // default here is exactly what the settings page would have stored.
+            config.setRedisProjection(RedisProjectionConfig.defaultFor(project.getId()));
+        }
+        return buildSourceOnly(project, config).toBuilder()
+                .lockOwner(lockOwner)
+                .lockRenewer(lockRenewer)
+                .stopRequested(stopRequested)
                 .build();
     }
 

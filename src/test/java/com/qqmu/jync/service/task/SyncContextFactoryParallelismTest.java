@@ -20,7 +20,8 @@ class SyncContextFactoryParallelismTest {
     private final SyncProperties properties = new SyncProperties();
     private final PoolActivity poolActivity = new PoolActivity(properties);
     private final SyncContextFactory factory =
-            new SyncContextFactory(null, null, null, null, null, properties, null, poolActivity);
+            new SyncContextFactory(null, null, null, null, null, null, properties, null,
+                    poolActivity);
 
     @Test
     void projectValueOverridesTheGlobalDefault() {

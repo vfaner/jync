@@ -123,6 +123,12 @@ public class SyncConfig {
      */
     private Long cdcIdlePollMs;
 
+    /**
+     * Cache-projection contract, present only while the project's target kind is Redis.
+     * Legacy and database configs leave it null; the Redis save path fills the defaults.
+     */
+    private RedisProjectionConfig redisProjection;
+
     /** Null-safe accessor: legacy configs (field absent) behave exactly like v1.4.0. */
     @JsonIgnore // derived value: keep it out of the persisted JSON, which stores captureStrategy only
     public CaptureStrategy getCaptureStrategyOrDefault() {

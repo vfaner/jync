@@ -20,4 +20,8 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
     List<Project> findBySourceDbId(Long sourceDbId);
 
     List<Project> findByTargetDbId(Long targetDbId);
+
+    boolean existsByTargetRedisId(Long targetRedisId);
+
+    List<Project> findByTargetRedisId(Long targetRedisId);
 }

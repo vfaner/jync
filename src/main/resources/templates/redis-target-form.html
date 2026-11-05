@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:replace="~{layout :: page(~{::content}, ~{::scripts}, 'databases', 'redis.targets.title')}">
+<body>
+<th:block th:fragment="content" th:remove="tag">
+<div th:remove="tag">
+
+    <div class="page-head">
+        <div>
+            <h1 th:text="${form.id != null} ? #{redis.target.form.edit} : #{redis.target.form.new}">New Redis target</h1>
+            <p class="sub" th:text="#{redis.target.form.hint}">Used only as a cache target for real-time sync.</p>
+        </div>
+        <div class="page-actions">
+            <a class="btn btn-ghost btn-sm" th:href="@{/redis/targets}">
+                <svg class="ico"><use href="#arrow-left"/></svg>
+                <span th:text="#{common.back}">Back</span>
+            </a>
+        </div>
+    </div>
+
+    <div th:if="${errorDetail != null}" class="alert alert-danger" th:text="${errorDetail}">Connection failed</div>
+
+    <div style="max-width:820px">
+        <form method="post" id="redis-target-form"
+              th:action="@{/redis/targets/save}" th:object="${form}">
+            <input type="hidden" th:field="*{id}">
+
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#database"/></svg>
+                        <span th:text="#{redis.target.form.endpoint}">Endpoint</span></h2>
+                </div>
+                <div class="card-body">
+                    <div class="field">
+                        <label for="name">
+                            <span th:text="#{common.name}">Name</span><span class="req">*</span>
+                        </label>
+                        <input type="text" class="input" id="name" th:field="*{name}"
+                               required maxlength="128" autocomplete="off">
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="host">
+                                <span th:text="#{redis.target.form.host}">Host</span><span class="req">*</span>
+                            </label>
+                            <input type="text" class="input mono" id="host" th:field="*{host}"
+                                   required maxlength="255" placeholder="127.0.0.1" autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="port">
+                                <span th:text="#{redis.target.form.port}">Port</span><span class="req">*</span>
+                            </label>
+                            <input type="number" class="input" id="port" th:field="*{port}"
+                                   required min="1" max="65535">
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="databaseIndex" th:text="#{redis.target.form.databaseIndex}">Database index</label>
+                            <input type="number" class="input" id="databaseIndex"
+                                   th:field="*{databaseIndex}" min="0">
+                            <div class="help" th:text="#{redis.target.form.databaseIndexHelp}">
+                                Single-node only; a cluster always uses database 0.
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="username" th:text="#{redis.target.form.username}">Username</label>
+                            <input type="text" class="input" id="username" th:field="*{username}"
+                                   maxlength="255" autocomplete="off">
+                            <div class="help" th:text="#{redis.target.form.usernameHelp}">
+                                Redis 6 ACL user. Leave blank for password-only authentication.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="rawPassword" th:text="#{redis.target.form.password}">Password</label>
+                        <!--/* The stored secret is never filled back in; blank means keep it. */-->
+                        <input type="password" class="input" id="rawPassword" name="rawPassword"
+                               autocomplete="new-password">
+                        <div class="help" th:if="${form.id != null}"
+                             th:text="#{redis.target.form.passwordKeep}">Leave blank to keep the stored password.</div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label class="switch">
+                                <input type="checkbox" th:field="*{clusterMode}" data-role="cluster-mode">
+                                <span class="track"></span>
+                                <span class="switch-text"><strong th:text="#{redis.target.form.cluster}">Cluster mode</strong></span>
+                            </label>
+                            <div class="help" th:text="#{redis.target.form.clusterHelp}">
+                                Uses Redis Cluster routing. Database index must be 0.
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label class="switch">
+                                <input type="checkbox" th:field="*{tlsEnabled}" data-role="tls-enabled">
+                                <span class="track"></span>
+                                <span class="switch-text"><strong th:text="#{redis.target.form.tls}">TLS</strong></span>
+                            </label>
+                            <div class="help" th:text="#{redis.target.form.tlsHelp}">
+                                Connect over TLS (rediss).
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label class="switch">
+                            <input type="checkbox" th:field="*{verifyTls}" data-role="verify-tls">
+                            <span class="track"></span>
+                            <span class="switch-text"><strong th:text="#{redis.target.form.verifyTls}">Verify TLS certificate</strong></span>
+                        </label>
+                        <div class="help" th:text="#{redis.target.form.verifyTlsHelp}">
+                            Turning this off skips certificate and hostname checks and is recorded in the audit log.
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="connectTimeoutMs" th:text="#{redis.target.form.connectTimeout}">Connect timeout</label>
+                            <input type="number" class="input" id="connectTimeoutMs"
+                                   th:field="*{connectTimeoutMs}" min="500" max="60000">
+                        </div>
+                        <div class="field">
+                            <label for="commandTimeoutMs" th:text="#{redis.target.form.commandTimeout}">Command timeout</label>
+                            <input type="number" class="input" id="commandTimeoutMs"
+                                   th:field="*{commandTimeoutMs}" min="1000" max="600000">
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label for="description" th:text="#{common.description}">Description</label>
+                        <input type="text" class="input" id="description" th:field="*{description}"
+                               maxlength="512">
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body btn-row">
+                    <button type="submit" class="btn btn-primary">
+                        <svg class="ico"><use href="#check-lg"/></svg>
+                        <span th:text="#{common.save}">Save</span>
+                    </button>
+                    <button type="submit" class="btn btn-ghost"
+                            th:formaction="@{/redis/targets/verify}">
+                        <svg class="ico"><use href="#plug"/></svg>
+                        <span th:text="#{common.test}">Test connection</span>
+                    </button>
+                    <a class="btn btn-ghost" th:href="@{/redis/targets}"
+                       th:text="#{common.cancel}">Cancel</a>
+                </div>
+            </div>
+        </form>
+    </div>
+
+</div>
+</th:block>
+
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
+</body>
+</html>

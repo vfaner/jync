@@ -33,6 +33,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * On a phone the project list used to squeeze five columns into 390px. The 详情 column lost
@@ -70,6 +71,9 @@ class ProjectListPhoneLayoutTest {
 
     @MockBean
     private CdcPositionStore cdcPositionStore;
+
+    @MockBean
+    private RedisTargetService redisTargetService;
 
     @Test
     void theProjectTableIsMarkedForThePhoneLayout() throws Exception {

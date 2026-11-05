@@ -9,8 +9,11 @@ import java.util.function.BooleanSupplier;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.dto.SyncResult;
+import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.projection.redis.RedisBaselineService;
 import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
@@ -38,15 +41,18 @@ public class CdcBaselineService {
     private final SyncTaskStore taskStore;
     private final DataSourceManager dataSourceManager;
     private final SyncEngine engine;
+    private final RedisBaselineService redisBaseline;
 
     public CdcBaselineService(CdcPositionStore positionStore, BinlogClientFactory clientFactory,
                               SyncTaskStore taskStore,
-                              DataSourceManager dataSourceManager, SyncEngine engine) {
+                              DataSourceManager dataSourceManager, SyncEngine engine,
+                              RedisBaselineService redisBaseline) {
         this.positionStore = positionStore;
         this.clientFactory = clientFactory;
         this.taskStore = taskStore;
         this.dataSourceManager = dataSourceManager;
         this.engine = engine;
+        this.redisBaseline = redisBaseline;
     }
 
     /** SHOW BINARY LOG STATUS (8.4+) with SHOW MASTER STATUS fallback; GTID set when gtid_mode=ON. */
@@ -252,63 +258,88 @@ public class CdcBaselineService {
         }
     }
 
+    /**
+     * Records the capture strategy's current position as the baseline anchor and returns
+     * the LogMiner SCN (null for every other strategy) so the caller can re-check the
+     * archive floor once the load finishes. Exposed through {@link CdcBaselineAnchor} so
+     * the Redis baseline can record the same anchor without a service cycle.
+     */
+    public Long recordBaselineAnchor(SyncContext ctx) {
+        long projectId = ctx.getProject().getId();
+        // Hand-built contexts (tests, the Redis baseline's callers) may carry no config at
+        // all; they behaved like POLLING before this method existed, and still do.
+        CaptureStrategy strategy = ctx.getConfig() == null
+                ? CaptureStrategy.POLLING
+                : ctx.getConfig().getCaptureStrategyOrDefault();
+        Long logMinerAnchorScn = null;
+        switch (strategy) {
+            case LOGMINER_CDC: {
+                long scn = readCurrentScn(ctx.getSourceConfig());
+                logMinerAnchorScn = scn;
+                positionStore.recordBaselineStartScn(projectId, scn);
+                engine.resetProject(projectId);
+                log.info("CDC baseline for project {}: full load from SCN {} (LogMiner)",
+                        projectId, scn);
+                break;
+            }
+            case PG_LOGICAL_CDC: {
+                String lsn = readCurrentLsnPg(ctx.getSourceConfig());
+                positionStore.recordBaselineStartLsn(projectId, lsn);
+                engine.resetProject(projectId);
+                log.info("CDC baseline for project {}: full load from LSN {} (PG logical)",
+                        projectId, lsn);
+                break;
+            }
+            case SQLSERVER_CDC: {
+                String lsn = readCurrentLsnSqlServer(ctx.getSourceConfig());
+                positionStore.recordBaselineStartLsn(projectId, lsn);
+                engine.resetProject(projectId);
+                log.info("CDC baseline for project {}: full load from LSN {} (SQL Server CDC)",
+                        projectId, lsn);
+                break;
+            }
+            case YSTREAM_CDC: {
+                // 崖山没有 SHOW MASTER STATUS,锚点也不是这里读的:YStreamServiceLifecycle
+                // 创建服务时已经从 RESTART_POSITION 读出基线起点并写成 recordBaselineStartLsn。
+                // 落进 default 会去读 binlog 位点,项目一开始就被 park 在 ERROR。
+                engine.resetProject(projectId);
+                log.info("CDC baseline for project {}: full load; YStream replay starts at the"
+                        + " anchor recorded when the service was created", projectId);
+                break;
+            }
+            case POLLING:
+            case FULL_COMPARE:
+            case BINLOG_CDC:
+            default: {
+                CdcPositionMark mark = readCurrentPosition(ctx.getSourceConfig());
+                positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
+                        mark.getGtidSet(), clientFactory.serverIdFor(projectId));
+                engine.resetProject(projectId);
+                log.info("CDC baseline for project {}: full load from position {}:{}",
+                        projectId, mark.getFile(), mark.getPos());
+                break;
+            }
+        }
+        return logMinerAnchorScn;
+    }
+
     public void runBaseline(SyncContext ctx, BooleanSupplier lockRenewer) {
         long projectId = ctx.getProject().getId();
-        com.qqmu.jync.model.CaptureStrategy strategy = ctx.getConfig() == null
-                ? com.qqmu.jync.model.CaptureStrategy.POLLING
-                : ctx.getConfig().getCaptureStrategyOrDefault();
         // LogMiner only: the SCN the full load anchored at, checked against the source's
         // archive floor once the load finishes (see assertArchiveStillCovers).
         Long logMinerAnchorScn = null;
         try {
-            switch (strategy) {
-                case LOGMINER_CDC: {
-                    long scn = readCurrentScn(ctx.getSourceConfig());
-                    logMinerAnchorScn = scn;
-                    positionStore.recordBaselineStartScn(projectId, scn);
-                    engine.resetProject(projectId);
-                    log.info("CDC baseline for project {}: full load from SCN {} (LogMiner)",
-                            projectId, scn);
-                    break;
-                }
-                case PG_LOGICAL_CDC: {
-                    String lsn = readCurrentLsnPg(ctx.getSourceConfig());
-                    positionStore.recordBaselineStartLsn(projectId, lsn);
-                    engine.resetProject(projectId);
-                    log.info("CDC baseline for project {}: full load from LSN {} (PG logical)",
-                            projectId, lsn);
-                    break;
-                }
-                case SQLSERVER_CDC: {
-                    String lsn = readCurrentLsnSqlServer(ctx.getSourceConfig());
-                    positionStore.recordBaselineStartLsn(projectId, lsn);
-                    engine.resetProject(projectId);
-                    log.info("CDC baseline for project {}: full load from LSN {} (SQL Server CDC)",
-                            projectId, lsn);
-                    break;
-                }
-                case YSTREAM_CDC: {
-                    // 崖山没有 SHOW MASTER STATUS,锚点也不是这里读的:YStreamServiceLifecycle
-                    // 创建服务时已经从 RESTART_POSITION 读出基线起点并写成 recordBaselineStartLsn。
-                    // 落进 default 会去读 binlog 位点,项目一开始就被 park 在 ERROR。
-                    engine.resetProject(projectId);
-                    log.info("CDC baseline for project {}: full load; YStream replay starts at the"
-                            + " anchor recorded when the service was created", projectId);
-                    break;
-                }
-                case POLLING:
-                case FULL_COMPARE:
-                case BINLOG_CDC:
-                default: {
-                    CdcPositionMark mark = readCurrentPosition(ctx.getSourceConfig());
-                    positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
-                            mark.getGtidSet(), clientFactory.serverIdFor(projectId));
-                    engine.resetProject(projectId);
-                    log.info("CDC baseline for project {}: full load from position {}:{}",
-                            projectId, mark.getFile(), mark.getPos());
-                    break;
-                }
+            if (ctx.getProject().getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+                // A cache target cannot run the JDBC full load. The Redis baseline records the
+                // same anchor through this::recordBaselineAnchor and projects the rows itself;
+                // it stays inside this try so a failure keeps the JDBC semantics below (clear
+                // the anchor, record the ERROR hat, leave it not-done). For Redis the anchor is
+                // reset rather than the row deleted, because the row also carries the contract
+                // of the keys the partial baseline already wrote.
+                redisBaseline.run(ctx, lockRenewer, this::recordBaselineAnchor);
+                return;
             }
+            logMinerAnchorScn = recordBaselineAnchor(ctx);
             SyncResult result = engine.runCycle(ctx.toBuilder().cdcBaselineRun(true).build());
             // runCycle 把 SQLException/LockLost/RuntimeException 折进 result 而不外抛:
             // 失败的全量必须在这里转成异常,否则残缺快照会被标成 baseline_done,流从
@@ -382,7 +413,16 @@ public class CdcBaselineService {
                 throw new LockLostException("CDC baseline for project " + projectId
                         + " lost its lease mid-load: " + e);
             }
-            positionStore.delete(projectId);
+            if (ctx.getProject().getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+                // A cache baseline that failed halfway has already written some keys. Their
+                // value format is recorded on the position row, and deleting the row would
+                // lose it: the rerun's baseline could write a different format over the
+                // leftovers and answer WRONGTYPE. Reset the anchor (so the baseline still
+                // reruns), keep the contract until a completed baseline replaces it.
+                positionStore.resetAnchorKeepingProjectionSignature(projectId);
+            } else {
+                positionStore.delete(projectId);
+            }
             taskStore.recordCdcFailure(projectId, CdcFailureClassifier.describe(e));
             throw e;
         }

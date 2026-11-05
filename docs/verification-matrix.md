@@ -1,6 +1,6 @@
 # 真实数据库验证矩阵
 
-这份文档说明每个数据库产品在 Jync v1.12.0 上**实际验证到什么程度**：用什么版本/镜像、走哪条驱动、验证了哪些策略、验证级别是「自动化容器」「环境门控」还是「手工」，以及最近一次验证是什么时候。
+这份文档说明每个数据库产品在 Jync v1.13.0 上**实际验证到什么程度**：用什么版本/镜像、走哪条驱动、验证了哪些策略、验证级别是「自动化容器」「环境门控」还是「手工」，以及最近一次验证是什么时候。
 
 > 验证级别只描述**测试是否存在并能跑**，不承诺所有组合。未跑过的产品在本表中标为「未验证」，不会因为驱动已内置或单元测试通过就写成已验证。
 
@@ -20,7 +20,8 @@
 | 产品 | 角色 | 测试版本 / 镜像 | 驱动 | 已验证策略 | 验证级别 | 最后验证 | 备注 |
 |---|---|---|---|---|---|---|---|
 | PostgreSQL | 源 + 目标 | `postgres:16`、`postgres:16-alpine` | `org.postgresql:postgresql`（Boot 管理） | 全量、时间戳/主键轮询、upsert、行数审计、内容校验、PG 逻辑 CDC、元数据库；16 实测拒绝非整数 identity | 自动化容器 + 手工探针 | 自动化套件 v1.11.0 起持续回归；identity 探针 **2026-11-04（v1.12.0）** | 目标端类型/主键/LOB 行为由多组 IT 覆盖；DECIMAL/NUMERIC identity 报 "identity column type must be smallint, integer, or bigint" |
-| MySQL | 源 + 目标 | `mysql:8.0`（自动化）；`mysql:8.4.11`（本机探针，仅 identity DDL） | `mysql:mysql-connector-java:8.0.33` | 全量、轮询、upsert、binlog CDC、元数据库；8.4.11 实测拒绝 DECIMAL/NUMERIC `AUTO_INCREMENT` | 自动化容器 + 手工探针 | 自动化套件 v1.11.0 起持续回归；identity 探针 **2026-11-04（v1.12.0）** | binlog CDC 有独立容器套件；8.4 对任意 DECIMAL 自增报 ER_WRONG_FIELD_SPEC (1063) |
+| MySQL | 源 + 目标 | `mysql:8.0`（自动化）；`mysql:8.4.11`（本机探针，仅 identity DDL） | `mysql:mysql-connector-java:8.0.33` | 全量、轮询、upsert、binlog CDC、元数据库；8.4.11 实测拒绝 DECIMAL/NUMERIC `AUTO_INCREMENT` | 自动化容器 + 手工探针 | 自动化套件 v1.11.0 起持续回归；identity 探针 **2026-11-04（v1.12.0）** | binlog CDC 有独立容器套件；8.4 对任意 DECIMAL 自增报 ER_WRONG_FIELD_SPEC (1063)；5.7 无窗口函数与表达式默认值，v1.13.0 按服务器版本自动适配，**未用真 5.7 实例回归**（按使用者报错定位） |
+| Redis | 仅目标 | `redis:7-alpine` | `io.lettuce:lettuce-core`（Boot 管理） | 基线投影（JSON）、CDC 的 INSERT/UPDATE/DELETE 收敛、Redis 停机期间位点不推进且恢复后重放、带前缀清扫的重建（不误删相邻前缀） | 自动化容器 | **2026-11-05（v1.13.0）** | `RedisProjectionIT`、`MysqlToRedisCdcIT`、`PgToRedisCdcIT`；只作目标、只配 CDC；不支持 Sentinel |
 | MariaDB | 源 + 目标 | `mariadb:11.4` | `org.mariadb.jdbc:mariadb-java-client`（Boot 管理） | 全量、时间戳轮询、更新送达、空转不写入、内容校验 | 自动化容器 | **2026-11-03（v1.12.0）** | `MariaDbPollingIT`；驱动用普通正数 fetch size 流式读取，URL 带 `useAffectedRows=true` |
 | Oracle | 源 + 目标 | `gvenzl/oracle-free:23`；`gvenzl/oracle-xe:11-slim`（目标标识列场景） | `com.oracle.database.jdbc:ojdbc8` | 全量、轮询、upsert、LogMiner CDC、LOB、元数据库、11g 目标 DDL 兼容 | 自动化容器 | v1.11.0 及以前持续回归 | 23 Free 在 arm64 原生运行；11 XE 用 amd64 模拟 |
 | SQL Server | 源 + 目标 | `mcr.microsoft.com/mssql/server:2022-latest` | `com.microsoft.sqlserver:mssql-jdbc` | 全量、CDC 源、目标写入（含 LOB） | 自动化容器 | v1.11.0 及以前持续回归 | |

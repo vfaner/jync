@@ -4,6 +4,8 @@ import java.time.Instant;
 
 import javax.persistence.Column;
 import javax.persistence.Entity;
+import javax.persistence.EnumType;
+import javax.persistence.Enumerated;
 import javax.persistence.GeneratedValue;
 import javax.persistence.GenerationType;
 import javax.persistence.Id;
@@ -38,6 +40,18 @@ public class Project {
     @Column(name = "target_db_id")
     private Long targetDbId;
 
+    /**
+     * Null on every row written before Redis targets existed; those are JDBC. New rows are
+     * written with an explicit value, and the startup backfill fills the old ones in.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "target_kind", length = 16)
+    private SyncTargetKind targetKind;
+
+    /** Set only when {@link #targetKind} is {@code REDIS}. */
+    @Column(name = "target_redis_id")
+    private Long targetRedisId;
+
     /** Serialized {@link com.qqmu.jync.dto.SyncConfig}. */
     @Lob
     @Column(name = "sync_config")
@@ -52,6 +66,16 @@ public class Project {
 
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    /**
+     * The kind to branch on. Null means the row predates Redis targets, which is JDBC; every
+     * reader must go through this instead of {@link #getTargetKind()} so a legacy row never
+     * reaches a null-check that turns into a {@code NullPointerException} or, worse, an
+     * accidental Redis branch.
+     */
+    public SyncTargetKind getTargetKindOrDefault() {
+        return targetKind == null ? SyncTargetKind.JDBC : targetKind;
+    }
 
     @PrePersist
     void onCreate() {

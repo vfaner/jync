@@ -18,7 +18,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.qqmu.jync.config.SyncProperties;
-import com.qqmu.jync.util.JdbcUtil;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.DatabaseType;
@@ -109,7 +108,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private final CdcRuntimeStats stats;
     private final SyncProperties properties;
 
-    private final CdcEventApplier applier;
+    private final CdcTargetTransactionFactory targetTransactions;
     private final BindingSupplier supplier = new BindingSupplier();
 
     /** P1-6: discovery throttle + the CI names this consumer has already logged. */
@@ -156,6 +155,17 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                                 CdcBaselineService baselineService, SyncTaskStore taskStore,
                                 SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
                                 CdcRuntimeStats stats, SyncProperties properties) {
+        this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
+                dataSourceManager, stats, properties,
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+    }
+
+    public SqlServerCdcConsumer(Project project, SyncLockService.LockHandle lock,
+                                SyncContext ctx, CdcPositionStore positionStore,
+                                CdcBaselineService baselineService, SyncTaskStore taskStore,
+                                SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
+                                CdcRuntimeStats stats, SyncProperties properties,
+                                CdcTargetTransactionFactory targetTransactions) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -166,7 +176,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         this.dataSourceManager = dataSourceManager;
         this.stats = stats;
         this.properties = properties;
-        this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
+        this.targetTransactions = targetTransactions;
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
                 taskStore, properties.getCdc().getChangeWindowMs());
     }
@@ -796,38 +806,27 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                                   Map<CdcTableBinding, SqlServerTxFold.Buffer> buffers)
             throws Exception {
         if (buffers.isEmpty()) return;
-        Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
-        boolean originalAutoCommit = true;
-        try {
-            originalAutoCommit = target.getAutoCommit();
-            target.setAutoCommit(false);
-            // Upserts before deletes: with the fold's same-PK collapsing this order is
-            // what makes PK chains (1→2→3 in one tx) land on the source's final state.
-            for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
-                applier.applyUpserts(target, e.getKey(), e.getValue().upserts());
-            }
-            for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
-                applier.applyDeletes(target, e.getKey(), e.getValue().deletes());
-            }
-            target.commit();
-        } catch (Exception e) {
-            JdbcUtil.rollbackAndClose(target);
-            // P2-3: a flush failure may mean schema drift — the cached bindings that
-            // built these statements may still carry columns the source dropped (or
-            // miss new ones). Evict them so the retry re-reads metadata instead of
-            // replaying the identical failing SQL until strike-out parks the project.
-            for (CdcTableBinding b : buffers.keySet()) {
-                supplier.invalidate(b);
-            }
-            throw e;
-        } finally {
+        try (CdcTargetTransaction target = targetTransactions.open(project, ctx)) {
             try {
-                if (originalAutoCommit) target.setAutoCommit(true);
-            } catch (SQLException ignored) { }
-            // 归还池连接：异常路径已由 rollbackAndClose 关闭，这里是成功路径唯一的关闭点。
-            try {
-                target.close();
-            } catch (SQLException ignored) { }
+                // Upserts before deletes: with the fold's same-PK collapsing this order is
+                // what makes PK chains (1→2→3 in one tx) land on the source's final state.
+                for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
+                    target.applyUpserts(e.getKey(), e.getValue().upserts());
+                }
+                for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
+                    target.applyDeletes(e.getKey(), e.getValue().deletes());
+                }
+                target.commit();
+            } catch (Exception e) {
+                // P2-3: a flush failure may mean schema drift — the cached bindings that
+                // built these statements may still carry columns the source dropped (or
+                // miss new ones). Evict them so the retry re-reads metadata instead of
+                // replaying the identical failing SQL until strike-out parks the project.
+                for (CdcTableBinding b : buffers.keySet()) {
+                    supplier.invalidate(b);
+                }
+                throw e;
+            }
         }
         ctx.requireLease();
         positionStore.advanceLsn(projectId, txLsn);

@@ -25,11 +25,12 @@ public class SqlDialectFactory {
     }
 
     /**
-     * Variant configured with the connected target server's major version. Dialects whose SQL
-     * does not vary by version return the same instance.
+     * Variant configured with the connected server's major version — either side, since a
+     * source's version decides how its keys can be sampled. Dialects whose SQL does not vary
+     * by version return the same instance.
      */
-    public SqlDialect forType(DatabaseType type, Integer targetMajorVersion) {
-        return forType(type, targetMajorVersion, null);
+    public SqlDialect forType(DatabaseType type, Integer serverMajorVersion) {
+        return forType(type, serverMajorVersion, null);
     }
 
     /**
@@ -40,7 +41,7 @@ public class SqlDialectFactory {
      * @param familyOverride the CUSTOM connection's declared family; null or GENERIC means
      *                       the generic ANSI-leaning fallback
      */
-    public SqlDialect forType(DatabaseType type, Integer targetMajorVersion,
+    public SqlDialect forType(DatabaseType type, Integer serverMajorVersion,
                               DatabaseType.DialectFamily familyOverride) {
         if (type == null) {
             return fallback;
@@ -51,11 +52,11 @@ public class SqlDialectFactory {
             }
             // Prefer the family's generic dialect: product-specific dialects carry assumptions
             // (openGauss's upsert form, say) that a custom product may not share.
-            Integer oracleVersion = familyOverride == DatabaseType.DialectFamily.ORACLE
-                    ? targetMajorVersion : null;
+            Integer familyVersion = familyOverride == DatabaseType.DialectFamily.ORACLE
+                    ? serverMajorVersion : null;
             for (SqlDialect dialect : dialects) {
                 if (dialect.explicitType() == null && dialect.family() == familyOverride) {
-                    return dialect.withServerMajorVersion(oracleVersion).forProduct(type);
+                    return dialect.withServerMajorVersion(familyVersion).forProduct(type);
                 }
             }
             return fallback;
@@ -65,12 +66,12 @@ public class SqlDialectFactory {
         // explicit PK insert into such a column needs a per-session IDENTITY_INSERT switch,
         // which the sync cannot do — so non-Oracle Oracle-family products always get the
         // universally-valid sequence+trigger emulation (version 11 branch of the dialect).
-        Integer oracleVersion = oracleDialectVersion(type, targetMajorVersion);
+        Integer dialectVersion = dialectVersion(type, serverMajorVersion);
         // Product-specific dialects win over their family's generic dialect (openGauss
         // diverges from plain PostgreSQL only on the upsert form).
         for (SqlDialect dialect : dialects) {
             if (type.equals(dialect.explicitType())) {
-                return dialect.withServerMajorVersion(oracleVersion).forProduct(type);
+                return dialect.withServerMajorVersion(dialectVersion).forProduct(type);
             }
         }
         DatabaseType.DialectFamily family = type.getFamily();
@@ -79,20 +80,24 @@ public class SqlDialectFactory {
         }
         for (SqlDialect dialect : dialects) {
             if (dialect.explicitType() == null && dialect.family() == family) {
-                return dialect.withServerMajorVersion(oracleVersion).forProduct(type);
+                return dialect.withServerMajorVersion(dialectVersion).forProduct(type);
             }
         }
         return fallback;
     }
 
     /**
-     * Version handed to the Oracle dialect: the connected server's effective version for the
-     * real product ({@code null} when it could not be resolved — the dialect then chooses the
-     * portable emulation), and a fixed pre-12 marker for other Oracle-family products.
+     * Version handed to the product's dialect. Oracle: the connected server's effective
+     * version for the real product ({@code null} when it could not be resolved — the dialect
+     * then chooses the portable emulation), and a fixed pre-12 marker for other Oracle-family
+     * products. MySQL/MariaDB: the connected server's major version, because 5.7 lacks window
+     * functions and expression defaults that 8.0 accepts. Everything else: null, meaning the
+     * dialect's own portable behavior.
      */
-    private static Integer oracleDialectVersion(DatabaseType type, Integer targetMajorVersion) {
-        if (type == DatabaseType.ORACLE) {
-            return targetMajorVersion;
+    private static Integer dialectVersion(DatabaseType type, Integer serverMajorVersion) {
+        if (type == DatabaseType.ORACLE || type == DatabaseType.MYSQL
+                || type == DatabaseType.MARIADB) {
+            return serverMajorVersion;
         }
         return type.getFamily() == DatabaseType.DialectFamily.ORACLE ? 11 : null;
     }

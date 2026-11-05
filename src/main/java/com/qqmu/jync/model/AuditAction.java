@@ -29,6 +29,12 @@ public enum AuditAction {
     CHANGELOG_CLEAR,
     /** A diagnostics bundle was exported, including logs and configuration shape. */
     DIAGNOSTICS_EXPORT,
+    /** A Redis cache target was created or updated. */
+    REDIS_TARGET_SAVE,
+    /** A Redis cache target was deleted. */
+    REDIS_TARGET_DELETE,
+    /** A Redis project's cache was rebuilt by hand: prefix swept, stream re-anchored, baseline rerun. */
+    REDIS_REBUILD,
     /** A dedicated-migration connection was created or updated. */
     MIGRATION_CONNECTION_SAVE,
     /** A dedicated-migration connection was deleted. */

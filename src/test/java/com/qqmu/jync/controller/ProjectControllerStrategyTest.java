@@ -40,6 +40,7 @@ import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.cdc.CdcRuntimeStats;
 
@@ -64,6 +65,7 @@ class ProjectControllerStrategyTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     /** Stubs the detail route for a project whose source has the given type (null = no source). */
     private Project stubDetail(DatabaseType sourceType) {

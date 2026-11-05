@@ -60,16 +60,54 @@
                                         th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
                             </select>
                         </div>
+                        <!--/* 目标类型：数据库走原来的 JDBC 目标选择；Redis 是缓存目标，
+                               有独立的连接实体，与 DatabaseConfig 的角色/方言无关。 */-->
                         <div class="field">
-                            <label for="targetDbId">
+                            <label>
                                 <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
-                                <span th:text="#{project.targetDb}">Target</span><span class="req">*</span>
+                                <span th:text="#{project.targetKind}">Target type</span><span class="req">*</span>
                             </label>
-                            <select class="select" id="targetDbId" th:field="*{targetDbId}" required>
-                                <option value="" th:text="#{project.selectDatabase}">-- select --</option>
-                                <option th:each="db : ${targetDatabases}" th:value="${db.id}"
-                                        th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
-                            </select>
+                            <div class="radio-row">
+                                <label class="radio-inline">
+                                    <input type="radio" name="targetKind" value="JDBC"
+                                           th:checked="${project.targetKindOrDefault.name() == 'JDBC'}">
+                                    <span th:text="#{project.targetKind.jdbc}">Database</span>
+                                </label>
+                                <label class="radio-inline">
+                                    <input type="radio" name="targetKind" value="REDIS"
+                                           th:checked="${project.targetKindOrDefault.name() == 'REDIS'}">
+                                    <span th:text="#{project.targetKind.redis}">Redis cache</span>
+                                </label>
+                            </div>
+                            <div class="help" th:text="#{project.targetKind.help}">A Redis target mirrors rows into a cache and runs only with log-based change capture.</div>
+                        </div>
+                    </div>
+                    <div class="field" id="jdbc-target-field"
+                         th:classappend="${project.targetKindOrDefault.name() == 'JDBC'} ? '' : 'is-hidden'">
+                        <label for="targetDbId">
+                            <span th:text="#{project.targetDb}">Target database</span><span class="req">*</span>
+                        </label>
+                        <select class="select" id="targetDbId" th:field="*{targetDbId}"
+                                th:attr="required=${project.targetKindOrDefault.name() == 'JDBC'} ? 'required' : null">
+                            <option value="" th:text="#{project.selectDatabase}">-- select --</option>
+                            <option th:each="db : ${targetDatabases}" th:value="${db.id}"
+                                    th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
+                        </select>
+                    </div>
+                    <div class="field" id="redis-target-field"
+                         th:classappend="${project.targetKindOrDefault.name() == 'REDIS'} ? '' : 'is-hidden'">
+                        <label for="targetRedisId">
+                            <span th:text="#{project.redisTarget}">Redis target</span><span class="req">*</span>
+                        </label>
+                        <select class="select" id="targetRedisId" th:field="*{targetRedisId}"
+                                th:attr="required=${project.targetKindOrDefault.name() == 'REDIS'} ? 'required' : null">
+                            <option value="" th:text="#{project.redisTarget.select}">-- select --</option>
+                            <option th:each="rt : ${redisTargets}" th:value="${rt.id}"
+                                    th:text="|${rt.name} · ${rt.host}:${rt.port}|">redis</option>
+                        </select>
+                        <div class="help" th:if="${#lists.isEmpty(redisTargets)}">
+                            <span th:text="#{project.redisTarget.empty}">No Redis targets yet.</span>
+                            <a th:href="@{/redis/targets/new}" th:text="#{redis.targets.new}">New Redis target</a>
                         </div>
                     </div>
                     <div class="help" id="source-only-hint"
@@ -93,6 +131,33 @@
 </div>
 </th:block>
 
-<th:block th:fragment="scripts" th:remove="tag"></th:block>
+<th:block th:fragment="scripts" th:remove="tag">
+<script>
+    // 目标类型切换：两种目标各有自己的下拉，且只有选中的那个是必填。
+    // 服务端已经按已保存的类型渲染好初始状态，这里只负责切换后的即时反馈。
+    (function () {
+        var jdbcField = document.getElementById('jdbc-target-field');
+        var redisField = document.getElementById('redis-target-field');
+        var jdbcSelect = document.getElementById('targetDbId');
+        var redisSelect = document.getElementById('targetRedisId');
+        if (!jdbcField || !redisField || !jdbcSelect || !redisSelect) {
+            return;
+        }
+        function apply(kind) {
+            jdbcField.classList.toggle('is-hidden', kind !== 'JDBC');
+            redisField.classList.toggle('is-hidden', kind !== 'REDIS');
+            jdbcSelect.required = kind === 'JDBC';
+            redisSelect.required = kind === 'REDIS';
+        }
+        document.querySelectorAll('input[name="targetKind"]').forEach(function (radio) {
+            radio.addEventListener('change', function () {
+                if (radio.checked) {
+                    apply(radio.value);
+                }
+            });
+        });
+    })();
+</script>
+</th:block>
 </body>
 </html>

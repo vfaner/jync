@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* Redis 缓存投影卡片：只对目标类型为 REDIS 的项目渲染（装配处已用 th:if 门控）。
+       表单字段名与 SyncConfigForm 的扁平字段一一对应，服务端按目标类型决定是否落库；
+       取值来自已保存的 SyncConfig.redisProjection，没有时留空由服务端填默认值。 */-->
+<div class="card" style="margin-top:0" th:fragment="card"
+     th:with="projection=${config.redisProjection}">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#database"/></svg> <span th:text="#{redis.projection.title}">Cache projection</span></h2>
+    </div>
+    <div class="card-body">
+        <p class="small muted" style="margin:0 0 10px"
+           th:text="#{redis.projection.hint}">Each selected table is mirrored into the cache as one key per row.</p>
+
+        <div class="field" th:if="${redisTarget != null}">
+            <label th:text="#{redis.projection.target}">Redis target</label>
+            <div class="mono" th:text="|${redisTarget.name} · ${redisTarget.host}:${redisTarget.port}|">cache-1 · redis.local:6379</div>
+        </div>
+
+        <div class="field">
+            <label for="keyPrefix">
+                <span th:text="#{redis.projection.keyPrefix}">Key prefix</span><span class="req">*</span>
+            </label>
+            <input type="text" class="input mono" id="keyPrefix" name="keyPrefix" maxlength="128"
+                   th:value="${projection != null ? projection.keyPrefix : ''}">
+            <div class="help" th:text="#{redis.projection.keyPrefixHelp}">help</div>
+        </div>
+
+        <div class="field">
+            <label for="valueFormat" th:text="#{redis.projection.valueFormat}">Value format</label>
+            <select class="select" id="valueFormat" name="valueFormat">
+                <option value="JSON"
+                        th:selected="${projection == null or projection.valueFormat.name() == 'JSON'}"
+                        th:text="#{redis.projection.valueFormat.json}">One JSON document per row</option>
+                <option value="HASH"
+                        th:selected="${projection != null and projection.valueFormat.name() == 'HASH'}"
+                        th:text="#{redis.projection.valueFormat.hash}">One hash per row</option>
+            </select>
+            <div class="help" th:text="#{redis.projection.valueFormatHelp}">help</div>
+        </div>
+
+        <div class="field">
+            <label for="ttlSeconds" th:text="#{redis.projection.ttl}">TTL (seconds)</label>
+            <input type="number" class="input" id="ttlSeconds" name="ttlSeconds" min="0"
+                   th:value="${projection != null ? projection.ttlSeconds : 0}">
+            <div class="help" th:text="#{redis.projection.ttlHelp}">help</div>
+        </div>
+
+        <div class="field">
+            <label for="excludedColumns" th:text="#{redis.projection.excludedColumns}">Excluded columns</label>
+            <input type="text" class="input mono" id="excludedColumns" name="excludedColumns"
+                   th:value="${projection != null ? #strings.listJoin(#lists.toList(projection.excludedColumns), ', ') : ''}">
+            <div class="help" th:text="#{redis.projection.excludedColumnsHelp}">help</div>
+        </div>
+
+        <div class="grid-2">
+            <div class="field">
+                <label for="maxValueBytes" th:text="#{redis.projection.maxValueBytes}">Max value size (bytes)</label>
+                <input type="number" class="input" id="maxValueBytes" name="maxValueBytes"
+                       min="4096" max="16777216"
+                       th:value="${projection != null ? projection.maxValueBytes : 1048576}">
+            </div>
+            <div class="field">
+                <label for="maxCommandsPerTransaction" th:text="#{redis.projection.maxCommands}">Max commands per transaction</label>
+                <input type="number" class="input" id="maxCommandsPerTransaction"
+                       name="maxCommandsPerTransaction" min="1"
+                       th:value="${projection != null ? projection.maxCommandsPerTransaction : 10000}">
+            </div>
+        </div>
+        <div class="help" th:text="#{redis.projection.limitsHelp}">help</div>
+    </div>
+</div>
+</body>
+</html>

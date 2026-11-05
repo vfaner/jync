@@ -3,6 +3,7 @@ package com.qqmu.jync.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -27,6 +28,7 @@ import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
+import com.qqmu.jync.service.projection.redis.RedisProjectionPolicy;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
@@ -78,7 +80,8 @@ class ProjectServiceFullCompareOversizeTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                taskMetricSampleRepository, alertStateRepository, properties);
+                taskMetricSampleRepository, alertStateRepository, properties,
+                mock(RedisProjectionPolicy.class));
     }
 
     private void snapshots(TableMeta... tables) {

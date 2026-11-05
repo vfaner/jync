@@ -43,6 +43,7 @@ class JsMessageMapCoverageTest {
     private static final List<Path> JSON_CONTROLLERS = List.of(
             Path.of("src/main/java/com/qqmu/jync/controller/api/ProjectApiController.java"),
             Path.of("src/main/java/com/qqmu/jync/controller/CdcApiController.java"),
+            Path.of("src/main/java/com/qqmu/jync/controller/api/RedisRebuildApiController.java"),
             Path.of("src/main/java/com/qqmu/jync/controller/api/UpgradeApiController.java"));
 
     /**
@@ -64,6 +65,16 @@ class JsMessageMapCoverageTest {
             "error.project.no.objects",
             "error.project.no.options",
             "cdc.rebaseline.not.holder",
+            "error.project.redis.rebuild.mustStop",
+            "error.project.redis.rebuild.notRedis",
+            "error.project.redis.rebuild.sweepRequired",
+            // start: a stale page or a direct API call still reaches these. The settings page
+            // localizes its own refusals server-side, but the start toast does not.
+            "error.project.redis.target.required",
+            "error.project.redis.cdcOnly",
+            "error.project.redis.projection.rebuildRequired",
+            "error.project.redis.prefixConflict",
+            "error.redis.target.not.found",
             "error.unexpected");
 
     @Test
@@ -119,6 +130,35 @@ class JsMessageMapCoverageTest {
      * panel as the raw key. That is how YashanDB's YStream checks shipped: every line of a
      * 崖山 source test read "cdc.check.YSTREAM_SOURCE — …" instead of its sentence.
      */
+    /**
+     * The precheck modal resolves each row's label with {@code t(check.messageKey)}. Those keys
+     * are literals in a service, not in a controller body, so the controller scan above cannot
+     * see them — the whole Redis precheck panel shipped as raw keys for that reason. Both
+     * engines are scanned together because the modal renders their checks through one code path.
+     */
+    @Test
+    @DisplayName("every precheck check's message key is in the browser map")
+    void everyPrecheckMessageKeyIsInTheMap() throws Exception {
+        List<Path> precheckSources = List.of(
+                Path.of("src/main/java/com/qqmu/jync/service/sync/SyncPrecheckService.java"),
+                Path.of("src/main/java/com/qqmu/jync/service/projection/redis/"
+                        + "RedisPrecheckService.java"));
+
+        Set<String> keys = new TreeSet<>();
+        for (Path source : precheckSources) {
+            String text = Files.readString(source, StandardCharsets.UTF_8);
+            Matcher m = Pattern.compile("\"(precheck\\.[A-Za-z0-9_.]+)\"").matcher(text);
+            while (m.find()) {
+                keys.add(m.group(1));
+            }
+        }
+
+        assertThat(keys).as("sanity: the precheck services do return literal keys").isNotEmpty();
+        assertThat(missing(keys, mapKeys()))
+                .as("app.js renders these with t(check.messageKey); a missing one shows the key")
+                .isEmpty();
+    }
+
     @Test
     @DisplayName("every CDC probe check has a label in the browser map")
     void everyCdcProbeCheckLabelIsInTheMap() throws Exception {

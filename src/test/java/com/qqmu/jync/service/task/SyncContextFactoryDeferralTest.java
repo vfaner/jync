@@ -20,6 +20,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.connection.PoolContentionException;
+import com.qqmu.jync.service.connection.ServerVersionResolver;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.metadata.MetadataReader;
@@ -61,8 +62,8 @@ class SyncContextFactoryDeferralTest {
         when(dialectFactory.forType(any(), any(), any())).thenReturn(mock(SqlDialect.class));
 
         factory = new SyncContextFactory(repository, dataSourceManager, readerFactory,
-                dialectFactory, null, new SyncProperties(), null,
-                new PoolActivity(new SyncProperties()));
+                dialectFactory, null, mock(ServerVersionResolver.class), new SyncProperties(),
+                null, new PoolActivity(new SyncProperties()));
     }
 
     @Test

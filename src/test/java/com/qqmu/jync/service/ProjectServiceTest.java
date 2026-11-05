@@ -37,11 +37,13 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
+import com.qqmu.jync.service.projection.redis.RedisProjectionPolicy;
 import com.qqmu.jync.service.cdc.LogCapture;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
@@ -99,7 +101,8 @@ class ProjectServiceTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                taskMetricSampleRepository, alertStateRepository, properties);
+                taskMetricSampleRepository, alertStateRepository, properties,
+                mock(RedisProjectionPolicy.class));
     }
 
     private Project project(Long id) {
@@ -553,7 +556,7 @@ class ProjectServiceTest {
                 new MetadataReaderFactory(java.util.List.of(familyReader)), snapshotService,
                 contextFactory, scheduler, taskRunner, taskStore, syncEngine, lockService,
                 auditService, cdcManager, stateWriter, positionStore, taskMetricSampleRepository,
-                alertStateRepository, properties);
+                alertStateRepository, properties, mock(RedisProjectionPolicy.class));
 
         assertThat(service.listSourceObjects(1L).getTables()).containsExactly("pg_orders");
         assertThat(service.listTableColumns(1L, "pg_orders")).containsExactly("total");
@@ -1304,6 +1307,94 @@ class ProjectServiceTest {
         // Unknown-to-this-version fields survive the reset.
         assertThat(node.path("futureField").path("k").asInt()).isEqualTo(1);
         assertThat(node.path("tables").get(0).asText()).isEqualTo("A");
+    }
+
+    @Test
+    void saveAsCloneGivesARedisProjectItsOwnKeyNamespace() throws Exception {
+        // A clone copies the settings verbatim, projection included. The key prefix is a
+        // namespace: two projects projecting into one Redis target must not share one, or each
+        // project's writes silently overwrite the other's keys. The copy gets the default prefix
+        // for its own id; the rest of the copied projection survives untouched.
+        Project source = project(1L);
+        source.setSyncConfig("{\"tables\":[\"A\"],\"redisProjection\":"
+                + "{\"keyPrefix\":\"shared:\",\"valueFormat\":\"HASH\"}}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(source));
+        when(projectRepository.save(any())).thenAnswer(inv -> {
+            Project p = inv.getArgument(0);
+            if (p.getId() == null) {
+                p.setId(42L);
+            }
+            return p;
+        });
+        Project clone = project(null);
+        clone.setName("proj (copy)");
+        clone.setSourceDbId(1L);
+        clone.setTargetKind(SyncTargetKind.REDIS);
+        clone.setTargetRedisId(7L);
+
+        Project saved = service.saveAsClone(clone, 1L);
+
+        com.fasterxml.jackson.databind.JsonNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
+        assertThat(node.path("redisProjection").path("keyPrefix").asText())
+                .isEqualTo("jync:42:");
+        assertThat(node.path("redisProjection").path("valueFormat").asText())
+                .isEqualTo("HASH");
+        assertThat(node.path("tables").get(0).asText()).isEqualTo("A");
+    }
+
+    @Test
+    void saveAsCloneGivesAJDBCCloneOfARedisProjectItsOwnKeyNamespace() throws Exception {
+        // The clone form lets the user pick any target, so a Redis project can be cloned into
+        // a JDBC one. The copied config then still carries the source's projection node. If
+        // the clone is later switched back to Redis, start reuses that stale prefix and the
+        // two projects silently overwrite each other's keys. The rekey follows the copied
+        // projection, not the clone's current target kind.
+        Project source = project(1L);
+        source.setSyncConfig("{\"tables\":[\"A\"],\"redisProjection\":"
+                + "{\"keyPrefix\":\"shared:\",\"valueFormat\":\"HASH\"}}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(source));
+        when(projectRepository.save(any())).thenAnswer(inv -> {
+            Project p = inv.getArgument(0);
+            if (p.getId() == null) {
+                p.setId(42L);
+            }
+            return p;
+        });
+        Project clone = project(null);
+        clone.setName("proj (copy)");
+        clone.setSourceDbId(1L);
+        clone.setTargetKind(SyncTargetKind.JDBC);
+        clone.setTargetDbId(2L);
+
+        Project saved = service.saveAsClone(clone, 1L);
+
+        com.fasterxml.jackson.databind.JsonNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
+        assertThat(node.path("redisProjection").path("keyPrefix").asText())
+                .isEqualTo("jync:42:");
+        assertThat(node.path("redisProjection").path("valueFormat").asText())
+                .isEqualTo("HASH");
+        assertThat(node.path("tables").get(0).asText()).isEqualTo("A");
+    }
+
+    @Test
+    void aJdbcCloneOfADatabaseProjectDoesNotGainAProjectionNode() {
+        // Nothing was copied to re-key: a JDBC project's settings must stay free of the
+        // Redis-only node, or its config would claim a projection it never had.
+        Project source = project(1L);
+        source.setSyncConfig("{\"tables\":[\"A\"]}");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(source));
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        Project clone = project(null);
+        clone.setName("proj (copy)");
+        clone.setSourceDbId(1L);
+        clone.setTargetKind(SyncTargetKind.JDBC);
+        clone.setTargetDbId(2L);
+
+        Project saved = service.saveAsClone(clone, 1L);
+
+        assertThat(saved.getSyncConfig()).isEqualTo("{\"tables\":[\"A\"]}");
     }
 
     // --- object-selection guards -------------------------------------------------------------

@@ -25,6 +25,8 @@ import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.RedisTarget;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
@@ -32,6 +34,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * The project form's source selector must only offer SOURCE connections and its target selector
@@ -50,6 +53,7 @@ class ProjectFormViewTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     private static org.springframework.test.web.servlet.request.RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();
@@ -206,5 +210,61 @@ class ProjectFormViewTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(page).doesNotContain("endpoint-lock-hint");
+    }
+
+    @Test
+    void aNewProjectOffersRedisAsATargetKindButDefaultsToADatabase() throws Exception {
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(config(1L, "src", ConnectionRole.SOURCE)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET)).thenReturn(List.of());
+        when(redisTargetService.findAll()).thenReturn(List.of(redisTarget(5L, "cache-1")));
+
+        String page = mvc.perform(get("/projects/new").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("name=\"targetKind\"");
+        assertThat(page).contains("value=\"JDBC\"");
+        assertThat(page).contains("value=\"REDIS\"");
+        // Both target fields are rendered; the script swaps which one is active/required.
+        assertThat(selectBlock(page, "targetDbId")).contains("required");
+        assertThat(selectBlock(page, "targetRedisId")).contains("cache-1");
+        assertThat(selectBlock(page, "targetRedisId")).doesNotContain("required");
+        assertThat(page).doesNotContain("??project.", "??redis.");
+    }
+
+    @Test
+    void editingARedisProjectPreselectsItsTarget() throws Exception {
+        Project project = new Project();
+        project.setId(6L);
+        project.setName("cache-proj");
+        project.setSourceDbId(1L);
+        project.setTargetKind(SyncTargetKind.REDIS);
+        project.setTargetRedisId(5L);
+        when(projectService.findById(6L)).thenReturn(Optional.of(project));
+        when(projectService.isRunning(project)).thenReturn(false);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(config(1L, "src", ConnectionRole.SOURCE)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET)).thenReturn(List.of());
+        when(redisTargetService.findAll()).thenReturn(List.of(redisTarget(5L, "cache-1")));
+
+        String page = mvc.perform(get("/projects/6/edit").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).containsPattern("value=\"REDIS\"[^>]*checked");
+        String redisSelect = selectBlock(page, "targetRedisId");
+        assertThat(redisSelect).containsPattern("value=\"5\"[^>]*selected");
+        assertThat(redisSelect).contains("required");
+        assertThat(selectBlock(page, "targetDbId")).doesNotContain("required");
+    }
+
+    private static RedisTarget redisTarget(long id, String name) {
+        RedisTarget target = new RedisTarget();
+        target.setId(id);
+        target.setName(name);
+        target.setHost("redis.local");
+        target.setPort(6379);
+        return target;
     }
 }

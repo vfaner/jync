@@ -26,7 +26,6 @@ import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
-import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -80,7 +79,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     private final SyncProperties properties;
     private final LogMinerSessionFactory sessionFactory;
 
-    private final CdcEventApplier applier;
+    private final CdcTargetTransactionFactory targetTransactions;
     private final SqlRedoParser parser = new SqlRedoParser();
     private final BindingSupplier supplier = new BindingSupplier();
 
@@ -134,6 +133,18 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                                SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
                                CdcRuntimeStats stats, SyncProperties properties,
                                LogMinerSessionFactory sessionFactory) {
+        this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
+                dataSourceManager, stats, properties, sessionFactory,
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+    }
+
+    public LogMinerCdcConsumer(Project project, SyncLockService.LockHandle lock,
+                               SyncContext ctx, CdcPositionStore positionStore,
+                               CdcBaselineService baselineService, SyncTaskStore taskStore,
+                               SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
+                               CdcRuntimeStats stats, SyncProperties properties,
+                               LogMinerSessionFactory sessionFactory,
+                               CdcTargetTransactionFactory targetTransactions) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -145,7 +156,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         this.stats = stats;
         this.properties = properties;
         this.sessionFactory = sessionFactory;
-        this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
+        this.targetTransactions = targetTransactions;
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
                 taskStore, properties.getCdc().getChangeWindowMs());
     }
@@ -631,31 +642,16 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
      */
     private void flushTransaction(long projectId, long csn, CdcTransactionBuffer tx)
             throws Exception {
-        Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
-        boolean originalAutoCommit = true;
-        try {
-            originalAutoCommit = target.getAutoCommit();
-            target.setAutoCommit(false);
+        try (CdcTargetTransaction target = targetTransactions.open(project, ctx)) {
             for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e
                     : tx.upserts().entrySet()) {
-                applier.applyUpserts(target, e.getKey(), e.getValue());
+                target.applyUpserts(e.getKey(), e.getValue());
             }
             for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e
                     : tx.deletes().entrySet()) {
-                applier.applyDeletes(target, e.getKey(), e.getValue());
+                target.applyDeletes(e.getKey(), e.getValue());
             }
             target.commit();
-        } catch (Exception e) {
-            JdbcUtil.rollbackAndClose(target);
-            throw e;
-        } finally {
-            try {
-                if (originalAutoCommit) target.setAutoCommit(true);
-            } catch (java.sql.SQLException ignored) { }
-            // 归还池连接：异常路径已由 rollbackAndClose 关闭，这里是成功路径唯一的关闭点。
-            try {
-                target.close();
-            } catch (java.sql.SQLException ignored) { }
         }
         ctx.requireLease();
         positionStore.advanceScn(projectId, csn);

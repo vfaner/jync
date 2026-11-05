@@ -41,6 +41,7 @@ import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.CaptureStrategy;
+import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ChunkCheckpoint;
@@ -49,6 +50,7 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.repository.AlertStateRepository;
 import com.qqmu.jync.repository.ChangeLogRepository;
@@ -67,6 +69,8 @@ import com.qqmu.jync.service.metadata.CursorIndexProbe;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
+import com.qqmu.jync.service.projection.redis.RedisProjectionPolicy;
+import com.qqmu.jync.service.projection.redis.RedisProjectionSignature;
 import com.qqmu.jync.service.sync.SyncEngine;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncContextFactory;
@@ -117,6 +121,7 @@ public class ProjectService {
     private final TaskMetricSampleRepository taskMetricSampleRepository;
     private final AlertStateRepository alertStateRepository;
     private final SyncProperties properties;
+    private final RedisProjectionPolicy redisPolicy;
 
     /**
      * Lenient reader for the persisted sync_config JSON, used only to recover the CURRENT
@@ -154,7 +159,8 @@ public class ProjectService {
                           CdcPositionStore positionStore,
                           TaskMetricSampleRepository taskMetricSampleRepository,
                           AlertStateRepository alertStateRepository,
-                          SyncProperties properties) {
+                          SyncProperties properties,
+                          RedisProjectionPolicy redisPolicy) {
         this.projectRepository = projectRepository;
         this.databaseConfigRepository = databaseConfigRepository;
         this.progressRepository = progressRepository;
@@ -176,6 +182,28 @@ public class ProjectService {
         this.taskMetricSampleRepository = taskMetricSampleRepository;
         this.alertStateRepository = alertStateRepository;
         this.properties = properties;
+        this.redisPolicy = redisPolicy;
+    }
+
+    /**
+     * Routes a saved config through the target-kind rules. Database targets simply drop a
+     * stale projection contract; Redis targets are validated and forced by their own policy.
+     */
+    private void applyTargetPolicy(Project project, SyncConfig config, CaptureStrategy effective,
+                                   DatabaseConfig resolvedSource) {
+        if (project.getTargetKindOrDefault() != SyncTargetKind.REDIS) {
+            redisPolicy.clear(config);
+            return;
+        }
+        DatabaseConfig source = resolvedSource;
+        if (source == null && project.getSourceDbId() != null) {
+            // A save that carries no strategy name (column rules, AI assist) still has to
+            // answer "can this source produce CDC?" — the strategy gate above only ran
+            // when a name was submitted.
+            source = databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
+        }
+        redisPolicy.requireTarget(project);
+        redisPolicy.apply(project, config, effective, source);
     }
 
     public List<Project> findAll() {
@@ -292,9 +320,31 @@ public class ProjectService {
             // Syncing a database onto itself would loop changes back onto the source.
             throw new IllegalArgumentException("error.project.same.database");
         }
+        if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+            if (project.getTargetRedisId() == null) {
+                throw new IllegalArgumentException("error.project.redis.target.required");
+            }
+            // The id must name a saved target, and the source must be able to produce
+            // change events: a cache projection is CDC-only, so a source with no log
+            // capture (H2, ClickHouse, ...) can never feed one.
+            redisPolicy.requireTarget(project);
+            redisPolicy.requireCdcCapableSource(project.getSourceDbId() == null ? null
+                    : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null));
+            // A Redis target replaces the JDBC one. The target dropdown is hidden but still
+            // submitted, so a JDBC→Redis switch carries the old id; left in the row it lets
+            // target-only actions (preview, AI assist) read a database this project no longer
+            // writes to. The other direction clears its stale id the same way.
+            project.setTargetDbId(null);
+        } else {
+            // A JDBC project has no Redis target. A stale id from the form (or a switch back
+            // to JDBC) must not survive into the row: the target dropdown on the next edit
+            // would otherwise disagree with the actual target kind.
+            project.setTargetRedisId(null);
+        }
 
         boolean isNew = project.getId() == null;
         boolean endpointsChanged = false;
+        boolean targetKindChanged = false;
         // Read off the stored row before the merge below overwrites it: these describe the
         // OLD source, and the old source is where a PG logical slot may be left behind.
         boolean sourceChanged = false;
@@ -319,10 +369,13 @@ public class ProjectService {
                 return existing;
             }
             sourceChanged = !Objects.equals(project.getSourceDbId(), existing.getSourceDbId());
+            targetKindChanged = existing.getTargetKindOrDefault() != project.getTargetKindOrDefault();
             previousSourceDbId = existing.getSourceDbId();
             previousStrategy = CaptureStrategyParser.parse(existing.getSyncConfig());
             endpointsChanged = sourceChanged
-                    || !Objects.equals(project.getTargetDbId(), existing.getTargetDbId());
+                    || !Objects.equals(project.getTargetDbId(), existing.getTargetDbId())
+                    || targetKindChanged
+                    || !Objects.equals(project.getTargetRedisId(), existing.getTargetRedisId());
             if (endpointsChanged && isRunning(existing)) {
                 // The running cycle (or live CDC consumer) holds the old endpoints; switching
                 // them mid-flight would read one database and write another within a single
@@ -347,7 +400,19 @@ public class ProjectService {
             // endpoint change instead of requested explicitly.
             syncEngine.resetProject(saved.getId());
             checkpointRepository.deleteByProjectId(saved.getId());
-            positionStore.delete(saved.getId());
+            if (targetKindChanged && !sourceChanged) {
+                // A kind switch replaces the destination, so the anchor and the layouts are
+                // stale — but the row also carries the contract of the keys this project
+                // wrote into Redis, and the switch did not touch those. Deleting the row is
+                // how a Redis -> JDBC -> Redis round trip forgot their type, letting a
+                // value-format change reach the baseline and answer WRONGTYPE. Reset the
+                // anchor, keep the contract; the next baseline replaces it when it completes.
+                positionStore.resetAnchorKeepingProjectionSignature(saved.getId());
+            } else {
+                // A source change invalidates the contract as well: the cached keys were
+                // built from a source this project no longer reads.
+                positionStore.delete(saved.getId());
+            }
             log.info("Project '{}' endpoints changed; sync state cleared for a full reload",
                     saved.getName());
             // A PG logical slot lives ON the source, not in our metadata database: clearing
@@ -438,7 +503,60 @@ public class ProjectService {
         clone.setSyncConfig(cloneSettings(source));
         log.info("Project '{}' cloned sync settings from project '{}'",
                 clone.getName(), source.getName());
-        return save(clone);
+        return claimRedisKeyNamespace(save(clone));
+    }
+
+    /**
+     * A clone must not inherit the source's Redis key prefix.
+     *
+     * <p>The prefix is a namespace: two projects projecting into one Redis target must not share
+     * one, or each project's writes silently overwrite the other's keys — the very collision
+     * {@code RedisProjectionPolicy} refuses on the settings save. The copy is assigned the
+     * default {@code jync:<id>:} for its own id, and everything else in the copied JSON stays
+     * untouched, fields this version does not know included.
+     *
+     * <p>The decision follows the <em>copied settings</em>, not the clone's current target kind:
+     * the clone form lets the user pick any target, so a Redis project cloned into a JDBC one
+     * still carries the source's projection node. Leaving that prefix in place means switching
+     * the clone back to Redis later starts it in the source's namespace — bypassing the save
+     * path that would have refused the collision. A database project cloned into a Redis target
+     * has no projection to re-key, so it gets one with just the default prefix and stays
+     * startable before its settings page is visited.
+     *
+     * <p>The id only exists after the insert, which is why this runs as a second write inside
+     * the clone's transaction.
+     */
+    private Project claimRedisKeyNamespace(Project saved) {
+        String json = saved.getSyncConfig();
+        if (json == null || json.isBlank()) {
+            return saved;
+        }
+        try {
+            JsonNode node = STRATEGY_JSON.readTree(json);
+            if (!(node instanceof ObjectNode object)) {
+                return saved;
+            }
+            ObjectNode projection = object.path("redisProjection").isObject()
+                    ? (ObjectNode) object.get("redisProjection")
+                    : null;
+            if (projection == null) {
+                // Nothing was copied to re-key. Only a Redis-targeted clone needs a node; a
+                // database clone must not gain a projection its source never had.
+                if (saved.getTargetKindOrDefault() != SyncTargetKind.REDIS) {
+                    return saved;
+                }
+                projection = object.putObject("redisProjection");
+            }
+            projection.put("keyPrefix", "jync:" + saved.getId() + ":");
+            saved.setSyncConfig(STRATEGY_JSON.writeValueAsString(object));
+            return projectRepository.save(saved);
+        } catch (JsonProcessingException e) {
+            // Same rule as cloneSettings: an unreadable config is not a reason to refuse the
+            // clone; the user can repair it on the settings page.
+            log.warn("Cloned settings of project '{}' are not valid JSON; the Redis key prefix"
+                    + " was not reset", saved.getName());
+            return saved;
+        }
     }
 
     /**
@@ -535,6 +653,7 @@ public class ProjectService {
         // cycle makes it copy tables the old schedule never promised, and per-table cursors
         // are keyed by the OLD name. A strategy switch is exempt — that flow stops the
         // engine and clears its cursors in both directions by design.
+        applyTargetPolicy(project, config, requested != null ? requested : oldStrategy, source);
         boolean switching = requested != null && requested != oldStrategy;
         SyncConfig previousConfig = parseConfigLenient(project.getSyncConfig());
         boolean tablesChanged = tableSelectionChanged(previousConfig, config);
@@ -542,6 +661,10 @@ public class ProjectService {
                 && isRunning(project)) {
             throw new IllegalStateException(stoppedButRunningKey(project,
                     "error.project.mapping.running"));
+        }
+        if (keyspaceChanged(project, previousConfig, config) && isRunning(project)) {
+            throw new IllegalStateException(stoppedButRunningKey(project,
+                    "error.project.redis.projection.running"));
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         Project saved = projectRepository.save(project);
@@ -731,7 +854,12 @@ public class ProjectService {
         return form.getName().equals(stored.getName())
                 && normalizeBlank(form.getDescription()).equals(normalizeBlank(stored.getDescription()))
                 && Objects.equals(form.getSourceDbId(), stored.getSourceDbId())
-                && Objects.equals(form.getTargetDbId(), stored.getTargetDbId());
+                && Objects.equals(form.getTargetDbId(), stored.getTargetDbId())
+                // A legacy row stores null; the edit form posts JDBC. Both mean JDBC, so the
+                // comparison goes through the defaulting accessor or opening and saving an
+                // unchanged project would bump updated_at and write an audit row.
+                && form.getTargetKindOrDefault() == stored.getTargetKindOrDefault()
+                && Objects.equals(form.getTargetRedisId(), stored.getTargetRedisId());
     }
 
     private static String normalizeBlank(String value) {
@@ -798,6 +926,25 @@ public class ProjectService {
         return !oldTables.equals(newTables);
     }
 
+    /**
+     * A Redis project's key prefix or value format differs from what the row last persisted.
+     *
+     * <p>Both decide the type and the namespace of every key. A running consumer built its
+     * serializer and key builder at start, so saving them mid-flight changes nothing it writes;
+     * after the next restart the old keys answer {@code WRONGTYPE} instead. Treat them as
+     * topology: stop, save, rebuild the cache (with the sweep), then start.
+     */
+    private static boolean keyspaceChanged(Project project, SyncConfig previous, SyncConfig next) {
+        if (project.getTargetKindOrDefault() != SyncTargetKind.REDIS) {
+            return false;
+        }
+        String before = RedisProjectionSignature
+                .of(previous == null ? null : previous.getRedisProjection());
+        String after = RedisProjectionSignature
+                .of(next == null ? null : next.getRedisProjection());
+        return !Objects.equals(before, after);
+    }
+
     /** Table selection or name mapping differs from what the row last persisted. */
     private static boolean mappingChanged(SyncConfig previous, SyncConfig next) {
         // Compare invariants: the persisted map is always normalised, so a legacy entry
@@ -837,7 +984,16 @@ public class ProjectService {
     @Transactional
     public void start(Long projectId) {
         Project project = require(projectId);
-        if (project.getSourceDbId() == null || project.getTargetDbId() == null) {
+        // A Redis target replaces the JDBC one, so its projects have no targetDbId at all.
+        // Requiring it here made a fresh cache project unstartable before its consumer ran.
+        if (project.getSourceDbId() == null) {
+            throw new IllegalStateException("error.project.endpoints.required");
+        }
+        if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+            if (project.getTargetRedisId() == null) {
+                throw new IllegalStateException("error.project.redis.target.required");
+            }
+        } else if (project.getTargetDbId() == null) {
             throw new IllegalStateException("error.project.endpoints.required");
         }
         // Nothing to sync is refused up front: starting would only schedule connect-and-read
@@ -845,6 +1001,18 @@ public class ProjectService {
         // button; this is the server-side backstop for a stale page or a direct API call.
         // Bare keys: ApiExceptionHandler returns them as-is and the browser localizes them.
         SyncConfig config = loadConfig(project);
+        // Switching an existing polling project's target to Redis leaves its stored config
+        // untouched, and the detail page no longer offers POLLING for a cache target — so a
+        // start before the next config save would schedule JDBC cycles that cannot even build
+        // a context (there is no target database). The save path already refuses a non-CDC
+        // strategy here; start answers the same way instead of running a job that fails on
+        // every fire while the cache consumer never starts.
+        if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+            if (!config.getCaptureStrategyOrDefault().isLogCdc()) {
+                throw new IllegalStateException("error.project.redis.cdcOnly");
+            }
+            prepareRedisProjection(project, config);
+        }
         // The save path validates the expression, but a config can also arrive by clone, by
         // a direct database edit, or from an older version that stored it unchecked.
         // Scheduling runs after commit: an invalid cron there leaves the project enabled
@@ -880,6 +1048,46 @@ public class ProjectService {
             scheduler.triggerNow(projectId);
         });
         log.info("Started sync for project '{}'", saved.getName());
+    }
+
+    /**
+     * Makes sure a Redis project starts with a projection contract and that the contract still
+     * matches the keys already in the cache.
+     *
+     * <p>The first half covers a project switched to Redis before its settings page was ever
+     * saved: the stored config predates the {@code redisProjection} node, so the consumer used
+     * to die on the internal message "Redis projection settings are missing" — an English
+     * implementation detail shown as the task's error. The documented default is applied and
+     * persisted here (same rules as the settings save) instead of leaving the project
+     * permanently unstartable.
+     *
+     * <p>The second half compares that contract with the one the existing keys were written
+     * with. A JSON &lt;-&gt; HASH switch leaves keys of the other type; the next baseline or
+     * CDC write answers WRONGTYPE and the consumer parks, with no hint about why. The only
+     * remedy is a rebuild that sweeps the old keys first, so start names it.
+     */
+    private void prepareRedisProjection(Project project, SyncConfig config) {
+        if (config.getRedisProjection() == null) {
+            applyTargetPolicy(project, config, config.getCaptureStrategyOrDefault(), null);
+            project.setSyncConfig(contextFactory.serializeConfig(config));
+        } else {
+            // The settings save already refused a conflicting prefix, but a projection can also
+            // arrive by clone, by a switch back to Redis (which never re-saves settings), or by
+            // a direct database edit. Starting in another project's namespace would let the two
+            // silently overwrite each other's keys, so start re-checks the collision.
+            String prefix = RedisProjectionPolicy.normalizePrefix(
+                    config.getRedisProjection().getKeyPrefix(), project.getId());
+            if (redisPolicy.conflictingProject(project, prefix) != null) {
+                throw new IllegalStateException("error.project.redis.prefixConflict");
+            }
+        }
+        String built = positionStore.find(project.getId())
+                .map(CdcPosition::getProjectionSignature)
+                .orElse(null);
+        String current = RedisProjectionSignature.of(config.getRedisProjection());
+        if (built != null && current != null && !built.equals(current)) {
+            throw new IllegalStateException("error.project.redis.projection.rebuildRequired");
+        }
     }
 
     /**

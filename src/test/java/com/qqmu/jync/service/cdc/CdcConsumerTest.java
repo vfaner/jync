@@ -163,31 +163,30 @@ class CdcConsumerTest {
     }
 
     @Test
-    void consumerBuildsItsApplierWithTheConfiguredQueryTimeout() throws SQLException {
+    void targetTransactionsUseTheConfiguredQueryTimeout() throws SQLException {
         // R3:applier 的超时值与 DataSyncService 同源——SyncProperties.queryTimeoutSeconds。
         SyncProperties properties = new SyncProperties();
         properties.setQueryTimeoutSeconds(45);
         Project project = project(8L);
+        Connection target = mock(Connection.class);
+        when(target.getAutoCommit()).thenReturn(true);
+        PreparedStatement ps = mock(PreparedStatement.class);
+        when(target.prepareStatement(anyString())).thenReturn(ps);
         SyncContext ctx = SyncContext.builder()
                 .project(project)
                 .config(new SyncConfig())
                 .targetDialect(new GenericSqlDialect())
                 .batchSize(100)
+                .connectionProvider(config -> target)
                 .build();
-        CdcConsumer consumer = new CdcConsumer(project, mock(SyncLockService.LockHandle.class),
-                ctx, mock(BinlogClientFactory.class), mock(CdcPositionStore.class),
-                mock(CdcBaselineService.class), mock(SyncTaskStore.class),
-                mock(SyncStateWriter.class), mock(DataSourceManager.class),
-                new CdcRuntimeStats(), properties);
 
-        Connection target = mock(Connection.class);
-        PreparedStatement ps = mock(PreparedStatement.class);
-        when(target.prepareStatement(anyString())).thenReturn(ps);
-
-        Map<String, Object> row = new LinkedHashMap<>();
-        row.put("id", 1L);
-        row.put("name", "a");
-        consumer.applierForTest().applyUpserts(target, pkBinding(), List.of(row));
+        try (JdbcCdcTargetTransaction tx = new JdbcCdcTargetTransaction(ctx,
+                new CdcRuntimeStats(), properties.getQueryTimeoutSeconds())) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", 1L);
+            row.put("name", "a");
+            tx.applyUpserts(pkBinding(), List.of(row));
+        }
 
         verify(ps, atLeastOnce()).setQueryTimeout(45);
     }

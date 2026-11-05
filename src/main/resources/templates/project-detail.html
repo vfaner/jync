@@ -52,10 +52,18 @@
                        共用卡片与其它库都不受影响。当前没有这样的库，故留空。 */-->
             </div>
             <div>
-                <th:block th:replace="~{project-detail/options :: card}"/>
-                <th:block th:replace="~{project-detail/schedule :: card}"/>
-                <th:block th:replace="~{project-detail/cdc-schedule-hint :: card}"/>
-                <th:block th:replace="~{project-detail/performance :: card}"/>
+                <!--/* Redis 缓存目标没有 DDL、没有视图/过程、没有轮询调度与整表比对：
+                       这些卡片连同它们提交的字段整块不渲染，而不是渲染后藏起来——
+                       否则一次保存就会把不存在的「结构同步」开关写进配置。 */-->
+                <th:block th:if="${isRedisTarget}">
+                    <th:block th:replace="~{project-detail/redis-projection :: card}"/>
+                </th:block>
+                <th:block th:unless="${isRedisTarget}">
+                    <th:block th:replace="~{project-detail/options :: card}"/>
+                    <th:block th:replace="~{project-detail/schedule :: card}"/>
+                    <th:block th:replace="~{project-detail/cdc-schedule-hint :: card}"/>
+                    <th:block th:replace="~{project-detail/performance :: card}"/>
+                </th:block>
                 <th:block th:replace="~{project-detail/cdc-idle-poll :: card}"/>
             </div>
         </div>

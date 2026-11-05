@@ -85,12 +85,25 @@ public class MySqlDialect extends AbstractSqlDialect {
      */
     private final boolean connectorJSentinel;
 
+    /**
+     * The connected server's major version, or null when it could not be read. MySQL 5.7 and
+     * 8.0 differ on window functions and expression defaults, and both differences fail the
+     * statement outright rather than degrading, so the version decides what is emitted.
+     */
+    private final Integer majorVersion;
+
     public MySqlDialect() {
-        this(true);
+        this(true, null);
     }
 
-    private MySqlDialect(boolean connectorJSentinel) {
+    private MySqlDialect(boolean connectorJSentinel, Integer majorVersion) {
         this.connectorJSentinel = connectorJSentinel;
+        this.majorVersion = majorVersion;
+    }
+
+    @Override
+    public SqlDialect withServerMajorVersion(Integer majorVersion) {
+        return new MySqlDialect(connectorJSentinel, majorVersion);
     }
 
     /**
@@ -115,7 +128,26 @@ public class MySqlDialect extends AbstractSqlDialect {
 
     @Override
     public SqlDialect forProduct(DatabaseType type) {
-        return new MySqlDialect(type == null || type.needsConnectorJStreamingSentinel());
+        return new MySqlDialect(type == null || type.needsConnectorJStreamingSentinel(),
+                majorVersion);
+    }
+
+    /**
+     * MySQL gained window functions in 8.0 and MariaDB in 10.2, so a single threshold works
+     * for the whole family: every server reporting 8 or higher has them. The preset is
+     * deliberately not consulted — it names the driver, and a "MariaDB" connection can point
+     * at MySQL (or the reverse); the server's own number is the honest signal. MariaDB
+     * 10.0/10.1 are the one hole (they report 10 but predate the feature): they are long EOL,
+     * and there the attempt fails and the load falls back exactly as it did before this
+     * check existed. With no known version the answer is true: attempting once is cheaper
+     * than turning off key sampling for a server that would have accepted it.
+     */
+    @Override
+    public boolean supportsWindowFunctions() {
+        if (majorVersion == null || majorVersion <= 0) {
+            return true;
+        }
+        return majorVersion >= 8;
     }
 
     @Override
@@ -269,6 +301,14 @@ public class MySqlDialect extends AbstractSqlDialect {
         if (renderedDefault != null && "DATE".equalsIgnoreCase(targetType.trim())
                 && renderedDefault.trim().toUpperCase(Locale.ROOT)
                         .startsWith("CURRENT_TIMESTAMP")) {
+            if (majorVersion != null && majorVersion > 0 && majorVersion < 8) {
+                // Expression defaults (DATE DEFAULT (CURRENT_DATE)) are 8.0.13+; MySQL 5.7
+                // rejects the clause, and losing a default is recoverable where a rejected
+                // CREATE TABLE is not. MariaDB accepts the parenthesized form from 10.2, and
+                // its version number (10+) never lands in this branch — 10.0/10.1 (EOL) are
+                // treated the same as 10.2, i.e. exactly as they were before this check.
+                return null;
+            }
             return "(CURRENT_DATE)";
         }
         return renderedDefault;

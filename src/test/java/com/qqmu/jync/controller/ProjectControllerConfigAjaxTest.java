@@ -34,6 +34,7 @@ import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
  * The detail page saves its configuration in the background: a full page reload re-runs
@@ -58,6 +59,7 @@ class ProjectControllerConfigAjaxTest {
     @MockBean private CdcOperationsService cdcOperationsService;
     @MockBean private CdcConsumerManager cdcConsumerManager;
     @MockBean private CdcPositionStore cdcPositionStore;
+    @MockBean private RedisTargetService redisTargetService;
 
     /** Stubs a stopped project whose stored config is the instance the controller mutates. */
     private SyncConfig stubStoppedProject() {

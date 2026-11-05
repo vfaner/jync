@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
@@ -36,6 +37,8 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.RedisTarget;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
@@ -45,6 +48,8 @@ import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
 import com.qqmu.jync.service.monitor.ChangeDetector;
 import com.qqmu.jync.service.monitor.CursorStrategyResolver;
+import com.qqmu.jync.service.projection.redis.RedisPrecheckService;
+import com.qqmu.jync.service.projection.redis.RedisTargetService;
 import com.qqmu.jync.service.task.SyncContextFactory;
 
 /**
@@ -65,6 +70,8 @@ class SyncPrecheckServiceTest {
     private CursorStrategyResolver cursorResolver;
     private CdcOperationsService cdcOperations;
     private CdcPositionStore cdcPositions;
+    private RedisTargetService redisTargets;
+    private RedisPrecheckService redisPrecheck;
 
     private Project project;
     private DatabaseConfig sourceConfig;
@@ -85,6 +92,8 @@ class SyncPrecheckServiceTest {
         cursorResolver = new CursorStrategyResolver(properties);
         cdcOperations = mock(CdcOperationsService.class);
         cdcPositions = mock(CdcPositionStore.class);
+        redisTargets = mock(RedisTargetService.class);
+        redisPrecheck = mock(RedisPrecheckService.class);
 
         project = new Project();
         project.setId(PROJECT_ID);
@@ -119,7 +128,8 @@ class SyncPrecheckServiceTest {
 
     private SyncPrecheckService service(ChangeDetector detector) {
         return new SyncPrecheckService(projectRepository, contextFactory, dataSourceManager,
-                syncEngine, detector, cursorResolver, cdcOperations, cdcPositions, properties);
+                syncEngine, detector, cursorResolver, cdcOperations, cdcPositions, properties,
+                redisTargets, redisPrecheck);
     }
 
     private SyncContext context(SyncConfig config) {
@@ -537,6 +547,42 @@ class SyncPrecheckServiceTest {
         PrecheckReport report = cdcProject(config, table, CdcProbeResult.of(List.of()));
 
         assertThat(check(report, "cdc.baseline.pending")).isNotNull();
+    }
+
+    @Test
+    void aRedisProjectUsesTheRedisPrecheckAndNeverBuildsAJdbcContext() {
+        project.setTargetKind(SyncTargetKind.REDIS);
+        project.setTargetRedisId(9L);
+        RedisTarget target = new RedisTarget();
+        target.setId(9L);
+        target.setName("cache-1");
+        when(redisTargets.find(9L)).thenReturn(Optional.of(target));
+        SyncConfig config = config(false);
+        when(contextFactory.parseConfig(project)).thenReturn(config);
+        PrecheckReport.Check ping = new PrecheckReport.Check("redis.ping",
+                PrecheckReport.Severity.OK, "REDIS", "cache-1", "precheck.redis.pingFailed", null);
+        when(redisPrecheck.precheck(project, target, config)).thenReturn(List.of(ping));
+
+        PrecheckReport report = service().precheck(PROJECT_ID);
+
+        assertThat(report.checks()).containsExactly(ping);
+        verify(contextFactory, never()).build(any(), any(), any());
+        verify(contextFactory, never()).build(any(), any(), any(), any());
+        verify(redisPrecheck).precheck(project, target, config);
+    }
+
+    @Test
+    void aRedisProjectWithoutATargetReportsAnErrorInsteadOfThrowing() {
+        project.setTargetKind(SyncTargetKind.REDIS);
+        project.setTargetRedisId(null);
+
+        PrecheckReport report = service().precheck(PROJECT_ID);
+
+        assertThat(report.checks()).hasSize(1);
+        assertThat(report.checks().get(0).code()).isEqualTo("redis.target");
+        assertThat(report.checks().get(0).severity()).isEqualTo(PrecheckReport.Severity.ERROR);
+        assertThat(report.passed()).isFalse();
+        verifyNoInteractions(redisPrecheck);
     }
 
     @Test

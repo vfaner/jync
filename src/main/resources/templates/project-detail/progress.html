@@ -138,8 +138,10 @@
                             <svg class="ico"><use href="#table"/></svg>
                             <span th:text="#{preview.source}">Source</span>
                         </button>
+                        <!--/* 目标预览与内容校验都读 JDBC 目标：Redis 目标没有 targetDbId,
+                                按钮只会换来一个错误,因此不渲染。 */-->
                         <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
-                                th:if="${isAdmin}"
+                                th:if="${isAdmin and !isRedisTarget}"
                                 data-side="target"
                                 th:attr="data-table=${p.objectName},
                                          data-action=@{/api/projects/{id}/preview(id=${project.id})},
@@ -151,7 +153,7 @@
                                数据库的值，因此仅管理员可见。 */-->
                         <button type="button" class="btn btn-ghost btn-xs"
                                 data-role="content-audit"
-                                th:if="${isAdmin}"
+                                th:if="${isAdmin and !isRedisTarget}"
                                 th:attr="data-table=${p.objectName},
                                          data-action=@{/api/projects/{id}/content-audit(id=${project.id})},
                                          title=#{contentAudit.hint}">

@@ -12,6 +12,8 @@
         </div>
     </div>
 
+    <div th:replace="~{connections/tabs :: tabs('jdbc')}"></div>
+
     <!--/* 健康点的接口地址与本地化文案：脚本按这张表取，取不到(查看者)就整列都不存在 */-->
     <div th:if="${isAdmin}" id="db-health" hidden
          th:attr="data-health-url=@{/api/databases/health},

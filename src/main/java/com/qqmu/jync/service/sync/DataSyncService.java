@@ -111,6 +111,13 @@ public class DataSyncService {
     private final Set<String> cursorIndexChecked =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /**
+     * Projects already told that their source cannot sample keys (MySQL 5.7 and its kin), so
+     * the explanation appears once instead of on every table of every full load.
+     */
+    private final Set<Long> windowFunctionNotices =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     public DataSyncService(SyncProperties properties) {
         this(properties, null);
     }
@@ -1646,11 +1653,10 @@ public class DataSyncService {
                     total = emulated
                             ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
                                     typeByColumn, rs, readPlan, ctx, cleanser, pkTrack,
-                                    sink, throughput, batchSize, lobPolicy, spillSession,
-                                    guardEmulated)
+                                    sink, throughput, batchSize, spillSession, guardEmulated)
                             : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
                                     rs, readPlan, ctx, cleanser, pkTrack,
-                                    sink, throughput, batchSize, lobPolicy, spillSession);
+                                    sink, throughput, batchSize, spillSession);
                 } finally {
                     if (spillSession != null) {
                         spillSession.close();
@@ -1911,7 +1917,6 @@ public class DataSyncService {
                                              SyncContext ctx, ColumnCleanser cleanser,
                                              List<String> pkTrack, PkCursor sink,
                                              ThroughputMeter throughput, int batchSize,
-                                             LobReadPolicy lobPolicy,
                                              LobSpillSession spillSession)
             throws SQLException {
         WriteStats stats = new WriteStats();
@@ -2076,7 +2081,6 @@ public class DataSyncService {
                                                SyncContext ctx, ColumnCleanser cleanser,
                                                List<String> pkTrack, PkCursor sink,
                                                ThroughputMeter throughput, int batchSize,
-                                               LobReadPolicy lobPolicy,
                                                LobSpillSession spillSession,
                                                boolean guardUnchanged)
             throws SQLException {
@@ -3062,6 +3066,18 @@ public class DataSyncService {
                                                    CursorStrategy strategy, Object upperBound,
                                                    SyncContext ctx, int parallelism)
             throws SQLException {
+        if (ctx.getSourceDialect() != null
+                && !ctx.getSourceDialect().supportsWindowFunctions()) {
+            // Asking would fail every table, every run: the server rejects the statement's
+            // grammar, not its arguments. One line per project says why the full load is
+            // sequential; the alternative was an INFO per table on every full load.
+            if (windowFunctionNotices.add(ctx.projectId())) {
+                log.info("Source product {} does not support window functions (MySQL 5.7 /"
+                        + " MariaDB before 10.2); its tables load sequentially in chunks and"
+                        + " content sampling is skipped", ctx.getSourceType());
+            }
+            return null;
+        }
         try {
             // One bucket per worker: NTILE returns exactly one boundary row per bucket, and
             // sampledRanges turns m boundaries into m ranges, so parallelism + 1 buckets would

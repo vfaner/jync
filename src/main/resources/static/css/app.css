@@ -331,6 +331,16 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .btn-icon:disabled:hover { border-color: var(--line); color: var(--ink-soft); background: var(--bg); }
 
 /* ─── 页头 ──────────────────────────────────────────────── */
+/* 连接页的两个标签：数据库连接 | Redis 目标。只是一个链接条，两边的表格与表单各自独立。 */
+.conn-tabs { display: flex; flex-wrap: wrap; margin: 0 0 18px; border-bottom: 1px solid var(--line); }
+.conn-tab {
+  display: inline-block; padding: 9px 4px; margin: 0 22px -1px 0;
+  font-size: 13.5px; font-weight: 600; color: var(--ink-mute); text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+.conn-tab:hover { color: var(--ink-soft); }
+.conn-tab[aria-current="page"] { color: var(--brand); border-bottom-color: var(--brand); }
+
 .page-head {
   display: flex; justify-content: space-between; align-items: flex-start;
   gap: 16px; flex-wrap: wrap; margin-bottom: 22px;
@@ -577,6 +587,13 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .field:last-child { margin-bottom: 0; }
 .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--ink); }
 .field .req { color: var(--danger); margin-left: 2px; }
+/* 字段内的横向单选组（项目目标类型）：.field label 是块级字号 13px 的标签，
+   这里要把每个选项还原成小号行内 label，否则两项会各占一行。 */
+.radio-row { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-top: 6px; }
+.field label.radio-inline {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 500; margin-bottom: 0; cursor: pointer;
+}
 /* .help 的基线样式：绝大多数说明写在 .field / .dl dd / .switch 里，那几处各有规则。
    直接挂在卡片正文里的说明（批量创建、外部认证、系统信息等）没有这些祖先，
    就会按 15px 正文黑字渲染 —— 同一张卡片里一行 12px 灰、下一行 15px 黑。

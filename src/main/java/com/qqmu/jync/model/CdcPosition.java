@@ -96,6 +96,20 @@ public class CdcPosition {
     @Column(name = "schema_signatures")
     private String schemaSignatures;
 
+    /**
+     * The Redis key-space contract ({@code valueFormat|keyPrefix}) the cache was last built or
+     * rebuilt with; null for JDBC targets and for rows written before this column existed.
+     *
+     * <p>Existing keys have a type. Flipping JSON &lt;-&gt; HASH leaves them in the other type,
+     * and the next baseline or CDC write answers {@code WRONGTYPE} instead of overwriting — the
+     * consumer parks and the cache stays as it was. Remembering the contract lets start and
+     * rebuild refuse that mismatch with an actionable message (rebuild with the prefix sweep)
+     * instead of discovering it one failed key at a time.
+     */
+    @Lob
+    @Column(name = "projection_signature")
+    private String projectionSignature;
+
     @Getter(AccessLevel.NONE) // the accessor below is isBaselineDone(), per the store contract
     @Column(name = "baseline_done", nullable = false)
     private Boolean baselineDone = false;

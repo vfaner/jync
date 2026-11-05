@@ -65,15 +65,42 @@ public class CdcPositionStore {
         // A baseline re-reads every table: whatever layouts the interrupted run recorded no
         // longer describe the snapshot the next stream will decode.
         position.setSchemaSignatures(null);
+        // The projection signature is NOT cleared here. It describes the keys that are in
+        // Redis *now*, and an anchored-but-unfinished baseline has not rewritten them yet —
+        // dropping it would lose the only record of their type if the load fails or is
+        // stopped. A cache baseline replaces it when it completes (markBaselineDone with the
+        // contract it actually wrote); a destructive path (rebuild sweep) resets the anchor
+        // through resetAnchorKeepingProjectionSignature.
         position.setBaselineDone(false);
         position.setUpdatedAt(Instant.now());
         return repository.save(position);
     }
 
+    /**
+     * Marks a database baseline complete. The Redis key-space contract, if any, is left
+     * untouched: this baseline wrote to a database and never looked at the cache, so what it
+     * says about the keys still in Redis remains true.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markBaselineDone(Long projectId) {
         repository.findByProjectId(projectId).ifPresent(position -> {
             position.setBaselineDone(true);
+            position.setUpdatedAt(Instant.now());
+            repository.save(position);
+        });
+    }
+
+    /**
+     * Marks the baseline complete and records the Redis key-space contract the cache was built
+     * with (null for database targets). Start and rebuild compare it with the project's current
+     * settings: a JSON &lt;-&gt; HASH switch, or a prefix change, would otherwise only surface as
+     * a WRONGTYPE on the next write, after the consumer already parked.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markBaselineDone(Long projectId, String projectionSignature) {
+        repository.findByProjectId(projectId).ifPresent(position -> {
+            position.setBaselineDone(true);
+            position.setProjectionSignature(projectionSignature);
             position.setUpdatedAt(Instant.now());
             repository.save(position);
         });
@@ -233,6 +260,34 @@ public class CdcPositionStore {
     }
 
     /**
+     * Drops the anchor and the per-table layouts — they describe a destination this project
+     * is no longer writing to — while keeping the Redis key-space contract.
+     *
+     * <p>The contract is not tied to the anchor: it describes the keys this project wrote
+     * into Redis, and neither a target-kind switch nor a rebuild sweep has touched them yet.
+     * Deleting it with the row lost the only record of their type, so a value-format change
+     * made during a Redis &rarr; database &rarr; Redis round trip reached the baseline
+     * unannounced and the first write answered {@code WRONGTYPE}. Because {@code baselineDone}
+     * resets, the next start or rebuild still reruns the whole baseline and replaces the
+     * contract when it completes.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void resetAnchorKeepingProjectionSignature(Long projectId) {
+        repository.findByProjectId(projectId).ifPresent(position -> {
+            position.setBinlogFile(null);
+            position.setBinlogPos(null);
+            position.setGtidSet(null);
+            position.setServerId(null);
+            position.setScn(null);
+            position.setLsn(null);
+            position.setSchemaSignatures(null);
+            position.setBaselineDone(false);
+            position.setUpdatedAt(Instant.now());
+            repository.save(position);
+        });
+    }
+
+    /**
      * LogMiner variant of {@link #recordBaselineStart}: captures the current SCN as the
      * baseline anchor (the mining session later resumes from {@code CSCN > this scn}).
      * Mirrors the binlog contract: baselineDone resets to false; other columns left alone.
@@ -245,6 +300,8 @@ public class CdcPositionStore {
             return created;
         });
         position.setScn(scn);
+        // Same rule as the binlog variant: the signature describes the keys still in Redis
+        // and is only replaced by a completed cache baseline.
         position.setBaselineDone(false);
         position.setUpdatedAt(Instant.now());
         return repository.save(position);

@@ -25,6 +25,7 @@ import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.projection.redis.RedisBaselineService;
 import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
@@ -40,8 +41,9 @@ class CdcBaselineServiceTest {
     private final CryptoUtil crypto = new CryptoUtil(props());   // @Component,构造吃 SyncProperties(默认 key/salt)
     private final BinlogClientFactory clientFactory =
             new BinlogClientFactory(crypto, props());
+    private final RedisBaselineService redisBaseline = mock(RedisBaselineService.class);
     private final CdcBaselineService service = new CdcBaselineService(
-            positionStore, clientFactory, taskStore, dataSourceManager, engine);
+            positionStore, clientFactory, taskStore, dataSourceManager, engine, redisBaseline);
 
     private static com.qqmu.jync.config.SyncProperties props() {
         return new com.qqmu.jync.config.SyncProperties();
@@ -97,6 +99,16 @@ class CdcBaselineServiceTest {
         project.setName("ystream-test");
         com.qqmu.jync.dto.SyncConfig cfg = new com.qqmu.jync.dto.SyncConfig();
         cfg.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.YSTREAM_CDC);
+        return SyncContext.builder().project(project).sourceConfig(source()).config(cfg).build();
+    }
+
+    private SyncContext redisCtx(long projectId) {
+        com.qqmu.jync.model.Project project = new com.qqmu.jync.model.Project();
+        project.setId(projectId);
+        project.setName("redis-test");
+        project.setTargetKind(com.qqmu.jync.model.SyncTargetKind.REDIS);
+        com.qqmu.jync.dto.SyncConfig cfg = new com.qqmu.jync.dto.SyncConfig();
+        cfg.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
         return SyncContext.builder().project(project).sourceConfig(source()).config(cfg).build();
     }
 
@@ -643,5 +655,46 @@ class CdcBaselineServiceTest {
         when(ceiling.wasNull()).thenReturn(nullCeiling);
         when(st.executeQuery("SELECT MAX(NEXT_CHANGE#) FROM V$ARCHIVED_LOG")).thenReturn(ceiling);
         when(dataSourceManager.getConnection(any())).thenReturn(dm);
+    }
+
+    @Test
+    void aRedisProjectRunsTheRedisBaselineInsteadOfTheEngine() {
+        service.runBaseline(redisCtx(11L), () -> true);
+
+        verify(redisBaseline).run(any(SyncContext.class), any(), any());
+        verify(engine, never()).runCycle(any(SyncContext.class));
+        verify(positionStore, never()).markBaselineDone(anyLong());
+        verify(positionStore, never()).delete(anyLong());
+    }
+
+    @Test
+    void aFailedRedisBaselineKeepsTheCacheContractAndRecordsTheError() {
+        doThrow(new IllegalStateException("redis projection exploded"))
+                .when(redisBaseline).run(any(SyncContext.class), any(), any());
+
+        assertThatThrownBy(() -> service.runBaseline(redisCtx(12L), () -> true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("redis projection exploded");
+
+        // The keys written before the failure are still in Redis. Deleting the row would
+        // drop the only record of their value format, and the rerun's baseline could then
+        // write a different format over them and answer WRONGTYPE. Reset the anchor, keep
+        // the contract until a completed baseline replaces it.
+        verify(positionStore).resetAnchorKeepingProjectionSignature(12L);
+        verify(positionStore, never()).delete(anyLong());
+        verify(taskStore).recordCdcFailure(eq(12L), contains("redis projection exploded"));
+        verify(positionStore, never()).markBaselineDone(anyLong());
+    }
+
+    @Test
+    void aRedisBaselineThatLostItsLeaseLeavesThePositionRow() {
+        doThrow(new LockLostException("lost"))
+                .when(redisBaseline).run(any(SyncContext.class), any(), any());
+
+        assertThatThrownBy(() -> service.runBaseline(redisCtx(13L), () -> false))
+                .isInstanceOf(LockLostException.class);
+
+        verify(positionStore, never()).delete(anyLong());
+        verify(taskStore, never()).recordCdcFailure(anyLong(), any());
     }
 }

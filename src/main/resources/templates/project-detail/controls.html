@@ -133,6 +133,10 @@
                 <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
                 <span th:text="#{cdc.rebaseline.button}">Rebuild baseline</span>
             </button>
+            <!--/* Redis 缓存目标的重建入口：清位点、重新记录起点、全量重投影。
+                   放在独立模板里，数据库项目不渲染，两套目标类型的按钮互不牵连。 */-->
+            <th:block th:if="${isRedisTarget}"
+                      th:replace="~{project-detail/redis-rebuild :: controls}"/>
             <!--/* 同步前检查：只读排练下一轮（连通性、待执行 DDL、目标形状、轮询/CDC），
                    不建表、不写快照、不推进游标。接口会连两侧数据库，因此仅管理员可见。 */-->
             <button type="button" class="btn btn-ghost btn-sm"
@@ -188,6 +192,8 @@
         <p class="small muted" style="margin:3px 0 0"
            th:if="${isAdmin and !cdcActive}" data-cdc-visibility="non-cdc"
            th:text="#{project.resetHelp}">Reset help</p>
+        <th:block th:if="${isRedisTarget}"
+                  th:replace="~{project-detail/redis-rebuild :: hint}"/>
         <p class="small muted" style="margin:0" th:unless="${isAdmin}"
            th:text="#{common.readOnly}">Read-only account.</p>
     </div>

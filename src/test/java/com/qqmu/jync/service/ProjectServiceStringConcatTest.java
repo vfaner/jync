@@ -35,6 +35,7 @@ import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
+import com.qqmu.jync.service.projection.redis.RedisProjectionPolicy;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -103,7 +104,8 @@ class ProjectServiceStringConcatTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                taskMetricSampleRepository, alertStateRepository, properties);
+                taskMetricSampleRepository, alertStateRepository, properties,
+                mock(RedisProjectionPolicy.class));
 
         project = new Project();
         project.setId(1L);

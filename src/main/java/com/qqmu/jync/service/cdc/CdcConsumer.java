@@ -82,7 +82,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     private final CdcRuntimeStats stats;
     private final SyncProperties properties;
 
-    private final CdcEventApplier applier;
+    private final CdcTargetTransactionFactory targetTransactions;
     private final CdcEventStreamHandler.TransactionSink sink;
     private final BindingSupplier supplier;
 
@@ -132,6 +132,17 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                        CdcBaselineService baselineService, SyncTaskStore taskStore,
                        SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
                        CdcRuntimeStats stats, SyncProperties properties) {
+        this(project, lock, ctx, clientFactory, positionStore, baselineService, taskStore,
+                stateWriter, dataSourceManager, stats, properties,
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+    }
+
+    public CdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,
+                       BinlogClientFactory clientFactory, CdcPositionStore positionStore,
+                       CdcBaselineService baselineService, SyncTaskStore taskStore,
+                       SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
+                       CdcRuntimeStats stats, SyncProperties properties,
+                       CdcTargetTransactionFactory targetTransactions) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -145,7 +156,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         this.properties = properties;
         // R3: the same timeout source DataSyncService uses (SyncProperties.queryTimeoutSeconds),
         // so CDC apply statements are bounded exactly like polling write statements.
-        this.applier = new CdcEventApplier(ctx, stats, properties.getQueryTimeoutSeconds());
+        this.targetTransactions = targetTransactions;
         // 聚合变更日志:按表累计 upsert/delete,到龄一条;停机兜底刷剩余。
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
                 taskStore, properties.getCdc().getChangeWindowMs());
@@ -336,11 +347,6 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         return dwellMs >= MIN_BACKOFF_RESET_DWELL_MS;
     }
 
-    /** The applier this consumer applies transactions with; package-private for tests (R3). */
-    CdcEventApplier applierForTest() {
-        return applier;
-    }
-
     /** The reconnect backoff this consumer escalates with; package-private for tests (R3b). */
     CdcReconnectBackoff backoffForTest() {
         return backoff;
@@ -472,28 +478,12 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     private CdcEventStreamHandler.TransactionSink transactionSink() {
         return (changes, mark) -> {
             long projectId = project.getId();
-            Connection target = ctx.getConnectionProvider().open(ctx.getTargetConfig());
-            boolean originalAutoCommit = true;
-            try {
-                originalAutoCommit = target.getAutoCommit();
-                target.setAutoCommit(false);
+            try (CdcTargetTransaction target = targetTransactions.open(project, ctx)) {
                 for (CdcEventStreamHandler.TableChange tc : changes) {
-                    applier.applyUpserts(target, tc.binding, tc.upserts());
-                    applier.applyDeletes(target, tc.binding, tc.deletes());
+                    target.applyUpserts(tc.binding, tc.upserts());
+                    target.applyDeletes(tc.binding, tc.deletes());
                 }
                 target.commit();
-            } catch (Exception e) {
-                JdbcUtil.rollbackAndClose(target);
-                throw e instanceof RuntimeException r ? r : new RuntimeException(e);
-            } finally {
-                try {
-                    if (originalAutoCommit) target.setAutoCommit(true);
-                } catch (SQLException ignored) { }
-                // 归还池连接：异常路径已由 rollbackAndClose 关闭，这里是成功路径唯一的关闭点。
-                // 漏掉它，每个已提交事务都会永久占走一个目标池连接。
-                try {
-                    target.close();
-                } catch (SQLException ignored) { }
             }
             ctx.requireLease();                                  // 丢租约 → 位点不动,接管方重放
             String file = mark.getFile() != null ? mark.getFile() : lastFile;

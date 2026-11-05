@@ -63,6 +63,21 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 - 被清洗的列会强制整列物化读取，单值超过 `sync.lob.force-inline-max-bytes`（默认 1MB）会明确报错并指出表、列与配置键。
 - `STRIP_PREFIX` / `STRIP_SUFFIX` / `REGEX_REPLACE` 必须填写参数；正则按 Java 语义在保存时校验，非法表达式与替换串直接拒绝。
 
+## Redis 缓存目标
+
+当项目的「目标类型」选 Redis 时，投影按**项目**配置，不写进 `application.yml`，也不属于 Redis 连接本身——同一个 Redis 目标可以被多个项目共用，每个项目必须有自己的前缀。这些项保存在项目的 `syncConfig.redisProjection` 里：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `keyPrefix` | `jync:<项目ID>:` | 所有键的前缀，保存时自动补结尾 `:`；同一 Redis 目标上不同项目不得相同 |
+| `valueFormat` | `JSON` | `JSON`：每行一个 JSON 字符串；`HASH`：每行一个 Hash，field = 列名 |
+| `ttlSeconds` | `0` | 键过期秒数；`0` = 不过期。用于让孤儿键自然消失 |
+| `excludedColumns` | 空 | 不写入 Redis 的列，大小写不敏感；LOB/二进制默认排除 |
+| `maxValueBytes` | `1048576` | 单行投影上限（4KB–16MB）；超限行跳过并计数，不截断、不停机 |
+| `maxCommandsPerTransaction` | `10000` | 单个 CDC 事务缓冲的管道命令上限，超过先执行一批再继续 |
+
+> Redis 目标只支持日志 CDC：保存时会拒绝 `POLLING` / `FULL_COMPARE`（`error.project.redis.cdcOnly`），结构同步、索引/视图/存储过程同步对 Redis 无意义并强制关闭。键值语义、孤儿键、HASH 布局漂移与集群行为见[已知限制](known-limitations.md) 12 节。
+
 ## 常用配置
 
 `application.yml` 中最常用的 `sync.*` 键（完整清单见[用户操作手册](https://jync.qqmu.com/docs/jync-user-guide.pdf)）：

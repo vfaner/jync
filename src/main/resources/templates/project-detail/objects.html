@@ -70,8 +70,8 @@
                th:text="#{project.noTables}">No tables.</p>
         </div>
 
-        <!-- 视图 -->
-        <div class="picker" data-role="picker">
+        <!-- 视图（缓存目标没有视图：整块不渲染，保存时 views 随之为空） -->
+        <div class="picker" data-role="picker" th:if="${!isRedisTarget}">
             <div class="picker-head">
                 <span class="picker-title">
                     <svg class="ico"><use href="#eye"/></svg>
@@ -97,8 +97,8 @@
                th:text="#{project.noViews}">No views.</p>
         </div>
 
-        <!-- 存储过程 -->
-        <div class="picker" data-role="picker">
+        <!-- 存储过程（同上：缓存目标只投影行数据） -->
+        <div class="picker" data-role="picker" th:if="${!isRedisTarget}">
             <div class="picker-head">
                 <span class="picker-title">
                     <svg class="ico"><use href="#code-square"/></svg>
