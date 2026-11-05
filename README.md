@@ -8,6 +8,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
+[![GitHub star](https://img.shields.io/github/stars/vfaner/jync?label=GitHub%20star)](https://github.com/vfaner/jync)
+[![GitHub fork](https://img.shields.io/github/forks/vfaner/jync?label=GitHub%20fork)](https://github.com/vfaner/jync)
 [![Gitee star](https://gitee.com/super_rgh/jync/badge/star.svg?theme=dark)](https://gitee.com/super_rgh/jync)
 [![Gitee fork](https://gitee.com/super_rgh/jync/badge/fork.svg?theme=dark)](https://gitee.com/super_rgh/jync)
 
@@ -20,7 +22,7 @@
 - **增量只有一条索引查询**：默认轮询模式只读游标之后的变化，一个只读账号即可；六类源库可切换日志 CDC，做到秒级延迟。
 - **结构与数据一起走**：目标库缺失时自动建表 / 索引 / 视图 / 存储过程，内置各方言类型映射与函数转换。
 - **可靠续传**：停机、断网、进程被杀都能从检查点继续，写入全部幂等，停机期间源库的变更重启后自动补齐。
-- **另有专属迁移**：Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES 三条链路不走 JDBC，用独立的连接模型整库复制索引或集合，与实时同步、ETL 互不影响。
+- **另有专属迁移**：三条不走 JDBC 的整库复制链路，使用独立的连接模型，与实时同步、ETL 互不影响。
 - **出了问题会通知你**：同步失败、CDC 停摆、数据漂移等七类故障可推送到钉钉、企业微信、飞书或自定义 Webhook。
 
 | 资源 | 地址 |
@@ -28,7 +30,8 @@
 | **下载** | [Gitee 发行版](https://gitee.com/super_rgh/jync/releases/latest) · [GitHub Releases](https://github.com/vfaner/jync/releases/latest) |
 | **文档** | [官网](https://jync.qqmu.com) · [用户操作手册](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [产品介绍](https://jync.qqmu.com/docs/jync-overview.pdf) |
 | **演示** | [Bilibili · 14 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
-| **镜像** | [AtomGit（gitcode.com）](https://gitcode.com/vfaner/jync) · 代码与发布包的同步镜像，供国内加速访问 |
+| **更新日志** | [各版本发布说明](docs/release-notes/) |
+| **源码** | [GitHub](https://github.com/vfaner/jync) · [Gitee](https://gitee.com/super_rgh/jync) · [AtomGit 镜像](https://gitcode.com/vfaner/jync)（代码与发布包同步，国内加速） |
 
 > 下载、问题反馈与 PR 以 Gitee / GitHub 为准；AtomGit 为只读镜像。
 
@@ -68,7 +71,7 @@
 [![数据库能力地图与专属迁移链路](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
 
 - **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时用独立 `URLClassLoader` 加载，可选方言家族。
-- **驱动内置**：GBase、神通 Oscar、华为 GaussDB、SAP HANA、ClickHouse、Hive、Impala、Elasticsearch、MongoDB（Atlas SQL）的构件不可再分发，需自备 jar；驱动类名与预设不同时可在同一张卡片覆盖。
+- **需自备驱动**：GBase、神通 Oscar、华为 GaussDB、SAP HANA、ClickHouse、Hive、Impala、Elasticsearch、MongoDB（Atlas SQL）的构件不可再分发，需自备 jar；驱动类名与预设不同时可在同一张卡片覆盖。
 - **分析型 / 搜索型引擎**：Doris、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 没有日志 CDC，**只作实时同步的源**（轮询 / 全表比对）；ETL 中除 Elasticsearch 与 MongoDB 外都可写入。
 - **Redis 是同步目标，不是数据库**：在项目页选「目标类型 = Redis」，连接管理里单独维护 Redis 目标（单机或 Cluster，不支持 Sentinel）；源端仍是数据库连接，且必须走日志 CDC。它不是 `DatabaseType`，不出现在数据库能力矩阵与 ETL 引擎列表里。
 - **专属迁移不走 JDBC**：三条链路由独立的「专属连接」与迁移任务完成，不进入 JDBC 能力矩阵；边界见[已知限制](docs/known-limitations.md)。GaussDB 与 openGauss 的差异、TDSQL / PolarDB 分版本、HANA 的 CDC 限制见[官网数据库页](https://jync.qqmu.com/database.html)。
@@ -108,6 +111,8 @@ Jync 有三条数据通路，分别解决"第一次怎么搬""之后怎么追""�
 容器单机基准（50 万行 Oracle 表）全量实测 **21.6 万行/秒**，日志 CDC 端到端延迟**秒级**。调优参数、调度规则与性能曲线见[配置与调优](docs/configuration.md)与[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)。
 
 ---
+
+<a id="deploy"></a>
 
 ## 快速开始
 
@@ -196,7 +201,7 @@ com.qqmu.jync
 mvn test
 ```
 
-**测试覆盖方言与 SQL 改写、全量与续传、六类 CDC 前提与位点纪律、ETL 与告警、安全（加密存储、访客 POST 全拒、CSRF）、页面国际化，以及升级双通道兜底。**
+测试覆盖方言与 SQL 改写、全量与续传、六类 CDC 前提与位点纪律、Redis 投影与专属迁移、ETL 与告警、安全（加密存储、访客 POST 全拒、CSRF）、页面国际化，以及升级双通道兜底。
 
 真实库集成测试（`*IT`，默认不进套件，需 Docker）：Oracle 23ai 并行全量与 `ROWDEPENDENCIES`；MySQL 8 binlog 基线 → 流式、崩溃重跑、十万行一致与故障注入。运行加 `-Dapi.version=1.44`（Docker Engine ≥ 29）。
 

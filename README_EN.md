@@ -8,6 +8,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 2.7](https://img.shields.io/badge/Spring%20Boot-2.7-brightgreen.svg)](https://spring.io/projects/spring-boot)
+[![GitHub star](https://img.shields.io/github/stars/vfaner/jync?label=GitHub%20star)](https://github.com/vfaner/jync)
+[![GitHub fork](https://img.shields.io/github/forks/vfaner/jync?label=GitHub%20fork)](https://github.com/vfaner/jync)
 [![Gitee star](https://gitee.com/super_rgh/jync/badge/star.svg?theme=dark)](https://gitee.com/super_rgh/jync)
 [![Gitee fork](https://gitee.com/super_rgh/jync/badge/fork.svg?theme=dark)](https://gitee.com/super_rgh/jync)
 
@@ -20,7 +22,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 - **Incremental is one indexed query**: the default polling mode reads only rows past the cursor, so one read-only account is enough. Six source families can switch to log CDC for second-level latency.
 - **Structure travels with data**: missing tables, indexes, views and procedures are created automatically, with built-in dialect type mapping and function conversion.
 - **Resumable by design**: crashes, network drops and killed processes resume from the last checkpoint; every write is idempotent, and changes made while Jync was down are caught up on restart.
-- **Dedicated migration too**: Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES copy whole indexes or collections over their own connection model, outside JDBC, leaving sync and ETL untouched.
+- **Dedicated migration too**: three whole-index / whole-collection copy chains outside JDBC, each with its own connection model, leaving sync and ETL untouched.
 - **Failures reach you**: seven fault categories — sync failures, CDC stalls, data drift and more — can be pushed to DingTalk, WeCom, Feishu or a custom Webhook.
 
 | Resource | Link |
@@ -28,7 +30,8 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | **Download** | [Gitee release](https://gitee.com/super_rgh/jync/releases/latest) · [GitHub Releases](https://github.com/vfaner/jync/releases/latest) |
 | **Docs** | [Website](https://jync.qqmu.com) · [User Guide](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [Overview](https://jync.qqmu.com/docs/jync-overview.pdf) |
 | **Demo** | [Bilibili · 14 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
-| **Mirror** | [AtomGit (gitcode.com)](https://gitcode.com/vfaner/jync) — synced code and release assets, for faster access in mainland China |
+| **Changelog** | [Release notes by version](docs/release-notes/) (in Chinese) |
+| **Source** | [GitHub](https://github.com/vfaner/jync) · [Gitee](https://gitee.com/super_rgh/jync) · [AtomGit mirror](https://gitcode.com/vfaner/jync) (synced code and release assets) |
 
 > Downloads, issues and pull requests belong on Gitee / GitHub; AtomGit is a read-only mirror.
 
@@ -68,7 +71,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 [![Database capability map and dedicated migration chains](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
 
 - **Custom types**: JDBC URL, driver class and driver jar path, loaded at runtime in an isolated `URLClassLoader`; pick a dialect family.
-- **Bundled drivers**: GBase, Oscar, Huawei GaussDB, SAP HANA, ClickHouse, Hive, Impala, Elasticsearch and MongoDB (Atlas SQL) publish no redistributable artifact, so supply the jar and path; the driver class can be overridden on the same card.
+- **Drivers to supply yourself**: GBase, Oscar, Huawei GaussDB, SAP HANA, ClickHouse, Hive, Impala, Elasticsearch and MongoDB (Atlas SQL) publish no redistributable artifact, so provide the jar and path; the driver class can be overridden on the same card.
 - **Analytic / search engines**: Doris, ClickHouse, Hive, Impala, Elasticsearch and MongoDB have no log-based CDC, so they are **real-time sync sources only** (polling / full compare); in ETL all but Elasticsearch and MongoDB can be written.
 - **Redis is a sync target, not a database**: pick "Target type = Redis" on the project page and manage Redis targets separately (standalone or Cluster; Sentinel is not supported). The source stays a database connection and must use log CDC. Redis is not a `DatabaseType`, so it does not appear in the database matrix or the ETL engine list.
 - **Dedicated migration is not JDBC**: the three chains use dedicated connections and tasks, outside the capability matrix above; boundaries are in [Known limitations](docs/known-limitations.md). The GaussDB vs openGauss distinction, TDSQL / PolarDB editions and HANA's CDC limits are on the [website's database page](https://jync.qqmu.com/database.html).
@@ -191,12 +194,13 @@ com.qqmu.jync
 - **Configuration, scheduling and tuning**: [docs/configuration.md](docs/configuration.md) (`sync.*` / `sync.cdc.*` keys, scheduling rules, column cleansing, CDC prerequisites and performance settings; in Chinese)
 - **Container deployment and operations**: [docs/deploy-container.md](docs/deploy-container.md)
 - **Known limitations**: [docs/known-limitations.md](docs/known-limitations.md)
+- **Real-database verification matrix**: [docs/verification-matrix.md](docs/verification-matrix.md) (what was verified per product: version/image, driver, strategies, verification level and run commands)
 
 ```bash
 mvn test
 ```
 
-**The suite covers dialect and SQL rewriting, full load and resume, CDC prerequisites and position discipline for six engines, ETL and alerting, security (encrypted storage, viewer POST rejection, CSRF), UI i18n, and the dual-channel upgrade fallback.**
+The suite covers dialect and SQL rewriting, full load and resume, CDC prerequisites and position discipline for six engines, Redis projection and dedicated migration, ETL and alerting, security (encrypted storage, viewer POST rejection, CSRF), UI i18n, and the dual-channel upgrade fallback.
 
 Real-database integration tests (`*IT`, excluded from the default suite, require Docker): Oracle 23ai parallel full load with `ROWDEPENDENCIES`; MySQL 8 binlog baseline → streaming, crash rerun, 100k-row consistency and fault injection. Run with `-Dapi.version=1.44` (Docker Engine ≥ 29).
 
