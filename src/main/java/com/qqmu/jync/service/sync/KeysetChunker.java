@@ -44,6 +44,13 @@ public final class KeysetChunker {
      */
     private static final String TIME_MARKER = "$jyncTime";
 
+    /**
+     * Marker for a zone-less wall clock. A bare number would decode as a {@link Timestamp}
+     * (an instant), and rebinding an instant to a pre-1949 Shanghai DATE moves it forward
+     * by an hour — the chunk boundary would then skip every row in that hour.
+     */
+    private static final String WALL_MARKER = "$jyncWall";
+
     private KeysetChunker() {
     }
 
@@ -516,7 +523,11 @@ public final class KeysetChunker {
         } else if (value instanceof java.time.Instant) {
             portable = java.sql.Timestamp.from((java.time.Instant) value);
         } else if (value instanceof java.time.LocalDateTime) {
-            portable = java.sql.Timestamp.valueOf((java.time.LocalDateTime) value);
+            java.time.LocalDateTime wall = (java.time.LocalDateTime) value;
+            Map<String, Object> marker = new LinkedHashMap<>();
+            marker.put(WALL_MARKER, wall.toInstant(java.time.ZoneOffset.UTC).toEpochMilli());
+            marker.put("nanos", wall.getNano());
+            return marker;
         } else if (value instanceof java.time.LocalDate) {
             portable = java.sql.Date.valueOf((java.time.LocalDate) value);
         }
@@ -564,6 +575,11 @@ public final class KeysetChunker {
             return null;
         }
         for (int i = 0; i < values.size(); i++) {
+            java.time.LocalDateTime wall = restoreWallMarker(values.get(i));
+            if (wall != null) {
+                values.set(i, wall);
+                continue;
+            }
             java.sql.Timestamp restored = restoreTimeMarker(values.get(i));
             if (restored != null) {
                 values.set(i, restored);
@@ -599,6 +615,26 @@ public final class KeysetChunker {
             }
         }
         return values;
+    }
+
+    /** Rebuilds a {@link #WALL_MARKER} boundary; returns null for any other value. */
+    private static java.time.LocalDateTime restoreWallMarker(Object value) {
+        if (!(value instanceof Map)) {
+            return null;
+        }
+        Map<?, ?> marker = (Map<?, ?>) value;
+        Object millis = marker.get(WALL_MARKER);
+        if (!(millis instanceof Number)) {
+            return null;
+        }
+        long epochMillis = ((Number) millis).longValue();
+        int nanos = 0;
+        Object storedNanos = marker.get("nanos");
+        if (storedNanos instanceof Number) {
+            nanos = ((Number) storedNanos).intValue();
+        }
+        return java.time.LocalDateTime.ofEpochSecond(
+                Math.floorDiv(epochMillis, 1000L), nanos, java.time.ZoneOffset.UTC);
     }
 
     /** Rebuilds a {@link #TIME_MARKER} boundary; returns null for any other value. */

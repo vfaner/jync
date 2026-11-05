@@ -152,10 +152,12 @@ class JdbcRowMapperCursorTest {
         java.time.LocalDateTime source = java.time.LocalDateTime.of(2026, 1, 1, 8, 0, 0);
 
         String stored = JdbcRowMapper.cursorToString(source);
-        Timestamp restored = (Timestamp) JdbcRowMapper.cursorFromString(stored, Types.TIMESTAMP);
+        // A zone-less cursor now stays a wall clock the whole way through: a Timestamp
+        // would read it in the default zone and move historical DST-gap times forward.
+        Object restored = JdbcRowMapper.cursorFromString(stored, Types.TIMESTAMP);
 
-        assertThat(stored).doesNotEndWith("Z");
-        assertThat(restored.toLocalDateTime()).isEqualTo(source);
+        assertThat(stored).isEqualTo("2026-01-01 08:00:00");
+        assertThat(restored).isEqualTo(source);
     }
 
     @Test
@@ -189,9 +191,11 @@ class JdbcRowMapperCursorTest {
 
     @Test
     void aLegacyLocalTimestampStringIsStillReadable() {
-        // Tolerating the older format means an upgrade does not force a full reload.
+        // Tolerating the older format means an upgrade does not force a full reload. The
+        // wall clock is restored exactly (as LocalDateTime, not as the instant that
+        // Timestamp.valueOf would have produced).
         Object restored = JdbcRowMapper.cursorFromString("2026-06-01 12:00:00", Types.TIMESTAMP);
-        assertThat(restored).isInstanceOf(Timestamp.class);
+        assertThat(restored).isEqualTo(java.time.LocalDateTime.of(2026, 6, 1, 12, 0));
     }
 
     @Test

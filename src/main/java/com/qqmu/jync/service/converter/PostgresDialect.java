@@ -24,6 +24,19 @@ public class PostgresDialect extends AbstractSqlDialect {
         return DatabaseType.DialectFamily.POSTGRES;
     }
 
+    /**
+     * PgJDBC 42.x converts a zone-less {@code LocalDateTime} through
+     * {@code Timestamp.valueOf}, which reads the fields in the JVM zone; a pre-1949
+     * Shanghai DST-gap wall clock (1948-05-01 00:00, say) is stored as 01:00. The same
+     * conversion happens for {@code setObject(idx, value, Types.TIMESTAMP)}; only the
+     * fixed-offset calendar bind hands the driver the wall clock. openGauss and the other
+     * PgJDBC-derived drivers inherit this.
+     */
+    @Override
+    public boolean bindsZoneLessTemporalThroughUtcCalendar() {
+        return true;
+    }
+
     /** NAMEDATALEN minus the terminator. PostgreSQL truncates silently, which is worse. */
     @Override
     public int maxIdentifierBytes() {

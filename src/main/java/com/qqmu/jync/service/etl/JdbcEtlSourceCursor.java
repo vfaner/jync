@@ -4,8 +4,12 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+
+import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.service.sync.JdbcRowMapper;
 
 /**
  * A {@link ResultSet} seen as an {@link EtlSourceCursor}. The metadata is read once, before
@@ -18,11 +22,14 @@ final class JdbcEtlSourceCursor implements EtlSourceCursor {
     private final ResultSet resultSet;
     private final List<EtlSourceColumn> columns;
     private final int resumeKeyIndex;
+    private final DatabaseType sourceType;
 
     JdbcEtlSourceCursor(PreparedStatement statement, ResultSet resultSet,
-                        com.qqmu.jync.model.EtlTask task, boolean resumable) throws SQLException {
+                        com.qqmu.jync.model.EtlTask task, boolean resumable,
+                        DatabaseType sourceType) throws SQLException {
         this.statement = statement;
         this.resultSet = resultSet;
+        this.sourceType = sourceType;
         ResultSetMetaData meta = resultSet.getMetaData();
         this.columns = columns(meta);
         this.resumeKeyIndex = resumeKeyIndex(resultSet, task, resumable);
@@ -81,6 +88,15 @@ final class JdbcEtlSourceCursor implements EtlSourceCursor {
 
     @Override
     public Object getObject(int oneBasedIndex) throws SQLException {
+        EtlSourceColumn column = columns.get(oneBasedIndex - 1);
+        if (column.jdbcType() == Types.TIMESTAMP
+                && JdbcRowMapper.bindsZoneLessThroughUtcCalendar(sourceType)) {
+            // Oracle DATE/TIMESTAMP and PostgreSQL timestamp are zone-less wall clocks; the
+            // plain getObject builds a Timestamp in the JVM zone and moves pre-1949 DST-gap
+            // times (Asia/Shanghai) forward an hour. The typed getter keeps the wall clock.
+            return JdbcRowMapper.readTemporal(resultSet, oneBasedIndex, column.jdbcType(),
+                    column.typeName(), sourceType);
+        }
         return resultSet.getObject(oneBasedIndex);
     }
 

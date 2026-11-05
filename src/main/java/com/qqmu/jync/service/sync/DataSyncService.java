@@ -11,6 +11,7 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -497,7 +498,7 @@ public class DataSyncService {
             result.error = "Unparseable high-watermark: " + watermark;
             return result;
         }
-        if (lastCursor != null && !isGreaterThan(upperBound, lastCursor)) {
+        if (lastCursor != null && !isAfter(upperBound, lastCursor)) {
             // The watermark has not moved past what we already synced.
             return result;
         }
@@ -594,12 +595,30 @@ public class DataSyncService {
         if (lag <= 0) {
             return watermark;
         }
+        return subtractSafetyLag(watermark, lag);
+    }
+
+    /**
+     * Rewinds a stored watermark by {@code lagMs}, in whichever form it was stored.
+     *
+     * <p>Zone-less timestamps are stored as wall-clock text (see
+     * {@link JdbcRowMapper#cursorToString}); an ISO instant comes from a zone-aware cursor
+     * or from an older version. Wall text must be rewound on the wall clock — parsing it
+     * through {@code Instant} would either fail (and silently disable the margin) or
+     * reinterpret it in the default zone and shift a pre-1949 gap time.
+     */
+    static String subtractSafetyLag(String watermark, long lagMs) {
         try {
             Instant instant = Instant.parse(watermark);
-            return instant.minusMillis(lag).toString();
+            return instant.minusMillis(lagMs).toString();
         } catch (Exception e) {
-            // Not a timestamp after all; leave it alone rather than corrupt the cursor.
-            return watermark;
+            try {
+                LocalDateTime wall = LocalDateTime.parse(watermark.trim().replace(' ', 'T'));
+                return JdbcRowMapper.wallClockToString(wall.minusNanos(lagMs * 1_000_000L));
+            } catch (Exception ignored) {
+                // Not a timestamp at all; leave it alone rather than corrupt the cursor.
+                return watermark;
+            }
         }
     }
 
@@ -621,7 +640,10 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(st, properties.getCopyTimeoutSeconds());
             try (ResultSet rs = st.executeQuery(sql)) {
                 if (rs.next()) {
-                    Object value = readWatermarkValue(rs, strategy);
+                    Object value = readWatermarkValue(rs, strategy,
+                            table.column(strategy.getColumn())
+                                    .map(ColumnMeta::getTypeName).orElse(null),
+                            ctx.effectiveSourceType());
                     if (!rs.wasNull() && value != null) {
                         return JdbcRowMapper.cursorToString(value);
                     }
@@ -642,7 +664,8 @@ public class DataSyncService {
      * {@code getObject} and came back as a driver-specific {@code LocalDateTime} whose
      * UTC-instant encoding shifted the window by the server timezone.
      */
-    private Object readWatermarkValue(ResultSet rs, CursorStrategy strategy) throws SQLException {
+    static Object readWatermarkValue(ResultSet rs, CursorStrategy strategy, String typeName,
+                                     DatabaseType sourceType) throws SQLException {
         switch (strategy.getJdbcType()) {
             case java.sql.Types.TIME:
             case java.sql.Types.TIME_WITH_TIMEZONE:
@@ -654,7 +677,11 @@ public class DataSyncService {
                 return rs.getDate(1);
             case java.sql.Types.TIMESTAMP:
             case java.sql.Types.TIMESTAMP_WITH_TIMEZONE:
-                return rs.getTimestamp(1);
+                // Same zone semantics as the row read: a zone-less TIMESTAMP is a wall
+                // clock, and getTimestamp would move a pre-1949 Shanghai gap time forward
+                // by an hour — which then persisted as the next cycle's window edge.
+                return JdbcRowMapper.readTemporal(rs, 1, strategy.getJdbcType(), typeName,
+                        sourceType);
             default:
                 // Kind IDENTITY with a numeric column.
                 return rs.getObject(1);
@@ -817,6 +844,11 @@ public class DataSyncService {
                     ctx.getConfig().targetTableName(table.getName()), strategy.getColumn(),
                     mysqlFamily(ctx));
             bound = truncateToScale((Timestamp) cursor, scale);
+        } else if (cursor instanceof LocalDateTime) {
+            int scale = targetCursorScale(targetConn, ctx.getTargetSchema(),
+                    ctx.getConfig().targetTableName(table.getName()), strategy.getColumn(),
+                    mysqlFamily(ctx));
+            bound = truncateToScale((LocalDateTime) cursor, scale);
         }
         return bound;
     }
@@ -995,7 +1027,7 @@ public class DataSyncService {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             for (int i = 0; i < params.size(); i++) {
-                ps.setObject(i + 1, params.get(i));
+                JdbcRowMapper.bindParameter(ps, i + 1, params.get(i), dialect);
             }
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getLong(1) : 0L;
@@ -1022,7 +1054,8 @@ public class DataSyncService {
             List<Object> params = new ArrayList<>();
             String sql = KeysetChunker.keyPageSql(sourceDialect, sourceSchema, sourceTable,
                     pkColumns, lastPk, range.upper, strategy, bound, pageSize, params);
-            List<List<Object>> sourceKeys = readKeys(sourceConn, sql, params, pkColumns.size());
+            List<List<Object>> sourceKeys = readKeys(sourceConn, sourceDialect, sql, params,
+                    pkColumns.size());
             if (sourceKeys.isEmpty()) {
                 return;
             }
@@ -1031,7 +1064,7 @@ public class DataSyncService {
             String targetSql = KeysetChunker.keyPageSql(targetDialect, targetSchema, targetTable,
                     pkColumns, lastPk, pageEnd, strategy, bound, pageSize, targetParams);
             Set<String> present = new HashSet<>();
-            for (List<Object> key : readKeys(targetConn, targetSql, targetParams,
+            for (List<Object> key : readKeys(targetConn, targetDialect, targetSql, targetParams,
                     pkColumns.size())) {
                 present.add(normalizedKey(key));
             }
@@ -1048,13 +1081,13 @@ public class DataSyncService {
     }
 
     /** Reads a key projection, one {@code List} per row, in result-column order. */
-    private List<List<Object>> readKeys(Connection conn, String sql, List<Object> params,
-                                        int arity) throws SQLException {
+    private List<List<Object>> readKeys(Connection conn, SqlDialect dialect, String sql,
+                                        List<Object> params, int arity) throws SQLException {
         List<List<Object>> keys = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             for (int i = 0; i < params.size(); i++) {
-                ps.setObject(i + 1, params.get(i));
+                JdbcRowMapper.bindParameter(ps, i + 1, params.get(i), dialect);
             }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -1220,12 +1253,25 @@ public class DataSyncService {
         if (scale < 0 || scale >= 9) {
             return ts;
         }
+        long remainder = Math.floorMod(ts.toInstant().getNano(), scaleUnit(scale));
+        return remainder == 0 ? ts : Timestamp.from(ts.toInstant().minusNanos(remainder));
+    }
+
+    /** The wall-clock twin of {@link #truncateToScale(Timestamp, int)}. */
+    private LocalDateTime truncateToScale(LocalDateTime wall, int scale) {
+        if (scale < 0 || scale >= 9) {
+            return wall;
+        }
+        long remainder = Math.floorMod(wall.getNano(), scaleUnit(scale));
+        return remainder == 0 ? wall : wall.minusNanos(remainder);
+    }
+
+    private static long scaleUnit(int scale) {
         long unit = 1L;
         for (int i = 0; i < 9 - scale; i++) {
             unit *= 10L;
         }
-        long remainder = Math.floorMod(ts.toInstant().getNano(), unit);
-        return remainder == 0 ? ts : Timestamp.from(ts.toInstant().minusNanos(remainder));
+        return unit;
     }
 
     private long countAtOrBelow(Connection conn, SqlDialect dialect, String qualifiedTable,
@@ -1235,7 +1281,7 @@ public class DataSyncService {
                 + " <= " + dialect.comparisonPlaceholder(jdbcType);
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
-            ps.setObject(1, cursor);
+            JdbcRowMapper.bindParameter(ps, 1, cursor, dialect);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getLong(1) : 0L;
             }
@@ -1351,7 +1397,7 @@ public class DataSyncService {
         }
     }
 
-    private boolean isGreaterThan(Object candidate, Object reference) {
+    static boolean isAfter(Object candidate, Object reference) {
         if (candidate == null) {
             return false;
         }
@@ -1360,6 +1406,23 @@ public class DataSyncService {
         }
         if (candidate instanceof Timestamp && reference instanceof Timestamp) {
             return ((Timestamp) candidate).after((Timestamp) reference);
+        }
+        // A wall clock (new cursors on zone-less columns) against another wall clock, or
+        // against an instant stored by an older version: compare on the same timeline the
+        // zone rules would put them on, which is what Timestamp.valueOf does.
+        if (candidate instanceof LocalDateTime wall) {
+            LocalDateTime other = reference instanceof LocalDateTime otherWall
+                    ? otherWall
+                    : null;
+            if (other != null) {
+                return wall.isAfter(other);
+            }
+            if (reference instanceof Timestamp) {
+                return Timestamp.valueOf(wall).after((Timestamp) reference);
+            }
+        }
+        if (candidate instanceof Timestamp && reference instanceof LocalDateTime wall) {
+            return ((Timestamp) candidate).after(Timestamp.valueOf(wall));
         }
         if (candidate instanceof java.sql.Date && reference instanceof java.sql.Date) {
             return ((java.sql.Date) candidate).toLocalDate()
@@ -1497,7 +1560,8 @@ public class DataSyncService {
             // configured fetch size.
             select.setFetchSize(ctx.getSourceDialect().streamingFetchSize(fetchSize));
             for (int i = 0; i < params.size(); i++) {
-                select.setObject(i + 1, params.get(i));
+                JdbcRowMapper.bindParameter(select, i + 1, params.get(i),
+                        ctx.getSourceDialect());
             }
 
             try (ResultSet rs = select.executeQuery()) {
@@ -3029,7 +3093,7 @@ public class DataSyncService {
         try (PreparedStatement st = sourceConn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
             for (int i = 0; i < params.size(); i++) {
-                st.setObject(i + 1, params.get(i));
+                JdbcRowMapper.bindParameter(st, i + 1, params.get(i), ctx.getSourceDialect());
             }
             try (ResultSet rs = st.executeQuery()) {
                 while (rs.next()) {
@@ -3141,7 +3205,7 @@ public class DataSyncService {
         try (PreparedStatement st = sourceConn.prepareStatement(sql.toString())) {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
             for (int i = 0; i < params.size(); i++) {
-                st.setObject(i + 1, params.get(i));
+                JdbcRowMapper.bindParameter(st, i + 1, params.get(i), dialect);
             }
             try (ResultSet rs = st.executeQuery()) {
                 if (!rs.next()) {
@@ -3743,7 +3807,7 @@ public class DataSyncService {
             int inBatch = 0;
             for (List<Object> keyValues : toDelete) {
                 for (int i = 0; i < keyValues.size(); i++) {
-                    ps.setObject(i + 1, keyValues.get(i));
+                    JdbcRowMapper.bindParameter(ps, i + 1, keyValues.get(i), targetDialect);
                 }
                 // Keyed delete: repeating it is a no-op, so this stays idempotent.
                 ps.addBatch();
@@ -3818,7 +3882,7 @@ public class DataSyncService {
         try (PreparedStatement ps = targetConn.prepareStatement(deleteSql)) {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             while (true) {
-                List<Object[]> chunk = readTargetPage(targetConn,
+                List<Object[]> chunk = readTargetPage(targetConn, targetDialect,
                         lastKey == null ? firstPage : nextPage, pk, chunkKeys, lastKey);
                 if (chunk.isEmpty()) {
                     break;
@@ -3836,7 +3900,7 @@ public class DataSyncService {
                         inTransaction = true;
                     }
                     for (int i = 0; i < row.length; i++) {
-                        ps.setObject(i + 1, row[i]);
+                        JdbcRowMapper.bindParameter(ps, i + 1, row[i], targetDialect);
                     }
                     ps.addBatch();
                     if (++inBatch >= ctx.getBatchSize()) {
@@ -3887,8 +3951,9 @@ public class DataSyncService {
     }
 
     /** One page of target keys, in primary-key order, after {@code lastKey} when given. */
-    private List<Object[]> readTargetPage(Connection conn, String sql, List<String> pk,
-                                          int chunkKeys, Object[] lastKey) throws SQLException {
+    private List<Object[]> readTargetPage(Connection conn, SqlDialect dialect, String sql,
+                                          List<String> pk, int chunkKeys, Object[] lastKey)
+            throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             // setMaxRows is portable where LIMIT / TOP / FETCH FIRST are not.
             ps.setMaxRows(chunkKeys);
@@ -3899,7 +3964,7 @@ public class DataSyncService {
                 int index = 1;
                 for (int column = 0; column < lastKey.length; column++) {
                     for (int prefix = 0; prefix <= column; prefix++) {
-                        ps.setObject(index++, lastKey[prefix]);
+                        JdbcRowMapper.bindParameter(ps, index++, lastKey[prefix], dialect);
                     }
                 }
             }
@@ -3964,7 +4029,7 @@ public class DataSyncService {
             int index = 1;
             for (Object[] row : chunk) {
                 for (Object value : row) {
-                    ps.setObject(index++, value);
+                    JdbcRowMapper.bindParameter(ps, index++, value, dialect);
                 }
             }
             try (ResultSet rs = ps.executeQuery()) {

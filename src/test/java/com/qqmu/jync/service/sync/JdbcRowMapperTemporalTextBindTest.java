@@ -2,6 +2,8 @@ package com.qqmu.jync.service.sync;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -9,6 +11,8 @@ import static org.mockito.Mockito.verify;
 import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,10 +43,14 @@ class JdbcRowMapperTemporalTextBindTest {
     private static final String DATETIME_TEXT = "2026-10-13 12:34:56.789012";
 
     @Test
-    void mysqlWallClockTextBecomesATimestampForAnOracleTarget() throws Exception {
+    void mysqlWallClockTextBecomesAWallClockForAnOracleTarget() throws Exception {
+        // Parsed back as a LocalDateTime and bound with an explicit UTC calendar: a plain
+        // setObject/Timestamp bind reads the literal in the JVM zone and moves a pre-1949
+        // Shanghai gap time forward by an hour.
         bind(ps, DATETIME_TEXT, Types.TIMESTAMP, new OracleDialect(23));
 
-        verify(ps).setTimestamp(1, Timestamp.valueOf(DATETIME_TEXT));
+        verifyOracleCalendarBind(ps, LocalDateTime.parse(DATETIME_TEXT.replace(' ', 'T')));
+        verify(ps, never()).setObject(eq(1), any());
     }
 
     @Test
@@ -71,17 +79,17 @@ class JdbcRowMapperTemporalTextBindTest {
      * Oracle DATE 时用的同一个锚点,因此与原生时态源端的行为一致。
      */
     @Test
-    void timeOfDayTextBecomesAnAnchoredTimestampForAnOracleTarget() throws Exception {
+    void timeOfDayTextBecomesAnAnchoredWallClockForAnOracleTarget() throws Exception {
         bind(ps, "12:34:56", Types.TIME, new OracleDialect(23));
 
-        verify(ps).setTimestamp(1, Timestamp.valueOf("1970-01-01 12:34:56"));
+        verifyOracleCalendarBind(ps, LocalDateTime.of(1970, 1, 1, 12, 34, 56));
     }
 
     @Test
     void timeOfDayTextKeepsItsFractionalSeconds() throws Exception {
         bind(ps, "12:34:56.789", Types.TIME, new OracleDialect(23));
 
-        verify(ps).setTimestamp(1, Timestamp.valueOf("1970-01-01 12:34:56.789"));
+        verifyOracleCalendarBind(ps, LocalDateTime.of(1970, 1, 1, 12, 34, 56, 789_000_000));
     }
 
     /** MySQL 的扩展 TIME 域(小时数 ≥ 24、负数)没有任何时间类型能承载,保持原样绑定。 */
@@ -124,6 +132,14 @@ class JdbcRowMapperTemporalTextBindTest {
         JdbcRowMapper.bind(ps, row, List.of("c"), types);
 
         verify(ps).setObject(1, DATETIME_TEXT);
+    }
+
+    /** Oracle 目标把无时区值按显式 UTC 日历绑定,墙钟字段原样交给驱动。 */
+    private static void verifyOracleCalendarBind(PreparedStatement ps, LocalDateTime wall)
+            throws Exception {
+        verify(ps).setTimestamp(eq(1), eq(Timestamp.from(wall.toInstant(ZoneOffset.UTC))),
+                argThat(calendar -> calendar != null
+                        && "UTC".equals(calendar.getTimeZone().getID())));
     }
 
     private static void bind(PreparedStatement ps, Object value, int targetJdbcType,

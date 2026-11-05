@@ -14,7 +14,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDateTime;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -234,6 +236,61 @@ class JdbcEtlSourceTest {
         assertThat(cursor.getObject(1)).isEqualTo(42);
         assertThat(cursor.getString(1)).isEqualTo("42");
         assertThat(cursor.next()).isFalse();
+        cursor.close();
+    }
+
+    @Test
+    void anOracleSourceReadsAZoneLessTimestampAsAWallClock() throws SQLException {
+        // Oracle DATE and TIMESTAMP both report Types.TIMESTAMP. getObject builds a
+        // Timestamp by reading the wall clock in the JVM zone, and Asia/Shanghai has no
+        // such local time on 1948-05-01 00:00, so the driver's instant lands on 01:00.
+        when(metadata.getColumnType(1)).thenReturn(Types.TIMESTAMP);
+        when(metadata.getColumnTypeName(1)).thenReturn("DATE");
+        LocalDateTime wall = LocalDateTime.of(1948, 5, 1, 0, 0);
+        when(resultSet.getObject(1, LocalDateTime.class)).thenReturn(wall);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.ORACLE)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo(wall);
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aPostgresSourceReadsAZoneLessTimestampAsAWallClock() throws SQLException {
+        // PgJDBC's plain getObject builds a Timestamp through the JVM zone too: a stored
+        // 1948-05-01 00:00 comes back as 01:00. The typed getter returns the wall clock.
+        when(metadata.getColumnType(1)).thenReturn(Types.TIMESTAMP);
+        when(metadata.getColumnTypeName(1)).thenReturn("timestamp");
+        LocalDateTime wall = LocalDateTime.of(1948, 5, 1, 0, 0);
+        when(resultSet.getObject(1, LocalDateTime.class)).thenReturn(wall);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.POSTGRESQL)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo(wall);
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aNonOracleSourceKeepsTheRawTimestampObject() throws SQLException {
+        // The wall-clock read is only safe where the source is known to store one as a
+        // wall clock; every other driver keeps the value getObject already returned.
+        when(metadata.getColumnType(1)).thenReturn(Types.TIMESTAMP);
+        when(metadata.getColumnTypeName(1)).thenReturn("TIMESTAMP");
+        Timestamp raw = Timestamp.valueOf("1948-05-01 01:00:00");
+        when(resultSet.getObject(1)).thenReturn(raw);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.H2)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo(raw);
+        verify(resultSet, never()).getObject(1, LocalDateTime.class);
         cursor.close();
     }
 

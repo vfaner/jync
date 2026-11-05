@@ -21,6 +21,7 @@ import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.etl.EtlRunResult.Side;
+import com.qqmu.jync.service.sync.JdbcRowMapper;
 import com.qqmu.jync.service.etl.mongo.MongoFilterParser;
 
 /**
@@ -136,14 +137,7 @@ public class EtlRunner {
                             keyValue = cursor.getString(keyIndex);
                         }
                         stage = Side.TARGET;
-                        for (int i = 1; i <= columns.size(); i++) {
-                            Object value = values[i - 1];
-                            if (value == null) {
-                                insert.setNull(i, columns.get(i - 1).jdbcType());
-                            } else {
-                                insert.setObject(i, value);
-                            }
-                        }
+                        bindRow(insert, columns, values, targetDialect);
                         insert.addBatch();
                         pending++;
 
@@ -269,6 +263,23 @@ public class EtlRunner {
 
     private static List<String> columnNames(List<EtlSourceColumn> columns) {
         return columns.stream().map(EtlSourceColumn::name).toList();
+    }
+
+    /**
+     * Binds one extracted row to the insert. A zone-less wall clock goes through
+     * {@link JdbcRowMapper#bindParameter}: Oracle's driver renders a {@code LocalDateTime}
+     * through the JVM default zone, so a pre-1949 DST-gap value would land an hour late.
+     */
+    static void bindRow(PreparedStatement insert, List<EtlSourceColumn> columns,
+                        Object[] values, SqlDialect dialect) throws SQLException {
+        for (int i = 1; i <= columns.size(); i++) {
+            Object value = values[i - 1];
+            if (value == null) {
+                insert.setNull(i, columns.get(i - 1).jdbcType());
+            } else {
+                JdbcRowMapper.bindParameter(insert, i, value, dialect);
+            }
+        }
     }
 
     // --- target -------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
+import com.qqmu.jync.service.sync.JdbcRowMapper;
 
 /**
  * The JDBC implementation of an ETL source. It is the behavior the runner used to hold inline,
@@ -74,10 +75,11 @@ final class JdbcEtlSource implements EtlSource {
                 statement.setQueryTimeout(timeout);
             }
             if (checkpoint != null && resumable) {
-                bindResumeKey(statement, checkpoint);
+                bindResumeKey(statement, checkpoint, config == null ? null : config.effectiveType());
             }
             ResultSet resultSet = statement.executeQuery();
-            return new JdbcEtlSourceCursor(statement, resultSet, task, resumable);
+            return new JdbcEtlSourceCursor(statement, resultSet, task, resumable,
+                    config == null ? null : config.effectiveType());
         } catch (SQLException | RuntimeException e) {
             closeQuietly(statement);
             throw e;
@@ -259,8 +261,8 @@ final class JdbcEtlSource implements EtlSource {
         return type != null && type.needsConnectorJStreamingSentinel() ? Integer.MIN_VALUE : FETCH_SIZE;
     }
 
-    private static void bindResumeKey(PreparedStatement statement, EtlCheckpointValue checkpoint)
-            throws SQLException {
+    static void bindResumeKey(PreparedStatement statement, EtlCheckpointValue checkpoint,
+                              DatabaseType sourceType) throws SQLException {
         String value = checkpoint.value();
         try {
             switch (checkpoint.jdbcType()) {
@@ -286,7 +288,17 @@ final class JdbcEtlSource implements EtlSource {
                     statement.setTime(1, Time.valueOf(value));
                     break;
                 case Types.TIMESTAMP:
-                    statement.setTimestamp(1, Timestamp.valueOf(value));
+                    java.time.LocalDateTime wall = wallClock(value);
+                    if (wall == null) {
+                        statement.setTimestamp(1, Timestamp.valueOf(value));
+                    } else {
+                        // The stored text is the wall clock the source rendered; binding it
+                        // as a plain Timestamp (or via setObject on Oracle's and PgJDBC's
+                        // drivers) reads it in the JVM zone and moves historical DST-gap
+                        // times (Asia/Shanghai before 1949) forward an hour.
+                        JdbcRowMapper.bindWallClock(statement, 1, wall,
+                                JdbcRowMapper.bindsZoneLessThroughUtcCalendar(sourceType));
+                    }
                     break;
                 default:
                     statement.setString(1, value);
@@ -295,6 +307,19 @@ final class JdbcEtlSource implements EtlSource {
         } catch (IllegalArgumentException e) {
             throw new EtlProgramException("stored resume value '" + value
                     + "' cannot be read back as JDBC type " + checkpoint.jdbcType());
+        }
+    }
+
+    /** The text as a zone-less wall clock, or null when it is not "yyyy-MM-dd HH:mm:ss[.f…]". */
+    private static java.time.LocalDateTime wallClock(String text) {
+        String t = text == null ? "" : text.trim();
+        if (t.length() < 19 || (t.charAt(10) != ' ' && t.charAt(10) != 'T')) {
+            return null;
+        }
+        try {
+            return java.time.LocalDateTime.parse(t.replace(' ', 'T'));
+        } catch (java.time.format.DateTimeParseException e) {
+            return null;
         }
     }
 

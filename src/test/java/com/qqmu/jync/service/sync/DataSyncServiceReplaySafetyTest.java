@@ -330,8 +330,8 @@ class DataSyncServiceReplaySafetyTest {
         assertThat(count("NOTES")).isEqualTo(2);
         // The keyless seed must store the watermark exactly: with the default 1s lag the
         // old code rewound it, and the very next window plain-inserted row 'a' again.
-        String expectedWatermark = java.sql.Timestamp.valueOf("2026-01-01 00:00:00")
-                .toInstant().toString();
+        // A zone-less TIMESTAMP watermark is stored as its wall clock, not as an instant.
+        String expectedWatermark = "2026-01-01 00:00:00";
         assertThat(seed.getNewCursorValue()).isEqualTo(expectedWatermark);
 
         progress.setInitialLoadDone(true);
@@ -426,9 +426,8 @@ class DataSyncServiceReplaySafetyTest {
         DataSyncService.TableSyncResult seed =
                 service.syncTable(source, target, table, timestamp, new SyncProgress(), ctx);
         assertThat(seed.isSuccess()).isTrue();
-        // 默认 lag 1000ms：存储游标比水位线早一秒（用与生产一致的时区换算推导期望值）。
-        String expected = java.sql.Timestamp.valueOf("2026-01-01 00:00:00")
-                .toInstant().minusMillis(1000).toString();
+        // 默认 lag 1000ms：墙钟水位线回退一秒后仍以墙钟文本存储。
+        String expected = "2025-12-31 23:59:59";
         assertThat(seed.getNewCursorValue()).isEqualTo(expected);
     }
 

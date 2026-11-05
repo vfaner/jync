@@ -127,6 +127,22 @@ public interface SqlDialect {
     }
 
     /**
+     * Whether a zone-less {@code LocalDateTime} must be bound as a {@code Timestamp} with an
+     * explicit fixed-offset calendar instead of {@code setObject(idx, LocalDateTime)}.
+     *
+     * <p>Some drivers render a zone-less {@code java.time} value through the JVM's default
+     * zone — Oracle's ojdbc8 21.5 does it for {@code setObject(LocalDateTime)} on DATE and
+     * TIMESTAMP, and PgJDBC 42.x converts the value through {@link java.sql.Timestamp#valueOf}
+     * for both {@code setObject} forms. Where the JVM zone's historical rules have no such
+     * local time — Asia/Shanghai before 1949 has six — the value is moved forward an hour on
+     * write. Binding the same fields through a UTC calendar hands the driver the wall clock
+     * directly, so a pre-1949 {@code DATE}/{@code TIMESTAMP} lands unchanged.
+     */
+    default boolean bindsZoneLessTemporalThroughUtcCalendar() {
+        return false;
+    }
+
+    /**
      * Statement that switches explicit-value inserts into an identity column for one table
      * ({@code SET IDENTITY_INSERT ... ON/OFF}); null when the product needs nothing. Only
      * SQL Server requires it — without it inserting the source's own id fails with error 544.

@@ -50,16 +50,20 @@ class JdbcRowMapperReadSpecialTypesTest {
     }
 
     @Test
-    void aGenuineTimestampColumnIsStillReadAsTimestamp() throws Exception {
-        java.sql.Timestamp ts = java.sql.Timestamp.valueOf("2026-10-13 12:34:56.789012");
+    void aZoneLessTimestampColumnIsReadAsAWallClock() throws Exception {
+        // Types.TIMESTAMP means "without time zone": getTimestamp reads the wall clock in
+        // the JVM zone and moves historical DST-gap times (Asia/Shanghai before 1949)
+        // forward by an hour, so the wall clock itself is what gets read.
+        java.time.LocalDateTime wall =
+                java.time.LocalDateTime.of(2026, 10, 13, 12, 34, 56, 789_012_000);
         ResultSet rs = mockRow(Types.TIMESTAMP, "TIMESTAMP");
-        when(rs.getTimestamp(1)).thenReturn(ts);
+        when(rs.getObject(1, java.time.LocalDateTime.class)).thenReturn(wall);
         when(rs.wasNull()).thenReturn(false);
 
         Map<String, Object> row = JdbcRowMapper.readRow(
                 rs, List.of("c"), List.of(Types.TIMESTAMP), List.of("TIMESTAMP"));
 
-        assertThat(row.get("c")).isEqualTo(ts);
+        assertThat(row.get("c")).isEqualTo(wall);
     }
 
     @Test

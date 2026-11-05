@@ -343,6 +343,16 @@ public class OracleDialect extends AbstractSqlDialect {
         return true;
     }
 
+    /**
+     * Oracle's driver converts a zone-less {@code LocalDateTime} through the JVM default
+     * zone, moving pre-1949 Asia/Shanghai DST-gap wall clocks forward an hour on write
+     * (the bundled ojdbc8 21.5 does this for {@code DATE} and {@code TIMESTAMP} alike).
+     */
+    @Override
+    public boolean bindsZoneLessTemporalThroughUtcCalendar() {
+        return true;
+    }
+
     @Override
     protected String currentTimestampFunction() {
         return "SYSTIMESTAMP";

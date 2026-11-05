@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
@@ -235,15 +236,7 @@ public final class JdbcRowMapper {
                 break;
             case Types.TIMESTAMP:
             case Types.TIMESTAMP_WITH_TIMEZONE:
-                if (isMysqlDatetime(typeName)) {
-                    // Connector/J converts DATETIME from the server session zone to the
-                    // JVM zone inside getTimestamp, shifting the wall clock. The server
-                    // literal is the displayed wall time and must survive verbatim; the
-                    // bind side casts it explicitly (?::timestamp on PG-family targets).
-                    value = rs.getString(idx);
-                } else {
-                    value = rs.getTimestamp(idx);
-                }
+                value = readTemporal(rs, idx, type, typeName, sourceType);
                 break;
             case Types.DATE:
                 if (isMysqlYear(typeName)) {
@@ -298,6 +291,72 @@ public final class JdbcRowMapper {
                 value = rs.getObject(idx);
         }
         return value;
+    }
+
+    /**
+     * Reads a timestamp column with the representation its zone semantics need.
+     *
+     * <p>JDBC {@code Types.TIMESTAMP} means a timestamp <em>without</em> time zone: the value
+     * is a wall clock, and {@link ResultSet#getTimestamp(int)} is the wrong accessor for it.
+     * That accessor builds a {@link Timestamp} by reading the wall clock in the JVM's default
+     * zone, and wherever the zone's rules have no such local time — Asia/Shanghai before 1949
+     * has six of them (1941-03-15 00:00, 1947-04-15 00:00, 1948-05-01 00:00, …) — the rules
+     * move it forward by an hour. Oracle 11g → 19c syncs copied every such DATE/TIMESTAMP
+     * value as the next hour. {@code getObject(idx, LocalDateTime.class)} returns the stored
+     * wall clock untouched.
+     *
+     * <p>Zone-aware columns stay instants: MySQL's {@code TIMESTAMP}, and
+     * {@code TIMESTAMPTZ}/{@code DATETIMEOFFSET}/{@code TIMESTAMP WITH TIME ZONE} (which the
+     * vendor normalizer reads as {@code OffsetDateTime}, but a plain metadata read still
+     * lands here). MySQL {@code DATETIME} keeps its server literal, as before.
+     */
+    public static Object readTemporal(ResultSet rs, int idx, int jdbcType, String typeName,
+                                      com.qqmu.jync.model.DatabaseType sourceType)
+            throws SQLException {
+        if (jdbcType == Types.TIMESTAMP_WITH_TIMEZONE) {
+            return rs.getTimestamp(idx);
+        }
+        if (isMysqlDatetime(typeName)) {
+            // Connector/J converts DATETIME from the server session zone to the
+            // JVM zone inside getTimestamp, shifting the wall clock. The server
+            // literal is the displayed wall time and must survive verbatim; the
+            // bind side casts it explicitly (?::timestamp on PG-family targets).
+            return rs.getString(idx);
+        }
+        if (isZoneAwareTimestampName(typeName)
+                || (sourceType != null
+                        && sourceType.getFamily() == com.qqmu.jync.model.DatabaseType
+                                .DialectFamily.MYSQL)) {
+            return rs.getTimestamp(idx);
+        }
+        return readWallClock(rs, idx);
+    }
+
+    /**
+     * The stored wall clock, or the driver's instant when it has no JDBC 4.2 typed getter.
+     * The fallback keeps old drivers working; a modern driver returns the exact time.
+     */
+    private static Object readWallClock(ResultSet rs, int idx) throws SQLException {
+        try {
+            return rs.getObject(idx, LocalDateTime.class);
+        } catch (SQLFeatureNotSupportedException | AbstractMethodError
+                | UnsupportedOperationException e) {
+            return rs.getTimestamp(idx);
+        } catch (SQLException e) {
+            // A driver that advertises the overload but cannot produce the type ends up
+            // here (some packaged GPL/legacy builds). Same fallback as above.
+            return rs.getTimestamp(idx);
+        }
+    }
+
+    /** Type names whose value carries its own offset, whatever JDBC type they report. */
+    private static boolean isZoneAwareTimestampName(String typeName) {
+        if (typeName == null) {
+            return false;
+        }
+        String n = typeName.trim().toUpperCase(java.util.Locale.ROOT);
+        return n.equals("TIMESTAMPTZ") || n.equals("DATETIMEOFFSET")
+                || n.equals("TIMESTAMP WITH TIME ZONE");
     }
 
     private static boolean isMysqlYear(String typeName) {
@@ -388,7 +447,7 @@ public final class JdbcRowMapper {
         if (value instanceof Instant) {
             ps.setTimestamp(idx, Timestamp.from((Instant) value));
         } else if (value instanceof LocalDateTime) {
-            ps.setTimestamp(idx, Timestamp.valueOf((LocalDateTime) value));
+            bindWallClock(ps, idx, (LocalDateTime) value, usesUtcCalendar(targetDialect));
         } else if (value instanceof java.time.OffsetDateTime) {
             ps.setTimestamp(idx, Timestamp.from(((java.time.OffsetDateTime) value).toInstant()));
         } else if (value instanceof java.time.ZonedDateTime) {
@@ -432,7 +491,7 @@ public final class JdbcRowMapper {
             // Oracle re-render it through NLS_TIMESTAMP_FORMAT
             // ("2026-10-13 12:34:56" → "13-10月-26 12.34.56.000000 下午"). Only text that
             // merely looks like a timestamp is at risk, and it must survive verbatim.
-            Timestamp parsed = timestampFromText((String) value);
+            LocalDateTime parsed = wallClockFromText((String) value);
             if (parsed == null && targetType == Types.TIME) {
                 // A TIME column reaches the binder as the server's literal text on every
                 // source (see readValue), and Oracle has no TIME type: structure sync
@@ -442,12 +501,12 @@ public final class JdbcRowMapper {
                 // DATETIME failure above. The parsed value carries 1970-01-01, the same
                 // anchor the driver applies to a java.sql.Time bound to Oracle DATE, so
                 // native temporal sources land identically.
-                parsed = timestampFromTimeOfDay((String) value);
+                parsed = wallClockFromTimeOfDay((String) value);
             }
             if (parsed == null) {
                 ps.setObject(idx, value);
             } else {
-                ps.setTimestamp(idx, parsed);
+                bindWallClock(ps, idx, parsed, usesUtcCalendar(targetDialect));
             }
         } else if (value instanceof CharSequence && isNumericType(targetType)) {
             // Oracle/DM redo text carries every numeric column as a literal string
@@ -482,12 +541,88 @@ public final class JdbcRowMapper {
         }
     }
 
-    /** The literal as a {@code Timestamp}, or null when it is not "yyyy-MM-dd HH:mm:ss[.f…]". */
-    private static Timestamp timestampFromText(String text) {
-        String t = text.trim();
+    /**
+     * Writes a zone-less timestamp as the wall clock it is.
+     *
+     * <p>{@code setObject(idx, LocalDateTime)} sends the literal through unchanged on a
+     * driver that treats {@code java.time} values as zone-less. Some drivers instead read
+     * them in the JVM's zone and move a pre-1949 Shanghai gap time forward an hour; for
+     * those ({@code viaUtcCalendar}) the same fields go through {@code setTimestamp} with a
+     * UTC calendar, which the driver renders literally.
+     */
+    public static void bindWallClock(PreparedStatement ps, int idx, LocalDateTime value,
+                                     boolean viaUtcCalendar) throws SQLException {
+        if (viaUtcCalendar) {
+            // Calendar is mutable; one per bind call keeps it off shared state.
+            java.util.Calendar utc = java.util.Calendar.getInstance(
+                    java.util.TimeZone.getTimeZone("UTC"));
+            ps.setTimestamp(idx, Timestamp.from(value.toInstant(java.time.ZoneOffset.UTC)),
+                    utc);
+            return;
+        }
         try {
-            return Timestamp.valueOf(t);
-        } catch (IllegalArgumentException e) {
+            ps.setObject(idx, value);
+        } catch (SQLFeatureNotSupportedException | AbstractMethodError
+                | UnsupportedOperationException e) {
+            ps.setTimestamp(idx, Timestamp.valueOf(value));
+        } catch (SQLException e) {
+            ps.setTimestamp(idx, Timestamp.valueOf(value));
+        }
+    }
+
+    /**
+     * Binds a query parameter, sending a zone-less wall clock through the driver's
+     * {@code java.time} support or its UTC-calendar rendering as the dialect requires (see
+     * {@link com.qqmu.jync.service.converter.SqlDialect#bindsZoneLessTemporalThroughUtcCalendar()}).
+     * Every other value goes through {@code setObject} unchanged.
+     */
+    public static void bindParameter(PreparedStatement ps, int idx, Object value,
+                                     com.qqmu.jync.service.converter.SqlDialect dialect)
+            throws SQLException {
+        if (value instanceof LocalDateTime && usesUtcCalendar(dialect)) {
+            bindWallClock(ps, idx, (LocalDateTime) value, true);
+            return;
+        }
+        ps.setObject(idx, value);
+    }
+
+    private static boolean usesUtcCalendar(
+            com.qqmu.jync.service.converter.SqlDialect dialect) {
+        return dialect != null && dialect.bindsZoneLessTemporalThroughUtcCalendar();
+    }
+
+    /**
+     * Whether wall-clock values bound to a product of this type need the fixed-offset
+     * calendar. Mirrors {@link com.qqmu.jync.service.converter.SqlDialect
+     * #bindsZoneLessTemporalThroughUtcCalendar()} for call sites that only have the
+     * {@link com.qqmu.jync.model.DatabaseType} at hand — the ETL resume key is bound
+     * against the source connection before a dialect is resolved.
+     */
+    public static boolean bindsZoneLessThroughUtcCalendar(
+            com.qqmu.jync.model.DatabaseType type) {
+        if (type == null) {
+            return false;
+        }
+        com.qqmu.jync.model.DatabaseType.DialectFamily family = type.getFamily();
+        return family == com.qqmu.jync.model.DatabaseType.DialectFamily.ORACLE
+                || family == com.qqmu.jync.model.DatabaseType.DialectFamily.POSTGRES;
+    }
+
+    /**
+     * The literal as a wall clock, or null when it is not "yyyy-MM-dd HH:mm:ss[.f…]".
+     *
+     * <p>Deliberately not {@code Timestamp.valueOf}: that re-reads the literal in the
+     * default zone and moves historical gap times (e.g. "1948-05-01 00:00:00" in
+     * Asia/Shanghai) forward by an hour.
+     */
+    private static LocalDateTime wallClockFromText(String text) {
+        String t = text.trim();
+        if (t.length() < 19 || (t.charAt(10) != ' ' && t.charAt(10) != 'T')) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(t.replace(' ', 'T'));
+        } catch (java.time.format.DateTimeParseException e) {
             return null;
         }
     }
@@ -496,21 +631,21 @@ public final class JdbcRowMapper {
     private static final String TIME_OF_DAY_ANCHOR = "1970-01-01 ";
 
     /**
-     * The literal as a {@code Timestamp} on {@value #TIME_OF_DAY_ANCHOR}, or null when it is
-     * not a clock time {@code HH:mm:ss[.f…]}. Deliberately strict about the hour of day: the
-     * MySQL extended domain (hours past 23, negative values) has no {@code Timestamp} form,
-     * and pretending otherwise would write a date the source never meant.
+     * The literal as a wall clock on {@value #TIME_OF_DAY_ANCHOR}, or null when it is not a
+     * clock time {@code HH:mm:ss[.f…]}. Deliberately strict about the hour of day: the MySQL
+     * extended domain (hours past 23, negative values) has no temporal form, and pretending
+     * otherwise would write a date the source never meant.
      */
-    private static Timestamp timestampFromTimeOfDay(String text) {
+    private static LocalDateTime wallClockFromTimeOfDay(String text) {
         String t = text.trim();
-        // Two-digit hours only: Timestamp.valueOf reads fixed offsets, so "9:05:07" would
+        // Two-digit hours only: LocalDateTime.parse reads fixed offsets, so "9:05:07" would
         // be misparsed rather than rejected.
         if (!t.matches("([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(\\.\\d{1,9})?")) {
             return null;
         }
         try {
-            return Timestamp.valueOf(TIME_OF_DAY_ANCHOR + t);
-        } catch (IllegalArgumentException e) {
+            return LocalDateTime.parse((TIME_OF_DAY_ANCHOR + t).replace(' ', 'T'));
+        } catch (java.time.format.DateTimeParseException e) {
             return null;
         }
     }
@@ -533,6 +668,30 @@ public final class JdbcRowMapper {
             default:
                 return false;
         }
+    }
+
+    private static final java.time.format.DateTimeFormatter WALL_CLOCK_FORMAT =
+            java.time.format.DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss");
+
+    /**
+     * The wall clock as {@code yyyy-MM-dd HH:mm:ss[.f…]}, with trailing fraction zeros
+     * trimmed, so it parses back through {@link LocalDateTime#parse} unchanged.
+     *
+     * <p>The fraction is appended because {@code LocalDateTime.toString()} omits a zero
+     * seconds component and local time formatting would otherwise drop sub-second values.
+     */
+    static String wallClockToString(LocalDateTime value) {
+        String text = value.format(WALL_CLOCK_FORMAT);
+        int nanos = value.getNano();
+        if (nanos == 0) {
+            return text;
+        }
+        String fraction = String.format(java.util.Locale.ROOT, "%09d", nanos);
+        int end = fraction.length();
+        while (end > 0 && fraction.charAt(end - 1) == '0') {
+            end--;
+        }
+        return text + "." + fraction.substring(0, end);
     }
 
     /** Renders a cursor value as text for durable storage in the progress row. */
@@ -584,10 +743,10 @@ public final class JdbcRowMapper {
             // Keep the wall-clock text itself. A LocalDateTime is explicitly zone-less: the
             // old toInstant(UTC) invented a UTC zone on write, but on bind the Timestamp went
             // back through the driver in its own session/JVM zone, so the window edge shifted
-            // by that offset and rows fell out of the window. Normalize through
-            // Timestamp.valueOf: LocalDateTime.toString() omits a zero seconds component,
-            // which the parser would then reject.
-            return Timestamp.valueOf((LocalDateTime) value).toString();
+            // by that offset and rows fell out of the window. Rendering through
+            // Timestamp.valueOf would re-read the wall clock in the default zone and move a
+            // historical gap time forward by an hour, so the text is produced directly.
+            return wallClockToString((LocalDateTime) value);
         }
         return String.valueOf(value);
     }
@@ -671,11 +830,11 @@ public final class JdbcRowMapper {
             try {
                 return Timestamp.from(Instant.parse(stored));
             } catch (Exception e) {
-                // Tolerate wall-clock forms: a plain SQL timestamp ("yyyy-MM-dd HH:mm:ss")
-                // written by an older version, or ISO LocalDateTime text ("...T...").
+                // Wall-clock forms are zone-less and must NOT go through Timestamp.valueOf:
+                // it re-reads them in the default zone and moves historical gap times
+                // (Asia/Shanghai before 1949) forward by an hour on every window bind.
                 try {
-                    String spaced = stored.trim().replace('T', ' ');
-                    return Timestamp.valueOf(spaced);
+                    return LocalDateTime.parse(stored.trim().replace(' ', 'T'));
                 } catch (Exception ignored) {
                     log.warn("Unparseable stored cursor '{}'; treating as absent", stored);
                     return null;

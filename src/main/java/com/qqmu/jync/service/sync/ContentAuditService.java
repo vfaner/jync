@@ -413,7 +413,7 @@ public class ContentAuditService {
         try (PreparedStatement st = conn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(st, timeoutSeconds);
             for (int i = 0; i < params.size(); i++) {
-                st.setObject(i + 1, params.get(i));
+                JdbcRowMapper.bindParameter(st, i + 1, params.get(i), dialect);
             }
             try (ResultSet rs = st.executeQuery()) {
                 List<String> names = JdbcRowMapper.columnNames(rs.getMetaData());
