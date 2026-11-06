@@ -88,6 +88,17 @@ public class DatabaseHealthService {
     }
 
     /**
+     * Drops every cached verdict.
+     *
+     * <p>Called after a configuration import: the ids in the cache now name different databases,
+     * and the timestamp check that invalidates an edited row cannot see a row that was replaced
+     * wholesale.
+     */
+    public void evictAll() {
+        cache.clear();
+    }
+
+    /**
      * Checks the given connections, in the order given.
      *
      * @param force bypass the cache; the page's "check all" button sets this, an automatic

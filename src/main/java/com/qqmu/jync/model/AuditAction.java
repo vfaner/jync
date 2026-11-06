@@ -42,5 +42,13 @@ public enum AuditAction {
     /** A dedicated-migration task was created or updated. */
     MIGRATION_TASK_SAVE,
     /** A dedicated-migration task was deleted. */
-    MIGRATION_TASK_DELETE
+    MIGRATION_TASK_DELETE,
+    /** A system setting was changed from the 系统配置 page (currently the HTTPS switch). */
+    SYSTEM_SETTING_SAVE,
+    /** A configuration package was exported. */
+    CONFIG_EXPORT,
+    /** A configuration package was imported into this (empty) metadata database. */
+    CONFIG_IMPORT,
+    /** A candidate metadata-database connection was tested from the 系统配置 page. */
+    SYSTEM_DB_TEST
 }

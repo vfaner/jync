@@ -140,21 +140,38 @@
                     </a>
                 </div>
             </div>
-            <a class="nav-settings" th:href="@{/settings}"
-               th:classappend="${activeNav == 'settings'} ? 'active' : ''">
-                <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">System info</span>
-                <!--/* 更新提示圆点：管理员在每个页面都拿到它，登录后首次加载由 app.js 查一次，
-                       之后靠 sessionStorage 留在导航上；进入系统信息页再强制查一次。
-                       服务端先查 GitHub、超时无结果再查 Gitee；两边都失败就保持隐藏，不打扰用户。
-                       未开启更新检查（app.update-check.enabled=false）时整个圆点不渲染。 */-->
-                <span class="nav-update-dot" id="nav-update-badge"
-                      th:if="${updateCheckEnabled and isAdmin}"
-                      th:data-url="@{/api/version/check}"
-                      th:data-label="#{settings.updateAvailable}"
-                      th:data-label-artifact="#{settings.artifactUpdatedShort}"
-                      th:data-refresh="${activeNav == 'settings'}"
-                      hidden>!</span>
-            </a>
+            <!--/* 系统管理：系统配置（元数据库、强制 HTTPS、配置包）只对管理员可见，它同时
+                   也是 /system-config 的 ADMIN-only 规则在导航上的投影；系统信息对所有登录
+                   用户可见，更新圆点留在这一项里，位置与 id 都不变。 */-->
+            <div class="nav-group nav-links-group nav-system"
+                 th:classappend="${activeNav == 'settings' or activeNav == 'systemConfig'} ? 'is-active' : ''">
+                <button type="button" class="nav-trigger nav-link-trigger"
+                        aria-haspopup="true" aria-expanded="false">
+                    <svg class="ico"><use href="#gear"/></svg>
+                    <span th:text="#{nav.system}">System</span>
+                    <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
+                </button>
+                <div class="nav-menu">
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/system-config}">
+                        <svg class="ico"><use href="#sliders"/></svg>
+                        <span th:text="#{nav.systemConfig}">System settings</span>
+                    </a>
+                    <a class="menu-item nav-settings" th:href="@{/settings}">
+                        <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">System info</span>
+                        <!--/* 更新提示圆点：管理员在每个页面都拿到它，登录后首次加载由 app.js 查一次，
+                               之后靠 sessionStorage 留在导航上；进入系统信息页再强制查一次。
+                               服务端先查 GitHub、超时无结果再查 Gitee；两边都失败就保持隐藏，不打扰用户。
+                               未开启更新检查（app.update-check.enabled=false）时整个圆点不渲染。 */-->
+                        <span class="nav-update-dot" id="nav-update-badge"
+                              th:if="${updateCheckEnabled and isAdmin}"
+                              th:data-url="@{/api/version/check}"
+                              th:data-label="#{settings.updateAvailable}"
+                              th:data-label-artifact="#{settings.artifactUpdatedShort}"
+                              th:data-refresh="${activeNav == 'settings'}"
+                              hidden>!</span>
+                    </a>
+                </div>
+            </div>
         </nav>
 
         <div class="nav-right">
@@ -728,6 +745,8 @@
         'error.forbidden': /*[[#{error.forbidden}]]*/ '',
         'error.sessionExpired': /*[[#{error.sessionExpired}]]*/ '',
         'error.network': /*[[#{error.network}]]*/ '',
+        'msg.systemConfig.dbTest.ok': /*[[#{msg.systemConfig.dbTest.ok}]]*/ '',
+        'error.dbTest.failed': /*[[#{error.dbTest.failed}]]*/ '',
         'common.ok': /*[[#{common.ok}]]*/ '',
         'common.cancel': /*[[#{common.cancel}]]*/ '',
         'dirty.title': /*[[#{dirty.title}]]*/ '',

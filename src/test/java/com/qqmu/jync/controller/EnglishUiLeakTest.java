@@ -84,7 +84,7 @@ class EnglishUiLeakTest {
             "/migrations/connections", "/migrations/connections/new",
             "/databases", "/databases/new",
             "/ai", "/ai/new",
-            "/settings",
+            "/settings", "/system-config",
             "/audits",
             "/change-logs",
             "/system-logs",
