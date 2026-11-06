@@ -207,9 +207,13 @@ class ProjectControllerObjectSelectionTest {
         // them on for the baseline — so showing them invites edits that cannot take effect.
         // They stay in the form (CSS-hidden, not disabled) so the saved values survive a save
         // made while CDC is selected.
-        for (String name : List.of("syncStructure", "syncData", "syncIndexes")) {
+        for (String name : List.of("syncStructure", "syncData")) {
             assertThat(labelTag(page, name)).contains("polling-only").contains("is-hidden");
         }
+        // Indexes are the exception: the baseline honours the saved switch (it does not affect
+        // correctness), so the switch has to stay visible and editable in CDC mode.
+        assertThat(labelTag(page, "syncIndexes"))
+                .doesNotContain("polling-only").doesNotContain("is-hidden");
         // Views and routines are NOT forced on: they are synced whenever the baseline runs,
         // per their saved switches. Hiding them would leave CDC users no way to turn them off
         // without switching the strategy first, so they move into the collapsible baseline

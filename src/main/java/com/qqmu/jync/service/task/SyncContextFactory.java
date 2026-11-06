@@ -344,12 +344,17 @@ public class SyncContextFactory {
 
     /**
      * The log-CDC baseline is the only full load a CDC project ever gets, and the form hides
-     * the structure/data/indexes switches in that mode. Hidden is not inert: a project saved
-     * as structure-only and then switched to CDC would load no rows during the baseline, and
-     * the change stream only covers changes after the baseline position. Treat the three as
-     * on for CDC execution, without writing back to the stored config — switching back to
-     * polling restores the user's original choices, and the dangerous switches
-     * ({@code allowDrop}, {@code syncDeletes}) stay exactly as saved.
+     * the structure/data switches in that mode. Hidden is not inert: a project saved as
+     * structure-only and then switched to CDC would load no rows during the baseline, and the
+     * change stream only covers changes after the baseline position. Treat those two as on for
+     * CDC execution, without writing back to the stored config — switching back to polling
+     * restores the user's original choices.
+     *
+     * <p>Indexes are deliberately not forced: they do not affect baseline correctness, only
+     * the load's write cost and the target's space, and the switch stays visible in CDC mode.
+     * An operator who pre-created the tables by hand (with their own indexes) or who does not
+     * want secondary-index maintenance during the load must get what they asked for. The
+     * dangerous switches ({@code allowDrop}, {@code syncDeletes}) are likewise left as saved.
      */
     static void applyCdcBaselineDefaults(SyncConfig config) {
         if (config == null || !config.getCaptureStrategyOrDefault().isLogCdc()) {
@@ -357,7 +362,6 @@ public class SyncContextFactory {
         }
         config.setSyncStructure(true);
         config.setSyncData(true);
-        config.setSyncIndexes(true);
     }
 
     public String serializeConfig(SyncConfig config) {

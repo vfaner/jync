@@ -7,10 +7,11 @@
         <h2><svg class="ico"><use href="#toggles"/></svg> <span th:text="#{project.syncOptions}">Options</span></h2>
     </div>
     <div class="card-body">
-        <!--/* 日志 CDC 下这三个开关不参与增量流(消费者只按所选表过滤,
-               行变更照常应用),基线执行时又会被强制打开,显示出来只会
+        <!--/* 日志 CDC 下「表结构/表数据」不参与增量流(消费者只按所选表
+               过滤,行变更照常应用),基线执行时又会被强制打开,显示出来只会
                诱导无效修改:隐藏但不禁用,提交时保存值原样带回,切回
-               轮询后恢复显示。视图/存储过程不同,见下方基线分组。 */-->
+               轮询后恢复显示。索引不同:基线按保存值执行,不影响正确性,
+               因此保持可见可改。视图/存储过程见下方基线分组。 */-->
         <p class="small muted" data-cdc-visibility="cdc"
            th:classappend="${selectedCdc} ? '' : 'is-hidden'"
            style="margin:0 0 10px" th:text="#{project.syncOptions.cdcHidden}">Log CDC mode: the polling switches are hidden.</p>
@@ -39,8 +40,8 @@
                 <span class="help" th:text="#{option.syncDataHelp}">help</span>
             </span>
         </label>
-        <label class="switch" data-role="polling-only"
-               th:classappend="${selectedCdc} ? 'is-hidden' : ''">
+        <!-- 索引开关不随 CDC 隐藏:基线按保存值执行,关掉就不会建/重建二级索引。 -->
+        <label class="switch">
             <input type="checkbox" name="syncIndexes" value="true"
                    th:checked="${config.syncIndexes and (sourceObjects == null or !#lists.isEmpty(sourceObjects.tables))}"
                    th:disabled="${sourceObjects != null and #lists.isEmpty(sourceObjects.tables)}">
