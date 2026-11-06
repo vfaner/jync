@@ -8,7 +8,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -98,8 +97,4 @@ public class TlsCertificateInspector {
         }
     }
 
-    /** Not used for validation — the page compares this instant with the clock. */
-    static Instant now() {
-        return Instant.now();
-    }
 }

@@ -348,11 +348,14 @@
                                 <div class="field">
                                     <label for="tls-pem-port" th:text="#{systemConfig.tlsHttpsPort}">HTTPS port</label>
                                     <input class="input" id="tls-pem-port" type="number" name="httpsPort"
-                                           min="1" max="65535" value="8443" required/>
+                                           min="1" max="65535" required
+                                           th:value="${tls.httpsPort != null ? tls.httpsPort : 8443}"/>
                                 </div>
                                 <div class="field">
                                     <label class="check-inline">
-                                        <input type="checkbox" name="redirectHttp" value="true" checked/>
+                                        <!-- 续期重传时沿用已保存的选择，不能悄悄把端口改回 8443 或重新打开跳转。 -->
+                                        <input type="checkbox" name="redirectHttp" value="true"
+                                               th:checked="${tls.httpsPort == null or tls.redirectHttp}"/>
                                         <span th:text="#{systemConfig.tlsRedirect}">Redirect HTTP to HTTPS</span>
                                     </label>
                                 </div>
@@ -384,12 +387,14 @@
                                 <div class="field">
                                     <label for="tls-port" th:text="#{systemConfig.tlsHttpsPort}">HTTPS port</label>
                                     <input class="input" id="tls-port" type="number" name="httpsPort"
-                                           min="1" max="65535" value="8443" required/>
+                                           min="1" max="65535" required
+                                           th:value="${tls.httpsPort != null ? tls.httpsPort : 8443}"/>
                                     <div class="help" th:text="#{systemConfig.tlsPortHelp}">Must differ from the HTTP port.</div>
                                 </div>
                                 <div class="field">
                                     <label class="check-inline">
-                                        <input type="checkbox" name="redirectHttp" value="true" checked/>
+                                        <input type="checkbox" name="redirectHttp" value="true"
+                                               th:checked="${tls.httpsPort == null or tls.redirectHttp}"/>
                                         <span th:text="#{systemConfig.tlsRedirect}">Redirect HTTP to HTTPS</span>
                                     </label>
                                 </div>

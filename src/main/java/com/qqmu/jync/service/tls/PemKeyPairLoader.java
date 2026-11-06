@@ -18,8 +18,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Reads nginx-style PEM material: a certificate chain file and an unencrypted private key file.
@@ -34,9 +32,6 @@ import java.util.regex.Pattern;
  * start — the one failure this page exists to prevent.
  */
 final class PemKeyPairLoader {
-
-    private static final Pattern PEM_BLOCK = Pattern.compile(
-            "-----BEGIN ([A-Z0-9 ]+)-----([\\s\\S]*?)-----END \\1-----");
 
     /** Algorithms a Java 17 Tomcat connector can serve, in the order we try to parse them. */
     private static final List<String> KEY_ALGORITHMS =
@@ -75,16 +70,14 @@ final class PemKeyPairLoader {
         // also keeps the file order that TLS chain building depends on.
         List<X509Certificate> chain = new ArrayList<>();
         String text = new String(pem, StandardCharsets.US_ASCII);
-        Matcher matcher = PEM_BLOCK.matcher(text);
-        while (matcher.find()) {
-            String type = matcher.group(1);
-            if (!"CERTIFICATE".equals(type) && !"X509 CERTIFICATE".equals(type)) {
+        for (PemBlock block : readBlocks(text)) {
+            if (!"CERTIFICATE".equals(block.type()) && !"X509 CERTIFICATE".equals(block.type())) {
                 continue;
             }
             try {
                 Certificate certificate = CertificateFactory.getInstance("X.509")
                         .generateCertificate(new ByteArrayInputStream(
-                                matcher.group().getBytes(StandardCharsets.US_ASCII)));
+                                block.text().getBytes(StandardCharsets.US_ASCII)));
                 if (!(certificate instanceof X509Certificate x509)) {
                     throw new TlsKeystoreException("error.tls.pemCertInvalid");
                 }
@@ -129,25 +122,64 @@ final class PemKeyPairLoader {
         if (pem == null || pem.length == 0) {
             throw new TlsKeystoreException("error.tls.pemKeyInvalid");
         }
-        Matcher matcher = PEM_BLOCK.matcher(new String(pem, StandardCharsets.US_ASCII));
-        while (matcher.find()) {
-            String type = matcher.group(1);
-            if ("ENCRYPTED PRIVATE KEY".equals(type)) {
-                throw new TlsKeystoreException("error.tls.pemKeyEncrypted");
-            }
-            if ("PRIVATE KEY".equals(type)) {
-                return decodePkcs8(decodeBase64(matcher.group(2)));
-            }
-            if ("RSA PRIVATE KEY".equals(type)) {
-                return decodePkcs1(decodeBase64(matcher.group(2)));
-            }
-            if ("EC PRIVATE KEY".equals(type) || "DSA PRIVATE KEY".equals(type)) {
-                // SEC1 / legacy formats name no algorithm this JDK can load without parameters;
-                // the operator converts them with one openssl command (the page says which).
-                throw new TlsKeystoreException("error.tls.pemKeyUnsupported");
+        for (PemBlock block : readBlocks(new String(pem, StandardCharsets.US_ASCII))) {
+            switch (block.type()) {
+                case "ENCRYPTED PRIVATE KEY" ->
+                        throw new TlsKeystoreException("error.tls.pemKeyEncrypted");
+                case "PRIVATE KEY" -> {
+                    return decodePkcs8(decodeBase64(block.body()));
+                }
+                case "RSA PRIVATE KEY" -> {
+                    return decodePkcs1(decodeBase64(block.body()));
+                }
+                case "EC PRIVATE KEY", "DSA PRIVATE KEY" ->
+                        // SEC1 / legacy formats name no algorithm this JDK can load without
+                        // parameters; the operator converts them with one openssl command
+                        // (the page says which).
+                        throw new TlsKeystoreException("error.tls.pemKeyUnsupported");
+                default -> {
+                    // Some other PEM object (certificate, parameters): not the key.
+                }
             }
         }
         throw new TlsKeystoreException("error.tls.pemKeyInvalid");
+    }
+
+    /** One PEM block: its label, the whole BEGIN..END text, and the body between them. */
+    private record PemBlock(String type, String text, String body) {
+    }
+
+    /**
+     * Splits PEM text into blocks by scanning forward once.
+     *
+     * <p>The obvious regex ({@code -----BEGIN (X)-----.*?-----END \1-----}) is quadratic when the
+     * input carries many BEGIN markers and no matching END: each start position rescans the rest
+     * of the file. A 5 MB upload is allowed, and that shape of file took tens of minutes, so the
+     * scan here consumes each block whole and stops at the first truncated one.
+     */
+    private static List<PemBlock> readBlocks(String text) {
+        List<PemBlock> blocks = new ArrayList<>();
+        int from = 0;
+        while (true) {
+            int begin = text.indexOf("-----BEGIN ", from);
+            if (begin < 0) {
+                return blocks;
+            }
+            int labelStart = begin + "-----BEGIN ".length();
+            int labelEnd = text.indexOf("-----", labelStart);
+            if (labelEnd < 0) {
+                return blocks;
+            }
+            String type = text.substring(labelStart, labelEnd);
+            String endMarker = "-----END " + type + "-----";
+            int end = text.indexOf(endMarker, labelEnd + "-----".length());
+            if (end < 0) {
+                return blocks;
+            }
+            blocks.add(new PemBlock(type, text.substring(begin, end + endMarker.length()),
+                    text.substring(labelEnd + "-----".length(), end)));
+            from = end + endMarker.length();
+        }
     }
 
     private static byte[] decodeBase64(String body) {

@@ -297,6 +297,25 @@ class ColumnCleanserTest {
     }
 
     @Test
+    void aMaskedNameStartingWithANonBmpCharacterKeepsItWhole() {
+        // Names may start with an emoji; Java's char-based substring would split the surrogate
+        // pair and write a broken character to the target.
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "name", ColumnRuleType.MASK_NAME, null, null)), "users");
+
+        assertThat(cleanser.apply(row("name", "😀小明")).get("name")).isEqualTo("😀**");
+    }
+
+    @Test
+    void aMaskedEmailStartingWithANonBmpCharacterKeepsItWhole() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "email", ColumnRuleType.MASK_EMAIL, null, null)), "users");
+
+        assertThat(cleanser.apply(row("email", "😀alice@example.com")).get("email"))
+                .isEqualTo("😀***@example.com");
+    }
+
+    @Test
     void columnsListsEveryRuleColumnSoTheReaderCanKeepThemInMemory() {
         // A cleansed column must never reach apply() as a LobValue: the rules only look at
         // String values, so a streamed value would silently skip TRIM/UPPER. The read policy

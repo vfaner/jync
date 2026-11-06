@@ -269,6 +269,24 @@ class ConfigPackageControllerTest {
     }
 
     @Test
+    void enablingWhileTlsIsDisabledAndNothingIsSavedNamesTheConfigurationToo() throws Exception {
+        when(requireHttps.isConfigControlled()).thenReturn(false);
+        // Uploading cannot unblock the switch while the connector is disabled at startup, so
+        // "upload a certificate" is the wrong instruction for this state.
+        when(tlsCertificateService.pageState()).thenReturn(new TlsPageState(
+                false, false, false, false, true, false, false, null, null, null,
+                false, false, null, false, null));
+
+        mvc.perform(post("/system-config/require-https").with(csrf())
+                        .param("enabled", "true")
+                        .with(remoteAddress("127.0.0.1")))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.systemConfig.https.tlsDisabled"));
+
+        verify(systemSettings, never()).putBoolean(any(), anyBoolean());
+    }
+
+    @Test
     void anUnreadableSavedCertificateAsksForANewUpload() throws Exception {
         when(requireHttps.isConfigControlled()).thenReturn(false);
         // saved=true but the key cannot be opened, so a restart is not the fix.

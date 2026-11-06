@@ -2,9 +2,11 @@ package com.qqmu.jync.service.tls;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeout;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.security.KeyStore;
 import java.security.cert.X509Certificate;
 import java.util.Collections;
@@ -147,6 +149,18 @@ class PemKeyPairLoaderTest {
         java.security.cert.Certificate[] chain = store.getCertificateChain(alias);
         assertThat(chain).hasSize(1);
         assertThat(chain[0]).isInstanceOf(X509Certificate.class);
+    }
+
+    @Test
+    void aTruncatedPemCannotPinTheUploadThread() {
+        // Each BEGIN without an END made the old regex rescan the rest of the file, so a 5 MB
+        // malformed upload took tens of minutes. Parsing has to stay linear in the input size.
+        String truncated = "-----BEGIN CERTIFICATE-----".repeat(20_000);
+
+        assertTimeout(Duration.ofSeconds(5), () ->
+                assertThatThrownBy(() -> PemKeyPairLoader.load(bytes(truncated)))
+                        .isInstanceOf(TlsKeystoreException.class)
+                        .hasFieldOrPropertyWithValue("messageKey", "error.tls.pemCertInvalid"));
     }
 
     private static byte[] bytes(String text) {

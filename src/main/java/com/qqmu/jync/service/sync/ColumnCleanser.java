@@ -259,14 +259,16 @@ public final class ColumnCleanser {
         return "*".repeat(value.length() - tail) + value.substring(value.length() - tail);
     }
 
+    /** Counts code points, not UTF-16 units, so an emoji at the start stays one character. */
     private static String maskName(String value) {
         if (value.isEmpty()) {
             return value;
         }
-        if (value.length() == 1) {
+        int codePoints = value.codePointCount(0, value.length());
+        if (codePoints == 1) {
             return "*";
         }
-        return value.substring(0, 1) + "*".repeat(value.length() - 1);
+        return value.substring(0, value.offsetByCodePoints(0, 1)) + "*".repeat(codePoints - 1);
     }
 
     /** "alice@example.com" becomes "a***@example.com"; a value without a user part
@@ -276,7 +278,7 @@ public final class ColumnCleanser {
         if (at <= 0) {
             return maskName(value);
         }
-        return value.substring(0, 1) + "***" + value.substring(at);
+        return value.substring(0, value.offsetByCodePoints(0, 1)) + "***" + value.substring(at);
     }
 
     private static String sha256Hex(String value) {

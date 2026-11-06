@@ -302,6 +302,39 @@ class SystemConfigViewTest {
     }
 
     @Test
+    void theBlockedSwitchNamesDisabledTlsEvenBeforeACertificateIsSaved() throws Exception {
+        // Uploading a certificate cannot help while app.tls.enabled is false; "upload a
+        // certificate" would send the operator down the wrong path.
+        String page = render(UserRole.ADMIN, state(false, false, false, false, true, false, false,
+                null, null, false, false, null, false));
+
+        assertThat(page).contains("应用内 TLS 已被配置禁用");
+    }
+
+    @Test
+    void aReuploadKeepsTheSavedPortAndRedirectChoiceAsDefaults() throws Exception {
+        // The form used to hard-code 8443 and a checked redirect box, so uploading a renewed
+        // certificate silently moved the port back and re-enabled redirection.
+        String page = render(UserRole.ADMIN, state(true, true, false, false, false, true, false,
+                null, certificate(Instant.now().plusSeconds(86_400)), false, false, 9443, false));
+
+        for (String id : List.of("tls-port", "tls-pem-port")) {
+            int at = page.indexOf("id=\"" + id + "\"");
+            assertThat(at).as("field %s", id).isGreaterThan(-1);
+            String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
+            assertThat(tag).as("field %s", id).contains("value=\"9443\"");
+        }
+        int found = 0;
+        for (int at = page.indexOf("name=\"redirectHttp\""); at >= 0;
+             at = page.indexOf("name=\"redirectHttp\"", at + 1)) {
+            found++;
+            String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
+            assertThat(tag).doesNotContain("checked");
+        }
+        assertThat(found).as("both upload forms offer the redirect choice").isEqualTo(2);
+    }
+
+    @Test
     void passphraseFieldsAskTheBrowserNotToRememberThem() throws Exception {
         String page = render(UserRole.ADMIN);
 

@@ -196,7 +196,10 @@ public class TlsCertificateService {
                 expired,
                 expiresSoon,
                 saved.map(TlsConfig::httpsPort).orElse(active.map(TlsConfig::httpsPort).orElse(null)),
-                saved.map(TlsConfig::redirectHttp).orElse(false),
+                // Removal pending: the files are gone but the running connector still redirects,
+                // so the card has to describe that connector rather than a default.
+                saved.map(TlsConfig::redirectHttp)
+                        .orElse(active.map(TlsConfig::redirectHttp).orElse(false)),
                 saved.map(TlsConfig::updatedAt).orElse(null));
     }
 

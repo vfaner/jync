@@ -258,6 +258,9 @@ class TlsCertificateServiceTest {
         assertThat(state.saved()).isFalse();
         assertThat(state.active()).isTrue();
         assertThat(state.removalPending()).isTrue();
+        // The card describes the connector that is still redirecting, not the deleted file.
+        assertThat(state.redirectHttp()).isTrue();
+        assertThat(state.httpsPort()).isEqualTo(httpsPort);
     }
 
     @Test

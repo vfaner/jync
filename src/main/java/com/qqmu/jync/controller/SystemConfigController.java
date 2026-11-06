@@ -149,11 +149,16 @@ public class SystemConfigController {
      * nothing.
      */
     private static String httpsBlockedKey(TlsPageState state) {
-        if (state == null || !state.saved()) {
+        if (state == null) {
             return "error.systemConfig.https.requiresCertificate";
         }
+        // Disabled is checked before "saved": no upload can unblock the switch while the
+        // connector is switched off at startup, so that is the fact to name first.
         if (state.disabled()) {
             return "error.systemConfig.https.tlsDisabled";
+        }
+        if (!state.saved()) {
+            return "error.systemConfig.https.requiresCertificate";
         }
         if (state.expired()) {
             return "error.systemConfig.https.certificateExpired";
