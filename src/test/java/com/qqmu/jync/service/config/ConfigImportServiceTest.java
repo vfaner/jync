@@ -20,6 +20,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.AlertConfig;
 import com.qqmu.jync.model.AppUser;
+import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -429,6 +430,39 @@ class ConfigImportServiceTest {
         Long newTaskId = etlTasks.findAll().get(0).getId();
         assertThat(etlCheckpoints.findAll()).singleElement()
                 .satisfies(restored -> assertThat(restored.getTaskId()).isEqualTo(newTaskId));
+    }
+
+    @Test
+    @DisplayName("a restored CDC position keeps its baseline flag")
+    void aRestoredCdcPositionKeepsItsBaselineFlag() {
+        // The flag is what tells a restart that the full baseline already ran. Losing it on
+        // import makes every consumer re-run the whole baseline and write its rows a second time.
+        seedAdmin();
+        DatabaseConfig source = databaseConfigs.save(database("src"));
+        Project project = new Project();
+        project.setName("orders");
+        project.setSourceDbId(source.getId());
+        project.setSyncConfig("{}");
+        projects.save(project);
+        CdcPosition position = new CdcPosition();
+        position.setProjectId(project.getId());
+        position.setBinlogFile("mysql-bin.000042");
+        position.setBinlogPos(1234L);
+        position.setBaselineDone(true);
+        cdcPositions.save(position);
+
+        byte[] pkg = export(true).bytes();
+        wipeConfiguration();
+
+        importService.importPackage(pkg, PASSPHRASE, true);
+
+        Long newProjectId = projects.findAll().get(0).getId();
+        assertThat(cdcPositions.findAll()).singleElement().satisfies(restored -> {
+            assertThat(restored.getProjectId()).isEqualTo(newProjectId);
+            assertThat(restored.getBinlogFile()).isEqualTo("mysql-bin.000042");
+            assertThat(restored.getBinlogPos()).isEqualTo(1234L);
+            assertThat(restored.isBaselineDone()).isTrue();
+        });
     }
 
     @Test

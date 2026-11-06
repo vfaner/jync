@@ -593,6 +593,9 @@ public class ConfigImportService {
             position.setLsn(dto.lsn());
             position.setSchemaSignatures(dto.schemaSignatures());
             position.setProjectionSignature(dto.projectionSignature());
+            // Without this the restored position looks like a crashed mid-baseline row and the
+            // consumer re-runs the whole full load, writing every row a second time.
+            position.setBaselineDone(Boolean.TRUE.equals(dto.baselineDone()));
             cdcPositions.save(position);
         }
         for (ConfigPackageDtos.MetadataSnapshotDto dto : state.metadataSnapshots()) {
