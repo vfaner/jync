@@ -1,6 +1,10 @@
 package com.qqmu.jync.service.sync;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -40,6 +44,13 @@ public final class ColumnCleanser {
                         ? value.substring(0, value.length() - arg.length()) : value;
                 case REGEX_REPLACE -> pattern.matcher(value)
                         .replaceAll(replacement == null ? "" : replacement);
+                case MASK_PHONE -> keepEnds(value, 3, 4);
+                case MASK_ID_CARD -> keepEnds(value, 6, 4);
+                case MASK_BANK_CARD -> maskAllButLast(value, 4);
+                case MASK_NAME -> maskName(value);
+                case MASK_EMAIL -> maskEmail(value);
+                case HASH_SHA256 -> sha256Hex(arg == null || arg.isBlank()
+                        ? value : arg.strip() + ":" + value);
             };
         }
     }
@@ -220,6 +231,63 @@ public final class ColumnCleanser {
             names.add(m.group(1));
         }
         return names;
+    }
+
+    /**
+     * Keeps the first {@code head} and last {@code tail} characters. A value too short to
+     * leave a masked middle is masked whole, so no rule ever reveals more than it masks.
+     */
+    private static String keepEnds(String value, int head, int tail) {
+        if (value.isEmpty()) {
+            return value;
+        }
+        if (value.length() <= head + tail) {
+            return "*".repeat(value.length());
+        }
+        return value.substring(0, head)
+                + "*".repeat(value.length() - head - tail)
+                + value.substring(value.length() - tail);
+    }
+
+    private static String maskAllButLast(String value, int tail) {
+        if (value.isEmpty()) {
+            return value;
+        }
+        if (value.length() <= tail * 2) {
+            return "*".repeat(value.length());
+        }
+        return "*".repeat(value.length() - tail) + value.substring(value.length() - tail);
+    }
+
+    private static String maskName(String value) {
+        if (value.isEmpty()) {
+            return value;
+        }
+        if (value.length() == 1) {
+            return "*";
+        }
+        return value.substring(0, 1) + "*".repeat(value.length() - 1);
+    }
+
+    /** "alice@example.com" becomes "a***@example.com"; a value without a user part
+     *  is treated as a name so the whole value is still masked. */
+    private static String maskEmail(String value) {
+        int at = value.indexOf('@');
+        if (at <= 0) {
+            return maskName(value);
+        }
+        return value.substring(0, 1) + "***" + value.substring(at);
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of()
+                    .formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            // Every Java runtime is required to provide SHA-256.
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
     }
 
     private static String findKey(Map<String, Object> row, String column) {

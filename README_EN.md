@@ -56,7 +56,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
 | ETL | Copy result rows from a customer SQL query; 7 analytic engines; multi-statement scripts; overwrite / append / range overwrite; resumable runs; tables sharing a source and target can form a **batch** with one connection pair and one schedule |
 | Dedicated migration | Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES copy whole objects over a connection model independent of JDBC; precheck, manual or cron runs, cancellation and run history |
-| Data shaping | Column cleansing (7 rule types), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
+| Data shaping | Column cleansing (13 rule types, including phone/ID/name/email masking and SHA-256 hashing), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
 | AI assist (optional) | The model drafts candidate SQL for procedures and functions; nothing is stored until a person approves it, and AI never takes part in synchronization |
 | Alerting | Webhook pushes for sync failures, stuck polling, projects not running, CDC stalls, data drift, unhealthy connections and PG slot backlog; DingTalk / WeCom / Feishu / generic JSON; cooldown and recovery notices |
 | Reliability and observability | Idempotent upsert, checkpoint resume, database leases, at-least-once; dashboard, change / audit / system logs, performance charts, optional Prometheus scrape endpoint |
@@ -193,6 +193,7 @@ com.qqmu.jync
 
 - **Configuration, scheduling and tuning**: [docs/configuration.md](docs/configuration.md) (`sync.*` / `sync.cdc.*` keys, scheduling rules, column cleansing, CDC prerequisites and performance settings; in Chinese)
 - **Container deployment and operations**: [docs/deploy-container.md](docs/deploy-container.md)
+- **Data boundary and air-gapped deployment**: [docs/security-data-boundary.md](docs/security-data-boundary.md) (outbound endpoints, air-gap checklist, encryption/masking/crypto capability limits; in Chinese)
 - **Known limitations**: [docs/known-limitations.md](docs/known-limitations.md)
 - **Real-database verification matrix**: [docs/verification-matrix.md](docs/verification-matrix.md) (what was verified per product: version/image, driver, strategies, verification level and run commands)
 

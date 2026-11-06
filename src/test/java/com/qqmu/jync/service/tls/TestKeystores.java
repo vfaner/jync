@@ -2,7 +2,11 @@ package com.qqmu.jync.service.tls;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.security.KeyPairGenerator;
 import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 
@@ -61,6 +65,104 @@ public final class TestKeystores {
 
     public static byte[] pkcs12() {
         return Base64.getDecoder().decode(PKCS12_BASE64);
+    }
+
+    /** The certificate the fixture keystore serves, ready for a PEM-file test. */
+    public static X509Certificate certificate() {
+        try {
+            KeyStore source = loadPkcs12();
+            return (X509Certificate) source.getCertificate(alias(source));
+        } catch (Exception e) {
+            throw new IllegalStateException("cannot read the fixture certificate", e);
+        }
+    }
+
+    /** The fixture's private key, unencrypted, in PKCS#8 form. */
+    public static PrivateKey privateKey() {
+        try {
+            KeyStore source = loadPkcs12();
+            return (PrivateKey) source.getKey(alias(source), PASSPHRASE);
+        } catch (Exception e) {
+            throw new IllegalStateException("cannot read the fixture key", e);
+        }
+    }
+
+    /** The certificate as an operator would upload it from certbot or nginx. */
+    public static String certificatePem() {
+        try {
+            return pem("CERTIFICATE", certificate().getEncoded());
+        } catch (Exception e) {
+            throw new IllegalStateException("cannot encode the fixture certificate", e);
+        }
+    }
+
+    /** PKCS#8 — what {@code openssl req -newkey} writes into {@code key.pem}. */
+    public static String privateKeyPem() {
+        return pem("PRIVATE KEY", privateKey().getEncoded());
+    }
+
+    /** PKCS#1 — what the older {@code openssl genrsa} writes. */
+    public static String rsaPrivateKeyPem() {
+        return pem("RSA PRIVATE KEY", pkcs8ToPkcs1(privateKey().getEncoded()));
+    }
+
+    /** A key that belongs to no certificate in this class, for the mismatch test. */
+    public static String unrelatedPrivateKeyPem() {
+        try {
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+            generator.initialize(2048);
+            return pem("PRIVATE KEY", generator.generateKeyPair().getPrivate().getEncoded());
+        } catch (Exception e) {
+            throw new IllegalStateException("cannot generate an unrelated key", e);
+        }
+    }
+
+    public static String pem(String type, byte[] der) {
+        String base64 = Base64.getMimeEncoder(64, new byte[] {'\n'}).encodeToString(der);
+        return "-----BEGIN " + type + "-----\n" + base64 + "\n-----END " + type + "-----\n";
+    }
+
+    private static KeyStore loadPkcs12() throws Exception {
+        KeyStore source = KeyStore.getInstance("PKCS12");
+        source.load(new ByteArrayInputStream(pkcs12()), PASSPHRASE);
+        return source;
+    }
+
+    private static String alias(KeyStore store) throws Exception {
+        for (String alias : Collections.list(store.aliases())) {
+            if (store.isKeyEntry(alias)) {
+                return alias;
+            }
+        }
+        throw new IllegalStateException("the fixture keystore has no key entry");
+    }
+
+    /** PKCS#8 = SEQUENCE { version, algorithm, OCTET STRING(pkcs1) }. */
+    private static byte[] pkcs8ToPkcs1(byte[] pkcs8) {
+        int[] pos = {0};
+        byte[] body = readTlv(pkcs8, pos, 0x30);
+        int[] inner = {0};
+        readTlv(body, inner, 0x02);
+        readTlv(body, inner, 0x30);
+        return readTlv(body, inner, 0x04);
+    }
+
+    private static byte[] readTlv(byte[] data, int[] pos, int expectedTag) {
+        int tag = data[pos[0]++] & 0xff;
+        int length = data[pos[0]++] & 0xff;
+        if ((length & 0x80) != 0) {
+            int count = length & 0x7f;
+            length = 0;
+            for (int i = 0; i < count; i++) {
+                length = (length << 8) | (data[pos[0]++] & 0xff);
+            }
+        }
+        if (tag != expectedTag) {
+            throw new IllegalStateException("expected DER tag " + expectedTag + ", got " + tag);
+        }
+        byte[] value = Arrays.copyOfRange(data, pos[0], pos[0] + length);
+        pos[0] += length;
+        return value;
     }
 
     /** The same key and certificate, re-encoded as a JKS keystore. */

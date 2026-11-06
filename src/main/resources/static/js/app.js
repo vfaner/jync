@@ -1567,9 +1567,13 @@
 
     function syncArgFields() {
       var opt = typeSelect.options[typeSelect.selectedIndex];
-      var needsArg = !!opt && opt.getAttribute('data-arg') === 'true';
+      // data-arg="optional"（SHA-256 盐值）显示输入框但不强制填写。
+      var argMode = opt && opt.getAttribute('data-arg');
+      var needsArg = argMode === 'true';
+      var showsArg = needsArg || argMode === 'optional';
       var needsReplacement = !!opt && opt.getAttribute('data-replacement') === 'true';
-      toggleField(argInput, needsArg, opt && opt.getAttribute('data-arg-label'));
+      toggleField(argInput, showsArg, opt && opt.getAttribute('data-arg-label'));
+      if (argInput) { argInput.required = needsArg; }
       toggleField(replacementInput, needsReplacement,
                   opt && opt.getAttribute('data-replacement-label'));
     }

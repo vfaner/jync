@@ -36,13 +36,18 @@ class TlsCertificateServiceTest {
     private TlsCertificateInspector inspector;
     private TlsRuntimeState runtime;
     private CryptoUtil crypto;
+    /** Ephemeral, because the developer's own instance may already hold 8443. */
+    private int httpsPort;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
         crypto = new CryptoUtil(properties());
         store = new TlsKeystoreStore(dir.toString(), crypto);
         inspector = new TlsCertificateInspector();
         runtime = runtimeWith(Optional.empty());
+        try (ServerSocket socket = new ServerSocket(0)) {
+            httpsPort = socket.getLocalPort();
+        }
     }
 
     private static SyncProperties properties() {
@@ -64,14 +69,14 @@ class TlsCertificateServiceTest {
     }
 
     private void save() {
-        service().save(TestKeystores.pkcs12(), "certificate.p12", "changeit", 8443, true);
+        service().save(TestKeystores.pkcs12(), "certificate.p12", "changeit", httpsPort, true);
     }
 
     // ── Rejections ─────────────────────────────────────────────────────────────
 
     @Test
     void rejectsAnEmptyFile() {
-        assertThatThrownBy(() -> service().save(new byte[0], "certificate.p12", "changeit", 8443, false))
+        assertThatThrownBy(() -> service().save(new byte[0], "certificate.p12", "changeit", httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.fileRequired");
     }
@@ -80,7 +85,7 @@ class TlsCertificateServiceTest {
     void rejectsAnOversizedFile() {
         byte[] tooLarge = new byte[TlsCertificateService.MAX_BYTES + 1];
 
-        assertThatThrownBy(() -> service().save(tooLarge, "certificate.p12", "changeit", 8443, false))
+        assertThatThrownBy(() -> service().save(tooLarge, "certificate.p12", "changeit", httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.fileTooLarge");
     }
@@ -88,7 +93,7 @@ class TlsCertificateServiceTest {
     @Test
     void rejectsAnUnsupportedFormat() {
         assertThatThrownBy(() -> service().save(TestKeystores.pkcs12(), "certificate.pem",
-                "changeit", 8443, false))
+                "changeit", httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.unsupportedFormat");
     }
@@ -96,7 +101,7 @@ class TlsCertificateServiceTest {
     @Test
     void rejectsAnEmptyPassphrase() {
         assertThatThrownBy(() -> service().save(TestKeystores.pkcs12(), "certificate.p12", "",
-                8443, false))
+                httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.passphraseRequired");
     }
@@ -106,7 +111,7 @@ class TlsCertificateServiceTest {
         String tooLong = "x".repeat(TlsCertificateService.MAX_PASSPHRASE + 1);
 
         assertThatThrownBy(() -> service().save(TestKeystores.pkcs12(), "certificate.p12",
-                tooLong, 8443, false))
+                tooLong, httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.passphraseTooLong");
     }
@@ -114,7 +119,7 @@ class TlsCertificateServiceTest {
     @Test
     void rejectsTheWrongPassphrase() {
         assertThatThrownBy(() -> service().save(TestKeystores.pkcs12(), "certificate.p12",
-                "wrong-passphrase", 8443, false))
+                "wrong-passphrase", httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.unreadable");
         assertThat(Files.exists(dir.resolve(TlsKeystoreStore.SIDECAR))).isFalse();
@@ -128,7 +133,7 @@ class TlsCertificateServiceTest {
         empty.store(bytes, TestKeystores.PASSPHRASE);
 
         assertThatThrownBy(() -> service().save(bytes.toByteArray(), "truststore.p12",
-                "changeit", 8443, false))
+                "changeit", httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.noPrivateKey");
     }
@@ -142,7 +147,7 @@ class TlsCertificateServiceTest {
                 runtime, crypto, 8080);
 
         assertThatThrownBy(() -> service.save(TestKeystores.pkcs12(), "certificate.p12",
-                "changeit", 8443, false))
+                "changeit", httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.expired");
         assertThat(Files.exists(dir.resolve(TlsKeystoreStore.SIDECAR))).isFalse();
@@ -157,7 +162,7 @@ class TlsCertificateServiceTest {
                 runtime, crypto, 8080);
 
         assertThatThrownBy(() -> service.save(TestKeystores.pkcs12(), "certificate.p12",
-                "changeit", 8443, false))
+                "changeit", httpsPort, false))
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.notYetValid");
     }
@@ -227,7 +232,7 @@ class TlsCertificateServiceTest {
         assertThat(state.active()).isTrue();
         assertThat(state.pendingRestart()).isFalse();
         assertThat(state.activeCertificate()).isNotNull();
-        assertThat(state.httpsPort()).isEqualTo(8443);
+        assertThat(state.httpsPort()).isEqualTo(httpsPort);
         assertThat(state.redirectHttp()).isTrue();
     }
 
@@ -297,6 +302,103 @@ class TlsCertificateServiceTest {
         Mockito.when(runtime.enabled()).thenReturn(false);
 
         assertThat(service().pageState().disabled()).isTrue();
+    }
+
+    // ── PEM upload ─────────────────────────────────────────────────────────────
+
+    @Test
+    void savePemStoresAPkcs12ThatOpensWithTheGeneratedPassphrase() {
+        TlsConfig saved = service().savePem(bytes(TestKeystores.certificatePem()),
+                bytes(TestKeystores.privateKeyPem()), httpsPort, true);
+
+        assertThat(saved.format()).isEqualTo(TlsKeystoreFormat.PKCS12);
+        assertThat(saved.passphrase()).isNotEmpty();
+        TlsCertificateInfo info = inspector.inspect(store.keystoreBytes(saved),
+                TlsKeystoreFormat.PKCS12, saved.passphrase().toCharArray());
+        assertThat(info.subject()).contains("CN=misconfigured.example");
+        assertThat(info.notAfter()).isAfter(Instant.parse("2100-01-01T00:00:00Z"));
+    }
+
+    @Test
+    void savePemAcceptsACombinedCertificateAndKeyFile() {
+        // HAProxy-style bundles put the leaf, the chain and the key in one file; the page's
+        // second key input is then redundant and may be left empty.
+        String combined = TestKeystores.certificatePem() + TestKeystores.privateKeyPem();
+
+        TlsConfig saved = service().savePem(bytes(combined), null, httpsPort, true);
+
+        TlsCertificateInfo info = inspector.inspect(store.keystoreBytes(saved),
+                TlsKeystoreFormat.PKCS12, saved.passphrase().toCharArray());
+        assertThat(info.subject()).contains("CN=misconfigured.example");
+    }
+
+    @Test
+    void savePemRejectsACombinedFileWithoutAPrivateKey() {
+        assertThatThrownBy(() -> service().savePem(bytes(TestKeystores.certificatePem()), null,
+                httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.pemKeyInvalid");
+        assertThat(store.snapshot().config()).isEmpty();
+    }
+
+    @Test
+    void savePemRequiresACertificate() {
+        assertThatThrownBy(() -> service().savePem(new byte[0], null, httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.pemCertRequired");
+    }
+
+    @Test
+    void savePemDoesNotLeaveThePrivateKeyOrThePassphraseInPlaintext() throws IOException {
+        TlsConfig saved = service().savePem(bytes(TestKeystores.certificatePem()),
+                bytes(TestKeystores.privateKeyPem()), httpsPort, false);
+
+        try (java.util.stream.Stream<Path> files = Files.walk(dir)) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                String content = new String(Files.readAllBytes(file),
+                        StandardCharsets.ISO_8859_1);
+                assertThat(content).as("file %s", file)
+                        .doesNotContain("BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY",
+                                saved.passphrase());
+            }
+        }
+    }
+
+    @Test
+    void savePemRejectsAMismatchedKeyBeforeWritingAnything() {
+        assertThatThrownBy(() -> service().savePem(bytes(TestKeystores.certificatePem()),
+                bytes(TestKeystores.unrelatedPrivateKeyPem()), httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.pemKeyMismatch");
+
+        assertThat(store.snapshot().config()).isEmpty();
+    }
+
+    @Test
+    void savePemAppliesTheSamePortRulesAsAKeystoreUpload() {
+        assertThatThrownBy(() -> service().savePem(bytes(TestKeystores.certificatePem()),
+                bytes(TestKeystores.privateKeyPem()), 8080, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.portEqualsHttp");
+    }
+
+    @Test
+    void savePemRejectsAnOversizedCertificateOrKey() {
+        byte[] cert = bytes(TestKeystores.certificatePem());
+        byte[] key = bytes(TestKeystores.privateKeyPem());
+
+        assertThatThrownBy(() -> service().savePem(new byte[TlsCertificateService.MAX_BYTES + 1],
+                key, httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.fileTooLarge");
+        assertThatThrownBy(() -> service().savePem(cert,
+                new byte[TlsCertificateService.MAX_BYTES + 1], httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.fileTooLarge");
+    }
+
+    private static byte[] bytes(String text) {
+        return text.getBytes(StandardCharsets.US_ASCII);
     }
 
     private static TlsCertificateInfo info(long notBeforeOffsetSeconds, long notAfterOffsetSeconds) {

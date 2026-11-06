@@ -23,12 +23,15 @@ import com.qqmu.jync.util.HttpsSupport;
  *
  * <p>The switch exists because most deployments sit behind a reverse proxy that already
  * terminates TLS; turning enforcement on there without telling the app which peers are
- * proxies would reject everything. When it is on, a request that did not arrive over TLS is
- * answered 403, with two exemptions:
+ * proxies would reject everything. When the app's own HTTPS connector is serving, every
+ * plaintext request is redirected to it, whatever its source address — the mainstream rule.
+ * Otherwise an enforced request is answered 403, with two exemptions:
  *
  * <ul>
- *   <li><strong>Loopback.</strong> Same-host operations and the unit tests dial the app
- *       directly; the ciphertext question does not arise. This is loopback proper, not the
+ *   <li><strong>Loopback, while no HTTPS endpoint exists.</strong> This is the rescue path:
+ *       a saved certificate that cannot start must not also lock the operator out of the
+ *       page that replaces or removes it. Once a connector is serving there is somewhere to
+ *       send the request, so loopback stops being exempt. This is loopback proper, not the
  *       configured proxy list: a remote proxy relaying plaintext is exactly what enforcement
  *       refuses.</li>
  *   <li><strong>An unauthenticated {@code GET /login}.</strong> This is the target of both
@@ -114,14 +117,15 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
         response.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
 
         // Short-circuit order is load-bearing: the suppliers must not be asked for a secure
-        // request, a loopback caller, or the health probe.
-        if (secure || isLoopback(request) || isUncredentialedLoginProbe(request)) {
+        // request or the health probe.
+        if (secure || isUncredentialedLoginProbe(request)) {
             filterChain.doFilter(request, response);
             return;
         }
 
         // The app's own HTTPS connector wins over the proxy-mode switch: when it was loaded at
         // startup there is a real TLS endpoint to send the browser to, and a 403 would hide it.
+        // The source address does not matter here — loopback gets redirected like everyone else.
         Optional<TlsConfig> active = tlsState.get().active();
         if (active.isPresent() && active.get().redirectHttp()) {
             redirectToHttps(request, response, active.get().httpsPort());
@@ -129,6 +133,13 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
         }
 
         if (requireHttps.getAsBoolean()) {
+            // Without a connector there is nowhere to redirect to. Loopback stays open as the
+            // rescue path; with a connector serving, even loopback is refused, so the switch
+            // means the same thing regardless of where the request came from.
+            if (active.isEmpty() && isLoopback(request)) {
+                filterChain.doFilter(request, response);
+                return;
+            }
             response.sendError(HttpServletResponse.SC_FORBIDDEN,
                     "HTTPS is required; configure a TLS reverse proxy and use https://");
             return;

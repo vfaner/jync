@@ -17,6 +17,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,7 +41,9 @@ import com.qqmu.jync.service.config.ConfigPackageException;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.service.settings.SystemSettingService;
+import com.qqmu.jync.service.tls.TlsCertificateInfo;
 import com.qqmu.jync.service.tls.TlsCertificateService;
+import com.qqmu.jync.service.tls.TlsPageState;
 import com.qqmu.jync.util.CryptoUtil;
 
 /**
@@ -218,8 +221,91 @@ class ConfigPackageControllerTest {
     // --- forced HTTPS --------------------------------------------------------------------
 
     @Test
-    void enablingFromAPlaintextRemoteRequestIsRefused() throws Exception {
+    void enablingWithoutAServingCertificateIsRefused() throws Exception {
         when(requireHttps.isConfigControlled()).thenReturn(false);
+        when(tlsCertificateService.pageState()).thenReturn(tls(false, false, false));
+
+        mvc.perform(post("/system-config/require-https").with(csrf())
+                        .param("enabled", "true")
+                        .with(remoteAddress("127.0.0.1")))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error",
+                        "error.systemConfig.https.requiresCertificate"));
+
+        verify(systemSettings, never()).putBoolean(any(), anyBoolean());
+    }
+
+    @Test
+    void enablingWaitsForTheSavedCertificateToBeServing() throws Exception {
+        when(requireHttps.isConfigControlled()).thenReturn(false);
+        when(tlsCertificateService.pageState()).thenReturn(tls(true, false, false));
+
+        mvc.perform(post("/system-config/require-https").with(csrf())
+                        .param("enabled", "true")
+                        .with(remoteAddress("127.0.0.1")))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error",
+                        "error.systemConfig.https.certificatePendingRestart"));
+
+        verify(systemSettings, never()).putBoolean(any(), anyBoolean());
+    }
+
+    @Test
+    void enablingWhileTlsIsDisabledSaysTheRestartWouldNotHelp() throws Exception {
+        when(requireHttps.isConfigControlled()).thenReturn(false);
+        // Saved and valid, but app.tls.enabled=false keeps the connector from ever starting.
+        when(tlsCertificateService.pageState()).thenReturn(new TlsPageState(
+                true, false, true, false, true, true, false, null, null, null,
+                false, false, 8443, true, null));
+
+        mvc.perform(post("/system-config/require-https").with(csrf())
+                        .param("enabled", "true")
+                        .with(remoteAddress("127.0.0.1")))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error",
+                        "error.systemConfig.https.tlsDisabled"));
+
+        verify(systemSettings, never()).putBoolean(any(), anyBoolean());
+    }
+
+    @Test
+    void anUnreadableSavedCertificateAsksForANewUpload() throws Exception {
+        when(requireHttps.isConfigControlled()).thenReturn(false);
+        // saved=true but the key cannot be opened, so a restart is not the fix.
+        when(tlsCertificateService.pageState()).thenReturn(new TlsPageState(
+                true, false, true, false, false, true, false, "error.tls.unreadable",
+                null, null, false, false, 8443, true, null));
+
+        mvc.perform(post("/system-config/require-https").with(csrf())
+                        .param("enabled", "true")
+                        .with(remoteAddress("127.0.0.1")))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error",
+                        "error.systemConfig.https.requiresCertificate"));
+
+        verify(systemSettings, never()).putBoolean(any(), anyBoolean());
+    }
+
+    @Test
+    void anExpiredServingCertificateDoesNotUnlockTheSwitch() throws Exception {
+        when(requireHttps.isConfigControlled()).thenReturn(false);
+        when(tlsCertificateService.pageState()).thenReturn(tls(true, true, true));
+
+        mvc.perform(post("/system-config/require-https").with(csrf())
+                        .param("enabled", "true")
+                        .with(remoteAddress("127.0.0.1")))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error",
+                        "error.systemConfig.https.certificateExpired"));
+
+        verify(systemSettings, never()).putBoolean(any(), anyBoolean());
+    }
+
+    @Test
+    void enablingFromAPlaintextRemoteRequestIsRefusedEvenWithAServingCertificate()
+            throws Exception {
+        when(requireHttps.isConfigControlled()).thenReturn(false);
+        when(tlsCertificateService.pageState()).thenReturn(tls(true, true, false));
 
         mvc.perform(post("/system-config/require-https").with(csrf())
                         .param("enabled", "true")
@@ -231,14 +317,33 @@ class ConfigPackageControllerTest {
     }
 
     @Test
-    void enablingFromLoopbackIsAllowed() throws Exception {
+    void enablingFromLoopbackIsAllowedOnceTheCertificateIsServing() throws Exception {
         when(requireHttps.isConfigControlled()).thenReturn(false);
+        when(tlsCertificateService.pageState()).thenReturn(tls(true, true, false));
         when(systemSettings.putBoolean(SystemSettingKey.SECURITY_REQUIRE_HTTPS, true))
                 .thenReturn(Optional.empty());
 
         mvc.perform(post("/system-config/require-https").with(csrf())
                         .param("enabled", "true")
                         .with(remoteAddress("127.0.0.1")))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("message", "msg.systemConfig.https.enabled"));
+
+        verify(systemSettings).putBoolean(SystemSettingKey.SECURITY_REQUIRE_HTTPS, true);
+    }
+
+    @Test
+    void enablingBehindAProxyIsAllowedWithoutAnApplicationCertificate() throws Exception {
+        // The proxy's X-Forwarded-Proto makes the request secure; Jync needs no certificate of
+        // its own, and refusing here would break every proxy deployment.
+        when(requireHttps.isConfigControlled()).thenReturn(false);
+        when(tlsCertificateService.pageState()).thenReturn(tls(false, false, false));
+        when(systemSettings.putBoolean(SystemSettingKey.SECURITY_REQUIRE_HTTPS, true))
+                .thenReturn(Optional.empty());
+
+        mvc.perform(post("/system-config/require-https").with(csrf())
+                        .param("enabled", "true")
+                        .with(secureRequest()))
                 .andExpect(redirectedUrl("/system-config"))
                 .andExpect(flash().attribute("message", "msg.systemConfig.https.enabled"));
 
@@ -287,5 +392,23 @@ class ConfigPackageControllerTest {
             request.setRemoteAddr(address);
             return request;
         };
+    }
+
+    private static RequestPostProcessor secureRequest() {
+        return request -> {
+            request.setSecure(true);
+            return request;
+        };
+    }
+
+    private static TlsPageState tls(boolean saved, boolean active, boolean expired) {
+        TlsCertificateInfo certificate = saved
+                ? new TlsCertificateInfo("CN=misconfigured.example", "CN=misconfigured.example",
+                        "jync", "RSA", "abc", Instant.EPOCH,
+                        Instant.parse("2100-01-01T00:00:00Z"))
+                : null;
+        return new TlsPageState(saved, active, saved && !active, false, false, saved, false,
+                null, certificate, active ? certificate : null, expired, false,
+                saved ? 8443 : null, true, null);
     }
 }

@@ -26,10 +26,12 @@ import com.qqmu.jync.util.ClientIpResolver;
  * HTTPS enforcement and the transport-level response headers.
  *
  * <p>The switch is off by default because most deployments sit behind a reverse proxy that
- * already terminates TLS. When it is on, the only requests let through over plain HTTP are
- * the ones that cannot leak a credential: loopback (same-host ops and probes) and an
- * unauthenticated {@code GET /login}, which is the container health probe's target and
- * carries no session cookie.
+ * already terminates TLS. When it is on, plaintext requests are redirected as soon as the
+ * app's own HTTPS connector is serving — the mainstream rule, with no exception for the
+ * source address. Two exemptions remain: an unauthenticated {@code GET /login} (the
+ * container health probe's target, carrying no session cookie), and loopback while no HTTPS
+ * endpoint exists at all — the rescue path that keeps a broken certificate from locking the
+ * operator out of the page that fixes it.
  *
  * <p>An {@code X-Forwarded-Proto} is believed only from a peer named as a trusted proxy,
  * for the same reason {@link ClientIpResolver} does not trust forwarding headers from an
@@ -70,7 +72,9 @@ class TransportSecurityFilterTest {
     }
 
     @Test
-    void loopbackIsAlwaysLetThrough() throws Exception {
+    void loopbackIsLetThroughOnlyWhileNoHttpsEndpointExists() throws Exception {
+        // The rescue path: a saved certificate that cannot start leaves no HTTPS endpoint to
+        // redirect to, so the operator must still reach the page from the machine itself.
         assertThat(run(true, request("POST", "/databases/save", "127.0.0.1")).getStatus())
                 .isEqualTo(200);
         assertThat(chain.getRequest()).isNotNull();
@@ -264,13 +268,29 @@ class TransportSecurityFilterTest {
     }
 
     @Test
-    void loopbackIsNeverRedirected() throws Exception {
-        MockHttpServletRequest request = request("GET", "/projects", "127.0.0.1");
-        request.setServerName("example.com");
+    void loopbackIsRedirectedOnceAnHttpsConnectorIsActive() throws Exception {
+        // Once there is a real HTTPS endpoint, the source address stops mattering: this is
+        // what every mainstream stack does, and it is what makes the switch mean one thing.
+        MockHttpServletRequest request = request("GET", "/projects?x=1", "127.0.0.1");
+        request.setServerName("localhost");
 
-        assertThat(runWithTls(state(8443, true), false, "", request).getStatus())
-                .isEqualTo(200);
-        assertThat(chain.getRequest()).isNotNull();
+        MockHttpServletResponse response = runWithTls(state(8443, true), false, "", request);
+
+        assertThat(response.getStatus()).isEqualTo(307);
+        assertThat(response.getHeader("Location")).isEqualTo("https://localhost:8443/projects?x=1");
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void loopbackIsRefusedWhenAnHttpsEndpointExistsButRedirectIsOff() throws Exception {
+        // No parallel exemption in the 403 path either: the certificate is serving, so a
+        // browser has somewhere to go; silence here would only hide a proxy misconfiguration.
+        MockHttpServletRequest request = request("GET", "/projects", "127.0.0.1");
+        request.setServerName("localhost");
+
+        assertThat(runWithTls(state(8443, false), true, "", request).getStatus())
+                .isEqualTo(403);
+        assertThat(chain.getRequest()).isNull();
     }
 
     @Test

@@ -3,8 +3,10 @@ package com.qqmu.jync.service.tls;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -37,6 +39,9 @@ public class TlsCertificateService {
 
     /** How early the page starts warning that the certificate is about to expire. */
     static final Duration EXPIRY_WARNING = Duration.ofDays(30);
+
+    /** Passphrases for PEM uploads are generated, not typed; one source of randomness. */
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final TlsKeystoreStore store;
     private final TlsCertificateInspector inspector;
@@ -78,7 +83,40 @@ public class TlsCertificateService {
             throw new TlsKeystoreException("error.tls.passphraseTooLong");
         }
 
-        char[] secret = passphrase.toCharArray();
+        return validateAndStore(bytes, format, passphrase.toCharArray(), httpsPort, redirectHttp);
+    }
+
+    /**
+     * Saves an nginx-style certificate chain plus its unencrypted private key.
+     *
+     * <p>PEM is what operators already have; Tomcat only reads keystores. The pair is wrapped in a
+     * PKCS#12 in memory under a passphrase generated here, so the plaintext key is never written to
+     * disk and the page needs no second passphrase field. {@code privateKeyPem} may be empty when
+     * the certificate file is a combined bundle that already carries the key. The rest of the
+     * gate — dates, port, probe — is shared with the keystore upload.
+     */
+    public TlsConfig savePem(byte[] certificatePem, byte[] privateKeyPem, int httpsPort,
+                             boolean redirectHttp) {
+        if (certificatePem == null || certificatePem.length == 0) {
+            throw new TlsKeystoreException("error.tls.pemCertRequired");
+        }
+        boolean separateKey = privateKeyPem != null && privateKeyPem.length > 0;
+        if (certificatePem.length > MAX_BYTES
+                || (separateKey && privateKeyPem.length > MAX_BYTES)) {
+            throw new TlsKeystoreException("error.tls.fileTooLarge");
+        }
+
+        PemKeyPair pair = separateKey
+                ? PemKeyPairLoader.load(certificatePem, privateKeyPem)
+                : PemKeyPairLoader.load(certificatePem);
+        char[] secret = randomPassphrase();
+        byte[] keystore = pair.toPkcs12(secret);
+        return validateAndStore(keystore, TlsKeystoreFormat.PKCS12, secret, httpsPort,
+                redirectHttp);
+    }
+
+    private TlsConfig validateAndStore(byte[] bytes, TlsKeystoreFormat format, char[] secret,
+                                       int httpsPort, boolean redirectHttp) {
         TlsCertificateInfo info = inspector.inspect(bytes, format, secret);
         Instant now = Instant.now();
         if (info.isExpired(now)) {
@@ -104,6 +142,13 @@ public class TlsCertificateService {
         }
 
         return store.save(bytes, format, secret, httpsPort, redirectHttp);
+    }
+
+    /** 32 URL-safe characters — long enough that the keystore is not guessable. */
+    private static char[] randomPassphrase() {
+        byte[] bytes = new byte[24];
+        SECURE_RANDOM.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes).toCharArray();
     }
 
     /** @return whether anything was removed */

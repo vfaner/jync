@@ -181,6 +181,122 @@ class ColumnCleanserTest {
     }
 
     @Test
+    void masksAPhoneNumberKeepingTheFirstThreeAndLastFourDigits() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "phone", ColumnRuleType.MASK_PHONE, null, null)), "users");
+
+        assertThat(cleanser.apply(row("phone", "13800138000")).get("phone"))
+                .isEqualTo("138****8000");
+        // Separators are part of the value, so the digits kept are still the outer ones.
+        assertThat(cleanser.apply(row("phone", "138-0013-8000")).get("phone"))
+                .isEqualTo("138******8000");
+    }
+
+    @Test
+    void aPhoneNumberTooShortToKeepBothEndsIsMaskedEntirely() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "phone", ColumnRuleType.MASK_PHONE, null, null)), "users");
+
+        assertThat(cleanser.apply(row("phone", "1234567")).get("phone")).isEqualTo("*******");
+        assertThat(cleanser.apply(row("phone", "12345")).get("phone")).isEqualTo("*****");
+    }
+
+    @Test
+    void masksAnIdCardNumberKeepingTheFirstSixAndLastFour() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "id_card", ColumnRuleType.MASK_ID_CARD, null, null)), "users");
+
+        assertThat(cleanser.apply(row("id_card", "110101199003071234")).get("id_card"))
+                .isEqualTo("110101********1234");
+        assertThat(cleanser.apply(row("id_card", "1234567890")).get("id_card"))
+                .isEqualTo("**********");
+    }
+
+    @Test
+    void masksABankCardNumberKeepingOnlyTheLastFour() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "card", ColumnRuleType.MASK_BANK_CARD, null, null)), "users");
+
+        assertThat(cleanser.apply(row("card", "6222020200112233445")).get("card"))
+                .isEqualTo("***************3445");
+        assertThat(cleanser.apply(row("card", "12345678")).get("card")).isEqualTo("********");
+    }
+
+    @Test
+    void masksANameKeepingOnlyTheFirstCharacter() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "name", ColumnRuleType.MASK_NAME, null, null)), "users");
+
+        assertThat(cleanser.apply(row("name", "张三丰")).get("name")).isEqualTo("张**");
+        assertThat(cleanser.apply(row("name", "Alice")).get("name")).isEqualTo("A****");
+        // A single-character name cannot keep a visible prefix without revealing it whole.
+        assertThat(cleanser.apply(row("name", "李")).get("name")).isEqualTo("*");
+    }
+
+    @Test
+    void masksAnEmailKeepingTheFirstLocalCharacterAndTheDomain() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "email", ColumnRuleType.MASK_EMAIL, null, null)), "users");
+
+        assertThat(cleanser.apply(row("email", "alice@example.com")).get("email"))
+                .isEqualTo("a***@example.com");
+    }
+
+    @Test
+    void anEmailWithoutAnAtSignFallsBackToTheNameMask() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "email", ColumnRuleType.MASK_EMAIL, null, null)), "users");
+
+        assertThat(cleanser.apply(row("email", "alice")).get("email")).isEqualTo("a****");
+    }
+
+    @Test
+    void maskingLeavesAnEmptyValueEmpty() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "name", ColumnRuleType.MASK_NAME, null, null),
+                rule("users", "phone", ColumnRuleType.MASK_PHONE, null, null)), "users");
+
+        Map<String, Object> row = cleanser.apply(row("name", "", "phone", ""));
+
+        assertThat(row.get("name")).isEqualTo("");
+        assertThat(row.get("phone")).isEqualTo("");
+    }
+
+    @Test
+    void hashesAValueWithSha256SoEqualInputsStayJoinnable() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "email", ColumnRuleType.HASH_SHA256, null, null)), "users");
+
+        // Pinned to the standard digest of "alice", so a broken or truncated hash fails here.
+        assertThat(cleanser.apply(row("email", "alice")).get("email"))
+                .isEqualTo("2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90");
+        assertThat(cleanser.apply(row("email", "alice")).get("email"))
+                .isEqualTo(cleanser.apply(row("email", "alice")).get("email"));
+    }
+
+    @Test
+    void theHashSaltChangesTheDigestButStaysDeterministic() {
+        ColumnCleanser salted = ColumnCleanser.forTable(config(
+                rule("users", "email", ColumnRuleType.HASH_SHA256, "salt", null)), "users");
+
+        assertThat(salted.apply(row("email", "alice")).get("email"))
+                .isEqualTo("29b0186358ce0d738b48ddf514bd76d2fd3defb8a1b39de7b30d82d4cbf9ba85");
+        assertThat(salted.apply(row("email", "alice")).get("email"))
+                .isNotEqualTo(ColumnCleanser.forTable(config(
+                        rule("users", "email", ColumnRuleType.HASH_SHA256, null, null)), "users")
+                        .apply(row("email", "alice")).get("email"));
+    }
+
+    @Test
+    void aBlankHashSaltHashesTheValueAlone() {
+        ColumnCleanser blank = ColumnCleanser.forTable(config(
+                rule("users", "email", ColumnRuleType.HASH_SHA256, "  ", null)), "users");
+
+        assertThat(blank.apply(row("email", "alice")).get("email"))
+                .isEqualTo("2bd806c97f0e00af1a1fc3328fa763a9269723c8db8fac4f93af71db186d6e90");
+    }
+
+    @Test
     void columnsListsEveryRuleColumnSoTheReaderCanKeepThemInMemory() {
         // A cleansed column must never reach apply() as a LobValue: the rules only look at
         // String values, so a streamed value would silently skip TRIM/UPPER. The read policy

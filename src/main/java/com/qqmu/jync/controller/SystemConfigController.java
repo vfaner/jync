@@ -19,6 +19,7 @@ import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.service.settings.SystemSettingService;
 import com.qqmu.jync.service.tls.TlsCertificateService;
+import com.qqmu.jync.service.tls.TlsPageState;
 import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
 import com.qqmu.jync.util.CryptoUtil;
@@ -77,8 +78,13 @@ public class SystemConfigController {
                 datasourceUsername == null ? "" : datasourceUsername);
         model.addAttribute("defaultCryptoKey", crypto.isUsingDefaultKey());
         model.addAttribute("packageMaxBytes", PACKAGE_MAX_BYTES);
-        model.addAttribute("tls", tls.pageState());
+        TlsPageState tlsState = tls.pageState();
+        model.addAttribute("tls", tlsState);
         model.addAttribute("tlsMaxBytes", TlsCertificateService.MAX_BYTES);
+        // 强制 HTTPS 只有在确实存在一条 HTTPS 通路时才开得了：应用内证书已在服务，
+        // 或当前请求本身就是 HTTPS（反代终止 TLS）。否则开启后除回环外全部 403。
+        model.addAttribute("httpsEnableBlocked", !httpsAvailable(tlsState, request));
+        model.addAttribute("httpsBlockedKey", httpsBlockedKey(tlsState));
         return "system-config";
     }
 
@@ -102,6 +108,11 @@ public class SystemConfigController {
             flash.addFlashAttribute("error", "error.systemConfig.https.envControlled");
             return "redirect:/system-config";
         }
+        TlsPageState tlsState = tls.pageState();
+        if (enabled && !httpsAvailable(tlsState, request)) {
+            flash.addFlashAttribute("error", httpsBlockedKey(tlsState));
+            return "redirect:/system-config";
+        }
         if (enabled && !HttpsSupport.isSecure(request)
                 && !ClientIpResolver.isLoopback(request.getRemoteAddr())) {
             flash.addFlashAttribute("error", "error.systemConfig.https.requiresSecure");
@@ -120,6 +131,36 @@ public class SystemConfigController {
                 ? "msg.systemConfig.https.enabled"
                 : "msg.systemConfig.https.disabled");
         return "redirect:/system-config";
+    }
+
+    /** The app's own certificate is loaded and not expired, or this request already came in
+     *  over HTTPS (a reverse proxy terminated TLS). Either way an HTTPS path exists. */
+    private static boolean httpsAvailable(TlsPageState state, HttpServletRequest request) {
+        if (state != null && state.active() && !state.expired()) {
+            return true;
+        }
+        return HttpsSupport.isSecure(request);
+    }
+
+    /**
+     * Why the switch is blocked. Deliberately distinguishes the three fixes: upload a usable
+     * certificate, re-enable application TLS, or restart. "Saved but unusable" must not be
+     * reported as a pending restart — restarting a disabled or unreadable connector changes
+     * nothing.
+     */
+    private static String httpsBlockedKey(TlsPageState state) {
+        if (state == null || !state.saved()) {
+            return "error.systemConfig.https.requiresCertificate";
+        }
+        if (state.disabled()) {
+            return "error.systemConfig.https.tlsDisabled";
+        }
+        if (state.expired()) {
+            return "error.systemConfig.https.certificateExpired";
+        }
+        return state.certificate() == null
+                ? "error.systemConfig.https.requiresCertificate"
+                : "error.systemConfig.https.certificatePendingRestart";
     }
 
 }

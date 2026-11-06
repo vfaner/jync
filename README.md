@@ -56,7 +56,7 @@
 | 结构同步 | 表、索引、视图、存储过程/函数；类型映射、函数转换、标识符引号、分页语法、DDL 覆盖 |
 | ETL | 按客户取数 SQL 复制结果行；7 种分析型引擎；多语句脚本；覆盖 / 追加 / 范围覆盖；断点续跑；同源同目标的表可组成**批次**共享连接与调度 |
 | 专属迁移 | Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES 三种整库复制，连接模型独立于 JDBC；带预检，手动或 cron 运行，可取消并查看运行历史 |
-| 数据加工 | 列清洗（7 种规则）、表名映射、只读数据预览、按需行数核对、任务克隆、批量建任务（按表大小分箱） |
+| 数据加工 | 列清洗（13 种规则，含手机号/身份证/姓名/邮箱掩码与 SHA-256 哈希）、表名映射、只读数据预览、按需行数核对、任务克隆、批量建任务（按表大小分箱） |
 | AI 辅助（可选） | 模型起草存储过程/函数的候选 SQL，人工审阅后才落库；AI 永不参与同步 |
 | 告警通知 | Webhook 推送同步失败、轮询卡死、项目未运行、CDC 停摆、数据漂移、连接健康、PG slot 积压；钉钉 / 企业微信 / 飞书 / 通用 JSON；冷却与恢复通知 |
 | 可靠性与可观测 | 幂等 upsert、检查点续传、数据库租约锁、at-least-once；看板、变更 / 审计 / 系统日志、性能曲线、可选 Prometheus 指标端点 |
@@ -194,6 +194,7 @@ com.qqmu.jync
 
 - **配置、调度与调优**：[docs/configuration.md](docs/configuration.md)（`sync.*` / `sync.cdc.*` 键、调度规则、列清洗、CDC 前提与性能参数）
 - **容器部署与运维**：[docs/deploy-container.md](docs/deploy-container.md)（环境变量、TLS、多实例、升级与排障）
+- **数据边界与离线部署**：[docs/security-data-boundary.md](docs/security-data-boundary.md)（出网点清单、air-gap 关闭清单、字段加密/脱敏/国密的能力边界）
 - **已知限制与边界**：[docs/known-limitations.md](docs/known-limitations.md)（CDC 边界、无主键表、大字段、内容校验、过程转换）
 - **真实数据库验证矩阵**：[docs/verification-matrix.md](docs/verification-matrix.md)（每个产品验证到哪一步：版本/镜像、驱动、策略、验证级别与运行命令）
 

@@ -233,6 +233,40 @@ class ProjectColumnRuleViewTest {
     }
 
     @Test
+    void aMaskingRuleIsSavedWithoutAnArgument() throws Exception {
+        SyncConfig config = storedConfig(false);
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "phone")
+                        .param("ruleType", "MASK_PHONE"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(projectService).saveConfig(eq(1L), any());
+        assertThat(config.getColumnRules()).hasSize(1);
+        assertThat(config.getColumnRules().get(0).getType()).isEqualTo(ColumnRuleType.MASK_PHONE);
+        assertThat(config.getColumnRules().get(0).getArg()).isNull();
+    }
+
+    @Test
+    void aHashRuleKeepsItsOptionalSalt() throws Exception {
+        SyncConfig config = storedConfig(false);
+
+        mvc.perform(post("/projects/1/column-rules").with(asAdmin()).with(csrf())
+                        .param("tableName", "orders")
+                        .param("columnName", "email")
+                        .param("ruleType", "HASH_SHA256")
+                        .param("ruleArg", "salt-2026"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(projectService).saveConfig(eq(1L), any());
+        assertThat(config.getColumnRules()).hasSize(1);
+        assertThat(config.getColumnRules().get(0).getType())
+                .isEqualTo(ColumnRuleType.HASH_SHA256);
+        assertThat(config.getColumnRules().get(0).getArg()).isEqualTo("salt-2026");
+    }
+
+    @Test
     void aRuleMissingItsArgumentIsRefusedWithoutSaving() throws Exception {
         storedConfig(false);
 
@@ -352,6 +386,11 @@ class ProjectColumnRuleViewTest {
         // Only the rules that take an argument carry a label for it.
         assertThat(page).contains("data-arg-label=\"Prefix to remove\"");
         assertThat(page).contains("data-arg-label=\"Regular expression\"");
+        // Masking needs no argument; the hash salt is shown but optional.
+        assertThat(page).contains("value=\"MASK_PHONE\"");
+        assertThat(page).contains("value=\"MASK_EMAIL\"");
+        assertThat(page).contains("value=\"HASH_SHA256\" data-arg=\"optional\"");
+        assertThat(page).contains("data-arg-label=\"Optional salt (equal values stay joinable)\"");
         // The submit button gets its own right-aligned row instead of trailing the grid.
         assertThat(page).contains("class=\"column-rule-actions\"");
     }

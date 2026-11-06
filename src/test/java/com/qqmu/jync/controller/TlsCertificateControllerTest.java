@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -145,6 +146,105 @@ class TlsCertificateControllerTest {
                 .doesNotContain("changeit")
                 .contains("8443")
                 .contains("abc123abc123");
+    }
+
+    @Test
+    void aPemUploadWithoutACertificateIsRefused() throws Exception {
+        mvc.perform(multipart("/system-config/tls")
+                        .file(new MockMultipartFile("keyFile", "privkey.pem",
+                                "application/x-pem-file", new byte[] {2}))
+                        .param("httpsPort", "8443")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.tls.pemCertRequired"));
+
+        verify(service, never()).savePem(any(), any(), anyInt(), anyBoolean());
+    }
+
+    @Test
+    void anEmptyPemCertificateIsRefusedWithThePemMessage() throws Exception {
+        // The browser's required attribute can be bypassed; the answer must still name the PEM
+        // form's field, not the keystore's "choose a file".
+        mvc.perform(multipart("/system-config/tls")
+                        .file(new MockMultipartFile("certFile", "fullchain.pem",
+                                "application/x-pem-file", new byte[0]))
+                        .param("httpsPort", "8443")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.tls.pemCertRequired"));
+
+        verify(service, never()).savePem(any(), any(), anyInt(), anyBoolean());
+        verify(service, never()).save(any(), anyString(), anyString(), anyInt(), anyBoolean());
+    }
+
+    @Test
+    void aCombinedPemUploadNeedsOnlyTheCertificateFile() throws Exception {
+        // HAProxy-style bundle: leaf, chain and key in one file. The key part is optional.
+        when(service.savePem(any(), isNull(), eq(8443), eq(true))).thenReturn(config());
+
+        mvc.perform(multipart("/system-config/tls")
+                        .file(new MockMultipartFile("certFile", "fullchain-with-key.pem",
+                                "application/x-pem-file", new byte[] {1}))
+                        .param("httpsPort", "8443")
+                        .param("redirectHttp", "true")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("message", "msg.systemConfig.tls.saved"));
+
+        verify(service).savePem(any(), isNull(), eq(8443), eq(true));
+        verify(audit).record(eq(AuditAction.TLS_CONFIG_SAVE), anyString());
+    }
+
+    @Test
+    void aSuccessfulPemUploadFlashesAndIsAudited() throws Exception {
+        when(service.savePem(any(), any(), eq(8443), eq(true))).thenReturn(config());
+
+        mvc.perform(multipart("/system-config/tls")
+                        .file(new MockMultipartFile("certFile", "fullchain.pem",
+                                "application/x-pem-file", new byte[] {1}))
+                        .file(new MockMultipartFile("keyFile", "privkey.pem",
+                                "application/x-pem-file", new byte[] {2}))
+                        .param("httpsPort", "8443")
+                        .param("redirectHttp", "true")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("message", "msg.systemConfig.tls.saved"));
+
+        verify(service, never()).save(any(), anyString(), anyString(), anyInt(), anyBoolean());
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(audit).record(eq(AuditAction.TLS_CONFIG_SAVE), detail.capture());
+        assertThat(detail.getValue()).contains("8443").contains("abc123abc123");
+    }
+
+    @Test
+    void aRejectedPemUploadShowsItsKey() throws Exception {
+        when(service.savePem(any(), any(), anyInt(), anyBoolean()))
+                .thenThrow(new TlsKeystoreException("error.tls.pemKeyMismatch"));
+
+        mvc.perform(multipart("/system-config/tls")
+                        .file(new MockMultipartFile("certFile", "fullchain.pem",
+                                "application/x-pem-file", new byte[] {1}))
+                        .file(new MockMultipartFile("keyFile", "privkey.pem",
+                                "application/x-pem-file", new byte[] {2}))
+                        .param("httpsPort", "8443")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.tls.pemKeyMismatch"));
+    }
+
+    @Test
+    void anOversizedPemPartIsRefusedBeforeItIsRead() throws Exception {
+        byte[] tooBig = new byte[TlsCertificateService.MAX_BYTES + 1];
+
+        mvc.perform(multipart("/system-config/tls")
+                        .file(new MockMultipartFile("certFile", "fullchain.pem", null, tooBig))
+                        .file(new MockMultipartFile("keyFile", "privkey.pem", null, new byte[] {2}))
+                        .param("httpsPort", "8443")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.tls.fileTooLarge"));
+
+        verify(service, never()).savePem(any(), any(), anyInt(), anyBoolean());
     }
 
     @Test

@@ -92,6 +92,15 @@
                                 th:attr="data-arg-label=#{columnrule.arg.regex},
                                          data-replacement-label=#{columnrule.replacement.regex}"
                                 th:text="#{columnrule.type.REGEX_REPLACE}">Regex replace</option>
+                        <option value="MASK_PHONE" th:text="#{columnrule.type.MASK_PHONE}">Mask phone number</option>
+                        <option value="MASK_ID_CARD" th:text="#{columnrule.type.MASK_ID_CARD}">Mask ID number</option>
+                        <option value="MASK_BANK_CARD" th:text="#{columnrule.type.MASK_BANK_CARD}">Mask bank card</option>
+                        <option value="MASK_NAME" th:text="#{columnrule.type.MASK_NAME}">Mask name</option>
+                        <option value="MASK_EMAIL" th:text="#{columnrule.type.MASK_EMAIL}">Mask email</option>
+                        <!-- 盐值是可选参数：显示输入框但不设 required。 -->
+                        <option value="HASH_SHA256" data-arg="optional"
+                                th:attr="data-arg-label=#{columnrule.arg.salt}"
+                                th:text="#{columnrule.type.HASH_SHA256}">SHA-256 hash</option>
                     </select>
                 </div>
                 <div class="field">

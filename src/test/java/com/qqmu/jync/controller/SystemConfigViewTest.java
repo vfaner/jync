@@ -117,6 +117,21 @@ class SystemConfigViewTest {
     }
 
     @Test
+    void thePackageCardSitsInTheLeftColumn() throws Exception {
+        // Cards render in document order, so the package before the HTTPS card means it is in
+        // the left column: the two "switch databases" chores share one side, transport security
+        // takes the other.
+        String page = render(UserRole.ADMIN);
+
+        int database = page.indexOf("<span>元数据库</span>");
+        int pkg = page.indexOf("<span>配置包</span>");
+        int https = page.indexOf("<span>强制 HTTPS</span>");
+        assertThat(database).isGreaterThan(-1);
+        assertThat(pkg).isGreaterThan(database);
+        assertThat(pkg).isLessThan(https);
+    }
+
+    @Test
     void theSystemGroupIsTheActiveOneHere() throws Exception {
         assertThat(render(UserRole.ADMIN)).contains("nav-system is-active");
     }
@@ -151,7 +166,8 @@ class SystemConfigViewTest {
 
         for (String id : List.of("db-test-url", "db-test-driver", "db-test-username",
                 "db-test-password", "export-passphrase", "export-passphrase-confirm",
-                "import-file", "import-passphrase", "tls-file", "tls-passphrase", "tls-port")) {
+                "import-file", "import-passphrase", "tls-file", "tls-passphrase", "tls-port",
+                "tls-cert-file", "tls-key-file", "tls-pem-port")) {
             int at = page.indexOf("id=\"" + id + "\"");
             assertThat(at).as("field %s", id).isGreaterThan(-1);
             String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
@@ -174,6 +190,44 @@ class SystemConfigViewTest {
         assertThat(page).contains("enctype=\"multipart/form-data\"")
                 .containsPattern("action=\"/system-config/tls[^\"]*_csrf=");
         assertThat(page).containsPattern("accept=\"\\.p12,\\.pfx,\\.jks\"");
+    }
+
+    @Test
+    void thePemFormTakesACertificateAndAKeyWithoutAPassphrase() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        int cert = page.indexOf("id=\"tls-cert-file\"");
+        assertThat(cert).isGreaterThan(-1);
+        String form = page.substring(page.lastIndexOf("<form", cert),
+                page.indexOf("</form>", cert));
+        assertThat(form).contains("enctype=\"multipart/form-data\"", "name=\"certFile\"",
+                "name=\"keyFile\"", "name=\"httpsPort\"", "action=\"/system-config/tls");
+        // nginx-style PEM has no keystore password; an encrypted key is rejected with its own key.
+        assertThat(form).doesNotContain("type=\"password\"");
+    }
+
+    @Test
+    void theTwoUploadModesAreTabsWithPemFirst() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        int pem = page.indexOf("id=\"tls-mode-pem\"");
+        int keystore = page.indexOf("id=\"tls-mode-keystore\"");
+        assertThat(pem).isGreaterThan(-1);
+        assertThat(keystore).isGreaterThan(pem);
+        assertThat(page.substring(pem, page.indexOf('>', pem))).contains("checked");
+        assertThat(page.indexOf("data-mode=\"pem\""))
+                .isLessThan(page.indexOf("data-mode=\"keystore\""));
+    }
+
+    @Test
+    void thePemKeyFileIsOptionalForACombinedFile() throws Exception {
+        // The certificate file may already carry the private key (HAProxy-style bundle).
+        String page = render(UserRole.ADMIN);
+
+        int field = page.indexOf("id=\"tls-key-file\"");
+        assertThat(field).isGreaterThan(-1);
+        String tag = page.substring(page.lastIndexOf('<', field), page.indexOf('>', field));
+        assertThat(tag).doesNotContain("required");
     }
 
     @Test
@@ -217,6 +271,34 @@ class SystemConfigViewTest {
                 null, certificate(Instant.now().plusSeconds(86_400)), false, false, 8443, false));
 
         assertThat(page).contains("重启 Jync 后保存的证书才会生效");
+    }
+
+    @Test
+    void theHttpsSwitchIsBlockedUntilACertificateIsServing() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).contains("开启强制 HTTPS 前，需要先上传有效证书并重启");
+        int form = page.indexOf("action=\"/system-config/require-https\"");
+        assertThat(form).isGreaterThan(-1);
+        assertThat(page.substring(form, page.indexOf("</form>", form))).contains("disabled");
+    }
+
+    @Test
+    void theHttpsSwitchIsAvailableWhenTheCertificateIsServing() throws Exception {
+        String page = render(UserRole.ADMIN, state(true, true, false, false, false, true, false,
+                null, certificate(Instant.now().plusSeconds(86_400)), false, false, 8443, true));
+
+        assertThat(page).doesNotContain("开启强制 HTTPS 前，需要先上传有效证书并重启");
+        int form = page.indexOf("action=\"/system-config/require-https\"");
+        assertThat(page.substring(form, page.indexOf("</form>", form))).doesNotContain("disabled");
+    }
+
+    @Test
+    void theBlockedSwitchExplainsThatAnExpiredCertificateDoesNotCount() throws Exception {
+        String page = render(UserRole.ADMIN, state(true, true, false, false, false, true, false,
+                null, certificate(Instant.now().minusSeconds(60)), true, false, 8443, true));
+
+        assertThat(page).contains("当前证书已过期");
     }
 
     @Test

@@ -88,7 +88,7 @@ Spring 的 relaxed binding 让所有配置项都能用环境变量覆盖，无�
 | `SERVER_PORT` | `server.port` | 容器内端口，默认 8080 |
 | `JYN_COOKIE_SECURE` | `server.servlet.session.cookie.secure` | HTTPS 部署设 `true`，会话 Cookie 带 Secure 标记 |
 | `JYN_TRUSTED_PROXIES` | `app.security.trusted-proxies` | 可信反向代理地址（逗号分隔，支持 CIDR）；只有这些对端的 `X-Forwarded-Proto` 会被采信。代理终止 TLS 时**必须**配置，否则 Jync 认为连接是明文。**只能写在配置文件/环境变量里，页面不提供编辑入口** |
-| `JYN_REQUIRE_HTTPS` | `app.security.require-https` | `true` 时非 TLS 请求返回 403（回环地址与不带 Cookie 的 `GET /login` 除外）。不设时由「系统管理 → 系统配置」页面决定，改完即时生效；一旦显式设置（含 `false`），页面开关变为只读。直连 8080 的部署不要在页面上打开；配置见[配置文档](configuration.md)「HTTPS 与等保部署」 |
+| `JYN_REQUIRE_HTTPS` | `app.security.require-https` | `true` 时非 TLS 请求返回 403（不带 Cookie 的 `GET /login`，以及没有可用 HTTPS 端点时的回环应急通道除外；应用内证书在跑时回环也按规则处理）。不设时由「系统管理 → 系统配置」页面决定，改完即时生效；一旦显式设置（含 `false`），页面开关变为只读。直连 8080 的部署不要在页面上打开；配置见[配置文档](configuration.md)「HTTPS 与等保部署」 |
 | `JYN_TLS_ENABLED` | `app.tls.enabled` | 默认 `true`。设为 `false` 时不读取证书、不加 HTTPS 连接器——用于证书损坏或 8443 被占导致启动失败时救回实例 |
 | `JYN_TLS_DIRECTORY` | `app.tls.directory` | 密钥库与边车目录，默认 `./data/tls`（即 `/app/data/tls`）。**证书不在配置包里**，换机或迁移时重新上传，备份数据卷即可包含 |
 | `JYN_TLS_REDIRECT_HOST` | `app.tls.redirect-host` | HTTP→HTTPS 重定向固定使用的主机名；留空沿用请求 `Host`（严格校验，非法值 400）。应用内 TLS 配置见[配置文档](configuration.md)「HTTPS 与等保部署」 |
