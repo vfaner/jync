@@ -83,7 +83,9 @@ Spring 的 relaxed binding 让所有配置项都能用环境变量覆盖，无�
 | `JAVA_OPTS` | — | JVM 参数，镜像默认 `-XX:MaxRAMPercentage=75`（按容器内存限额取堆） |
 | `SERVER_PORT` | `server.port` | 容器内端口，默认 8080 |
 | `JYN_COOKIE_SECURE` | `server.servlet.session.cookie.secure` | HTTPS 部署设 `true`，会话 Cookie 带 Secure 标记 |
-| `SPRING_DATASOURCE_URL` | `spring.datasource.url` | 换外部元数据库（多实例的前提；已验证 MySQL 8 / PostgreSQL 16 / Oracle 23） |
+| `JYN_TRUSTED_PROXIES` | `app.security.trusted-proxies` | 可信反向代理地址（逗号分隔，支持 CIDR）；只有这些对端的 `X-Forwarded-Proto` 会被采信。代理终止 TLS 时**必须**配置，否则 Jync 认为连接是明文。**只能写在配置文件/环境变量里，页面不提供编辑入口** |
+| `JYN_REQUIRE_HTTPS` | `app.security.require-https` | `true` 时非 TLS 请求返回 403（回环地址与不带 Cookie 的 `GET /login` 除外）。不设时由「系统管理 → 系统配置」页面决定，改完即时生效；一旦显式设置（含 `false`），页面开关变为只读。直连 8080 的部署不要在页面上打开；配置见[配置文档](configuration.md)「HTTPS 与等保部署」 |
+| `SPRING_DATASOURCE_URL` | `spring.datasource.url` | 换外部元数据库（多实例的前提；已验证 MySQL 8 / PostgreSQL 16 / Oracle 23）。换库后按[元数据库迁移](configuration.md#元数据库迁移)导入配置包，否则新库是空的 |
 | `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | 同上 | 元数据库账号 |
 | `SPRING_DATASOURCE_DRIVER_CLASS_NAME` | `spring.datasource.driver-class-name` | 驱动类；能按 URL 推断时可省略 |
 | `JYN_RESET_LOGIN` | `app.login.reset-on-startup` | 应急开关：关闭本地登录后外部认证不可用时，设为 `true` 启动一次即恢复本地登录并保存；修好后去掉 |

@@ -124,6 +124,100 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 
 > 连接密码、AI 密钥与告警 Webhook 地址以 AES-256 加密存储，`enc:` 前缀防止重复加密；密钥留空时首启自动生成并写入 `data/<库名>.key`。
 
+## 元数据库迁移
+
+Jync 的元数据（连接、同步任务、ETL、专属迁移、用户、系统设置）默认存在内置 H2 文件里。要换到 MySQL / PostgreSQL / Oracle，只改 `SPRING_DATASOURCE_*` 是不够的：新库是空的，而且新部署通常有自己的一套 `sync.crypto-*` 密钥——旧库里的 `enc:` 密文在新密钥下全部解不开。**导出配置包就是补上这一步。**
+
+流程：
+
+1. 旧实例进入「系统管理 → 系统配置 → 配置包」，输入口令导出。包用 AES-256-GCM 加密，口令至少 8 位；勾选「包含同步进度与游标」可把断点一起带走。
+2. 停旧实例，把新库的连接写到环境变量：
+
+   ```bash
+   SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/jync
+   SPRING_DATASOURCE_USERNAME=jync
+   SPRING_DATASOURCE_PASSWORD=...
+   SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+   # 强烈建议显式指定；不设则落到发行包的公开默认密钥
+   SYNC_CRYPTO_PASSWORD=...
+   SYNC_CRYPTO_SALT=...
+   ```
+
+3. 启动新实例。`ddl-auto: update` 会自动建出全部元数据表。
+4. 在「系统配置 → 配置包」导入刚才的包。导入成功后连接池、健康检查缓存和调度器会就地重新装载，**不需要再重启**。
+
+几条硬性规则：
+
+- **目标库必须是空的**：`database_config`、`redis_target`、`migration_connection`、`project`、`etl_*`、`migration_task` 等配置/状态表必须 0 行。`app_user`、`alert_config`、`oa_auth_config`、`system_setting` 例外：用户按用户名合并（同名保留目标端的口令哈希与角色），单例与设置按覆盖/upsert 处理。导入后必须至少还有一个管理员，否则整次导入回滚。
+- **密钥随包走**：包内 `meta.json` 携带导出端的 `sync.crypto-*`（外面还有口令加密），导入时先用它解开 `enc:`，再用新部署的密钥重新加密。所以包里带着旧密钥——导入完成后请销毁包文件。
+- **强制 HTTPS 的例外**：包里的 `security.require-https=true` 只在导入请求本身是 HTTPS 时保留；明文导入会写成 `false` 并在页面提示，否则新实例导入完就把管理员自己锁在 403 里。
+- **不迁移的内容**：变更日志、审计、性能采样、ETL/迁移运行历史、`sync_task` 租约行都不进包，新库从零开始记。
+- **上限**：单包 ≤ 20 MB，解压后 ≤ 40 MB；超限时导出直接拒绝，请先清理变更日志或不要勾选状态。
+
+「系统配置」页还有一个**元数据库连接测试器**：填入候选 JDBC 地址与驱动类，它会真的连一次并给出产品/版本和一段 `SPRING_DATASOURCE_*` 环境变量块，方便先验证网络与账号再重启。测试器只支持 MySQL、MariaDB、PostgreSQL、Oracle，**不保存任何东西**——哪个库生效始终只由 `SPRING_DATASOURCE_*` 决定，页面上没有第二份指针。
+
+## HTTPS 与等保部署
+
+连接密码、AI Key 在**落盘时**加密，但浏览器到 Jync 之间默认是明文 HTTP：登录口令、数据源密码、AI Key 都会出现在请求体里，等保测评与渗透测试会直接判为传输安全不合格。Jync 自身不终止 TLS——由前置反向代理（Nginx / 网关 / 云负载均衡）持有证书，Jync 只监听本机 8080。
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `app.security.trusted-proxies` | 空 | 可信代理地址（逗号分隔，支持 IPv4 / IPv6 / CIDR）；只有来自这些对端的 `X-Forwarded-Proto` 才会被采信，其余请求一律按直连处理 |
+| `app.security.require-https` | `false` | 强制 HTTPS：判定为非 TLS 的请求直接返回 403。两个例外——回环地址（本机运维与探针）和不带 Cookie 的 `GET /login`（容器健康探针）；登录 POST 永远不放行 |
+
+部署步骤：
+
+1. 反向代理终止 TLS，并向下游传 `Host`、`X-Forwarded-For`、`X-Forwarded-Proto`。
+2. 把代理地址写进 `app.security.trusted-proxies`，否则代理转发来的请求会被当成明文直连。
+3. 打开 `app.security.require-https`，并把会话 Cookie 设为 `Secure`：`JYN_COOKIE_SECURE=true`。
+4. 打开「配置管理 → 系统信息」，确认「连接加密」一行显示 **HTTPS 已加密**；显示 **HTTP 明文** 说明代理头没传到或 `trusted-proxies` 没配对。
+
+Nginx 参考配置：
+
+```nginx
+server {
+    listen 80;
+    server_name jync.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name jync.example.com;
+
+    ssl_certificate     /etc/nginx/certs/jync.crt;
+    ssl_certificate_key /etc/nginx/certs/jync.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # 诊断包、批量导入等表单提交
+    client_max_body_size 16m;
+
+    location / {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+}
+```
+
+对应环境变量（Docker / K8s）：
+
+```bash
+JYN_TRUSTED_PROXIES=127.0.0.1,10.0.0.0/8
+JYN_REQUIRE_HTTPS=true
+JYN_COOKIE_SECURE=true
+```
+
+- **直接暴露 8080 的部署不要打开 `require-https`**：没有代理时所有请求都判定为明文，除了本机回环全部返回 403。
+- **HTTPS 生效时**响应带 `Strict-Transport-Security: max-age=31536000; includeSubDomains`；HSTS 一旦被浏览器记住，回退到 HTTP 会打不开页面，切换前先确认证书长期可用。
+- 所有响应带 `Content-Security-Policy`（仅允许同源资源）、`Referrer-Policy: same-origin`、`Permissions-Policy`（关闭定位/麦克风/摄像头），`X-Frame-Options: DENY` 由 Spring Security 默认提供。
+- `require-https` 用 403 而不是重定向：跳转目标取自 `Host` 头，可被伪造；HTTP→HTTPS 的 301 由上面的 Nginx 完成。
+- **反向代理不要开启 `server.forward-headers-strategy=framework`** 之类的全局转发头解析：那会让客户端自带的 `X-Forwarded-For` 改写 `getRemoteAddr()`，绕过登录失败锁定与审计里的真实来源。
+
 ## 日志 CDC 前提
 
 六种源库可按任务切换日志 CDC，直接解析源库日志。启动前会逐项探测以下前提：
