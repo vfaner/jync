@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionInfo;
@@ -47,8 +48,23 @@ class SettingsRuntimeCardViewTest {
     private SyncLockService lockService;
     @MockBean
     private VersionService versionService;
+    @MockBean
+    private RequireHttpsResolver requireHttpsResolver;
+
+    private static final RequireHttpsResolver.Effective HTTPS_OFF =
+            new RequireHttpsResolver.Effective(false, RequireHttpsResolver.Source.DEFAULT);
 
     private String render(Locale locale) throws Exception {
+        return render(locale, false, HTTPS_OFF);
+    }
+
+    private String render(Locale locale, boolean secure) throws Exception {
+        return render(locale, secure, HTTPS_OFF);
+    }
+
+    private String render(Locale locale, boolean secure,
+                          RequireHttpsResolver.Effective https) throws Exception {
+        when(requireHttpsResolver.effective()).thenReturn(https);
         when(scheduler.scheduledProjectIds()).thenReturn(List.of());
         when(versionService.snapshot()).thenReturn(VersionInfo.builder()
                 .currentVersion("1.8.1")
@@ -56,7 +72,7 @@ class SettingsRuntimeCardViewTest {
                 .latestVersion("1.8.1").latestTag("v1.8.1")
                 .build());
 
-        return mvc.perform(get("/settings").locale(locale).with(asAdmin()))
+        return mvc.perform(get("/settings").locale(locale).secure(secure).with(asAdmin()))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
     }
@@ -81,6 +97,47 @@ class SettingsRuntimeCardViewTest {
 
         // A real clock value, not a placeholder: the row is only useful if it carries a time.
         assertThat(html).containsPattern("(?s)启动时间.{0,500}?\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}");
+    }
+
+    @Test
+    void aPlainHttpRequestIsLabelledAsSuchAndPointsAtTheFix() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains("连接加密").contains("HTTP 明文")
+                .contains("JYN_REQUIRE_HTTPS=true");
+    }
+
+    @Test
+    void anHttpsRequestIsLabelledAsEncrypted() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE, true);
+
+        assertThat(html).contains("HTTPS 已加密")
+                // The warning belongs to the plaintext case only.
+                .doesNotContain("当前连接走明文 HTTP");
+    }
+
+    @Test
+    void theHttpsRowSpeaksEnglishOnTheEnglishUi() throws Exception {
+        String html = render(Locale.ENGLISH, true);
+
+        assertThat(html).contains("Connection security").contains("HTTPS encrypted")
+                .doesNotContain("连接加密");
+    }
+
+    @Test
+    void theHttpsRowNamesThePageAsTheSourceOfTheSwitch() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE, false,
+                new RequireHttpsResolver.Effective(true, RequireHttpsResolver.Source.DATABASE));
+
+        assertThat(html).contains("页面配置").contains("/system-config");
+    }
+
+    @Test
+    void aConfigurationPinnedSwitchSaysSoInstead() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE, false,
+                new RequireHttpsResolver.Effective(false, RequireHttpsResolver.Source.CONFIG));
+
+        assertThat(html).contains("配置文件").doesNotContain("页面配置");
     }
 
     @Test

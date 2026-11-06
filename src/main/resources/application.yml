@@ -23,6 +23,12 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+  servlet:
+    multipart:
+      # 配置包上限 20 MB（ConfigPackageFormat.MAX_PACKAGE_BYTES 是唯一语义来源，
+      # ConfigPackageController 在读字节前再校验一次）。请求上限多留 2 MB 给表单字段。
+      max-file-size: 20MB
+      max-request-size: 22MB
   thymeleaf:
     encoding: UTF-8
   messages:
@@ -122,6 +128,15 @@ app:
     # 请求里的身份头才会生效。Jync 必须部署在网关之后，不能直连暴露。
     # 曾经把"私网直连"当作代理，导致同网段客户端可以每次伪造不同 IP，绕过登录锁定并污染审计。
     trusted-proxies: ${JYN_TRUSTED_PROXIES:}
+    # 强制 HTTPS：非 TLS 请求返回 403。默认关闭——常规部署由前置反向代理终止 TLS，
+    # 打开时必须把代理地址写进 trusted-proxies，否则代理转发来的请求会被当成明文拒绝。
+    # 两个例外：回环地址（本机运维与探针）、不带 Cookie 的 GET /login（容器健康探针；
+    # 登录 POST 永远不放行，密码不会明文过网）。直接暴露 8080 的部署不要打开。
+    #
+    # 留空（默认）表示由「系统管理 → 系统配置」页面决定，改完即时生效、无需重启。
+    # 这里或 JYN_REQUIRE_HTTPS 一旦显式赋值（true/false/on/off/yes/no/1/0），
+    # 即以配置为准，页面变为只读——环境变量拼错会在启动时直接失败，而不是悄悄关掉防护。
+    require-https: ${JYN_REQUIRE_HTTPS:}
 
 sync:
   # Default polling interval in milliseconds for change detection

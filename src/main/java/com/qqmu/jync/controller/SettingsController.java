@@ -9,6 +9,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
+import javax.servlet.http.HttpServletRequest;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -16,9 +18,11 @@ import org.springframework.web.bind.annotation.GetMapping;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionService;
+import com.qqmu.jync.util.HttpsSupport;
 
 /** Read-only view of effective global settings and runtime state. */
 @Controller
@@ -35,9 +39,11 @@ public class SettingsController {
     private final String contactEmail;
     private final String contactWechat;
     private final long reconcileIntervalMs;
+    private final RequireHttpsResolver requireHttpsResolver;
 
     public SettingsController(SyncProperties properties, SyncScheduler scheduler,
                               SyncLockService lockService, VersionService versionService,
+                              RequireHttpsResolver requireHttpsResolver,
                               @Value("${app.gitee-url:}") String giteeUrl,
                               @Value("${app.site-url:}") String siteUrl,
                               @Value("${app.contact-qq:}") String contactQq,
@@ -56,6 +62,7 @@ public class SettingsController {
         this.contactQqGroup = contactQqGroup;
         this.contactEmail = contactEmail;
         this.contactWechat = contactWechat;
+        this.requireHttpsResolver = requireHttpsResolver;
         this.reconcileIntervalMs = reconcileIntervalMs;
     }
 
@@ -71,7 +78,12 @@ public class SettingsController {
     }
 
     @GetMapping("/settings")
-    public String settings(Model model) {
+    public String settings(Model model, HttpServletRequest request) {
+        RequireHttpsResolver.Effective https = requireHttpsResolver.effective();
+        model.addAttribute("httpsEnabled", HttpsSupport.isSecure(request));
+        model.addAttribute("requireHttps", https.required());
+        model.addAttribute("requireHttpsSource", https.source().name());
+        model.addAttribute("requireHttpsConfigControlled", requireHttpsResolver.isConfigControlled());
         model.addAttribute("properties", properties);
         model.addAttribute("reconcileIntervalMs", reconcileIntervalMs);
         model.addAttribute("supportedTypes", DatabaseType.values());

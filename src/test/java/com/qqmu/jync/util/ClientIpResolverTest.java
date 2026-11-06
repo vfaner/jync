@@ -19,6 +19,31 @@ class ClientIpResolverTest {
     }
 
     @Test
+    void loopbackCoversV4V6AndTheMappedForm() {
+        assertThat(ClientIpResolver.isLoopback("127.0.0.1")).isTrue();
+        assertThat(ClientIpResolver.isLoopback("127.0.0.2")).isTrue();
+        assertThat(ClientIpResolver.isLoopback("::1")).isTrue();
+        assertThat(ClientIpResolver.isLoopback("::ffff:127.0.0.1")).isTrue();
+    }
+
+    @Test
+    void aDirectPeerOnTheLanIsNotLoopback() {
+        // The HTTPS exemption is deliberately narrower than "trusted peer": a LAN client and
+        // a configured remote proxy are both untrusted for this purpose.
+        assertThat(ClientIpResolver.isLoopback("192.168.1.10")).isFalse();
+        assertThat(ClientIpResolver.isLoopback("10.0.0.7")).isFalse();
+        assertThat(ClientIpResolver.isLoopback(null)).isFalse();
+        assertThat(ClientIpResolver.isLoopback("not-an-ip")).isFalse();
+    }
+
+    @Test
+    void aConfiguredProxyIsNotLoopback() {
+        ClientIpResolver.configureTrustedProxies("10.0.0.7");
+
+        assertThat(ClientIpResolver.isLoopback("10.0.0.7")).isFalse();
+    }
+
+    @Test
     void ignoresForwardedHeadersFromAPublicDirectPeer() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setRemoteAddr("203.0.113.7");

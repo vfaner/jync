@@ -226,7 +226,10 @@ class SecurityConfigTest {
                 "/migrations/mongodb-to-mongodb/new",
                 "/migrations/mongodb-to-kingbase/new", "/migrations/connections",
                 "/migrations/connections/new", "/migrations/connections/1/edit",
-                "/redis/targets", "/redis/targets/new", "/redis/targets/1/edit"}) {
+                "/redis/targets", "/redis/targets/new", "/redis/targets/1/edit",
+                // Holds the configuration export/import and the metadata-database switch;
+                // every action on it is an admin write.
+                "/system-config"}) {
             assertThat(statusOf(get(page).with(asViewer()))).as(page).isEqualTo(302);
         }
         assertThat(statusOf(get("/api/databases/discover-drivers").with(asViewer())))

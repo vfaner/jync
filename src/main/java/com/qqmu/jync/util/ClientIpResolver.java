@@ -113,6 +113,20 @@ public final class ClientIpResolver {
         return isTrustedProxyPeer(remoteAddr);
     }
 
+    /**
+     * True only for a loopback socket address ({@code 127.0.0.0/8}, {@code ::1}, or an
+     * IPv4-mapped form of it).
+     *
+     * <p>Deliberately narrower than {@link #isTrustedPeer}: a remote reverse proxy named in
+     * {@code app.security.trusted-proxies} is trusted to forward headers, but it is not a
+     * same-host caller, and a plaintext request arriving from it must still be refused when
+     * HTTPS enforcement is on.
+     */
+    public static boolean isLoopback(String remoteAddr) {
+        InetAddress address = parseIpLiteral(remoteAddr);
+        return address != null && address.isLoopbackAddress();
+    }
+
     public static String resolve(HttpServletRequest request) {
         String peer = request.getRemoteAddr();
         if (isTrustedProxyPeer(peer)) {

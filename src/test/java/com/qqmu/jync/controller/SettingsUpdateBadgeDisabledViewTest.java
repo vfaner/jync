@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.util.List;
 import java.util.Locale;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.info.BuildProperties;
@@ -22,6 +23,7 @@ import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionInfo;
 import com.qqmu.jync.service.version.VersionService;
+import com.qqmu.jync.service.settings.RequireHttpsResolver;
 
 /**
  * With {@code app.update-check.enabled=false} the settings page must not even render the
@@ -40,6 +42,15 @@ class SettingsUpdateBadgeDisabledViewTest {
     @MockBean private SyncScheduler scheduler;
     @MockBean private SyncLockService lockService;
     @MockBean private VersionService versionService;
+
+    @MockBean
+    private RequireHttpsResolver requireHttpsResolver;
+
+    @BeforeEach
+    void defaultHttpsSource() {
+        when(requireHttpsResolver.effective()).thenReturn(
+                new RequireHttpsResolver.Effective(false, RequireHttpsResolver.Source.DEFAULT));
+    }
     @MockBean private BuildProperties buildProperties;
 
     @Test

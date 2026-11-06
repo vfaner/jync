@@ -38,6 +38,28 @@
                             <dt th:text="#{settings.startedAt}">Started</dt>
                             <dd><span class="chip" th:text="${startedAt}">2026-10-30 09:00:00</span></dd>
                         </div>
+                        <!--/* 传输加密状态：这是等保/渗透最先看的一条，明文时要显眼地说出来 */-->
+                        <div class="kv">
+                            <dt th:text="#{settings.https}">HTTPS</dt>
+                            <dd>
+                                <span class="chip badge-ok" th:if="${httpsEnabled}"
+                                      th:text="#{settings.httpsOn}">Encrypted</span>
+                                <span class="chip badge-danger" th:unless="${httpsEnabled}"
+                                      th:text="#{settings.httpsOff}">Plain HTTP</span>
+                                <span class="chip" th:if="${requireHttps}"
+                                      th:text="#{settings.httpsRequired}">Enforced</span>
+                                <span class="chip" th:if="${requireHttpsSource == 'DATABASE'}"
+                                      th:text="#{settings.httpsSourceDatabase}">Set on this page</span>
+                                <span class="chip" th:if="${requireHttpsSource == 'CONFIG'}"
+                                      th:text="#{settings.httpsSourceConfig}">Pinned by configuration</span>
+                                <span class="chip" th:if="${requireHttpsSource == 'DEFAULT'}"
+                                      th:text="#{settings.httpsSourceDefault}">Default off</span>
+                                <a class="small" th:if="${isAdmin}" th:href="@{/system-config}"
+                                   th:text="#{settings.httpsManage}">Change in System settings</a>
+                                <div class="small soft" th:unless="${httpsEnabled}"
+                                     th:text="#{settings.httpsOffHelp}">help</div>
+                            </dd>
+                        </div>
                         <div class="kv">
                             <dt th:text="#{settings.scheduledProjects}">Scheduled</dt>
                             <dd>

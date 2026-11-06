@@ -18,6 +18,9 @@ services:
       # JAVA_OPTS: "-XX:MaxRAMPercentage=75"
       # 走 HTTPS 反向代理时打开,让会话 Cookie 带 Secure 标记:
       # JYN_COOKIE_SECURE: "true"
+      # 同一场景下还必须告诉 Jync 谁是可信任的代理,并可选强制 HTTPS:
+      # JYN_TRUSTED_PROXIES: "127.0.0.1,10.0.0.0/8"
+      # JYN_REQUIRE_HTTPS: "true"
       # 多实例共享元数据库时,把 H2 换成外部 MySQL(此时 replicas 才可以 > 1):
       # SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/jync?useSSL=false&serverTimezone=UTC"
       # SPRING_DATASOURCE_USERNAME: "jync"

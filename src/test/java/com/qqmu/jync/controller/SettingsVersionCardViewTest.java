@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.info.BuildProperties;
@@ -28,6 +29,7 @@ import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionInfo;
 import com.qqmu.jync.service.version.VersionService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.settings.RequireHttpsResolver;
 
 /**
  * The settings-page version card: green badge when current, amber button when a newer release
@@ -51,6 +53,15 @@ class SettingsVersionCardViewTest {
     private SyncLockService lockService;
     @MockBean
     private VersionService versionService;
+
+    @MockBean
+    private RequireHttpsResolver requireHttpsResolver;
+
+    @BeforeEach
+    void defaultHttpsSource() {
+        when(requireHttpsResolver.effective()).thenReturn(
+                new RequireHttpsResolver.Effective(false, RequireHttpsResolver.Source.DEFAULT));
+    }
     @MockBean
     private BuildProperties buildProperties;
 
@@ -98,7 +109,7 @@ class SettingsVersionCardViewTest {
 
         // 小圆点挂在「系统信息」导航项右上角，而不是 nav-right 里的一整条横幅。
         assertThat(page).containsPattern(
-                "(?s)<a[^>]*class=\"nav-settings[^\"]*\"[^>]*>.*?id=\"nav-update-badge\"");
+                "(?s)<a[^>]*class=\"[^\"]*nav-settings[^\"]*\"[^>]*>.*?id=\"nav-update-badge\"");
         assertThat(page).contains("data-url=\"/api/version/check\"");
         assertThat(page).contains("data-refresh=\"true\"");
         assertThat(page).contains("data-label=\"发现新版本：\"");

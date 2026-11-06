@@ -51,7 +51,7 @@ abstract class AbstractMetadataStoreIT {
     private static final Set<String> EXPECTED_TABLES = Set.of(
             "ai_provider", "app_user", "audit_event", "cdc_position", "change_log",
             "chunk_checkpoint", "database_config", "metadata_snapshot", "oa_auth_config",
-            "project", "sync_progress", "sync_task");
+            "project", "sync_progress", "sync_task", "system_setting");
 
     @Autowired
     private DataSource dataSource;

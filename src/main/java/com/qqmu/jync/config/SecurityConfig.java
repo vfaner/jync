@@ -27,6 +27,7 @@ import org.springframework.security.web.authentication.LoginUrlAuthenticationEnt
 import org.springframework.security.web.authentication.SavedRequestAwareAuthenticationSuccessHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.logout.LogoutSuccessHandler;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 
 import com.qqmu.jync.model.AuditAction;
@@ -38,7 +39,9 @@ import com.qqmu.jync.service.auth.LoginAttemptService;
 import com.qqmu.jync.service.auth.LoginLockoutFilter;
 import com.qqmu.jync.service.auth.SsoHeaderAuthenticationFilter;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.auth.TransportSecurityFilter;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
+import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
 import com.qqmu.jync.util.CryptoUtil;
@@ -118,6 +121,10 @@ public class SecurityConfig {
             // The alerting page holds the webhook URL — a bearer credential — and every POST
             // that changes it is admin-only anyway, so the GET is locked with them.
             "/alert-settings",
+            // System settings writes the metadata-database test, the transport-security switch
+            // and the configuration package — every one of them an administrative action, and
+            // every POST is admin-only by the blanket rule anyway.
+            "/system-config",
             "/api/databases/discover-drivers",
             // Health dots open one connection per listed database. Read-only in the HTTP
             // sense, but it dials production sources, exactly like the probes below; the
@@ -222,15 +229,43 @@ public class SecurityConfig {
         return registration;
     }
 
+    /**
+     * HTTPS enforcement plus HSTS / CSP / Referrer-Policy / Permissions-Policy.
+     *
+     * <p>Off by default: a deployment behind a TLS reverse proxy is the normal case, and
+     * turning this on without naming the proxy in {@code app.security.trusted-proxies}
+     * would reject every forwarded request as plaintext. The resolver is consulted per
+     * request so the 系统配置 page can toggle the switch without a restart; an explicit
+     * configuration value still wins and pins it.
+     */
+    @Bean
+    public TransportSecurityFilter transportSecurityFilter(RequireHttpsResolver requireHttps) {
+        return new TransportSecurityFilter(requireHttps::isRequired);
+    }
+
+    /** Same reason as the lockout filter: in the security chain only, exactly once. */
+    @Bean
+    public FilterRegistrationBean<TransportSecurityFilter> transportSecurityFilterRegistration(
+            TransportSecurityFilter filter) {
+        FilterRegistrationBean<TransportSecurityFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            LoginAttemptService attemptService,
                                            LoginLockoutFilter loginLockoutFilter,
                                            SsoHeaderAuthenticationFilter ssoHeaderAuthenticationFilter,
                                            ForcePasswordChangeFilter forcePasswordChangeFilter,
+                                           TransportSecurityFilter transportSecurityFilter,
                                            AdminAuditService auditService,
                                            OaAuthConfigService configService) throws Exception {
         http
+                // First in the chain: an HTTP request is refused before it can authenticate,
+                // and the headers land even on the 401/403 Spring Security writes itself.
+                .addFilterBefore(transportSecurityFilter, SecurityContextHolderFilter.class)
                 .addFilterBefore(loginLockoutFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(ssoHeaderAuthenticationFilter,
                         UsernamePasswordAuthenticationFilter.class)
