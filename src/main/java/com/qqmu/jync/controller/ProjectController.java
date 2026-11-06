@@ -396,9 +396,10 @@ public class ProjectController {
         // recommendation wins over the stored value, so two cards can never both check.
         CaptureStrategy selected = recommendedStrategy != null ? recommendedStrategy : current;
         model.addAttribute("selectedStrategy", selected.name());
-        // The object/option switches below are polling-only: the CDC change stream does not
-        // consult them. Keyed off the SELECTION (including an unsaved recommendation) so the
-        // five switches hide the moment a CDC card is picked; app.js keeps it in sync after.
+        // The object/option switches below are polling-only — except the index switch, which
+        // the baseline honours exactly as saved and therefore stays visible. Keyed off the
+        // SELECTION (including an unsaved recommendation) so the hidden ones disappear the
+        // moment a CDC card is picked; app.js keeps it in sync after.
         model.addAttribute("selectedCdc", selected.isLogCdc());
         // The persisted value, deliberately distinct from selectedStrategy: a CDC card
         // pre-selected by the probe recommendation is NOT saved, and the form's baseline

@@ -32,7 +32,8 @@ class SyncContextFactoryCdcDefaultsTest {
     void everyLogCdcEngineForcesStructureAndDataButHonoursTheIndexSwitch() {
         for (CaptureStrategy strategy : new CaptureStrategy[] {
                 CaptureStrategy.BINLOG_CDC, CaptureStrategy.LOGMINER_CDC,
-                CaptureStrategy.PG_LOGICAL_CDC, CaptureStrategy.SQLSERVER_CDC }) {
+                CaptureStrategy.PG_LOGICAL_CDC, CaptureStrategy.SQLSERVER_CDC,
+                CaptureStrategy.YSTREAM_CDC }) {
             SyncConfig config = allOff(strategy);
 
             SyncContextFactory.applyCdcBaselineDefaults(config);

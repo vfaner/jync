@@ -6,7 +6,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -466,6 +469,57 @@ class ConfigImportServiceTest {
     }
 
     @Test
+    @DisplayName("a renumbered project drops the baseline flag only where the source resource is named after it")
+    void aRenumberedProjectDropsTheBaselineFlagForIdNamedResources() {
+        // PostgreSQL's replication slot name and YStream's service name embed the project
+        // id. Import renumbers projects, so the consumer would ask the source for a slot
+        // name it never had; PgLogicalCdcConsumer treats a missing slot at a committed LSN
+        // as a purged stream and parks the project for a manual rebuild. Dropping the flag
+        // makes it create the new slot and run the baseline instead. Binlog/SCN/LSN
+        // positions are plain source coordinates, so they stay valid across the renumber
+        // and re-running their baseline is exactly the full load this restore avoids.
+        seedAdmin();
+        DatabaseConfig source = databaseConfigs.save(database("src"));
+        long pgExportId = savePositionedProject(source, "orders-pg",
+                "{\"captureStrategy\":\"PG_LOGICAL_CDC\"}",
+                position -> position.setLsn("0/16B3748"));
+        long binlogExportId = savePositionedProject(source, "orders-binlog",
+                "{\"captureStrategy\":\"BINLOG_CDC\"}", position -> {
+                    position.setBinlogFile("mysql-bin.000042");
+                    position.setBinlogPos(1234L);
+                });
+        long ystreamExportId = savePositionedProject(source, "orders-ystream",
+                "{\"captureStrategy\":\"YSTREAM_CDC\"}",
+                position -> position.setLsn("0/2A"));
+
+        byte[] pkg = export(true).bytes();
+        wipeConfiguration();
+
+        importService.importPackage(pkg, PASSPHRASE, true);
+
+        // The premise of the test: the import really did assign different ids.
+        assertThat(projects.findAll()).extracting(Project::getId)
+                .doesNotContain(pgExportId, binlogExportId, ystreamExportId);
+
+        Map<String, CdcPosition> byProjectName = new HashMap<>();
+        Map<Long, String> names = projects.findAll().stream()
+                .collect(Collectors.toMap(Project::getId, Project::getName));
+        for (CdcPosition restored : cdcPositions.findAll()) {
+            byProjectName.put(names.get(restored.getProjectId()), restored);
+        }
+
+        assertThat(byProjectName.get("orders-pg").isBaselineDone())
+                .as("the restored PG position cannot belong to the new slot name").isFalse();
+        assertThat(byProjectName.get("orders-pg").getLsn()).isEqualTo("0/16B3748");
+        assertThat(byProjectName.get("orders-ystream").isBaselineDone())
+                .as("the YStream service name embeds the project id too").isFalse();
+        assertThat(byProjectName.get("orders-binlog").isBaselineDone())
+                .as("a binlog position is portable across instances").isTrue();
+        assertThat(byProjectName.get("orders-binlog").getBinlogFile())
+                .isEqualTo("mysql-bin.000042");
+    }
+
+    @Test
     @DisplayName("the change log of the exporting database is not part of the package")
     void theChangeLogStaysOutOfTheImport() {
         seedAdmin();
@@ -582,6 +636,22 @@ class ConfigImportServiceTest {
         db.setUsername("app");
         db.setPassword(cryptoUtil.encrypt("plain-password"));
         return db;
+    }
+
+    /** Saves a project with the given stored config plus a baseline-complete CDC position. */
+    private long savePositionedProject(DatabaseConfig source, String name, String syncConfig,
+                                       java.util.function.Consumer<CdcPosition> positionParts) {
+        Project project = new Project();
+        project.setName(name);
+        project.setSourceDbId(source.getId());
+        project.setSyncConfig(syncConfig);
+        projects.save(project);
+        CdcPosition position = new CdcPosition();
+        position.setProjectId(project.getId());
+        position.setBaselineDone(true);
+        positionParts.accept(position);
+        cdcPositions.save(position);
+        return project.getId();
     }
 
     private EtlTask etlTask(DatabaseConfig source) {

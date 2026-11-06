@@ -15,11 +15,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.config.ConfigPackageDtos;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.AlertConfig;
 import com.qqmu.jync.model.AlertState;
 import com.qqmu.jync.model.AppUser;
+import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlBatch;
@@ -90,6 +93,7 @@ public class ConfigImportService {
     private final ConfigSecretTranslator translator;
     private final ConfigImportRuntime runtime;
     private final TransactionTemplate transaction;
+    private final ObjectMapper objectMapper;
 
     private final DatabaseConfigRepository databaseConfigs;
     private final RedisTargetRepository redisTargets;
@@ -113,6 +117,7 @@ public class ConfigImportService {
                                ConfigSecretTranslator translator,
                                ConfigImportRuntime runtime,
                                PlatformTransactionManager transactionManager,
+                               ObjectMapper objectMapper,
                                DatabaseConfigRepository databaseConfigs,
                                RedisTargetRepository redisTargets,
                                MigrationConnectionRepository migrationConnections,
@@ -134,6 +139,7 @@ public class ConfigImportService {
         this.translator = translator;
         this.runtime = runtime;
         this.transaction = new TransactionTemplate(transactionManager);
+        this.objectMapper = objectMapper;
         this.databaseConfigs = databaseConfigs;
         this.redisTargets = redisTargets;
         this.migrationConnections = migrationConnections;
@@ -249,6 +255,9 @@ public class ConfigImportService {
         }
 
         Map<Long, Long> projectIds = new HashMap<>();
+        // The stored config decides whether a restored CDC position is still meaningful
+        // (see keepsRestoredBaselineFlag), so keep the exported JSON by its exported id.
+        Map<Long, String> projectSyncConfigs = new HashMap<>();
         for (ConfigPackageDtos.ProjectDto dto : content.projects()) {
             Project project = new Project();
             project.setName(dto.name());
@@ -260,6 +269,7 @@ public class ConfigImportService {
             project.setSyncConfig(dto.syncConfig());
             project.setEnabled(dto.enabled());
             projectIds.put(dto.id(), projects.save(project).getId());
+            projectSyncConfigs.put(dto.id(), dto.syncConfig());
         }
 
         Map<Long, Long> batchIds = new HashMap<>();
@@ -334,7 +344,7 @@ public class ConfigImportService {
 
         boolean stateImported = false;
         if (content.meta().includeState()) {
-            importState(content.state(), projectIds, taskIds);
+            importState(content.state(), projectIds, taskIds, projectSyncConfigs);
             stateImported = true;
         }
 
@@ -559,7 +569,8 @@ public class ConfigImportService {
      */
     private void importState(ConfigPackageDtos.State state,
                              Map<Long, Long> projectIds,
-                             Map<Long, Long> taskIds) {
+                             Map<Long, Long> taskIds,
+                             Map<Long, String> projectSyncConfigs) {
         for (ConfigPackageDtos.SyncProgressDto dto : state.syncProgress()) {
             Long projectId = projectIds.get(dto.projectId());
             if (projectId == null) {
@@ -595,7 +606,9 @@ public class ConfigImportService {
             position.setProjectionSignature(dto.projectionSignature());
             // Without this the restored position looks like a crashed mid-baseline row and the
             // consumer re-runs the whole full load, writing every row a second time.
-            position.setBaselineDone(Boolean.TRUE.equals(dto.baselineDone()));
+            position.setBaselineDone(Boolean.TRUE.equals(dto.baselineDone())
+                    && keepsRestoredBaselineFlag(dto.projectId(), projectId,
+                            captureStrategyOf(projectSyncConfigs.get(dto.projectId()))));
             cdcPositions.save(position);
         }
         for (ConfigPackageDtos.MetadataSnapshotDto dto : state.metadataSnapshots()) {
@@ -642,6 +655,45 @@ public class ConfigImportService {
             alertState.setLastNotifiedAt(dto.lastNotifiedAt());
             alertState.setLastEventAt(dto.lastEventAt());
             alertStates.save(alertState);
+        }
+    }
+
+    /**
+     * Whether a restored CDC position may keep its "baseline complete" flag.
+     *
+     * <p>Most positions are plain source coordinates — a binlog file/offset, an SCN, an LSN —
+     * and mean the same thing on every instance. PostgreSQL's replication slot and YStream's
+     * service are named after the project id ({@code prefix + id}), so when the import
+     * renumbers the project the consumer asks the source for a resource name that has never
+     * existed there. PostgreSQL treats a missing slot at a committed LSN as a purged stream
+     * and parks the project until a human rebuilds the baseline; dropping the flag makes the
+     * consumer create the fresh slot and run the baseline itself. YStream usually rebuilds on
+     * its own, but the flag is dropped there too: an adopted service says nothing about a
+     * position that arrived in a package. When the id is unchanged the resource name still
+     * matches, so a genuine restart keeps resuming instead of paying for a full load.
+     */
+    static boolean keepsRestoredBaselineFlag(Long exportedProjectId, Long importedProjectId,
+                                             CaptureStrategy strategy) {
+        if (exportedProjectId == null || exportedProjectId.equals(importedProjectId)) {
+            return true;
+        }
+        return strategy != CaptureStrategy.PG_LOGICAL_CDC
+                && strategy != CaptureStrategy.YSTREAM_CDC;
+    }
+
+    /**
+     * The project's capture strategy, read the way the runtime reads it: an absent or
+     * unparseable config falls back to defaults, which is the polling path.
+     */
+    private CaptureStrategy captureStrategyOf(String syncConfig) {
+        if (syncConfig == null || syncConfig.isBlank()) {
+            return CaptureStrategy.POLLING;
+        }
+        try {
+            return objectMapper.readValue(syncConfig, SyncConfig.class)
+                    .getCaptureStrategyOrDefault();
+        } catch (Exception e) {
+            return CaptureStrategy.POLLING;
         }
     }
 
