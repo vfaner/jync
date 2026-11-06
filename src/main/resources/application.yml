@@ -140,7 +140,9 @@ sync:
   # Initial load into an EMPTY Oracle / MySQL / PostgreSQL target writes plain INSERT instead
   # of the upsert (on Oracle this measured ~2.5x faster: nothing can match on an empty table,
   # so the match test buys nothing). The target is probed once per table load; a table that
-  # already has rows keeps the idempotent upsert. Other target databases are unaffected.
+  # already has rows keeps the idempotent upsert, and so does a table whose unique indexes go
+  # beyond the primary key: a plain INSERT would abort the batch on the second row when the
+  # source repeats a business key under a different primary key. Other targets are unaffected.
   # The former key sync.oracle-initial-load-insert-first is still accepted as an alias.
   initial-load-insert-first: true
   # A newly created table's non-unique secondary indexes are built AFTER its initial load,

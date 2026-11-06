@@ -92,6 +92,26 @@ class DataSyncServiceInsertFirstWriteTest {
     }
 
     @Test
+    void anEmptyTargetWithASecondaryUniqueIndexKeepsTheUpsert() throws SQLException {
+        exec(source, "DELETE FROM ORDERS");
+        exec(source, "INSERT INTO ORDERS VALUES (1,'dup'), (2,'dup'), (3,'c')");
+        target = DriverManager.getConnection(
+                "jdbc:h2:mem:ins_tgt_my_uk;MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+        exec(target, "CREATE TABLE ORDERS (ID BIGINT PRIMARY KEY, NAME VARCHAR(50),"
+                + " CONSTRAINT UK_ORDERS_NAME UNIQUE (NAME))");
+
+        DataSyncService.TableSyncResult result = load(new MySqlDialect(), DatabaseType.MYSQL);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(prepared).anyMatch(sql -> sql.contains("ON DUPLICATE KEY UPDATE"));
+        assertThat(prepared).noneMatch(sql -> sql.startsWith("INSERT INTO `ORDERS` (")
+                && !sql.contains("ON DUPLICATE KEY"));
+        // The two rows colliding on the secondary unique key collapse into one, exactly as
+        // they already do when the target was not empty.
+        assertThat(countOrders()).isEqualTo(2);
+    }
+
+    @Test
     void anEmptyPostgresTargetIsWrittenWithPlainInsert() throws SQLException {
         target = DriverManager.getConnection(
                 "jdbc:h2:mem:ins_tgt_pg;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "");

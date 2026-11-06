@@ -450,7 +450,95 @@ public class DataSyncService {
                 || !ctx.getTargetDialect().supportsInsertFirstInitialLoad()) {
             return false;
         }
-        return Boolean.TRUE.equals(probeTargetEmpty(targetConn, ctx, targetTable));
+        if (!Boolean.TRUE.equals(probeTargetEmpty(targetConn, ctx, targetTable))) {
+            return false;
+        }
+        // Only the MySQL family's upsert absorbs a collision on a unique index beyond the
+        // primary key (ON DUPLICATE KEY UPDATE). Oracle MERGE and PostgreSQL
+        // ON CONFLICT (pk) raise exactly where the plain INSERT would, so the shortcut
+        // costs nothing there and stays.
+        if (ctx.resolveTargetFamily() != DatabaseType.DialectFamily.MYSQL) {
+            return true;
+        }
+        return !hasUniqueIndexBeyondPrimaryKey(targetConn, ctx.getTargetSchema(), targetTable,
+                pkColumns);
+    }
+
+    /**
+     * Whether the target carries a unique index the primary key does not imply — e.g. a
+     * business key such as {@code uk_order_statistics(shopOrderId, orderType)}.
+     *
+     * <p>A plain INSERT only knows the primary key: a source row that repeats a business key
+     * under a different primary key aborts the whole batch (MySQL 1062), even though the
+     * upsert would absorb the collision exactly as it does on a non-empty target. Such
+     * tables therefore keep the upsert. A unique index containing every primary-key column
+     * can only be violated along with the primary key, so it does not change the answer.
+     *
+     * <p>Unreadable metadata counts as "may have one": guessing wrong here fails the load,
+     * while guessing the other way only costs the INSERT speedup.
+     */
+    private boolean hasUniqueIndexBeyondPrimaryKey(Connection targetConn, String schema,
+                                                   String targetTable, List<String> pkColumns) {
+        try {
+            DatabaseMetaData md = targetConn.getMetaData();
+            // MySQL keeps the database in the JDBC catalog and reports no schema, so the two
+            // arguments swap (the same convention CursorIndexProbe uses). Without a configured
+            // schema the connection's own catalog is the only correct scope.
+            String catalog = schema != null && !schema.isBlank()
+                    ? schema : targetConn.getCatalog();
+            Map<String, List<String>> columnsByIndex = new HashMap<>();
+            Set<String> uniqueIndexes = new HashSet<>();
+            try (ResultSet rs = md.getIndexInfo(catalog, null, targetTable, false, true)) {
+                while (rs.next()) {
+                    if (rs.getShort("TYPE") == DatabaseMetaData.tableIndexStatistic) {
+                        continue;
+                    }
+                    String indexName = rs.getString("INDEX_NAME");
+                    if (indexName == null) {
+                        continue;
+                    }
+                    String indexedTable = rs.getString("TABLE_NAME");
+                    // The table-name argument is a LIKE pattern: asking for T_1 also returns
+                    // TA1, whose indexes must not answer for T_1.
+                    if (indexedTable != null && !indexedTable.equalsIgnoreCase(targetTable)) {
+                        continue;
+                    }
+                    if (!rs.getBoolean("NON_UNIQUE")) {
+                        uniqueIndexes.add(indexName);
+                    }
+                    String column = rs.getString("COLUMN_NAME");
+                    // Null for a table-statistics row or a functional key part. Keep the
+                    // index itself: an expression we cannot read is not a primary key.
+                    if (column != null) {
+                        columnsByIndex.computeIfAbsent(indexName, k -> new ArrayList<>())
+                                .add(column);
+                    }
+                }
+            }
+            Set<String> upperPk = new HashSet<>();
+            for (String pk : pkColumns) {
+                upperPk.add(pk.toUpperCase(java.util.Locale.ROOT));
+            }
+            for (String indexName : uniqueIndexes) {
+                List<String> indexColumns = columnsByIndex.get(indexName);
+                Set<String> upperIndexColumns = new HashSet<>();
+                if (indexColumns != null) {
+                    for (String column : indexColumns) {
+                        upperIndexColumns.add(column.toUpperCase(java.util.Locale.ROOT));
+                    }
+                }
+                if (!upperIndexColumns.containsAll(upperPk)) {
+                    log.info("Initial load of {} keeps the upsert: the target has unique index"
+                            + " {} beyond the primary key", targetTable, indexName);
+                    return true;
+                }
+            }
+            return false;
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Cannot read the unique indexes of {} ({}); keeping the upsert",
+                    targetTable, e.toString());
+            return true;
+        }
     }
 
     /**

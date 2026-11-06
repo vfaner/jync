@@ -1,13 +1,17 @@
 package com.qqmu.jync.service.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -44,6 +48,8 @@ class InitialLoadInsertFirstProbeTest {
     private Connection target;
     private Statement statement;
     private ResultSet probe;
+    private DatabaseMetaData metadata;
+    private ResultSet indexRows;
     private DataSyncService service;
 
     @BeforeEach
@@ -51,9 +57,17 @@ class InitialLoadInsertFirstProbeTest {
         target = mock(Connection.class);
         statement = mock(Statement.class);
         probe = mock(ResultSet.class);
+        metadata = mock(DatabaseMetaData.class);
+        indexRows = mock(ResultSet.class);
         when(target.createStatement()).thenReturn(statement);
         when(statement.executeQuery(anyString())).thenReturn(probe);
         when(probe.next()).thenReturn(false);
+        when(target.getMetaData()).thenReturn(metadata);
+        when(metadata.getIndexInfo(any(), any(), anyString(), eq(false), eq(true)))
+                .thenReturn(indexRows);
+        // A plain primary key: the INSERT shortcut only defers to the upsert when the
+        // target carries a unique index the primary key does not imply.
+        stubIndexRows(new IndexRow("PRIMARY", "ID", true));
         service = new DataSyncService(new SyncProperties());
     }
 
@@ -112,6 +126,54 @@ class InitialLoadInsertFirstProbeTest {
     }
 
     @Test
+    void aUniqueIndexBeyondThePrimaryKeyKeepsTheUpsert() throws SQLException {
+        // Two source rows may repeat (SHOP_ORDER_ID, ORDER_TYPE) under different primary
+        // keys; the plain INSERT would abort the batch on the second row (MySQL 1062) while
+        // the upsert absorbs the collision as it already does on a non-empty target.
+        stubIndexRows(
+                new IndexRow("PRIMARY", "ID", true),
+                new IndexRow("UK_ORDERS_NAME", "NAME", true));
+
+        assertThat(useFirst(target, DatabaseType.MYSQL, new MySqlDialect(),
+                "T_ORDERS", List.of("ID"))).isFalse();
+        // MySQL keeps the database in the JDBC catalog and reports no schema.
+        verify(metadata).getIndexInfo(eq("APP"), isNull(), eq("T_ORDERS"), eq(false), eq(true));
+    }
+
+    @Test
+    void aUniqueIndexThatIncludesThePrimaryKeyDoesNotDisableTheInsert() throws SQLException {
+        // A duplicate on (ID, NAME) implies a duplicate ID, so the INSERT would have failed
+        // on the primary key anyway — this index adds no new failure mode.
+        stubIndexRows(
+                new IndexRow("PRIMARY", "ID", true),
+                new IndexRow("UK_ORDERS_ID_NAME", "ID", true),
+                new IndexRow("UK_ORDERS_ID_NAME", "NAME", true));
+
+        assertThat(useFirst(target, DatabaseType.MYSQL, new MySqlDialect(),
+                "T_ORDERS", List.of("ID"))).isTrue();
+    }
+
+    @Test
+    void aPostgresTargetKeepsTheInsertEvenWithASecondaryUniqueIndex() throws SQLException {
+        // PostgreSQL's ON CONFLICT (pk) raises where the plain INSERT would too, so the
+        // upsert absorbs nothing extra there: the shortcut costs no correctness and stays.
+        stubIndexRows(
+                new IndexRow("PRIMARY", "ID", true),
+                new IndexRow("UK_ORDERS_NAME", "NAME", true));
+
+        assertThat(useFirst(target, DatabaseType.POSTGRESQL, new PostgresDialect(),
+                "T_ORDERS", List.of("ID"))).isTrue();
+    }
+
+    @Test
+    void unreadableIndexMetadataFallsBackToTheUpsert() throws SQLException {
+        when(target.getMetaData()).thenThrow(new SQLException("dictionary unavailable"));
+
+        assertThat(useFirst(target, DatabaseType.MYSQL, new MySqlDialect(),
+                "T_ORDERS", List.of("ID"))).isFalse();
+    }
+
+    @Test
     void aTargetThatAlreadyHasRowsStaysOnTheUpsert() throws SQLException {
         when(probe.next()).thenReturn(true);
         assertThat(useFirst(target, DatabaseType.MYSQL, new MySqlDialect(),
@@ -160,6 +222,27 @@ class InitialLoadInsertFirstProbeTest {
         assertThat(useFirst(target, DatabaseType.POSTGRESQL, new PostgresDialect(),
                 "T_ORDERS", List.of())).isFalse();
         verify(target, never()).createStatement();
+    }
+
+    private record IndexRow(String index, String column, boolean unique) {
+    }
+
+    /** Serves {@code rows} from the index-info ResultSet, one per index column. */
+    private void stubIndexRows(IndexRow... rows) throws SQLException {
+        int[] cursor = {-1};
+        when(indexRows.next()).thenAnswer(invocation -> ++cursor[0] < rows.length);
+        when(indexRows.getShort("TYPE")).thenReturn(DatabaseMetaData.tableIndexOther);
+        when(indexRows.getString(anyString())).thenAnswer(invocation -> {
+            IndexRow row = rows[cursor[0]];
+            String field = invocation.getArgument(0);
+            return switch (field) {
+                case "INDEX_NAME" -> row.index();
+                case "COLUMN_NAME" -> row.column();
+                case "TABLE_NAME" -> "T_ORDERS";
+                default -> null;
+            };
+        });
+        when(indexRows.getBoolean("NON_UNIQUE")).thenAnswer(invocation -> !rows[cursor[0]].unique());
     }
 
     private String probedSql() throws SQLException {
