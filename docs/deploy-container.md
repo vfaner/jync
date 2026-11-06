@@ -10,7 +10,7 @@
 - **运行阶段**：`eclipse-temurin:17-jre-jammy`，只带 JRE；`curl` 仅用于 HEALTHCHECK；以非 root 用户 `jync`（uid 10001）运行。
 
 ```bash
-docker build -t jync:1.13.0 .
+docker build -t jync:1.14.0 .
 ```
 
 构建时跳过测试（`-DskipTests`），测试请在 CI 或本地 `mvn clean test` 跑。
@@ -36,7 +36,7 @@ docker run -d --name jync \
   -v jync-logs:/app/logs \
   -e TZ=Asia/Shanghai \
   --restart unless-stopped \
-  jync:1.13.0
+  jync:1.14.0
 ```
 
 `-p 8443:8443` 只有用「应用内 TLS」（在「系统配置」上传证书）时才需要；端口可在页面上改，改完同步改这里的映射。上传的密钥库落在数据卷 `/app/data/tls`，重启容器后生效。
@@ -59,8 +59,8 @@ Compose 文件里已写好常用环境变量的注释示例（HTTPS Cookie、外
 
 ```bash
 # 1) 构建并推送镜像到你的仓库
-docker build -t registry.example.com/qqmu/jync:1.13.0 .
-docker push registry.example.com/qqmu/jync:1.13.0
+docker build -t registry.example.com/qqmu/jync:1.14.0 .
+docker push registry.example.com/qqmu/jync:1.14.0
 
 # 2) 改 deploy/k8s/kustomization.yaml 里的 images 变换指向你的仓库
 
@@ -124,7 +124,7 @@ Jync 的同步正确性不依赖单实例，依赖的是**共享元数据库**�
 
 ```bash
 # Docker：换镜像标签重建容器，数据卷不动
-docker pull registry.example.com/qqmu/jync:1.13.0
+docker pull registry.example.com/qqmu/jync:1.14.0
 docker compose up -d
 
 # K8s：改 kustomization.yaml 的 newTag 后
