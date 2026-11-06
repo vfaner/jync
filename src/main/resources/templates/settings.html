@@ -150,48 +150,70 @@
             </div>
         </div>
 
-        <div class="card">
-            <div class="card-head">
-                <h2><svg class="ico"><use href="#sliders2"/></svg> <span th:text="#{settings.syncDefaults}">Defaults</span></h2>
+        <div>
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#sliders2"/></svg> <span th:text="#{settings.syncDefaults}">Defaults</span></h2>
+                </div>
+                <div class="card-body">
+                    <dl class="dl pairs">
+                        <div class="kv">
+                            <dt th:text="#{settings.pollInterval}">Poll interval</dt>
+                            <dd><span class="chip" th:text="${properties.pollInterval} + ' ms'">2000 ms</span></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{settings.batchSize}">Batch size</dt>
+                            <dd><span class="chip" th:text="${properties.batchSize}">500</span></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{settings.fetchSize}">Fetch size</dt>
+                            <dd><span class="chip" th:text="${properties.fetchSize}">1000</span></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{settings.maxRetries}">Max retries</dt>
+                            <dd><span class="chip" th:text="${properties.maxRetries}">3</span></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{settings.fullCompareMax}">Full-compare ceiling</dt>
+                            <dd><span class="chip" th:text="${properties.fullCompareMaxRows}">20000</span></dd>
+                        </div>
+                        <div class="kv wide">
+                            <dt th:text="#{settings.deleteCompareMax}">Chunked delete ceiling</dt>
+                            <dd>
+                                <span class="chip" th:text="${properties.deleteCompareMaxRows}">0</span>
+                                <div class="help" th:text="#{settings.deleteCompareMaxHelp}">help</div>
+                            </dd>
+                        </div>
+                        <!-- 带说明的行跨满双列：值和说明并排成一条长行，不挤在右半栏窄格里 -->
+                        <div class="kv wide">
+                            <dt th:text="#{settings.changeLogRetention}">Change-log retention (days)</dt>
+                            <dd>
+                                <span class="chip" th:text="${properties.changeLogRetentionDays}">30</span>
+                                <div class="help" th:text="#{settings.changeLogRetentionHelp}">help</div>
+                            </dd>
+                        </div>
+                    </dl>
+                </div>
             </div>
-            <div class="card-body">
-                <dl class="dl pairs">
-                    <div class="kv">
-                        <dt th:text="#{settings.pollInterval}">Poll interval</dt>
-                        <dd><span class="chip" th:text="${properties.pollInterval} + ' ms'">2000 ms</span></dd>
-                    </div>
-                    <div class="kv">
-                        <dt th:text="#{settings.batchSize}">Batch size</dt>
-                        <dd><span class="chip" th:text="${properties.batchSize}">500</span></dd>
-                    </div>
-                    <div class="kv">
-                        <dt th:text="#{settings.fetchSize}">Fetch size</dt>
-                        <dd><span class="chip" th:text="${properties.fetchSize}">1000</span></dd>
-                    </div>
-                    <div class="kv">
-                        <dt th:text="#{settings.maxRetries}">Max retries</dt>
-                        <dd><span class="chip" th:text="${properties.maxRetries}">3</span></dd>
-                    </div>
-                    <div class="kv">
-                        <dt th:text="#{settings.fullCompareMax}">Full-compare ceiling</dt>
-                        <dd><span class="chip" th:text="${properties.fullCompareMaxRows}">20000</span></dd>
-                    </div>
-                    <div class="kv wide">
-                        <dt th:text="#{settings.deleteCompareMax}">Chunked delete ceiling</dt>
-                        <dd>
-                            <span class="chip" th:text="${properties.deleteCompareMaxRows}">0</span>
-                            <div class="help" th:text="#{settings.deleteCompareMaxHelp}">help</div>
-                        </dd>
-                    </div>
-                    <!-- 带说明的行跨满双列：值和说明并排成一条长行，不挤在右半栏窄格里 -->
-                    <div class="kv wide">
-                        <dt th:text="#{settings.changeLogRetention}">Change-log retention (days)</dt>
-                        <dd>
-                            <span class="chip" th:text="${properties.changeLogRetentionDays}">30</span>
-                            <div class="help" th:text="#{settings.changeLogRetentionHelp}">help</div>
-                        </dd>
-                    </div>
-                </dl>
+
+            <!--/* 一键诊断包：仅管理员可见，POST 下载 zip；CSRF 由 Thymeleaf 表单自动注入。
+                 放在摘要区右列，与左列「项目与作者」同排，排障入口不必翻到页尾。 */-->
+            <div class="card" th:if="${isAdmin}">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#download"/></svg>
+                        <span th:text="#{settings.diagnostics}">Diagnostics bundle</span></h2>
+                    <span class="hint" th:text="#{settings.diagnosticsHint}">For support</span>
+                </div>
+                <div class="card-body">
+                    <p class="small soft" style="margin:0 0 16px"
+                       th:text="#{settings.diagnosticsNote}">note</p>
+                    <form method="post" th:action="@{/api/diagnostics/bundle}">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <svg class="ico"><use href="#download"/></svg>
+                            <span th:text="#{settings.diagnosticsDownload}">Download bundle</span>
+                        </button>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
@@ -642,25 +664,6 @@
                     </tbody>
                 </table>
             </div>
-        </div>
-    </div>
-
-    <!--/* 一键诊断包：仅管理员可见，POST 下载 zip；CSRF 由 Thymeleaf 表单自动注入。 */-->
-    <div class="card" th:if="${isAdmin}">
-        <div class="card-head">
-            <h2><svg class="ico"><use href="#download"/></svg>
-                <span th:text="#{settings.diagnostics}">Diagnostics bundle</span></h2>
-            <span class="hint" th:text="#{settings.diagnosticsHint}">For support</span>
-        </div>
-        <div class="card-body">
-            <p class="small soft" style="margin:0 0 16px;max-width:1080px"
-               th:text="#{settings.diagnosticsNote}">note</p>
-            <form method="post" th:action="@{/api/diagnostics/bundle}">
-                <button type="submit" class="btn btn-primary btn-sm">
-                    <svg class="ico"><use href="#download"/></svg>
-                    <span th:text="#{settings.diagnosticsDownload}">Download bundle</span>
-                </button>
-            </form>
         </div>
     </div>
 

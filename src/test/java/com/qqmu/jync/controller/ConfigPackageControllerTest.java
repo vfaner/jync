@@ -40,6 +40,7 @@ import com.qqmu.jync.service.config.ConfigPackageException;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.service.settings.SystemSettingService;
+import com.qqmu.jync.service.tls.TlsCertificateService;
 import com.qqmu.jync.util.CryptoUtil;
 
 /**
@@ -73,6 +74,10 @@ class ConfigPackageControllerTest {
     private AdminAuditService audit;
     @MockBean
     private CryptoUtil cryptoUtil;
+    // Only the POST endpoints are exercised here; the page state is covered by
+    // SystemConfigViewTest. The mock keeps the controller's constructor satisfied.
+    @MockBean
+    private TlsCertificateService tlsCertificateService;
 
     // --- export --------------------------------------------------------------------------
 

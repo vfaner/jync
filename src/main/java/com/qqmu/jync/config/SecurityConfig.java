@@ -5,6 +5,7 @@ import java.io.IOException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -42,6 +43,7 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.auth.TransportSecurityFilter;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
+import com.qqmu.jync.service.tls.TlsRuntimeState;
 import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
 import com.qqmu.jync.util.CryptoUtil;
@@ -239,8 +241,13 @@ public class SecurityConfig {
      * configuration value still wins and pins it.
      */
     @Bean
-    public TransportSecurityFilter transportSecurityFilter(RequireHttpsResolver requireHttps) {
-        return new TransportSecurityFilter(requireHttps::isRequired);
+    public TransportSecurityFilter transportSecurityFilter(
+            RequireHttpsResolver requireHttps,
+            TlsRuntimeState tlsState,
+            @Value("${app.tls.redirect-host:}") String redirectHost) {
+        // The snapshot is read per request, not captured: it is fixed for the life of the process,
+        // but taking it lazily keeps this bean constructible before the web server exists.
+        return new TransportSecurityFilter(requireHttps::isRequired, () -> tlsState, redirectHost);
     }
 
     /** Same reason as the lockout filter: in the security chain only, exactly once. */

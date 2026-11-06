@@ -21,6 +21,7 @@ import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.repository.AiProviderRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
+import com.qqmu.jync.service.tls.TlsKeystoreStore;
 import com.qqmu.jync.util.CryptoUtil;
 
 import lombok.extern.slf4j.Slf4j;
@@ -64,6 +65,7 @@ public class LegacyCryptoKeyMigration {
     private final DatabaseConfigRepository configRepository;
     private final AiProviderRepository providerRepository;
     private final TransactionTemplate transactionTemplate;
+    private final TlsKeystoreStore tlsStore;
     private final String datasourceUrl;
 
     public LegacyCryptoKeyMigration(SyncProperties properties,
@@ -71,12 +73,14 @@ public class LegacyCryptoKeyMigration {
                                     DatabaseConfigRepository configRepository,
                                     AiProviderRepository providerRepository,
                                     PlatformTransactionManager transactionManager,
+                                    TlsKeystoreStore tlsStore,
                                     @Value("${spring.datasource.url:}") String datasourceUrl) {
         this.properties = properties;
         this.cryptoUtil = cryptoUtil;
         this.configRepository = configRepository;
         this.providerRepository = providerRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.tlsStore = tlsStore;
         this.datasourceUrl = datasourceUrl;
     }
 
@@ -150,6 +154,13 @@ public class LegacyCryptoKeyMigration {
                     ? resolver.readPending()
                     : resolver.generatePending();
             TextEncryptor targetEncryptor = Encryptors.delux(target.password(), target.salt());
+
+            // The saved TLS certificate's passphrase is wrapped with the crypto key, so it must
+            // move with the rotation. Done before the transaction on purpose: a sidecar that
+            // cannot be rewritten aborts the whole migration (caught below, nothing touched),
+            // rather than leaving rows on the new key and a certificate no start can open.
+            // The new ciphertext goes to "passphrase.next", so this boot still reads the old one.
+            tlsStore.reencryptPassphrases(targetEncryptor);
 
             if (!allStoredSecretsReadableBy(targetEncryptor, configs, providers)) {
                 transactionTemplate.executeWithoutResult(

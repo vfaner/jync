@@ -151,14 +151,23 @@ Jync 的元数据（连接、同步任务、ETL、专属迁移、用户、系统
 - **目标库必须是空的**：`database_config`、`redis_target`、`migration_connection`、`project`、`etl_*`、`migration_task` 等配置/状态表必须 0 行。`app_user`、`alert_config`、`oa_auth_config`、`system_setting` 例外：用户按用户名合并（同名保留目标端的口令哈希与角色），单例与设置按覆盖/upsert 处理。导入后必须至少还有一个管理员，否则整次导入回滚。
 - **密钥随包走**：包内 `meta.json` 携带导出端的 `sync.crypto-*`（外面还有口令加密），导入时先用它解开 `enc:`，再用新部署的密钥重新加密。所以包里带着旧密钥——导入完成后请销毁包文件。
 - **强制 HTTPS 的例外**：包里的 `security.require-https=true` 只在导入请求本身是 HTTPS 时保留；明文导入会写成 `false` 并在页面提示，否则新实例导入完就把管理员自己锁在 403 里。
-- **不迁移的内容**：变更日志、审计、性能采样、ETL/迁移运行历史、`sync_task` 租约行都不进包，新库从零开始记。
+- **不迁移的内容**：变更日志、审计、性能采样、ETL/迁移运行历史、`sync_task` 租约行都不进包，新库从零开始记。TLS 证书与口令存在数据目录（`data/tls`）而不是元数据库，同样不进包；换实例后在「系统配置」重新上传并重启。
 - **上限**：单包 ≤ 20 MB，解压后 ≤ 40 MB；超限时导出直接拒绝，请先清理变更日志或不要勾选状态。
 
 「系统配置」页还有一个**元数据库连接测试器**：填入候选 JDBC 地址与驱动类，它会真的连一次并给出产品/版本和一段 `SPRING_DATASOURCE_*` 环境变量块，方便先验证网络与账号再重启。测试器只支持 MySQL、MariaDB、PostgreSQL、Oracle，**不保存任何东西**——哪个库生效始终只由 `SPRING_DATASOURCE_*` 决定，页面上没有第二份指针。
 
 ## HTTPS 与等保部署
 
-连接密码、AI Key 在**落盘时**加密，但浏览器到 Jync 之间默认是明文 HTTP：登录口令、数据源密码、AI Key 都会出现在请求体里，等保测评与渗透测试会直接判为传输安全不合格。Jync 自身不终止 TLS——由前置反向代理（Nginx / 网关 / 云负载均衡）持有证书，Jync 只监听本机 8080。
+连接密码、AI Key 在**落盘时**加密，但浏览器到 Jync 之间默认是明文 HTTP：登录口令、数据源密码、AI Key 都会出现在请求体里，等保测评与渗透测试会直接判为传输安全不合格。有两种让这一段链路加密的方式，二选一：
+
+| 方式 | 证书在哪 | 适用 |
+|---|---|---|
+| 反向代理终止 TLS（推荐） | Nginx / 网关 / 云负载均衡 | 对外服务、多实例、已有统一的证书管理 |
+| 应用内 TLS | 上传到「系统管理 → 系统配置」页 | 单实例内网、容器直连、不方便再加一层代理 |
+
+### 反向代理终止 TLS（推荐）
+
+Jync 只监听本机 8080，明文只存在于代理到 Jync 的回环/内网这一段。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -212,10 +221,56 @@ JYN_REQUIRE_HTTPS=true
 JYN_COOKIE_SECURE=true
 ```
 
-- **直接暴露 8080 的部署不要打开 `require-https`**：没有代理时所有请求都判定为明文，除了本机回环全部返回 403。
+### 应用内 TLS：在「系统配置」上传证书
+
+不需要反向代理，Jync 自己监听 HTTPS 端口（建议 8443，可与 HTTP 并存）：
+
+1. 准备密钥库。**私钥口令必须与库口令相同**——页面只接受一个口令，两者不同时会以「无法打开密钥库」拒绝：
+
+   ```bash
+   # 自签仅供测试；生产换成 CA 签发的证书，并保证 CN / SAN 与访问域名一致
+   openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+       -keyout jync.key -out jync.crt -subj "/CN=jync.example.com"
+   openssl pkcs12 -export -in jync.crt -inkey jync.key \
+       -out jync.p12 -name jync -passout pass:changeit
+   ```
+
+   已有的 JKS 可以直接上传 `.jks`，也可以转成 PKCS#12：
+
+   ```bash
+   keytool -importkeystore -srckeystore old.jks -srcstoretype JKS \
+       -destkeystore jync.p12 -deststoretype PKCS12
+   ```
+
+2. 以管理员进入「系统管理 → 系统配置 → TLS 证书」，选择文件，填写密钥库口令、HTTPS 端口，按需勾选「重定向 HTTP」，保存。文件上限 5 MB；证书已过期或尚未生效会被直接拒绝。
+3. **重启 Jync**。连接器在启动时创建，保存只写文件——页面显示「等待重启生效」，重启后才变成「已生效」。
+4. 验证：`https://<主机>:8443/login` 能打开；勾选了重定向时，`http://<主机>:8080/login` 返回 307 并指向 HTTPS。
+
+| 键 / 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `app.tls.enabled` / `JYN_TLS_ENABLED` | `true` | 设为 `false` 时不读取证书、不添加 HTTPS 连接器。用于证书损坏或端口被占导致启动失败时救回实例 |
+| `app.tls.directory` / `JYN_TLS_DIRECTORY` | `./data/tls` | 密钥库与 `tls.properties` 边车的目录；口令在边车里用 `sync.crypto-*` 加密。**不在配置包里**，备份数据目录时要一起备份 |
+| `app.tls.redirect-host` / `JYN_TLS_REDIRECT_HOST` | 空 | HTTP→HTTPS 重定向使用的固定主机名。留空表示沿用请求的 `Host`（严格校验，非法值返回 400，不转发到外部） |
+
+- **续期**：在新文件上重新导出、再次上传、重启生效；页面在到期前 30 天提示。证书过期后运行中的实例仍会继续用它提供服务（浏览器会报证书过期），删除证书也不会让运行中的实例停止 HTTPS——两种情况都要重新上传或重启。
+- **默认密钥告警**：`sync.crypto-*` 仍是随包默认值时，页面会警告边车口令受该密钥保护；应先换成部署专用密钥（见上文密钥说明），再上传证书。
+- **多实例**：`data/tls` 是实例本地目录。共享同一张证书时让 `JYN_TLS_DIRECTORY` 指向共享卷，并设置 `JYN_TLS_REDIRECT_HOST`，别让各节点按自己的 `Host` 做重定向。
+- **与 `require-https` 的关系**：可以同时开启。已加载证书时明文请求先按重定向处理（仅当上传时勾选；回环地址与不带 Cookie 的 `GET /login` 例外，与 `require-https` 相同），未勾选或未加载证书时仍由 `require-https` 返回 403。
+- **HTTP/2 与 SNI**：内置连接器只提供这张证书，不支持按域名切换证书（多证书 SNI）；需要多个站点证书时用反向代理方式。
+
+常见故障：
+
+| 现象 | 处理 |
+|---|---|
+| 启动失败，日志有 `ConnectorStartFailedException` / `Address already in use` | HTTPS 端口被占（重复启动的实例，或 HTTP 与 HTTPS 填了同一个端口）。先以 `JYN_TLS_ENABLED=false` 启动，进页面改端口 |
+| 启动失败，页面进不去，日志说密钥库不可读 / 摘要不符 / 缺少私钥 | 文件被替换或边车损坏。以 `JYN_TLS_ENABLED=false` 启动一次，在页面上重新上传或删除证书 |
+| 保存成功但 `https://` 打不开 | 还没重启；或防火墙 / 容器端口映射没放行 HTTPS 端口 |
+| 浏览器提示证书不受信任 | 自签证书的正常现象；生产用 CA 签发 |
+
+- **直接暴露 8080、又没上传证书的部署不要打开 `require-https`**：没有代理时所有请求都判定为明文，除了本机回环全部返回 403。用应用内 TLS 时，勾选重定向后明文请求会先 307 到 HTTPS，不会再落到 403。
 - **HTTPS 生效时**响应带 `Strict-Transport-Security: max-age=31536000; includeSubDomains`；HSTS 一旦被浏览器记住，回退到 HTTP 会打不开页面，切换前先确认证书长期可用。
 - 所有响应带 `Content-Security-Policy`（仅允许同源资源）、`Referrer-Policy: same-origin`、`Permissions-Policy`（关闭定位/麦克风/摄像头），`X-Frame-Options: DENY` 由 Spring Security 默认提供。
-- `require-https` 用 403 而不是重定向：跳转目标取自 `Host` 头，可被伪造；HTTP→HTTPS 的 301 由上面的 Nginx 完成。
+- `require-https` 用 403 而不是重定向：它不知道 HTTPS 端口在哪，也不该拿可伪造的 `Host` 去拼跳转目标。应用内 TLS 的重定向（307）只在证书已加载且上传时勾选后生效，主机名只取严格校验过的 `Host` 或 `app.tls.redirect-host`，不采信 `X-Forwarded-Host`，非法值返回 400。反向代理部署的 HTTP→HTTPS 301 仍由上面的 Nginx 完成。
 - **反向代理不要开启 `server.forward-headers-strategy=framework`** 之类的全局转发头解析：那会让客户端自带的 `X-Forwarded-For` 改写 `getRemoteAddr()`，绕过登录失败锁定与审计里的真实来源。
 
 ## 日志 CDC 前提

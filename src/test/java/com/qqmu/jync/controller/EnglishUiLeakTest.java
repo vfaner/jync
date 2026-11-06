@@ -49,7 +49,10 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
         "spring.quartz.job-store-type=memory",
         // The system-log page reads this file. Keep it inside the build so the sweep never
         // depends on — or scans — whatever the developer's own ./logs happens to hold.
-        "logging.file.name=target/englishui-logs/jync.log"
+        "logging.file.name=target/englishui-logs/jync.log",
+        // Same reason: a saved certificate on the developer's machine would add a redirect.
+        "app.tls.enabled=false",
+        "app.tls.directory=target/englishui-tls"
 })
 class EnglishUiLeakTest {
 

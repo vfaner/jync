@@ -147,7 +147,7 @@ sync:
   crypto-salt: ""
 ```
 
-Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `view / 123456` (viewer); **change the password immediately**. Production settings, external metadata store, systemd, Docker / Kubernetes, reverse proxy and HTTPS, upgrades and backups: [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf), the website's [deployment page](https://jync.qqmu.com/deploy.html) and [container notes](docs/deploy-container.md).
+Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `view / 123456` (viewer); **change the password immediately**. Production settings, external metadata store, systemd, Docker / Kubernetes, reverse proxy and HTTPS, upgrades and backups: [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf), the website's [deployment page](https://jync.qqmu.com/deploy.html) and [container notes](docs/deploy-container.md). HTTPS works two ways: terminate TLS at a reverse proxy (recommended), or upload a PKCS#12 / JKS certificate under System → System settings and let Jync serve HTTPS itself; changes apply after a restart. See [configuration](docs/configuration.md).
 
 > 🔐 Back up `./data` (including `<db>.key`), `./logs` and `application.yml` before upgrading. Without the key, saved connection passwords, AI keys and alert URLs cannot be decrypted.
 

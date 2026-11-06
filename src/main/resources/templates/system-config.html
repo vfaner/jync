@@ -37,44 +37,53 @@
                         <span th:text="#{systemConfig.metadata}">Metadata database</span></h2>
                 </div>
                 <div class="card-body">
-                    <dl class="dl pairs">
-                        <div class="kv">
-                            <dt th:text="#{systemConfig.metadataUrl}">Current connection</dt>
-                            <dd><code th:text="${datasourceUrl}">jdbc:h2:file:./data/jync</code></dd>
-                        </div>
-                        <div class="kv">
-                            <dt th:text="#{systemConfig.metadataUser}">Username</dt>
-                            <dd><span class="chip" th:text="${datasourceUsername}">sa</span></dd>
-                        </div>
-                        <div class="kv">
-                            <dt th:text="#{systemConfig.metadataCrypto}">Connection key</dt>
-                            <dd>
-                                <span class="chip badge-danger" th:if="${defaultCryptoKey}"
-                                      th:text="#{systemConfig.cryptoDefault}">Using the shipped default key</span>
-                                <span class="chip badge-ok" th:unless="${defaultCryptoKey}"
-                                      th:text="#{systemConfig.cryptoCustom}">Using a dedicated key</span>
-                            </dd>
-                        </div>
+                    <dl class="dl">
+                        <dt th:text="#{systemConfig.metadataUrl}">Current connection</dt>
+                        <dd><code class="mono" style="overflow-wrap:anywhere"
+                                  th:text="${datasourceUrl}">jdbc:h2:file:./data/jync</code></dd>
+                        <dt th:text="#{systemConfig.metadataUser}">Username</dt>
+                        <dd><span class="chip" th:text="${datasourceUsername}">sa</span></dd>
+                        <dt th:text="#{systemConfig.metadataCrypto}">Connection key</dt>
+                        <dd>
+                            <span class="chip chip-danger" th:if="${defaultCryptoKey}"
+                                  th:text="#{systemConfig.cryptoDefault}">Using the shipped default key</span>
+                            <span class="chip chip-ok" th:unless="${defaultCryptoKey}"
+                                  th:text="#{systemConfig.cryptoCustom}">Using a dedicated key</span>
+                        </dd>
                     </dl>
-                    <p class="small soft" th:text="#{systemConfig.metadataHelp}">The metadata database is chosen at startup by SPRING_DATASOURCE_*; changing it takes a restart.</p>
+                    <p class="help" th:text="#{systemConfig.metadataHelp}">The metadata database is chosen at startup by SPRING_DATASOURCE_*; changing it takes a restart.</p>
+
+                    <hr class="divider"/>
 
                     <form method="post" th:action="@{/system-config/db-test}"
                           th:id="metadata-db-test-form">
-                        <div class="form-grid">
+                        <div class="field">
                             <label for="db-test-url" th:text="#{systemConfig.dbTestUrl}">JDBC URL</label>
-                            <input id="db-test-url" type="text" name="url"
+                            <input class="input mono" id="db-test-url" type="text" name="url"
+                                   spellcheck="false" autocomplete="off"
                                    placeholder="jdbc:mysql://host:3306/jync?useSSL=false"/>
-                            <label for="db-test-driver" th:text="#{systemConfig.dbTestDriver}">Driver class</label>
-                            <input id="db-test-driver" type="text" name="driverClass"
-                                   placeholder="com.mysql.cj.jdbc.Driver"/>
-                            <label for="db-test-username" th:text="#{systemConfig.dbTestUser}">Username</label>
-                            <input id="db-test-username" type="text" name="username"/>
+                            <div class="help" th:text="#{systemConfig.dbTestHelp}">MySQL, MariaDB, PostgreSQL and Oracle; the password is used for this test only.</div>
+                        </div>
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="db-test-driver" th:text="#{systemConfig.dbTestDriver}">Driver class</label>
+                                <input class="input mono" id="db-test-driver" type="text" name="driverClass"
+                                       spellcheck="false" autocomplete="off"
+                                       placeholder="com.mysql.cj.jdbc.Driver"/>
+                            </div>
+                            <div class="field">
+                                <label for="db-test-username" th:text="#{systemConfig.dbTestUser}">Username</label>
+                                <input class="input" id="db-test-username" type="text" name="username"
+                                       autocomplete="off"/>
+                            </div>
+                        </div>
+                        <div class="field">
                             <label for="db-test-password" th:text="#{systemConfig.dbTestPassword}">Password</label>
-                            <input id="db-test-password" type="password" name="password"
+                            <input class="input" id="db-test-password" type="password" name="password"
                                    autocomplete="new-password"/>
                         </div>
-                        <div class="form-actions">
-                            <button class="btn" type="submit">
+                        <div class="btn-row">
+                            <button class="btn btn-primary btn-sm" type="submit">
                                 <svg class="ico"><use href="#plug"/></svg>
                                 <span th:text="#{systemConfig.dbTestRun}">Test connection</span>
                             </button>
@@ -82,7 +91,7 @@
                     </form>
                     <!-- 结果面板由 system-config.js 填充。标签放在 data-* 上，脚本就不必
                          自带一份翻译表，也避免密码字段之外的文案在 JS 里硬编码。 -->
-                    <div id="metadata-db-test-result" class="small" hidden
+                    <div id="metadata-db-test-result" class="small" hidden style="margin-top:12px"
                          th:attr="data-product=#{systemConfig.dbTestProduct},
                                   data-version=#{systemConfig.dbTestVersion},
                                   data-env=#{systemConfig.dbTestEnv}"></div>
@@ -103,7 +112,7 @@
                         <div class="kv">
                             <dt th:text="#{systemConfig.httpsCurrent}">Current state</dt>
                             <dd>
-                                <span class="chip badge-ok" th:if="${httpsRequired}"
+                                <span class="chip chip-ok" th:if="${httpsRequired}"
                                       th:text="#{systemConfig.httpsOn}">On</span>
                                 <span class="chip" th:unless="${httpsRequired}"
                                       th:text="#{systemConfig.httpsOff}">Off</span>
@@ -121,16 +130,167 @@
                             </dd>
                         </div>
                     </dl>
-                    <p class="small soft" th:text="#{systemConfig.httpsHelp}">When on, plaintext requests are refused; loopback and an unauthenticated GET /login stay reachable.</p>
-                    <p class="small soft" th:if="${httpsConfigControlled}"
+                    <p class="help" th:text="#{systemConfig.httpsHelp}">When on, plaintext requests are refused; loopback and an unauthenticated GET /login stay reachable.</p>
+                    <p class="help" th:if="${httpsConfigControlled}"
                        th:text="#{systemConfig.httpsPinned}">This switch is pinned by the configuration file and cannot be changed here.</p>
 
-                    <form method="post" th:action="@{/system-config/require-https}">
-                        <input type="hidden" name="enabled" th:value="${!httpsRequired}"/>
-                        <button class="btn" type="submit"
-                                th:disabled="${httpsConfigControlled}"
-                                th:text="${httpsRequired} ? #{systemConfig.httpsDisable} : #{systemConfig.httpsEnable}">Enable</button>
+                    <div class="btn-row" style="margin-top:16px">
+                        <form method="post" th:action="@{/system-config/require-https}">
+                            <input type="hidden" name="enabled" th:value="${!httpsRequired}"/>
+                            <button class="btn btn-sm" type="submit"
+                                    th:classappend="${httpsRequired} ? 'btn-ghost' : 'btn-primary'"
+                                    th:disabled="${httpsConfigControlled}"
+                                    th:text="${httpsRequired} ? #{systemConfig.httpsDisable} : #{systemConfig.httpsEnable}">Enable</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TLS 证书：密钥库与口令存在数据目录（默认 ./data/tls），连接器在启动时创建，
+                 所以保存后必须重启才生效。页面把「已保存」「已生效」「等待重启」「移除待重启」
+                 四个事实分开显示，避免把文件状态说成运行状态。 -->
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#lock-fill"/></svg>
+                        <span th:text="#{systemConfig.tls}">TLS certificate</span></h2>
+                </div>
+                <div class="card-body">
+                    <div th:if="${tls.disabled}" class="alert alert-warn" style="margin-bottom:16px">
+                        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+                        <div class="alert-body" th:text="#{systemConfig.tlsDisabled}">TLS is disabled in the configuration file.</div>
+                    </div>
+                    <div th:if="${tls.problemKey != null}" class="alert alert-warn" style="margin-bottom:16px">
+                        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+                        <div class="alert-body"
+                             th:text="${#messages.msgOrNull(tls.problemKey) ?: tls.problemKey}">The saved certificate cannot be used.</div>
+                    </div>
+                    <div th:if="${tls.pendingRestart}" class="alert alert-warn" style="margin-bottom:16px">
+                        <svg class="ico"><use href="#info-circle"/></svg>
+                        <div class="alert-body" th:text="#{systemConfig.tlsPendingRestart}">Waiting for a restart.</div>
+                    </div>
+                    <div th:if="${tls.removalPending}" class="alert alert-warn" style="margin-bottom:16px">
+                        <svg class="ico"><use href="#info-circle"/></svg>
+                        <div class="alert-body" th:text="#{systemConfig.tlsRemovalPending}">The certificate was removed; restart to stop serving HTTPS.</div>
+                    </div>
+                    <div th:if="${tls.usingDefaultCryptoKey}" class="alert alert-warn" style="margin-bottom:16px">
+                        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
+                        <div class="alert-body" th:text="#{systemConfig.tlsDefaultKey}">The built-in key protects the stored passphrase.</div>
+                    </div>
+
+                    <dl class="dl pairs">
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.tlsState}">Saved</dt>
+                            <dd>
+                                <span class="chip chip-ok" th:if="${tls.saved}"
+                                      th:text="#{systemConfig.tlsSaved}">Saved</span>
+                                <span class="chip" th:unless="${tls.saved}"
+                                      th:text="#{systemConfig.tlsNotSaved}">Not configured</span>
+                            </dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.tlsActiveState}">Running</dt>
+                            <dd>
+                                <span class="chip chip-ok" th:if="${tls.active}"
+                                      th:text="#{systemConfig.tlsActive}">Serving HTTPS</span>
+                                <span class="chip" th:unless="${tls.active}"
+                                      th:text="#{systemConfig.tlsInactive}">HTTP only</span>
+                            </dd>
+                        </div>
+                        <div class="kv" th:if="${tls.httpsPort != null}">
+                            <dt th:text="#{systemConfig.tlsHttpsPort}">HTTPS port</dt>
+                            <dd><code class="mono" th:text="${tls.httpsPort}">8443</code></dd>
+                        </div>
+                        <div class="kv" th:if="${tls.httpsPort != null}">
+                            <dt th:text="#{systemConfig.tlsRedirect}">Redirect HTTP</dt>
+                            <dd>
+                                <span class="chip chip-ok" th:if="${tls.redirectHttp}" th:text="#{systemConfig.httpsOn}">On</span>
+                                <span class="chip" th:unless="${tls.redirectHttp}" th:text="#{systemConfig.httpsOff}">Off</span>
+                            </dd>
+                        </div>
+                    </dl>
+
+                    <dl class="dl pairs" th:if="${tls.certificate != null}">
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.tlsSubject}">Subject</dt>
+                            <dd><code class="mono" style="overflow-wrap:anywhere"
+                                      th:text="${tls.certificate.subject}">CN=localhost</code></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.tlsIssuer}">Issuer</dt>
+                            <dd><code class="mono" style="overflow-wrap:anywhere"
+                                      th:text="${tls.certificate.issuer}">CN=localhost</code></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.tlsAlias}">Alias</dt>
+                            <dd><span class="chip" th:text="${tls.certificate.alias}">1</span></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.tlsValidFrom}">Valid from</dt>
+                            <dd th:text="${#temporals.format(tls.certificate.notBefore, 'yyyy-MM-dd HH:mm')}">2026-01-01 00:00</dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.tlsValidTo}">Valid to</dt>
+                            <dd>
+                                <span th:text="${#temporals.format(tls.certificate.notAfter, 'yyyy-MM-dd HH:mm')}">2027-01-01 00:00</span>
+                                <span class="chip chip-danger" th:if="${tls.expired}"
+                                      th:text="#{systemConfig.tlsExpired}">Expired</span>
+                                <span class="chip" th:if="${tls.expiresSoon}"
+                                      th:text="#{systemConfig.tlsExpiresSoon}">Expires soon</span>
+                            </dd>
+                        </div>
+                    </dl>
+
+                    <p class="help" th:text="#{systemConfig.tlsHelp}">Upload a PKCS#12 or JKS keystore...</p>
+                    <p class="help" th:text="#{systemConfig.tlsRestartRequired}">Restart Jync to apply the saved certificate.</p>
+
+                    <hr class="divider"/>
+
+                    <form method="post" enctype="multipart/form-data"
+                          th:action="@{/system-config/tls(_csrf=${_csrf.token})}">
+                        <div class="field">
+                            <label for="tls-file" th:text="#{systemConfig.tlsFile}">Keystore file</label>
+                            <input class="input" id="tls-file" type="file" name="file"
+                                   accept=".p12,.pfx,.jks" required/>
+                            <div class="help" th:text="#{systemConfig.tlsFileLimit}">At most 5 MB.</div>
+                        </div>
+                        <div class="field">
+                            <label for="tls-passphrase" th:text="#{systemConfig.tlsPassphrase}">Keystore passphrase</label>
+                            <input class="input" id="tls-passphrase" type="password" name="passphrase"
+                                   autocomplete="new-password" required/>
+                            <div class="help" th:text="#{systemConfig.tlsPassphraseHelp}">Used for the keystore and its private key.</div>
+                        </div>
+                        <div class="field">
+                            <label for="tls-port" th:text="#{systemConfig.tlsHttpsPort}">HTTPS port</label>
+                            <input class="input" id="tls-port" type="number" name="httpsPort"
+                                   min="1" max="65535" value="8443" required/>
+                            <div class="help" th:text="#{systemConfig.tlsPortHelp}">Must differ from the HTTP port.</div>
+                        </div>
+                        <div class="field">
+                            <label class="check-inline">
+                                <input type="checkbox" name="redirectHttp" value="true" checked/>
+                                <span th:text="#{systemConfig.tlsRedirect}">Redirect HTTP to HTTPS</span>
+                            </label>
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn btn-primary btn-sm" type="submit">
+                                <svg class="ico"><use href="#lock-fill"/></svg>
+                                <span th:text="#{systemConfig.tlsUpload}">Save certificate</span>
+                            </button>
+                        </div>
                     </form>
+
+                    <div th:if="${tls.canRemove}">
+                        <hr class="divider"/>
+                        <p class="help" th:text="#{systemConfig.tlsDeleteHelp}">Removing applies after a restart.</p>
+                        <div class="btn-row">
+                            <form method="post" th:action="@{/system-config/tls/delete}">
+                                <button class="btn btn-warn btn-sm" type="submit">
+                                    <svg class="ico"><use href="#trash"/></svg>
+                                    <span th:text="#{systemConfig.tlsRemove}">Remove certificate</span>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -142,49 +302,57 @@
                         <span th:text="#{systemConfig.package}">Configuration package</span></h2>
                 </div>
                 <div class="card-body">
-                    <p class="small soft" th:text="#{systemConfig.packageHelp}">Export before switching databases, then import on the fresh database. The package is encrypted with the passphrase you choose.</p>
+                    <p class="help" style="margin-bottom:16px" th:text="#{systemConfig.packageHelp}">Export before switching databases, then import on the fresh database. The package is encrypted with the passphrase you choose.</p>
 
                     <form method="post" th:action="@{/system-config/export}">
-                        <div class="form-grid">
-                            <label for="export-passphrase" th:text="#{systemConfig.passphrase}">Passphrase</label>
-                            <input id="export-passphrase" type="password" name="passphrase"
-                                   autocomplete="new-password" minlength="8" required/>
-                            <label for="export-passphrase-confirm" th:text="#{systemConfig.passphraseConfirm}">Confirm passphrase</label>
-                            <input id="export-passphrase-confirm" type="password" name="confirmPassphrase"
-                                   autocomplete="new-password" minlength="8" required/>
+                        <div class="grid-2">
+                            <div class="field">
+                                <label for="export-passphrase" th:text="#{systemConfig.passphrase}">Passphrase</label>
+                                <input class="input" id="export-passphrase" type="password" name="passphrase"
+                                       autocomplete="new-password" minlength="8" required/>
+                            </div>
+                            <div class="field">
+                                <label for="export-passphrase-confirm" th:text="#{systemConfig.passphraseConfirm}">Confirm passphrase</label>
+                                <input class="input" id="export-passphrase-confirm" type="password"
+                                       name="confirmPassphrase" autocomplete="new-password"
+                                       minlength="8" required/>
+                            </div>
                         </div>
-                        <label class="check">
-                            <input type="checkbox" name="includeState" value="true"/>
-                            <span th:text="#{systemConfig.includeState}">Include sync progress and cursors</span>
-                        </label>
-                        <div class="form-actions">
-                            <button class="btn" type="submit">
+                        <div class="field">
+                            <label class="check-inline">
+                                <input type="checkbox" name="includeState" value="true"/>
+                                <span th:text="#{systemConfig.includeState}">Include sync progress and cursors</span>
+                            </label>
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn btn-primary btn-sm" type="submit">
                                 <svg class="ico"><use href="#download"/></svg>
                                 <span th:text="#{systemConfig.export}">Export</span>
                             </button>
                         </div>
                     </form>
 
-                    <hr/>
+                    <hr class="divider"/>
 
                     <form method="post" enctype="multipart/form-data"
                           th:action="@{/system-config/import(_csrf=${_csrf.token})}">
-                        <div class="form-grid">
+                        <div class="field">
                             <label for="import-file" th:text="#{systemConfig.file}">Package file</label>
-                            <input id="import-file" type="file" name="file" accept=".jync" required/>
-                            <label for="import-passphrase" th:text="#{systemConfig.passphrase}">Passphrase</label>
-                            <input id="import-passphrase" type="password" name="passphrase"
-                                   autocomplete="new-password" required/>
+                            <input class="input" id="import-file" type="file" name="file" accept=".jync" required/>
                         </div>
-                        <div class="form-actions">
-                            <button class="btn btn-warn" type="submit">
+                        <div class="field">
+                            <label for="import-passphrase" th:text="#{systemConfig.passphrase}">Passphrase</label>
+                            <input class="input" id="import-passphrase" type="password" name="passphrase"
+                                   autocomplete="new-password" required/>
+                            <div class="help" th:text="#{systemConfig.packageLimit}">One package may be at most 20 MB.</div>
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn btn-warn btn-sm" type="submit">
                                 <svg class="ico"><use href="#download"/></svg>
                                 <span th:text="#{systemConfig.import}">Import</span>
                             </button>
                         </div>
                     </form>
-
-                    <p class="small soft" th:text="#{systemConfig.packageLimit}">One package may be at most 20 MB.</p>
                 </div>
             </div>
         </div>

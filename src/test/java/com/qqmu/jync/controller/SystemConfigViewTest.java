@@ -6,6 +6,8 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,9 @@ import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingService;
+import com.qqmu.jync.service.tls.TlsCertificateInfo;
+import com.qqmu.jync.service.tls.TlsCertificateService;
+import com.qqmu.jync.service.tls.TlsPageState;
 import com.qqmu.jync.util.CryptoUtil;
 
 /**
@@ -56,6 +61,8 @@ class SystemConfigViewTest {
     private AdminAuditService adminAuditService;
     @MockBean
     private CryptoUtil cryptoUtil;
+    @MockBean
+    private TlsCertificateService tlsCertificateService;
 
     private static RequestPostProcessor as(UserRole role) {
         AppUser user = new AppUser();
@@ -69,18 +76,44 @@ class SystemConfigViewTest {
     }
 
     private String render(UserRole role) throws Exception {
+        return render(role, noTls());
+    }
+
+    private String render(UserRole role, TlsPageState tls) throws Exception {
         when(requireHttpsResolver.effective()).thenReturn(HTTPS_OFF);
         when(requireHttpsResolver.isConfigControlled()).thenReturn(false);
+        when(tlsCertificateService.pageState()).thenReturn(tls);
         return mvc.perform(get("/system-config").locale(Locale.SIMPLIFIED_CHINESE).with(as(role)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
     }
 
+    private static TlsPageState noTls() {
+        return state(false, false, false, false, false, false, false, null, null, false, false,
+                null, false);
+    }
+
+    private static TlsPageState state(boolean saved, boolean active, boolean pendingRestart,
+                                      boolean removalPending, boolean disabled, boolean canRemove,
+                                      boolean defaultKey, String problemKey,
+                                      TlsCertificateInfo certificate, boolean expired,
+                                      boolean expiresSoon, Integer httpsPort,
+                                      boolean redirectHttp) {
+        return new TlsPageState(saved, active, pendingRestart, removalPending, disabled, canRemove,
+                defaultKey, problemKey, certificate, null, expired, expiresSoon, httpsPort,
+                redirectHttp, null);
+    }
+
+    private static TlsCertificateInfo certificate(Instant notAfter) {
+        return new TlsCertificateInfo("CN=localhost", "CN=localhost", "tomcat", "RSA",
+                "00", Instant.now().minusSeconds(60), notAfter);
+    }
+
     @Test
-    void thePageCarriesTheThreeConfigurationCards() throws Exception {
+    void thePageCarriesTheFourConfigurationCards() throws Exception {
         String page = render(UserRole.ADMIN);
 
-        assertThat(page).contains("元数据库", "强制 HTTPS", "配置包");
+        assertThat(page).contains("元数据库", "强制 HTTPS", "TLS 证书", "配置包");
     }
 
     @Test
@@ -106,6 +139,84 @@ class SystemConfigViewTest {
         // Nothing was typed, so there is nothing to echo — and after a failed test the browser
         // must not have last request's password sitting in the field.
         assertThat(tag).doesNotContain("value=");
+    }
+
+    @Test
+    void everyFormControlCarriesTheSharedInputStyling() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        // app.css has no .form-grid/.form-actions/.check — a page that reaches for them renders
+        // as bare stacked labels and default browser controls.
+        assertThat(page).doesNotContain("form-grid", "form-actions", "class=\"check\"");
+
+        for (String id : List.of("db-test-url", "db-test-driver", "db-test-username",
+                "db-test-password", "export-passphrase", "export-passphrase-confirm",
+                "import-file", "import-passphrase", "tls-file", "tls-passphrase", "tls-port")) {
+            int at = page.indexOf("id=\"" + id + "\"");
+            assertThat(at).as("field %s", id).isGreaterThan(-1);
+            String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
+            assertThat(tag).as("field %s uses .input", id).contains("class=\"input");
+        }
+    }
+
+    @Test
+    void tlsCardShowsSavedActiveAndPendingRestart() throws Exception {
+        String page = render(UserRole.ADMIN, state(true, false, true, false, false, true, false,
+                null, certificate(Instant.now().plusSeconds(86_400)), false, false, 8443, true));
+
+        assertThat(page).contains("已保存", "仅 HTTP", "等待重启生效", "8443");
+    }
+
+    @Test
+    void tlsUploadFormIsMultipartAndCarriesCsrfInTheAction() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).contains("enctype=\"multipart/form-data\"")
+                .containsPattern("action=\"/system-config/tls[^\"]*_csrf=");
+        assertThat(page).containsPattern("accept=\"\\.p12,\\.pfx,\\.jks\"");
+    }
+
+    @Test
+    void tlsPassphraseIsNeverRenderedBack() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        int field = page.indexOf("id=\"tls-passphrase\"");
+        assertThat(field).isGreaterThan(-1);
+        String tag = page.substring(page.lastIndexOf('<', field), page.indexOf('>', field));
+        assertThat(tag).doesNotContain("value=");
+    }
+
+    @Test
+    void theRemoveFormIsShownOnlyWhenSomethingIsSavedOrCorrupt() throws Exception {
+        assertThat(render(UserRole.ADMIN)).doesNotContain("action=\"/system-config/tls/delete\"");
+
+        String corrupted = render(UserRole.ADMIN, state(false, false, false, false, false, true,
+                false, "error.tls.storeCorrupt", null, false, false, null, false));
+        assertThat(corrupted).contains("action=\"/system-config/tls/delete\"");
+    }
+
+    @Test
+    void theExpiredChipIsShownForAnExpiredCertificate() throws Exception {
+        String page = render(UserRole.ADMIN, state(true, false, true, false, false, true, false,
+                null, certificate(Instant.now().minusSeconds(60)), true, false, 8443, false));
+
+        assertThat(page).contains("已过期");
+    }
+
+    @Test
+    void theDisabledNoticeIsShownWhenTlsIsDisabled() throws Exception {
+        String page = render(UserRole.ADMIN, state(true, false, true, false, true, true, false,
+                null, certificate(Instant.now().plusSeconds(86_400)), false, false, 8443, false));
+
+        assertThat(page).contains("app.tls.enabled=false");
+    }
+
+    @Test
+    void theCardExplainsTheRestartRequirement() throws Exception {
+        String page = render(UserRole.ADMIN, state(true, false, true, false, false, true, false,
+                null, certificate(Instant.now().plusSeconds(86_400)), false, false, 8443, false));
+
+        assertThat(page).contains("重启 Jync 后保存的证书才会生效");
     }
 
     @Test

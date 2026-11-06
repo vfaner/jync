@@ -50,5 +50,9 @@ public enum AuditAction {
     /** A configuration package was imported into this (empty) metadata database. */
     CONFIG_IMPORT,
     /** A candidate metadata-database connection was tested from the 系统配置 page. */
-    SYSTEM_DB_TEST
+    SYSTEM_DB_TEST,
+    /** A TLS certificate was uploaded on the 系统配置 page (applies after a restart). */
+    TLS_CONFIG_SAVE,
+    /** The saved TLS certificate was removed on the 系统配置 page (applies after a restart). */
+    TLS_CONFIG_DELETE
 }

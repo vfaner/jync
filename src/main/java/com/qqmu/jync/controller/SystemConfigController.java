@@ -18,6 +18,7 @@ import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.service.settings.SystemSettingService;
+import com.qqmu.jync.service.tls.TlsCertificateService;
 import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
 import com.qqmu.jync.util.CryptoUtil;
@@ -43,6 +44,7 @@ public class SystemConfigController {
     private final SystemSettingService settings;
     private final AdminAuditService audit;
     private final CryptoUtil crypto;
+    private final TlsCertificateService tls;
     private final String datasourceUrl;
     private final String datasourceUsername;
 
@@ -50,12 +52,14 @@ public class SystemConfigController {
                                   SystemSettingService settings,
                                   AdminAuditService audit,
                                   CryptoUtil crypto,
+                                  TlsCertificateService tls,
                                   @Value("${spring.datasource.url:}") String datasourceUrl,
                                   @Value("${spring.datasource.username:}") String datasourceUsername) {
         this.requireHttps = requireHttps;
         this.settings = settings;
         this.audit = audit;
         this.crypto = crypto;
+        this.tls = tls;
         this.datasourceUrl = datasourceUrl;
         this.datasourceUsername = datasourceUsername;
     }
@@ -73,6 +77,8 @@ public class SystemConfigController {
                 datasourceUsername == null ? "" : datasourceUsername);
         model.addAttribute("defaultCryptoKey", crypto.isUsingDefaultKey());
         model.addAttribute("packageMaxBytes", PACKAGE_MAX_BYTES);
+        model.addAttribute("tls", tls.pageState());
+        model.addAttribute("tlsMaxBytes", TlsCertificateService.MAX_BYTES);
         return "system-config";
     }
 

@@ -32,6 +32,9 @@ import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.repository.AiProviderRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
+import com.qqmu.jync.service.tls.TestKeystores;
+import com.qqmu.jync.service.tls.TlsKeystoreFormat;
+import com.qqmu.jync.service.tls.TlsKeystoreStore;
 import com.qqmu.jync.util.CryptoUtil;
 
 /**
@@ -68,7 +71,11 @@ class LegacyCryptoKeyMigrationTest {
 
     private LegacyCryptoKeyMigration migration(String url) {
         return new LegacyCryptoKeyMigration(properties, crypto, configRepository,
-                providerRepository, transactionManager(), url);
+                providerRepository, transactionManager(), tlsStore(), url);
+    }
+
+    private TlsKeystoreStore tlsStore() {
+        return new TlsKeystoreStore(dir.resolve("tls").toString(), crypto);
     }
 
     @Test
@@ -264,7 +271,52 @@ class LegacyCryptoKeyMigrationTest {
         assertThat(dir.resolve("jync.key")).doesNotExist();
     }
 
+    @Test
+    void rewrapsTheSavedTlsPassphraseUnderTheNewKey() throws IOException {
+        TlsKeystoreStore store = tlsStore();
+        store.save(TestKeystores.pkcs12(), TlsKeystoreFormat.PKCS12, TestKeystores.PASSPHRASE,
+                freePort(), true);
+
+        migration.migrate();
+
+        // The certificate's passphrase is wrapped with the crypto key too. It must travel with
+        // the rotation, or the next start cannot read the saved certificate and refuses to boot.
+        TlsKeystoreStore after = tlsStore();
+        assertThat(after.requireConfig().passphrase()).isEqualTo("changeit");
+    }
+
+    @Test
+    void rewrappingHappensBeforeTheRowsAreTouchedSoAFailureKeepsTheOldKey() {
+        // A sidecar whose file cannot be written aborts the migration before the transaction:
+        // the rows keep the old key and the pending key is discarded, never half-applied.
+        TlsKeystoreStore unwritable = mock(TlsKeystoreStore.class);
+        org.mockito.Mockito.doThrow(
+                new com.qqmu.jync.service.tls.TlsKeystoreException("error.tls.saveFailed"))
+                .when(unwritable).reencryptPassphrases(org.mockito.ArgumentMatchers.any());
+        DatabaseConfig config = new DatabaseConfig();
+        config.setPassword(crypto.encrypt("db-password"));
+        when(configRepository.findAll()).thenReturn(List.of(config));
+        LegacyCryptoKeyMigration failing = new LegacyCryptoKeyMigration(properties, crypto,
+                configRepository, providerRepository, transactionManager(), unwritable,
+                "jdbc:h2:file:" + dir.resolve("jync") + ";MODE=MySQL");
+
+        failing.migrate();
+
+        verify(configRepository, never()).saveAll(anyList());
+        assertThat(dir.resolve("jync.key.pending")).doesNotExist();
+        assertThat(properties.getCryptoPassword())
+                .isEqualTo(SyncProperties.DEFAULT_CRYPTO_PASSWORD);
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────────
+
+    private static int freePort() {
+        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+            return socket.getLocalPort();
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
 
     private Properties readKey() {
         Path key = dir.resolve("jync.key");

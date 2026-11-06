@@ -2,8 +2,11 @@ package com.qqmu.jync.service.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Instant;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 import javax.servlet.http.Cookie;
 
@@ -14,6 +17,9 @@ import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
+import com.qqmu.jync.service.tls.TlsConfig;
+import com.qqmu.jync.service.tls.TlsKeystoreFormat;
+import com.qqmu.jync.service.tls.TlsRuntimeState;
 import com.qqmu.jync.util.ClientIpResolver;
 
 /**
@@ -196,6 +202,185 @@ class TransportSecurityFilterTest {
 
         assertThat(run(true, request("POST", "/databases/save", "10.0.0.7")).getStatus())
                 .isEqualTo(403);
+    }
+
+
+    @Test
+    void redirectsPlaintextToTheActiveHttpsConnector() throws Exception {
+        MockHttpServletRequest request = request("GET", "/projects?x=1", "203.0.113.9");
+        request.setServerName("example.com");
+
+        MockHttpServletResponse response = runWithTls(state(8443, true), false, "", request);
+
+        assertThat(response.getStatus()).isEqualTo(307);
+        assertThat(response.getHeader("Location"))
+                .isEqualTo("https://example.com:8443/projects?x=1");
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
+    void omitsThePortWhenHttpsRunsOn443() throws Exception {
+        MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+        request.setServerName("example.com");
+
+        assertThat(runWithTls(state(443, true), false, "", request).getHeader("Location"))
+                .isEqualTo("https://example.com/");
+    }
+
+    @Test
+    void redirectPreservesPostMethod() throws Exception {
+        MockHttpServletRequest request = request("POST", "/system-config/tls", "203.0.113.9");
+        request.setServerName("example.com");
+
+        assertThat(runWithTls(state(8443, true), false, "", request).getStatus()).isEqualTo(307);
+    }
+
+    @Test
+    void redirectWinsOverTheForbiddenSwitch() throws Exception {
+        MockHttpServletRequest request = request("GET", "/projects", "203.0.113.9");
+        request.setServerName("example.com");
+
+        assertThat(runWithTls(state(8443, true), true, "", request).getStatus())
+                .isEqualTo(307);
+    }
+
+    @Test
+    void redirectOffAndRequireHttpsOnReturns403() throws Exception {
+        MockHttpServletRequest request = request("GET", "/projects", "203.0.113.9");
+        request.setServerName("example.com");
+
+        assertThat(runWithTls(state(8443, false), true, "", request).getStatus())
+                .isEqualTo(403);
+    }
+
+    @Test
+    void redirectOffAndRequireHttpsOffPassesThrough() throws Exception {
+        MockHttpServletRequest request = request("GET", "/projects", "203.0.113.9");
+        request.setServerName("example.com");
+
+        assertThat(runWithTls(state(8443, false), false, "", request).getStatus())
+                .isEqualTo(200);
+        assertThat(chain.getRequest()).isNotNull();
+    }
+
+    @Test
+    void loopbackIsNeverRedirected() throws Exception {
+        MockHttpServletRequest request = request("GET", "/projects", "127.0.0.1");
+        request.setServerName("example.com");
+
+        assertThat(runWithTls(state(8443, true), false, "", request).getStatus())
+                .isEqualTo(200);
+        assertThat(chain.getRequest()).isNotNull();
+    }
+
+    @Test
+    void theUncredentialedLoginProbeIsNeverRedirected() throws Exception {
+        MockHttpServletRequest request = request("GET", "/login", "10.0.0.5");
+        request.setServerName("example.com");
+
+        assertThat(runWithTls(state(8443, true), false, "", request).getStatus())
+                .isEqualTo(200);
+        assertThat(chain.getRequest()).isNotNull();
+    }
+
+    @Test
+    void secureRequestsAreNeverRedirectedAndDoNotConsultTheSuppliers() throws Exception {
+        MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+        request.setSecure(true);
+        BooleanSupplier explodingSwitch = () -> {
+            throw new IllegalStateException("must not be asked");
+        };
+        Supplier<TlsRuntimeState> explodingState = () -> {
+            throw new IllegalStateException("must not be asked");
+        };
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        new TransportSecurityFilter(explodingSwitch, explodingState, "").doFilter(request, response,
+                chain);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getHeader("Strict-Transport-Security")).isNotNull();
+    }
+
+    @Test
+    void rejectsAnUnsafeHostInsteadOfRedirecting() throws Exception {
+        MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+        request.setServerName("evil.example/path");
+
+        MockHttpServletResponse response = runWithTls(state(8443, true), false, "", request);
+
+        assertThat(response.getStatus()).isEqualTo(400);
+        assertThat(response.getHeader("Location")).isNull();
+    }
+
+    @Test
+    void configuredRedirectHostOverridesTheRequestHost() throws Exception {
+        MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+        request.setServerName("10.0.0.5");
+
+        assertThat(runWithTls(state(8443, true), false, "jync.example.com", request)
+                .getHeader("Location")).isEqualTo("https://jync.example.com:8443/");
+    }
+
+    @Test
+    void ipv6ServerNameIsBracketed() throws Exception {
+        MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+        request.setServerName("::1");
+
+        assertThat(runWithTls(state(8443, true), false, "", request).getHeader("Location"))
+                .isEqualTo("https://[::1]:8443/");
+    }
+
+    @Test
+    void rejectsAnIpv6ZoneId() throws Exception {
+        MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+        request.setServerName("fe80::1%en0");
+
+        assertThat(runWithTls(state(8443, true), false, "", request).getStatus())
+                .isEqualTo(400);
+    }
+
+    @Test
+    void ignoresXForwardedHost() throws Exception {
+        MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+        request.setServerName("example.com");
+        request.addHeader("X-Forwarded-Host", "evil.example");
+
+        assertThat(runWithTls(state(8443, true), false, "", request).getHeader("Location"))
+                .isEqualTo("https://example.com:8443/");
+    }
+
+    @Test
+    void aDisabledOrCorruptTlsStateNeverRedirects() throws Exception {
+        MockHttpServletRequest request = request("GET", "/projects", "203.0.113.9");
+        request.setServerName("example.com");
+
+        assertThat(runWithTls(TlsRuntimeState.disabled(), false, "", request).getStatus())
+                .isEqualTo(200);
+        // A MockFilterChain may be invoked once per request; this test sends two.
+        chain = new MockFilterChain();
+
+        TlsRuntimeState corrupt = org.mockito.Mockito.mock(TlsRuntimeState.class);
+        org.mockito.Mockito.when(corrupt.active()).thenReturn(Optional.empty());
+        org.mockito.Mockito.when(corrupt.problemKey()).thenReturn("error.tls.storeCorrupt");
+        assertThat(runWithTls(corrupt, false, "", request).getStatus()).isEqualTo(200);
+    }
+
+    private static TlsRuntimeState state(int httpsPort, boolean redirectHttp) {
+        TlsRuntimeState state = org.mockito.Mockito.mock(TlsRuntimeState.class);
+        org.mockito.Mockito.when(state.active()).thenReturn(Optional.of(new TlsConfig(
+                TlsKeystoreFormat.PKCS12, "keystore-x.p12", "changeit", httpsPort,
+                redirectHttp, Instant.now(), "00")));
+        return state;
+    }
+
+    private MockHttpServletResponse runWithTls(TlsRuntimeState state, boolean requireHttps,
+                                               String redirectHost,
+                                               MockHttpServletRequest request) throws Exception {
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        new TransportSecurityFilter(() -> requireHttps, () -> state, redirectHost)
+                .doFilter(request, response, chain);
+        return response;
     }
 
     private MockHttpServletResponse run(boolean requireHttps, MockHttpServletRequest request)

@@ -92,6 +92,22 @@ class SettingsRuntimeCardViewTest {
     }
 
     @Test
+    void theDiagnosticsBundleSitsInTheTopSummaryRow() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE);
+
+        int projectAuthor = html.indexOf("项目与作者");
+        int diagnostics = html.indexOf("下载诊断包");
+        int supported = html.indexOf("支持的数据库");
+
+        assertThat(projectAuthor).isGreaterThan(-1);
+        assertThat(diagnostics).as("管理员必须能看到诊断包入口").isGreaterThan(-1);
+        assertThat(supported).isGreaterThan(-1);
+        assertThat(diagnostics)
+                .as("诊断包放在上方摘要区、与「项目与作者」同排，而不是页面末尾")
+                .isGreaterThan(projectAuthor).isLessThan(supported);
+    }
+
+    @Test
     void theRuntimeCardShowsWhenTheApplicationStarted() throws Exception {
         String html = render(Locale.SIMPLIFIED_CHINESE);
 

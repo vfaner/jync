@@ -137,6 +137,19 @@ app:
     # 这里或 JYN_REQUIRE_HTTPS 一旦显式赋值（true/false/on/off/yes/no/1/0），
     # 即以配置为准，页面变为只读——环境变量拼错会在启动时直接失败，而不是悄悄关掉防护。
     require-https: ${JYN_REQUIRE_HTTPS:}
+  # 应用内 TLS（可选）：「系统管理 → 系统配置」上传 PKCS#12 / JKS 后，由 Jync 自己监听
+  # HTTPS，浏览器直连、不经过反向代理。证书与口令存在数据目录下的 tls.directory，
+  # **不在**元数据库、也不进「配置包」——备份数据卷时要把它一起带上。
+  # 连接器在启动时创建，保存/删除证书后必须重启才生效。
+  tls:
+    # 逃生口：设为 false 时不读取证书、不添加 HTTPS 连接器。证书损坏或 HTTPS 端口被占
+    # 导致启动失败时，用它启动一次进页面重新上传或删除。
+    enabled: ${JYN_TLS_ENABLED:true}
+    # 密钥库文件与 tls.properties 边车的存放目录（相对工作目录）。口令在边车里用 sync.crypto-* 加密。
+    directory: ${JYN_TLS_DIRECTORY:./data/tls}
+    # HTTP→HTTPS 307 重定向的目标主机名（如 jync.example.com）。留空表示用请求的 Host。
+    # 只在已加载证书、且上传时勾选了「重定向 HTTP」后才重定向；非法 Host 直接返回 400。
+    redirect-host: ${JYN_TLS_REDIRECT_HOST:}
 
 sync:
   # Default polling interval in milliseconds for change detection

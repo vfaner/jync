@@ -49,7 +49,11 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
         "app.github-url=https://example.com/repo",
         "sync.ai.enabled=false",
         "spring.datasource.url=jdbc:h2:mem:sectest;MODE=MySQL;DB_CLOSE_DELAY=-1",
-        "spring.quartz.job-store-type=memory"
+        "spring.quartz.job-store-type=memory",
+        // Never read the developer's own saved certificate: that would add an HTTPS connector
+        // and a redirect to every assertion here.
+        "app.tls.enabled=false",
+        "app.tls.directory=target/sectest-tls"
 })
 class SecurityConfigTest {
 

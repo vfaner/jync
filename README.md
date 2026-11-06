@@ -148,7 +148,7 @@ sync:
   crypto-salt: ""
 ```
 
-首次访问 `http://<服务器>:8080`，使用 `admin / 123456`（管理员）或 `view / 123456`（访客），**首次登录后必须修改密码**。生产部署、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)、[部署页](https://jync.qqmu.com/deploy.html)与[容器部署说明](docs/deploy-container.md)。
+首次访问 `http://<服务器>:8080`，使用 `admin / 123456`（管理员）或 `view / 123456`（访客），**首次登录后必须修改密码**。生产部署、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)、[部署页](https://jync.qqmu.com/deploy.html)与[容器部署说明](docs/deploy-container.md)。HTTPS 有两种方式：前置反向代理终止 TLS（推荐），或直接在「系统管理 → 系统配置」上传 PKCS#12 / JKS 证书，由 Jync 自己监听 HTTPS，重启后生效——细节见[配置文档](docs/configuration.md)。
 
 > 🔐 升级前备份 `./data`（连同 `<库名>.key`）、`./logs` 与 `application.yml`。密钥丢失后，已保存的连接密码、AI 密钥与告警地址将无法解密。
 
