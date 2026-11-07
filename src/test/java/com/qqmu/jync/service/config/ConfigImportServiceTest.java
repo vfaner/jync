@@ -85,6 +85,8 @@ class ConfigImportServiceTest {
     private CryptoUtil cryptoUtil;
     @Autowired
     private SyncProperties syncProperties;
+    @Autowired
+    private com.qqmu.jync.service.settings.SystemSettingService settingService;
     // Mocked so an import in this test does not start real schedulers; the re-arm behaviour
     // itself is covered by ConfigImportRuntimeTest.
     @MockBean
@@ -204,6 +206,24 @@ class ConfigImportServiceTest {
                     assertThat(restored.getSyncConfig()).isEqualTo("{\"tables\":[]}");
                     assertThat(restored.getEnabled()).isTrue();
                 });
+    }
+
+    @Test
+    @DisplayName("an import invalidates the settings cache on this node")
+    void anImportInvalidatesTheSettingsCacheOnThisNode() {
+        seedAdmin();
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+        users.deleteAll();
+
+        long before = settingService.revision();
+
+        importService.importPackage(pkg, PASSPHRASE, true);
+
+        // The package carries system_setting rows (including force-HTTPS). Writing them
+        // straight through the repository used to leave the resolver's revision untouched,
+        // so this node kept enforcing the old value for a whole TTL.
+        assertThat(settingService.revision()).isGreaterThan(before);
     }
 
     @Test

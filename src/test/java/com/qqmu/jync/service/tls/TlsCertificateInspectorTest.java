@@ -80,6 +80,19 @@ class TlsCertificateInspectorTest {
     }
 
     @Test
+    void rejectsAKeyThatDoesNotMatchItsCertificate() throws Exception {
+        // Tomcat accepts such a store at startup and fails every handshake, so the upload
+        // must be refused while the page can still explain it.
+        byte[] store = storeWithUnrelatedKey();
+
+        assertThatThrownBy(() -> inspector.inspect(store, TlsKeystoreFormat.PKCS12,
+                TestKeystores.PASSPHRASE))
+                .isInstanceOf(TlsKeystoreException.class)
+                .satisfies(e -> assertThat(((TlsKeystoreException) e).messageKey())
+                        .isEqualTo("error.tls.keyMismatch"));
+    }
+
+    @Test
     void doesNotLeakThePassphraseInTheException() {
         try {
             inspector.inspect(TestKeystores.pkcs12(), TlsKeystoreFormat.PKCS12,
@@ -115,6 +128,22 @@ class TlsCertificateInspectorTest {
         target.load(null, TestKeystores.PASSPHRASE);
         target.setKeyEntry("first", key, TestKeystores.PASSPHRASE, chain);
         target.setKeyEntry("second", key, TestKeystores.PASSPHRASE, chain);
+        return encoded(target);
+    }
+
+    private static byte[] storeWithUnrelatedKey() throws Exception {
+        KeyStore source = KeyStore.getInstance("PKCS12");
+        source.load(new ByteArrayInputStream(TestKeystores.pkcs12()), TestKeystores.PASSPHRASE);
+        String alias = source.aliases().nextElement();
+        Certificate[] chain = source.getCertificateChain(alias);
+        java.security.KeyPairGenerator generator = java.security.KeyPairGenerator
+                .getInstance("RSA");
+        generator.initialize(2048);
+
+        KeyStore target = KeyStore.getInstance("PKCS12");
+        target.load(null, TestKeystores.PASSPHRASE);
+        target.setKeyEntry("mismatch", generator.generateKeyPair().getPrivate(),
+                TestKeystores.PASSPHRASE, chain);
         return encoded(target);
     }
 

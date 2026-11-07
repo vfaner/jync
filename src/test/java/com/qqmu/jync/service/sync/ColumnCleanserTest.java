@@ -316,6 +316,31 @@ class ColumnCleanserTest {
     }
 
     @Test
+    void aMaskedPhoneStartingOrEndingWithANonBmpCharacterKeepsThePairWhole() {
+        ColumnCleanser cleanser = ColumnCleanser.forTable(config(
+                rule("users", "phone", ColumnRuleType.MASK_PHONE, null, null)), "users");
+
+        // Ten code points; the head and tail counts must be code points, not UTF-16 units.
+        assertThat(cleanser.apply(row("phone", "12😀3456789")).get("phone"))
+                .isEqualTo("12😀***6789");
+        assertThat(cleanser.apply(row("phone", "123456😀789")).get("phone"))
+                .isEqualTo("123***😀789");
+    }
+
+    @Test
+    void aMaskedIdCardAndBankCardCountCodePointsToo() {
+        ColumnCleanser idCard = ColumnCleanser.forTable(config(
+                rule("users", "id_card", ColumnRuleType.MASK_ID_CARD, null, null)), "users");
+        ColumnCleanser bankCard = ColumnCleanser.forTable(config(
+                rule("users", "card", ColumnRuleType.MASK_BANK_CARD, null, null)), "users");
+
+        assertThat(idCard.apply(row("id_card", "110101😀003071234")).get("id_card"))
+                .isEqualTo("110101******1234");
+        assertThat(bankCard.apply(row("card", "6222😀00200112233445")).get("card"))
+                .isEqualTo("***************3445");
+    }
+
+    @Test
     void columnsListsEveryRuleColumnSoTheReaderCanKeepThemInMemory() {
         // A cleansed column must never reach apply() as a LobValue: the rules only look at
         // String values, so a streamed value would silently skip TRIM/UPPER. The read policy

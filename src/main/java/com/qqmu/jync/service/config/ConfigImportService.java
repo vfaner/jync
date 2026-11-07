@@ -107,6 +107,7 @@ public class ConfigImportService {
     private final OaAuthConfigRepository oaAuthConfig;
     private final AppUserRepository users;
     private final SystemSettingRepository systemSettings;
+    private final com.qqmu.jync.service.settings.SystemSettingService settingService;
     private final SyncProgressRepository syncProgress;
     private final CdcPositionRepository cdcPositions;
     private final MetadataSnapshotRepository metadataSnapshots;
@@ -130,6 +131,7 @@ public class ConfigImportService {
                                OaAuthConfigRepository oaAuthConfig,
                                AppUserRepository users,
                                SystemSettingRepository systemSettings,
+                               com.qqmu.jync.service.settings.SystemSettingService settingService,
                                SyncProgressRepository syncProgress,
                                CdcPositionRepository cdcPositions,
                                MetadataSnapshotRepository metadataSnapshots,
@@ -152,6 +154,7 @@ public class ConfigImportService {
         this.oaAuthConfig = oaAuthConfig;
         this.users = users;
         this.systemSettings = systemSettings;
+        this.settingService = settingService;
         this.syncProgress = syncProgress;
         this.cdcPositions = cdcPositions;
         this.metadataSnapshots = metadataSnapshots;
@@ -169,6 +172,10 @@ public class ConfigImportService {
     public ImportResult importPackage(byte[] packageBytes, char[] passphrase, boolean requestSecure) {
         ConfigPackageReader.Content content = reader.read(packageBytes, passphrase);
         ImportResult result = transaction.execute(status -> restore(content, requestSecure));
+        // The settings rows were written through the repository, bypassing the service, so the
+        // cache revision that the HTTPS resolver checks on every request must be bumped here —
+        // after the commit, and only when the import did not roll back.
+        settingService.markChanged();
         // Only after the commit: the schedulers read the imported rows, and a rollback must
         // leave the running process untouched.
         runtime.rearm();

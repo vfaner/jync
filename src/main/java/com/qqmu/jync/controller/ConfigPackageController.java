@@ -11,10 +11,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
@@ -140,13 +138,6 @@ public class ConfigPackageController {
         flash.addFlashAttribute("importDatabases", result.databases());
         flash.addFlashAttribute("importProjects", result.projects());
         flash.addFlashAttribute("importWarnings", result.warningKeys());
-        return PAGE;
-    }
-
-    /** Tomcat rejects an oversized multipart body before the handler runs. */
-    @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public String tooLarge(RedirectAttributes flash) {
-        flash.addFlashAttribute("error", "error.config.import.fileTooLarge");
         return PAGE;
     }
 

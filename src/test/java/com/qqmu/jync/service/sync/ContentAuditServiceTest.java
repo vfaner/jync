@@ -164,6 +164,43 @@ class ContentAuditServiceTest {
     }
 
     @Test
+    void skipsAHashColumnInsteadOfReportingRowsWrittenBeforeTheRuleAsDrift() throws SQLException {
+        // A hash rule added after a table was already synchronised leaves old plaintext (or an
+        // old salt's digest) on the target. That is expected, and the audit must not report it
+        // every cycle: the column is excluded from comparison.
+        insert(source, 1, "alice", true);
+        insert(target, 1, "plain-old-value", true);
+        ColumnRule rule = new ColumnRule();
+        rule.setTable("ITEMS");
+        rule.setColumn("NAME");
+        rule.setType(ColumnRuleType.HASH_SHA256);
+        ctx.getConfig().getColumnRules().add(rule);
+
+        TableContentAudit result = auditNow("1");
+
+        assertThat(result.status()).isEqualTo(Status.OK);
+        assertThat(result.skippedColumns()).isEqualTo(1);
+        assertThat(result.mismatchColumns()).isEmpty();
+    }
+
+    @Test
+    void skipsWhenTheCursorColumnCarriesACleansingRule() throws SQLException {
+        // The bound is taken from the source's raw cursor. Once the rule rewrites that column
+        // on the target, the same bound names a different set of rows there and the sample
+        // silently misses keys, which the audit would report as missing rows.
+        ColumnRule rule = new ColumnRule();
+        rule.setTable("ITEMS");
+        rule.setColumn("NAME");
+        rule.setType(ColumnRuleType.TRIM);
+        ctx.getConfig().getColumnRules().add(rule);
+
+        CursorStrategy cursor = CursorStrategy.identity("NAME", Types.VARCHAR, "test");
+
+        assertThat(service.auditNow(source, target, table, cursor, progress("1"), ctx).detail())
+                .isEqualTo("cleansed-cursor");
+    }
+
+    @Test
     void respectsCursorBound() throws SQLException {
         insert(source, 1, "a", true);
         insert(source, 2, "b", true);

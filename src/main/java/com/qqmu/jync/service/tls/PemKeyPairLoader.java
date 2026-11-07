@@ -240,9 +240,22 @@ final class PemKeyPairLoader {
     }
 
     private static void requireMatching(X509Certificate certificate, PrivateKey key) {
+        verifyKeyMatches(certificate, key, "error.tls.pemKeyMismatch", "error.tls.pemKeyInvalid");
+    }
+
+    /**
+     * Signs a fixed probe with the key and verifies it with the certificate's public key. A
+     * keystore can hold a key entry whose quoted certificate belongs to another key; Tomcat
+     * would accept it at startup and fail every handshake, so the upload path rejects it.
+     *
+     * @param mismatchKey the i18n key reported when the key provably does not match
+     * @param invalidKey  the key reported when the key's algorithm cannot sign at all
+     */
+    static void verifyKeyMatches(X509Certificate certificate, PrivateKey key, String mismatchKey,
+                                 String invalidKey) {
         String signatureAlgorithm = signatureAlgorithm(key.getAlgorithm());
         if (signatureAlgorithm == null) {
-            throw new TlsKeystoreException("error.tls.pemKeyInvalid");
+            throw new TlsKeystoreException(invalidKey);
         }
         try {
             Signature signer = Signature.getInstance(signatureAlgorithm);
@@ -254,12 +267,12 @@ final class PemKeyPairLoader {
             verifier.initVerify(certificate.getPublicKey());
             verifier.update(KEY_CHECK_PROBE);
             if (!verifier.verify(signature)) {
-                throw new TlsKeystoreException("error.tls.pemKeyMismatch");
+                throw new TlsKeystoreException(mismatchKey);
             }
         } catch (InvalidKeyException e) {
-            throw new TlsKeystoreException("error.tls.pemKeyMismatch", e);
+            throw new TlsKeystoreException(mismatchKey, e);
         } catch (GeneralSecurityException e) {
-            throw new TlsKeystoreException("error.tls.pemKeyInvalid", e);
+            throw new TlsKeystoreException(invalidKey, e);
         }
     }
 

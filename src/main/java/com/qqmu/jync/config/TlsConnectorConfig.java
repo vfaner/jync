@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
 import org.apache.catalina.connector.Connector;
+import org.apache.coyote.AbstractProtocol;
 import org.apache.tomcat.util.net.SSLHostConfig;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
@@ -49,18 +50,34 @@ public class TlsConnectorConfig {
 
     @Bean
     public WebServerFactoryCustomizer<TomcatServletWebServerFactory> tlsConnectorCustomizer(
-            TlsRuntimeState runtime, TlsKeystoreStore store) {
-        return factory -> customize(factory, runtime, store);
+            TlsRuntimeState runtime, TlsKeystoreStore store,
+            @Value("${server.address:}") String bindAddress) {
+        return factory -> customize(factory, runtime, store, bindAddress);
     }
 
     static void customize(TomcatServletWebServerFactory factory, TlsRuntimeState runtime,
                           TlsKeystoreStore store) {
+        customize(factory, runtime, store, "");
+    }
+
+    /**
+     * {@code server.address} restricts the main connector to one interface; the hand-built
+     * HTTPS connector must follow it, or enabling TLS would quietly re-expose the application
+     * on every address the operator had deliberately excluded.
+     */
+    static void customize(TomcatServletWebServerFactory factory, TlsRuntimeState runtime,
+                          TlsKeystoreStore store, String bindAddress) {
         runtime.active().ifPresent(config ->
                 factory.addAdditionalTomcatConnectors(
-                        httpsConnector(config, store.keystorePath(config))));
+                        httpsConnector(config, store.keystorePath(config), bindAddress)));
     }
 
     static Connector httpsConnector(com.qqmu.jync.service.tls.TlsConfig config, Path keystore) {
+        return httpsConnector(config, keystore, "");
+    }
+
+    static Connector httpsConnector(com.qqmu.jync.service.tls.TlsConfig config, Path keystore,
+                                    String bindAddress) {
         Connector connector = new Connector("org.apache.coyote.http11.Http11NioProtocol");
         connector.setScheme("https");
         connector.setSecure(true);
@@ -69,6 +86,14 @@ public class TlsConnectorConfig {
         connector.setURIEncoding(StandardCharsets.UTF_8.name());
         connector.setMaxParameterCount(FormParameterLimitConfig.MAX_PARAMETER_COUNT);
         connector.setMaxPostSize(MAX_POST_SIZE);
+        if (bindAddress != null && !bindAddress.isBlank()) {
+            try {
+                ((AbstractProtocol<?>) connector.getProtocolHandler())
+                        .setAddress(java.net.InetAddress.getByName(bindAddress.strip()));
+            } catch (java.net.UnknownHostException e) {
+                throw new IllegalStateException("Invalid server.address: " + bindAddress, e);
+            }
+        }
 
         SSLHostConfig ssl = new SSLHostConfig();
         ssl.setProtocols(PROTOCOLS);

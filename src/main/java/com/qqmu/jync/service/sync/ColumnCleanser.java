@@ -120,6 +120,22 @@ public final class ColumnCleanser {
     }
 
     /**
+     * Columns whose value is replaced by a digest. The digest is deliberately one-way, so the
+     * content audit cannot compare a source row with a target row written before the rule
+     * existed (or under another salt); it excludes these columns instead of reporting drift
+     * every cycle.
+     */
+    public List<String> hashColumns() {
+        List<String> names = new ArrayList<>();
+        for (Rule rule : rules) {
+            if (rule.type() == ColumnRuleType.HASH_SHA256) {
+                names.add(rule.column());
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    /**
      * Returns the same row map with configured columns transformed. Keys are matched
      * case-insensitively, like the database identifiers they came from.
      */
@@ -236,27 +252,35 @@ public final class ColumnCleanser {
     /**
      * Keeps the first {@code head} and last {@code tail} characters. A value too short to
      * leave a masked middle is masked whole, so no rule ever reveals more than it masks.
+     *
+     * <p>Counts code points, not UTF-16 units: a surrogate pair is one character, and
+     * splitting it would emit a lone surrogate into the target column.
      */
     private static String keepEnds(String value, int head, int tail) {
         if (value.isEmpty()) {
             return value;
         }
-        if (value.length() <= head + tail) {
-            return "*".repeat(value.length());
+        int codePoints = value.codePointCount(0, value.length());
+        if (codePoints <= head + tail) {
+            return "*".repeat(codePoints);
         }
-        return value.substring(0, head)
-                + "*".repeat(value.length() - head - tail)
-                + value.substring(value.length() - tail);
+        int headEnd = value.offsetByCodePoints(0, head);
+        int tailStart = value.offsetByCodePoints(0, codePoints - tail);
+        return value.substring(0, headEnd)
+                + "*".repeat(codePoints - head - tail)
+                + value.substring(tailStart);
     }
 
     private static String maskAllButLast(String value, int tail) {
         if (value.isEmpty()) {
             return value;
         }
-        if (value.length() <= tail * 2) {
-            return "*".repeat(value.length());
+        int codePoints = value.codePointCount(0, value.length());
+        if (codePoints <= tail * 2) {
+            return "*".repeat(codePoints);
         }
-        return "*".repeat(value.length() - tail) + value.substring(value.length() - tail);
+        int tailStart = value.offsetByCodePoints(0, codePoints - tail);
+        return "*".repeat(codePoints - tail) + value.substring(tailStart);
     }
 
     /** Counts code points, not UTF-16 units, so an emoji at the start stays one character. */

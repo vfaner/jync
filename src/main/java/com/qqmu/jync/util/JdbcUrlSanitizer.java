@@ -18,9 +18,13 @@ public final class JdbcUrlSanitizer {
         if (url == null || url.isBlank()) {
             return "";
         }
-        String cleaned = url.replaceFirst("//[^/@]*@", "//");
-        // Oracle thin: user/password immediately after the scheme, before @host.
-        cleaned = cleaned.replaceFirst("(?i)^(jdbc:oracle:thin:)([^@/]+)/[^@]*@", "$1$2/***@");
+        // Greedy to the LAST '@' before the path or query: a password may itself contain an
+        // unencoded '@', and stopping at the first one would leave the tail of the password
+        // in the rendered URL.
+        String cleaned = url.replaceFirst("//[^/?]*@", "//");
+        // Oracle thin: user/password immediately after the scheme, before @host. A raw '@'
+        // in the password means the host starts after the last one.
+        cleaned = cleaned.replaceFirst("(?i)^(jdbc:oracle:thin:)([^/]+)/.*@(.*)$", "$1$2/***@$3");
         cleaned = cleaned.replaceAll("(?i)([?&](?:password|user|username)=)[^&]*", "$1***");
         return cleaned;
     }

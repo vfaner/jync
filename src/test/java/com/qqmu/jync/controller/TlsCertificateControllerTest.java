@@ -21,7 +21,6 @@ import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -30,7 +29,6 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.AdminAuditService;
@@ -280,13 +278,16 @@ class TlsCertificateControllerTest {
     }
 
     @Test
-    void aContainerRejectionIsReportedAsTooLarge() {
-        RedirectAttributes flash = Mockito.mock(RedirectAttributes.class);
+    void aDeleteFailureIsFlashedAsAKeyInsteadOfA500() throws Exception {
+        // The removal is the repair action after a corrupt store; a read-only data directory
+        // must not turn it into an HTML 500 page with no explanation.
+        when(service.delete()).thenThrow(new TlsKeystoreException("error.tls.deleteFailed"));
 
-        String view = new TlsCertificateController(service, audit).tooLarge(flash);
+        mvc.perform(post("/system-config/tls/delete").with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.tls.deleteFailed"));
 
-        assertThat(view).isEqualTo("redirect:/system-config");
-        verify(flash).addFlashAttribute("error", "error.tls.fileTooLarge");
+        verify(audit, never()).record(eq(AuditAction.TLS_CONFIG_DELETE), anyString());
     }
 
     private static TlsConfig config() {

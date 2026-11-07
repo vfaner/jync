@@ -237,6 +237,18 @@ public class ContentAuditService {
                 }
             }
         }
+        // Same problem for the cursor: the bound is read from the source's raw value, while
+        // the target stored the cleansed one. The same bound then names a different range on
+        // the target and the sample silently misses keys, which the audit would report as
+        // missing rows.
+        String cursorColumn = strategy.getColumn();
+        if (cursorColumn != null) {
+            for (String cleansed : cleanser.columns()) {
+                if (cleansed.equalsIgnoreCase(cursorColumn)) {
+                    return "cleansed-cursor";
+                }
+            }
+        }
         // Last, because it describes the connection rather than the table: a missing key or a
         // pending baseline load is the more useful explanation when both apply. Still early
         // enough to skip the row estimate, the index check and the target shape reads that a
@@ -275,6 +287,7 @@ public class ContentAuditService {
                     elapsed(started));
         }
 
+        ColumnCleanser cleanser = ColumnCleanser.forTable(ctx.getConfig(), tableName);
         Set<String> keyColumns = new HashSet<>();
         for (String key : table.getPrimaryKeys()) {
             keyColumns.add(key.toUpperCase(Locale.ROOT));
@@ -287,6 +300,13 @@ public class ContentAuditService {
         }
         Set<String> excluded = nonComparable(targetConn, table, targetTable, nonKeyColumns,
                 ctx);
+        // A digest is one-way and salted, so the target cannot be expected to hold a value
+        // comparable with the source's: rows written before the rule existed, or under
+        // another salt, would be reported as drift every cycle. Hash columns are excluded
+        // from the comparison (the count is already reported as skippedColumns).
+        for (String hashed : cleanser.hashColumns()) {
+            excluded.add(hashed.toUpperCase(Locale.ROOT));
+        }
         List<String> comparable = new ArrayList<>(table.getPrimaryKeys());
         for (String column : nonKeyColumns) {
             if (!excluded.contains(column.toUpperCase(Locale.ROOT))) {
@@ -331,7 +351,6 @@ public class ContentAuditService {
                 table.getPrimaryKeys(), targetSelect, keys, strategy, bound, timeout,
                 ctx.effectiveTargetType());
 
-        ColumnCleanser cleanser = ColumnCleanser.forTable(ctx.getConfig(), tableName);
         int matched = 0;
         int mismatched = 0;
         int missing = 0;

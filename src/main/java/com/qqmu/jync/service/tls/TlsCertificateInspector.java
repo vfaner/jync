@@ -60,6 +60,13 @@ public class TlsCertificateInspector {
         }
 
         X509Certificate leaf = (X509Certificate) chain[0];
+        // A key entry can quote a certificate that belongs to another key. The PEM path
+        // checks this; a keystore has the same failure mode, and Tomcat would only discover
+        // it at the first handshake after the restart.
+        if (key instanceof java.security.PrivateKey privateKey) {
+            PemKeyPairLoader.verifyKeyMatches(leaf, privateKey, "error.tls.keyMismatch",
+                    "error.tls.unreadable");
+        }
         return new TlsCertificateInfo(
                 leaf.getSubjectX500Principal().getName(),
                 leaf.getIssuerX500Principal().getName(),

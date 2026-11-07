@@ -164,6 +164,27 @@ class TlsConnectorConfigTest {
     }
 
     @Test
+    void bindsTheHttpsConnectorToTheConfiguredServerAddress() throws Exception {
+        // server.address restricts the HTTP connector to one interface. The hand-built HTTPS
+        // connector must follow, or enabling TLS re-exposes the app on every address.
+        TomcatServletWebServerFactory factory = new TomcatServletWebServerFactory();
+        factory.setPort(0);
+        TlsConnectorConfig.customize(factory, runtimeWithCertificate(freePort()), store(),
+                "127.0.0.1");
+
+        TomcatWebServer server = start(factory);
+        try {
+            org.apache.coyote.AbstractProtocol<?> handler =
+                    (org.apache.coyote.AbstractProtocol<?>) httpsConnector(server)
+                            .getProtocolHandler();
+            assertThat(handler.getAddress()).isNotNull()
+                    .satisfies(address -> assertThat(address.isLoopbackAddress()).isTrue());
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
     void addsNoConnectorWhenNothingIsSaved() throws Exception {
         TomcatServletWebServerFactory factory = new TomcatServletWebServerFactory();
         factory.setPort(0);

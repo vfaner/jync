@@ -332,6 +332,20 @@ class ConfigExportServiceTest {
         ConfigExportService.requireWithinPackageLimit(ConfigPackageFormat.MAX_PACKAGE_BYTES);
     }
 
+    @Test
+    @DisplayName("a package that would unpack past the import ceiling is refused at export time")
+    void packagesTooLargeToImportAreRefused() {
+        // The importer stops at the uncompressed cap. A compressed package can slip under the
+        // sealed-file ceiling and still be permanently unimportable, so the export checks the
+        // entries before sealing them.
+        assertThatThrownBy(() -> ConfigExportService.requireWithinUncompressedLimit(
+                ConfigPackageFormat.MAX_UNCOMPRESSED_BYTES + 1))
+                .isInstanceOf(ConfigPackageException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.config.export.tooLarge");
+        ConfigExportService.requireWithinUncompressedLimit(
+                ConfigPackageFormat.MAX_UNCOMPRESSED_BYTES);
+    }
+
     private static DatabaseConfig database(String name, String password) {
         DatabaseConfig db = new DatabaseConfig();
         db.setName(name);

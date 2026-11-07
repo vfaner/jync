@@ -212,6 +212,15 @@ public class ConfigExportService {
 
         entries.put("manifest.json", json(ConfigManifest.of(entries)));
 
+        // The reader refuses a package whose entries unpack past the uncompressed cap, so an
+        // export that would exceed it must fail here — otherwise the file the page just
+        // downloaded can never be imported back.
+        long uncompressed = 0;
+        for (byte[] entry : entries.values()) {
+            uncompressed += entry.length;
+        }
+        requireWithinUncompressedLimit(uncompressed);
+
         byte[] sealed = packageCrypto.encrypt(writer.zip(entries), passphrase, includeState);
         requireWithinPackageLimit(sealed.length);
 
@@ -227,6 +236,13 @@ public class ConfigExportService {
     /** A package this large is not a configuration export; refuse it before anything is written. */
     static void requireWithinPackageLimit(long size) {
         if (size > ConfigPackageFormat.MAX_PACKAGE_BYTES) {
+            throw new ConfigPackageException("error.config.export.tooLarge");
+        }
+    }
+
+    /** The same, for the sum of the entries before they are compressed and sealed. */
+    static void requireWithinUncompressedLimit(long size) {
+        if (size > ConfigPackageFormat.MAX_UNCOMPRESSED_BYTES) {
             throw new ConfigPackageException("error.config.export.tooLarge");
         }
     }

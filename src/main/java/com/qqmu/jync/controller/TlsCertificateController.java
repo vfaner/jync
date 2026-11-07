@@ -5,10 +5,8 @@ import java.io.IOException;
 import javax.servlet.http.HttpServletRequest;
 
 import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
@@ -143,18 +141,23 @@ public class TlsCertificateController {
 
     @PostMapping("/system-config/tls/delete")
     public String delete(HttpServletRequest request, RedirectAttributes flash) {
-        if (service.delete()) {
+        boolean removed;
+        try {
+            removed = service.delete();
+        } catch (TlsKeystoreException e) {
+            // Removal is the repair action after a corrupt store; a read-only data directory
+            // must not turn it into an HTML 500 page with no explanation.
+            flash.addFlashAttribute("error", e.messageKey());
+            return PAGE;
+        } catch (RuntimeException e) {
+            flash.addFlashAttribute("error", "error.tls.deleteFailed");
+            return PAGE;
+        }
+        if (removed) {
             audit.record(AuditAction.TLS_CONFIG_DELETE,
                     AuditDetail.of("audit.detail.tlsDeleted", AuditOrigin.of(request)));
             flash.addFlashAttribute("message", "msg.systemConfig.tls.removed");
         }
-        return PAGE;
-    }
-
-    /** Tomcat rejects an oversized multipart body before the handler runs. */
-    @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public String tooLarge(RedirectAttributes flash) {
-        flash.addFlashAttribute("error", "error.tls.fileTooLarge");
         return PAGE;
     }
 

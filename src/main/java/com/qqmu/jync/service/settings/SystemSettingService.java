@@ -71,6 +71,15 @@ public class SystemSettingService {
         return revision.get();
     }
 
+    /**
+     * Announces that a setting was written outside this service — the configuration-package
+     * import saves rows through the repository directly. Caches on this node refresh on the
+     * next request instead of waiting for their TTL.
+     */
+    public void markChanged() {
+        revision.incrementAndGet();
+    }
+
     static Optional<Boolean> parseBoolean(String raw) {
         if (raw == null) {
             return Optional.empty();
