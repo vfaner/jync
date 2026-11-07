@@ -3,6 +3,7 @@ package com.qqmu.jync.service.version;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.TreeMap;
 
 /**
  * Source of published-release metadata. Split out from {@link VersionService} so tests can
@@ -118,6 +119,57 @@ public interface ReleaseFeed {
                 }
             }
             return null;
+        }
+
+        /**
+         * The fixed-name jar split into {@code jync.jar.part00}, {@code jync.jar.part01}, …
+         * in numeric order, or an empty list when the assets are not a complete, gap-free
+         * split.
+         *
+         * <p>Gitee caps one attachment at 100 MB, so a jar larger than that cannot be
+         * published whole. The parts must start at index 0, be contiguous and appear exactly
+         * once: a missing or duplicated index would otherwise concatenate into a jar with a
+         * hole in it, and zip verification is not a substitute for refusing the set.
+         */
+        public List<Asset> jarParts(String jarName) {
+            if (jarName == null || jarName.isBlank()) {
+                return List.of();
+            }
+            String prefix = jarName + ".part";
+            TreeMap<Integer, Asset> parts = new TreeMap<>();
+            for (Asset asset : assets) {
+                String name = asset.name();
+                if (name == null || name.length() <= prefix.length()
+                        || !name.regionMatches(true, 0, prefix, 0, prefix.length())) {
+                    continue;
+                }
+                String suffix = name.substring(prefix.length());
+                if (!suffix.chars().allMatch(Character::isDigit)) {
+                    continue;
+                }
+                int index;
+                try {
+                    index = Integer.parseInt(suffix);
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+                // A part without a downloadable URL makes the whole set unassemblable: skip
+                // it and the merge would silently drop bytes.
+                if (asset.url() == null || asset.url().isBlank()
+                        || parts.putIfAbsent(index, asset) != null) {
+                    return List.of();
+                }
+            }
+            if (parts.isEmpty()) {
+                return List.of();
+            }
+            int expected = 0;
+            for (int index : parts.keySet()) {
+                if (index != expected++) {
+                    return List.of();
+                }
+            }
+            return List.copyOf(parts.values());
         }
     }
 

@@ -125,6 +125,8 @@ A single-host container benchmark (500k-row Oracle table) measured **216k rows/s
 
 Download `jync.jar` from [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) or [GitHub Releases](https://github.com/vfaner/jync/releases/latest); build from source with `mvn clean package -DskipTests` (output `target/jync.jar`).
 
+> **Gitee split assets**: Gitee caps one attachment at 100 MB, and since v2.0.0 the jar exceeds it, so the Gitee release ships `jync.jar.part00` / `jync.jar.part01`. When downloading manually, fetch both and run `cat jync.jar.part00 jync.jar.part01 > jync.jar`; the in-app one-click upgrade downloads and assembles the parts automatically (GitHub and AtomGit still carry the whole `jync.jar`).
+
 ```bash
 mkdir -p /opt/jync && cd /opt/jync
 java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \

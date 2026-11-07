@@ -51,7 +51,8 @@ import com.qqmu.jync.service.version.VersionService;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * One-click in-app upgrade: download the fixed-name {@code jync.jar} release asset from the
+ * One-click in-app upgrade: download the fixed-name {@code jync.jar} release asset (or its
+ * {@code jync.jar.part00/part01/…} split when a mirror caps attachments at 100 MB) from the
  * user-chosen mirror, verify it, swap it in place of the running jar and offer a restart.
  *
  * <p>The swap is a rename dance ({@code jync.jar → jync.jar.bak}, {@code jync.jar.part →
@@ -148,10 +149,17 @@ public class UpgradeService {
         void update(long bytesRead, long bytesTotal);
     }
 
-    /** Downloads {@code url} to {@code target}, reporting progress as it streams. */
+    /**
+     * Downloads {@code url} to {@code target}, reporting progress as it streams.
+     *
+     * <p>{@code append} is false for a whole-jar asset (create/truncate) and true for the
+     * second and later parts of a split release, which are concatenated into the same file
+     * instead of being staged separately and merged — a 100 MB jar should not need twice its
+     * size in free disk space.
+     */
     public interface JarDownloader {
-        void download(String url, Path target, Long expectedBytes, DownloadProgress progress)
-                throws Exception;
+        void download(String url, Path target, Long expectedBytes, DownloadProgress progress,
+                      boolean append) throws Exception;
     }
 
     /** Detaches the platform restart helper script. */
@@ -382,15 +390,18 @@ public class UpgradeService {
                     throw new IllegalStateException(text("error.upgrade.alreadyLatest", current));
                 }
             }
-            Asset asset = release.jarAsset(JAR_NAME);
-            if (asset == null || !StringUtils.hasText(asset.url())) {
+            // A whole jar is preferred, but Gitee's 100 MB per-attachment cap means a newer,
+            // larger jar is published as jync.jar.part00/part01/… instead. Both layouts feed
+            // the same download → verify → swap → restart flow.
+            List<Asset> assets = downloadAssets(release);
+            if (assets.isEmpty()) {
                 throw new IllegalStateException(text("error.upgrade.noAsset", JAR_NAME));
             }
 
             status = new Status(Phase.DOWNLOADING, null, target, source.name(), 0,
-                    asset.sizeBytes() == null ? 0 : asset.sizeBytes());
+                    declaredBytes(assets));
             Thread worker = new Thread(
-                    () -> downloadAndInstall(jar, asset, target, release.tag(), source),
+                    () -> downloadAndInstall(jar, assets, target, release.tag(), source),
                     "jync-upgrade");
             worker.setDaemon(true);
             worker.start();
@@ -506,28 +517,69 @@ public class UpgradeService {
 
     // ── download / verify / swap ───────────────────────────────────────────────────────
 
-    private void downloadAndInstall(Path jar, Asset asset, String target, String tag,
+    /**
+     * The whole jar when the release publishes one, otherwise its split parts, otherwise an
+     * empty list. The whole jar always wins: a release that carries both is not ambiguous.
+     */
+    private static List<Asset> downloadAssets(Release release) {
+        Asset whole = release.jarAsset(JAR_NAME);
+        if (whole != null && StringUtils.hasText(whole.url())) {
+            return List.of(whole);
+        }
+        return release.jarParts(JAR_NAME);
+    }
+
+    /** Sum of the parts' published sizes, or 0 when any of them does not declare one. */
+    private static long declaredBytes(List<Asset> assets) {
+        long total = 0;
+        for (Asset asset : assets) {
+            if (asset.sizeBytes() == null || asset.sizeBytes() <= 0) {
+                return 0L;
+            }
+            total += asset.sizeBytes();
+        }
+        return total;
+    }
+
+    private void downloadAndInstall(Path jar, List<Asset> assets, String target, String tag,
                                     Source source) {
         Path part = jar.resolveSibling(jar.getFileName() + PART_SUFFIX);
         try {
             Files.deleteIfExists(part);
-            Long expected = asset.sizeBytes();
-            long declared = expected != null && expected > 0 ? expected : 0L;
-            // Gitee's API reports no asset size. The downloader reports the response's
-            // Content-Length instead, so the bar shows a real percentage on both mirrors;
-            // when neither source knows a total it stays 0 and the UI goes indeterminate.
-            downloader.download(asset.url(), part, expected,
-                    (read, total) -> status = new Status(
-                            Phase.DOWNLOADING, null, target, source.name(),
-                            read, total > 0 ? total : declared));
+            long declared = declaredBytes(assets);
+            long before = 0L;
+            for (int i = 0; i < assets.size(); i++) {
+                Asset asset = assets.get(i);
+                long base = before;
+                // Gitee's API reports no asset size. The downloader reports the response's
+                // Content-Length instead, so the bar shows a real percentage on both mirrors;
+                // when neither source knows a total it stays 0 and the UI goes indeterminate.
+                // A split download without published sizes stays indeterminate: one part's
+                // Content-Length is not the whole jar, and a bar that jumps back is worse
+                // than no bar.
+                downloader.download(asset.url(), part,
+                        asset.sizeBytes(),
+                        (read, total) -> status = new Status(
+                                Phase.DOWNLOADING, null, target, source.name(),
+                                base + read,
+                                declared > 0 ? declared
+                                        : (assets.size() == 1 && total > 0 ? total : 0)),
+                        i > 0);
+                before = Files.size(part);
+            }
 
             long actual = Files.size(part);
-            if (expected != null && expected > 0 && actual != expected) {
+            if (declared > 0 && actual != declared) {
                 throw new LocalizedFailure(new Localized("upgrade.failed.sizeMismatch",
-                        String.valueOf(expected), String.valueOf(actual)), null);
+                        String.valueOf(declared), String.valueOf(actual)), null);
             }
             verifyZipIntegrity(part);
-            verifyChecksum(part, asset, tag, source);
+            // Part assets carry a digest of their own bytes, not of the assembled jar; the
+            // whole-jar digest can only come from the other mirror publishing the same tag.
+            boolean wholeJar = assets.size() == 1
+                    && assets.get(0).name() != null
+                    && assets.get(0).name().equalsIgnoreCase(JAR_NAME);
+            verifyChecksum(part, wholeJar ? assets.get(0) : null, tag, source);
 
             Path backup = backupPath(jar);
             Files.move(jar, backup, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
@@ -623,9 +675,14 @@ public class UpgradeService {
         }
     }
 
-    /** The release's own digest, or the other mirror's for the same tag, or null. */
+    /**
+     * The release's own digest, or the other mirror's for the same tag, or null.
+     *
+     * <p>{@code asset} is null for a split download: part assets carry per-part digests, which
+     * say nothing about the assembled jar, so only the other mirror's whole-jar digest counts.
+     */
     private String publishedSha256(Asset asset, String tag, Source source) {
-        String own = normalizeDigest(asset.sha256());
+        String own = asset == null ? null : normalizeDigest(asset.sha256());
         if (own != null) {
             return own;
         }
@@ -1091,7 +1148,7 @@ public class UpgradeService {
 
     /** Streams the asset with progress; follows redirects (both forges redirect to a CDN). */
     static JarDownloader httpDownloader() {
-        return (url, target, expectedBytes, progress) -> {
+        return (url, target, expectedBytes, progress, append) -> {
             HttpClient client = HttpClient.newBuilder()
                     .followRedirects(HttpClient.Redirect.NORMAL)
                     .connectTimeout(Duration.ofSeconds(15))
@@ -1112,8 +1169,20 @@ public class UpgradeService {
             long expectedTotal = expectedBytes != null && expectedBytes > 0
                     ? expectedBytes
                     : response.headers().firstValueAsLong("Content-Length").orElse(0L);
+            // Split parts share one file: truncate for the first (or a whole jar), append for
+            // every later part. CREATE plus TRUNCATE_EXISTING keeps the whole-jar path's
+            // "always a fresh file" property.
+            var openOptions = append
+                    ? new java.nio.file.OpenOption[]{
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.WRITE,
+                            java.nio.file.StandardOpenOption.APPEND}
+                    : new java.nio.file.OpenOption[]{
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.WRITE,
+                            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING};
             try (InputStream in = response.body();
-                 OutputStream out = Files.newOutputStream(target)) {
+                 OutputStream out = Files.newOutputStream(target, openOptions)) {
                 byte[] buffer = new byte[64 * 1024];
                 long read = 0;
                 int n;

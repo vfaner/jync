@@ -12,8 +12,11 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
@@ -71,22 +74,43 @@ class UpgradeServiceTest {
         /** What the server declares as Content-Length; 0 = the response declares none. */
         volatile long declaredTotal;
         final AtomicLong lastReported = new AtomicLong();
+        /** Per-URL payloads for split releases; when set, {@link #blob} is unused. */
+        volatile Map<String, byte[]> blobsByUrl;
+        /** A URL whose transfer fails mid-flow, to prove a failed part cleans up. */
+        volatile String failingUrl;
+        final List<String> requestedUrls = Collections.synchronizedList(new ArrayList<>());
 
         @Override
         public void download(String url, Path target, Long expectedBytes,
-                             UpgradeService.DownloadProgress progress) throws Exception {
+                             UpgradeService.DownloadProgress progress, boolean append)
+                throws Exception {
             if (failure != null) {
                 throw failure;
             }
-            Files.write(target, blob);
+            requestedUrls.add(url);
+            if (url.equals(failingUrl)) {
+                throw new RuntimeException("connection reset while fetching " + url);
+            }
+            byte[] data = blob;
+            if (blobsByUrl != null) {
+                data = blobsByUrl.get(url);
+                if (data == null) {
+                    throw new IllegalStateException("no scripted blob for " + url);
+                }
+            }
+            if (append) {
+                Files.write(target, data, java.nio.file.StandardOpenOption.APPEND);
+            } else {
+                Files.write(target, data);
+            }
             // Half the blob first, so a test can hold the download open and read the status.
-            progress.update(blob.length / 2, declaredTotal);
+            progress.update(data.length / 2, declaredTotal);
             if (entered != null) {
                 entered.countDown();
                 release.await(10, TimeUnit.SECONDS);
             }
-            progress.update(blob.length, declaredTotal);
-            lastReported.set(blob.length);
+            progress.update(data.length, declaredTotal);
+            lastReported.set(data.length);
         }
     }
 
@@ -282,7 +306,7 @@ class UpgradeServiceTest {
             List<long[]> reports = new java.util.ArrayList<>();
             UpgradeService.httpDownloader().download(
                     "http://127.0.0.1:" + server.getAddress().getPort() + "/jync.jar",
-                    target, null, (read, total) -> reports.add(new long[]{read, total}));
+                    target, null, (read, total) -> reports.add(new long[]{read, total}), false);
 
             assertThat(Files.readAllBytes(target)).isEqualTo(payload);
             assertThat(reports).isNotEmpty();
@@ -434,6 +458,131 @@ class UpgradeServiceTest {
         assertThatThrownBy(() -> svc.start("GITEE"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("jync.jar");
+    }
+
+    // ── split release assets (Gitee's 100 MB per-attachment cap) ────────────────────────
+
+    private static final String PART0_URL = "https://example.invalid/jync.jar.part00";
+    private static final String PART1_URL = "https://example.invalid/jync.jar.part01";
+
+    private static Release splitRelease(String tag) {
+        return new Release(tag, "https://example.invalid/gitee/" + tag, null, "body",
+                List.of(new Asset("jync.jar.part00", PART0_URL, null),
+                        new Asset("jync.jar.part01", PART1_URL, null)),
+                Source.GITEE);
+    }
+
+    /** Splits a fat jar in two and scripts one payload per part URL. */
+    private ScriptedDownloader splitDownloader(byte[] jar) {
+        int cut = jar.length / 2;
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blobsByUrl = Map.of(
+                PART0_URL, Arrays.copyOfRange(jar, 0, cut),
+                PART1_URL, Arrays.copyOfRange(jar, cut, jar.length));
+        return downloader;
+    }
+
+    @Test
+    void installsAReleaseWhoseJarIsSplitAcrossParts() throws Exception {
+        byte[] nextJar = makeFatJar("split-new-jar-bytes");
+        ScriptedDownloader downloader = splitDownloader(nextJar);
+        feed.release = splitRelease("v2.0.0");
+        UpgradeService svc = service("1.9.0", downloader);
+
+        svc.start("GITEE");
+        awaitPhase(svc, UpgradeService.Phase.READY);
+
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+        assertThat(Files.readAllBytes(tempDir.resolve("app/jync.jar.bak")))
+                .startsWith(new byte[]{'P', 'K'});
+        assertThat(tempDir.resolve("app/jync.jar.part")).doesNotExist();
+        // Parts are assembled in numeric order, not in API order.
+        assertThat(downloader.requestedUrls).containsExactly(PART0_URL, PART1_URL);
+    }
+
+    @Test
+    void aWholeJarWinsOverSplitPartsWhenBothArePublished() throws Exception {
+        byte[] nextJar = makeFatJar("whole-new-jar-bytes");
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        downloader.blob = nextJar;
+        feed.release = new Release("v2.0.0", "https://example.invalid/gitee/v2.0.0", null, "body",
+                List.of(new Asset("jync.jar", "https://example.invalid/jync.jar", null, null),
+                        new Asset("jync.jar.part00", PART0_URL, null),
+                        new Asset("jync.jar.part01", PART1_URL, null)),
+                Source.GITEE);
+        UpgradeService svc = service("1.9.0", downloader);
+
+        svc.start("GITEE");
+        awaitPhase(svc, UpgradeService.Phase.READY);
+
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+        assertThat(downloader.requestedUrls).containsExactly("https://example.invalid/jync.jar");
+    }
+
+    @Test
+    void aSplitWithAGapIsRefusedBeforeDownloading() {
+        ScriptedDownloader downloader = new ScriptedDownloader();
+        feed.release = new Release("v2.0.0", "https://example.invalid/gitee/v2.0.0", null, "body",
+                List.of(new Asset("jync.jar.part00", PART0_URL, null),
+                        new Asset("jync.jar.part02", "https://example.invalid/jync.jar.part02",
+                                null)),
+                Source.GITEE);
+        UpgradeService svc = service("1.9.0", downloader);
+
+        assertThatThrownBy(() -> svc.start("GITEE"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("jync.jar");
+        assertThat(downloader.requestedUrls).isEmpty();
+    }
+
+    @Test
+    void aFailedPartLeavesTheRunningJarAndNoPartialFile() throws Exception {
+        byte[] nextJar = makeFatJar("split-new-jar-bytes");
+        ScriptedDownloader downloader = splitDownloader(nextJar);
+        downloader.failingUrl = PART1_URL;
+        feed.release = splitRelease("v2.0.0");
+        UpgradeService svc = service("1.9.0", downloader);
+
+        svc.start("GITEE");
+        awaitPhase(svc, UpgradeService.Phase.FAILED);
+
+        assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
+        assertThat(tempDir.resolve("app/jync.jar.bak")).doesNotExist();
+        assertThat(tempDir.resolve("app/jync.jar.part")).doesNotExist();
+        assertThat(svc.status().message().key()).isEqualTo("upgrade.failed.detail");
+    }
+
+    /** Part assets carry no whole-jar digest, so the merged bytes are checked against GitHub. */
+    @Test
+    void aSplitDownloadIsVerifiedAgainstTheOtherMirrorsWholeJarDigest() throws Exception {
+        byte[] nextJar = makeFatJar("split-new-jar-bytes");
+        ScriptedDownloader downloader = splitDownloader(nextJar);
+        feed.release = splitRelease("v2.0.0");
+        feed.otherByTag = release(Source.GITHUB, "v2.0.0", (long) nextJar.length,
+                sha256Of(nextJar));
+        UpgradeService svc = service("1.9.0", downloader);
+
+        svc.start("GITEE");
+        awaitPhase(svc, UpgradeService.Phase.READY);
+
+        assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
+    }
+
+    @Test
+    void aSplitDownloadFailsClosedWhenTheWholeJarDigestDisagrees() throws Exception {
+        byte[] nextJar = makeFatJar("split-new-jar-bytes");
+        ScriptedDownloader downloader = splitDownloader(nextJar);
+        feed.release = splitRelease("v2.0.0");
+        feed.otherByTag = release(Source.GITHUB, "v2.0.0", (long) nextJar.length,
+                "0000000000000000000000000000000000000000000000000000000000000000");
+        UpgradeService svc = service("1.9.0", downloader);
+
+        svc.start("GITEE");
+        awaitPhase(svc, UpgradeService.Phase.FAILED);
+
+        assertThat(Files.readAllBytes(jarFile)).startsWith(new byte[]{'P', 'K'});
+        assertThat(tempDir.resolve("app/jync.jar.bak")).doesNotExist();
+        assertThat(svc.status().message().key()).isEqualTo("upgrade.failed.checksumMismatch");
     }
 
     @Test

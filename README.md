@@ -126,6 +126,8 @@ Jync 有三条数据通路，分别解决"第一次怎么搬""之后怎么追""�
 
 从 [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) 或 [GitHub Releases](https://github.com/vfaner/jync/releases/latest) 下载 `jync.jar`；源码编译为 `mvn clean package -DskipTests`，产物 `target/jync.jar`。
 
+> **Gitee 分卷**：Gitee 单个附件上限 100 MB，v2.0.0 起 jar 已超过该上限，Gitee 发行版提供 `jync.jar.part00` / `jync.jar.part01` 两个分卷。手动下载时全部取回后执行 `cat jync.jar.part00 jync.jar.part01 > jync.jar`；应用内「一键升级」会自动按序下载并合并分卷，无需手动处理（GitHub 与 AtomGit 仍是完整 `jync.jar`）。
+
 ```bash
 mkdir -p /opt/jync && cd /opt/jync
 java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
