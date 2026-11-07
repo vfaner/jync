@@ -75,8 +75,15 @@ class ProjectRedisViewTest {
                 principal, null, principal.getAuthorities()));
     }
 
-    @Test
-    void detailShowsRedisTargetInsteadOfJdbcSections() throws Exception {
+    /** The Redis detail page for project 1, already staged by {@link #stagedCacheProject()}. */
+    private String renderedDetailPage() throws Exception {
+        stagedCacheProject();
+        return mvc.perform(get("/projects/1").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+    }
+
+    private void stagedCacheProject() {
         Project project = new Project();
         project.setId(1L);
         project.setName("cache-proj");
@@ -119,10 +126,11 @@ class ProjectRedisViewTest {
         ProjectService.SourceObjects objects = new ProjectService.SourceObjects();
         objects.getTables().add("orders");
         when(projectService.listSourceObjects(1L)).thenReturn(objects);
+    }
 
-        String page = mvc.perform(get("/projects/1").with(asAdmin()))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
+    @Test
+    void detailShowsRedisTargetInsteadOfJdbcSections() throws Exception {
+        String page = renderedDetailPage();
 
         // The Redis projection card, with the saved contract.
         assertThat(page).contains("name=\"keyPrefix\"");
@@ -154,6 +162,20 @@ class ProjectRedisViewTest {
         // source rows against a relational target that does not exist.
         assertThat(page).doesNotContain("data-side=\"target\"");
         assertThat(page).doesNotContain("data-role=\"content-audit\"");
+        // …and neither does the modal shell its button would open.
+        assertThat(page).doesNotContain("id=\"content-audit-modal\"");
+    }
+
+    @Test
+    void theKeyPrefixIsNotMarkedRequiredBecauseBlankMeansTheDefault() throws Exception {
+        // The server fills a blank prefix with jync:<id>:; the red asterisk promised a
+        // validation the form (and the backend) does not perform.
+        String page = renderedDetailPage();
+
+        int labelAt = page.indexOf("<label for=\"keyPrefix\"");
+        assertThat(labelAt).as("keyPrefix label rendered").isPositive();
+        String label = page.substring(labelAt, page.indexOf("</label>", labelAt));
+        assertThat(label).doesNotContain("class=\"req\"");
     }
 
     /**

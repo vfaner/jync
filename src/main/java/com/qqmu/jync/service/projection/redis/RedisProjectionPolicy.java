@@ -175,7 +175,7 @@ public class RedisProjectionPolicy {
     public static String normalizePrefix(String raw, Long projectId) {
         String prefix = raw == null ? "" : raw.trim();
         if (prefix.isEmpty()) {
-            prefix = "jync:" + projectId + ":";
+            prefix = RedisProjectionConfig.defaultKeyPrefix(projectId);
         }
         return prefix.endsWith(":") ? prefix : prefix + ":";
     }

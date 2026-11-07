@@ -19,9 +19,8 @@
         </div>
 
         <div class="field">
-            <label for="keyPrefix">
-                <span th:text="#{redis.projection.keyPrefix}">Key prefix</span><span class="req">*</span>
-            </label>
+            <!--/* 不标必填:留空由服务端补默认 jync:<id>:,帮助文案已说明。 */-->
+            <label for="keyPrefix" th:text="#{redis.projection.keyPrefix}">Key prefix</label>
             <input type="text" class="input mono" id="keyPrefix" name="keyPrefix" maxlength="128"
                    th:value="${projection != null ? projection.keyPrefix : ''}">
             <div class="help" th:text="#{redis.projection.keyPrefixHelp}">help</div>

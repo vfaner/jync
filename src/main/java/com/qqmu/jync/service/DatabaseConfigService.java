@@ -100,6 +100,16 @@ public class DatabaseConfigService {
     public DatabaseConfig save(DatabaseConfig config, String rawPassword, String rawMinerPassword) {
         validate(config);
         boolean isNew = config.getId() == null;
+        // The mining account exists only for an Oracle source: every other type/role hides
+        // the two fields (so the username arrives null) and never reads them. Clearing both
+        // keeps a hidden ciphertext from surviving a type/role switch and being silently
+        // reused the next time the connection is an Oracle source.
+        boolean minerApplicable = config.getType() == DatabaseType.ORACLE
+                && config.getRole() == ConnectionRole.SOURCE;
+        if (!minerApplicable) {
+            config.setMinerUsername(null);
+            config.setMinerPassword(null);
+        }
 
         if (config.getId() != null) {
             DatabaseConfig existing = repository.findById(config.getId())
@@ -134,15 +144,17 @@ public class DatabaseConfigService {
             } else {
                 config.setPassword(cryptoUtil.encrypt(rawPassword));
             }
-            if (rawMinerPassword == null || rawMinerPassword.isEmpty()) {
-                config.setMinerPassword(existing.getMinerPassword());
-            } else {
-                config.setMinerPassword(cryptoUtil.encrypt(rawMinerPassword));
+            if (minerApplicable) {
+                if (rawMinerPassword == null || rawMinerPassword.isEmpty()) {
+                    config.setMinerPassword(existing.getMinerPassword());
+                } else {
+                    config.setMinerPassword(cryptoUtil.encrypt(rawMinerPassword));
+                }
             }
             config.setCreatedAt(existing.getCreatedAt());
         } else {
             config.setPassword(cryptoUtil.encrypt(rawPassword));
-            if (rawMinerPassword != null && !rawMinerPassword.isEmpty()) {
+            if (minerApplicable && rawMinerPassword != null && !rawMinerPassword.isEmpty()) {
                 config.setMinerPassword(cryptoUtil.encrypt(rawMinerPassword));
             }
         }

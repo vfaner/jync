@@ -4038,12 +4038,15 @@
     var sqlGroup = document.querySelector('[data-role="source-sql-group"]');
     var mongoGroup = document.querySelector('[data-role="source-mongo-group"]');
     if (!select || !sqlGroup || !mongoGroup) { return; }
+    // Mongo-only resume advice in the always-visible options card.
+    var mongoResumeHint = document.querySelector('[data-role="mongo-resume-hint"]');
 
     function apply() {
       var option = select.options[select.selectedIndex];
       var mongo = !!option && option.getAttribute('data-type') === 'MONGODB_NATIVE';
       sqlGroup.hidden = mongo;
       mongoGroup.hidden = !mongo;
+      if (mongoResumeHint) { mongoResumeHint.hidden = !mongo; }
     }
 
     select.addEventListener('change', apply);

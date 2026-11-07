@@ -101,6 +101,15 @@ class EtlFormMongoViewTest {
         return page.substring(start, page.indexOf('>', at) + 1);
     }
 
+    /** The opening tag of the element carrying the given {@code data-role}. */
+    private static String openingTag(String page, String role) {
+        int at = page.indexOf("data-role=\"" + role + "\"");
+        assertThat(at).as("element with data-role=%s rendered", role).isPositive();
+        int start = page.lastIndexOf('<', at);
+        assertThat(start).as("opening tag of data-role=%s", role).isNotNegative();
+        return page.substring(start, page.indexOf('>', at) + 1);
+    }
+
     /** The rendered {@code <select>} element with the given id, options included. */
     private static String select(String page, String id) {
         int at = page.indexOf("id=\"" + id + "\"");
@@ -123,6 +132,40 @@ class EtlFormMongoViewTest {
                 .contains("name=\"sourceCollection\"", "maxlength=\"255\"");
         assertThat(textarea(page, "sourceFilter"))
                 .contains("name=\"sourceFilter\"", "maxlength=\"4000\"", "placeholder=\"{}\"");
+    }
+
+    @Test
+    void theMongoResumeHintIsHiddenForASqlSource() throws Exception {
+        // The resume key exists for every engine, but the "name a top-level field such as
+        // _id" advice is Mongo-only; showing it on a MySQL → openGauss task describes a
+        // field that source does not have.
+        when(etlTaskService.connections()).thenReturn(List.of(
+                connection(1L, "mysql-src", DatabaseType.MYSQL)));
+
+        String page = html(mvc.perform(get("/etl/new").with(asAdmin()))
+                .andExpect(status().isOk()));
+
+        assertThat(openingTag(page, "mongo-resume-hint")).contains("hidden");
+    }
+
+    @Test
+    void theMongoResumeHintIsShownForANativeMongoTask() throws Exception {
+        EtlTask task = new EtlTask();
+        task.setId(7L);
+        task.setName("mongo etl");
+        task.setSourceDbId(2L);
+        task.setTargetDbId(1L);
+        task.setSourceSql("");
+        task.setSourceCollection("orders");
+        when(etlTaskService.findById(7L)).thenReturn(Optional.of(task));
+        when(etlTaskService.connections()).thenReturn(List.of(
+                connection(1L, "mysql-src", DatabaseType.MYSQL),
+                connection(2L, "mongo-src", DatabaseType.MONGODB_NATIVE)));
+
+        String page = html(mvc.perform(get("/etl/7/edit").with(asAdmin()))
+                .andExpect(status().isOk()));
+
+        assertThat(openingTag(page, "mongo-resume-hint")).doesNotContain("hidden");
     }
 
     @Test

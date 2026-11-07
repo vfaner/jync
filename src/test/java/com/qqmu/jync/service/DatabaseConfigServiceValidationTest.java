@@ -71,10 +71,14 @@ class DatabaseConfigServiceValidationTest {
     }
 
     private DatabaseConfig stored(long id, ConnectionRole role) {
+        return stored(id, role, DatabaseType.MYSQL);
+    }
+
+    private DatabaseConfig stored(long id, ConnectionRole role, DatabaseType type) {
         DatabaseConfig existing = new DatabaseConfig();
         existing.setId(id);
         existing.setName("conn-x");
-        existing.setType(DatabaseType.MYSQL);
+        existing.setType(type);
         existing.setRole(role);
         existing.setHost("localhost");
         return existing;
@@ -265,9 +269,9 @@ class DatabaseConfigServiceValidationTest {
     @Test
     void blankMinerPasswordOnUpdateKeepsExisting() {
         // 与 rawPassword 同一约定:更新时留空 = 保留旧值,表单不必回传密钥。
-        DatabaseConfig existing = stored(1L, ConnectionRole.SOURCE);
+        DatabaseConfig existing = stored(1L, ConnectionRole.SOURCE, DatabaseType.ORACLE);
         existing.setMinerPassword("old-enc");
-        DatabaseConfig incoming = stored(1L, ConnectionRole.SOURCE);
+        DatabaseConfig incoming = stored(1L, ConnectionRole.SOURCE, DatabaseType.ORACLE);
         when(repository.findById(1L)).thenReturn(Optional.of(existing));
         when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -280,9 +284,9 @@ class DatabaseConfigServiceValidationTest {
 
     @Test
     void newMinerPasswordOnUpdateReplacesExisting() {
-        DatabaseConfig existing = stored(1L, ConnectionRole.SOURCE);
+        DatabaseConfig existing = stored(1L, ConnectionRole.SOURCE, DatabaseType.ORACLE);
         existing.setMinerPassword("old-enc");
-        DatabaseConfig incoming = stored(1L, ConnectionRole.SOURCE);
+        DatabaseConfig incoming = stored(1L, ConnectionRole.SOURCE, DatabaseType.ORACLE);
         when(repository.findById(1L)).thenReturn(Optional.of(existing));
         when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
         when(cryptoUtil.encrypt("fresh")).thenReturn("enc-fresh");
@@ -291,6 +295,43 @@ class DatabaseConfigServiceValidationTest {
         DatabaseConfig saved = service.save(incoming, null, "fresh");
 
         assertThat(saved.getMinerPassword()).isEqualTo("enc-fresh");
+    }
+
+    @Test
+    void minerCredentialsAreClearedWhenTheConnectionIsNoLongerAnOracleSource() {
+        // The mining account only exists for Oracle CDB sources; the form disables the two
+        // fields everywhere else, so the username arrives null. Preserving the password
+        // would leave a hidden credential behind that the next "leave blank to keep" save
+        // silently reuses if the connection is switched back.
+        DatabaseConfig existing = stored(1L, ConnectionRole.SOURCE);
+        existing.setMinerUsername("C##MINER");
+        existing.setMinerPassword("old-enc");
+        DatabaseConfig incoming = stored(1L, ConnectionRole.SOURCE);
+        when(repository.findById(1L)).thenReturn(Optional.of(existing));
+        when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig saved = service.save(incoming, null, "");
+
+        assertThat(saved.getMinerUsername()).isNull();
+        assertThat(saved.getMinerPassword()).isNull();
+    }
+
+    @Test
+    void anOracleTargetAlsoDropsMiningCredentials() {
+        // Only a *source* is mined; an Oracle target never reads its own logs.
+        DatabaseConfig existing = stored(1L, ConnectionRole.TARGET, DatabaseType.ORACLE);
+        existing.setMinerUsername("C##MINER");
+        existing.setMinerPassword("old-enc");
+        DatabaseConfig incoming = stored(1L, ConnectionRole.TARGET, DatabaseType.ORACLE);
+        when(repository.findById(1L)).thenReturn(Optional.of(existing));
+        when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig saved = service.save(incoming, null, "");
+
+        assertThat(saved.getMinerUsername()).isNull();
+        assertThat(saved.getMinerPassword()).isNull();
     }
 
     @Test

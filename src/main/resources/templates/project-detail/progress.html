@@ -7,7 +7,11 @@
     <div class="card-head">
         <h2><svg class="ico"><use href="#graph-up"/></svg> <span th:text="#{project.progress}">Progress</span></h2>
         <div class="card-head-tools">
-            <span class="hint" th:text="#{cursor.help}">help</span>
+            <!--/* 游标说明只在轮询/全量比对下成立：日志 CDC 的变更来自日志流而不是
+                   游标列，留着会让用户以为改游标列就能少读数据。 */-->
+            <span class="hint" data-role="cursor-help" data-cdc-visibility="non-cdc"
+                  th:classappend="${cdcActive} ? 'is-hidden' : ''"
+                  th:text="#{cursor.help}">help</span>
             <span id="row-count-badge" class="badge is-hidden"></span>
             <!-- 行数核对是显式动作：页面打开不查库，点击后才逐表 COUNT(*)。 -->
             <button type="button" class="btn btn-ghost btn-sm"
@@ -278,7 +282,7 @@
 <!--/* 内容校验弹窗：一次只校验进度行对应的那张表，结果由 app.js 按接口返回填充。
        页面只渲染空壳；表名、列名与原因都在 JS 里用 textContent 写入。 */-->
 <div class="modal" id="content-audit-modal" aria-hidden="true" role="dialog" aria-modal="true"
-     th:if="${isAdmin and !#lists.isEmpty(progressList)}"
+     th:if="${isAdmin and !isRedisTarget and !#lists.isEmpty(progressList)}"
      th:attr="aria-label=#{contentAudit.title}">
     <div class="modal-mask" data-close-modal="content-audit-modal"></div>
     <div class="modal-dialog preview-dialog">

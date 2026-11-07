@@ -192,6 +192,62 @@ class ProjectFormViewTest {
     }
 
     @Test
+    void aRunningProjectDisablesTheEndpointControlsAndMirrorsTheirValues() throws Exception {
+        Project project = new Project();
+        project.setId(8L);
+        project.setName("orders");
+        project.setSourceDbId(1L);
+        project.setTargetDbId(2L);
+        when(projectService.findById(8L)).thenReturn(Optional.of(project));
+        when(projectService.isRunning(project)).thenReturn(true);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(config(1L, "src", ConnectionRole.SOURCE)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET))
+                .thenReturn(List.of(config(2L, "tgt", ConnectionRole.TARGET)));
+
+        String page = mvc.perform(get("/projects/8/edit").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // A disabled control posts nothing; without the hidden mirrors the save would look
+        // like an endpoint wipe (null ids) and be refused as a "change while running".
+        assertThat(selectBlock(page, "sourceDbId")).contains("disabled");
+        assertThat(selectBlock(page, "targetDbId")).contains("disabled");
+        assertThat(page).containsPattern(
+                "(?s)<input[^>]*type=\"hidden\"[^>]*name=\"sourceDbId\"[^>]*value=\"1\"");
+        assertThat(page).containsPattern(
+                "(?s)<input[^>]*type=\"hidden\"[^>]*name=\"targetDbId\"[^>]*value=\"2\"");
+        assertThat(page).containsPattern(
+                "(?s)<input[^>]*name=\"targetKind\"[^>]*value=\"JDBC\"[^>]*disabled");
+        assertThat(page).containsPattern(
+                "(?s)<input[^>]*type=\"hidden\"[^>]*name=\"targetKind\"[^>]*value=\"JDBC\"");
+    }
+
+    @Test
+    void aStoppedProjectLeavesTheEndpointControlsEditable() throws Exception {
+        Project project = new Project();
+        project.setId(8L);
+        project.setName("orders");
+        project.setSourceDbId(1L);
+        project.setTargetDbId(2L);
+        when(projectService.findById(8L)).thenReturn(Optional.of(project));
+        when(projectService.isRunning(project)).thenReturn(false);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(config(1L, "src", ConnectionRole.SOURCE)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET))
+                .thenReturn(List.of(config(2L, "tgt", ConnectionRole.TARGET)));
+
+        String page = mvc.perform(get("/projects/8/edit").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(selectBlock(page, "sourceDbId")).doesNotContain("disabled");
+        assertThat(selectBlock(page, "targetDbId")).doesNotContain("disabled");
+        assertThat(page).doesNotContainPattern(
+                "<input[^>]*type=\"hidden\"[^>]*name=\"sourceDbId\"");
+    }
+
+    @Test
     void aStoppedProjectShowsNoEndpointLockHint() throws Exception {
         Project project = new Project();
         project.setId(8L);

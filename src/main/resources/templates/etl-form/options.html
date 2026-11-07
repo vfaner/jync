@@ -30,7 +30,10 @@
         <input type="text" class="input" id="resumeKeyColumn" name="resumeKeyColumn"
                maxlength="128" th:value="${task.resumeKeyColumn}">
         <div class="help" th:text="#{etl.resumeKey.hint}">Optional unique monotonic result column. Enables resuming append and range overwrite.</div>
-        <div class="help" th:text="#{etl.mongo.resume.hint}">For a native MongoDB source, name a top-level field such as _id.</div>
+        <!--/* Mongo 专属提示：SQL 源没有顶层文档字段。首屏由服务端按源类型隐藏，
+               切换源下拉时由 app.js 同步（隐藏但不禁用：resumeKeyColumn 对两种源都有效）。 */-->
+        <div class="help" data-role="mongo-resume-hint" th:hidden="${!sourceMongo}"
+             th:text="#{etl.mongo.resume.hint}">For a native MongoDB source, name a top-level field such as _id.</div>
     </div>
 </div>
 </th:block>

@@ -40,14 +40,21 @@ public class RedisProjectionConfig {
     private int maxCommandsPerTransaction = 10_000;
 
     /**
-     * The contract a project gets before its first save: {@code jync:<projectId>:}.
+     * The prefix a project gets before its first save: {@code jync:<projectId>:}.
      *
      * <p>The project id makes the prefix unique on a shared Redis without the user having to
      * invent one, and the trailing ':' keeps the namespace boundary visible in every key.
+     * Single source of truth: the policy (blank → default) and the clone path (re-key to the
+     * new id) must produce exactly this string, or a clone can collide with its source.
      */
+    public static String defaultKeyPrefix(Long projectId) {
+        return "jync:" + projectId + ":";
+    }
+
+    /** The contract a project gets before its first save. */
     public static RedisProjectionConfig defaultFor(Long projectId) {
         RedisProjectionConfig config = new RedisProjectionConfig();
-        config.setKeyPrefix("jync:" + projectId + ":");
+        config.setKeyPrefix(defaultKeyPrefix(projectId));
         return config;
     }
 }

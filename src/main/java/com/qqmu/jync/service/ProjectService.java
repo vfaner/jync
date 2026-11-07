@@ -35,6 +35,7 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.service.audit.AuditDetail;
+import com.qqmu.jync.dto.RedisProjectionConfig;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -548,7 +549,7 @@ public class ProjectService {
                 }
                 projection = object.putObject("redisProjection");
             }
-            projection.put("keyPrefix", "jync:" + saved.getId() + ":");
+            projection.put("keyPrefix", RedisProjectionConfig.defaultKeyPrefix(saved.getId()));
             saved.setSyncConfig(STRATEGY_JSON.writeValueAsString(object));
             return projectRepository.save(saved);
         } catch (JacksonException e) {

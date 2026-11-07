@@ -120,6 +120,32 @@ class ProjectDetailModeGatingViewTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
+    void theCursorExplanationIsHiddenForACdcProject() throws Exception {
+        // The hint says a cursor column reads only what changed — true for polling, false
+        // for log CDC, where changes come from the log stream. Leaving it up next to the
+        // (unused) cursor column invites editing a value that changes nothing.
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, true);
+
+        String page = renderDetail();
+
+        String hint = enclosingTag(page, "data-role=\"cursor-help\"", "<span");
+        assertThat(hint).contains("is-hidden")
+                .contains("data-cdc-visibility=\"non-cdc\"");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void theCursorExplanationIsShownForAPollingProject() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, true);
+
+        String page = renderDetail();
+
+        String hint = enclosingTag(page, "data-role=\"cursor-help\"", "<span");
+        assertThat(hint).doesNotContain("is-hidden");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
     void theResetButtonIsHiddenOnTheServerForACdcProject() throws Exception {
         stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, true);
 
