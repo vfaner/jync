@@ -71,6 +71,11 @@ public class MigrationTaskService {
         return taskRepository.findByTypeOrderByIdDesc(type);
     }
 
+    /** For the landing page, which needs only the number — a task row carries two @Lob columns. */
+    public long countByType(MigrationType type) {
+        return taskRepository.countByType(type);
+    }
+
     @Transactional(readOnly = true)
     public Optional<MigrationTask> findById(Long id) {
         return taskRepository.findById(id);

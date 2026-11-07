@@ -2,6 +2,8 @@ package com.qqmu.jync.service.metrics;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -12,9 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.model.AppMetricSample;
-import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DbMetricSample;
-import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.TaskMetricSample;
 import com.qqmu.jync.repository.AppMetricSampleRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
@@ -81,10 +81,7 @@ class PrometheusMetricsServiceTest {
 
     @Test
     void eachTaskGetsItsCurrentFigures() {
-        Project project = new Project();
-        project.setId(1L);
-        project.setName("orders");
-        when(projectRepository.findAll()).thenReturn(List.of(project));
+        namedProject(1L, "orders");
         TaskMetricSample sample = new TaskMetricSample();
         sample.setProjectId(1L);
         sample.setSampledAt(SAMPLED_AT);
@@ -110,10 +107,7 @@ class PrometheusMetricsServiceTest {
 
     @Test
     void anUnknownFigureIsNanNotZero() {
-        Project project = new Project();
-        project.setId(1L);
-        project.setName("orders");
-        when(projectRepository.findAll()).thenReturn(List.of(project));
+        namedProject(1L, "orders");
         TaskMetricSample sample = new TaskMetricSample();
         sample.setProjectId(1L);
         sample.setSampledAt(SAMPLED_AT);
@@ -129,10 +123,7 @@ class PrometheusMetricsServiceTest {
 
     @Test
     void eachConnectionGetsItsLatestProbe() {
-        DatabaseConfig config = new DatabaseConfig();
-        config.setId(10L);
-        config.setName("prod-mysql");
-        when(configRepository.findAll()).thenReturn(List.of(config));
+        namedConnection(10L, "prod-mysql");
         DbMetricSample sample = new DbMetricSample();
         sample.setConnectionId(10L);
         sample.setSampledAt(SAMPLED_AT);
@@ -167,10 +158,7 @@ class PrometheusMetricsServiceTest {
         // A probe that could not connect still carries the time it spent failing. Exporting
         // that as latency makes the scrape claim a 30 s round-trip to a database that never
         // answered — an alert rule on latency then fires for the wrong reason.
-        DatabaseConfig config = new DatabaseConfig();
-        config.setId(10L);
-        config.setName("prod-mysql");
-        when(configRepository.findAll()).thenReturn(List.of(config));
+        namedConnection(10L, "prod-mysql");
         DbMetricSample sample = new DbMetricSample();
         sample.setConnectionId(10L);
         sample.setSampledAt(SAMPLED_AT);
@@ -188,10 +176,7 @@ class PrometheusMetricsServiceTest {
 
     @Test
     void labelValuesAreEscaped() {
-        Project project = new Project();
-        project.setId(1L);
-        project.setName("a\"b\\c\nd");
-        when(projectRepository.findAll()).thenReturn(List.of(project));
+        namedProject(1L, "a\"b\\c\nd");
         TaskMetricSample sample = new TaskMetricSample();
         sample.setProjectId(1L);
         sample.setSampledAt(SAMPLED_AT);
@@ -213,5 +198,46 @@ class PrometheusMetricsServiceTest {
 
         assertThat(body).contains("jync_up 1");
         assertThat(body).doesNotContain("jync_app_cpu_ratio");
+    }
+
+    @Test
+    void theLabelMapsDoNotLoadWholeEntities() {
+        // A scrape runs every 15 seconds. Project carries the serialized sync config and
+        // DatabaseConfig carries encrypted credentials, so reading whole rows to get two
+        // label values is pure waste; the id/name projection is the only query allowed.
+        when(projectRepository.findAllIdAndName()).thenReturn(List.of());
+        when(configRepository.findAllIdAndName()).thenReturn(List.of());
+        when(taskSamples.findLatestPerProject()).thenReturn(List.of());
+        when(dbSamples.findLatestPerConnection()).thenReturn(List.of());
+
+        service.scrape();
+
+        verify(projectRepository, never()).findAll();
+        verify(configRepository, never()).findAll();
+    }
+
+    private void namedProject(long id, String name) {
+        when(projectRepository.findAllIdAndName())
+                .thenReturn(List.of(new Named(id, name)));
+    }
+
+    private void namedConnection(long id, String name) {
+        when(configRepository.findAllIdAndName())
+                .thenReturn(List.of(new Named(id, name)));
+    }
+
+    /** The two projections share a shape; one record stands in for both in the mocks. */
+    private record Named(Long id, String name)
+            implements ProjectRepository.IdAndName, DatabaseConfigRepository.IdAndName {
+
+        @Override
+        public Long getId() {
+            return id;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
     }
 }

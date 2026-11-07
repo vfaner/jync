@@ -12,9 +12,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.model.AppMetricSample;
-import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DbMetricSample;
-import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.TaskMetricSample;
 import com.qqmu.jync.repository.AppMetricSampleRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
@@ -195,20 +193,16 @@ public class PrometheusMetricsService {
 
     private Map<Long, String> projectNames() {
         Map<Long, String> names = new HashMap<>();
-        for (Project project : projectRepository.findAll()) {
-            if (project.getId() != null) {
-                names.put(project.getId(), project.getName());
-            }
+        for (ProjectRepository.IdAndName project : projectRepository.findAllIdAndName()) {
+            names.put(project.getId(), project.getName());
         }
         return names;
     }
 
     private Map<Long, String> connectionNames() {
         Map<Long, String> names = new HashMap<>();
-        for (DatabaseConfig config : configRepository.findAll()) {
-            if (config.getId() != null) {
-                names.put(config.getId(), config.getName());
-            }
+        for (DatabaseConfigRepository.IdAndName config : configRepository.findAllIdAndName()) {
+            names.put(config.getId(), config.getName());
         }
         return names;
     }

@@ -1,12 +1,13 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-
-import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,7 +20,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import com.qqmu.jync.model.AppUser;
-import com.qqmu.jync.model.MigrationTask;
 import com.qqmu.jync.model.MigrationType;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.auth.SyncUserDetails;
@@ -43,11 +43,10 @@ class MigrationHomeViewTest {
         when(registry.isRegistered(MigrationType.ES_TO_EASYSEARCH)).thenReturn(true);
         when(registry.isRegistered(MigrationType.MONGODB_TO_MONGODB)).thenReturn(true);
         when(registry.isRegistered(MigrationType.MONGODB_TO_KINGBASE)).thenReturn(true);
-        MigrationTask task = new MigrationTask();
-        task.setId(9L);
-        when(taskService.findByType(MigrationType.ES_TO_EASYSEARCH)).thenReturn(List.of(task));
+        when(taskService.countByType(MigrationType.ES_TO_EASYSEARCH)).thenReturn(1L);
 
-        String page = mvc.perform(get("/migrations").with(asAdmin()))
+        String page = mvc.perform(get("/migrations").locale(java.util.Locale.ENGLISH)
+                        .with(asAdmin()))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
@@ -56,7 +55,10 @@ class MigrationHomeViewTest {
                 .contains("href=\"/migrations/mongodb-to-mongodb\"")
                 .contains("href=\"/migrations/mongodb-to-kingbase\"")
                 .contains("href=\"/migrations/connections\"")
+                .contains("1 tasks")
                 .doesNotContain("data-role=\"type-coming-soon\"");
+        // The card needs a number, not the rows: a task carries two @Lob columns.
+        verify(taskService, never()).findByType(any());
     }
 
     @Test

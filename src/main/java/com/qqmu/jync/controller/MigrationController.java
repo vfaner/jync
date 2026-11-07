@@ -66,7 +66,7 @@ public class MigrationController {
         List<TypeCard> cards = new ArrayList<>();
         for (MigrationType type : MigrationType.values()) {
             boolean available = type.available() && registry.isRegistered(type);
-            long taskCount = available ? taskService.findByType(type).size() : 0;
+            long taskCount = available ? taskService.countByType(type) : 0;
             cards.add(new TypeCard(type, available, taskCount));
         }
         model.addAttribute("cards", cards);
