@@ -20,7 +20,8 @@
 - **配置正确性**：Oracle 挖掘账号与口令只对「Oracle 源库」保存，连接改用其他类型后自动清空，下次切回 Oracle 不会复用旧凭据；Redis key 前缀留空自动补 `jync:<id>:`，不再标必填；项目运行中锁定端点后由隐藏字段原样提交已保存拓扑。
 - **性能**：Prometheus 抓取只查询项目/连接的 id 与名称，迁移首页只取计数，不再为两个标签字段加载带 `@Lob` 的整行实体。
 - **平台适配**：修正 `.gitignore` 中 `*secret*` 误伤 `ConfigSecretTranslator.java` 的问题；`xdb` 与 `ojdbc8` / `orai18n` 统一到 23.26.3.0.0，消除 1.14 混用 21.5 驱动在 XMLTYPE 路径上的链接风险；清理 Boot 4 / Jackson 3 / Security 7 / Lettuce 7 的过期 API；设置页「运行时信息」新增 Spring Boot 与内嵌 Tomcat 版本。
-- **测试基线**：全量 **5325** 个测试通过（1 个按环境跳过）；新增 H2 文件格式守卫、尾斜杠 404 回归、旧 `delux` 密文互读、跨模式控件可见性、投影查询与列表标题测试。
+- **一键升级支持 Gitee 分卷**：Gitee 单个附件上限 100 MB，本版 jar 超过该上限，Gitee 发行版只能提供 `jync.jar.part00` / `jync.jar.part01`；升级器原先只认固定名 `jync.jar`，默认选中 Gitee 时点升级会直接报「该版本未提供 jync.jar 下载附件」。现在优先使用完整 jar，缺失时按数字序逐卷下载并追加合并，再用 GitHub 同 tag 的完整 jar digest 交叉校验；缺号、重号或任一卷下载失败都不会动运行中的 jar。手动下载 Gitee 分卷仍需 `cat jync.jar.part00 jync.jar.part01 > jync.jar` 合并。
+- **测试基线**：全量 **5338** 个测试通过（1 个按环境跳过）；新增 H2 文件格式守卫、尾斜杠 404 回归、旧 `delux` 密文互读、跨模式控件可见性、投影查询与列表标题测试，以及分卷附件发现与升级流程测试。
 - **文档同步**：README / README_EN 技术栈更新为 Spring Boot 4.1；Dockerfile、Compose、K8s 清单与容器部署文档的示例版本号为 2.0.0。
 
 ## 已知边界
