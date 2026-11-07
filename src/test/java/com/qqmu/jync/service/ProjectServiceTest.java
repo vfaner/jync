@@ -1301,12 +1301,12 @@ class ProjectServiceTest {
 
         Project saved = service.saveAsClone(clone, 1L);
 
-        com.fasterxml.jackson.databind.JsonNode node =
-                new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
+        tools.jackson.databind.JsonNode node =
+                new tools.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
         assertThat(node.path("truncateBeforeInitialLoad").asBoolean()).isFalse();
         // Unknown-to-this-version fields survive the reset.
         assertThat(node.path("futureField").path("k").asInt()).isEqualTo(1);
-        assertThat(node.path("tables").get(0).asText()).isEqualTo("A");
+        assertThat(node.path("tables").get(0).asString()).isEqualTo("A");
     }
 
     @Test
@@ -1334,13 +1334,13 @@ class ProjectServiceTest {
 
         Project saved = service.saveAsClone(clone, 1L);
 
-        com.fasterxml.jackson.databind.JsonNode node =
-                new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
-        assertThat(node.path("redisProjection").path("keyPrefix").asText())
+        tools.jackson.databind.JsonNode node =
+                new tools.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
+        assertThat(node.path("redisProjection").path("keyPrefix").asString())
                 .isEqualTo("jync:42:");
-        assertThat(node.path("redisProjection").path("valueFormat").asText())
+        assertThat(node.path("redisProjection").path("valueFormat").asString())
                 .isEqualTo("HASH");
-        assertThat(node.path("tables").get(0).asText()).isEqualTo("A");
+        assertThat(node.path("tables").get(0).asString()).isEqualTo("A");
     }
 
     @Test
@@ -1369,13 +1369,13 @@ class ProjectServiceTest {
 
         Project saved = service.saveAsClone(clone, 1L);
 
-        com.fasterxml.jackson.databind.JsonNode node =
-                new com.fasterxml.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
-        assertThat(node.path("redisProjection").path("keyPrefix").asText())
+        tools.jackson.databind.JsonNode node =
+                new tools.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
+        assertThat(node.path("redisProjection").path("keyPrefix").asString())
                 .isEqualTo("jync:42:");
-        assertThat(node.path("redisProjection").path("valueFormat").asText())
+        assertThat(node.path("redisProjection").path("valueFormat").asString())
                 .isEqualTo("HASH");
-        assertThat(node.path("tables").get(0).asText()).isEqualTo("A");
+        assertThat(node.path("tables").get(0).asString()).isEqualTo("A");
     }
 
     @Test
@@ -1449,6 +1449,27 @@ class ProjectServiceTest {
         assertThatThrownBy(() -> service.syncNow(1L))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.no.objects");
+        verify(taskRunner, never()).runOnce(any());
+    }
+
+    @Test
+    void syncNowRefusesACacheProjectWhoseStoredStrategyIsStillPolling() {
+        // Switching a polling project's target to Redis keeps the stored config; the detail
+        // page no longer offers POLLING for a cache target, so this row is reachable only
+        // through a stale page or a direct API call. Running a JDBC cycle here fails inside
+        // the task (there is no target database) and parks an English error on the cache
+        // project; the same answer start gives is the correct one.
+        Project project = storedProject(1L, false);
+        project.setTargetKind(SyncTargetKind.REDIS);
+        project.setTargetDbId(null);
+        project.setTargetRedisId(9L);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(cdcManager.strategyOf(project))
+                .thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
+
+        assertThatThrownBy(() -> service.syncNow(1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.redis.cdcOnly");
         verify(taskRunner, never()).runOnce(any());
     }
 

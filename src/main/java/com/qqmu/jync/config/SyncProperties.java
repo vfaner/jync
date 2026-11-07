@@ -283,7 +283,7 @@ public class SyncProperties {
     private int changeLogRetentionDays = 30;
 
     /** Pushes the configured metadata timeout to readers once binding is done. */
-    @javax.annotation.PostConstruct
+    @jakarta.annotation.PostConstruct
     void configureMetadataTimeouts() {
         MetadataTimeouts.configure(metadataQueryTimeoutSeconds);
     }

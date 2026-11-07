@@ -92,7 +92,7 @@ class SearchHttpClientTest {
         connection.setUsername("用户");
         SearchHttpClient client = new SearchHttpClient(connection, "pässwörd", null);
 
-        assertThat(client.get("/_cluster/health").path("status").asText()).isEqualTo("green");
+        assertThat(client.get("/_cluster/health").path("status").asString()).isEqualTo("green");
 
         String expected = "Basic " + Base64.getEncoder().encodeToString(
                 "用户:pässwörd".getBytes(StandardCharsets.UTF_8));

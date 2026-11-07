@@ -26,8 +26,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionAuthType;
 import com.qqmu.jync.model.MigrationConnectionKind;

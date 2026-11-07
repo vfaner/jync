@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.apache.catalina.connector.Connector;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
-import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
+import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
+import org.springframework.boot.tomcat.TomcatWebServer;
 
 /**
  * The object picker posts one field pair per table row. Tomcat stops parsing at 10,000

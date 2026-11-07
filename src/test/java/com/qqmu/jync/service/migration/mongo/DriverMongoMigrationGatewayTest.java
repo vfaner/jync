@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
@@ -220,6 +221,6 @@ class DriverMongoMigrationGatewayTest {
         when(writeResult.getInsertedCount()).thenReturn(inserted);
         BulkWriteError error = new BulkWriteError(code, "write error", new BsonDocument(), index);
         return new MongoBulkWriteException(writeResult, List.of(error), concern,
-                new ServerAddress());
+                new ServerAddress(), Set.of());
     }
 }

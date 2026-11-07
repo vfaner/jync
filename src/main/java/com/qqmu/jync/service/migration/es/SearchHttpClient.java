@@ -23,8 +23,8 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionAuthType;
 
@@ -183,10 +183,6 @@ public class SearchHttpClient implements AutoCloseable {
         return request("PUT", path, json(body), "application/json").json();
     }
 
-    public void putRaw(String path, String body, String contentType) {
-        request("PUT", path, body, contentType);
-    }
-
     public void delete(String path) {
         request("DELETE", path, null, null);
     }
@@ -220,10 +216,10 @@ public class SearchHttpClient implements AutoCloseable {
                 JsonNode error = action.get("error");
                 int status = action.path("status").asInt(200);
                 if (error != null || status >= 300) {
-                    String id = action.path("_id").asText("");
+                    String id = action.path("_id").asString("");
                     String reason = error == null ? ("status " + status)
-                            : error.path("type").asText("error") + ": "
-                                    + error.path("reason").asText("");
+                            : error.path("type").asString("error") + ": "
+                                    + error.path("reason").asString("");
                     failures.add(new BulkResult.FailedItem(id, sanitize(reason)));
                 }
             }
@@ -321,7 +317,7 @@ public class SearchHttpClient implements AutoCloseable {
         if (!body.isBlank()) {
             try {
                 json = JSON.readTree(body);
-            } catch (IOException ignored) {
+            } catch (tools.jackson.core.JacksonException ignored) {
                 // A non-JSON error body is still useful as text.
             }
         }
@@ -354,7 +350,7 @@ public class SearchHttpClient implements AutoCloseable {
         }
         try {
             return JSON.writeValueAsString(body);
-        } catch (IOException e) {
+        } catch (tools.jackson.core.JacksonException e) {
             throw new IllegalArgumentException("Could not serialize request body", e);
         }
     }

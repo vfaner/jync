@@ -4,7 +4,7 @@
 <!-- 全量加载性能：与调度无关，轮询与 CDC 模式都常显——CDC 的基线全量走同一
      条 chunked 加载路径。批次越大提交越稀、并行度越高连接越多，两者都受
      连接池与数据库承受能力约束：数据库敏感时把并行度设为 1、批次调小。 -->
-<div class="card" data-role="full-load-performance" th:fragment="card">
+<div class="card" th:fragment="card">
     <div class="card-head">
         <h2><svg class="ico"><use href="#activity"/></svg> <span th:text="#{project.performance}">全量加载性能</span></h2>
     </div>

@@ -3,7 +3,6 @@ package com.qqmu.jync.service.etl.mongo;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.math.BigDecimal;
 import java.sql.Types;
 import java.time.Instant;
 import java.util.Date;

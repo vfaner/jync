@@ -2,8 +2,8 @@ package com.qqmu.jync.service.migration;
 
 import java.util.Set;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionKind;
 import com.qqmu.jync.model.MigrationTask;

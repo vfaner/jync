@@ -14,8 +14,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.qqmu.jync.model.AiProtocol;
@@ -135,7 +135,7 @@ class AiChatClientStreamTest {
 
         JsonNode body = mapper.readTree(requestBodies.get(0));
         assertThat(body.path("stream").asBoolean()).isTrue();
-        assertThat(body.path("messages").get(0).path("role").asText()).isEqualTo("system");
+        assertThat(body.path("messages").get(0).path("role").asString()).isEqualTo("system");
     }
 
     @Test

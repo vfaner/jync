@@ -17,8 +17,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -41,10 +41,10 @@ import com.qqmu.jync.service.metadata.ConnectionCatalogService;
 class DatabaseHealthApiTest {
 
     @Autowired private MockMvc mvc;
-    @MockBean private DatabaseConfigService service;
-    @MockBean private DatabaseHealthService healthService;
-    @MockBean private DriverLoader driverLoader;
-    @MockBean private ConnectionCatalogService catalogService;
+    @MockitoBean private DatabaseConfigService service;
+    @MockitoBean private DatabaseHealthService healthService;
+    @MockitoBean private DriverLoader driverLoader;
+    @MockitoBean private ConnectionCatalogService catalogService;
 
     private DatabaseConfig config(long id) {
         DatabaseConfig config = new DatabaseConfig();

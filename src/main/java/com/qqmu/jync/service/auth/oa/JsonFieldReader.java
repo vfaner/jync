@@ -1,6 +1,6 @@
 package com.qqmu.jync.service.auth.oa;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 /** Dot-path lookup and accepted-value matching over a JSON response. */
 public final class JsonFieldReader {
@@ -23,10 +23,10 @@ public final class JsonFieldReader {
             }
             node = node.get(part);
         }
-        if (node == null || node.isNull() || node.isContainerNode()) {
+        if (node == null || node.isNull() || node.isContainer()) {
             return null;
         }
-        String text = node.asText();
+        String text = node.asString();
         return text == null || text.isBlank() ? null : text.trim();
     }
 

@@ -14,10 +14,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.mongodb.client.ListCollectionNamesIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
-import com.mongodb.client.MongoIterable;
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionAuthType;
@@ -30,7 +30,7 @@ class MongoConnectionAdapterTest {
     @Mock private MongoClient client;
     @Mock private MongoDatabase database;
     @Mock private MongoCollection<Document> collection;
-    @Mock private MongoIterable<String> collectionNames;
+    @Mock private ListCollectionNamesIterable collectionNames;
 
     private MongoConnectionAdapter adapter;
 

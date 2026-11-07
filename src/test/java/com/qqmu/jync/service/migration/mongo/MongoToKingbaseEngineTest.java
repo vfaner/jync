@@ -16,7 +16,6 @@ import static org.mockito.Mockito.when;
 import java.sql.Connection;
 import java.sql.Types;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -28,8 +27,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.MigrationConnection;

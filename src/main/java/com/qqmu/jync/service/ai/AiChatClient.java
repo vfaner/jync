@@ -18,10 +18,11 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.stereotype.Component;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.AiReasoningEffort;
@@ -315,7 +316,7 @@ public class AiChatClient {
                         if (served[0].isEmpty()) {
                             served[0] = servedModel(chunk);
                         }
-                        String piece = chunk.path("message").path("content").asText("");
+                        String piece = chunk.path("message").path("content").asString("");
                         if (!piece.isEmpty()) {
                             text.append(piece);
                             sink.accept(piece);
@@ -366,16 +367,16 @@ public class AiChatClient {
                     String delta = "";
                     JsonNode choice = root.path("choices").path(0);
                     if (!choice.isMissingNode()) {
-                        delta = choice.path("delta").path("content").asText("");
+                        delta = choice.path("delta").path("content").asString("");
                         if (delta.isEmpty()) {
                             // Some compatible endpoints send the whole text as a message chunk.
-                            delta = choice.path("message").path("content").asText("");
+                            delta = choice.path("message").path("content").asString("");
                         }
-                    } else if ("message_stop".equals(root.path("type").asText(""))) {
+                    } else if ("message_stop".equals(root.path("type").asString(""))) {
                         break;
-                    } else if ("content_block_delta".equals(root.path("type").asText(""))
-                            && "text_delta".equals(root.path("delta").path("type").asText(""))) {
-                        delta = root.path("delta").path("text").asText("");
+                    } else if ("content_block_delta".equals(root.path("type").asString(""))
+                            && "text_delta".equals(root.path("delta").path("type").asString(""))) {
+                        delta = root.path("delta").path("text").asString("");
                     }
                     if (!delta.isEmpty()) {
                         text.append(delta);
@@ -540,7 +541,7 @@ public class AiChatClient {
         }
         try {
             return mapper.readTree(responseBody);
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             log.debug("Could not parse AI response body as JSON: {}", e.getMessage());
             return null;
         }
@@ -553,25 +554,25 @@ public class AiChatClient {
         }
         if (protocol == AiProtocol.OLLAMA_NATIVE) {
             // 原生回复直接是 message.content,没有 choices 这一层。
-            return root.path("message").path("content").asText("");
+            return root.path("message").path("content").asString("");
         }
         if (protocol == AiProtocol.ANTHROPIC) {
             // content is a list of typed blocks; only the text ones carry the reply, and a
             // response may legitimately open with a non-text block.
             StringBuilder sb = new StringBuilder();
             for (JsonNode block : root.path("content")) {
-                if ("text".equals(block.path("type").asText())) {
-                    sb.append(block.path("text").asText(""));
+                if ("text".equals(block.path("type").asString())) {
+                    sb.append(block.path("text").asString(""));
                 }
             }
             return sb.toString();
         }
-        return root.path("choices").path(0).path("message").path("content").asText("");
+        return root.path("choices").path(0).path("message").path("content").asString("");
     }
 
     /** The model the endpoint says answered, which gateways often remap from the alias sent. */
     private String servedModel(JsonNode root) {
-        return root == null ? "" : root.path("model").asText("");
+        return root == null ? "" : root.path("model").asString("");
     }
 
     /** Pulls the human-readable part out of an error body, falling back to a truncated body. */
@@ -583,15 +584,15 @@ public class AiChatClient {
             JsonNode root = mapper.readTree(responseBody);
             for (String path : new String[] {"error", "message"}) {
                 JsonNode node = root.path(path);
-                if (node.isTextual() && !node.asText().isBlank()) {
-                    return truncate(node.asText());
+                if (node.isString() && !node.asString().isBlank()) {
+                    return truncate(node.asString());
                 }
                 JsonNode nested = node.path("message");
-                if (nested.isTextual() && !nested.asText().isBlank()) {
-                    return truncate(nested.asText());
+                if (nested.isString() && !nested.asString().isBlank()) {
+                    return truncate(nested.asString());
                 }
             }
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             // Not JSON: an HTML error page from a reverse proxy is itself the useful signal.
         }
         return truncate(responseBody);

@@ -87,7 +87,7 @@
                     <div class="grid-2">
                         <div class="field">
                             <label class="switch">
-                                <input type="checkbox" th:field="*{clusterMode}" data-role="cluster-mode">
+                                <input type="checkbox" th:field="*{clusterMode}">
                                 <span class="track"></span>
                                 <span class="switch-text"><strong th:text="#{redis.target.form.cluster}">Cluster mode</strong></span>
                             </label>
@@ -97,7 +97,7 @@
                         </div>
                         <div class="field">
                             <label class="switch">
-                                <input type="checkbox" th:field="*{tlsEnabled}" data-role="tls-enabled">
+                                <input type="checkbox" th:field="*{tlsEnabled}">
                                 <span class="track"></span>
                                 <span class="switch-text"><strong th:text="#{redis.target.form.tls}">TLS</strong></span>
                             </label>
@@ -109,7 +109,7 @@
 
                     <div class="field">
                         <label class="switch">
-                            <input type="checkbox" th:field="*{verifyTls}" data-role="verify-tls">
+                            <input type="checkbox" th:field="*{verifyTls}">
                             <span class="track"></span>
                             <span class="switch-text"><strong th:text="#{redis.target.form.verifyTls}">Verify TLS certificate</strong></span>
                         </label>

@@ -13,8 +13,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -27,7 +27,7 @@ import com.qqmu.jync.service.cdc.CdcProbeResult;
  * the readiness probe GET and the one-click rebaseline POST.
  *
  * <p>搭法照抄 controller/api/ProjectApiControllerTest(@WebMvcTest + @WithMockUser(roles=
- * "ADMIN") + @MockBean service)。契约与 api 包的 {success,message} 约定不同:错误体是
+ * "ADMIN") + @MockitoBean service)。契约与 api 包的 {success,message} 约定不同:错误体是
  * {error:"&lt;message key&gt;"}(400),成功体带 ok:true——controller 自己 catch
  * IllegalArgumentException,不经过 ApiExceptionHandler(它的 basePackages 只盖
  * controller.api,而本控制器按任务书放在 controller 包)。
@@ -37,7 +37,7 @@ import com.qqmu.jync.service.cdc.CdcProbeResult;
 class CdcApiControllerTest {
 
     @Autowired private MockMvc mvc;
-    @MockBean private CdcOperationsService operations;
+    @MockitoBean private CdcOperationsService operations;
 
     /** 5 过 2 败(SERVER_ID 冲突 + 权限缺失),与 CdcOperationsServiceTest 同款样本。 */
     private static CdcProbeResult fivePassTwoFail() {

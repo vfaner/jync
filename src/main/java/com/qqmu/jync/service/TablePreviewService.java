@@ -11,7 +11,7 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.TablePreview;
 import com.qqmu.jync.dto.TableRowCount;

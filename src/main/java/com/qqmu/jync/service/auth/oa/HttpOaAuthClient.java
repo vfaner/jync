@@ -16,8 +16,8 @@ import java.util.Map;
 
 import org.springframework.stereotype.Component;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.model.OaAuthConfig;
 import com.qqmu.jync.service.auth.ExternalIdentity;
 
@@ -121,7 +121,7 @@ public class HttpOaAuthClient implements OaAuthClient {
         JsonNode root;
         try {
             root = body.length == 0 ? null : objectMapper.readTree(body);
-        } catch (IOException ex) {
+        } catch (tools.jackson.core.JacksonException ex) {
             return OaAuthResult.failure("error.oa.badResponse");
         }
 

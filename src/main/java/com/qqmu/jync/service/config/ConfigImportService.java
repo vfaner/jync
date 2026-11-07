@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.config.ConfigPackageDtos;
 import com.qqmu.jync.model.AiProvider;

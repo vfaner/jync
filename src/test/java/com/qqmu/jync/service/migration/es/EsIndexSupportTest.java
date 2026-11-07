@@ -7,9 +7,9 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 class EsIndexSupportTest {
 
@@ -41,11 +41,11 @@ class EsIndexSupportTest {
         ObjectNode cleaned = EsIndexSupport.cleanSettings(response, "orders-2026");
 
         JsonNode index = cleaned.path("index");
-        assertThat(index.path("number_of_shards").asText()).isEqualTo("3");
-        assertThat(index.path("number_of_replicas").asText()).isEqualTo("1");
-        assertThat(index.path("refresh_interval").asText()).isEqualTo("30s");
-        assertThat(index.path("max_result_window").asText()).isEqualTo("50000");
-        assertThat(cleaned.path("analysis").path("analyzer").path("my_cn").path("type").asText())
+        assertThat(index.path("number_of_shards").asString()).isEqualTo("3");
+        assertThat(index.path("number_of_replicas").asString()).isEqualTo("1");
+        assertThat(index.path("refresh_interval").asString()).isEqualTo("30s");
+        assertThat(index.path("max_result_window").asString()).isEqualTo("50000");
+        assertThat(cleaned.path("analysis").path("analyzer").path("my_cn").path("type").asString())
                 .isEqualTo("smartcn");
 
         assertThat(index.has("uuid")).isFalse();
@@ -73,7 +73,7 @@ class EsIndexSupportTest {
 
         ObjectNode cleaned = EsIndexSupport.cleanSettings(response, "users");
 
-        assertThat(cleaned.path("index").path("number_of_shards").asText()).isEqualTo("1");
+        assertThat(cleaned.path("index").path("number_of_shards").asString()).isEqualTo("1");
         assertThat(cleaned.path("index").has("uuid")).isFalse();
         assertThat(cleaned.path("index").has("frozen")).isFalse();
         assertThat(cleaned.path("index").has("lifecycle")).isFalse();

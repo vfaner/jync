@@ -3,8 +3,8 @@ package com.qqmu.jync.config;
 import java.util.Locale;
 import java.util.Set;
 
-import javax.servlet.http.Cookie;
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.web.servlet.i18n.CookieLocaleResolver;
 import org.springframework.web.servlet.i18n.LocaleChangeInterceptor;
@@ -28,6 +28,10 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public class TimezoneAwareLocaleResolver extends CookieLocaleResolver {
+
+    public TimezoneAwareLocaleResolver(String cookieName) {
+        super(cookieName);
+    }
 
     /** Cookie the client writes its detected timezone into. */
     public static final String TZ_COOKIE = "JYNC_TZ";
@@ -61,8 +65,7 @@ public class TimezoneAwareLocaleResolver extends CookieLocaleResolver {
      * click or a refresh. Hooking in here leaves that attribute handshake intact, so a single
      * click takes effect on the very response it triggers.
      */
-    @Override
-    protected Locale determineDefaultLocale(HttpServletRequest request) {
+    public Locale defaultLocale(HttpServletRequest request) {
         // Upgrade from SyncTool (<= 1.2.x): honour the language choice persisted in the
         // legacy cookie. This method only runs when the renamed cookie is absent, so the
         // new cookie always wins once the browser has picked it up.

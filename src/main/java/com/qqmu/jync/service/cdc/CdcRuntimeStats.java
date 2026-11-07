@@ -158,10 +158,6 @@ public final class CdcRuntimeStats {
         upserts.addAndGet(n);
     }
 
-    public void addDeletes(long n) {
-        deletes.addAndGet(n);
-    }
-
     public void addSkippedDdl(long n) {
         skippedDdl.addAndGet(n);
     }

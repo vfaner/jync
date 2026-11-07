@@ -29,7 +29,6 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.DbMetricSample;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.DbMetricSampleRepository;
-import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.connection.DatabaseHealthService;
 import com.qqmu.jync.service.metadata.MetadataReader;

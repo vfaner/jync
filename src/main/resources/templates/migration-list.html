@@ -17,7 +17,7 @@
                 <svg class="ico"><use href="#arrow-left"/></svg>
                 <span th:text="#{migration.title}">Dedicated migration</span>
             </a>
-            <a class="btn btn-primary btn-sm" data-role="new-task"
+            <a class="btn btn-primary btn-sm"
                th:href="@{/migrations/{type}/new(type=${type.key()})}">
                 <svg class="ico"><use href="#plus-lg"/></svg>
                 <span th:text="#{migration.new}">New migration task</span>

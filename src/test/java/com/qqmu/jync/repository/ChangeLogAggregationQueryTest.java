@@ -50,7 +50,10 @@ class ChangeLogAggregationQueryTest {
                 Timestamp.from(BASE.minusSeconds(60)), Timestamp.from(BASE.plusSeconds(300)));
 
         assertThat(rows).hasSize(3);
-        assertThat(rows).allSatisfy(row -> assertThat(row[0]).isInstanceOf(Timestamp.class));
+        // Hibernate 7 returns the date_trunc bucket as LocalDateTime (UTC wall clock); Hibernate
+        // 5 handed back java.sql.Timestamp. Both describe the same instant.
+        assertThat(rows).allSatisfy(row -> assertThat(row[0])
+                .isInstanceOfAny(Timestamp.class, java.time.LocalDateTime.class));
         assertThat(rows).extracting(row -> row[1] + ":" + row[2])
                 .containsExactlyInAnyOrder("INSERT:2", "UPDATE:1", "DELETE:1");
     }

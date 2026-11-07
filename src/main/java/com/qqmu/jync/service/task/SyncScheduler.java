@@ -37,6 +37,10 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class SyncScheduler {
 
+    /** Zone-less on purpose: the zone is applied per call, so a JVM time-zone change is seen. */
+    private static final DateTimeFormatter NEXT_FIRE_TIME =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
     private final Scheduler scheduler;
     private final SyncProperties properties;
     private final SyncTaskStore taskStore;
@@ -215,8 +219,7 @@ public class SyncScheduler {
         if (next == null) {
             return "none";
         }
-        return DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-                .withZone(ZoneId.systemDefault())
+        return NEXT_FIRE_TIME.withZone(ZoneId.systemDefault())
                 .format(next.toInstant())
                 + " (" + ZoneId.systemDefault().getId() + ")";
     }

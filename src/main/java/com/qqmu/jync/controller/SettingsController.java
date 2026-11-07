@@ -9,9 +9,11 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
+import org.apache.catalina.util.ServerInfo;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.SpringBootVersion;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -90,6 +92,8 @@ public class SettingsController {
         model.addAttribute("scheduledProjectIds", scheduler.scheduledProjectIds());
         model.addAttribute("instanceId", lockService.getOwnerId());
         model.addAttribute("javaVersion", System.getProperty("java.version"));
+        model.addAttribute("springBootVersion", versionOrDash(SpringBootVersion.getVersion()));
+        model.addAttribute("tomcatVersion", versionOrDash(ServerInfo.getServerNumber()));
         model.addAttribute("osName", osName());
         model.addAttribute("startedAt", startedAt());
         model.addAttribute("versionInfo", versionService.snapshot());
@@ -100,6 +104,14 @@ public class SettingsController {
         model.addAttribute("contactEmail", contactEmail);
         model.addAttribute("contactWechat", contactWechat);
         return "settings";
+    }
+
+    /**
+     * A version string for the runtime card, or an em dash when the library is not packaged
+     * with build metadata (for example when running from an IDE module path).
+     */
+    private static String versionOrDash(String version) {
+        return version == null || version.isBlank() ? "—" : version;
     }
 
     /** "Linux 6.8.0-45-generic (aarch64)" — the machine this page describes. */

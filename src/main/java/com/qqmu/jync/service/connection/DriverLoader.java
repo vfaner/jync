@@ -247,7 +247,7 @@ public class DriverLoader {
      * web-app redeploy (or an embedded restart in tests) leaks the loaders and their jar
      * handles along with this bean.
      */
-    @javax.annotation.PreDestroy
+    @jakarta.annotation.PreDestroy
     public void shutdown() {
         for (DriverShim shim : registered.values()) {
             try {

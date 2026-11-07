@@ -24,8 +24,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -65,21 +65,21 @@ class ConfigPackageControllerTest {
     @Autowired
     private MockMvc mvc;
 
-    @MockBean
+    @MockitoBean
     private ConfigExportService exportService;
-    @MockBean
+    @MockitoBean
     private ConfigImportService importService;
-    @MockBean
+    @MockitoBean
     private RequireHttpsResolver requireHttps;
-    @MockBean
+    @MockitoBean
     private SystemSettingService systemSettings;
-    @MockBean
+    @MockitoBean
     private AdminAuditService audit;
-    @MockBean
+    @MockitoBean
     private CryptoUtil cryptoUtil;
     // Only the POST endpoints are exercised here; the page state is covered by
     // SystemConfigViewTest. The mock keeps the controller's constructor satisfied.
-    @MockBean
+    @MockitoBean
     private TlsCertificateService tlsCertificateService;
 
     // --- export --------------------------------------------------------------------------

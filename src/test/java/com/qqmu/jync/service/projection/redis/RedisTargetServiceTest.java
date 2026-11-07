@@ -98,6 +98,32 @@ class RedisTargetServiceTest {
     }
 
     @Test
+    void editingIsRefusedWhileAReferencingProjectIsStillRunning() {
+        // A running consumer keeps the connection it opened from the old settings. Letting the
+        // row change under it means the next page view and the stream disagree about where the
+        // cache is, and restarting the project is the only way to pick the new values up.
+        // Database connections answer this the same way (error.connection.edit.running).
+        RedisTarget existing = new RedisTarget();
+        existing.setId(3L);
+        existing.setName("cache-1");
+        when(targets.findById(3L)).thenReturn(Optional.of(existing));
+        com.qqmu.jync.model.Project running = new com.qqmu.jync.model.Project();
+        running.setId(7L);
+        running.setName("orders-cache");
+        running.setEnabled(true);
+        com.qqmu.jync.model.Project stopped = new com.qqmu.jync.model.Project();
+        stopped.setId(8L);
+        stopped.setName("users-cache");
+        stopped.setEnabled(false);
+        when(projects.findByTargetRedisId(3L)).thenReturn(java.util.List.of(running, stopped));
+
+        assertThatThrownBy(() -> service.save(form("cache-1", 3L), null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.redis.target.edit.running:orders-cache");
+        verify(targets, never()).save(any());
+    }
+
+    @Test
     void verifyReportsUnreachableWithoutThrowing() {
         RedisTargetForm form = form("cache-1", null);
         form.setHost("127.0.0.1");

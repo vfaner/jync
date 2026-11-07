@@ -14,8 +14,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -100,10 +100,10 @@ class AiConnectionTestServiceTest {
         assertThat(r.headers().getFirst("Authorization")).isEqualTo("Bearer sk-abc");
 
         JsonNode body = mapper.readTree(r.body());
-        assertThat(body.path("model").asText()).isEqualTo("some-model");
+        assertThat(body.path("model").asString()).isEqualTo("some-model");
         // One token is enough to prove the key and model work, and costs almost nothing.
         assertThat(body.path("max_tokens").asInt()).isEqualTo(1);
-        assertThat(body.path("messages").get(0).path("role").asText()).isEqualTo("user");
+        assertThat(body.path("messages").get(0).path("role").asString()).isEqualTo("user");
     }
 
     @Test

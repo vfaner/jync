@@ -23,11 +23,10 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditEvent;
-import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
@@ -445,7 +444,7 @@ public class DiagnosticBundleService {
     private byte[] json(Object value) {
         try {
             return mapper.writeValueAsBytes(value);
-        } catch (IOException ex) {
+        } catch (tools.jackson.core.JacksonException ex) {
             throw new IllegalStateException("error.diagnostics.serialize", ex);
         }
     }

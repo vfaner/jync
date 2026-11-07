@@ -7,7 +7,6 @@ import static org.mockito.Mockito.verify;
 
 import java.time.Instant;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -16,7 +15,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.TestPropertySource;
 
 import com.qqmu.jync.config.SyncProperties;
@@ -89,7 +88,7 @@ class ConfigImportServiceTest {
     private com.qqmu.jync.service.settings.SystemSettingService settingService;
     // Mocked so an import in this test does not start real schedulers; the re-arm behaviour
     // itself is covered by ConfigImportRuntimeTest.
-    @MockBean
+    @MockitoBean
     private ConfigImportRuntime runtime;
 
     @Autowired

@@ -9,9 +9,9 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 /** Pure helpers shared by precheck and the migration engine: names, globs, settings cleanup. */
 public final class EsIndexSupport {
@@ -149,7 +149,7 @@ public final class EsIndexSupport {
         JsonNode nestedIndex = settings.get("index");
         ObjectNode indexNode = nestedIndex instanceof ObjectNode
                 ? ((ObjectNode) nestedIndex).deepCopy() : JSON.createObjectNode();
-        Iterator<Map.Entry<String, JsonNode>> fields = settings.fields();
+        Iterator<Map.Entry<String, JsonNode>> fields = settings.properties().iterator();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> entry = fields.next();
             String key = entry.getKey();
@@ -220,19 +220,19 @@ public final class EsIndexSupport {
         if (properties == null || !properties.isObject()) {
             return;
         }
-        Iterator<Map.Entry<String, JsonNode>> fields = properties.fields();
+        Iterator<Map.Entry<String, JsonNode>> fields = properties.properties().iterator();
         while (fields.hasNext()) {
             JsonNode field = fields.next().getValue();
-            String type = field.path("type").asText("").toLowerCase(Locale.ROOT);
+            String type = field.path("type").asString("").toLowerCase(Locale.ROOT);
             if (UNSUPPORTED_TYPES.contains(type)) {
                 found.add(type);
             }
             collectTypes(field.path("properties"), found);
             JsonNode fieldsNode = field.path("fields");
             if (fieldsNode.isObject()) {
-                Iterator<Map.Entry<String, JsonNode>> sub = fieldsNode.fields();
+                Iterator<Map.Entry<String, JsonNode>> sub = fieldsNode.properties().iterator();
                 while (sub.hasNext()) {
-                    String subType = sub.next().getValue().path("type").asText("")
+                    String subType = sub.next().getValue().path("type").asString("")
                             .toLowerCase(Locale.ROOT);
                     if (UNSUPPORTED_TYPES.contains(subType)) {
                         found.add(subType);
@@ -262,7 +262,7 @@ public final class EsIndexSupport {
             return rows;
         }
         for (JsonNode row : catResponse) {
-            String name = row.path("index").asText("");
+            String name = row.path("index").asString("");
             if (name.isBlank()) {
                 continue;
             }
@@ -273,8 +273,8 @@ public final class EsIndexSupport {
                 continue;
             }
             rows.add(new IndexSummary(name, row.path("docs.count").asLong(0),
-                    row.path("store.size").asText(""), row.path("status").asText(""),
-                    row.path("health").asText("")));
+                    row.path("store.size").asString(""), row.path("status").asString(""),
+                    row.path("health").asString("")));
         }
         return rows;
     }

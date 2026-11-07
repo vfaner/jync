@@ -8,10 +8,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 
-import javax.annotation.PostConstruct;
+import jakarta.annotation.PostConstruct;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.crypto.encrypt.Encryptors;
 import org.springframework.security.crypto.encrypt.TextEncryptor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -23,6 +22,7 @@ import com.qqmu.jync.repository.AiProviderRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.service.tls.TlsKeystoreStore;
 import com.qqmu.jync.util.CryptoUtil;
+import com.qqmu.jync.util.DeluxTextEncryptor;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -153,7 +153,8 @@ public class LegacyCryptoKeyMigration {
             target = resolver.pendingKeyFileExists()
                     ? resolver.readPending()
                     : resolver.generatePending();
-            TextEncryptor targetEncryptor = Encryptors.delux(target.password(), target.salt());
+            TextEncryptor targetEncryptor =
+                    DeluxTextEncryptor.create(target.password(), target.salt());
 
             // The saved TLS certificate's passphrase is wrapped with the crypto key, so it must
             // move with the rotation. Done before the transaction on purpose: a sidecar that

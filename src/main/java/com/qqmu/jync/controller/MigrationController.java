@@ -1,13 +1,12 @@
 package com.qqmu.jync.controller;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -18,12 +17,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.dto.MigrationTaskForm;
 import com.qqmu.jync.model.MigrationConnection;
-import com.qqmu.jync.model.MigrationRun;
 import com.qqmu.jync.model.MigrationRunTrigger;
 import com.qqmu.jync.model.MigrationTask;
 import com.qqmu.jync.model.MigrationType;
@@ -397,7 +395,7 @@ public class MigrationController {
                 ? JSON.createObjectNode()
                 : copyObject(handler.defaultOptions());
         if (submitted != null) {
-            Iterator<Map.Entry<String, JsonNode>> fields = submitted.fields();
+            Iterator<Map.Entry<String, JsonNode>> fields = submitted.properties().iterator();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> entry = fields.next();
                 String key = entry.getKey();
@@ -420,7 +418,7 @@ public class MigrationController {
             if (parsed != null && parsed.isObject()) {
                 stored.setAll((ObjectNode) parsed);
             }
-        } catch (IOException ignored) {
+        } catch (tools.jackson.core.JacksonException ignored) {
             // A corrupt blob still renders the form with defaults; saving overwrites it.
         }
         return stored;

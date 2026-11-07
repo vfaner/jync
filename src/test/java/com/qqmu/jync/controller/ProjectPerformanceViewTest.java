@@ -18,8 +18,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
@@ -49,9 +49,9 @@ import com.qqmu.jync.service.metrics.ProjectMetricsView;
 class ProjectPerformanceViewTest {
 
     @Autowired private MockMvc mvc;
-    @MockBean private ProjectService projectService;
-    @MockBean private DatabaseConfigService databaseConfigService;
-    @MockBean private MetricsQueryService metricsService;
+    @MockitoBean private ProjectService projectService;
+    @MockitoBean private DatabaseConfigService databaseConfigService;
+    @MockitoBean private MetricsQueryService metricsService;
 
     @Test
     void aViewerSeesThroughput() throws Exception {

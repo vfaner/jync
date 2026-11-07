@@ -11,8 +11,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
@@ -44,13 +44,13 @@ class EtlBatchMemberFormViewTest {
     @Autowired
     private MockMvc mvc;
 
-    @MockBean
+    @MockitoBean
     private EtlTaskService etlTaskService;
 
-    @MockBean
+    @MockitoBean
     private EtlPrecheckService precheckService;
 
-    @MockBean
+    @MockitoBean
     private EtlBatchService etlBatchService;
 
     @Test

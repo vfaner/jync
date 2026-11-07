@@ -18,7 +18,6 @@ import com.qqmu.jync.dto.meta.ProcedureMeta.ParamMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.ChangeType;
-import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.service.converter.DdlHeader;
 import com.qqmu.jync.service.converter.RoutineTypeMapper;

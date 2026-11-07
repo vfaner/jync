@@ -52,6 +52,11 @@ snapshots/
 *.keystore
 *secret*
 *credentials*
+# Source files that legitimately carry "secret" in their name. Keep the broad
+# rules above (credential dumps, sidecar files) but do not hide application code:
+# a clean clone must compile without hand-copying these files.
+!src/**/*Secret*.java
+!src/**/*secret*.java
 
 # ============================================
 # 第三方 JDBC 驱动（许可原因不随仓库分发）

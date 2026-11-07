@@ -13,8 +13,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.info.BuildProperties;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -39,11 +39,11 @@ import com.qqmu.jync.service.settings.RequireHttpsResolver;
 class SettingsUpdateBadgeDisabledViewTest {
 
     @Autowired private MockMvc mvc;
-    @MockBean private SyncScheduler scheduler;
-    @MockBean private SyncLockService lockService;
-    @MockBean private VersionService versionService;
+    @MockitoBean private SyncScheduler scheduler;
+    @MockitoBean private SyncLockService lockService;
+    @MockitoBean private VersionService versionService;
 
-    @MockBean
+    @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
 
     @BeforeEach
@@ -51,7 +51,7 @@ class SettingsUpdateBadgeDisabledViewTest {
         when(requireHttpsResolver.effective()).thenReturn(
                 new RequireHttpsResolver.Effective(false, RequireHttpsResolver.Source.DEFAULT));
     }
-    @MockBean private BuildProperties buildProperties;
+    @MockitoBean private BuildProperties buildProperties;
 
     @Test
     void noNavBadgeIsRenderedWhenTheUpdateCheckIsSwitchedOff() throws Exception {

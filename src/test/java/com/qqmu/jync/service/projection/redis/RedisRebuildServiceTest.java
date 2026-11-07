@@ -170,6 +170,20 @@ class RedisRebuildServiceTest {
     }
 
     @Test
+    void aRunningDatabaseProjectIsReportedAsNotRedisRatherThanMustStop() {
+        // A stale form (the target was switched to a database after the page rendered) or a
+        // direct API call reaches this service with a project that has no cache at all. The
+        // kind check must come first: "stop the project" is advice for a cache project, and
+        // following it here would still leave the caller unable to rebuild anything.
+        project.setTargetKind(SyncTargetKind.JDBC);
+        when(projectService.isRunning(project)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.rebuild(PROJECT_ID, false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.redis.rebuild.notRedis");
+    }
+
+    @Test
     void missingProjectIsReportedWithTheSharedKey() {
         when(projects.findById(42L)).thenReturn(Optional.empty());
 

@@ -18,17 +18,16 @@ import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionKind;
@@ -53,11 +52,11 @@ class MigrationFormViewTest {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Autowired private MockMvc mvc;
-    @MockBean private MigrationTaskService taskService;
-    @MockBean private MigrationConnectionService connectionService;
-    @MockBean private MigrationTypeRegistry registry;
-    @MockBean private MigrationRunRepository runRepository;
-    @MockBean private MigrationTypeHandler handler;
+    @MockitoBean private MigrationTaskService taskService;
+    @MockitoBean private MigrationConnectionService connectionService;
+    @MockitoBean private MigrationTypeRegistry registry;
+    @MockitoBean private MigrationRunRepository runRepository;
+    @MockitoBean private MigrationTypeHandler handler;
 
     @BeforeEach
     void setUp() {

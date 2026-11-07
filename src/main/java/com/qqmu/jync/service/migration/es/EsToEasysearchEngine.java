@@ -1,6 +1,5 @@
 package com.qqmu.jync.service.migration.es;
 
-import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -9,10 +8,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationTask;
 import com.qqmu.jync.service.migration.MigrationCancellation;
@@ -212,7 +211,7 @@ final class EsToEasysearchEngine {
         if (!aliases.isObject()) {
             return;
         }
-        Iterator<Map.Entry<String, JsonNode>> iterator = aliases.fields();
+        Iterator<Map.Entry<String, JsonNode>> iterator = aliases.properties().iterator();
         while (iterator.hasNext()) {
             Map.Entry<String, JsonNode> alias = iterator.next();
             try {
@@ -240,7 +239,7 @@ final class EsToEasysearchEngine {
 
         String searchPath = sourcePath + "/_search?scroll=" + options.getScrollTtl();
         JsonNode page = sourceClient.search(searchPath, query);
-        String scrollId = page == null ? null : page.path("_scroll_id").asText(null);
+        String scrollId = page == null ? null : page.path("_scroll_id").asString(null);
         try {
             while (page != null) {
                 JsonNode hits = page.path("hits").path("hits");
@@ -251,7 +250,7 @@ final class EsToEasysearchEngine {
                 long chunkBytes = 0;
                 int chunkDocuments = 0;
                 for (JsonNode hit : hits) {
-                    String id = hit.path("_id").asText(null);
+                    String id = hit.path("_id").asString(null);
                     JsonNode document = hit.get("_source");
                     if (document == null || document.isNull()) {
                         throw new IllegalStateException(
@@ -292,7 +291,7 @@ final class EsToEasysearchEngine {
                 JsonNode next = sourceClient.postJson("/_search/scroll",
                         scrollBody(scrollId, options.getScrollTtl()));
                 scrollId = next == null ? scrollId
-                        : next.path("_scroll_id").asText(scrollId);
+                        : next.path("_scroll_id").asString(scrollId);
                 page = next;
             }
         } finally {
@@ -358,7 +357,7 @@ final class EsToEasysearchEngine {
         Map<String, JsonNode> expected = new LinkedHashMap<>();
         ArrayNode ids = JSON.createArrayNode();
         for (JsonNode hit : hits) {
-            String id = hit.path("_id").asText("");
+            String id = hit.path("_id").asString("");
             if (id.isEmpty()) {
                 continue;
             }
@@ -379,7 +378,7 @@ final class EsToEasysearchEngine {
 
         int mismatches = 0;
         for (JsonNode doc : docs) {
-            String id = doc.path("_id").asText("");
+            String id = doc.path("_id").asString("");
             JsonNode source = expected.get(id);
             if (source == null) {
                 continue;
@@ -402,7 +401,7 @@ final class EsToEasysearchEngine {
     private static String write(JsonNode node) {
         try {
             return JSON.writeValueAsString(node);
-        } catch (IOException e) {
+        } catch (tools.jackson.core.JacksonException e) {
             throw new IllegalArgumentException("Could not serialize a bulk line", e);
         }
     }

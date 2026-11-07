@@ -22,9 +22,8 @@ import java.util.zip.ZipInputStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
@@ -55,8 +54,8 @@ class DiagnosticBundleServiceTest {
 
     private static final long PROJECT_ID = 7L;
 
-    private final ObjectMapper mapper = new ObjectMapper()
-            .registerModule(new JavaTimeModule());
+    private final ObjectMapper mapper = tools.jackson.databind.json.JsonMapper
+            .builderWithJackson2Defaults().build();
     private ProjectRepository projects;
     private DatabaseConfigRepository connections;
     private SyncProgressRepository progress;
@@ -245,7 +244,7 @@ class DiagnosticBundleServiceTest {
         assertThat(first.has("customUrl")).isFalse();
         assertThat(first.has("extraParams")).isFalse();
         assertThat(first.has("customJarPath")).isFalse();
-        assertThat(first.get("host").asText()).isEqualTo("db.internal");
+        assertThat(first.get("host").asString()).isEqualTo("db.internal");
     }
 
     @Test
@@ -256,14 +255,14 @@ class DiagnosticBundleServiceTest {
 
         assertThat(manifest.get("entries").size()).isEqualTo(entries.size() - 1);
         for (JsonNode listed : manifest.get("entries")) {
-            String name = listed.get("name").asText();
+            String name = listed.get("name").asString();
             if ("manifest.json".equals(name)) {
                 continue;
             }
             assertThat(entries).containsKey(name);
             assertThat(listed.get("size").asLong())
                     .isEqualTo(entries.get(name).getBytes(StandardCharsets.UTF_8).length);
-            assertThat(listed.get("sha256").asText())
+            assertThat(listed.get("sha256").asString())
                     .isEqualTo(sha256(entries.get(name)
                             .getBytes(StandardCharsets.UTF_8)));
         }

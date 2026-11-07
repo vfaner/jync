@@ -2,7 +2,6 @@ package com.qqmu.jync.repository;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -16,9 +15,6 @@ public interface DbMetricSampleRepository extends JpaRepository<DbMetricSample, 
 
     List<DbMetricSample> findByConnectionIdAndSampledAtAfterOrderBySampledAtAsc(
             Long connectionId, Instant after);
-
-    /** The latest probe decides the status badge and whether the page shows its red banner. */
-    Optional<DbMetricSample> findTopByConnectionIdOrderBySampledAtDesc(Long connectionId);
 
     /**
      * The newest row of every connection in one query. The Prometheus scrape runs on a

@@ -5,8 +5,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
@@ -32,8 +33,9 @@ public final class KeysetChunker {
      * value is only ever re-bound as a {@code >} / {@code =} comparison parameter, and SQL
      * numeric comparison widens.
      */
-    private static final ObjectMapper JSON = new ObjectMapper()
-            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    private static final ObjectMapper JSON = JsonMapper.builderWithJackson2Defaults()
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .build();
 
     /**
      * Key of the marker that carries a temporal boundary's sub-millisecond part. Jackson writes

@@ -114,7 +114,7 @@ public class RedisClients implements AutoCloseable {
     }
 
     private Holder connectStandalone(RedisClient client, Duration timeout, long version) {
-        client.setDefaultTimeout(timeout);
+        client.setOptions(LettuceTimeouts.client(timeout));
         StatefulRedisConnection<String, String> connection = client.connect();
         RedisAsyncCommands<String, String> async = connection.async();
         AsyncOps ops = new AsyncOps() {
@@ -157,7 +157,7 @@ public class RedisClients implements AutoCloseable {
     }
 
     private Holder connectCluster(RedisClusterClient client, Duration timeout, long version) {
-        client.setDefaultTimeout(timeout);
+        client.setOptions(LettuceTimeouts.cluster(timeout));
         StatefulRedisClusterConnection<String, String> connection = client.connect();
         RedisClusterAsyncCommands<String, String> async = connection.async();
         AsyncOps ops = new AsyncOps() {

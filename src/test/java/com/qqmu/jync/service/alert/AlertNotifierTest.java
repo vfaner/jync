@@ -2,15 +2,14 @@ package com.qqmu.jync.service.alert;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.model.AlertWebhookFormat;
 import com.sun.net.httpserver.HttpServer;
 
@@ -28,8 +27,8 @@ class AlertNotifierTest {
     void theGenericShapeCarriesTheMessageAsJson() throws Exception {
         JsonNode body = json.readTree(AlertNotifier.payload(AlertWebhookFormat.GENERIC, "hello"));
 
-        assertThat(body.path("event").asText()).isEqualTo("jync.alert");
-        assertThat(body.path("text").asText()).isEqualTo("hello");
+        assertThat(body.path("event").asString()).isEqualTo("jync.alert");
+        assertThat(body.path("text").asString()).isEqualTo("hello");
     }
 
     @Test
@@ -38,8 +37,8 @@ class AlertNotifierTest {
                 AlertWebhookFormat.WE_COM, AlertWebhookFormat.DING_TALK}) {
             JsonNode body = json.readTree(AlertNotifier.payload(format, "hi"));
 
-            assertThat(body.path("msgtype").asText()).as(format.name()).isEqualTo("text");
-            assertThat(body.path("text").path("content").asText()).isEqualTo("hi");
+            assertThat(body.path("msgtype").asString()).as(format.name()).isEqualTo("text");
+            assertThat(body.path("text").path("content").asString()).isEqualTo("hi");
         }
     }
 
@@ -47,8 +46,8 @@ class AlertNotifierTest {
     void theFeishuShapeUsesItsOwnEnvelope() throws Exception {
         JsonNode body = json.readTree(AlertNotifier.payload(AlertWebhookFormat.FEISHU, "hi"));
 
-        assertThat(body.path("msg_type").asText()).isEqualTo("text");
-        assertThat(body.path("content").path("text").asText()).isEqualTo("hi");
+        assertThat(body.path("msg_type").asString()).isEqualTo("text");
+        assertThat(body.path("content").path("text").asString()).isEqualTo("hi");
     }
 
     @Test
@@ -57,7 +56,7 @@ class AlertNotifierTest {
 
         JsonNode body = json.readTree(AlertNotifier.payload(AlertWebhookFormat.GENERIC, text));
 
-        assertThat(body.path("text").asText()).isEqualTo(text);
+        assertThat(body.path("text").asString()).isEqualTo(text);
     }
 
     @Test
@@ -79,7 +78,7 @@ class AlertNotifierTest {
 
             assertThat(sent).isTrue();
             JsonNode body = json.readTree(received.get());
-            assertThat(body.path("text").path("content").asText()).isEqualTo("告警文本");
+            assertThat(body.path("text").path("content").asString()).isEqualTo("告警文本");
         } finally {
             server.stop(0);
         }

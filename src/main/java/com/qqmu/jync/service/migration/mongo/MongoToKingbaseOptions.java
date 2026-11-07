@@ -3,9 +3,9 @@ package com.qqmu.jync.service.migration.mongo;
 import java.util.List;
 import java.util.Locale;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.service.migration.MigrationGlob;
 import com.qqmu.jync.service.migration.MigrationTargetNaming;
 import com.qqmu.jync.service.migration.MigrationWriteMode;
@@ -135,7 +135,7 @@ public final class MongoToKingbaseOptions {
 
     private static String text(JsonNode node, String field, String fallback) {
         JsonNode value = node == null ? null : node.get(field);
-        return value == null || value.isNull() ? fallback : value.asText();
+        return value == null || value.isNull() ? fallback : value.asString();
     }
 
     private static boolean bool(JsonNode node, String field, boolean fallback) {

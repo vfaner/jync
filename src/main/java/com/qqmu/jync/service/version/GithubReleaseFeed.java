@@ -18,8 +18,8 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -49,7 +49,7 @@ public class GithubReleaseFeed implements ReleaseFeed {
     private final String apiBase;
     private final Duration timeout;
     private final HttpClient http;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Component
     public static class Bean extends GithubReleaseFeed {
@@ -135,28 +135,28 @@ public class GithubReleaseFeed implements ReleaseFeed {
 
     /** Parses one GitHub release JSON document; package-private for tests (no sockets). */
     static Release parse(String body) throws Exception {
-        JsonNode json = new ObjectMapper().readTree(body);
-        String tag = json.path("tag_name").asText(null);
-        String htmlUrl = json.path("html_url").asText(null);
-        String published = json.path("published_at").asText(null);
-        String releaseBody = json.path("body").asText("");
+        JsonNode json = MAPPER.readTree(body);
+        String tag = json.path("tag_name").asString(null);
+        String htmlUrl = json.path("html_url").asString(null);
+        String published = json.path("published_at").asString(null);
+        String releaseBody = json.path("body").asString("");
         if (tag == null || htmlUrl == null) {
             throw new IllegalStateException("GitHub API response is missing tag_name/html_url");
         }
         List<Asset> assets = new ArrayList<>();
         for (JsonNode asset : json.path("assets")) {
-            String name = asset.path("name").asText(null);
-            String downloadUrl = asset.path("browser_download_url").asText(null);
+            String name = asset.path("name").asString(null);
+            String downloadUrl = asset.path("browser_download_url").asString(null);
             if (name == null || downloadUrl == null) {
                 continue;
             }
             long size = asset.path("size").asLong(0L);
             assets.add(new Asset(name, downloadUrl, size > 0 ? size : null,
-                    parseSha256(asset.path("digest").asText(null)),
+                    parseSha256(asset.path("digest").asString(null)),
                     // An asset re-uploaded under the same tag keeps the release's published_at
                     // but moves updated_at; the latter is what dates the bytes.
-                    parseInstant(asset.path("updated_at").asText(null),
-                            asset.path("created_at").asText(null))));
+                    parseInstant(asset.path("updated_at").asString(null),
+                            asset.path("created_at").asString(null))));
         }
         Instant publishedAt = null;
         if (published != null && !published.isBlank()) {

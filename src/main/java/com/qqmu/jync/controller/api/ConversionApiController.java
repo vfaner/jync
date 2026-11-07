@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import javax.annotation.PreDestroy;
+import jakarta.annotation.PreDestroy;
 
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;

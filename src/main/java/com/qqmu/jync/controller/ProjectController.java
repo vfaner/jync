@@ -108,7 +108,7 @@ public class ProjectController {
         // their start icon and shows the reason; the service refuses the action anyway.
         Map<Long, String> noSyncWorkMessages = new HashMap<>();
         for (Project project : projects) {
-            String reason = noSyncWorkMessage(projectService.loadConfig(project));
+            String reason = noSyncWorkMessage(project, projectService.loadConfig(project));
             if (reason != null) {
                 noSyncWorkMessages.put(project.getId(), reason);
             }
@@ -151,7 +151,15 @@ public class ProjectController {
      * sync options off only reduces a polling cycle to a no-op, because a CDC consumer
      * replays row events regardless of those switches.
      */
-    private String noSyncWorkMessage(SyncConfig config) {
+    private String noSyncWorkMessage(Project project, SyncConfig config) {
+        // A cache target runs only on the log stream; a stored polling strategy on a row that
+        // was switched to Redis keeps the start button enabled and makes it fail server-side.
+        // Start refuses it with this key, so the page must say the same thing.
+        if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS
+                && !config.getCaptureStrategyOrDefault().isLogCdc()) {
+            return messages.get("error.project.redis.cdcOnly",
+                    LocaleContextHolder.getLocale());
+        }
         if (config.hasNoSyncObjects()) {
             return messages.get("error.project.no.objects", LocaleContextHolder.getLocale());
         }
@@ -276,7 +284,7 @@ public class ProjectController {
                 : null;
         model.addAttribute("redisTarget", redisTarget);
         // Drives the disabled state of start/sync-now plus the reason shown on the page.
-        model.addAttribute("noSyncWorkMessage", noSyncWorkMessage(config));
+        model.addAttribute("noSyncWorkMessage", noSyncWorkMessage(project, config));
         SyncTask task = projectService.findTask(id).orElse(null);
         model.addAttribute("task", task);
         // The polling cycle executing on this node, if any: the next-run block uses it to
@@ -663,30 +671,37 @@ public class ProjectController {
                 return ConfigSaveOutcome.error("error.project.cdc.idle.poll.too.small");
             }
 
-            config.setSyncStructure(form.isSyncStructure());
-            config.setSyncData(form.isSyncData());
-            config.setSyncIndexes(form.isSyncIndexes());
-            config.setSyncViews(form.isSyncViews());
-            config.setSyncProcedures(form.isSyncProcedures());
-            config.setAllowDrop(form.isAllowDrop());
-            config.setSyncDeletes(form.isSyncDeletes());
-            config.setDisableTargetConstraints(form.isDisableTargetConstraints());
-            config.setTruncateBeforeInitialLoad(form.isTruncateBeforeInitialLoad());
-            // 自定义调度开关:关闭时清空调度的两个字段,让引擎回退到全局默认值。
-            // 开启时透传表单值(空字符串 → null,保持"留空=默认"语义)。
-            if (form.isCustomSchedule()) {
-                config.setPollIntervalMs(form.getPollIntervalMs());
-                String cron = form.getCronExpression();
-                config.setCronExpression(cron == null || cron.isBlank() ? null : cron.trim());
-            } else {
-                config.setPollIntervalMs(null);
-                config.setCronExpression(null);
+            // The option, schedule and performance cards are not rendered for a cache target
+            // (see project-detail.html), so their fields are absent from the submission. The
+            // form defaults would overwrite what a converted project saved while it still had
+            // a database target — the baseline load of the projection still uses batch size
+            // and worker count. Write only what the Redis page actually renders.
+            if (project.getTargetKindOrDefault() != SyncTargetKind.REDIS) {
+                config.setSyncStructure(form.isSyncStructure());
+                config.setSyncData(form.isSyncData());
+                config.setSyncIndexes(form.isSyncIndexes());
+                config.setSyncViews(form.isSyncViews());
+                config.setSyncProcedures(form.isSyncProcedures());
+                config.setAllowDrop(form.isAllowDrop());
+                config.setSyncDeletes(form.isSyncDeletes());
+                config.setDisableTargetConstraints(form.isDisableTargetConstraints());
+                config.setTruncateBeforeInitialLoad(form.isTruncateBeforeInitialLoad());
+                // 自定义调度开关:关闭时清空调度的两个字段,让引擎回退到全局默认值。
+                // 开启时透传表单值(空字符串 → null,保持"留空=默认"语义)。
+                if (form.isCustomSchedule()) {
+                    config.setPollIntervalMs(form.getPollIntervalMs());
+                    String cron = form.getCronExpression();
+                    config.setCronExpression(cron == null || cron.isBlank() ? null : cron.trim());
+                } else {
+                    config.setPollIntervalMs(null);
+                    config.setCronExpression(null);
+                }
+                // 加载性能与调度无关(CDC 项目的基线全量同样吃这两个值),因此不受上面开关影响。
+                // 留空 → null = 用全局默认;越界在服务端收敛到边界并记账,绝不静默接受。
+                config.setBatchSize(clampFullLoadBatchSize(form.getBatchSize()));
+                config.setFullLoadParallelism(
+                        clampFullLoadParallelism(form.getFullLoadParallelism()));
             }
-            // 加载性能与调度无关(CDC 项目的基线全量同样吃这两个值),因此不受上面开关影响。
-            // 留空 → null = 用全局默认;越界在服务端收敛到边界并记账,绝不静默接受。
-            config.setBatchSize(clampFullLoadBatchSize(form.getBatchSize()));
-            config.setFullLoadParallelism(
-                    clampFullLoadParallelism(form.getFullLoadParallelism()));
             // 与自定义调度无关:三个轮询式日志 CDC 引擎(LogMiner/PG/SQLServer)
             // 的空闲休眠;留空回退引擎默认。binlog 引擎不轮询,忽略此值。
             config.setCdcIdlePollMs(cdcIdlePollMs);
@@ -710,7 +725,7 @@ public class ProjectController {
             String message = strategyError != null ? null
                     : (switched ? "msg.project.strategy.switched" : "msg.config.saved");
             return new ConfigSaveOutcome(strategyError, message, switched,
-                    noSyncWorkMessage(config));
+                    noSyncWorkMessage(project, config));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ConfigSaveOutcome.error(e.getMessage());
         }

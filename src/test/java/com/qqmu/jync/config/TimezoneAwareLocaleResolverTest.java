@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.Locale;
 
-import javax.servlet.http.Cookie;
+import jakarta.servlet.http.Cookie;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -22,8 +22,10 @@ class TimezoneAwareLocaleResolverTest {
     private static final String LANG_COOKIE = TimezoneAwareLocaleResolver.LANG_COOKIE;
 
     private TimezoneAwareLocaleResolver resolver() {
-        TimezoneAwareLocaleResolver resolver = new TimezoneAwareLocaleResolver();
-        resolver.setCookieName(LANG_COOKIE);
+        TimezoneAwareLocaleResolver resolver = new TimezoneAwareLocaleResolver(LANG_COOKIE);
+        // Spring Framework 7 replaced determineDefaultLocale() with this explicit extension
+        // point; I18nConfig wires the same function in production.
+        resolver.setDefaultLocaleFunction(resolver::defaultLocale);
         resolver.setDefaultLocale(Locale.SIMPLIFIED_CHINESE);
         return resolver;
     }

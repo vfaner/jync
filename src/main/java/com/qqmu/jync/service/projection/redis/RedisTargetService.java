@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.dto.RedisTargetForm;
 import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.RedisTargetRepository;
@@ -85,6 +86,16 @@ public class RedisTargetService {
             entity = targets.findById(id)
                     .orElseThrow(() -> new IllegalArgumentException(
                             "error.redis.target.not.found"));
+            // A running consumer holds a connection built from the settings it started with;
+            // changing host/credentials under it makes the page and the stream disagree until
+            // the project is restarted. Database connections answer an edit the same way.
+            List<Project> running = projects.findByTargetRedisId(id).stream()
+                    .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
+                    .toList();
+            if (!running.isEmpty()) {
+                throw new IllegalStateException(
+                        "error.redis.target.edit.running:" + joinNames(running));
+            }
         }
 
         entity.setName(form.getName());
@@ -114,6 +125,11 @@ public class RedisTargetService {
         }
         log.info("Saved Redis target '{}'", saved.getName());
         return saved;
+    }
+
+    private static String joinNames(List<Project> projects) {
+        return projects.stream().map(Project::getName)
+                .reduce((a, b) -> a + ", " + b).orElse("");
     }
 
     @Transactional
@@ -157,7 +173,7 @@ public class RedisTargetService {
         if (target.isClusterMode()) {
             RedisClusterClient client = RedisClusterClient.create(uri);
             try {
-                client.setDefaultTimeout(commandTimeout);
+                client.setOptions(LettuceTimeouts.cluster(commandTimeout));
                 client.connect().sync().ping();
             } finally {
                 client.shutdown();
@@ -165,7 +181,7 @@ public class RedisTargetService {
         } else {
             RedisClient client = RedisClient.create(uri);
             try {
-                client.setDefaultTimeout(commandTimeout);
+                client.setOptions(LettuceTimeouts.client(commandTimeout));
                 client.connect().sync().ping();
             } finally {
                 client.shutdown();

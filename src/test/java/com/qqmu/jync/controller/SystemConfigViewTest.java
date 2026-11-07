@@ -12,8 +12,8 @@ import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
@@ -53,15 +53,15 @@ class SystemConfigViewTest {
     @Autowired
     private MockMvc mvc;
 
-    @MockBean
+    @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
-    @MockBean
+    @MockitoBean
     private SystemSettingService systemSettingService;
-    @MockBean
+    @MockitoBean
     private AdminAuditService adminAuditService;
-    @MockBean
+    @MockitoBean
     private CryptoUtil cryptoUtil;
-    @MockBean
+    @MockitoBean
     private TlsCertificateService tlsCertificateService;
 
     private static RequestPostProcessor as(UserRole role) {

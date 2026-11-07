@@ -14,17 +14,17 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.ServletRegistration;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.ServletRegistration;
 
 import org.apache.catalina.connector.Connector;
 import org.apache.tomcat.util.net.SSLHostConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
-import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
+import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
+import org.springframework.boot.tomcat.TomcatWebServer;
 import org.springframework.boot.web.server.WebServerException;
 import org.springframework.boot.web.servlet.ServletContextInitializer;
 
@@ -137,8 +137,10 @@ class TlsConnectorConfigTest {
         try {
             SSLHostConfig ssl = httpsConnector(server).findSslHostConfigs()[0];
             assertThat(ssl.getProtocols()).contains("TLSv1.2", "TLSv1.3");
-            assertThat(ssl.getCertificateKeystoreType()).isEqualTo("PKCS12");
-            assertThat(ssl.getCertificateKeystoreFile()).endsWith(".p12");
+            org.apache.tomcat.util.net.SSLHostConfigCertificate certificate =
+                    ssl.getCertificates().iterator().next();
+            assertThat(certificate.getCertificateKeystoreType()).isEqualTo("PKCS12");
+            assertThat(certificate.getCertificateKeystoreFile()).endsWith(".p12");
         } finally {
             server.stop();
         }

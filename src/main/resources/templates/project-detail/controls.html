@@ -125,7 +125,8 @@
                              data-busy-text=#{common.loading}">
                 <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{project.syncNow}">Sync now</span>
             </button>
-            <button type="button" class="btn btn-primary btn-sm" th:if="${cdcActive}"
+            <button type="button" class="btn btn-primary btn-sm"
+                    th:if="${cdcActive and !isRedisTarget}"
                     data-role="api-btn" data-reload="true" data-cdc-visibility="cdc"
                     th:attr="data-action=@{/api/projects/{id}/cdc-rebaseline(id=${project.id})},
                              data-confirm=${project.enabled} ? #{cdc.rebaseline.confirm} : #{cdc.rebaseline.confirm.pending},
@@ -133,10 +134,6 @@
                 <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
                 <span th:text="#{cdc.rebaseline.button}">Rebuild baseline</span>
             </button>
-            <!--/* Redis 缓存目标的重建入口：清位点、重新记录起点、全量重投影。
-                   放在独立模板里，数据库项目不渲染，两套目标类型的按钮互不牵连。 */-->
-            <th:block th:if="${isRedisTarget}"
-                      th:replace="~{project-detail/redis-rebuild :: controls}"/>
             <!--/* 同步前检查：只读排练下一轮（连通性、待执行 DDL、目标形状、轮询/CDC），
                    不建表、不写快照、不推进游标。接口会连两侧数据库，因此仅管理员可见。 */-->
             <button type="button" class="btn btn-ghost btn-sm"
@@ -149,6 +146,8 @@
             <!--/* CDC 任务的进度行不参与续流,清空进度是空操作;全量重载的入口是
                    旁边的「重建基线」。服务端同样会拒绝,这里只是不去点一个死按钮。 */-->
             <button type="button" class="btn btn-outline-danger btn-sm"
+                    th:if="${!isRedisTarget}"
+                    th:classappend="${cdcActive} ? 'is-hidden' : ''"
                     data-role="api-btn" data-reload="true" data-cdc-visibility="non-cdc"
                     th:attr="data-action=@{/api/projects/{id}/reset(id=${project.id})},
                              data-confirm=#{common.confirm.reset(${project.name})},
@@ -184,7 +183,8 @@
                必然打断基线,页面还会同时出现「已停止」与「CDC 运行中」。把「启用后
                才全量」明说,别让用户猜。 */-->
         <p class="small muted" id="cdc-rebaseline-disabled-hint" style="margin:11px 0 0"
-           th:if="${isAdmin and cdcActive and !project.enabled}" data-cdc-visibility="cdc"
+           th:if="${isAdmin and cdcActive and !isRedisTarget and !project.enabled}"
+           data-cdc-visibility="cdc"
            th:text="#{cdc.rebaseline.disabled.hint}">Disabled-project rebaseline hint</p>
         <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin and !cdcActive}"
            data-cdc-visibility="non-cdc"
@@ -192,8 +192,6 @@
         <p class="small muted" style="margin:3px 0 0"
            th:if="${isAdmin and !cdcActive}" data-cdc-visibility="non-cdc"
            th:text="#{project.resetHelp}">Reset help</p>
-        <th:block th:if="${isRedisTarget}"
-                  th:replace="~{project-detail/redis-rebuild :: hint}"/>
         <p class="small muted" style="margin:0" th:unless="${isAdmin}"
            th:text="#{common.readOnly}">Read-only account.</p>
     </div>

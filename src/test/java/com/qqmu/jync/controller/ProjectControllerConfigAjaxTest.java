@@ -17,8 +17,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
@@ -54,12 +54,12 @@ import com.qqmu.jync.service.projection.redis.RedisTargetService;
 class ProjectControllerConfigAjaxTest {
 
     @Autowired private MockMvc mvc;
-    @MockBean private ProjectService projectService;
-    @MockBean private DatabaseConfigService databaseConfigService;
-    @MockBean private CdcOperationsService cdcOperationsService;
-    @MockBean private CdcConsumerManager cdcConsumerManager;
-    @MockBean private CdcPositionStore cdcPositionStore;
-    @MockBean private RedisTargetService redisTargetService;
+    @MockitoBean private ProjectService projectService;
+    @MockitoBean private DatabaseConfigService databaseConfigService;
+    @MockitoBean private CdcOperationsService cdcOperationsService;
+    @MockitoBean private CdcConsumerManager cdcConsumerManager;
+    @MockitoBean private CdcPositionStore cdcPositionStore;
+    @MockitoBean private RedisTargetService redisTargetService;
 
     /** Stubs a stopped project whose stored config is the instance the controller mutates. */
     private SyncConfig stubStoppedProject() {

@@ -1,6 +1,6 @@
 package com.qqmu.jync.util;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * Whether the client's leg of this request is encrypted.

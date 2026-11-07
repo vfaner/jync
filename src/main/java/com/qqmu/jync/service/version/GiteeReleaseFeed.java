@@ -17,8 +17,8 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -45,7 +45,7 @@ public class GiteeReleaseFeed implements ReleaseFeed {
     private final String apiBase;
     private final Duration timeout;
     private final HttpClient http;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Component
     public static class Bean extends GiteeReleaseFeed {
@@ -131,8 +131,8 @@ public class GiteeReleaseFeed implements ReleaseFeed {
 
     /** Parses one Gitee release JSON document; package-private for tests (no sockets). */
     static Release parse(String body, String owner, String repo) throws Exception {
-        JsonNode json = new ObjectMapper().readTree(body);
-        String tag = json.path("tag_name").asText(null);
+        JsonNode json = MAPPER.readTree(body);
+        String tag = json.path("tag_name").asString(null);
         if (tag == null) {
             throw new IllegalStateException("Gitee API response is missing tag_name");
         }
@@ -141,8 +141,8 @@ public class GiteeReleaseFeed implements ReleaseFeed {
 
         List<Asset> assets = new ArrayList<>();
         for (JsonNode asset : json.path("assets")) {
-            String name = asset.path("name").asText(null);
-            String downloadUrl = asset.path("browser_download_url").asText(null);
+            String name = asset.path("name").asString(null);
+            String downloadUrl = asset.path("browser_download_url").asString(null);
             if (name != null && downloadUrl != null) {
                 // Gitee v5 payloads carry no asset size: null stays null and verification
                 // relies on zip integrity instead of a byte count.
@@ -151,7 +151,7 @@ public class GiteeReleaseFeed implements ReleaseFeed {
         }
 
         Instant publishedAt = null;
-        String created = json.path("created_at").asText(null);
+        String created = json.path("created_at").asString(null);
         if (created != null && !created.isBlank()) {
             try {
                 publishedAt = OffsetDateTime.parse(created).toInstant();
@@ -163,7 +163,7 @@ public class GiteeReleaseFeed implements ReleaseFeed {
                         + " showing it without a date", tag, created);
             }
         }
-        return new Release(tag, htmlUrl, publishedAt, json.path("body").asText(""),
+        return new Release(tag, htmlUrl, publishedAt, json.path("body").asString(""),
                 List.copyOf(assets), Source.GITEE);
     }
 }

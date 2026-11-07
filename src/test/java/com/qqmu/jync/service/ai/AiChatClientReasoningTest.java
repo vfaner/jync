@@ -15,8 +15,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.qqmu.jync.model.AiProtocol;
@@ -104,11 +104,7 @@ class AiChatClientReasoningTest {
         AiChatClient.ChatResult result =
                 client.complete(provider(protocol, effort, maxTokens), "k", null, "ping", maxTokens);
         assertThat(result.isSuccess()).as(result.getMessage()).isTrue();
-        try {
-            return mapper.readTree(lastBody.get());
-        } catch (IOException e) {
-            throw new AssertionError("请求体不是 JSON: " + lastBody.get(), e);
-        }
+        return mapper.readTree(lastBody.get());
     }
 
     // --- 跟随默认一根毛都不发 -----------------------------------------------------------
@@ -140,7 +136,7 @@ class AiChatClientReasoningTest {
     @Test
     void turningReasoningOffSendsTheNoneLevel() {
         JsonNode body = complete(AiProtocol.OPENAI, AiReasoningEffort.OFF, 4096);
-        assertThat(body.path("reasoning_effort").asText())
+        assertThat(body.path("reasoning_effort").asString())
                 .as("Ollama/vLLM 这类兼容端点认 none;官方 OpenAI 不认,所以默认绝不会发它")
                 .isEqualTo("none");
     }
@@ -148,15 +144,15 @@ class AiChatClientReasoningTest {
     @Test
     void ollamaTakesExactlyTheSameSwitch() {
         JsonNode body = complete(AiProtocol.OLLAMA, AiReasoningEffort.OFF, 4096);
-        assertThat(body.path("reasoning_effort").asText()).isEqualTo("none");
+        assertThat(body.path("reasoning_effort").asString()).isEqualTo("none");
     }
 
     @Test
     void anExplicitLevelIsPassedThroughVerbatim() {
         assertThat(complete(AiProtocol.OPENAI, AiReasoningEffort.LOW, 4096)
-                .path("reasoning_effort").asText()).isEqualTo("low");
+                .path("reasoning_effort").asString()).isEqualTo("low");
         assertThat(complete(AiProtocol.OPENAI, AiReasoningEffort.HIGH, 4096)
-                .path("reasoning_effort").asText()).isEqualTo("high");
+                .path("reasoning_effort").asString()).isEqualTo("high");
     }
 
     // --- Anthropic:预算而不是档位 --------------------------------------------------------
@@ -169,7 +165,7 @@ class AiChatClientReasoningTest {
         assertThat(body.has("reasoning_effort"))
                 .as("Anthropic 不认 reasoning_effort,发过去就是 400")
                 .isFalse();
-        assertThat(body.path("thinking").path("type").asText()).isEqualTo("enabled");
+        assertThat(body.path("thinking").path("type").asString()).isEqualTo("enabled");
         int budget = body.path("thinking").path("budget_tokens").asInt(-1);
         assertThat(budget)
                 .as("Anthropic 要求 budget_tokens >= 1024")
@@ -230,15 +226,11 @@ class AiChatClientReasoningTest {
                 deltas::add);
 
         assertThat(result.isSuccess()).as(result.getMessage()).isTrue();
-        try {
-            JsonNode body = mapper.readTree(lastBody.get());
-            assertThat(body.path("stream").asBoolean()).isTrue();
-            assertThat(body.path("reasoning_effort").asText())
-                    .as("草稿是流式出的;设置只挂在 complete 上就等于没做")
-                    .isEqualTo("none");
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        }
+        JsonNode body = mapper.readTree(lastBody.get());
+        assertThat(body.path("stream").asBoolean()).isTrue();
+        assertThat(body.path("reasoning_effort").asString())
+                .as("草稿是流式出的;设置只挂在 complete 上就等于没做")
+                .isEqualTo("none");
     }
 
     // --- 最要紧的一条 -------------------------------------------------------------------
@@ -250,16 +242,12 @@ class AiChatClientReasoningTest {
         AiChatClient.ChatResult result = client.probe(p, "k");
 
         assertThat(result.isSuccess()).as(result.getMessage()).isTrue();
-        try {
-            JsonNode body = mapper.readTree(lastBody.get());
-            assertThat(body.path("max_tokens").asInt()).isEqualTo(1);
-            assertThat(body.has("reasoning_effort"))
-                    .as("max_tokens=1 再带推理参数,探测会以端点自己的 400 收场")
-                    .isFalse();
-            assertThat(body.has("thinking")).isFalse();
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        }
+        JsonNode body = mapper.readTree(lastBody.get());
+        assertThat(body.path("max_tokens").asInt()).isEqualTo(1);
+        assertThat(body.has("reasoning_effort"))
+                .as("max_tokens=1 再带推理参数,探测会以端点自己的 400 收场")
+                .isFalse();
+        assertThat(body.has("thinking")).isFalse();
     }
 
     @Test
@@ -271,16 +259,12 @@ class AiChatClientReasoningTest {
         AiChatClient.ChatResult result = client.probe(p, "k");
 
         assertThat(result.isSuccess()).as(result.getMessage()).isTrue();
-        try {
-            JsonNode body = mapper.readTree(lastBody.get());
-            assertThat(body.path("max_tokens").asInt())
-                    .as("探测永远是 1,而 Anthropic 的预算是按 max_tokens 比例算的")
-                    .isEqualTo(1);
-            assertThat(body.has("thinking"))
-                    .as("哪怕 provider 存档里开着高档思考,探测也必须裸奔")
-                    .isFalse();
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        }
+        JsonNode body = mapper.readTree(lastBody.get());
+        assertThat(body.path("max_tokens").asInt())
+                .as("探测永远是 1,而 Anthropic 的预算是按 max_tokens 比例算的")
+                .isEqualTo(1);
+        assertThat(body.has("thinking"))
+                .as("哪怕 provider 存档里开着高档思考,探测也必须裸奔")
+                .isFalse();
     }
 }

@@ -1,11 +1,11 @@
 package com.qqmu.jync.service;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
@@ -30,8 +30,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class CaptureStrategyParser {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    private static final ObjectMapper MAPPER = JsonMapper.builderWithJackson2Defaults()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .build();
 
     private CaptureStrategyParser() {
     }
@@ -162,7 +163,7 @@ public final class CaptureStrategyParser {
         }
         try {
             return MAPPER.readValue(json, SyncConfig.class).getCaptureStrategyOrDefault();
-        } catch (IOException | RuntimeException e) {
+        } catch (RuntimeException e) {
             if (projectId != null) {
                 log.warn("Project {} has unreadable sync_config ({}); treating it as POLLING",
                         projectId, e.getMessage());

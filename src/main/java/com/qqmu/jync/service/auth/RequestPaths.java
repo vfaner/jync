@@ -1,6 +1,6 @@
 package com.qqmu.jync.service.auth;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
 /** Request-path helpers shared by the auth filters. */
 final class RequestPaths {

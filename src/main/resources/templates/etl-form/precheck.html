@@ -8,7 +8,14 @@
     </div>
     <div class="card-body">
         <div th:if="${precheckError != null}" class="alert alert-danger">
-            <div class="alert-body" th:text="#{precheckError}">Precheck failed: invalid task</div>
+            <div class="alert-body"
+                 th:with="err=${precheckError.toString()},
+                          colon=${#strings.indexOf(err, ':')},
+                          headKey=${colon >= 0 ? err.substring(0, colon) : err},
+                          head=${#messages.msgOrNull(headKey)},
+                          suffix=${colon >= 0 ? err.substring(colon + 1) : ''}"
+                 th:text="${head != null} ? ${head + (#strings.isEmpty(suffix) ? '' : ' ' + suffix)}
+                                          : ${#messages.msgOrNull(err) ?: err}">Precheck failed: invalid task</div>
         </div>
 
         <div th:if="${precheck != null}">

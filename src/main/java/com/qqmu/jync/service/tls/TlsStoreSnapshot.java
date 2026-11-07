@@ -18,8 +18,4 @@ public record TlsStoreSnapshot(Optional<TlsConfig> config,
     public static TlsStoreSnapshot empty() {
         return new TlsStoreSnapshot(Optional.empty(), null, false, false);
     }
-
-    public boolean hasProblem() {
-        return problemKey != null;
-    }
 }

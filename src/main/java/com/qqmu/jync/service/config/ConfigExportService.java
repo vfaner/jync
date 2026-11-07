@@ -13,9 +13,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.cfg.DateTimeFeature;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.config.ConfigPackageDtos;
 import com.qqmu.jync.model.AiProvider;
@@ -139,8 +139,11 @@ public class ConfigExportService {
                                AlertStateRepository alertStates) {
         this.readOnly = new TransactionTemplate(transactionManager);
         this.readOnly.setReadOnly(true);
-        this.json = objectMapper.copy()
-                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        // The package format promises a readable ISO timestamp; the application's own mapper
+        // writes epoch values for the pages' JavaScript.
+        this.json = objectMapper.rebuild()
+                .disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .build();
         this.writer = writer;
         this.packageCrypto = packageCrypto;
         this.syncProperties = syncProperties;
@@ -275,7 +278,7 @@ public class ConfigExportService {
     private byte[] json(Object value) {
         try {
             return json.writeValueAsBytes(value);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new ConfigPackageException("error.config.export.failed", e);
         }
     }

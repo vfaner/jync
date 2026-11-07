@@ -1,5 +1,6 @@
 package com.qqmu.jync.config;
 
+import java.time.Duration;
 import java.util.Locale;
 
 import org.springframework.context.MessageSource;
@@ -7,7 +8,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.LocaleResolver;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
-import org.springframework.web.servlet.config.annotation.PathMatchConfigurer;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.servlet.i18n.LocaleChangeInterceptor;
 
@@ -26,9 +26,10 @@ public class I18nConfig implements WebMvcConfigurer {
 
     @Bean
     public LocaleResolver localeResolver() {
-        TimezoneAwareLocaleResolver resolver = new TimezoneAwareLocaleResolver();
-        resolver.setCookieName(TimezoneAwareLocaleResolver.LANG_COOKIE);
-        resolver.setCookieMaxAge(60 * 60 * 24 * 365);
+        TimezoneAwareLocaleResolver resolver =
+                new TimezoneAwareLocaleResolver(TimezoneAwareLocaleResolver.LANG_COOKIE);
+        resolver.setCookieMaxAge(Duration.ofDays(365));
+        resolver.setDefaultLocaleFunction(resolver::defaultLocale);
         resolver.setCookiePath("/");
         resolver.setDefaultLocale(Locale.SIMPLIFIED_CHINESE);
         // A stale or hand-edited cookie should degrade to the detected language, not 500 the
@@ -51,13 +52,6 @@ public class I18nConfig implements WebMvcConfigurer {
         registry.addInterceptor(localeChangeInterceptor());
     }
 
-    @Override
-    public void configurePathMatch(PathMatchConfigurer configurer) {
-        // MVC 默认把 "/databases/1/edit/" 也映射到 "/databases/1/edit" 的控制器，而 Spring
-        // Security 的 AntPathMatcher 规则不匹配这个尾斜杠——只读用户给受保护页面 URL 加个
-        // "/" 就能绕过 ADMIN_ONLY_GET 拿到管理表单。关掉 MVC 的尾斜杠兼容，加斜杠直接 404。
-        configurer.setUseTrailingSlashMatch(false);
-    }
 
     /** Exposes the message source to code that formats messages outside a request. */
     @Bean

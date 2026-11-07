@@ -16,6 +16,4 @@ public interface MigrationTaskRepository extends JpaRepository<MigrationTask, Lo
     long countByType(MigrationType type);
 
     long countBySourceConnectionIdOrTargetConnectionId(Long source, Long target);
-
-    List<MigrationTask> findBySourceConnectionIdOrTargetConnectionId(Long source, Long target);
 }

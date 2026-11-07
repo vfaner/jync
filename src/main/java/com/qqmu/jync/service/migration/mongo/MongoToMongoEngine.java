@@ -10,7 +10,7 @@ import java.util.Set;
 
 import org.bson.Document;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationTask;
 import com.qqmu.jync.service.migration.MigrationCancellation;

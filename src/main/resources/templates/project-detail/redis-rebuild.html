@@ -1,35 +1,51 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org">
 <body>
-<!--/* Redis 缓存重建入口：只对目标类型为 REDIS 的项目渲染（装配处用 isRedisTarget 门控），
-       与数据库任务的「重建基线」互不影响——后者走 cdc-rebaseline，重建的是 JDBC 目标。
+<!--/* Redis 缓存维护卡片：只有在目标类型为 REDIS 且当前账号是管理员时才渲染
+       （装配处在 isRedisTarget 分支里引用，根元素再用 isAdmin 门控）。重建缓存要清位点、
+       整表重写，属于低频维护动作，不放进日常运行按钮行；与数据库任务的「重建基线」
+       互不影响——后者走 cdc-rebaseline，重建的是 JDBC 目标。
 
-       按钮故意不用 data-role="api-btn"：是否需要先清空键由页面上的开关在点击时决定，
+       按钮故意不用 data-role="api-btn"：是否需要先清空键由页面上的复选框在点击时决定，
        而 api-btn 的 action 是渲染时写死的。专属的 bindRedisRebuild(app.js) 补上 sweep 参数，
        其余约定（加载态、确认框、成功后刷新）与 api-btn 一致。 */-->
-<th:block th:fragment="controls">
-    <button type="button" class="btn btn-warn btn-sm"
-            data-role="redis-rebuild" data-reload="true"
-            th:disabled="${project.enabled}"
-            th:attr="data-action=@{/api/projects/{id}/redis-rebuild(id=${project.id})},
-                     data-confirm=#{redis.rebuild.confirm},
-                     data-confirm-sweep=#{redis.rebuild.confirm.sweep},
-                     title=#{redis.rebuild.hint},
-                     data-busy-text=#{common.loading}">
-        <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
-        <span th:text="#{redis.rebuild.button}">Rebuild cache</span>
-    </button>
-    <label class="switch" th:title="#{redis.rebuild.sweepHint}">
-        <input type="checkbox" id="redis-rebuild-sweep" value="true"
-               th:disabled="${project.enabled}">
-        <span class="track"></span>
-        <span class="switch-text" th:text="#{redis.rebuild.sweep}">Delete keys under this prefix first</span>
-    </label>
-</th:block>
+<div class="card" th:fragment="card" th:if="${isAdmin}" id="redis-maintenance">
+    <div class="card-head">
+        <h2>
+            <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
+            <span th:text="#{redis.maintenance.title}">Cache maintenance</span>
+        </h2>
+    </div>
+    <div class="card-body">
+        <p class="small muted" style="margin:0 0 10px"
+           th:text="#{redis.rebuild.hint}">Rebuild resets the CDC position and re-projects every selected table.</p>
 
-<!--/* 停用态说明：运行中的项目不能重建缓存（服务端也会拒绝），原因写在页面上，
-       不只放在禁用按钮的 tooltip 里。 */-->
-<p class="small muted" style="margin:11px 0 0" th:fragment="hint"
-   th:if="${project.enabled}" th:text="#{redis.rebuild.running.hint}">Stop the task first.</p>
+        <button type="button" class="btn btn-warn btn-sm"
+                data-role="redis-rebuild" data-reload="true"
+                th:disabled="${project.enabled}"
+                th:attr="data-action=@{/api/projects/{id}/redis-rebuild(id=${project.id})},
+                         data-confirm=#{redis.rebuild.confirm},
+                         data-confirm-sweep=#{redis.rebuild.confirm.sweep},
+                         title=#{redis.rebuild.hint},
+                         data-busy-text=#{common.loading}">
+            <svg class="ico"><use href="#arrow-counterclockwise"/></svg>
+            <span th:text="#{redis.rebuild.button}">Rebuild cache</span>
+        </button>
+
+        <div class="field" style="margin:12px 0 0">
+            <label class="check-inline">
+                <input type="checkbox" id="redis-rebuild-sweep" value="true"
+                       th:disabled="${project.enabled}">
+                <span th:text="#{redis.rebuild.sweep}">Delete keys under this prefix first</span>
+            </label>
+            <div class="help" th:text="#{redis.rebuild.sweepHint}">Only keys under this project's prefix are deleted.</div>
+        </div>
+
+        <!--/* 停用态说明：运行中的项目不能重建缓存（服务端也会拒绝），原因写在页面上，
+               不只放在禁用按钮的 tooltip 里。 */-->
+        <p class="small muted" style="margin:11px 0 0"
+           th:if="${project.enabled}" th:text="#{redis.rebuild.running.hint}">Stop the task first.</p>
+    </div>
+</div>
 </body>
 </html>

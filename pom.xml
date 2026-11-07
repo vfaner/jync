@@ -7,13 +7,13 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>2.7.18</version>
+        <version>4.1.2</version>
         <relativePath/>
     </parent>
 
     <groupId>com.qqmu.jync</groupId>
     <artifactId>jync</artifactId>
-    <version>1.14.0</version>
+    <version>2.0.0</version>
     <name>Jync</name>
     <description>Jync (捷同) - real-time heterogeneous database structure and data synchronization in a single JAR</description>
 
@@ -30,28 +30,36 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <lombok.version>1.18.30</lombok.version>
-        <!-- Spring Boot 2.7.18 is the last OSS release of the 2.7 line, so its managed
-             versions stop at 2023. These overrides pick up the security fixes published
-             afterwards on the same minor lines; Boot supports overriding all three. -->
-        <tomcat.version>9.0.123</tomcat.version>
-        <spring-framework.version>5.3.39</spring-framework.version>
-        <spring-security.version>5.7.14</spring-security.version>
         <!-- JVM args for the forked test JVM; the lob-memory-it profile sets a small heap
              so PostgresToOracleLobIT proves the LOB read path does not buffer whole values. -->
         <jync.test.jvmArgs></jync.test.jvmArgs>
+        <!-- Every 1.x deployment has an MVStore file at ./data/jync.mv.db in H2's old
+             write format. H2 2.2+ refuses to open it ("Unsupported database file version"),
+             so the Boot 4 default would strand the embedded metadata store on upgrade.
+             2.1.214 is the last release that reads that format; keep it until an explicit
+             export/import migration ships. External MySQL / PostgreSQL metadata stores are
+             unaffected. -->
+        <h2.version>2.1.214</h2.version>
     </properties>
 
     <dependencies>
+        <!-- Boot 4 split the servlet stack out of "web"; "webmvc" is the module name that
+             survives, and it resolves to the same set of artifacts. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
             <exclusions>
                 <!-- No WebSocket endpoint anywhere (checked: no @ServerEndpoint / SockJS / WebSocket
                      usage); it is only a default of the Tomcat starter. -->
                 <exclusion>
                     <groupId>org.apache.tomcat.embed</groupId>
                     <artifactId>tomcat-embed-websocket</artifactId>
+                </exclusion>
+                <!-- Templates use Thymeleaf's SpringEL dialect, and no @Valid / Bean Validation
+                     is used anywhere, so no Jakarta EL implementation is ever evaluated. -->
+                <exclusion>
+                    <groupId>org.apache.tomcat.embed</groupId>
+                    <artifactId>tomcat-embed-el</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
@@ -73,6 +81,14 @@
                 <exclusion>
                     <groupId>org.springframework</groupId>
                     <artifactId>spring-aspects</artifactId>
+                </exclusion>
+                <!-- Hibernate links against jakarta.xml.bind.JAXBException while building
+                     the bootstrap binder, so the API jar must stay. The binding implementation
+                     is only used for orm.xml / hbm.xml; this application maps exclusively with
+                     annotations and has no such file on the classpath. -->
+                <exclusion>
+                    <groupId>org.glassfish.jaxb</groupId>
+                    <artifactId>jaxb-runtime</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
@@ -125,9 +141,13 @@
 
         <!-- Bundled drivers. GBase and Oscar have no artifact on Maven Central, so they stay
              on the user-supplied-jar path together with CUSTOM; see DriverPresence. -->
+        <!-- Current coordinates for the MySQL driver; the old
+             mysql:mysql-connector-java is a relocation POM for this artifact. The version
+             stays at the 8.0 line this release was verified against (the BOM would
+             otherwise select a newer major). -->
         <dependency>
-            <groupId>mysql</groupId>
-            <artifactId>mysql-connector-java</artifactId>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
             <version>8.0.33</version>
             <scope>runtime</scope>
         </dependency>
@@ -148,6 +168,14 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
+            <exclusions>
+                <!-- Annotation-only artifact (CHECKER framework qualifiers); the driver
+                     itself does not reference it at runtime. -->
+                <exclusion>
+                    <groupId>org.checkerframework</groupId>
+                    <artifactId>checker-qual</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.mariadb.jdbc</groupId>
@@ -185,21 +213,24 @@
         <!-- Oracle's XMLType implementation. Without it, reading a table that contains an
              XMLTYPE column (or even advancing past it in a result set) dies with
              NoClassDefFoundError oracle/xdb/XMLType, which used to abort the whole sync.
-             Version pinned to the ojdbc8 above; the two are released together. -->
+             Version comes from the Spring Boot BOM, which aligns it with ojdbc8 above;
+             mixing an older xdb with a newer driver links against classes the driver no
+             longer exports. -->
         <dependency>
             <groupId>com.oracle.database.xml</groupId>
             <artifactId>xdb</artifactId>
-            <version>21.5.0.0</version>
             <scope>runtime</scope>
         </dependency>
         <!-- Oracle's XML parser classes (oracle.xml.parser.v2.*), required by xdb's XMLType
              implementation. The "_sans_jaxp_services" variant is deliberate: the plain jar
              registers itself as the JAXP provider, which would replace the JDK parsers for
-             every other part of the application. -->
+             every other part of the application. The BOM does not manage this variant, so
+             its version is explicit and must track the BOM's oracle-database.version
+             (${oracle-database.version}) used for xdb and ojdbc8. -->
         <dependency>
             <groupId>com.oracle.database.xml</groupId>
             <artifactId>xmlparserv2_sans_jaxp_services</artifactId>
-            <version>23.8.0.25.04</version>
+            <version>23.26.3.0.0</version>
             <scope>runtime</scope>
         </dependency>
         <dependency>
@@ -288,6 +319,26 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Boot 4 moved @WebMvcTest / @AutoConfigureMockMvc out of the generic test starter
+             into the per-technology module. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Same split for @DataJpaTest / TestEntityManager. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Boot 4 moved the @WebMvcTest security auto-configuration into this module; without
+             it slice tests run without Security, so no CSRF token reaches the Thymeleaf forms. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-test</artifactId>
             <scope>test</scope>
         </dependency>
 

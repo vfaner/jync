@@ -2,7 +2,6 @@ package com.qqmu.jync.service.config;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,8 +10,9 @@ import java.util.zip.ZipInputStream;
 
 import org.springframework.stereotype.Component;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.dto.config.ConfigPackageDtos;
 
 /**
@@ -126,7 +126,7 @@ public class ConfigPackageReader {
         }
         try {
             return json.readValue(body, type);
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             throw new ConfigPackageException("error.config.import.badFormat", e);
         }
     }

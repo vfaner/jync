@@ -1,9 +1,13 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -12,8 +16,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
@@ -53,12 +57,12 @@ import com.qqmu.jync.service.projection.redis.RedisValueFormat;
 class ProjectRedisViewTest {
 
     @Autowired private MockMvc mvc;
-    @MockBean private ProjectService projectService;
-    @MockBean private DatabaseConfigService databaseConfigService;
-    @MockBean private CdcOperationsService cdcOperationsService;
-    @MockBean private CdcConsumerManager cdcConsumerManager;
-    @MockBean private CdcPositionStore cdcPositionStore;
-    @MockBean private RedisTargetService redisTargetService;
+    @MockitoBean private ProjectService projectService;
+    @MockitoBean private DatabaseConfigService databaseConfigService;
+    @MockitoBean private CdcOperationsService cdcOperationsService;
+    @MockitoBean private CdcConsumerManager cdcConsumerManager;
+    @MockitoBean private CdcPositionStore cdcPositionStore;
+    @MockitoBean private RedisTargetService redisTargetService;
 
     private static RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();
@@ -150,6 +154,47 @@ class ProjectRedisViewTest {
         // source rows against a relational target that does not exist.
         assertThat(page).doesNotContain("data-side=\"target\"");
         assertThat(page).doesNotContain("data-role=\"content-audit\"");
+    }
+
+    /**
+     * A cache page does not render the schedule or full-load performance cards, so those
+     * fields are absent from its submission. Writing the absent-field defaults would reset
+     * the batch size and worker count the projection's baseline load actually runs with —
+     * values a converted project saved while it still had a database target.
+     */
+    @Test
+    void savingACacheConfigLeavesFieldsItsPageNeverRenderedAlone() throws Exception {
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("cache-proj");
+        project.setSourceDbId(2L);
+        project.setTargetKind(SyncTargetKind.REDIS);
+        project.setTargetRedisId(9L);
+        project.setEnabled(false);
+        when(projectService.findById(1L)).thenReturn(Optional.of(project));
+
+        SyncConfig stored = new SyncConfig();
+        stored.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+        stored.setBatchSize(1500);
+        stored.setFullLoadParallelism(3);
+        stored.setAllowDrop(true);
+        stored.setCronExpression("0 */5 * * * ?");
+        when(projectService.loadConfig(project)).thenReturn(stored);
+
+        mvc.perform(post("/projects/1/config").with(asAdmin()).with(csrf())
+                        .param("tables", "orders")
+                        .param("objectSelectionExplicit", "true")
+                        .param("captureStrategy", "BINLOG_CDC"))
+                .andExpect(status().is3xxRedirection());
+
+        org.mockito.ArgumentCaptor<SyncConfig> captor =
+                org.mockito.ArgumentCaptor.forClass(SyncConfig.class);
+        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("BINLOG_CDC"));
+        SyncConfig saved = captor.getValue();
+        assertThat(saved.getBatchSize()).isEqualTo(1500);
+        assertThat(saved.getFullLoadParallelism()).isEqualTo(3);
+        assertThat(saved.isAllowDrop()).isTrue();
+        assertThat(saved.getCronExpression()).isEqualTo("0 */5 * * * ?");
     }
 
     @Test

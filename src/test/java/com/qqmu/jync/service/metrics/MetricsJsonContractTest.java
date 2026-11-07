@@ -8,7 +8,8 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import com.qqmu.jync.config.JacksonConfig;
 
@@ -26,7 +27,8 @@ class MetricsJsonContractTest {
 
     private static final Instant SAMPLED_AT = Instant.parse("2026-11-01T12:34:56.123456Z");
 
-    private final ObjectMapper mapper = new JacksonConfig().objectMapper();
+    private final ObjectMapper mapper =
+            JacksonConfig.applyDefaults(JsonMapper.builder()).build();
 
     @Test
     void theTaskViewSerialisesItsTimestampAsAnIsoString() throws Exception {

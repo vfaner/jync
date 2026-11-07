@@ -2,9 +2,7 @@ package com.qqmu.jync.service.cdc;
 
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -714,14 +712,4 @@ public final class PgTestDecodingParser {
     /** Trailing UTC offset: {@code +HH}, {@code +HHMM} or {@code +HH:MM}. */
     private static final java.util.regex.Pattern TZ_OFFSET_SUFFIX =
             java.util.regex.Pattern.compile("[+-]\\d{2}(:?\\d{2})?$");
-
-    /** Helper for tests: split a multi-line slot batch into a list of lines. */
-    static List<String> splitBatch(String batch) {
-        List<String> out = new ArrayList<>();
-        if (batch == null) return out;
-        for (String line : batch.split("\n")) {
-            if (!line.isBlank()) out.add(line);
-        }
-        return out;
-    }
 }

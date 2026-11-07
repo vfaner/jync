@@ -6,7 +6,7 @@ import java.util.Set;
 
 import org.springframework.stereotype.Component;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionAuthType;
@@ -68,12 +68,12 @@ public class SearchConnectionAdapter implements MigrationConnectionKindAdapter {
         long start = System.nanoTime();
         try {
             JsonNode root = client.get("/");
-            String product = root.path("version").path("distribution").asText("");
+            String product = root.path("version").path("distribution").asString("");
             if (product.isBlank()) {
-                product = root.path("tagline").asText("unknown");
+                product = root.path("tagline").asString("unknown");
             }
-            String version = root.path("version").path("number").asText(null);
-            String cluster = root.path("cluster_name").asText(null);
+            String version = root.path("version").path("number").asString(null);
+            String cluster = root.path("cluster_name").asString(null);
             return new MigrationConnectionTestResult(true, null, product, version, cluster,
                     elapsedMs(start));
         } catch (RuntimeException e) {
@@ -96,7 +96,7 @@ public class SearchConnectionAdapter implements MigrationConnectionKindAdapter {
         List<MigrationDiscoveryItem> indices = new ArrayList<>();
         if (cat != null && cat.isArray()) {
             for (JsonNode row : cat) {
-                String name = row.path("index").asText("");
+                String name = row.path("index").asString("");
                 if (name.isBlank()
                         || name.startsWith(".")
                         && !MigrationGlob.namesPrefix(effective, ".")) {
@@ -106,9 +106,9 @@ public class SearchConnectionAdapter implements MigrationConnectionKindAdapter {
                     continue;
                 }
                 indices.add(new MigrationDiscoveryItem(name, row.path("docs.count").asLong(0),
-                        row.path("store.size").asText(""),
-                        row.path("status").asText(""),
-                        row.path("health").asText("")));
+                        row.path("store.size").asString(""),
+                        row.path("status").asString(""),
+                        row.path("health").asString("")));
             }
         }
         return indices;

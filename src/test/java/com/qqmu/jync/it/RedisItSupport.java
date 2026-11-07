@@ -14,7 +14,9 @@ import com.github.dockerjava.api.model.Ports;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.repository.RedisTargetRepository;
 
+import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
 
@@ -185,7 +187,10 @@ final class RedisItSupport {
         if (connection == null || !connection.isOpen()) {
             dropConnection();
             client = RedisClient.create(uri());
-            client.setDefaultTimeout(Duration.ofSeconds(5));
+            client.setOptions(ClientOptions.builder()
+                    .timeoutOptions(TimeoutOptions.builder()
+                            .timeoutCommands().fixedTimeout(Duration.ofSeconds(5)).build())
+                    .build());
             connection = client.connect();
         }
         return connection;

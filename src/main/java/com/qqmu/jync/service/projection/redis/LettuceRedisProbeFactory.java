@@ -45,7 +45,7 @@ public class LettuceRedisProbeFactory implements RedisProbeFactory {
         if (target.isClusterMode()) {
             RedisClusterClient client = RedisClusterClient.create(uri);
             try {
-                client.setDefaultTimeout(timeout);
+                client.setOptions(LettuceTimeouts.cluster(timeout));
                 StatefulRedisClusterConnection<String, String> connection = client.connect();
                 return new LettuceRedisProbe(connection.sync(), () -> {
                     connection.close();
@@ -59,7 +59,7 @@ public class LettuceRedisProbeFactory implements RedisProbeFactory {
 
         RedisClient client = RedisClient.create(uri);
         try {
-            client.setDefaultTimeout(timeout);
+            client.setOptions(LettuceTimeouts.client(timeout));
             StatefulRedisConnection<String, String> connection = client.connect();
             return new LettuceRedisProbe(connection.sync(), () -> {
                 connection.close();

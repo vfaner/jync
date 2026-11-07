@@ -2,7 +2,6 @@ package com.qqmu.jync;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
@@ -16,7 +15,7 @@ import com.qqmu.jync.config.SyncProperties;
  * {@link com.qqmu.jync.config.LegacyStoreMigration}, which runs against the effective
  * datasource URL before the context is built.
  */
-@SpringBootApplication(exclude = MongoAutoConfiguration.class)
+@SpringBootApplication
 @EnableScheduling
 @EnableConfigurationProperties({SyncProperties.class, MetricsProperties.class})
 public class JyncApplication {

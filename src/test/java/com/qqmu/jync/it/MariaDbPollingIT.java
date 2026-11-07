@@ -30,7 +30,6 @@ import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.sync.ContentAuditRunner;
-import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
 import com.qqmu.jync.service.task.SyncContextFactory;
 import com.qqmu.jync.util.CryptoUtil;

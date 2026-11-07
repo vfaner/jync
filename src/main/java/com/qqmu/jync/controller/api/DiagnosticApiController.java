@@ -45,7 +45,7 @@ public class DiagnosticApiController {
         try {
             bundle = bundleService.build();
         } catch (DiagnosticBundleTooLargeException ex) {
-            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+            return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("success", false, "message", ex.getMessage()));
         }

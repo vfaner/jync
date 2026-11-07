@@ -6,7 +6,6 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.ArrayList;
@@ -16,7 +15,7 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
@@ -79,11 +78,11 @@ class SecurityConfigTest {
     private RequestMappingHandlerMapping handlerMapping;
 
     @Autowired
-    private org.springframework.boot.autoconfigure.web.ServerProperties serverProperties;
+    private org.springframework.boot.web.server.autoconfigure.ServerProperties serverProperties;
 
     @Test
     void sessionCookieCarriesHardeningFlagsByDefault() {
-        org.springframework.boot.web.servlet.server.Session.Cookie cookie =
+        org.springframework.boot.web.server.Cookie cookie =
                 serverProperties.getServlet().getSession().getCookie();
         assertThat(cookie.getHttpOnly()).isTrue();
         assertThat(String.valueOf(cookie.getSameSite()).toLowerCase()).isEqualTo("lax");
@@ -132,7 +131,7 @@ class SecurityConfigTest {
     void aPageRedirectsToTheLoginForm() throws Exception {
         mvc.perform(get("/"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrlPattern("**/login"));
+                .andExpect(redirectedUrl("/login"));
     }
 
     /**
@@ -242,6 +241,19 @@ class SecurityConfigTest {
         // only reads.
         assertThat(statusOf(get("/api/migrations/indices").with(asViewer())))
                 .isEqualTo(403);
+    }
+
+    /**
+     * Spring 7 removed trailing-slash matching, and with it the old workaround that kept a viewer
+     * from reaching an admin-only form through {@code /databases/1/edit/}. Pin the outcome: the
+     * path is not routed at all, so no variant of it can render the admin page.
+     */
+    @Test
+    void aTrailingSlashDoesNotReachAnAdminOnlyPage() throws Exception {
+        assertThat(statusOf(get("/databases/1/edit/").with(asViewer())))
+                .isEqualTo(404);
+        assertThat(statusOf(get("/projects/1/edit/").with(asViewer())))
+                .isEqualTo(404);
     }
 
     /**

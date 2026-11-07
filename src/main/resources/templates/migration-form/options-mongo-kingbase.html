@@ -16,13 +16,13 @@
                 <label for="opt-writeMode" th:text="#{migration.opt.writeMode}">Write mode</label>
                 <select class="input" id="opt-writeMode" name="opt.writeMode">
                     <option value="OVERWRITE"
-                            th:selected="${options.get('writeMode') == null or options.get('writeMode').asText('OVERWRITE') == 'OVERWRITE'}"
+                            th:selected="${options.get('writeMode') == null or options.get('writeMode').asString('OVERWRITE') == 'OVERWRITE'}"
                             th:text="#{migration.kingbase.writeMode.OVERWRITE}">Delete and rebuild the table</option>
                     <option value="APPEND"
-                            th:selected="${options.get('writeMode') != null and options.get('writeMode').asText('') == 'APPEND'}"
+                            th:selected="${options.get('writeMode') != null and options.get('writeMode').asString('') == 'APPEND'}"
                             th:text="#{migration.kingbase.writeMode.APPEND}">Add to the existing table</option>
                     <option value="FAIL_IF_EXISTS"
-                            th:selected="${options.get('writeMode') != null and options.get('writeMode').asText('') == 'FAIL_IF_EXISTS'}"
+                            th:selected="${options.get('writeMode') != null and options.get('writeMode').asString('') == 'FAIL_IF_EXISTS'}"
                             th:text="#{migration.kingbase.writeMode.FAIL_IF_EXISTS}">Fail if it exists</option>
                 </select>
                 <div class="help" th:text="#{migration.kingbase.writeMode.help}">
@@ -36,7 +36,7 @@
                 <label for="opt-nestedMode" th:text="#{migration.opt.nestedMode}">Nested documents and arrays</label>
                 <select class="input" id="opt-nestedMode" name="opt.nestedMode">
                     <option value="JSON"
-                            th:selected="${options.get('nestedMode') == null or options.get('nestedMode').asText('JSON') == 'JSON'}"
+                            th:selected="${options.get('nestedMode') == null or options.get('nestedMode').asString('JSON') == 'JSON'}"
                             th:text="#{migration.opt.nestedMode.JSON}">JSON text</option>
                 </select>
                 <div class="help" th:text="#{migration.opt.nestedModeHelp}">
@@ -85,25 +85,25 @@
                 <label for="opt-batchSize" th:text="#{migration.opt.batchSize}">Batch size</label>
                 <input type="number" class="input" id="opt-batchSize" name="opt.batchSize"
                        min="1" max="10000"
-                       th:value="${options.get('batchSize') != null ? options.get('batchSize').asText('1000') : '1000'}">
+                       th:value="${options.get('batchSize') != null ? options.get('batchSize').asString('1000') : '1000'}">
             </div>
             <div class="field">
                 <label for="opt-sampleLimit" th:text="#{migration.opt.sampleLimit}">Schema sample size</label>
                 <input type="number" class="input" id="opt-sampleLimit" name="opt.sampleLimit"
                        min="1" max="1000"
-                       th:value="${options.get('sampleLimit') != null ? options.get('sampleLimit').asText('200') : '200'}">
+                       th:value="${options.get('sampleLimit') != null ? options.get('sampleLimit').asString('200') : '200'}">
             </div>
             <div class="field">
                 <label for="opt-verifySampleSize" th:text="#{migration.opt.verifySampleSize}">Verification sample</label>
                 <input type="number" class="input" id="opt-verifySampleSize"
                        name="opt.verifySampleSize" min="0" max="1000"
-                       th:value="${options.get('verifySampleSize') != null ? options.get('verifySampleSize').asText('100') : '100'}">
+                       th:value="${options.get('verifySampleSize') != null ? options.get('verifySampleSize').asString('100') : '100'}">
             </div>
             <div class="field">
                 <label for="opt-maxCollections" th:text="#{migration.opt.maxCollections}">Maximum collections</label>
                 <input type="number" class="input" id="opt-maxCollections" name="opt.maxCollections"
                        min="1" max="10000"
-                       th:value="${options.get('maxCollections') != null ? options.get('maxCollections').asText('200') : '200'}">
+                       th:value="${options.get('maxCollections') != null ? options.get('maxCollections').asString('200') : '200'}">
             </div>
         </div>
 

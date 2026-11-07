@@ -50,24 +50,6 @@ final class TolerantReads {
         return value == null || value > Integer.MAX_VALUE ? null : value.intValue();
     }
 
-    static Double scalarDouble(Connection connection, String sql) throws SQLException {
-        try (Statement statement = connection.createStatement();
-             ResultSet rs = statement.executeQuery(sql)) {
-            return rs.next() ? parseDouble(rs.getString(1)) : null;
-        }
-    }
-
-    static Double parseDouble(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-        try {
-            return Double.parseDouble(raw.trim());
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
     /** A blank cell (SQL NULL, or a server that answered with something non-numeric) is unknown, not zero. */
     static Long parseLong(String raw) {
         if (raw == null || raw.isBlank()) {

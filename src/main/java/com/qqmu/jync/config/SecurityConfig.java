@@ -2,8 +2,8 @@ package com.qqmu.jync.config;
 
 import java.io.IOException;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -283,22 +283,22 @@ public class SecurityConfig {
                         UsernamePasswordAuthenticationFilter.class)
 
                 .authorizeHttpRequests(reg -> reg
-                        .antMatchers(PUBLIC).permitAll()
+                        .requestMatchers(PUBLIC).permitAll()
 
                         // The OA sign-in form posts before anyone is signed in. It must sit
                         // above the blanket POST rule below, which would otherwise demand an
                         // admin role from the very person trying to log in.
-                        .antMatchers(HttpMethod.POST, "/login/oa").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/login/oa").permitAll()
 
                         // Both roles must be able to POST here. This has to precede the blanket
                         // POST rule below, or a viewer would be shown a password form they are
                         // forbidden to submit.
-                        .antMatchers("/account/password").authenticated()
+                        .requestMatchers("/account/password").authenticated()
 
-                        .antMatchers(HttpMethod.GET, ADMIN_ONLY_GET).hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.GET, ADMIN_ONLY_GET).hasRole("ADMIN")
 
                         // Every mutation in the app is a POST; see the class comment.
-                        .antMatchers(HttpMethod.POST, "/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/**").hasRole("ADMIN")
 
                         // Everything left is a read.
                         .anyRequest().authenticated())

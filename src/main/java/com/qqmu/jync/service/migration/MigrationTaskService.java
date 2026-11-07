@@ -1,6 +1,5 @@
 package com.qqmu.jync.service.migration;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
@@ -14,9 +13,9 @@ import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.dto.MigrationTaskForm;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.audit.AuditDetail;
@@ -250,7 +249,7 @@ public class MigrationTaskService {
         }
         try {
             return JSON.readTree(task.getOptionsJson());
-        } catch (IOException e) {
+        } catch (tools.jackson.core.JacksonException e) {
             throw new IllegalArgumentException("error.migration.options.invalid", e);
         }
     }

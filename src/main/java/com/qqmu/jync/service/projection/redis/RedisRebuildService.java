@@ -88,11 +88,14 @@ public class RedisRebuildService {
         long startedAt = System.currentTimeMillis();
         Project project = projects.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
-        if (projectService.isRunning(project)) {
-            throw new IllegalStateException("error.project.redis.rebuild.mustStop");
-        }
+        // The kind check comes first: "stop the project first" is advice for a cache project,
+        // and a database project cannot be rebuilt no matter what state it is in. A stale
+        // form that still shows the cache card after the target was switched reaches here.
         if (project.getTargetKindOrDefault() != SyncTargetKind.REDIS) {
             throw new IllegalArgumentException("error.project.redis.rebuild.notRedis");
+        }
+        if (projectService.isRunning(project)) {
+            throw new IllegalStateException("error.project.redis.rebuild.mustStop");
         }
         SyncContext ctx = contextFactory.buildForRedis(project, REBUILD_LOCK_OWNER,
                 () -> true, null);

@@ -35,13 +35,14 @@ public final class RedisUris {
             // driver, so leave the URI at the default and let validation refuse the form.
             builder.withDatabase(target.getDatabaseIndex());
         }
-        RedisURI uri = builder.build();
         if (plainPassword != null && !plainPassword.isEmpty()) {
+            // Lettuce 7 made RedisURI immutable; credentials are set on the builder.
             if (target.getUsername() != null && !target.getUsername().isBlank()) {
-                uri.setUsername(target.getUsername());
+                builder.withAuthentication(target.getUsername(), plainPassword);
+            } else {
+                builder.withPassword(plainPassword);
             }
-            uri.setPassword(plainPassword);
         }
-        return uri;
+        return builder.build();
     }
 }

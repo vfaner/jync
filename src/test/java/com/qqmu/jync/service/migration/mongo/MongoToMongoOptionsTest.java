@@ -5,14 +5,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.service.migration.MigrationTargetNaming;
 import com.qqmu.jync.service.migration.MigrationWriteMode;
 
 class MongoToMongoOptionsTest {
 
-    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
-            new com.fasterxml.jackson.databind.ObjectMapper();
+    private static final tools.jackson.databind.ObjectMapper JSON =
+            new tools.jackson.databind.ObjectMapper();
 
     @Test
     void theDefaultsAreTheSafeOnes() {

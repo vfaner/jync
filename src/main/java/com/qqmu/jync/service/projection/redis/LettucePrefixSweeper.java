@@ -176,7 +176,7 @@ public class LettucePrefixSweeper implements RedisPrefixSweeper {
             if (target.isClusterMode()) {
                 RedisClusterClient client = RedisClusterClient.create(uri);
                 try {
-                    client.setDefaultTimeout(timeout);
+                    client.setOptions(LettuceTimeouts.cluster(timeout));
                     StatefulRedisClusterConnection<String, String> connection = client.connect();
                     AtomicBoolean closed = new AtomicBoolean();
                     Runnable close = () -> {
@@ -185,7 +185,7 @@ public class LettucePrefixSweeper implements RedisPrefixSweeper {
                     };
                     List<Handle> handles = new ArrayList<>();
                     for (RedisClusterNode node : connection.getPartitions()) {
-                        if (!node.is(RedisClusterNode.NodeFlag.MASTER)) {
+                        if (!node.is(RedisClusterNode.NodeFlag.UPSTREAM)) {
                             continue;
                         }
                         StatefulRedisConnection<String, String> pinned =
@@ -204,7 +204,7 @@ public class LettucePrefixSweeper implements RedisPrefixSweeper {
 
             RedisClient client = RedisClient.create(uri);
             try {
-                client.setDefaultTimeout(timeout);
+                client.setOptions(LettuceTimeouts.client(timeout));
                 StatefulRedisConnection<String, String> connection = client.connect();
                 return List.of(new LettuceHandle(connection.sync(), () -> {
                     connection.close();

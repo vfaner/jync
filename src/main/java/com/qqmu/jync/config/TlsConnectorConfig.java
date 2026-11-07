@@ -6,8 +6,9 @@ import java.nio.file.Path;
 import org.apache.catalina.connector.Connector;
 import org.apache.coyote.AbstractProtocol;
 import org.apache.tomcat.util.net.SSLHostConfig;
+import org.apache.tomcat.util.net.SSLHostConfigCertificate;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
+import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -68,7 +69,7 @@ public class TlsConnectorConfig {
     static void customize(TomcatServletWebServerFactory factory, TlsRuntimeState runtime,
                           TlsKeystoreStore store, String bindAddress) {
         runtime.active().ifPresent(config ->
-                factory.addAdditionalTomcatConnectors(
+                factory.addAdditionalConnectors(
                         httpsConnector(config, store.keystorePath(config), bindAddress)));
     }
 
@@ -97,9 +98,13 @@ public class TlsConnectorConfig {
 
         SSLHostConfig ssl = new SSLHostConfig();
         ssl.setProtocols(PROTOCOLS);
-        ssl.setCertificateKeystoreFile(keystore.toString());
-        ssl.setCertificateKeystoreType(config.format().keystoreType());
-        ssl.setCertificateKeystorePassword(config.passphrase());
+        // Tomcat 11 moved the keystore settings from SSLHostConfig onto the certificate entry.
+        SSLHostConfigCertificate certificate = new SSLHostConfigCertificate(
+                ssl, SSLHostConfigCertificate.Type.UNDEFINED);
+        certificate.setCertificateKeystoreFile(keystore.toString());
+        certificate.setCertificateKeystoreType(config.format().keystoreType());
+        certificate.setCertificateKeystorePassword(config.passphrase());
+        ssl.addCertificate(certificate);
         connector.addSslHostConfig(ssl);
         return connector;
     }

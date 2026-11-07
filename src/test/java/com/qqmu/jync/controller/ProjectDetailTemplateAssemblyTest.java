@@ -38,7 +38,27 @@ class ProjectDetailTemplateAssemblyTest {
                 .contains("project-detail/cdc-status :: cdc-card")
                 .contains("project-detail/cdc-idle-poll :: card")
                 .contains("project-detail/column-rules :: card")
-                .contains("project-detail/progress :: block");
+                .contains("project-detail/progress :: block")
+                .contains("project-detail/redis-projection :: card")
+                .contains("project-detail/redis-rebuild :: card");
+    }
+
+    @Test
+    void theRunControlsNeverCarryTheRedisMaintenanceAction() throws IOException {
+        String controls = read(DETAIL.resolve("controls.html"));
+
+        assertThat(controls)
+                .as("cache rebuilding belongs to the right-hand cache column, not the button row")
+                .doesNotContain("redis-rebuild");
+    }
+
+    @Test
+    void theRedisMaintenanceCardFollowsTheProjectionCard() throws IOException {
+        String shell = read(TEMPLATES.resolve("project-detail.html"));
+
+        assertThat(shell.indexOf("project-detail/redis-rebuild :: card"))
+                .as("maintenance card sits under the projection card it acts on")
+                .isGreaterThan(shell.indexOf("project-detail/redis-projection :: card"));
     }
 
     @Test
@@ -71,6 +91,8 @@ class ProjectDetailTemplateAssemblyTest {
         assertFragment("cdc-status.html", "cdc-card");
         assertFragment("cdc-idle-poll.html", "card");
         assertFragment("column-rules.html", "card");
+        assertFragment("redis-projection.html", "card");
+        assertFragment("redis-rebuild.html", "card");
         assertFragment("progress.html", "block");
     }
 

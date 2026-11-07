@@ -10,25 +10,25 @@
         <label for="opt-targetNaming" th:text="#{migration.opt.targetNaming}">Target name</label>
         <select class="input" id="opt-targetNaming" name="opt.targetNaming">
             <option value="SAME"
-                    th:selected="${options.get('targetNaming') == null or options.get('targetNaming').asText('SAME') == 'SAME'}"
+                    th:selected="${options.get('targetNaming') == null or options.get('targetNaming').asString('SAME') == 'SAME'}"
                     th:text="#{migration.naming.SAME}">Same as source</option>
             <option value="PREFIX"
-                    th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asText('') == 'PREFIX'}"
+                    th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asString('') == 'PREFIX'}"
                     th:text="#{migration.naming.PREFIX}">Add a prefix</option>
             <option value="SUFFIX"
-                    th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asText('') == 'SUFFIX'}"
+                    th:selected="${options.get('targetNaming') != null and options.get('targetNaming').asString('') == 'SUFFIX'}"
                     th:text="#{migration.naming.SUFFIX}">Add a suffix</option>
         </select>
     </div>
     <div class="field">
         <label for="opt-targetPrefix" th:text="#{migration.opt.prefix}">Prefix</label>
         <input type="text" class="input mono" id="opt-targetPrefix" name="opt.targetPrefix"
-               th:value="${options.get('targetPrefix') != null ? options.get('targetPrefix').asText('') : ''}">
+               th:value="${options.get('targetPrefix') != null ? options.get('targetPrefix').asString('') : ''}">
     </div>
     <div class="field">
         <label for="opt-targetSuffix" th:text="#{migration.opt.suffix}">Suffix</label>
         <input type="text" class="input mono" id="opt-targetSuffix" name="opt.targetSuffix"
-               th:value="${options.get('targetSuffix') != null ? options.get('targetSuffix').asText('') : suffixDefault}">
+               th:value="${options.get('targetSuffix') != null ? options.get('targetSuffix').asString('') : suffixDefault}">
     </div>
 </th:block>
 
@@ -37,7 +37,7 @@
     <label for="opt-collectionsText" th:text="#{migration.opt.collections}">Collections</label>
     <textarea class="input mono" id="opt-collectionsText" name="opt.collectionsText"
               rows="3" placeholder="orders, users"
-              th:text="${options.get('collectionsText') != null ? options.get('collectionsText').asText('') : ''}"></textarea>
+              th:text="${options.get('collectionsText') != null ? options.get('collectionsText').asString('') : ''}"></textarea>
     <div class="help">
         <span th:text="#{migration.opt.collectionsHelp}">
             Comma or newline separated patterns. Leave blank for every non-system collection.

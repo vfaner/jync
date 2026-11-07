@@ -1,6 +1,5 @@
 package com.qqmu.jync.service;
 
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -28,11 +27,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.dto.SyncConfig;
@@ -136,8 +136,9 @@ public class ProjectService {
      * bean cannot be reused here because saveConfig needs the parse to behave identically
      * under unit-test mocks of the manager.
      */
-    private static final ObjectMapper STRATEGY_JSON = new ObjectMapper()
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    private static final ObjectMapper STRATEGY_JSON = JsonMapper.builderWithJackson2Defaults()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .build();
 
     public ProjectService(ProjectRepository projectRepository,
                           DatabaseConfigRepository databaseConfigRepository,
@@ -550,7 +551,7 @@ public class ProjectService {
             projection.put("keyPrefix", "jync:" + saved.getId() + ":");
             saved.setSyncConfig(STRATEGY_JSON.writeValueAsString(object));
             return projectRepository.save(saved);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             // Same rule as cloneSettings: an unreadable config is not a reason to refuse the
             // clone; the user can repair it on the settings page.
             log.warn("Cloned settings of project '{}' are not valid JSON; the Redis key prefix"
@@ -582,7 +583,7 @@ public class ProjectService {
                 return STRATEGY_JSON.writeValueAsString(object);
             }
             return json;
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             // A config this version cannot parse is copied verbatim — the behavior before
             // the clone feature existed. Refusing the clone would be worse: the user can
             // still repair the copied JSON afterwards.
@@ -873,7 +874,7 @@ public class ProjectService {
         }
         try {
             return STRATEGY_JSON.readValue(json, SyncConfig.class);
-        } catch (IOException | RuntimeException e) {
+        } catch (RuntimeException e) {
             log.warn("Unreadable sync_config while comparing table mappings: {}",
                     e.getMessage());
             return null;
@@ -1150,6 +1151,13 @@ public class ProjectService {
             // 「立即同步」对 CDC 无意义:流一直在跑。正确的重放入口是「重建基线」(T17)。
             // 裸 i18n 键:ApiExceptionHandler 原样返回,浏览器端 JyncMessages 本地化。
             throw new IllegalStateException("error.project.cdc.use.rebaseline");
+        }
+        // A cache target has no database to run a polling cycle against. The row reaches here
+        // when an older polling project's target was switched to Redis (the stored config is
+        // kept) or via a direct API call. Without this guard the task runs, fails on the null
+        // target inside the runner, and parks a raw English error on the cache project.
+        if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+            throw new IllegalStateException("error.project.redis.cdcOnly");
         }
         SyncConfig config = loadConfig(project);
         if (config.hasNoSyncObjects()) {

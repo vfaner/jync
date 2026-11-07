@@ -12,15 +12,14 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
@@ -54,11 +53,11 @@ class OaLoginControllerTest {
     @Autowired
     private MockMvc mvc;
 
-    @MockBean
+    @MockitoBean
     private OaAuthClient oaAuthClient;
-    @MockBean
+    @MockitoBean
     private OaAuthConfigService configService;
-    @MockBean
+    @MockitoBean
     private AdminAuditService auditService;
 
     private OaAuthConfig config;
@@ -91,14 +90,16 @@ class OaLoginControllerTest {
         // Signing in from a deep link: the request cache keeps the target in the session.
         mvc.perform(get("/projects").session(session))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrlPattern("**/login"));
+                .andExpect(redirectedUrl("/login"));
         String sessionIdBefore = session.getId();
 
         // The saved target is reduced to a same-origin path (no absolute URL can be replayed).
         mvc.perform(post("/login/oa").session(session).with(csrf())
                         .param("username", "alice").param("password", "pw"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/projects"));
+                // Spring Security 7 appends its matching-request marker to the saved URL; the
+                // application ignores it and the route still resolves.
+                .andExpect(redirectedUrl("/projects?continue"));
 
         // Session fixation protection: the id the browser arrived with is not the id it leaves with.
         assertThat(session.getId()).isNotEqualTo(sessionIdBefore);

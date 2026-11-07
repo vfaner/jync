@@ -93,7 +93,7 @@ class CdcConsumerManagerTest {
         config.setCaptureStrategy(strategy);
         // config JSON 按 SyncContextFactory.parseConfig 期望的序列化格式塞进 project.setSyncConfig(...)
         // (Project 实体字段名是 syncConfig,已核实)
-        project.setSyncConfig(new com.fasterxml.jackson.databind.ObjectMapper()
+        project.setSyncConfig(new tools.jackson.databind.ObjectMapper()
                 .valueToTree(config).toString());
         return project;
     }

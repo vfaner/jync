@@ -9,7 +9,7 @@ import java.util.TreeMap;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
@@ -42,6 +42,13 @@ class ChangeLogHourlySeriesDataTest {
         repository.save(log);
     }
 
+    private static Instant instantOf(Object raw) {
+        if (raw instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toInstant();
+        }
+        return ((java.time.LocalDateTime) raw).toInstant(java.time.ZoneOffset.UTC);
+    }
+
     @Test
     void rowsAreBucketedByHourWithTheirChangeAndAffectedRowTotals() {
         Instant since = Instant.parse("2026-01-01T08:00:00Z");
@@ -58,7 +65,7 @@ class ChangeLogHourlySeriesDataTest {
 
         Map<Instant, Object[]> byHour = new TreeMap<>();
         for (Object[] row : rows) {
-            byHour.put(((java.sql.Timestamp) row[0]).toInstant(), row);
+            byHour.put(instantOf(row[0]), row);
         }
         assertThat(byHour.keySet()).containsExactly(
                 Instant.parse("2026-01-01T09:00:00Z"),

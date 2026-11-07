@@ -3,7 +3,7 @@ package com.qqmu.jync.util;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * Human-facing name of where a sign-in came from, for the audit trail.

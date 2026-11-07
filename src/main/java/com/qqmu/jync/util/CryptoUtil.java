@@ -1,6 +1,5 @@
 package com.qqmu.jync.util;
 
-import org.springframework.security.crypto.encrypt.Encryptors;
 import org.springframework.security.crypto.encrypt.TextEncryptor;
 import org.springframework.stereotype.Component;
 
@@ -50,8 +49,9 @@ public class CryptoUtil {
     }
 
     private void applyKey(String password, String salt) {
-        // Delux encryptor: AES-256 CBC with a random IV per value.
-        this.encryptor = Encryptors.delux(password, salt);
+        // AES-256 GCM with a random IV per value, hex-encoded (the format legacy
+        // Encryptors.delux wrote, so existing rows keep decrypting).
+        this.encryptor = DeluxTextEncryptor.create(password, salt);
         this.usingDefaultKey = DEFAULT_CRYPTO_PASSWORD.equals(password)
                 || DEFAULT_CRYPTO_SALT.equals(salt);
     }

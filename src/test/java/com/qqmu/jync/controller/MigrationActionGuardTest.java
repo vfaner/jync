@@ -15,8 +15,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
@@ -37,10 +37,10 @@ import com.qqmu.jync.service.migration.MigrationTypeRegistry;
 class MigrationActionGuardTest {
 
     @Autowired private MockMvc mvc;
-    @MockBean private MigrationTaskService taskService;
-    @MockBean private MigrationConnectionService connectionService;
-    @MockBean private MigrationTypeRegistry registry;
-    @MockBean private MigrationRunRepository runRepository;
+    @MockitoBean private MigrationTaskService taskService;
+    @MockitoBean private MigrationConnectionService connectionService;
+    @MockitoBean private MigrationTypeRegistry registry;
+    @MockitoBean private MigrationRunRepository runRepository;
 
     @Test
     void aMissingTaskIsNeverSubmittedAndLeavesNoRunRowBehind() throws Exception {

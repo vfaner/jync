@@ -31,6 +31,14 @@
                             <dd><span class="chip" th:text="${javaVersion}">17</span></dd>
                         </div>
                         <div class="kv">
+                            <dt th:text="#{settings.springBoot}">Spring Boot</dt>
+                            <dd><span class="chip" th:text="${springBootVersion}">4.1.2</span></dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{settings.tomcat}">Tomcat</dt>
+                            <dd><span class="chip" th:text="${tomcatVersion}">11.0.27</span></dd>
+                        </div>
+                        <div class="kv">
                             <dt th:text="#{settings.os}">OS</dt>
                             <dd><span class="chip" th:text="${osName}">Linux</span></dd>
                         </div>

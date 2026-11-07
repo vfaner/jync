@@ -22,11 +22,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.AiProvider;
-import com.qqmu.jync.model.AlertConfig;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
@@ -35,10 +34,8 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.MigrationTask;
 import com.qqmu.jync.model.ObjectType;
-import com.qqmu.jync.model.OaAuthConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.RedisTarget;
-import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.repository.AiProviderRepository;
 import com.qqmu.jync.repository.AlertConfigRepository;
@@ -244,10 +241,10 @@ class ConfigExportServiceTest {
 
         assertThat(meta.get("schemaVersion").asInt()).isEqualTo(ConfigPackageFormat.SCHEMA_VERSION);
         assertThat(meta.get("includeState").asBoolean()).isFalse();
-        assertThat(meta.get("exportedAt").isTextual()).isTrue();
-        assertThat(meta.get("sourceCrypto").get("password").asText())
+        assertThat(meta.get("exportedAt").isString()).isTrue();
+        assertThat(meta.get("sourceCrypto").get("password").asString())
                 .isEqualTo(syncProperties.getCryptoPassword());
-        assertThat(meta.get("sourceCrypto").get("salt").asText())
+        assertThat(meta.get("sourceCrypto").get("salt").asString())
                 .isEqualTo(syncProperties.getCryptoSalt());
         assertThat(meta.get("counts").get("databases").asInt()).isEqualTo(1);
         assertThat(meta.get("counts").get("users").asInt()).isEqualTo(1);
@@ -264,10 +261,10 @@ class ConfigExportServiceTest {
         assertThat(manifest.get("entries")).hasSize(entries.size() - 1);
         Set<String> covered = new TreeSet<>();
         for (JsonNode item : manifest.get("entries")) {
-            String name = item.get("name").asText();
+            String name = item.get("name").asString();
             covered.add(name);
             assertThat(item.get("size").asLong()).isEqualTo(entries.get(name).length);
-            assertThat(item.get("sha256").asText())
+            assertThat(item.get("sha256").asString())
                     .isEqualTo(ConfigPackageWriter.sha256Hex(entries.get(name)));
         }
         assertThat(covered).doesNotContain("manifest.json");

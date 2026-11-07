@@ -15,8 +15,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.qqmu.jync.model.AiProtocol;
@@ -109,11 +109,7 @@ class AiChatClientOllamaNativeTest {
         AiChatClient.ChatResult result =
                 client.complete(provider(effort, maxTokens), null, "SYS", "USER", maxTokens);
         assertThat(result.isSuccess()).as(result.getMessage()).isTrue();
-        try {
-            return mapper.readTree(lastBody.get());
-        } catch (IOException e) {
-            throw new AssertionError("请求体不是 JSON: " + lastBody.get(), e);
-        }
+        return mapper.readTree(lastBody.get());
     }
 
     // --- 端点与响应形状 -----------------------------------------------------------------
@@ -149,8 +145,8 @@ class AiChatClientOllamaNativeTest {
         assertThat(body.path("system").isMissingNode())
                 .as("顶层 system 是 Anthropic 的形状,原生协议不收")
                 .isTrue();
-        assertThat(body.path("messages").get(0).path("role").asText()).isEqualTo("system");
-        assertThat(body.path("messages").get(0).path("content").asText()).isEqualTo("SYS");
+        assertThat(body.path("messages").get(0).path("role").asString()).isEqualTo("system");
+        assertThat(body.path("messages").get(0).path("content").asString()).isEqualTo("SYS");
     }
 
     // --- 请求体:三处与 OpenAI 形状不同 -------------------------------------------------
@@ -270,16 +266,12 @@ class AiChatClientOllamaNativeTest {
 
         assertThat(result.isSuccess()).as(result.getMessage()).isTrue();
         assertThat(lastPath.get()).isEqualTo("/api/chat");
-        try {
-            JsonNode body = mapper.readTree(lastBody.get());
-            assertThat(body.path("options").path("num_predict").asInt()).isEqualTo(1);
-            assertThat(body.path("stream").asBoolean()).isFalse();
-            assertThat(body.has("think"))
-                    .as("探测是 max_tokens=1 的最小请求,带思考参数只会以端点自己的错误收场")
-                    .isFalse();
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        }
+        JsonNode body = mapper.readTree(lastBody.get());
+        assertThat(body.path("options").path("num_predict").asInt()).isEqualTo(1);
+        assertThat(body.path("stream").asBoolean()).isFalse();
+        assertThat(body.has("think"))
+                .as("探测是 max_tokens=1 的最小请求,带思考参数只会以端点自己的错误收场")
+                .isFalse();
     }
 
     @Test

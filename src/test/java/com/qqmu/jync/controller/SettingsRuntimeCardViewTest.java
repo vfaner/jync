@@ -8,11 +8,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
+import org.apache.catalina.util.ServerInfo;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.SpringBootVersion;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
@@ -42,13 +45,13 @@ class SettingsRuntimeCardViewTest {
     @Autowired
     private MockMvc mvc;
 
-    @MockBean
+    @MockitoBean
     private SyncScheduler scheduler;
-    @MockBean
+    @MockitoBean
     private SyncLockService lockService;
-    @MockBean
+    @MockitoBean
     private VersionService versionService;
-    @MockBean
+    @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
 
     private static final RequireHttpsResolver.Effective HTTPS_OFF =
@@ -105,6 +108,28 @@ class SettingsRuntimeCardViewTest {
         assertThat(diagnostics)
                 .as("诊断包放在上方摘要区、与「项目与作者」同排，而不是页面末尾")
                 .isGreaterThan(projectAuthor).isLessThan(supported);
+    }
+
+    @Test
+    void theRuntimeCardShowsTheSpringBootVersion() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(SpringBootVersion.getVersion()).isNotBlank();
+        assertThat(html)
+                .contains("Spring Boot")
+                .containsPattern("(?s)Spring Boot.{0,300}?"
+                        + Pattern.quote(SpringBootVersion.getVersion()));
+    }
+
+    @Test
+    void theRuntimeCardShowsTheEmbeddedTomcatVersion() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(ServerInfo.getServerNumber()).isNotBlank();
+        assertThat(html)
+                .contains("Tomcat")
+                .containsPattern("(?s)Tomcat.{0,300}?"
+                        + Pattern.quote(ServerInfo.getServerNumber()));
     }
 
     @Test

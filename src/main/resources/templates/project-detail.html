@@ -57,6 +57,9 @@
                        否则一次保存就会把不存在的「结构同步」开关写进配置。 */-->
                 <th:block th:if="${isRedisTarget}">
                     <th:block th:replace="~{project-detail/redis-projection :: card}"/>
+                    <!--/* 重建缓存是 Redis 专属的低频维护动作：紧跟在投影配置之后，
+                           数据库目标与非管理员都不渲染，避免在运行按钮行里造成误解。 */-->
+                    <th:block th:replace="~{project-detail/redis-rebuild :: card}"/>
                 </th:block>
                 <th:block th:unless="${isRedisTarget}">
                     <th:block th:replace="~{project-detail/options :: card}"/>
