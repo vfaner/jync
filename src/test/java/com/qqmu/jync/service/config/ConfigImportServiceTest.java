@@ -33,6 +33,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncProgress;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.SystemSetting;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.repository.AiProviderRepository;
@@ -293,6 +294,82 @@ class ConfigImportServiceTest {
 
         assertThat(databaseConfigs.findAll()).isEmpty();
         assertThat(projects.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a Redis project without a Redis target is refused instead of importing unstartable")
+    void aRedisProjectWithoutItsRedisTargetIsRefused() {
+        seedAdmin();
+        DatabaseConfig source = databaseConfigs.save(database("src"));
+        Project project = new Project();
+        project.setName("cache-without-target");
+        project.setSourceDbId(source.getId());
+        project.setTargetKind(SyncTargetKind.REDIS);
+        project.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");
+        projects.save(project);
+
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+
+        assertThatThrownBy(() -> importService.importPackage(pkg, PASSPHRASE, true))
+                .isInstanceOf(ConfigPackageException.class)
+                .hasFieldOrPropertyWithValue("messageKey",
+                        "error.config.import.targetKindInvalid");
+        assertThat(projects.findAll()).isEmpty();
+        assertThat(redisTargets.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a JDBC project without a target database imports with a warning")
+    void aJdbcProjectWithoutATargetDatabaseImportsWithAWarning() {
+        seedAdmin();
+        DatabaseConfig source = databaseConfigs.save(database("src"));
+        Project project = new Project();
+        project.setName("db-without-target");
+        project.setSourceDbId(source.getId());
+        project.setSyncConfig("{}");
+        projects.save(project);
+
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+
+        // Not refused: the form lets a task be saved before a target is chosen, so such a
+        // project is legitimately exportable. It just cannot start yet — say so, don't fail.
+        ConfigImportService.ImportResult result =
+                importService.importPackage(pkg, PASSPHRASE, true);
+        assertThat(result.warningKeys()).contains("warn.config.import.targetMissing");
+        assertThat(projects.findAll()).singleElement()
+                .extracting(Project::getName).isEqualTo("db-without-target");
+    }
+
+    @Test
+    @DisplayName("an imported cache project keeps only its Redis target")
+    void anImportedCacheProjectDropsAStaleDatabaseTarget() {
+        seedAdmin();
+        DatabaseConfig source = databaseConfigs.save(database("src"));
+        DatabaseConfig staleTarget = databaseConfigs.save(database("old-target"));
+        RedisTarget target = new RedisTarget();
+        target.setName("cache");
+        target.setHost("redis.internal");
+        RedisTarget saved = redisTargets.save(target);
+        Project project = new Project();
+        project.setName("cache");
+        project.setSourceDbId(source.getId());
+        project.setTargetKind(SyncTargetKind.REDIS);
+        project.setTargetDbId(staleTarget.getId());
+        project.setTargetRedisId(saved.getId());
+        project.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");
+        projects.save(project);
+
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+        importService.importPackage(pkg, PASSPHRASE, true);
+
+        assertThat(projects.findAll()).singleElement().satisfies(restored -> {
+            assertThat(restored.getTargetKind()).isEqualTo(SyncTargetKind.REDIS);
+            assertThat(restored.getTargetDbId()).isNull();
+            assertThat(restored.getTargetRedisId()).isNotNull();
+        });
     }
 
     @Test

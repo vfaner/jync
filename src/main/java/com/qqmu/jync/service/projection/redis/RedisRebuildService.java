@@ -19,6 +19,7 @@ import com.qqmu.jync.service.cdc.CdcBaselineService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.task.SyncContextFactory;
+import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
 
 import lombok.extern.slf4j.Slf4j;
@@ -29,7 +30,9 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>Only a stopped project may be rebuilt. A running consumer would keep writing mutations
  * derived from the old position while the baseline rewrites the same keys, and the interleaving
- * has no ordering guarantee — the cache would be a mix of both.
+ * has no ordering guarantee — the cache would be a mix of both. The rebuild therefore holds the
+ * project's sync lease for its whole run: the enabled flag alone is not mutual exclusion, and
+ * a second rebuild (or a start landing mid-sweep) must not write the same keys concurrently.
  *
  * <p>The anchor is reset before the sweep, not after the baseline. Should anything fail in
  * between, {@code baselineDone} is then false and the next start reruns the whole baseline; the
@@ -41,11 +44,9 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 public class RedisRebuildService {
 
-    /** The synthetic owner used for a rebuild's context; no lease is held, so it is never lost. */
-    private static final String REBUILD_LOCK_OWNER = "redis-rebuild";
-
     private final ProjectRepository projects;
     private final ProjectService projectService;
+    private final SyncLockService locks;
     private final SyncContextFactory contextFactory;
     private final RedisTargetService targets;
     private final RedisBaselineService baseline;
@@ -57,13 +58,14 @@ public class RedisRebuildService {
     private final RedisProjectionPolicy policy;
 
     public RedisRebuildService(ProjectRepository projects, ProjectService projectService,
-                               SyncContextFactory contextFactory, RedisTargetService targets,
-                               RedisBaselineService baseline, CdcBaselineService cdcBaseline,
-                               CdcPositionStore positionStore, RedisPrefixSweeper sweeper,
-                               AdminAuditService auditService, SyncTaskStore taskStore,
-                               RedisProjectionPolicy policy) {
+                               SyncLockService locks, SyncContextFactory contextFactory,
+                               RedisTargetService targets, RedisBaselineService baseline,
+                               CdcBaselineService cdcBaseline, CdcPositionStore positionStore,
+                               RedisPrefixSweeper sweeper, AdminAuditService auditService,
+                               SyncTaskStore taskStore, RedisProjectionPolicy policy) {
         this.projects = projects;
         this.projectService = projectService;
+        this.locks = locks;
         this.contextFactory = contextFactory;
         this.targets = targets;
         this.baseline = baseline;
@@ -82,10 +84,11 @@ public class RedisRebuildService {
      * @throws IllegalArgumentException with {@code error.project.not.found} or
      *         {@code error.project.redis.rebuild.notRedis}
      * @throws IllegalStateException with {@code error.project.redis.rebuild.mustStop} while the
-     *         project is enabled or a live consumer holds its lease
+     *         project is enabled or a live consumer holds its lease, or with
+     *         {@code error.project.redis.rebuild.busy} when another rebuild or start wins the
+     *         lease between that check and the acquisition
      */
     public RebuildResult rebuild(Long projectId, boolean sweepPrefix) {
-        long startedAt = System.currentTimeMillis();
         Project project = projects.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
         // The kind check comes first: "stop the project first" is advice for a cache project,
@@ -97,8 +100,26 @@ public class RedisRebuildService {
         if (projectService.isRunning(project)) {
             throw new IllegalStateException("error.project.redis.rebuild.mustStop");
         }
-        SyncContext ctx = contextFactory.buildForRedis(project, REBUILD_LOCK_OWNER,
-                () -> true, null);
+        // A rebuild writes the same keys a consumer would, and "not enabled" is a flag, not
+        // mutual exclusion: two admins can click at once, or a start can land while the sweep
+        // runs. The lease is the one a sync cycle takes, so exactly one writer proceeds — on
+        // this node or any other. ensureTask creates the row a project imported from a
+        // configuration package may never have had, so it has something to lock against.
+        taskStore.ensureTask(project);
+        try (SyncLockService.LockHandle lock = locks.tryAcquire(projectId)) {
+            if (lock == null) {
+                throw new IllegalStateException("error.project.redis.rebuild.busy");
+            }
+            return rebuildUnderLease(project, sweepPrefix, lock);
+        }
+    }
+
+    private RebuildResult rebuildUnderLease(Project project, boolean sweepPrefix,
+                                            SyncLockService.LockHandle lock) {
+        long startedAt = System.currentTimeMillis();
+        Long projectId = project.getId();
+        SyncContext ctx = contextFactory.buildForRedis(project, lock.owner(),
+                lock::renew, null);
         RedisProjectionConfig projection = requireProjection(ctx);
         // The sweep below deletes every key under this prefix, and the baseline rewrites the
         // rest. The settings save refuses a shared prefix, but a projection can also arrive by
@@ -142,8 +163,10 @@ public class RedisRebuildService {
                     projectId, sweptKeys, projection.getKeyPrefix());
         }
 
+        // The baseline renews the lease at table boundaries: a full load can outlive one TTL,
+        // and letting the lease expire mid-rebuild would hand the project to another node.
         RedisBaselineService.BaselineResult result =
-                baseline.run(ctx, () -> true, cdcBaseline::recordBaselineAnchor);
+                baseline.run(ctx, lock::renew, cdcBaseline::recordBaselineAnchor);
         // A parked ERROR hat describes the run before this rebuild; the cache now holds every
         // row the source had, so the task goes back to a clean stopped state.
         taskStore.markStoppedClearingResult(projectId);
@@ -190,20 +213,24 @@ public class RedisRebuildService {
     private RedisTarget requireTarget(Project project) {
         Long targetId = project.getTargetRedisId();
         if (targetId == null) {
-            throw new IllegalStateException(
-                    "Redis target is not configured for project " + project.getId());
+            log.warn("Redis rebuild of project {} has no target configured", project.getId());
+            throw new IllegalStateException("error.project.redis.targetMissing");
         }
         return targets.find(targetId)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Redis target " + targetId + " no longer exists"));
+                .orElseThrow(() -> {
+                    log.warn("Redis target {} referenced by project {} no longer exists",
+                            targetId, project.getId());
+                    return new IllegalStateException("error.project.redis.targetGone");
+                });
     }
 
     private static RedisProjectionConfig requireProjection(SyncContext ctx) {
         RedisProjectionConfig projection = ctx.getConfig() == null
                 ? null : ctx.getConfig().getRedisProjection();
         if (projection == null) {
-            throw new IllegalStateException("Redis projection settings are missing for project "
-                    + (ctx.getProject() == null ? "?" : ctx.getProject().getId()));
+            log.warn("Redis projection settings are missing for project {}",
+                    ctx.getProject() == null ? "?" : ctx.getProject().getId());
+            throw new IllegalStateException("error.project.redis.projectionMissing");
         }
         return projection;
     }

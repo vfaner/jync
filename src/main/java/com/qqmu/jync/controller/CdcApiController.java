@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.qqmu.jync.service.cdc.CdcNotHolderException;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
+import com.qqmu.jync.service.cdc.CdcRestartFailedException;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -101,6 +102,8 @@ public class CdcApiController {
             return badRequest(e);
         } catch (CdcNotHolderException e) {
             return conflict(e);
+        } catch (CdcRestartFailedException e) {
+            return unavailable(e);
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", true);
@@ -140,5 +143,18 @@ public class CdcApiController {
         body.put("success", false);
         body.put("message", String.valueOf(e.getMessage()));
         return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    /**
+     * 503 twin for a reset that committed but could not restart the consumer: the request
+     * was not malformed and nothing conflicts — the dependency is momentarily unable to
+     * serve. Same dual body shape so the shared api-btn toast localizes the key.
+     */
+    private static ResponseEntity<Map<String, Object>> unavailable(CdcRestartFailedException e) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", String.valueOf(e.getMessage()));
+        body.put("success", false);
+        body.put("message", String.valueOf(e.getMessage()));
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body);
     }
 }

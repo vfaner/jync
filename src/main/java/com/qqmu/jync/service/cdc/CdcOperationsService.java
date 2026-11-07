@@ -296,6 +296,10 @@ public class CdcOperationsService {
      *         when this node runs no local consumer AND the daemon lease is held by
      *         another live owner (the API controller turns that into a 409) — refused
      *         with ZERO mutations and ZERO trail rows
+     * @throws CdcRestartFailedException with the bare key
+     *         {@code error.cdc.rebaseline.restartFailed} when the reset committed but the
+     *         consumer could not be started (the API controller turns that into a 503);
+     *         the reset stands and supervision retries the start
      * @return {@code true} when the consumer was restarted (enabled project, full load
      *         started now); {@code false} when the task is disabled and only the baseline
      *         state was reset — the full load runs on the next start
@@ -327,7 +331,24 @@ public class CdcOperationsService {
         boolean restarted = Boolean.TRUE.equals(fresh.getEnabled());
         if (restarted) {
             taskStore.markCdcRunning(projectId);                 // ERROR 帽子必须先摘
-            cdcManager.ensureStarted(fresh);
+            try {
+                cdcManager.ensureStarted(fresh);
+            } catch (RuntimeException e) {
+                // The destructive half already committed: the position row is gone, the
+                // cursors are cleared and the ERROR hat is lifted. Letting this escape as a
+                // generic 500 hides that the reset did succeed and that retrying (or letting
+                // supervision start the consumer) is the next step. Trail the partial
+                // outcome, then report a fixed, translatable key.
+                log.error("CDC baseline of project {} was reset, but the consumer could not be"
+                        + " started; supervision will retry", projectId, e);
+                changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
+                        fresh.getName(), ChangeType.ERROR,
+                        "baseline reset; consumer restart failed"));
+                auditService.record(AuditAction.PROJECT_CDC_REBASELINE,
+                        AuditDetail.of("audit.detail.cdcRebaseline", String.valueOf(projectId),
+                                "@rebaseline:restartFailed"));
+                throw new CdcRestartFailedException(e);
+            }
         } else {
             // Disabled: reset only. markStoppedClearingResult lifts the ERROR hat
             // (hasErrorHat reads status) AND drops the old failure text, so the page does

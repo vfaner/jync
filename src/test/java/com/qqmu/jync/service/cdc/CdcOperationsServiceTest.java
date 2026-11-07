@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -353,6 +354,37 @@ class CdcOperationsServiceTest {
         assertThat(changeLog.getValue().getObjectType()).isEqualTo(ObjectType.PROJECT);
         assertThat(changeLog.getValue().getChangeType()).isEqualTo(ChangeType.INFO);
         assertThat(changeLog.getValue().getDetails()).contains("baseline rebuilt");
+        verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), anyString());
+    }
+
+    /**
+     * 重置已经落库(position/cursor/帽子都动过)之后消费者启动失败:不能让它变成一页
+     * 500 —— 调用方既看不出「重置其实成功了」,也没有可翻译的提示。用独立异常携带
+     * 固定的 i18n key,并把这次半成功写进 trail。
+     */
+    @Test
+    void aFailedRestartAfterTheResetIsReportedAsAPartialOutcome() {
+        Project stale = cdcProject("stale");
+        Project fresh = cdcProject("fresh");
+        when(projectRepository.findById(1L))
+                .thenReturn(Optional.of(stale), Optional.of(fresh));
+        doThrow(new IllegalStateException("source unreachable"))
+                .when(cdcManager).ensureStarted(same(fresh));
+
+        assertThatThrownBy(() -> service.rebaseline(1L))
+                .isInstanceOf(CdcRestartFailedException.class)
+                .hasMessage("error.cdc.rebaseline.restartFailed");
+
+        // 破坏性的一半已经生效:位点删除、游标清空、帽子已摘,这些不能回滚也不能假装没发生
+        verify(cdcManager).ensureStopped(1L);
+        verify(positionStore).delete(1L);
+        verify(stateWriter).clearCursor(1L);
+        verify(taskStore).markCdcRunning(1L);
+
+        ArgumentCaptor<ChangeLog> changeLog = ArgumentCaptor.forClass(ChangeLog.class);
+        verify(changeLogRepository).save(changeLog.capture());
+        assertThat(changeLog.getValue().getChangeType()).isEqualTo(ChangeType.ERROR);
+        assertThat(changeLog.getValue().getDetails()).contains("restart failed");
         verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), anyString());
     }
 

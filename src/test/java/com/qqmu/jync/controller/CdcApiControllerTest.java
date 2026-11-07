@@ -21,6 +21,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.qqmu.jync.service.cdc.CdcNotHolderException;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
+import com.qqmu.jync.service.cdc.CdcRestartFailedException;
 
 /**
  * The JSON contract behind the CDC detail-page pair (task book B7/C3, Task 17):
@@ -130,6 +131,23 @@ class CdcApiControllerTest {
                 .andExpect(jsonPath("$.error").value("cdc.rebaseline.not.holder"))
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("cdc.rebaseline.not.holder"))
+                .andExpect(jsonPath("$.ok").doesNotExist());
+    }
+
+    /**
+     * 重置已生效但消费者起不来:不是「请求冲突」也不是「服务器 bug」,而是一个可以
+     * 重试的半成功。503 + 固定 key,前端照常把 message 本地化成 toast。
+     */
+    @Test
+    void rebaselineThatResetButCouldNotRestartBecomes503() throws Exception {
+        doThrow(new CdcRestartFailedException(new IllegalStateException("source unreachable")))
+                .when(operations).rebaseline(1L);
+
+        mvc.perform(post("/api/projects/1/cdc-rebaseline").with(csrf()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("error.cdc.rebaseline.restartFailed"))
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("error.cdc.rebaseline.restartFailed"))
                 .andExpect(jsonPath("$.ok").doesNotExist());
     }
 }

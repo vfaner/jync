@@ -13,6 +13,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,7 @@ import com.qqmu.jync.service.cdc.CdcBaselineService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.task.SyncContextFactory;
+import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
 
 /**
@@ -47,6 +49,8 @@ class RedisRebuildServiceTest {
 
     private ProjectRepository projects;
     private ProjectService projectService;
+    private SyncLockService locks;
+    private SyncLockService.LockHandle lock;
     private SyncContextFactory contextFactory;
     private RedisTargetService targets;
     private RedisBaselineService baseline;
@@ -66,6 +70,8 @@ class RedisRebuildServiceTest {
     void setUp() {
         projects = mock(ProjectRepository.class);
         projectService = mock(ProjectService.class);
+        locks = mock(SyncLockService.class);
+        lock = mock(SyncLockService.LockHandle.class);
         contextFactory = mock(SyncContextFactory.class);
         targets = mock(RedisTargetService.class);
         baseline = mock(RedisBaselineService.class);
@@ -98,9 +104,13 @@ class RedisRebuildServiceTest {
         when(baseline.run(eq(ctx), any(), any()))
                 .thenReturn(new RedisBaselineService.BaselineResult(2, 7));
         when(targets.find(TARGET_ID)).thenReturn(Optional.of(target));
+        when(locks.tryAcquire(PROJECT_ID)).thenReturn(lock);
+        when(lock.owner()).thenReturn("rebuild-owner");
+        when(lock.renew()).thenReturn(true);
 
-        service = new RedisRebuildService(projects, projectService, contextFactory, targets,
-                baseline, cdcBaseline, positionStore, sweeper, auditService, taskStore, policy);
+        service = new RedisRebuildService(projects, projectService, locks, contextFactory,
+                targets, baseline, cdcBaseline, positionStore, sweeper, auditService, taskStore,
+                policy);
     }
 
     @Test
@@ -113,6 +123,56 @@ class RedisRebuildServiceTest {
                 .hasMessage("error.project.redis.rebuild.mustStop");
 
         verifyNoInteractions(sweeper, baseline, cdcBaseline, positionStore);
+        verify(locks, never()).tryAcquire(any());
+    }
+
+    @Test
+    void aRebuildHoldsTheProjectLeaseWhileItRuns() {
+        // "Not enabled" is a flag, not mutual exclusion: two admins can click rebuild at once,
+        // or a start can land while the baseline is rewriting keys. The lease is the same one
+        // a sync run takes, so exactly one of them proceeds.
+        service.rebuild(PROJECT_ID, true);
+
+        verify(taskStore).ensureTask(project);
+        verify(locks).tryAcquire(PROJECT_ID);
+        verify(lock).close();
+    }
+
+    @Test
+    void aRebuildIsRefusedWhileAnotherRunHoldsTheLease() {
+        when(locks.tryAcquire(PROJECT_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.rebuild(PROJECT_ID, true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.redis.rebuild.busy");
+
+        // Nothing destructive before the lease was won.
+        verifyNoInteractions(positionStore, sweeper, baseline);
+        verify(auditService, never()).record(any(), any());
+    }
+
+    @Test
+    void theBaselineRenewsTheLeaseItRunsUnder() {
+        // A full load can outlive one TTL. The baseline renews between tables so a long
+        // rebuild keeps the lease instead of letting another node take it over midway.
+        service.rebuild(PROJECT_ID, false);
+
+        ArgumentCaptor<BooleanSupplier> renewer = ArgumentCaptor.forClass(BooleanSupplier.class);
+        verify(baseline).run(eq(ctx), renewer.capture(), any());
+        assertThat(renewer.getValue().getAsBoolean()).isTrue();
+        verify(lock).renew();
+        verify(contextFactory).buildForRedis(eq(project), eq("rebuild-owner"), any(), any());
+    }
+
+    @Test
+    void aFailedRebuildReleasesTheLease() {
+        when(baseline.run(eq(ctx), any(), any()))
+                .thenThrow(new RedisProjectionException("redis down"));
+
+        assertThatThrownBy(() -> service.rebuild(PROJECT_ID, false))
+                .isInstanceOf(RedisProjectionException.class);
+
+        verify(lock).close();
     }
 
     @Test
@@ -326,12 +386,35 @@ class RedisRebuildServiceTest {
     }
 
     @Test
-    void aSweepWithoutAConfiguredTargetIsRefused() {
+    void aSweepWithoutAConfiguredTargetIsRefusedWithAUserFacingKey() {
         when(targets.find(TARGET_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.rebuild(PROJECT_ID, true))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(String.valueOf(TARGET_ID));
+                .hasMessage("error.project.redis.targetGone");
         verifyNoInteractions(baseline);
+    }
+
+    @Test
+    void aCacheProjectWithoutATargetIsRefusedWithAUserFacingKey() {
+        project.setTargetRedisId(null);
+
+        assertThatThrownBy(() -> service.rebuild(PROJECT_ID, true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.redis.targetMissing");
+    }
+
+    @Test
+    void aCacheProjectWithoutProjectionSettingsIsRefusedWithAUserFacingKey() {
+        // The real factory fills the documented default when the row is empty; a context
+        // without the contract can still arrive from a stale clone or a direct row edit, and
+        // the refusal must be translatable instead of an internal English sentence.
+        SyncContext bare = SyncContext.builder().project(project).config(new SyncConfig()).build();
+        when(contextFactory.buildForRedis(eq(project), any(), any(), any())).thenReturn(bare);
+
+        assertThatThrownBy(() -> service.rebuild(PROJECT_ID, false))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.redis.projectionMissing");
+        verify(lock).close();
     }
 }

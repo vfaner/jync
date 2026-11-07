@@ -35,6 +35,7 @@ import com.qqmu.jync.model.OaAuthConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncProgress;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.SystemSetting;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.repository.AiProviderRepository;
@@ -184,9 +185,8 @@ public class ConfigImportService {
 
     private ImportResult restore(ConfigPackageReader.Content content, boolean requestSecure) {
         requireEmptyDatabase();
-        validateReferences(content);
-
         List<String> warnings = new ArrayList<>();
+        validateReferences(content, warnings);
         if (content.meta().sourceCrypto() != null
                 && content.meta().sourceCrypto().usingDefaultKey()) {
             warnings.add("warn.config.import.defaultSourceKey");
@@ -270,9 +270,17 @@ public class ConfigImportService {
             project.setName(dto.name());
             project.setDescription(dto.description());
             project.setSourceDbId(map(databaseIds, dto.sourceDbId()));
-            project.setTargetDbId(map(databaseIds, dto.targetDbId()));
             project.setTargetKind(dto.targetKind());
-            project.setTargetRedisId(map(redisIds, dto.targetRedisId()));
+            // Only one target kind may survive, exactly as ProjectService.save normalizes it:
+            // a package exported from a directly edited row can carry both ids, and the stale
+            // one lets target-only actions read a database this project no longer writes to.
+            if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+                project.setTargetRedisId(map(redisIds, dto.targetRedisId()));
+                project.setTargetDbId(null);
+            } else {
+                project.setTargetDbId(map(databaseIds, dto.targetDbId()));
+                project.setTargetRedisId(null);
+            }
             project.setSyncConfig(dto.syncConfig());
             project.setEnabled(dto.enabled());
             projectIds.put(dto.id(), projects.save(project).getId());
@@ -376,7 +384,17 @@ public class ConfigImportService {
         }
     }
 
-    private void validateReferences(ConfigPackageReader.Content content) {
+    /**
+     * Refuses references that point nowhere, and target kinds the UI cannot produce.
+     *
+     * <p>Only the REDIS-without-a-Redis-target combination is fatal: a cache task saved
+     * through the UI can never lack one ({@code ProjectService.save} requires it), and
+     * re-running the projection without a target is impossible. A JDBC task with no target
+     * database, by contrast, is a legitimate intermediate state the form itself allows —
+     * it is exportable and merely not startable yet — so it imports and reports a warning
+     * instead of failing the whole package.
+     */
+    private void validateReferences(ConfigPackageReader.Content content, List<String> warnings) {
         Set<Long> databaseIds = ids(content.databaseConfigs(),
                 ConfigPackageDtos.DatabaseConfigDto::id);
         Set<Long> redisIds = ids(content.redisTargets(), ConfigPackageDtos.RedisTargetDto::id);
@@ -388,6 +406,22 @@ public class ConfigImportService {
             require(databaseIds, project.sourceDbId());
             require(databaseIds, project.targetDbId());
             require(redisIds, project.targetRedisId());
+            // Dangling ids above are one problem; a combination the UI can never produce is
+            // another. A REDIS project without its Redis target imports "successfully" and
+            // then cannot be rebuilt at all — refuse the whole package while it is still
+            // cheap to fix. A JDBC project without a target database is not fatal: the form
+            // lets a task be saved before its target is chosen, so such a project is
+            // exportable and must round-trip; it reports a warning instead.
+            SyncTargetKind kind = project.targetKind() == null
+                    ? SyncTargetKind.JDBC : project.targetKind();
+            if (kind == SyncTargetKind.REDIS) {
+                if (project.targetRedisId() == null) {
+                    throw new ConfigPackageException("error.config.import.targetKindInvalid");
+                }
+            } else if (project.targetDbId() == null
+                    && !warnings.contains("warn.config.import.targetMissing")) {
+                warnings.add("warn.config.import.targetMissing");
+            }
         }
         for (ConfigPackageDtos.EtlBatchDto batch : content.etlBatches()) {
             require(databaseIds, batch.sourceDbId());
