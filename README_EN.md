@@ -18,7 +18,7 @@
 An out-of-the-box web application that keeps **structure and data** in sync between **heterogeneous databases**: start one jar, pick **34 built-in database types (plus custom types)** in a browser, and a sync or ETL pipeline is running — search and document data additionally gets three **dedicated migration** chains that skip JDBC (Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB, MongoDB → KingbaseES). No Kafka, no Flink, no ZooKeeper, and not a line of job code.
 
 - **Zero external dependencies**: a Spring Boot monolith with Thymeleaf server-side rendering, Quartz and an embedded H2 metadata store. Runs air-gapped.
-- **Full load is not a bulk query import**: keyset chunking, in-table parallelism, streamed result sets, per-chunk commits and checkpoints — single-table throughput reaches the **hundreds of thousands of rows per second** range.
+- **Full load is not a bulk query import**: keyset chunking, in-table parallelism, streamed result sets, per-chunk commits and checkpoints — single-table throughput reaches the **200,000 rows/second** range.
 - **Incremental is one indexed query**: the default polling mode reads only rows past the cursor, so one read-only account is enough. Six source families can switch to log CDC for second-level latency.
 - **Structure travels with data**: missing tables, indexes, views and procedures are created automatically, with built-in dialect type mapping and function conversion.
 - **Resumable by design**: crashes, network drops and killed processes resume from the last checkpoint; every write is idempotent, and changes made while Jync was down are caught up on restart.
@@ -27,11 +27,11 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 
 | Resource | Link |
 |---|---|
-| **Download** | [Gitee release](https://gitee.com/super_rgh/jync/releases/latest) · [GitHub Releases](https://github.com/vfaner/jync/releases/latest) |
+| **Download** | [Gitee release (split assets)](https://gitee.com/super_rgh/jync/releases/latest) · [GitHub Releases (single jar)](https://github.com/vfaner/jync/releases/latest) |
 | **Docs** | [Website](https://jync.qqmu.com) · [User Guide](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [Overview](https://jync.qqmu.com/docs/jync-overview.pdf) |
 | **Demo** | [Bilibili · 14 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
-| **Changelog** | [Release notes by version](docs/release-notes/) (in Chinese) |
-| **Source** | [GitHub](https://github.com/vfaner/jync) · [Gitee](https://gitee.com/super_rgh/jync) · [AtomGit mirror](https://gitcode.com/vfaner/jync) (synced code and release assets) |
+| **Changelog** | [Release notes by version](docs/release-notes/) (in Chinese; current: v2.0.0) |
+| **Source** | [GitHub](https://github.com/vfaner/jync) · [Gitee](https://gitee.com/super_rgh/jync) · [AtomGit mirror](https://atomgit.com/vfaner/jync) (synced code and release assets) |
 
 > Downloads, issues and pull requests belong on Gitee / GitHub; AtomGit is a read-only mirror.
 
@@ -41,7 +41,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 
 When a public-sector or enterprise system moves from MySQL, Oracle or SQL Server to a domestic database such as DM (达梦), Kingbase or OceanBase, the migration rarely ends when the data is copied. Old and new systems run side by side, cutover happens in batches, and read-only archives coexist with live services — all of which require the two databases to **stay consistent for weeks or months**.
 
-Existing tools always leave one gap. Commercial sync products are licensed per node, with long procurement cycles and high cost. Log-based tools such as Debezium and Flink CDC are capable, but require Kafka, Flink and job orchestration before the first row moves. DataX and Kettle excel at one-off transfers, but do not own long-running incremental sync, structure synchronization or resume-from-checkpoint. **Jync turns that logic into a product**: one jar, a browser for connections, tables, scheduling and start/stop, and no scripts or message queues to operate. It is open source under MIT and fully self-hostable.
+Existing tools always leave one gap. Commercial sync products are licensed per node, with long procurement cycles and high cost. Log-based tools such as Debezium and Flink CDC are capable, but require Kafka, Flink and job orchestration before the first row moves. DataX and Kettle excel at one-off transfers, but long-running incremental sync, structure synchronization and resume-from-checkpoint usually need to be orchestrated yourself. **Jync turns that logic into a product**: one jar, a browser for connections, tables, scheduling and start/stop, and no scripts or message queues to operate. It is open source under MIT and fully self-hostable.
 
 ---
 
@@ -49,7 +49,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 
 | Area | What Jync does |
 |---|---|
-| Full load | Keyset chunking + in-table parallelism + streamed reads + per-chunk checkpoints; INSERT-first into empty targets, deferred secondary indexes; hundreds of thousands of rows/s |
+| Full load | Keyset chunking + in-table parallelism + streamed reads + per-chunk checkpoints; INSERT-first into empty targets, deferred secondary indexes; 200,000 rows/s range |
 | Incremental sync | Timestamp, row SCN, identity column or full comparison, selected automatically; one cursor-range query; safety-lagged watermark; cursor advances only after commit |
 | Log CDC | MySQL binlog, Oracle LogMiner, DM LogMiner, PostgreSQL-family logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency |
 | Redis cache projection | A real-time sync target can be Redis: CDC projects each row to `<prefix><table>:<primary key>` as JSON or HASH, with baseline, replay and prefix-scoped rebuild; log CDC only — see [Known limitations](docs/known-limitations.md) |
@@ -83,9 +83,9 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 
 <table>
   <tr>
-    <td align="center" width="33%"><a href="https://jync.qqmu.com/images/jync_kanban.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_kanban.webp" alt="Kanban" width="100%"></a><br><sub><b>Kanban</b> · resources, tasks and a 24h trend</sub></td>
-    <td align="center"><a href="https://jync.qqmu.com/images/jync_xiangmu.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_xiangmu.webp" alt="Sync tasks" width="100%"></a><br><sub><b>Sync tasks</b> · state, last sync and details</sub></td>
-    <td align="center"><a href="https://jync.qqmu.com/images/jync_db.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_db.webp" alt="Connections" width="100%"></a><br><sub><b>Connections</b> · source and target side by side</sub></td>
+    <td align="center" width="33%"><a href="docs/images/jync_kanban.webp" target="_blank" rel="noopener"><img src="docs/images/jync_kanban.webp" alt="Kanban" width="100%"></a><br><sub><b>Kanban</b> · resources, tasks and a 24h trend</sub></td>
+    <td align="center"><a href="docs/images/jync_xiangmu.webp" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu.webp" alt="Sync tasks" width="100%"></a><br><sub><b>Sync tasks</b> · state, last sync and details</sub></td>
+    <td align="center"><a href="docs/images/jync_db.webp" target="_blank" rel="noopener"><img src="docs/images/jync_db.webp" alt="Connections" width="100%"></a><br><sub><b>Connections</b> · source and target side by side</sub></td>
   </tr>
 </table>
 
@@ -123,9 +123,9 @@ A single-host container benchmark (500k-row Oracle table) measured **216k rows/s
 | Memory / disk | Heap ≥ 512 MB recommended, 1 GB free; LOB sync scales with the largest value |
 | Working directory | Fixed: `./data` (metadata store and key) and `./logs` are created relative to it |
 
-Download `jync.jar` from [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) or [GitHub Releases](https://github.com/vfaner/jync/releases/latest); build from source with `mvn clean package -DskipTests` (output `target/jync.jar`).
+Download the release from [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) or [GitHub Releases](https://github.com/vfaner/jync/releases/latest) (Gitee ships split assets; see below); build from source with `mvn clean package -DskipTests` (output `target/jync.jar`).
 
-> **Gitee split assets**: Gitee caps one attachment at 100 MB, and since v2.0.0 the jar exceeds it, so the Gitee release ships `jync.jar.part00` / `jync.jar.part01`. When downloading manually, fetch both and run `cat jync.jar.part00 jync.jar.part01 > jync.jar`; the in-app one-click upgrade downloads and assembles the parts automatically (GitHub and AtomGit still carry the whole `jync.jar`).
+> **Gitee split assets**: Gitee caps one attachment at 100 MB, so since v2.0.0 the jar ships as `jync.jar.part00` / `jync.jar.part01`. Fetch both and run `cat jync.jar.part00 jync.jar.part01 > jync.jar`; the in-app upgrade assembles them automatically. GitHub / AtomGit carry the whole `jync.jar`.
 
 ```bash
 mkdir -p /opt/jync && cd /opt/jync
@@ -150,7 +150,7 @@ sync:
   crypto-salt: ""
 ```
 
-Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `view / 123456` (viewer); **change the password immediately**. Production settings, external metadata store, systemd, Docker / Kubernetes, reverse proxy and HTTPS, upgrades and backups: [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf), the website's [deployment page](https://jync.qqmu.com/deploy.html) and [container notes](docs/deploy-container.md). HTTPS works two ways: terminate TLS at a reverse proxy (recommended), or upload a PKCS#12 / JKS keystore or PEM certificate and key under System → System settings and let Jync serve HTTPS itself; changes apply after a restart. The same page toggles force-HTTPS, exports/imports configuration packages and tests a candidate metadata database. See [configuration](docs/configuration.md).
+Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `view / 123456` (viewer); **you must change the password on first sign-in** (until then, only the change-password page is reachable). Production settings, external metadata store, systemd, Docker / Kubernetes, reverse proxy and HTTPS, upgrades and backups: [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf), the website's [deployment page](https://jync.qqmu.com/deploy.html) and [container notes](docs/deploy-container.md). HTTPS works two ways: terminate TLS at a reverse proxy (recommended), or upload a PKCS#12 / JKS keystore or PEM certificate and key under System → System settings and let Jync serve HTTPS itself; changes apply after a restart. The same page toggles force-HTTPS, exports/imports configuration packages and tests a candidate metadata database. See [configuration](docs/configuration.md).
 
 > 🔐 Back up `./data` (including `<db>.key`), `./logs` and `application.yml` before upgrading. Without the key, saved connection passwords, AI keys and alert URLs cannot be decrypted.
 
@@ -204,7 +204,7 @@ com.qqmu.jync
 mvn test
 ```
 
-The suite covers dialect and SQL rewriting, full load and resume, CDC prerequisites and position discipline for six engines, Redis projection and dedicated migration, ETL and alerting, security (encrypted storage, viewer POST rejection, CSRF), UI i18n, and the dual-channel upgrade fallback.
+The suite has 5,300+ unit tests and covers dialect and SQL rewriting, full load and resume, CDC prerequisites and position discipline for six engines, Redis projection and dedicated migration, ETL and alerting, security (encrypted storage, viewer POST rejection, CSRF), UI i18n, and the dual-channel upgrade fallback.
 
 Real-database integration tests (`*IT`, excluded from the default suite, require Docker): Oracle 23ai parallel full load with `ROWDEPENDENCIES`; MySQL 8 binlog baseline → streaming, crash rerun, 100k-row consistency and fault injection. Run with `-Dapi.version=1.44` (Docker Engine ≥ 29).
 
@@ -234,4 +234,4 @@ Every Jync feature is free and open source. If it saved you time, use the button
 
 [MIT License](LICENSE), for commercial and non-commercial use. Bundled third-party JDBC drivers keep their vendors' licenses; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
-Maintained by 沐沐开源工坊: GitHub [@vfaner](https://github.com/vfaner), Gitee [@super_rgh](https://gitee.com/super_rgh), AtomGit [@vfaner](https://gitcode.com/vfaner). The one request is not to replace the "Jync / 捷同" name, logo and author attribution with your own — see [TRADEMARK.md](TRADEMARK.md).
+Maintained by 沐沐开源工坊: GitHub [@vfaner](https://github.com/vfaner), Gitee [@super_rgh](https://gitee.com/super_rgh), AtomGit [@vfaner](https://atomgit.com/vfaner). The one request is not to replace the "Jync / 捷同" name, logo and author attribution with your own — see [TRADEMARK.md](TRADEMARK.md).

@@ -27,11 +27,11 @@
 
 | 资源 | 地址 |
 |---|---|
-| **下载** | [Gitee 发行版](https://gitee.com/super_rgh/jync/releases/latest) · [GitHub Releases](https://github.com/vfaner/jync/releases/latest) |
+| **下载** | [Gitee 发行版（分卷）](https://gitee.com/super_rgh/jync/releases/latest) · [GitHub Releases（完整 jar）](https://github.com/vfaner/jync/releases/latest) |
 | **文档** | [官网](https://jync.qqmu.com) · [用户操作手册](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [产品介绍](https://jync.qqmu.com/docs/jync-overview.pdf) |
 | **演示** | [Bilibili · 14 分钟，从建连接到实时同步](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
-| **更新日志** | [各版本发布说明](docs/release-notes/) |
-| **源码** | [GitHub](https://github.com/vfaner/jync) · [Gitee](https://gitee.com/super_rgh/jync) · [AtomGit 镜像](https://gitcode.com/vfaner/jync)（代码与发布包同步，国内加速） |
+| **更新日志** | [各版本发布说明](docs/release-notes/)（当前 v2.0.0） |
+| **源码** | [GitHub](https://github.com/vfaner/jync) · [Gitee](https://gitee.com/super_rgh/jync) · [AtomGit 镜像](https://atomgit.com/vfaner/jync)（代码与发布包同步，国内加速） |
 
 > 下载、问题反馈与 PR 以 Gitee / GitHub 为准；AtomGit 为只读镜像。
 
@@ -41,7 +41,7 @@
 
 政企系统从 MySQL、Oracle、SQL Server 迁移到达梦、金仓、OceanBase 等国产数据库时，迁移往往不是一次性搬完：新旧系统双轨运行、分批割接、历史库只读共存，都要求两个库在数周甚至数月里**持续保持一致**。
 
-现成方案总有一步对不上。商业同步工具按节点授权，采购周期长、成本高；Debezium、Flink CDC 能力强，但要先搭 Kafka、Flink 与作业编排；DataX、Kettle 擅长一次性搬运，却不负责长期增量、结构同步与断点续传。**Jync 把这些逻辑做成一个可交付的软件**：一个 jar，实施人员用浏览器完成建连接、选表、配置调度、启动同步。MIT 协议开源，可完全私有化部署。
+现成方案总有一步对不上。商业同步工具按节点授权，采购周期长、成本高；Debezium、Flink CDC 能力强，但要先搭 Kafka、Flink 与作业编排；DataX、Kettle 擅长一次性搬运，长期增量、结构同步与断点续传通常需要自己编排。**Jync 把这些逻辑做成一个可交付的软件**：一个 jar，实施人员用浏览器完成建连接、选表、配置调度、启动同步。MIT 协议开源，可完全私有化部署。
 
 ---
 
@@ -83,9 +83,9 @@
 
 <table>
   <tr>
-    <td align="center" width="33%"><a href="https://jync.qqmu.com/images/jync_kanban.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_kanban.webp" alt="看板" width="100%"></a><br><sub><b>看板</b> · 资源、任务与 24h 趋势</sub></td>
-    <td align="center"><a href="https://jync.qqmu.com/images/jync_xiangmu.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_xiangmu.webp" alt="实时同步任务" width="100%"></a><br><sub><b>实时同步任务</b> · 状态、上次同步与详情</sub></td>
-    <td align="center"><a href="https://jync.qqmu.com/images/jync_db.webp" target="_blank" rel="noopener"><img src="https://jync.qqmu.com/images/jync_db.webp" alt="连接管理" width="100%"></a><br><sub><b>连接管理</b> · 源 / 目标分栏</sub></td>
+    <td align="center" width="33%"><a href="docs/images/jync_kanban.webp" target="_blank" rel="noopener"><img src="docs/images/jync_kanban.webp" alt="看板" width="100%"></a><br><sub><b>看板</b> · 资源、任务与 24h 趋势</sub></td>
+    <td align="center"><a href="docs/images/jync_xiangmu.webp" target="_blank" rel="noopener"><img src="docs/images/jync_xiangmu.webp" alt="实时同步任务" width="100%"></a><br><sub><b>实时同步任务</b> · 状态、上次同步与详情</sub></td>
+    <td align="center"><a href="docs/images/jync_db.webp" target="_blank" rel="noopener"><img src="docs/images/jync_db.webp" alt="连接管理" width="100%"></a><br><sub><b>连接管理</b> · 源 / 目标分栏</sub></td>
   </tr>
 </table>
 
@@ -124,9 +124,9 @@ Jync 有三条数据通路，分别解决"第一次怎么搬""之后怎么追""�
 | 内存 / 磁盘 | 建议堆 ≥ 512MB，预留 1GB；大字段同步按最大单值放大堆 |
 | 工作目录 | 必须固定：`./data`（元数据库与密钥）与 `./logs` 相对进程工作目录生成 |
 
-从 [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) 或 [GitHub Releases](https://github.com/vfaner/jync/releases/latest) 下载 `jync.jar`；源码编译为 `mvn clean package -DskipTests`，产物 `target/jync.jar`。
+从 [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) 或 [GitHub Releases](https://github.com/vfaner/jync/releases/latest) 下载发布包（Gitee 为分卷，见下）；源码编译为 `mvn clean package -DskipTests`，产物 `target/jync.jar`。
 
-> **Gitee 分卷**：Gitee 单个附件上限 100 MB，v2.0.0 起 jar 已超过该上限，Gitee 发行版提供 `jync.jar.part00` / `jync.jar.part01` 两个分卷。手动下载时全部取回后执行 `cat jync.jar.part00 jync.jar.part01 > jync.jar`；应用内「一键升级」会自动按序下载并合并分卷，无需手动处理（GitHub 与 AtomGit 仍是完整 `jync.jar`）。
+> **Gitee 分卷**：Gitee 单附件上限 100 MB，v2.0.0 起 jar 拆为 `jync.jar.part00` / `jync.jar.part01`。手动下载后执行 `cat jync.jar.part00 jync.jar.part01 > jync.jar`；应用内一键升级会自动合并。GitHub / AtomGit 为完整 jar。
 
 ```bash
 mkdir -p /opt/jync && cd /opt/jync
@@ -151,7 +151,7 @@ sync:
   crypto-salt: ""
 ```
 
-首次访问 `http://<服务器>:8080`，使用 `admin / 123456`（管理员）或 `view / 123456`（访客），**首次登录后必须修改密码**。生产部署、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)、[部署页](https://jync.qqmu.com/deploy.html)与[容器部署说明](docs/deploy-container.md)。HTTPS 有两种方式：前置反向代理终止 TLS（推荐），或直接在「系统管理 → 系统配置」上传 PKCS#12 / JKS 密钥库或 PEM 证书与私钥，由 Jync 自己监听 HTTPS，重启后生效；同一页还可开关强制 HTTPS、导出/导入配置包、测试候选元数据库——细节见[配置文档](docs/configuration.md)。
+首次访问 `http://<服务器>:8080`，使用 `admin / 123456`（管理员）或 `view / 123456`（访客），**首次登录强制修改密码**（未修改前只能停留在改密页）。生产部署、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)、[部署页](https://jync.qqmu.com/deploy.html)与[容器部署说明](docs/deploy-container.md)。HTTPS 有两种方式：前置反向代理终止 TLS（推荐），或直接在「系统管理 → 系统配置」上传 PKCS#12 / JKS 密钥库或 PEM 证书与私钥，由 Jync 自己监听 HTTPS，重启后生效；同一页还可开关强制 HTTPS、导出/导入配置包、测试候选元数据库——细节见[配置文档](docs/configuration.md)。
 
 > 🔐 升级前备份 `./data`（连同 `<库名>.key`）、`./logs` 与 `application.yml`。密钥丢失后，已保存的连接密码、AI 密钥与告警地址将无法解密。
 
@@ -205,7 +205,7 @@ com.qqmu.jync
 mvn test
 ```
 
-测试覆盖方言与 SQL 改写、全量与续传、六类 CDC 前提与位点纪律、Redis 投影与专属迁移、ETL 与告警、安全（加密存储、访客 POST 全拒、CSRF）、页面国际化，以及升级双通道兜底。
+5300+ 单元测试，覆盖方言与 SQL 改写、全量与续传、六类 CDC 前提与位点纪律、Redis 投影与专属迁移、ETL 与告警、安全（加密存储、访客 POST 全拒、CSRF）、页面国际化，以及升级双通道兜底。
 
 真实库集成测试（`*IT`，默认不进套件，需 Docker）：Oracle 23ai 并行全量与 `ROWDEPENDENCIES`；MySQL 8 binlog 基线 → 流式、崩溃重跑、十万行一致与故障注入。运行加 `-Dapi.version=1.44`（Docker Engine ≥ 29）。
 
@@ -235,4 +235,4 @@ Jync 全部能力免费开源。如果它帮到了你，欢迎点上面的按钮
 
 [MIT License](LICENSE)，商业与非商业用途均可。内置第三方 JDBC 驱动各自适用原厂许可证，见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 
-项目由沐沐开源工坊维护：GitHub [@vfaner](https://github.com/vfaner)、Gitee [@super_rgh](https://gitee.com/super_rgh)、AtomGit [@vfaner](https://gitcode.com/vfaner)。唯一的请求是不要把「Jync / 捷同」名称、logo 与作者署名替换成自己的，详见 [TRADEMARK.md](TRADEMARK.md)。
+项目由沐沐开源工坊维护：GitHub [@vfaner](https://github.com/vfaner)、Gitee [@super_rgh](https://gitee.com/super_rgh)、AtomGit [@vfaner](https://atomgit.com/vfaner)。唯一的请求是不要把「Jync / 捷同」名称、logo 与作者署名替换成自己的，详见 [TRADEMARK.md](TRADEMARK.md)。
