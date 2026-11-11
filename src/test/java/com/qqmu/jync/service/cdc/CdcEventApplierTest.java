@@ -58,7 +58,10 @@ class CdcEventApplierTest {
         target = DriverManager.getConnection(
                 "jdbc:h2:mem:cdc_apply;DB_CLOSE_DELAY=-1;CASE_INSENSITIVE_IDENTIFIERS=TRUE", "sa", "");
         try (Statement st = target.createStatement()) {
-            st.execute("CREATE TABLE orders (id BIGINT PRIMARY KEY, name VARCHAR(64), amount DECIMAL(10,2))");
+            // Quoted: the projection reads the target dictionary by the exact configured
+            // name, and H2's metadata lookup is case-sensitive while an unquoted name is
+            // stored upper-cased.
+            st.execute("CREATE TABLE \"orders\" (id BIGINT PRIMARY KEY, name VARCHAR(64), amount DECIMAL(10,2))");
         }
         TableMeta meta = new TableMeta();
         meta.setName("orders");

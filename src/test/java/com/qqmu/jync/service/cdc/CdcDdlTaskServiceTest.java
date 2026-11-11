@@ -122,7 +122,8 @@ class CdcDdlTaskServiceTest {
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
         when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
         when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
-        when(dataSourceManager.getConnection(any())).thenReturn(connectionExecuting(true));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
         service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
 
@@ -142,7 +143,8 @@ class CdcDdlTaskServiceTest {
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
         when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
         when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
-        when(dataSourceManager.getConnection(any())).thenReturn(connectionExecuting(false));
+        Connection connection = connectionExecuting(false);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
         assertThatThrownBy(() -> service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT"))
                 .isInstanceOf(IllegalStateException.class)
@@ -197,7 +199,8 @@ class CdcDdlTaskServiceTest {
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
         when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
         when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
-        when(dataSourceManager.getConnection(any())).thenReturn(connectionExecuting(true));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
         CdcPosition at = new CdcPosition();
         at.setBinlogFile("binlog.000042");
         at.setBinlogPos(901743416L);
@@ -278,7 +281,8 @@ class CdcDdlTaskServiceTest {
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
         when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
         when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
-        when(dataSourceManager.getConnection(any())).thenReturn(connectionExecuting(true));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
         service.executeDdl(9L, "ALTER TABLE t DROP COLUMN c");
 
@@ -296,7 +300,8 @@ class CdcDdlTaskServiceTest {
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
         when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
         when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
-        when(dataSourceManager.getConnection(any())).thenReturn(connectionExecuting(true));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
         service.executeDdl(9L, "ALTER TABLE t ADD COLUMN d INT, DROP COLUMN c");
 
@@ -313,7 +318,8 @@ class CdcDdlTaskServiceTest {
         when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
         when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
         // MySQL 1091: the column is not there, so the DROP has nothing to remove.
-        when(dataSourceManager.getConnection(any())).thenReturn(dropMissingColumn());
+        Connection connection = dropMissingColumn();
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
         service.executeDdl(9L, "ALTER TABLE t DROP COLUMN c");
 
@@ -363,7 +369,8 @@ class CdcDdlTaskServiceTest {
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
         when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
         when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
-        when(dataSourceManager.getConnection(any())).thenReturn(connectionExecuting(true));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
         service.executeDdl(9L, "alter table t add column c int comment 'remark'");
 

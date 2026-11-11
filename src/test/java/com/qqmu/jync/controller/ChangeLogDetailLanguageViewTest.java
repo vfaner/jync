@@ -194,8 +194,10 @@ class ChangeLogDetailLanguageViewTest {
 
         String html = render(Locale.SIMPLIFIED_CHINESE);
 
+        // The template always carries the pending label in a data attribute for the JS
+        // toggle, so only the rendered button body proves which state was shown.
         assertThat(html).contains("已处理").contains("badge-ok")
-                .doesNotContain("待处理");
+                .doesNotContain(">待处理<");
     }
 
     @Test
