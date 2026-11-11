@@ -51,7 +51,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 |---|---|
 | Full load | Keyset chunking + in-table parallelism + streamed reads + per-chunk checkpoints; INSERT-first into empty targets, deferred secondary indexes; 200,000 rows/s range |
 | Incremental sync | Timestamp, row SCN, identity column or full comparison, selected automatically; one cursor-range query; safety-lagged watermark; cursor advances only after commit |
-| Log CDC | MySQL binlog, Oracle LogMiner, DM LogMiner, PostgreSQL-family logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency |
+| Log CDC | MySQL binlog, Oracle LogMiner, DM LogMiner, PostgreSQL-family logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency; when source DDL leaves the target short of columns, rows are pruned in-stream and a DDL task is filed — the stream keeps running |
 | Redis cache projection | A real-time sync target can be Redis: CDC projects each row to `<prefix><table>:<primary key>` as JSON or HASH, with baseline, replay and prefix-scoped rebuild; log CDC only — see [Known limitations](docs/known-limitations.md) |
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
 | ETL | Copy result rows from a customer SQL query; 7 analytic engines; multi-statement scripts; overwrite / append / range overwrite / upsert by key; resumable runs; tables sharing a source and target can form a **batch** with one connection pair and one schedule |

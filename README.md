@@ -51,7 +51,7 @@
 |---|---|
 | 全量加载 | 主键 keyset 分块 + 单表内并行 + 结果集流式读取 + 逐块检查点；空表 INSERT-first、延迟二级索引；单表 20 万行/秒量级 |
 | 增量同步 | 时间戳 / 行级 SCN / 自增列 / 全表比对自动选策略；一条游标区间查询；水位线安全回退；游标提交后推进 |
-| 日志 CDC | MySQL binlog、Oracle LogMiner、达梦 LogMiner、PostgreSQL 系逻辑解码、SQL Server CDC、崖山 YStream；长驻线程流式回放，秒级延迟 |
+| 日志 CDC | MySQL binlog、Oracle LogMiner、达梦 LogMiner、PostgreSQL 系逻辑解码、SQL Server CDC、崖山 YStream；长驻线程流式回放，秒级延迟；源库 DDL 让目标缺列时流内裁剪并登记待办，任务不停摆 |
 | Redis 缓存投影 | 实时同步的目标也可以是 Redis：按 CDC 把每一行投影成 `<前缀><表>:<主键>` 的 JSON 或 HASH，基线 + 回放 + 前缀清扫重建；只支持日志 CDC，缓存语义与边界见[已知限制](docs/known-limitations.md) |
 | 结构同步 | 表、索引、视图、存储过程/函数；类型映射、函数转换、标识符引号、分页语法、DDL 覆盖 |
 | ETL | 按客户取数 SQL 复制结果行；7 种分析型引擎；多语句脚本；覆盖 / 追加 / 范围覆盖 / 主键更新；断点续跑；同源同目标的表可组成**批次**共享连接与调度 |
