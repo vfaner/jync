@@ -250,4 +250,29 @@ class ColumnDefaultAndIdentityDdlTest {
 
         assertThat(ddl).contains("DATETIMEOFFSET").contains("DEFAULT SYSDATETIMEOFFSET()");
     }
+
+    @Test
+    void aLiteralDatetime2DefaultIsNotReplacedBySysdatetime() {
+        // Only the portable CURRENT_TIMESTAMP render may be upgraded to the DATETIME2-precision
+        // function. A declared constant such as '1970-01-01 00:00:00' is not "now": replacing it
+        // with SYSDATETIME() silently changes every row inserted without the column.
+        ColumnMeta ts = column("TS", Types.TIMESTAMP, "DATETIME", null, null);
+        ts.setDefaultValue("'1970-01-01 00:00:00'");
+
+        String ddl = sqlServer.columnDefinition(ts, DatabaseType.MYSQL);
+
+        assertThat(ddl).contains("DEFAULT '1970-01-01 00:00:00'");
+        assertThat(ddl).doesNotContain("SYSDATETIME()");
+    }
+
+    @Test
+    void aLiteralDatetimeoffsetDefaultIsNotReplacedBySysdatetimeoffset() {
+        ColumnMeta ts = column("TS", Types.TIMESTAMP_WITH_TIMEZONE, "TIMESTAMPTZ", 6, null);
+        ts.setDefaultValue("'1970-01-01 00:00:00'");
+
+        String ddl = sqlServer.columnDefinition(ts, DatabaseType.POSTGRESQL);
+
+        assertThat(ddl).contains("DEFAULT '1970-01-01 00:00:00'");
+        assertThat(ddl).doesNotContain("SYSDATETIMEOFFSET()");
+    }
 }

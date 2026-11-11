@@ -200,6 +200,13 @@ public class SqlServerDialect extends AbstractSqlDialect {
         if (renderedDefault == null) {
             return null;
         }
+        // Only a rendered "current time" function is rewritten. A literal default — a declared
+        // timestamp constant, NULL, a number — keeps its value: replacing it with SYSDATETIME()
+        // would silently turn every value the source never supplied into "now".
+        if (!isCurrentTimestampDefault(
+                renderedDefault.trim().toUpperCase(java.util.Locale.ROOT))) {
+            return renderedDefault;
+        }
         String type = targetType.trim().toUpperCase(java.util.Locale.ROOT);
         if (type.startsWith("DATETIMEOFFSET")) {
             return "SYSDATETIMEOFFSET()";
