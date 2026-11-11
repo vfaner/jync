@@ -16,7 +16,6 @@ import com.qqmu.jync.model.MigrationConnectionKind;
 import com.qqmu.jync.model.MigrationTask;
 import com.qqmu.jync.model.MigrationType;
 import com.qqmu.jync.service.migration.MigrationCancellation;
-import com.qqmu.jync.service.migration.MigrationGlob;
 import com.qqmu.jync.service.migration.MigrationPrecheckResult;
 import com.qqmu.jync.service.migration.MigrationPrecheckResult.Check;
 import com.qqmu.jync.service.migration.MigrationPrecheckResult.Level;
@@ -105,17 +104,8 @@ public class MongoToMongoHandler implements MigrationTypeHandler {
             checks.add(new Check(Level.OK, "migration.precheck.source.reachable",
                     source.getName()));
 
-            List<MongoCollectionInfo> collections = new ArrayList<>();
-            for (MongoCollectionInfo info : discovered) {
-                if (!MigrationGlob.matchesAny(info.name(), options.getCollectionsText())) {
-                    continue;
-                }
-                if (MongoCollectionSupport.isSystem(info.name())
-                        && !MigrationGlob.namesPrefix(options.getCollectionsText(), "system.")) {
-                    continue;
-                }
-                collections.add(info);
-            }
+            List<MongoCollectionInfo> collections = MongoMigrationSupport.matching(discovered,
+                    options.getCollectionsText());
             if (collections.isEmpty()) {
                 checks.add(new Check(Level.WARN, "migration.precheck.discovery.empty",
                         String.join(", ", options.patterns())));
