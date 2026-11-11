@@ -118,10 +118,12 @@ public class AlertConfigService {
                 ? AlertWebhookFormat.GENERIC : form.getFormat());
         config.setCategories(AlertCategory.toCsv(categories));
         config.setCooldownMinutes(cooldown);
-        if (form.isClearWebhookUrl()) {
-            config.setWebhookUrl(null);
-        } else if (typed != null) {
+        // A replacement URL wins over the clear checkbox: the checkbox stays visible while the
+        // user types, and letting it win would silently drop the new URL.
+        if (typed != null) {
             config.setWebhookUrl(crypto.encrypt(typed));
+        } else if (form.isClearWebhookUrl()) {
+            config.setWebhookUrl(null);
         }
         config.setUpdatedAt(Instant.now());
         repository.save(config);

@@ -136,6 +136,29 @@ class AlertConfigServiceTest {
     }
 
     @Test
+    void aTypedUrlWinsOverTheClearCheckbox() {
+        // The "clear the stored URL" checkbox stays visible while a replacement is typed.
+        // Letting the checkbox win silently discarded the new URL and left an enabled config
+        // with no webhook, so notifications stopped without any error on the page.
+        AlertConfig stored = new AlertConfig();
+        stored.setId(AlertConfigService.SINGLETON_ID);
+        stored.setEnabled(true);
+        stored.setWebhookUrl(crypto.encrypt("https://hooks.example.com/old-0000"));
+        when(repository.findById(AlertConfigService.SINGLETON_ID))
+                .thenReturn(Optional.of(stored));
+
+        AlertConfigForm form = form(true);
+        form.setWebhookUrl("https://hooks.example.com/new-2222");
+        form.setClearWebhookUrl(true);
+        service.save(form);
+
+        ArgumentCaptor<AlertConfig> saved = ArgumentCaptor.forClass(AlertConfig.class);
+        verify(repository).save(saved.capture());
+        assertThat(crypto.decrypt(saved.getValue().getWebhookUrl()))
+                .isEqualTo("https://hooks.example.com/new-2222");
+    }
+
+    @Test
     void anInvalidUrlSchemeIsRefused() {
         when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
         AlertConfigForm form = form(true);
