@@ -41,6 +41,11 @@ final class CdcDdlStatements {
             "CREATE SCHEMA ",
             "ALTER DATABASE ",
             "ALTER SCHEMA ",
+            // A dropped database cannot be represented as a per-table task; the execute
+            // dialog would run the statement verbatim on the target connection, where it
+            // can delete a same-named database.
+            "DROP DATABASE ",
+            "DROP SCHEMA ",
             "CREATE TABLESPACE ",
             "ALTER TABLESPACE ",
             "DROP TABLESPACE ",

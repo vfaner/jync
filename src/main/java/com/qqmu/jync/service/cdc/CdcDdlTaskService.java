@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -236,15 +237,15 @@ public class CdcDdlTaskService {
         if (columns == null || columns.isEmpty()) {
             return;
         }
-        String executedTable = alteredTable(entry.getTargetDdlSql() != null
-                ? entry.getTargetDdlSql() : stripPrefix(entry.getDetails()));
+        // The source statement names the table the stream saw. The executed row's
+        // targetDdlSql is already rewritten to the mapped target name, which would never
+        // equal the source name on the open tasks.
+        String executedTable = alteredTable(stripPrefix(entry.getDetails()));
         for (ChangeLog open : repository.findOpenDdlTasks(entry.getProjectId())) {
             if (open.getId() != null && open.getId().equals(entry.getId())) {
                 continue; // the task being executed must not close itself
             }
-            String openSql = open.getTargetDdlSql() != null
-                    ? open.getTargetDdlSql() : stripPrefix(open.getDetails());
-            String openTable = alteredTable(openSql);
+            String openTable = alteredTable(stripPrefix(open.getDetails()));
             if (executedTable != null && openTable != null
                     && !executedTable.equalsIgnoreCase(openTable)) {
                 // Same column name on a different table is a different gap: aligning one
@@ -342,6 +343,13 @@ public class CdcDdlTaskService {
                 continue;
             }
             if (quote != 0) {
+                if (c == '\\' && i + 1 < rest.length()) {
+                    // MySQL keeps backslash escapes inside string literals; the escaped
+                    // character must not close the quote and expose its comma as a clause
+                    // boundary.
+                    current.append(c).append(rest.charAt(++i));
+                    continue;
+                }
                 if (c == quote) {
                     quote = 0;
                 }
@@ -541,13 +549,19 @@ public class CdcDdlTaskService {
                 entry.setGapEndPos(at.getBinlogPos());
             }
         }
-        String gaps = describeGaps(runningGaps(entry.getProjectId()));
+        // Only the statement's own table belongs to this task: another table's pruned rows
+        // came from a different structural change and must stay available to its own task.
+        String ownTable = alteredTable(stripPrefix(entry.getDetails()));
+        Map<String, Set<String>> own = ownTable == null
+                ? runningGaps(entry.getProjectId())
+                : gapsFor(runningGaps(entry.getProjectId()), ownTable);
+        String gaps = describeGaps(own);
         if (gaps != null) {
             // The task row now owns the gap; the live map must not hand it to the next
             // task as well.
             CdcRuntimeStats stats = statsFor(entry.getProjectId());
             if (stats != null) {
-                stats.clearPrunedGaps();
+                stats.clearPrunedGaps(own.keySet());
             }
         }
         if (gaps == null) {
@@ -571,7 +585,9 @@ public class CdcDdlTaskService {
      * would leave it PENDING forever, because the replay refuses a task with no table.
      */
     private String statementGapTable(ChangeLog entry) {
-        String table = alteredTable(entry.getTargetDdlSql());
+        // The source statement, not targetDdlSql: the latter has already been rewritten to
+        // the mapped target table, while a replay reads the table from the source.
+        String table = alteredTable(stripPrefix(entry.getDetails()));
         if (table == null) {
             return null;
         }
@@ -589,6 +605,26 @@ public class CdcDdlTaskService {
             }
         }
         return table;
+    }
+
+    /**
+     * The entries of a pruned-gap map that belong to one source table.
+     *
+     * <p>Keys and the statement's identifier may differ in case (the binlog spells a table
+     * the way the source does), so the match is case-insensitive.
+     */
+    private static Map<String, Set<String>> gapsFor(Map<String, Set<String>> gaps,
+                                                    String table) {
+        if (gaps == null) {
+            return null;
+        }
+        Map<String, Set<String>> own = new LinkedHashMap<>();
+        gaps.forEach((name, columns) -> {
+            if (name != null && name.equalsIgnoreCase(table)) {
+                own.put(name, columns);
+            }
+        });
+        return own;
     }
 
     /** The gaps the running consumer recorded, if it is still the one that saw the DDL. */

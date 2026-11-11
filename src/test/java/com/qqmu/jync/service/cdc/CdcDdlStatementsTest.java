@@ -38,6 +38,17 @@ class CdcDdlStatementsTest {
         assertThat(CdcDdlStatements.changesTableStructure("SOMETHING NEW")).isTrue();
     }
 
+    /**
+     * A dropped database is not a per-table task: the dialog would offer to run the
+     * statement verbatim on the target connection, where it can delete a same-named
+     * database. CREATE/ALTER DATABASE are already excluded; DROP must be too.
+     */
+    @Test
+    void droppingADatabaseIsNotFiledAsAnExecutableTableTask() {
+        assertThat(CdcDdlStatements.changesTableStructure("DROP DATABASE reporting")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure("drop schema reporting")).isFalse();
+    }
+
     @Test
     void leadingWhitespaceAndCaseDoNotMatter() {
         assertThat(CdcDdlStatements.changesTableStructure("  grant select on app.* to x"))

@@ -2,6 +2,7 @@ package com.qqmu.jync.service.cdc;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -262,14 +263,22 @@ public final class CdcRuntimeStats {
     }
 
     /**
-     * Drops the recorded gaps once a DDL task has taken them over.
+     * Drops the recorded gaps of the given tables once a DDL task has taken them over.
      *
      * <p>The gap then lives on the task row, which is what a replay reads. This map keeps
-     * the consumer's whole lifetime; leaving it populated makes every later task inherit
-     * an earlier table's columns and replay data that was already brought over.
+     * the consumer's whole lifetime; leaving an entry populated makes every later task
+     * inherit an earlier table's columns and replay data that was already brought over.
+     * Entries of other tables stay: they belong to their own task.
      */
-    public void clearPrunedGaps() {
-        prunedGaps.clear();
+    public void clearPrunedGaps(Collection<String> tables) {
+        if (tables == null || tables.isEmpty()) {
+            return;
+        }
+        for (String table : tables) {
+            if (table != null) {
+                prunedGaps.keySet().removeIf(key -> key.equalsIgnoreCase(table));
+            }
+        }
     }
 
     /**

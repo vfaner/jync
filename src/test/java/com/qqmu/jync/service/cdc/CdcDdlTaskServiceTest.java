@@ -17,6 +17,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -209,7 +210,9 @@ class CdcDdlTaskServiceTest {
         at.setBinlogPos(901743416L);
         when(positionStore.find(3L)).thenReturn(Optional.of(at));
         CdcRuntimeStats stats = new CdcRuntimeStats();
-        stats.recordPrunedGap("file_info", List.of("suffix"));
+        // The pruned rows belong to the table the statement changes; a task for another
+        // table must not inherit them.
+        stats.recordPrunedGap("t", List.of("suffix"));
         when(cdcConsumerManager.statsFor(3L)).thenReturn(stats);
 
         service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
@@ -217,7 +220,7 @@ class CdcDdlTaskServiceTest {
         // The gap is now bounded and names what a replay has to bring over.
         assertThat(log.getGapEndFile()).isEqualTo("binlog.000042");
         assertThat(log.getGapEndPos()).isEqualTo(901743416L);
-        assertThat(log.getAffectedTables()).isEqualTo("file_info(suffix)");
+        assertThat(log.getAffectedTables()).isEqualTo("t(suffix)");
         // The task row now owns the gap. The live counters keep running for the rest of
         // the consumer's life; without clearing, every later DDL task inherits this
         // table's columns and asks for a replay that was already done.
@@ -640,5 +643,91 @@ class CdcDdlTaskServiceTest {
 
         assertThat(log.getDdlExecuted()).isTrue();
         assertThat(log.getTargetDdlSql()).contains("remark");
+    }
+
+    @Test
+    void theFallbackGapNamesTheSourceTableEvenWhenTheTargetIsMapped() throws Exception {
+        ChangeLog log = pendingLog();
+        log.setDetails(SyncStateWriter.SKIPPED_DDL_PREFIX
+                + "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+        SyncConfig config = new SyncConfig();
+        config.setObjectSelectionExplicit(true);
+        config.setTables(Set.of("orders"));
+        config.setTableNameMapping(Map.of("orders", "orders_tgt"));
+        when(contextFactory.parseConfig(any())).thenReturn(config);
+
+        service.executeDdl(9L, "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)");
+
+        // A replay reads the source table. The recorded name must therefore be the source's;
+        // the mapped target name does not exist on the source at all.
+        assertThat(log.getAffectedTables()).isEqualTo("orders");
+        assertThat(log.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PENDING);
+    }
+
+    @Test
+    void aligningAMappedTableClosesAnOlderTaskForTheSameSourceTable() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig target = target();
+        target.setType(DatabaseType.MYSQL);
+        target.setDatabaseName("tgt_db");
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+        SyncConfig config = new SyncConfig();
+        config.setTableNameMapping(Map.of("t", "t_tgt"));
+        when(contextFactory.parseConfig(any())).thenReturn(config);
+        ChangeLog older = ChangeLog.of(3L, ObjectType.PROJECT, "source_db", ChangeType.ERROR,
+                SyncStateWriter.SKIPPED_DDL_PREFIX + "ALTER TABLE `t` ADD COLUMN `c` INT");
+        older.setId(10L);
+        older.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+        when(changeLogRepository.findOpenDdlTasks(3L)).thenReturn(List.of(older));
+
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+
+        // The executed statement now targets t_tgt, but the open task still names its source
+        // table t. Same column on the same logical table: the older task is moot.
+        assertThat(older.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PROCESSED);
+        assertThat(older.getReplayDone()).isTrue();
+    }
+
+    @Test
+    void aTaskTakesOnlyItsOwnTablesGapAndLeavesOtherTablesForTheirOwnTask() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        stats.recordPrunedGap("t", List.of("c"));
+        stats.recordPrunedGap("other", List.of("x"));
+        when(cdcConsumerManager.statsFor(3L)).thenReturn(stats);
+
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+
+        // other's rows were pruned for another table's column; this task must not claim
+        // them and must leave them for the task that owns that table.
+        assertThat(log.getAffectedTables()).isEqualTo("t(c)");
+        assertThat(stats.prunedGaps()).containsOnlyKeys("other");
+    }
+
+    @Test
+    void aCommaInsideABackslashEscapedQuoteDoesNotSplitTheClause() {
+        List<String> clauses = CdcDdlTaskService.alterClauses(
+                "ALTER TABLE t ADD COLUMN a INT,"
+                        + " ADD COLUMN b VARCHAR(8) COMMENT 'it\\'s, ok',"
+                        + " ADD COLUMN c INT");
+
+        // MySQL accepts backslash-escaped quotes inside a string literal; the comma there is
+        // part of the comment, not a clause separator.
+        assertThat(clauses).hasSize(3);
+        assertThat(clauses.get(1)).isEqualTo("ADD COLUMN b VARCHAR(8) COMMENT 'it\\'s, ok'");
     }
 }
