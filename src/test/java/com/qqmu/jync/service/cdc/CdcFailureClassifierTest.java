@@ -11,6 +11,20 @@ import com.github.shyiko.mysql.binlog.network.AuthenticationException;
 class CdcFailureClassifierTest {
 
     @Test
+    void aMissingCdcTargetTableIsItsOwnKindNotTransient() {
+        // A dropped target table used to fall through as TRANSIENT: the consumer backed
+        // off, reconnected and replayed the same transaction forever, with the panel only
+        // saying "disconnected". It must be a kind of its own so the consumer can recreate
+        // the one missing table and replay from the same position.
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                CdcTargetTableMissingException.PREFIX + "orders does not exist")))
+                .isEqualTo(CdcFailureClassifier.Kind.TARGET_TABLE_MISSING);
+        assertThat(CdcFailureClassifier.classify(new CdcTargetTableMissingException(
+                "orders", "orders", "public", new java.sql.SQLException("Table not found"))))
+                .isEqualTo(CdcFailureClassifier.Kind.TARGET_TABLE_MISSING);
+    }
+
+    @Test
     void purgedBinlogClassified() {
         assertThat(CdcFailureClassifier.classify(new IOException(
                 "Could not find first log file name in binary log index file (errno: 1236)")))

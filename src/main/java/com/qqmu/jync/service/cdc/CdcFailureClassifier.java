@@ -36,6 +36,14 @@ public final class CdcFailureClassifier {
          * wall, so the project is parked for a human.
          */
         YSTREAM_BLOCKED,
+        /**
+         * The target table a row event must be applied to is gone (dropped while the
+         * project ran). Reconnecting replays the same transaction against the same absent
+         * table forever, so it must never fall through as TRANSIENT. The consumer recreates
+         * that one table and reloads it when targeted repair is enabled; otherwise, or once
+         * the attempt cap is reached, the project parks with an actionable message.
+         */
+        TARGET_TABLE_MISSING,
         TRANSIENT
     }
 
@@ -46,6 +54,12 @@ public final class CdcFailureClassifier {
             String message = c.getMessage() == null
                     ? "" : c.getMessage().toLowerCase(Locale.ROOT);
             String typeName = c.getClass().getName().toLowerCase(Locale.ROOT);
+            // Checked first: the sentinel is unambiguous, and a "missing table" wording must
+            // never be mistaken for a transient disconnect. Matched on the message so a
+            // driver wrapping the exception still classifies.
+            if (message.contains(CdcTargetTableMissingException.PREFIX.toLowerCase(Locale.ROOT))) {
+                return Kind.TARGET_TABLE_MISSING;
+            }
             if (message.contains("could not find first log file name in binary log index file")
                     || message.contains("master has purged binary logs")
                     || message.contains("errno: 1236")

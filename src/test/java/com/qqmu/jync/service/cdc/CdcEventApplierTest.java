@@ -468,6 +468,43 @@ class CdcEventApplierTest {
     }
 
     @Test
+    void aDroppedTargetTableIsReportedAsItsOwnFaultSoItIsNotRetriedForever() throws SQLException {
+        // The target table was dropped while the project ran. A raw SQLException falls
+        // through the classifier as TRANSIENT, so the consumer reconnects and replays the
+        // same transaction forever without ever saying what is wrong. The dedicated fault
+        // names the source and target table so the consumer can recreate exactly that one
+        // table and replay from the same position.
+        try (Statement st = target.createStatement()) {
+            st.execute("DROP TABLE \"orders\"");
+        }
+
+        assertThatThrownBy(() -> applier.applyUpserts(target, binding,
+                List.of(row(1L, "a", "1.00"))))
+                .isInstanceOf(CdcTargetTableMissingException.class)
+                .hasMessageStartingWith(CdcTargetTableMissingException.PREFIX)
+                .satisfies(thrown -> {
+                    CdcTargetTableMissingException missing =
+                            (CdcTargetTableMissingException) thrown;
+                    assertThat(missing.sourceTable()).isEqualTo("orders");
+                    assertThat(missing.targetTable()).isEqualTo("orders");
+                });
+    }
+
+    @Test
+    void aDroppedTargetTableIsReportedOnDeleteOnlyTrafficToo() throws SQLException {
+        // A stream that only carries deletes must reach the same verdict; otherwise the
+        // reconnect loop stays invisible until an insert happens to arrive.
+        try (Statement st = target.createStatement()) {
+            st.execute("DROP TABLE \"orders\"");
+        }
+
+        assertThatThrownBy(() -> applier.applyDeletes(target, binding,
+                List.of(Map.of("id", 1L))))
+                .isInstanceOf(CdcTargetTableMissingException.class)
+                .hasMessageStartingWith(CdcTargetTableMissingException.PREFIX);
+    }
+
+    @Test
     void aMissingPrimaryKeyColumnIsNeverProjectedAway() {
         TableMeta meta = new TableMeta();
         meta.setName("orders");
