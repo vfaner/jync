@@ -154,6 +154,37 @@ abstract class AbstractMetadataStoreIT {
         projects.deleteById(project.getId());
     }
 
+    /**
+     * 跳过 DDL 的去重查询必须在真实元数据库上可执行。
+     *
+     * <p>{@code details} 是 {@code @Lob}，在 Oracle 族里是 CLOB。用 {@code =} 比较 CLOB 会报
+     * ORA-00932，而这两条查询正是在 CDC 读到一条 DDL 时无条件执行的：查询一失败，项目就会被
+     * 当成流故障停摆。H2 的 {@code MODE=Oracle} 不会暴露这一点，只有真库才会。
+     */
+    @Test
+    @Transactional
+    void skippedDdlDedupeQueriesRunOnTheMetadataDatabase() {
+        String details = "CDC_SKIPPED_DDL:ALTER TABLE t ADD COLUMN c INT";
+        ChangeLog entry = new ChangeLog();
+        entry.setProjectId(4242L);
+        entry.setObjectType(ObjectType.PROJECT);
+        entry.setObjectName("t");
+        entry.setChangeType(ChangeType.ERROR);
+        entry.setSuccess(false);
+        entry.setDetails(details);
+        entry.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+        entry.setGapStartFile("binlog.000001");
+        entry.setGapStartPos(100L);
+        entry.setOccurredAt(Instant.now());
+        changeLogs.saveAndFlush(entry);
+
+        assertThat(changeLogs.countDdlTasksAt(4242L, "binlog.000001", 100L, details))
+                .as("同一位置同一语句只算一件任务").isEqualTo(1);
+        assertThat(changeLogs.countDdlTasksAt(4242L, "binlog.000001", 200L, details)).isZero();
+        assertThat(changeLogs.countOpenDdlTasksByDetails(4242L, details))
+                .as("没有位置来源（LogMiner）按语句文本去重").isEqualTo(1);
+    }
+
     @Test
     void theSingleSignInConfigRowStoresItsMode() {
         OaAuthConfig config = new OaAuthConfig();

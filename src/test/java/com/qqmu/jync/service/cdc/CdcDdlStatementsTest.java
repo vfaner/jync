@@ -54,4 +54,23 @@ class CdcDdlStatementsTest {
         assertThat(CdcDdlStatements.changesTableStructure("  grant select on app.* to x"))
                 .isFalse();
     }
+
+    /**
+     * MySQL keeps versioned comments ({@code /*!NNNNN ...}, and MariaDB's {@code /*M!...})
+     * in the binlog Query text. The content is SQL the server executed, not a note: dropping
+     * it leaves an empty statement, which is filed as a structural change with no table and
+     * slips past the schema and table filters.
+     */
+    @Test
+    void versionedCommentsAreUnwrappedNotDiscarded() {
+        assertThat(CdcDdlStatements.stripLeadingNoise(
+                "/*!40101 ALTER TABLE `app`.`orders` ADD COLUMN `note` INT */").trim())
+                .isEqualTo("ALTER TABLE `app`.`orders` ADD COLUMN `note` INT");
+        assertThat(CdcDdlStatements.changesTableStructure("/*!40101 ANALYZE TABLE orders */"))
+                .isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure(
+                "/*M!100100 OPTIMIZE TABLE orders */")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure(
+                "/*!40101 ALTER TABLE orders ADD COLUMN note INT */")).isTrue();
+    }
 }

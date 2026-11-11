@@ -461,6 +461,18 @@ class CdcDdlTaskServiceTest {
         assertThat(CdcDdlTaskService.alteredTable("SOMETHING ELSE")).isNull();
     }
 
+    /**
+     * A versioned comment wraps real SQL; the parser must read through it exactly as it
+     * reads the bare statement, or the schema rewrite and the table mapping both see null.
+     */
+    @Test
+    void aWrappedStatementIsParsedLikeThePlainOne() {
+        String wrapped = "/*!40101 ALTER TABLE `src_db`.`orders` ADD COLUMN note INT */";
+        assertThat(CdcDdlTaskService.qualifiedSchema(wrapped)).isEqualTo("src_db");
+        assertThat(CdcDdlTaskService.alteredTable(wrapped)).isEqualTo("orders");
+        assertThat(CdcDdlTaskService.isSupportedStatement(wrapped)).isTrue();
+    }
+
     @Test
     void theSchemaQualifierIsRewrittenToTheTargetDatabase() {
         // The binlog statement names the source database; only the target may be touched.

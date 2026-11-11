@@ -78,17 +78,49 @@ final class CdcDdlStatements {
      * batch can prefix {@code USE db;}. Both sit in front of the head keyword, so every
      * rule anchored on {@code ^ALTER / ^RENAME / ^DROP} silently stopped matching: the
      * schema was never rewritten, the table never mapped and the clauses never read.
+     *
+     * <p>Versioned comments are not comments: {@code /*!NNNNN ...} (MySQL) and
+     * {@code /*M!NNNNN ...} (MariaDB) wrap SQL the server actually executed. Their content
+     * is unwrapped (the version guard dropped) rather than discarded, or a wrapped
+     * {@code ALTER TABLE} would strip to an empty statement — filed as a structural change
+     * with no table, while the schema rewrite and table mapping saw nothing at all.
      */
     static String stripLeadingNoise(String sql) {
         String statement = sql == null ? "" : sql;
         while (true) {
             statement = statement.stripLeading();
             if (statement.startsWith("/*")) {
-                int end = statement.indexOf("*/", 2);
+                int open;
+                boolean executable;
+                if (statement.startsWith("/*!")) {
+                    open = 3;
+                    executable = true;
+                } else if (statement.regionMatches(true, 0, "/*M!", 0, 4)) {
+                    open = 4;
+                    executable = true;
+                } else {
+                    open = 2;
+                    executable = false;
+                }
+                int end = statement.indexOf("*/", open);
                 if (end < 0) {
                     return statement;
                 }
-                statement = statement.substring(end + 2);
+                String body = statement.substring(open, end);
+                String rest = statement.substring(end + 2);
+                if (!executable) {
+                    statement = rest;
+                    continue;
+                }
+                // Only the version guard is not SQL: digits, optionally led by spaces.
+                int content = 0;
+                while (content < body.length() && Character.isWhitespace(body.charAt(content))) {
+                    content++;
+                }
+                while (content < body.length() && Character.isDigit(body.charAt(content))) {
+                    content++;
+                }
+                statement = body.substring(content) + " " + rest;
                 continue;
             }
             if (statement.startsWith("--") || statement.startsWith("#")) {
