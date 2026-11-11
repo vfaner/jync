@@ -336,6 +336,34 @@ class SqlRedoParserTest {
     }
 
     @Test
+    void updateOldImageNullColumnWhoseNameGrowsWhenUppercasedIsParsed() {
+        // nullPredicateColumn 原先在大写副本上 indexOf("IS NULL"),再把下标套回原文。
+        // Java 的大小写映射会改变长度("ß" → "SS"),列名里只要出现这种字符,下标就整体
+        // 后移一位,`"straße" IS NULL` 认不出来 —— 该列从旧镜像里消失,整条 UPDATE 被
+        // refuseIfColumnsAreMissing 误判成缺列(行外 LOB 那一类)。indexOfWord 与
+        // splitOnAnd 早已为此改成 regionMatches 原地比较,这里漏了同一处规则。
+        TableMeta meta = new TableMeta();
+        meta.setName("SPIKE_T");
+        meta.setSchema("SRC");
+        meta.getColumns().add(col("ID", Types.BIGINT, true));
+        meta.getColumns().add(col("NOTE", Types.VARCHAR, false));
+        meta.getColumns().add(col("straße", Types.VARCHAR, false));
+        meta.getPrimaryKeys().add("ID");
+        CdcTableBinding binding = CdcTableBinding.of("SRC", "SPIKE_T", meta, "SPIKE_T",
+                Collections.emptyMap());
+
+        String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"ID\" = '1'"
+                + " and \"straße\" IS NULL"
+                + " and ROWID = 'AAAR4TAAYAAAAAPAAA';";
+        SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, binding);
+        assertThat(c.unsupportedReason).isNull();
+        assertThat(c.op).isEqualTo(SqlRedoParser.Op.UPDATE);
+        assertThat(c.row).containsKey("straße");
+        assertThat(c.row.get("straße")).isNull();
+        assertThat(c.row.get("NOTE")).isEqualTo("x");
+    }
+
+    @Test
     void updateMissingPkInWhereIsUnsupported() {
         String sql = "update \"SRC\".\"SPIKE_T\" set \"NOTE\" = 'x' where \"NAME\" = 'Alice';";
         SqlRedoParser.ParsedChange c = parser.parse(SqlRedoParser.Op.UPDATE, sql, spikeBinding());

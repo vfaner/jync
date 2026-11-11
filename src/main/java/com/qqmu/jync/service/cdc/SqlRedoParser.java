@@ -511,8 +511,14 @@ public class SqlRedoParser {
             text = text.substring(0, text.length() - 1).trim();
         }
 
-        // Find "IS NULL" as a substring, case-insensitive
-        int isIndex = text.toUpperCase(Locale.ROOT).indexOf("IS NULL");
+        // Find "IS NULL" in place, case-insensitively. Never through an uppercased
+        // copy: Java's case mapping can change a string's length ("ß" → "SS"), and
+        // an index found in the copy then addresses the wrong character of the
+        // original — a column whose name holds such a letter silently drops out of
+        // the old image, and refuseIfColumnsAreMissing refuses the whole UPDATE as
+        // an out-of-line-LOB-style missing column. indexOfWord and splitOnAnd
+        // compare in place for exactly this reason.
+        int isIndex = indexOfIgnoreCase(text, "IS NULL");
         if (isIndex < 0) {
             return null;
         }
@@ -527,6 +533,17 @@ public class SqlRedoParser {
 
         // Remove the surrounding quotes; the identifier's case is meaningful.
         return colPart.substring(1, colPart.length() - 1);
+    }
+
+    /** Case-insensitive {@link String#indexOf(String)} that never builds a copy, so a
+     *  case-mapping length change cannot shift the returned offset. */
+    private static int indexOfIgnoreCase(String haystack, String needle) {
+        for (int i = 0; i <= haystack.length() - needle.length(); i++) {
+            if (haystack.regionMatches(true, i, needle, 0, needle.length())) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     // —— splitters that respect quotes, double-quotes and parentheses ——
