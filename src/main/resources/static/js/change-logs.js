@@ -118,7 +118,8 @@
     // 已执行过目标 DDL 就不必再执行；目标还没对齐时无从重放；已补齐的数据也不必再重放。
     var executed = btn.getAttribute('data-ddl-executed') === 'true';
     var replayed = btn.getAttribute('data-ddl-replayed') === 'true';
-    exec.disabled = executed;
+    // 已关闭（已执行或已处理）的任务服务端一律拒绝执行：按钮不能看起来可用。
+    exec.disabled = executed || replayed;
     exec.setAttribute('data-action', '/change-logs/' + id + '/execute');
     if (retry) {
       // 目标库还没执行这条 DDL，重放无从谈起（服务端也会拒绝）：执行之后才可用。

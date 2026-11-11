@@ -90,7 +90,11 @@ public class CdcDdlTaskService {
      * the statement ran.
      */
     static boolean hasColumnGap(String sql) {
-        for (String clause : alterClauses(sql)) {
+        return hasColumnGap(sql, true);
+    }
+
+    static boolean hasColumnGap(String sql, boolean backslashEscapes) {
+        for (String clause : alterClauses(sql, backslashEscapes)) {
             if (leavesDataGap(clause)) {
                 return true;
             }
@@ -160,8 +164,12 @@ public class CdcDdlTaskService {
      * not exist" error as a real failure instead of as "the target is already aligned".
      */
     static List<String> droppedColumns(String sql) {
+        return droppedColumns(sql, true);
+    }
+
+    static List<String> droppedColumns(String sql, boolean backslashEscapes) {
         List<String> dropped = new ArrayList<>();
-        for (String clause : alterClauses(sql)) {
+        for (String clause : alterClauses(sql, backslashEscapes)) {
             java.util.regex.Matcher matcher = java.util.regex.Pattern
                     .compile("(?is)^DROP\\s+(?:COLUMN\\s+)?(.+)$").matcher(clause.trim());
             if (!matcher.matches()) {
@@ -186,8 +194,12 @@ public class CdcDdlTaskService {
      * leaves no gap to replay.
      */
     static List<String> addedColumns(String sql) {
+        return addedColumns(sql, true);
+    }
+
+    static List<String> addedColumns(String sql, boolean backslashEscapes) {
         List<String> added = new ArrayList<>();
-        for (String clause : alterClauses(sql)) {
+        for (String clause : alterClauses(sql, backslashEscapes)) {
             java.util.regex.Matcher matcher = java.util.regex.Pattern
                     .compile("(?is)^ADD\\s+(?:COLUMN\\s+)?(.+)$").matcher(clause.trim());
             if (!matcher.matches()) {
@@ -233,7 +245,8 @@ public class CdcDdlTaskService {
      * without this, the second ADD would be swallowed by the first one's still-open task and
      * never raise an alert again.
      */
-    private void supersedeTasksFor(ChangeLog entry, List<String> columns) {
+    private void supersedeTasksFor(ChangeLog entry, List<String> columns,
+                                   boolean backslashEscapes) {
         if (columns == null || columns.isEmpty()) {
             return;
         }
@@ -252,7 +265,7 @@ public class CdcDdlTaskService {
                 // table says nothing about the other.
                 continue;
             }
-            List<String> added = addedColumns(stripPrefix(open.getDetails()));
+            List<String> added = addedColumns(stripPrefix(open.getDetails()), backslashEscapes);
             for (String column : columns) {
                 if (!added.isEmpty() && containsIgnoreCase(added, column)) {
                     open.setReplayDone(true);
@@ -275,21 +288,36 @@ public class CdcDdlTaskService {
         return false;
     }
 
-    /** One identifier, optionally schema-qualified: t, `db`.`t`, db.t, [db].[t]. */
-    private static final java.util.regex.Pattern TABLE_IDENTIFIER = java.util.regex.Pattern.compile(
-            "^(?:`[^`]+`|\"[^\"]+\"|\\[[^\\]]+\\]|[A-Za-z0-9_$]+)"
-                    + "(?:\\s*\\.\\s*(?:`[^`]+`|\"[^\"]+\"|\\[[^\\]]+\\]|[A-Za-z0-9_$]+))?");
+    /** One table identifier, in any of the quoting styles the supported dialects use. */
+    private static final String IDENT =
+            "(?:`[^`]+`|\"[^\"]+\"|\\[[^\\]]+\\]|[A-Za-z0-9_$]+)";
 
     /**
-     * The table an {@code ALTER TABLE} statement changes, without its schema qualifier.
+     * The statement heads that name a table. Skipped DDL is not always an ALTER: CREATE,
+     * DROP, RENAME and TRUNCATE are filed too, and each has to be rewritten before it runs
+     * on the target connection.
+     */
+    private static final String TABLE_HEAD =
+            "(?:ALTER|CREATE|DROP)\\s+TABLE\\s+(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?"
+                    + "|TRUNCATE\\s+(?:TABLE\\s+)?"
+                    + "|RENAME\\s+TABLE\\s+";
+
+    /** One identifier, optionally schema-qualified: t, `db`.`t`, db.t, [db].[t]. */
+    private static final java.util.regex.Pattern TABLE_IDENTIFIER = java.util.regex.Pattern.compile(
+            "^(?:" + IDENT + ")(?:\\s*\\.\\s*(?:" + IDENT + "))?");
+
+    /**
+     * The table a DDL statement changes, without its schema qualifier.
      *
      * <p>When neither the running consumer nor the live column diff can name the affected
      * tables, the statement itself still says which table's rows were omitted meanwhile.
+     * For {@code RENAME TABLE} this is the old name — the one the sync and its mapping
+     * know; a multi-table {@code DROP} names its first table.
      */
     static String alteredTable(String sql) {
         String statement = sql == null ? "" : sql.trim();
         java.util.regex.Matcher matcher = java.util.regex.Pattern
-                .compile("(?is)^ALTER\\s+TABLE\\s+(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?(.+)$")
+                .compile("(?is)^(?:" + TABLE_HEAD + ")(.+)$")
                 .matcher(statement);
         if (!matcher.matches()) {
             return null;
@@ -309,6 +337,16 @@ public class CdcDdlTaskService {
 
     /** The ALTER TABLE clauses, split on the commas that separate them. */
     static List<String> alterClauses(String sql) {
+        return alterClauses(sql, true);
+    }
+
+    /**
+     * @param backslashEscapes whether a backslash escapes the next character inside a string
+     *                         literal. MySQL does; Oracle, DM, SQL Server and PostgreSQL end
+     *                         the literal at the quote, so {@code DEFAULT 'C:\'} really is
+     *                         followed by the next clause separator.
+     */
+    static List<String> alterClauses(String sql, boolean backslashEscapes) {
         String statement = sql == null ? "" : sql.trim();
         java.util.regex.Matcher matcher = java.util.regex.Pattern
                 .compile("(?is)^ALTER\\s+TABLE\\s+(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?(.+)$")
@@ -343,10 +381,10 @@ public class CdcDdlTaskService {
                 continue;
             }
             if (quote != 0) {
-                if (c == '\\' && i + 1 < rest.length()) {
+                if (backslashEscapes && c == '\\' && i + 1 < rest.length()) {
                     // MySQL keeps backslash escapes inside string literals; the escaped
                     // character must not close the quote and expose its comma as a clause
-                    // boundary.
+                    // boundary. Other dialects have no such escape in a quoted literal.
                     current.append(c).append(rest.charAt(++i));
                     continue;
                 }
@@ -463,8 +501,9 @@ public class CdcDdlTaskService {
         // the target, so it is rewritten here rather than trusted from the form.
         // A statement that only drops things leaves no data behind; one that adds, renames
         // or retypes a column leaves that column's values unreplicated.
-        boolean gap = hasColumnGap(statement);
-        List<String> dropped = droppedColumns(statement);
+        boolean backslashEscapes = backslashEscapes(project);
+        boolean gap = hasColumnGap(statement, backslashEscapes);
+        List<String> dropped = droppedColumns(statement, backslashEscapes);
         // The binlog names the source table; the project may map it to a different target
         // name. Without the mapping the DDL lands on a table the sync never writes.
         String sourceTable = alteredTable(stripPrefix(entry.getDetails()));
@@ -527,9 +566,9 @@ public class CdcDdlTaskService {
         // This statement supersedes the open tasks that touch the same columns: once the
         // target has been aligned for a column, an older task asking for a change to that
         // column is moot — and the replay covers the whole table anyway.
-        List<String> touched = new ArrayList<>(addedColumns(statement));
-        touched.addAll(droppedColumns(statement));
-        supersedeTasksFor(entry, touched);
+        List<String> touched = new ArrayList<>(addedColumns(statement, backslashEscapes));
+        touched.addAll(droppedColumns(statement, backslashEscapes));
+        supersedeTasksFor(entry, touched, backslashEscapes);
         // handledBy / handledAt / targetDdlSql on this row ARE the audit trail. No
         // AdminAuditService row: audit_event.action is a fixed H2 ENUM column and adding a
         // new AuditAction value cannot be applied by ddl-auto=update (H2 22030 on insert).
@@ -853,7 +892,7 @@ public class CdcDdlTaskService {
     }
 
     /**
-     * Rewrites the schema qualifier of an ALTER TABLE to the target database.
+     * Rewrites the schema qualifier of a table DDL to the target database.
      *
      * <p>The qualifier is not the administrator's to change: the statement may only run
      * against the target, and the name in the form came from the source's binlog. Whatever
@@ -868,17 +907,30 @@ public class CdcDdlTaskService {
         String qualifier = name.isEmpty()
                 ? "" : java.util.regex.Matcher.quoteReplacement(
                         com.qqmu.jync.util.JdbcUtil.quotedIdentifier(identifierQuote, name) + ".");
-        return sql.replaceAll(
-                "(?is)^(\\s*ALTER\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)"
-                        + "(`[^`]+`|\"[^\"]+\"|[A-Za-z0-9_$]+)\\s*\\.\\s*",
+        String rewritten = sql.replaceFirst(
+                "(?is)^(\\s*(?:" + TABLE_HEAD + "))" + IDENT + "\\s*\\.\\s*",
                 qualifier.isEmpty() ? "$1" : "$1" + qualifier);
+        if (listsSeveralTables(rewritten)) {
+            // RENAME names its second side after TO; DROP may list several tables. Every
+            // qualifier in the list is a schema, and each one has to be the target's.
+            rewritten = rewritten.replaceAll(
+                    "(?is)" + IDENT + "\\s*\\.\\s*(?=" + IDENT + ")",
+                    qualifier);
+        }
+        return rewritten;
+    }
+
+    /** Whether the statement head is followed by more than one table reference. */
+    private static boolean listsSeveralTables(String sql) {
+        String upper = sql == null ? "" : sql.trim().toUpperCase(Locale.ROOT);
+        return upper.startsWith("RENAME TABLE") || upper.startsWith("DROP TABLE");
     }
 
     /**
-     * Rewrites the table an {@code ALTER TABLE} changes to the project's mapped target name.
+     * Rewrites the table a DDL statement changes to the project's mapped target name.
      *
-     * <p>Only the statement head is touched: the table token after {@code ALTER TABLE} and
-     * its optional schema qualifier. Columns and clauses stay exactly as submitted. A blank
+     * <p>Only the statement head is touched: the table token after the head keyword and its
+     * optional schema qualifier. Columns and clauses stay exactly as submitted. A blank
      * mapping, an unknown source table, or a mapping to the same name leaves the statement
      * unchanged.
      */
@@ -892,9 +944,9 @@ public class CdcDdlTaskService {
         String quoted = java.util.regex.Matcher.quoteReplacement(
                 com.qqmu.jync.util.JdbcUtil.quotedIdentifier(identifierQuote, target));
         return sql.replaceFirst(
-                "(?is)^(\\s*ALTER\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)"
-                        + "((?:`[^`]+`|\"[^\"]+\"|[A-Za-z0-9_$]+)\\s*\\.\\s*)?"
-                        + "(`[^`]+`|\"[^\"]+\"|[A-Za-z0-9_$]+)",
+                "(?is)^(\\s*(?:" + TABLE_HEAD + "))"
+                        + "((?:" + IDENT + "\\s*\\.\\s*)?)"
+                        + "(" + IDENT + ")",
                 "$1$2" + quoted);
     }
 
@@ -904,17 +956,60 @@ public class CdcDdlTaskService {
      */
     private static String executionSchema(DatabaseConfig target, Connection connection)
             throws SQLException {
-        String schema = target.getSchemaName();
-        if (schema != null && !schema.isBlank()) {
-            schema = schema.trim();
-            return target.resolvedFamily() == DatabaseType.DialectFamily.ORACLE
-                    || target.resolvedFamily() == DatabaseType.DialectFamily.DB2
-                    ? schema.toUpperCase(Locale.ROOT) : schema;
+        String configured = configuredSchema(target);
+        if (configured != null) {
+            return configured;
         }
         if (target.resolvedFamily() == DatabaseType.DialectFamily.MYSQL) {
             return target.getDatabaseName();
         }
         return connection.getSchema();
+    }
+
+    /**
+     * The configured schema, or null when none is configured.
+     *
+     * <p>Oracle and DB2 fold an unquoted name to upper case. A quoted name is
+     * case-sensitive by definition, so it keeps the case the administrator wrote.
+     */
+    private static String configuredSchema(DatabaseConfig target) {
+        String schema = target.getSchemaName();
+        if (schema == null || schema.isBlank()) {
+            return null;
+        }
+        schema = schema.trim();
+        if (schema.length() >= 2) {
+            char first = schema.charAt(0);
+            char last = schema.charAt(schema.length() - 1);
+            if (first == '"' && last == '"') {
+                return schema.substring(1, schema.length() - 1).replace("\"\"", "\"");
+            }
+            if (first == '`' && last == '`') {
+                return schema.substring(1, schema.length() - 1);
+            }
+        }
+        return target.resolvedFamily() == DatabaseType.DialectFamily.ORACLE
+                || target.resolvedFamily() == DatabaseType.DialectFamily.DB2
+                ? schema.toUpperCase(Locale.ROOT) : schema;
+    }
+
+    /**
+     * Whether the source dialect gives a backslash a meaning inside a string literal.
+     *
+     * <p>MySQL (and its protocol-compatible presets) do; Oracle, DM, SQL Server and
+     * PostgreSQL do not. Reading {@code DEFAULT 'C:\'} as an escaped quote merges the
+     * remainder of a multi-clause statement into the literal, so the columns after it are
+     * never seen — and the task closes without a replay.
+     */
+    boolean backslashEscapes(Project project) {
+        if (project == null || project.getSourceDbId() == null
+                || databaseConfigRepository == null) {
+            return true;
+        }
+        DatabaseConfig source = databaseConfigRepository.findById(project.getSourceDbId())
+                .orElse(null);
+        return source == null
+                || source.resolvedFamily() == DatabaseType.DialectFamily.MYSQL;
     }
 
     /**

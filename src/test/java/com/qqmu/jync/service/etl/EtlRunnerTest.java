@@ -630,6 +630,43 @@ class EtlRunnerTest {
     }
 
     @Test
+    void analysisEngineTargetsAlsoCountAsAbsentWhenTheTableIsMissing() throws SQLException {
+        // ClickHouse, Hive, Impala and HANA are all ETL-writable, and the documented first
+        // run creates the target table. Their "no such table" errors do not carry the
+        // SQL-standard states the probe knows, so they must be read from the message.
+        for (SQLException missing : List.of(
+                new SQLException("Code: 60. DB::Exception: Table default.dst does not exist."
+                        + " (UNKNOWN_TABLE)", null, 60),
+                new SQLException("Error while compiling statement: FAILED: SemanticException"
+                        + " [Error 10001]: Table not found dst", "42000", 10001),
+                new SQLException("AnalysisException: Table does not exist: dst"),
+                new SQLException("SAP DBTech JDBC: [259]: invalid table name: dst"))) {
+            Connection connection = mock(Connection.class);
+            Statement statement = mock(Statement.class);
+            when(connection.createStatement()).thenReturn(statement);
+            when(statement.executeQuery(anyString())).thenThrow(missing);
+
+            assertThat(EtlSqlSupport.exists(connection, "dst")).as(missing.getMessage()).isFalse();
+        }
+    }
+
+    @Test
+    void aDeadlockIsNotAnAbsentTable() throws SQLException {
+        // Oracle ORA-00060 shares the numeric code ClickHouse gives UNKNOWN_TABLE. The
+        // vendor code alone must never classify an error as a missing table.
+        Connection connection = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(anyString())).thenThrow(
+                new SQLException("ORA-00060: deadlock detected while waiting for resource",
+                        "60000", 60));
+
+        assertThatThrownBy(() -> EtlSqlSupport.exists(connection, "dst"))
+                .isInstanceOf(SQLException.class);
+        verify(connection).rollback();
+    }
+
+    @Test
     void aSourceThatCannotOpenIsBlamedOnTheSource() {
         // The stage still said PROGRAM when the source connection was opened, so an
         // unreachable source database was reported as a program error. The operator then

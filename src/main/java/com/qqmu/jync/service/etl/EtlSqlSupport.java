@@ -131,9 +131,30 @@ public final class EtlSqlSupport {
                     || code == 42104) { // H2 table not found in an empty database
                 return true;
             }
+            String message = e.getMessage();
+            if (message != null) {
+                String lower = message.toLowerCase(java.util.Locale.ROOT);
+                for (String marker : MISSING_TABLE_MARKERS) {
+                    if (lower.contains(marker)) {
+                        return true;
+                    }
+                }
+            }
         }
         return false;
     }
+
+    /**
+     * The messages of the analytic engines and HANA, none of which carry a state the list
+     * above knows: ClickHouse returns code 60 but so does Oracle's ORA-00060 deadlock, which
+     * is why the vendor codes are not extended here. A table probe cannot return these
+     * messages for a permission fault — every family words that differently — so a match
+     * means the object is absent.
+     */
+    private static final String[] MISSING_TABLE_MARKERS = {
+            "does not exist", "doesn't exist", "table not found", "no such table",
+            "unknown table", "invalid object name", "invalid table name",
+            "invalid table or view name", "无效的表或视图名", "表或视图不存在"};
 
     private static void rollbackQuietly(Connection connection) {
         try {

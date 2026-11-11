@@ -109,19 +109,22 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     long countOpenDdlTasks(@Param("projectId") Long projectId);
 
     /**
-     * Whether the exact binlog event still has an open task.
+     * Whether the exact binlog event was already filed, whatever the task's state.
      *
      * <p>A consumer restart re-reads a DDL it has already filed; the in-memory dedupe map
      * died with the previous process, so this row is the only surviving record of the
-     * event. Position, not statement text, is the identity — a column dropped and added
-     * again is a new task even though the ALTER reads the same.
+     * event. Position <em>and</em> statement are the identity: the position alone is not,
+     * because a rebuilt binlog reuses an offset for a different statement. The task's
+     * status is deliberately not part of the check — the position only advances on commit,
+     * so a dismissed or already-executed task is still the same event and must not be
+     * raised again.
      */
     @Query("select count(c) from ChangeLog c where c.projectId = :projectId"
-            + " and c.details like 'CDC_SKIPPED_DDL:%'"
-            + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')"
+            + " and c.details = :details"
             + " and c.gapStartFile = :file and c.gapStartPos = :pos")
-    long countOpenDdlTasksAt(@Param("projectId") Long projectId,
-                             @Param("file") String file, @Param("pos") Long pos);
+    long countDdlTasksAt(@Param("projectId") Long projectId,
+                         @Param("file") String file, @Param("pos") Long pos,
+                         @Param("details") String details);
 
     /** The same check for sources that report no binlog position (LogMiner): text identity. */
     @Query("select count(c) from ChangeLog c where c.projectId = :projectId"

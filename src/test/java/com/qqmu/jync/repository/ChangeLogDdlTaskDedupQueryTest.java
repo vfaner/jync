@@ -30,18 +30,29 @@ class ChangeLogDdlTaskDedupQueryTest {
     void theSameEventIsFoundAgainAfterARestart() {
         task(1L, "binlog.000001", 100L, DDL, ChangeLog.RESOLUTION_PENDING);
 
-        assertThat(repository.countOpenDdlTasksAt(1L, "binlog.000001", 100L)).isEqualTo(1);
-        assertThat(repository.countOpenDdlTasksAt(1L, "binlog.000001", 200L)).isZero();
-        assertThat(repository.countOpenDdlTasksAt(2L, "binlog.000001", 100L)).isZero();
+        assertThat(repository.countDdlTasksAt(1L, "binlog.000001", 100L, DDL)).isEqualTo(1);
+        assertThat(repository.countDdlTasksAt(1L, "binlog.000001", 200L, DDL)).isZero();
+        assertThat(repository.countDdlTasksAt(2L, "binlog.000001", 100L, DDL)).isZero();
     }
 
     @Test
-    void aProcessedTaskDoesNotSuppressTheSameEventLater() {
-        // The column was dropped and added again at the very same position of a recreated
-        // binlog: the old task is closed, so this is new work, not a replay.
+    void aClosedTaskStillIdentifiesTheSameEvent() {
+        // The position only advances on commit, so a restart before that re-reads the very
+        // event the administrator already dismissed or executed. Counting only open tasks
+        // would put it back on the list and resurrect a decision that was already made.
         task(1L, "binlog.000001", 100L, DDL, ChangeLog.RESOLUTION_PROCESSED);
 
-        assertThat(repository.countOpenDdlTasksAt(1L, "binlog.000001", 100L)).isZero();
+        assertThat(repository.countDdlTasksAt(1L, "binlog.000001", 100L, DDL)).isEqualTo(1);
+    }
+
+    @Test
+    void aDifferentStatementAtTheSamePositionIsNewWork() {
+        // A rebuilt binlog reuses the offset for other statements. The text is part of the
+        // event's identity, so a processed task must not swallow them.
+        task(1L, "binlog.000001", 100L, DDL, ChangeLog.RESOLUTION_PROCESSED);
+
+        assertThat(repository.countDdlTasksAt(1L, "binlog.000001", 100L,
+                "CDC_SKIPPED_DDL:" + "DROP COLUMN c")).isZero();
         assertThat(repository.countOpenDdlTasksByDetails(1L, DDL)).isZero();
     }
 

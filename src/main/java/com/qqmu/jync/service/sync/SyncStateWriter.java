@@ -273,16 +273,17 @@ public class SyncStateWriter {
                                   String ddlFile, Long ddlPos) {
         String statement = sql == null ? "" : sql;
         String details = SKIPPED_DDL_PREFIX + statement;
-        // The binlog position identifies the *event*. The same statement may legitimately
-        // occur again later — a column is dropped and added again — and that is a new task,
-        // while the same event delivered twice after a reconnect is not. The open task row
-        // is the record of what was already filed: an in-memory window would forget it on
-        // the next restart and file the event again.
-        boolean alreadyOpen = ddlPos != null && ddlFile != null
-                ? changeLogRepository.countOpenDdlTasksAt(projectId, ddlFile, ddlPos) > 0
+        // The binlog position plus the statement identify the *event*. The same statement
+        // may legitimately occur again later — a column is dropped and added again at a new
+        // position — and that is a new task, while the same event delivered twice after a
+        // reconnect is not. The status is not consulted: the position only advances on
+        // commit, so a restart before that re-reads events whose task was already dismissed
+        // or executed, and those must not be raised again.
+        boolean alreadyFiled = ddlPos != null && ddlFile != null
+                ? changeLogRepository.countDdlTasksAt(projectId, ddlFile, ddlPos, details) > 0
                 : changeLogRepository.countOpenDdlTasksByDetails(projectId, details) > 0;
-        if (alreadyOpen) {
-            log.debug("The skipped DDL of project {} at {}:{} already has an open task",
+        if (alreadyFiled) {
+            log.debug("The skipped DDL of project {} at {}:{} was already filed",
                     projectId, ddlFile, ddlPos);
             return;
         }

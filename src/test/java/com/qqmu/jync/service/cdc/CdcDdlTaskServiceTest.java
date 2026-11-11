@@ -452,7 +452,13 @@ class CdcDdlTaskServiceTest {
                 "ALTER TABLE `src_db`.`file_info` ADD COLUMN c INT")).isEqualTo("file_info");
         assertThat(CdcDdlTaskService.alteredTable(
                 "ALTER TABLE [db].[t] ADD COLUMN c INT")).isEqualTo("t");
-        assertThat(CdcDdlTaskService.alteredTable("DROP TABLE t")).isNull();
+        // The other heads name their table too: the mapping has to apply to a skipped DROP
+        // just as it does to an ALTER, or the statement hits a table the sync never writes.
+        assertThat(CdcDdlTaskService.alteredTable("DROP TABLE IF EXISTS t")).isEqualTo("t");
+        assertThat(CdcDdlTaskService.alteredTable("CREATE TABLE t (id INT)")).isEqualTo("t");
+        assertThat(CdcDdlTaskService.alteredTable("RENAME TABLE a TO b")).isEqualTo("a");
+        assertThat(CdcDdlTaskService.alteredTable("TRUNCATE TABLE t")).isEqualTo("t");
+        assertThat(CdcDdlTaskService.alteredTable("SOMETHING ELSE")).isNull();
     }
 
     @Test
@@ -534,6 +540,102 @@ class CdcDdlTaskServiceTest {
                 "target_db", "\"")).isEqualTo("ALTER TABLE \"target_db\".t ADD COLUMN c INT");
         assertThat(CdcDdlTaskService.targetize("ALTER TABLE src.t ADD COLUMN c INT",
                 "target_db", "`")).isEqualTo("ALTER TABLE `target_db`.t ADD COLUMN c INT");
+    }
+
+    @Test
+    void everySingleTableHeadIsRewrittenToTheTargetSchema() {
+        // A skipped DDL is not always an ALTER: CREATE, DROP and TRUNCATE are filed too,
+        // and running them verbatim applies the source schema to the target connection.
+        assertThat(CdcDdlTaskService.targetize(
+                "CREATE TABLE `src_db`.`orders` (`id` INT)", "target_db", "`"))
+                .isEqualTo("CREATE TABLE `target_db`.`orders` (`id` INT)");
+        assertThat(CdcDdlTaskService.targetize(
+                "DROP TABLE IF EXISTS `src_db`.`orders`", "target_db", "`"))
+                .isEqualTo("DROP TABLE IF EXISTS `target_db`.`orders`");
+        assertThat(CdcDdlTaskService.targetize(
+                "TRUNCATE TABLE `src_db`.`orders`", "target_db", "`"))
+                .isEqualTo("TRUNCATE TABLE `target_db`.`orders`");
+    }
+
+    @Test
+    void aRenameIsQualifiedOnBothSides() {
+        // RENAME TABLE carries two table references; leaving the second one qualified with
+        // the source schema points the rename at a schema the target may not have.
+        assertThat(CdcDdlTaskService.targetize(
+                "RENAME TABLE `src_db`.`orders` TO `src_db`.`orders_old`", "target_db", "`"))
+                .isEqualTo("RENAME TABLE `target_db`.`orders` TO `target_db`.`orders_old`");
+    }
+
+    @Test
+    void theMappedTableNameIsAppliedToEverySingleTableHead() {
+        assertThat(CdcDdlTaskService.retargetTable(
+                "CREATE TABLE `tgt_db`.`orders` (`id` INT)", "orders", "orders_tgt", "`"))
+                .isEqualTo("CREATE TABLE `tgt_db`.`orders_tgt` (`id` INT)");
+        assertThat(CdcDdlTaskService.retargetTable(
+                "DROP TABLE IF EXISTS `tgt_db`.`orders`", "orders", "orders_tgt", "`"))
+                .isEqualTo("DROP TABLE IF EXISTS `tgt_db`.`orders_tgt`");
+        assertThat(CdcDdlTaskService.retargetTable(
+                "TRUNCATE TABLE `tgt_db`.`orders`", "orders", "orders_tgt", "`"))
+                .isEqualTo("TRUNCATE TABLE `tgt_db`.`orders_tgt`");
+    }
+
+    @Test
+    void renamingAMappedTableKeepsTheOldSideMapped() {
+        // The old name is the one the sync knows; the new name is left as the source wrote
+        // it — the project has no mapping for a name it has never seen.
+        assertThat(CdcDdlTaskService.retargetTable(
+                "RENAME TABLE `tgt_db`.`orders` TO `tgt_db`.`orders_old`",
+                "orders", "orders_tgt", "`"))
+                .isEqualTo("RENAME TABLE `tgt_db`.`orders_tgt` TO `tgt_db`.`orders_old`");
+    }
+
+    @Test
+    void aBackslashOnlyEscapesAQuoteWhenTheSourceIsMySQL() {
+        // MySQL reads DEFAULT 'C:\' as an escaped quote, so the following comma stays inside
+        // the literal. Standard SQL (Oracle, DM, SQL Server, PostgreSQL) ends the literal at
+        // that quote and the comma really does separate two clauses.
+        String ddl = "ALTER TABLE t ADD COLUMN p VARCHAR(200) DEFAULT 'C:\\', ADD COLUMN q INT";
+
+        assertThat(CdcDdlTaskService.alterClauses(ddl, true)).hasSize(1);
+        assertThat(CdcDdlTaskService.alterClauses(ddl, false))
+                .containsExactly("ADD COLUMN p VARCHAR(200) DEFAULT 'C:\\'", "ADD COLUMN q INT");
+        assertThat(CdcDdlTaskService.addedColumns(ddl, false)).containsExactly("p", "q");
+    }
+
+    @Test
+    void onlyAMySqlSourceUsesBackslashEscapes() {
+        Project project = project();
+        project.setSourceDbId(12L);
+
+        DatabaseConfig oracle = new DatabaseConfig();
+        oracle.setId(12L);
+        oracle.setType(DatabaseType.ORACLE);
+        when(databaseConfigRepository.findById(12L)).thenReturn(Optional.of(oracle));
+
+        assertThat(service.backslashEscapes(project)).isFalse();
+        assertThat(service.backslashEscapes(project())).as("no source configured").isTrue();
+    }
+
+    @Test
+    void aQuotedMixedCaseSchemaKeepsItsCaseOnOracle() throws Exception {
+        // A quoted schema is case-sensitive by definition; upper-casing it looks for a
+        // schema the administrator did not configure.
+        ChangeLog log = pendingLog();
+        log.setDetails(SyncStateWriter.SKIPPED_DDL_PREFIX
+                + "ALTER TABLE src.t ADD COLUMN c INT");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig oracle = target();
+        oracle.setType(DatabaseType.ORACLE);
+        oracle.setDatabaseName("ORCLPDB1");
+        oracle.setSchemaName("\"MixedSchema\"");
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(oracle));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+
+        service.executeDdl(9L, "ALTER TABLE src.t ADD COLUMN c INT");
+
+        assertThat(log.getTargetDdlSql()).isEqualTo("ALTER TABLE MixedSchema.t ADD COLUMN c INT");
     }
 
     @Test

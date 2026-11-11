@@ -99,11 +99,14 @@ class SyncStateWriterErrorDedupTest {
         verify(changeLogRepository, times(2)).save(any());
     }
 
+    private static final String DDL_DETAILS =
+            SyncStateWriter.SKIPPED_DDL_PREFIX + "ALTER TABLE t ADD COLUMN c INT";
+
     @Test
     void theSameDdlEventDeliveredTwiceIsWrittenOnce() {
         // A reconnect replays the very same event from the unchanged position. The first
         // write is on record; the second consults it.
-        when(changeLogRepository.countOpenDdlTasksAt(PROJECT_ID, "binlog.000001", 100L))
+        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L, DDL_DETAILS))
                 .thenReturn(0L, 1L);
         writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
                 "binlog.000001", 100L);
@@ -115,10 +118,24 @@ class SyncStateWriterErrorDedupTest {
 
     @Test
     void aRestartStillRecognisesTheTaskFiledByThePreviousProcess() {
-        // The in-memory dedupe died with the previous process. The open task row is what
+        // The in-memory dedupe died with the previous process. The task row is what
         // survives a restart, so the check must consult the database — otherwise every
         // reconnect files the same DDL again and buries the operator in duplicates.
-        when(changeLogRepository.countOpenDdlTasksAt(PROJECT_ID, "binlog.000001", 100L))
+        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L, DDL_DETAILS))
+                .thenReturn(1L);
+
+        writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
+                "binlog.000001", 100L);
+
+        verify(changeLogRepository, never()).save(any());
+    }
+
+    @Test
+    void aClosedTaskStillKeepsItsEventFromBeingFiledAgain() {
+        // Dismissed or already executed — the position did not move past the event, so a
+        // restart re-reads the same statement. Counting only open tasks would raise the
+        // alert again and resurrect a decision the administrator already made.
+        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L, DDL_DETAILS))
                 .thenReturn(1L);
 
         writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
