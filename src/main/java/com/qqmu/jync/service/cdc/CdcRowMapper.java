@@ -105,8 +105,20 @@ public final class CdcRowMapper {
                     return formatTimeLiteral(micros);
                 case Types.TIMESTAMP:
                 default:
-                    // floorDiv keeps the seconds base aligned with the floored (always >= 0)
-                    // nanos for pre-1970 fractions; truncating division lands a second late.
+                    if (isMysqlDatetime(column.getTypeName())) {
+                        // MySQL DATETIME is a zone-less wall clock: the binlog packs its
+                        // fields as if they were UTC. Emit the server's literal text, exactly
+                        // like the baseline readTemporal getString path, so the binder sees
+                        // the same value on every target. A Timestamp here would instead make
+                        // each driver that renders zone-less temporal columns through the JVM
+                        // default zone (pgjdbc, ojdbc, H2, …) shift the whole column by the
+                        // zone offset — on the documented Asia/Shanghai deployment CDC would
+                        // rewrite DATETIME values the full load had already written correctly.
+                        return formatDateTimeLiteral(micros);
+                    }
+                    // MySQL TIMESTAMP is a real instant; keep the java.sql.Timestamp. floorDiv
+                    // keeps the seconds base aligned with the floored (always >= 0) nanos for
+                    // pre-1970 fractions; truncating division lands a second late.
                     java.sql.Timestamp ts =
                             new java.sql.Timestamp(Math.floorDiv(micros, 1_000_000L) * 1000L);
                     ts.setNanos((int) (Math.floorMod(micros, 1_000_000L) * 1000L));
@@ -160,6 +172,49 @@ public final class CdcRowMapper {
 
     private static boolean isTemporal(int jdbcType) {
         return jdbcType == Types.DATE || jdbcType == Types.TIME || jdbcType == Types.TIMESTAMP;
+    }
+
+    /** MySQL's zone-less DATETIME, as opposed to its zone-aware TIMESTAMP. */
+    private static boolean isMysqlDatetime(String typeName) {
+        return typeName != null && "DATETIME".equalsIgnoreCase(typeName.trim());
+    }
+
+    /**
+     * Formats a DATETIME's wall-clock micros as MySQL's literal text:
+     * {@code yyyy-MM-dd HH:mm:ss} with a {@code .uuuuuu} fraction appended only when
+     * sub-second micros are present. Whole-second values then render exactly like
+     * {@code rs.getString} does on the baseline path for DATETIME(0) columns; a fractional
+     * value is padded to six digits, value-equal on every target.
+     */
+    static String formatDateTimeLiteral(long micros) {
+        long seconds = Math.floorDiv(micros, 1_000_000L);
+        long fraction = Math.floorMod(micros, 1_000_000L);
+        java.time.LocalDateTime wall = java.time.LocalDateTime.ofEpochSecond(
+                seconds, 0, java.time.ZoneOffset.UTC);
+        StringBuilder sb = new StringBuilder(26);
+        pad(sb, wall.getYear(), 4).append('-');
+        pad(sb, wall.getMonthValue(), 2).append('-');
+        pad(sb, wall.getDayOfMonth(), 2).append(' ');
+        pad(sb, wall.getHour(), 2).append(':');
+        pad(sb, wall.getMinute(), 2).append(':');
+        pad(sb, wall.getSecond(), 2);
+        if (fraction != 0) {
+            sb.append('.');
+            String frac = Long.toString(fraction);
+            for (int pad = frac.length(); pad < 6; pad++) {
+                sb.append('0');
+            }
+            sb.append(frac);
+        }
+        return sb.toString();
+    }
+
+    private static StringBuilder pad(StringBuilder sb, int value, int width) {
+        String digits = Integer.toString(value);
+        for (int pad = digits.length(); pad < width; pad++) {
+            sb.append('0');
+        }
+        return sb.append(digits);
     }
 
     /**

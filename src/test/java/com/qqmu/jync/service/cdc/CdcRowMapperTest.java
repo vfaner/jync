@@ -61,23 +61,37 @@ class CdcRowMapperTest {
     }
 
     @Test
-    void datetimeKeepsWallClockWithMicros() throws Exception {
-        // 2026-10-10 12:34:56.789012,DATETIME 在 binlog 里是"墙钟当 UTC"的 epoch-micros
+    void datetimeKeepsWallClockAsTheServerLiteral() throws Exception {
+        // 2026-10-10 12:34:56.789012,DATETIME 在 binlog 里是"墙钟当 UTC"的 epoch-micros。
+        // 它是墙钟而不是时刻:必须与基线 getString 路径一样输出服务器字面量,交给
+        // JdbcRowMapper.bind 按目标方言绑定。包装成 java.sql.Timestamp 会让按 JVM 默认时区
+        // 渲染无时区列的驱动(Asia/Shanghai 部署下 +8h)把墙钟整体平移。
         long micros = Instant.parse("2026-10-10T12:34:56Z").getEpochSecond() * 1_000_000L + 789_012L;
-        Object out = map(micros, column("c_dt", Types.TIMESTAMP, "datetime", null), null);
-        java.sql.Timestamp ts = (java.sql.Timestamp) out;
-        assertThat(ts.toInstant().getEpochSecond())
-                .isEqualTo(Instant.parse("2026-10-10T12:34:56Z").getEpochSecond());
-        assertThat(ts.getNanos()).isEqualTo(789_012_000);
+        assertThat(map(micros, column("c_dt", Types.TIMESTAMP, "datetime", null), null))
+                .isEqualTo("2026-10-10 12:34:56.789012");
+        // 整秒:与 DATETIME(0) 的 rs.getString 文本逐字节一致
+        assertThat(map(Instant.parse("2026-10-10T12:34:56Z").getEpochSecond() * 1_000_000L,
+                column("c_dt0", Types.TIMESTAMP, "datetime", null), null))
+                .isEqualTo("2026-10-10 12:34:56");
     }
 
     @Test
     void datetimeBefore1970KeepsFractionalSecondAlignment() throws Exception {
-        // 1969-12-31T23:59:58.999999Z: truncating millis + floored (always >= 0) nanos
-        // would disagree by a full second — millis must floor-divide to stay aligned.
-        Object out = map(-1_000_001L, column("c_dt_old", Types.TIMESTAMP, "datetime", null), null);
+        // 1969-12-31T23:59:58.999999: floorDiv/floorMod 让秒基与小数秒一致,
+        // 截断除法则会落到前一秒。
+        assertThat(map(-1_000_001L, column("c_dt_old", Types.TIMESTAMP, "datetime", null), null))
+                .isEqualTo("1969-12-31 23:59:58.999999");
+    }
+
+    @Test
+    void timestampStaysAnInstant() throws Exception {
+        // MySQL TIMESTAMP 在 binlog 里是真实 epoch,不是墙钟:保持 Timestamp,
+        // 目标端按各自的时区渲染同一时刻。
+        long micros = Instant.parse("2026-10-10T01:02:03Z").getEpochSecond() * 1_000_000L + 456_000L;
+        Object out = map(micros, column("c_ts", Types.TIMESTAMP, "TIMESTAMP", null), null);
         assertThat(((java.sql.Timestamp) out).toInstant())
-                .isEqualTo(Instant.ofEpochSecond(-2, 999_999_000));
+                .isEqualTo(Instant.ofEpochSecond(
+                        Instant.parse("2026-10-10T01:02:03Z").getEpochSecond(), 456_000_000));
     }
 
     // —— 裁定 R5:TIME 必须以服务器字面量原样往返(符号 / >24h / 小数秒),java.sql.Time
