@@ -166,7 +166,7 @@ class CdcDdlTaskServiceTest {
     }
 
     @Test
-    void anOrdinaryAuditRowCannotBeUsedToRunSql() {
+    void anOrdinaryAuditRowCannotBeUsedToRunSql() throws Exception {
         ChangeLog log = ChangeLog.of(3L, ObjectType.PROJECT, "db", ChangeType.INFO, "baseline rebuilt");
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
