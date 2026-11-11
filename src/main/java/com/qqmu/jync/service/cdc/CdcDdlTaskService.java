@@ -14,6 +14,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.DatabaseMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -79,20 +80,73 @@ public class CdcDdlTaskService {
     /**
      * Whether the statement leaves a data gap behind.
      *
-     * <p>Only a statement that adds, renames or retypes a column can leave rows behind that
+     * <p>Only a clause that adds, renames or retypes a column can leave rows behind that
      * the target never received: the projection drops that column, so its values never reach
      * the target and have to be replayed. A statement that only drops things — or only
-     * touches table-level attributes — leaves no such gap: there is nothing to bring over,
-     * so the task closes as soon as the statement ran.
+     * touches table-level objects and attributes (indexes, constraints, partitions, defaults)
+     * — leaves no such gap: there is nothing to bring over, so the task closes as soon as
+     * the statement ran.
      */
     static boolean hasColumnGap(String sql) {
         for (String clause : alterClauses(sql)) {
-            String head = clause.trim().toUpperCase(Locale.ROOT);
-            if (head.startsWith("ADD ") || head.startsWith("MODIFY ")
-                    || head.startsWith("CHANGE ") || head.startsWith("RENAME ")
-                    || head.startsWith("ALTER ")) {
+            if (leavesDataGap(clause)) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    /** The {@code ADD} sub-clauses that add a table-level object rather than a column. */
+    private static final List<String> NON_DATA_ADDITIONS = List.of(
+            "INDEX ", "KEY ", "UNIQUE ", "PRIMARY ", "FULLTEXT ", "SPATIAL ",
+            "CONSTRAINT ", "FOREIGN ", "CHECK ", "PARTITION ");
+
+    /**
+     * Whether one ALTER clause changes the data the projection carries.
+     *
+     * <p>{@code ADD INDEX}, {@code ADD CONSTRAINT} and {@code ADD PARTITION} add no column
+     * value; a default is applied by the database itself, so every value already reached the
+     * target. Treating any of them as a gap parked the task in PENDING forever: the replay
+     * refuses a task with no recorded table, and after the target was aligned the live column
+     * diff finds nothing to name.
+     */
+    private static boolean leavesDataGap(String clause) {
+        String head = clause.trim().toUpperCase(Locale.ROOT);
+        if (head.startsWith("ADD ")) {
+            String addition = head.substring("ADD ".length()).trim();
+            for (String object : NON_DATA_ADDITIONS) {
+                if (addition.startsWith(object)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (head.startsWith("MODIFY ") || head.startsWith("CHANGE ")) {
+            return true;
+        }
+        if (head.startsWith("RENAME ")) {
+            String target = head.substring("RENAME ".length()).trim();
+            // RENAME TO / AS renames the table itself: every value already on the target
+            // moved with it, and replaying the old name would find no table. RENAME INDEX
+            // and RENAME KEY move a table-level object, which carries no data either.
+            // RENAME COLUMN leaves the gap window's rows behind, so it stays a gap.
+            return !target.startsWith("TO ") && !target.startsWith("AS ")
+                    && !target.startsWith("INDEX ") && !target.startsWith("KEY ");
+        }
+        if (head.startsWith("ALTER ")) {
+            String rest = head.substring("ALTER ".length()).trim();
+            if (rest.startsWith("INDEX ") || rest.startsWith("CONSTRAINT ")
+                    || rest.startsWith("CHECK ") || rest.startsWith("PARTITION ")) {
+                return false;
+            }
+            if (rest.startsWith("COLUMN ")) {
+                rest = rest.substring("COLUMN ".length()).trim();
+            }
+            // ALTER COLUMN c SET DEFAULT: the column name comes first, so the action follows
+            // the first token.
+            int space = rest.indexOf(' ');
+            String action = space < 0 ? "" : rest.substring(space + 1).trim();
+            return !action.startsWith("SET DEFAULT") && !action.startsWith("DROP DEFAULT");
         }
         return false;
     }
@@ -213,6 +267,33 @@ public class CdcDdlTaskService {
             "^(?:`[^`]+`|\"[^\"]+\"|\\[[^\\]]+\\]|[A-Za-z0-9_$]+)"
                     + "(?:\\s*\\.\\s*(?:`[^`]+`|\"[^\"]+\"|\\[[^\\]]+\\]|[A-Za-z0-9_$]+))?");
 
+    /**
+     * The table an {@code ALTER TABLE} statement changes, without its schema qualifier.
+     *
+     * <p>When neither the running consumer nor the live column diff can name the affected
+     * tables, the statement itself still says which table's rows were omitted meanwhile.
+     */
+    static String alteredTable(String sql) {
+        String statement = sql == null ? "" : sql.trim();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(?is)^ALTER\\s+TABLE\\s+(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?(.+)$")
+                .matcher(statement);
+        if (!matcher.matches()) {
+            return null;
+        }
+        java.util.regex.Matcher identifier = TABLE_IDENTIFIER.matcher(matcher.group(1).trim());
+        if (!identifier.find()) {
+            return null;
+        }
+        String name = identifier.group();
+        int dot = name.lastIndexOf('.');
+        if (dot >= 0) {
+            name = name.substring(dot + 1);
+        }
+        name = unquoteIdentifier(name.trim());
+        return name.isBlank() ? null : name;
+    }
+
     /** The ALTER TABLE clauses, split on the commas that separate them. */
     static List<String> alterClauses(String sql) {
         String statement = sql == null ? "" : sql.trim();
@@ -277,7 +358,8 @@ public class CdcDdlTaskService {
         if (trimmed.length() >= 2) {
             char first = trimmed.charAt(0);
             char last = trimmed.charAt(trimmed.length() - 1);
-            if ((first == '`' && last == '`') || (first == '"' && last == '"')) {
+            if ((first == '`' && last == '`') || (first == '"' && last == '"')
+                    || (first == '[' && last == ']')) {
                 return trimmed.substring(1, trimmed.length() - 1);
             }
         }
@@ -389,6 +471,13 @@ public class CdcDdlTaskService {
             // The replay is still outstanding: stay PENDING so retention keeps the task.
             entry.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
             recordGapBounds(entry);
+            if (parseAffectedTables(entry.getAffectedTables()).isEmpty()) {
+                // No table of this statement is synced by the project, so none of its rows
+                // ever reached the target: there is no gap to replay and the task is done.
+                entry.setReplayDone(true);
+                entry.setAffectedTables(null);
+                entry.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
+            }
         } else {
             // Nothing was left behind, so there is no row to bring over: the task is done.
             entry.setReplayDone(true);
@@ -428,7 +517,39 @@ public class CdcDdlTaskService {
             // nothing to replay, so fall back to comparing the columns directly.
             gaps = diffMissingColumns(entry.getProjectId());
         }
+        if (gaps == null) {
+            // After the target was aligned the column diff finds nothing, so it cannot name
+            // the gap; the statement itself still says which table lost rows meanwhile.
+            gaps = statementGapTable(entry);
+        }
         entry.setAffectedTables(gaps);
+    }
+
+    /**
+     * The table named by the statement itself, unless the project does not sync it.
+     *
+     * <p>A table the project never syncs had no row replicated at all: keeping its task open
+     * would leave it PENDING forever, because the replay refuses a task with no table.
+     */
+    private String statementGapTable(ChangeLog entry) {
+        String table = alteredTable(entry.getTargetDdlSql());
+        if (table == null) {
+            return null;
+        }
+        Project project = projectRepository == null || entry.getProjectId() == null
+                ? null : projectRepository.findById(entry.getProjectId()).orElse(null);
+        if (project != null && contextFactory != null) {
+            SyncConfig config = contextFactory.parseConfig(project);
+            // A config that cannot be parsed is not a reason to close the task: err on the
+            // side of keeping the replay available.
+            if (config != null && !config.includesTable(table)) {
+                log.info("DDL task {} changes {}, which project {} does not sync;"
+                        + " no row of it was replicated", entry.getId(), table,
+                        project.getId());
+                return null;
+            }
+        }
+        return table;
     }
 
     /** The gaps the running consumer recorded, if it is still the one that saw the DDL. */

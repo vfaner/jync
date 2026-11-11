@@ -67,9 +67,11 @@ public class ChangeLogService {
                     ? repository.deleteByProjectIdAndSuccessFalse(projectId)
                     : repository.deleteAllSuccessFalse();
         } else {
+            // Not deleteByProjectId: that unfiltered delete exists for project deletion,
+            // and reuse here also wiped the DDL tasks still waiting for an administrator.
             removed = projectId != null
-                    ? repository.deleteByProjectId(projectId)
-                    : repository.deleteAllBulk();
+                    ? repository.deleteByProjectIdKeepingOpenDdlTasks(projectId)
+                    : repository.deleteAllBulkKeepingOpenDdlTasks();
         }
         auditService.record(AuditAction.CHANGELOG_CLEAR,
                 AuditDetail.of("audit.detail.changelogClear", String.valueOf(removed),

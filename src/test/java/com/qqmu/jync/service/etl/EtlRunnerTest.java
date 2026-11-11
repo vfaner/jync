@@ -196,6 +196,30 @@ class EtlRunnerTest {
                 .isInstanceOf(SQLException.class);
     }
 
+    /**
+     * A NULL key can never match a row: the UPDATE predicate is never true and a MySQL unique
+     * index accepts repeated NULLs, so the emulation would insert another copy on every run.
+     * The run must say which column is at fault instead of duplicating rows silently.
+     */
+    @Test
+    void upsertRejectsARowWhoseConfiguredKeyIsNull() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (NULL, 'a'), (1, 'b')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT, name VARCHAR(20))");
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        // The label is the driver's: H2 folds an unquoted result label to upper case.
+        assertThat(result.errorMessage())
+                .contains("error.etl.upsertKey.null")
+                .containsIgnoringCase("id");
+        assertThat(rows("SELECT id FROM dst")).isEmpty();
+    }
+
     @Test
     void upsertWithoutAKeyColumnIsRejectedBeforeTheTargetIsTouched() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
@@ -286,6 +310,24 @@ class EtlRunnerTest {
      * Pre-sql runs on the target connection, so its failure is the target's. Reporting it as a
      * program error sends the operator looking at the wrong side of the copy.
      */
+    /**
+     * The documented pre-sql example is a cleanup DELETE against the target. On a first run
+     * the target table does not exist yet, so the run must create it before the pre-sql
+     * executes; otherwise the very example the form suggests fails every first run.
+     */
+    @Test
+    void preSqlMayCleanATargetTableTheRunItselfCreates() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1), (2)");
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setPreSql("DELETE FROM dst");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(result.rowsRead()).isEqualTo(2);
+        assertThat(result.rowsWritten()).isEqualTo(2);
+    }
+
     @Test
     void aFailingPreSqlIsAttributedToTheTarget() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");

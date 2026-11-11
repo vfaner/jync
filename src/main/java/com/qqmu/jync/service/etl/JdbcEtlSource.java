@@ -241,7 +241,9 @@ final class JdbcEtlSource implements EtlSource {
         String key = task.getResumeKeyColumn() == null
                 ? null : task.getResumeKeyColumn().trim();
         if (resumable) {
-            String wrapped = "SELECT * FROM (" + sql + ") " + EtlSqlSupport.SUBQUERY_ALIAS;
+            // The newline keeps a trailing "--" comment in the customer's SQL from
+            // swallowing the closing paren and the resume condition.
+            String wrapped = "SELECT * FROM (" + sql + "\n) " + EtlSqlSupport.SUBQUERY_ALIAS;
             if (checkpoint != null) {
                 wrapped += " WHERE " + key + " > ?";
             }

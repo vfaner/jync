@@ -83,7 +83,7 @@ public class ChangeLog {
 
     /** Editable statement for the target; pre-filled with the source DDL. */
     @Lob
-    @Column(name = "target_ddl_sql")
+    @Column(name = "target_ddl_sql", length = Integer.MAX_VALUE)
     private String targetDdlSql;
 
     /** Bounds of the window in which the new column's values were not replicated. */
@@ -98,7 +98,7 @@ public class ChangeLog {
 
     /** Tables touched during the gap, used by the table-scoped replay. */
     @Lob
-    @Column(name = "affected_tables")
+    @Column(name = "affected_tables", length = Integer.MAX_VALUE)
     private String affectedTables;
 
     @Column(name = "handled_by", length = 128)
@@ -106,7 +106,7 @@ public class ChangeLog {
     @Column(name = "handled_at")
     private Instant handledAt;
     @Lob
-    @Column(name = "error_detail")
+    @Column(name = "error_detail", length = Integer.MAX_VALUE)
     private String errorDetail;
 
     /**

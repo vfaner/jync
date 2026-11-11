@@ -36,9 +36,15 @@ public final class EtlSqlSupport {
         return JdbcUtil.stripTrailingSemicolon(sql);
     }
 
-    /** Wraps the extraction SQL so its columns can be read without returning rows. */
+    /**
+     * Wraps the extraction SQL so its columns can be read without returning rows.
+     *
+     * <p>The closing paren starts a new line on purpose: the customer's SQL may end in a
+     * {@code --} line comment, and appended on the same line the comment would swallow the
+     * paren, the alias and the zero-row condition.
+     */
     static String zeroRowProbe(String sql) {
-        return "SELECT * FROM (" + stripTrailingSemicolon(sql) + ") "
+        return "SELECT * FROM (" + stripTrailingSemicolon(sql) + "\n) "
                 + SUBQUERY_ALIAS + " WHERE 1 = 0";
     }
 

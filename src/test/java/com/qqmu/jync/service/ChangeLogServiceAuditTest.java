@@ -25,7 +25,7 @@ class ChangeLogServiceAuditTest {
 
     @Test
     void aFullClearAuditsTheTotalRowCount() {
-        when(repository.deleteAllBulk()).thenReturn(42);
+        when(repository.deleteAllBulkKeepingOpenDdlTasks()).thenReturn(42);
         ChangeLogService service = new ChangeLogService(repository, auditService);
 
         service.clear(null, false);
@@ -38,7 +38,7 @@ class ChangeLogServiceAuditTest {
 
     @Test
     void aProjectScopedClearAuditsTheProjectAndRowCount() {
-        when(repository.deleteByProjectId(7L)).thenReturn(3);
+        when(repository.deleteByProjectIdKeepingOpenDdlTasks(7L)).thenReturn(3);
         ChangeLogService service = new ChangeLogService(repository, auditService);
 
         service.clear(7L, false);

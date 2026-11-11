@@ -56,12 +56,24 @@ class ChangeLogServiceClearScopeTest {
     }
 
     @Test
-    void aPlainClearStillDeletesEverythingInScope() {
-        when(repository.deleteByProjectId(7L)).thenReturn(3);
+    void aPlainClearRemovesHistoryButKeepsOpenDdlTasks() {
+        when(repository.deleteByProjectIdKeepingOpenDdlTasks(7L)).thenReturn(3);
 
         service().clear(7L, false);
 
-        verify(repository).deleteByProjectId(7L);
+        verify(repository).deleteByProjectIdKeepingOpenDdlTasks(7L);
+        // Project deletion still needs the unfiltered delete; clearing the log must not.
+        verify(repository, never()).deleteByProjectId(any());
         verify(repository, never()).deleteByProjectIdAndSuccessFalse(any());
+    }
+
+    @Test
+    void aGlobalPlainClearRemovesHistoryButKeepsOpenDdlTasks() {
+        when(repository.deleteAllBulkKeepingOpenDdlTasks()).thenReturn(4);
+
+        service().clear(null, false);
+
+        verify(repository).deleteAllBulkKeepingOpenDdlTasks();
+        verify(repository, never()).deleteAllBulk();
     }
 }

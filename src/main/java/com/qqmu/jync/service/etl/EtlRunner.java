@@ -90,13 +90,6 @@ public class EtlRunner {
             target = connections.open(targetConfig);
             target.setAutoCommit(false);
 
-            // Execute pre-sql (cleanup, deletions, pre-transformations). It runs on the target
-            // connection, so a failure belongs to the target, not to the program.
-            stage = Side.TARGET;
-            if (task.getPreSql() != null && !task.getPreSql().isBlank()) {
-                executePreOrPost(target, task, task.getPreSql());
-            }
-
             String targetName = EtlSqlSupport.qualified(targetConfig, task.getTargetTable());
 
             stage = Side.SOURCE;
@@ -114,8 +107,17 @@ public class EtlRunner {
                         ? EtlUpsertSql.resolve(columnNames,
                                 EtlUpsertSql.parse(task.getUpsertKeyColumns()))
                         : List.of();
-                ensureTargetTable(target, targetDialect, sourceType, targetConfig,
-                        task.getTargetTable(), targetName, columns, upsertKeys);
+                boolean targetCreated = ensureTargetTable(target, targetDialect, sourceType,
+                        targetConfig, task.getTargetTable(), targetName, columns, upsertKeys);
+                // Pre-sql (cleanup, deletions, pre-transformations) runs after the target
+                // table exists: its documented example is a DELETE on that table, which a
+                // first run would otherwise fail before the table was created. It still runs
+                // before the write-mode deletion and before any row is written. A failure is
+                // the target's, not the program's.
+                stage = Side.TARGET;
+                if (task.getPreSql() != null && !task.getPreSql().isBlank()) {
+                    executePreOrPost(target, task, task.getPreSql());
+                }
                 deleteForWriteMode(target, task, targetName, checkpoint);
 
                 String insertSql = insertSql(targetName, columnNames);
@@ -123,6 +125,15 @@ public class EtlRunner {
                         ? EtlUpsertSql.nativeUpsert(targetConfig.effectiveType(), targetName,
                                 columnNames, upsertKeys)
                         : null;
+                if (nativeUpsertSql != null && !targetCreated
+                        && !EtlUpsertIndexes.coversKeys(target, targetName, upsertKeys)) {
+                    // A pre-existing target without a unique index on exactly the keys cannot
+                    // make a repeated key collide: ON DUPLICATE KEY UPDATE would insert a
+                    // second copy instead of updating the first.
+                    log.info("ETL target {} has no unique index on {}, using the emulated",
+                            targetName, upsertKeys);
+                    nativeUpsertSql = null;
+                }
                 boolean emulatedUpsert = task.getWriteMode() == EtlWriteMode.UPSERT
                         && nativeUpsertSql == null;
                 String writeSql = nativeUpsertSql != null ? nativeUpsertSql : insertSql;
@@ -135,8 +146,10 @@ public class EtlRunner {
                         ? upsertBindingIndexes(columnNames, upsertKeys) : List.of();
                 List<EtlSourceColumn> updateColumns = updateIndexes.stream()
                         .map(columns::get).toList();
-                List<Integer> keyIndexes = emulatedUpsert
-                        ? upsertKeys.stream().map(columnNames::indexOf).toList() : List.of();
+                // Both upsert forms match a row by its key, so both need the key positions:
+                // the emulation binds them, the NULL check rejects a row without them.
+                List<Integer> keyIndexes = upsertKeys.stream()
+                        .map(columnNames::indexOf).toList();
                 List<EtlSourceColumn> keyColumns = keyIndexes.stream()
                         .map(columns::get).toList();
 
@@ -175,6 +188,14 @@ public class EtlRunner {
                         Object[] values = new Object[columns.size()];
                         for (int i = 1; i <= columns.size(); i++) {
                             values[i - 1] = cursor.getObject(i);
+                        }
+                        for (int index : keyIndexes) {
+                            if (values[index] == null) {
+                                // An upsert matches a row by its key; a NULL key matches
+                                // nothing, so the row would be inserted again on every run.
+                                throw new EtlProgramException(
+                                        "error.etl.upsertKey.null:" + columnNames.get(index));
+                            }
                         }
                         if (keyIndex > 0) {
                             keyType = columns.get(keyIndex - 1).jdbcType();
@@ -422,13 +443,15 @@ public class EtlRunner {
 
     // --- target -------------------------------------------------------------------------
 
-    private void ensureTargetTable(Connection target, SqlDialect dialect, DatabaseType sourceType,
-                                   DatabaseConfig targetConfig, String configuredTable,
-                                   String targetName, List<EtlSourceColumn> columns,
-                                   List<String> primaryKeyColumns)
+    /** Creates the target table when it is missing; true when it did. */
+    private boolean ensureTargetTable(Connection target, SqlDialect dialect,
+                                      DatabaseType sourceType,
+                                      DatabaseConfig targetConfig, String configuredTable,
+                                      String targetName, List<EtlSourceColumn> columns,
+                                      List<String> primaryKeyColumns)
             throws SQLException {
         if (EtlSqlSupport.exists(target, targetName)) {
-            return;
+            return false;
         }
         TableMeta table = new TableMeta();
         table.setName(configuredTable);
@@ -474,6 +497,7 @@ public class EtlRunner {
             target.commit();
             log.info("ETL created target table {} from the extraction result metadata", targetName);
         }
+        return true;
     }
 
     private void deleteForWriteMode(Connection target, EtlTask task, String targetName,

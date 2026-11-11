@@ -149,15 +149,39 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     @Query("delete from ChangeLog c")
     int deleteAllBulk();
 
+    /**
+     * The clear button removes history, not work.
+     *
+     * <p>An open skipped-DDL task is a {@code success = false} row, but deleting it cancels
+     * the projection gate and the replay entry point the administrator still needs. The
+     * retention pruner already keeps these rows; every clear path does the same. {@code null}
+     * details are excluded explicitly: a JPQL {@code not like} on a null is unknown, which
+     * would keep those ordinary rows forever.
+     */
+    String CLEARABLE = " and (c.details is null"
+            + " or c.details not like 'CDC_SKIPPED_DDL:%'"
+            + " or c.resolutionStatus = 'PROCESSED')";
+
     /** Remove only the failed entries of one project, in bulk. */
     @Modifying
-    @Query("delete from ChangeLog c where c.projectId = :projectId and c.success = false")
+    @Query("delete from ChangeLog c where c.projectId = :projectId and c.success = false"
+            + CLEARABLE)
     int deleteByProjectIdAndSuccessFalse(@Param("projectId") Long projectId);
 
     /** Remove every failed entry, in bulk. */
     @Modifying
-    @Query("delete from ChangeLog c where c.success = false")
+    @Query("delete from ChangeLog c where c.success = false" + CLEARABLE)
     int deleteAllSuccessFalse();
+
+    /** Full clear of one project's log, keeping the DDL tasks that are still open. */
+    @Modifying
+    @Query("delete from ChangeLog c where c.projectId = :projectId" + CLEARABLE)
+    int deleteByProjectIdKeepingOpenDdlTasks(@Param("projectId") Long projectId);
+
+    /** Full clear of every project's log, keeping the DDL tasks that are still open. */
+    @Modifying
+    @Query("delete from ChangeLog c where 1 = 1" + CLEARABLE)
+    int deleteAllBulkKeepingOpenDdlTasks();
 
     /**
      * Retention pruning for the audit trail.

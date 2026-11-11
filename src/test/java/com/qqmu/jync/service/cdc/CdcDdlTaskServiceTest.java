@@ -23,6 +23,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CdcPosition;
@@ -293,6 +294,91 @@ class CdcDdlTaskServiceTest {
     }
 
     @Test
+    void clausesThatOnlyTouchObjectsOrAttributesOpenNoGap() {
+        // None of these changes a column's values, so the projection left nothing behind and
+        // a replay has nothing to bring over. Treating them as gaps parked the task in
+        // PENDING forever: replay refuses a task with no recorded table.
+        assertThat(CdcDdlTaskService.hasColumnGap("ALTER TABLE t ADD INDEX idx_name (c)"))
+                .isFalse();
+        assertThat(CdcDdlTaskService.hasColumnGap(
+                "ALTER TABLE t ADD CONSTRAINT fk FOREIGN KEY (c) REFERENCES other (id)"))
+                .isFalse();
+        assertThat(CdcDdlTaskService.hasColumnGap(
+                "ALTER TABLE t ADD PARTITION (PARTITION p1 VALUES LESS THAN (10))"))
+                .isFalse();
+        assertThat(CdcDdlTaskService.hasColumnGap("ALTER TABLE t ADD UNIQUE KEY uk (c)"))
+                .isFalse();
+        assertThat(CdcDdlTaskService.hasColumnGap("ALTER TABLE t ALTER COLUMN c SET DEFAULT 0"))
+                .isFalse();
+        // ALTER TABLE ... RENAME TO renames the table, not a column: every value already on
+        // the target moved with it, and a replay would search for a table that no longer
+        // exists under that name. RENAME COLUMN does leave the gap window's rows behind.
+        assertThat(CdcDdlTaskService.hasColumnGap("ALTER TABLE t RENAME TO t2")).isFalse();
+        assertThat(CdcDdlTaskService.hasColumnGap("ALTER TABLE t RENAME AS t2")).isFalse();
+        assertThat(CdcDdlTaskService.hasColumnGap("ALTER TABLE t RENAME COLUMN a TO b"))
+                .isTrue();
+        // A statement that also adds a column still leaves that column's values behind.
+        assertThat(CdcDdlTaskService.hasColumnGap(
+                "ALTER TABLE t ADD COLUMN d INT, ADD INDEX i (d)"))
+                .isTrue();
+    }
+
+    @Test
+    void aTableLevelClauseNeedsNoReplaySoTheTaskClosesRightAway() throws Exception {
+        ChangeLog log = pendingLog();
+        log.setDetails(SyncStateWriter.SKIPPED_DDL_PREFIX + "ALTER TABLE t ADD INDEX idx_name (name)");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+
+        service.executeDdl(9L, "ALTER TABLE t ADD INDEX idx_name (name)");
+
+        // No row carries a new column value, so there is no gap to replay.
+        assertThat(log.getDdlExecuted()).isTrue();
+        assertThat(log.getReplayDone()).isTrue();
+        assertThat(log.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PROCESSED);
+    }
+
+    @Test
+    void aGenuineGapWithoutConsumerHistoryFallsBackToTheStatementTable() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+
+        // The consumer recorded nothing (restart) and the live column diff finds nothing
+        // (the target is already aligned). The statement itself names the table a replay has
+        // to re-read — without it the task could never close.
+        assertThat(log.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PENDING);
+        assertThat(log.getAffectedTables()).isEqualTo("t");
+    }
+
+    @Test
+    void aGapOnATableTheProjectDoesNotSyncClosesWithoutAReplay() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+        SyncConfig config = new SyncConfig();
+        config.setObjectSelectionExplicit(true); // syncs no table at all
+        when(contextFactory.parseConfig(any())).thenReturn(config);
+
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+
+        // Rows of a table the project never syncs were never replicated, so no gap exists.
+        assertThat(log.getReplayDone()).isTrue();
+        assertThat(log.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PROCESSED);
+    }
+
+    @Test
     void aStatementThatAlsoAddsAColumnStillNeedsTheReplay() throws Exception {
         ChangeLog log = pendingLog();
         log.setDetails(SyncStateWriter.SKIPPED_DDL_PREFIX
@@ -347,6 +433,17 @@ class CdcDdlTaskServiceTest {
                 "ALTER TABLE `free_fs_dev`.`file_info` DROP COLUMN `brand_new`,"
                         + " DROP COLUMN `brand_new3`"))
                 .containsExactly("brand_new", "brand_new3");
+    }
+
+    @Test
+    void theStatementNamesTheTableAReplayWouldHaveToReread() {
+        assertThat(CdcDdlTaskService.alteredTable("ALTER TABLE t ADD COLUMN c INT"))
+                .isEqualTo("t");
+        assertThat(CdcDdlTaskService.alteredTable(
+                "ALTER TABLE `src_db`.`file_info` ADD COLUMN c INT")).isEqualTo("file_info");
+        assertThat(CdcDdlTaskService.alteredTable(
+                "ALTER TABLE [db].[t] ADD COLUMN c INT")).isEqualTo("t");
+        assertThat(CdcDdlTaskService.alteredTable("DROP TABLE t")).isNull();
     }
 
     @Test

@@ -73,7 +73,7 @@ class JdbcEtlSourceTest {
         assertThat(cursor.columns()).extracting(EtlSourceColumn::name).containsExactly("id");
         assertThat(cursor.resumeKeyIndex()).isEqualTo(1);
         verify(connection).prepareStatement(
-                "SELECT * FROM (SELECT id FROM src) jync_etl_src ORDER BY id",
+                "SELECT * FROM (SELECT id FROM src\n) jync_etl_src ORDER BY id",
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
         cursor.close();
     }
@@ -86,7 +86,7 @@ class JdbcEtlSourceTest {
                 new EtlCheckpointValue(Types.INTEGER, "3"));
 
         verify(connection).prepareStatement(
-                "SELECT * FROM (SELECT id FROM src) jync_etl_src WHERE id > ? ORDER BY id",
+                "SELECT * FROM (SELECT id FROM src\n) jync_etl_src WHERE id > ? ORDER BY id",
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
         verify(statement).setLong(1, 3L);
         cursor.close();
@@ -156,11 +156,44 @@ class JdbcEtlSourceTest {
         EtlSourceProbe probe = source.probe(task(EtlWriteMode.APPEND, "id"), 15);
 
         verify(statement).executeQuery(
-                "SELECT * FROM (SELECT id FROM src) jync_etl_src WHERE 1 = 0");
+                "SELECT * FROM (SELECT id FROM src\n) jync_etl_src WHERE 1 = 0");
         assertThat(probe.columns()).extracting(EtlSourceColumn::name).containsExactly("id");
         assertThat(probe.resumeKeyIndex()).isEqualTo(1);
         assertThat(probe.issues()).extracting(EtlSourceIssue::code)
                 .contains("etl.precheck.source.ok", "etl.precheck.resume.ok");
+    }
+
+    /**
+     * The customer's SQL may end in a {@code --} line comment. Appending the wrapper on the
+     * same line lets the comment swallow the closing paren and the alias, turning a valid
+     * extraction into a syntax error at precheck time.
+     */
+    @Test
+    void aTrailingLineCommentDoesNotSwallowTheResumableWrapper() throws SQLException {
+        EtlTask task = task(EtlWriteMode.APPEND, "id");
+        task.setSourceSql("SELECT id FROM src -- only live rows");
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        EtlSourceCursor cursor = source.query(task, null);
+
+        verify(connection).prepareStatement(
+                "SELECT * FROM (SELECT id FROM src -- only live rows\n)"
+                        + " jync_etl_src ORDER BY id",
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+        cursor.close();
+    }
+
+    @Test
+    void aTrailingLineCommentDoesNotSwallowTheProbeWrapper() throws SQLException {
+        EtlTask task = task(EtlWriteMode.APPEND, "id");
+        task.setSourceSql("SELECT id FROM src -- only live rows");
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        source.probe(task, 15);
+
+        verify(statement).executeQuery(
+                "SELECT * FROM (SELECT id FROM src -- only live rows\n) jync_etl_src"
+                        + " WHERE 1 = 0");
     }
 
     @Test
@@ -307,7 +340,7 @@ class JdbcEtlSourceTest {
         verify(connection).setReadOnly(false);
         verify(statement).execute("CREATE TEMP TABLE t (id INT)");
         verify(connection).prepareStatement(
-                "SELECT * FROM (SELECT id FROM t) jync_etl_src ORDER BY id",
+                "SELECT * FROM (SELECT id FROM t\n) jync_etl_src ORDER BY id",
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
         cursor.close();
     }
@@ -336,7 +369,7 @@ class JdbcEtlSourceTest {
 
         verify(statement).execute("CREATE TEMP TABLE t (id INT)");
         verify(connection).prepareStatement(
-                "SELECT * FROM (SELECT id FROM t) jync_etl_src WHERE id > ? ORDER BY id",
+                "SELECT * FROM (SELECT id FROM t\n) jync_etl_src WHERE id > ? ORDER BY id",
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
         verify(statement).setLong(1, 3L);
         cursor.close();
@@ -352,7 +385,7 @@ class JdbcEtlSourceTest {
 
         verify(statement).execute("CREATE TEMP TABLE t (id INT)");
         verify(statement).executeQuery(
-                "SELECT * FROM (SELECT id FROM t) jync_etl_src WHERE 1 = 0");
+                "SELECT * FROM (SELECT id FROM t\n) jync_etl_src WHERE 1 = 0");
         assertThat(probe.issues()).extracting(EtlSourceIssue::code)
                 .contains("etl.precheck.script.ok", "etl.precheck.source.ok");
         // The rollback is best-effort: MySQL-family DDL commits implicitly, so the precheck
