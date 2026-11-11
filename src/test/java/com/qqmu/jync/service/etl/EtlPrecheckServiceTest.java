@@ -122,6 +122,32 @@ class EtlPrecheckServiceTest {
     }
 
     @Test
+    void anUpsertKeyMissingFromTheResultIsAnError() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask form = form("SELECT id FROM src", "dst", EtlWriteMode.UPSERT);
+        form.setUpsertKeyColumns("id, tenant");
+
+        EtlPrecheckResult result = service.check(form, source, target, connections);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(check(result, "etl.precheck.upsert.keys.missing").detail()).isEqualTo("tenant");
+    }
+
+    @Test
+    void presentUpsertKeysAreReportedAsOk() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask form = form("SELECT id FROM src", "dst", EtlWriteMode.UPSERT);
+        form.setUpsertKeyColumns("id");
+
+        EtlPrecheckResult result = service.check(form, source, target, connections);
+
+        assertThat(result.passed()).isTrue();
+        assertThat(check(result, "etl.precheck.upsert.ok").detail()).isEqualTo("id");
+    }
+
+    @Test
     void aMissingTargetTableIsReportedAsCreatedOnFirstRun() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)");
 

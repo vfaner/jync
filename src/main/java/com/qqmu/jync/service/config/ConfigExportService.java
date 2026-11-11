@@ -329,7 +329,8 @@ public class ConfigExportService {
                 task.getSourceDbId(), task.getTargetDbId(), task.getBatchId(), task.getSourceSql(),
                 task.getSourceCollection(), task.getSourceFilter(), task.getPreSql(),
                 task.getPostSql(), task.getTargetTable(), task.getWriteMode(),
-                task.getRangeCondition(), task.getResumeKeyColumn(), task.getCronExpression(),
+                task.getRangeCondition(), task.getResumeKeyColumn(),
+                task.getUpsertKeyColumns(), task.getCronExpression(),
                 task.getEnabled(), task.getTimeoutSeconds());
     }
 

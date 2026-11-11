@@ -29,7 +29,7 @@
                     th:selected="${task.writeMode != null and mode == task.writeMode}"
                     th:text="#{${'etl.mode.' + mode.name()}}">Overwrite</option>
         </select>
-        <div class="help" th:text="#{etl.writeMode.hint}">Overwrite deletes all target rows; append never deletes; range overwrite deletes one range.</div>
+        <div class="help" th:text="#{etl.writeMode.hint}">Overwrite deletes all target rows; append never deletes; range overwrite deletes one range; upsert updates rows whose key already exists and inserts the rest.</div>
     </div>
 </div>
 </body>

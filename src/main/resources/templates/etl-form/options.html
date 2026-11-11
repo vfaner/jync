@@ -18,7 +18,7 @@
     <div class="help" th:text="#{etl.postSql.hint}">Optional: runs on the target database after the load and commits immediately, e.g. UPDATE target SET total = amount + tax.</div>
 </div>
 
-<div class="grid-2">
+<div class="grid-3">
     <div class="field">
         <label for="rangeCondition" th:text="#{etl.rangeCondition}">Range condition</label>
         <input type="text" class="input" id="rangeCondition" name="rangeCondition"
@@ -34,6 +34,12 @@
                切换源下拉时由 app.js 同步（隐藏但不禁用：resumeKeyColumn 对两种源都有效）。 */-->
         <div class="help" data-role="mongo-resume-hint" th:hidden="${!sourceMongo}"
              th:text="#{etl.mongo.resume.hint}">For a native MongoDB source, name a top-level field such as _id.</div>
+    </div>
+    <div class="field">
+        <label for="upsertKeyColumns" th:text="#{etl.upsertKey}">Upsert key</label>
+        <input type="text" class="input" id="upsertKeyColumns" name="upsertKeyColumns"
+               maxlength="512" th:value="${task.upsertKeyColumns}">
+        <div class="help" th:text="#{etl.upsertKey.hint}">Required for upsert: one or more result columns, comma-separated. The target needs a primary key or unique index on them.</div>
     </div>
 </div>
 </th:block>

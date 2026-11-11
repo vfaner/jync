@@ -2,9 +2,11 @@ package com.qqmu.jync.service.etl;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -22,6 +24,7 @@ import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.etl.EtlRunResult.Side;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
+import com.qqmu.jync.service.sync.UniqueViolations;
 import com.qqmu.jync.service.etl.mongo.MongoFilterParser;
 
 /**
@@ -102,14 +105,49 @@ public class EtlRunner {
                 // Resolve the key before anything on the target is deleted: a typo must
                 // not cost the operator the previous contents.
                 int keyIndex = cursor.resumeKeyIndex();
+                List<String> columnNames = columnNames(columns);
 
                 stage = Side.TARGET;
+                // Upsert keys are resolved against the result labels before the target is
+                // created or written: a misspelled key must cost neither a table nor a row.
+                List<String> upsertKeys = task.getWriteMode() == EtlWriteMode.UPSERT
+                        ? EtlUpsertSql.resolve(columnNames,
+                                EtlUpsertSql.parse(task.getUpsertKeyColumns()))
+                        : List.of();
                 ensureTargetTable(target, targetDialect, sourceType, targetConfig,
-                        task.getTargetTable(), targetName, columns);
+                        task.getTargetTable(), targetName, columns, upsertKeys);
                 deleteForWriteMode(target, task, targetName, checkpoint);
-                String insertSql = insertSql(targetName, columnNames(columns));
+
+                String insertSql = insertSql(targetName, columnNames);
+                String nativeUpsertSql = task.getWriteMode() == EtlWriteMode.UPSERT
+                        ? EtlUpsertSql.nativeUpsert(targetConfig.effectiveType(), targetName,
+                                columnNames, upsertKeys)
+                        : null;
+                boolean emulatedUpsert = task.getWriteMode() == EtlWriteMode.UPSERT
+                        && nativeUpsertSql == null;
+                String writeSql = nativeUpsertSql != null ? nativeUpsertSql : insertSql;
+                String updateSql = emulatedUpsert
+                        ? EtlUpsertSql.update(targetName, columnNames, upsertKeys) : null;
+
+                // The emulation binds the SET values first, then the key, in the configured
+                // key order; both lists are constant for the whole run.
+                List<Integer> updateIndexes = emulatedUpsert
+                        ? upsertBindingIndexes(columnNames, upsertKeys) : List.of();
+                List<EtlSourceColumn> updateColumns = updateIndexes.stream()
+                        .map(columns::get).toList();
+                List<Integer> keyIndexes = emulatedUpsert
+                        ? upsertKeys.stream().map(columnNames::indexOf).toList() : List.of();
+                List<EtlSourceColumn> keyColumns = keyIndexes.stream()
+                        .map(columns::get).toList();
+
                 stage = Side.TARGET;
-                try (PreparedStatement insert = target.prepareStatement(insertSql)) {
+                try (PreparedStatement insert = target.prepareStatement(writeSql);
+                     PreparedStatement update = updateSql == null ? null
+                             : target.prepareStatement(updateSql);
+                     PreparedStatement probe = emulatedUpsert
+                             ? target.prepareStatement(
+                                     EtlUpsertSql.selectByKey(targetName, upsertKeys))
+                             : null) {
                     int pending = 0;
                     int keyType = Types.NULL;
                     String keyValue = null;
@@ -118,6 +156,12 @@ public class EtlRunner {
                         // A statement property, not a per-row one: setting it inside the batch
                         // loop repeats the same driver call once per row.
                         insert.setQueryTimeout(timeout);
+                        if (update != null) {
+                            update.setQueryTimeout(timeout);
+                        }
+                        if (probe != null) {
+                            probe.setQueryTimeout(timeout);
+                        }
                     }
 
                     while (true) {
@@ -137,13 +181,23 @@ public class EtlRunner {
                             keyValue = cursor.getString(keyIndex);
                         }
                         stage = Side.TARGET;
-                        bindRow(insert, columns, values, targetDialect);
-                        insert.addBatch();
+                        if (emulatedUpsert) {
+                            writeUpsertRow(update, insert, probe, columns, keyColumns,
+                                    updateColumns, updateIndexes, keyIndexes,
+                                    values, targetDialect);
+                        } else {
+                            bindRow(insert, columns, values, targetDialect);
+                            insert.addBatch();
+                        }
                         pending++;
 
                         if (pending >= BATCH_SIZE) {
                             stage = Side.TARGET;
-                            insert.executeBatch();
+                            // The emulation already executed each row's statements; only the
+                            // committed transaction boundary is left to draw.
+                            if (!emulatedUpsert) {
+                                insert.executeBatch();
+                            }
                             target.commit();
                             rowsWritten += pending;
                             pending = 0;
@@ -157,7 +211,9 @@ public class EtlRunner {
 
                     if (pending > 0) {
                         stage = Side.TARGET;
-                        insert.executeBatch();
+                        if (!emulatedUpsert) {
+                            insert.executeBatch();
+                        }
                         target.commit();
                         rowsWritten += pending;
                         stage = Side.PROGRAM;
@@ -226,6 +282,17 @@ public class EtlRunner {
             throw new EtlProgramException(
                     "a range overwrite needs a range condition on the target table");
         }
+        if (task.getWriteMode() == EtlWriteMode.UPSERT) {
+            List<String> keys = EtlUpsertSql.parse(task.getUpsertKeyColumns());
+            if (keys.isEmpty()) {
+                throw new EtlProgramException("error.etl.upsertKey.required");
+            }
+            for (String key : keys) {
+                if (!EtlSqlSupport.RESUME_KEY.matcher(key).matches()) {
+                    throw new EtlProgramException("error.etl.upsertKey.invalid");
+                }
+            }
+        }
         if (targetConfig == null || !targetConfig.supportsEtlTarget()) {
             // Defends the paths that bypass the form: a SQL-endpoint read-only type and the
             // native Mongo preset can never be the target of a copy.
@@ -282,11 +349,83 @@ public class EtlRunner {
         }
     }
 
+    /**
+     * Writes one row in an emulated upsert: update by key, insert only when the key is absent.
+     *
+     * <p>The existence probe is what makes this correct on every target: some drivers report
+     * the number of <em>changed</em> rows, so an update that matched an identical row answers
+     * zero. Treating that as "missing" would then insert a second copy.
+     */
+    private static void writeUpsertRow(PreparedStatement update, PreparedStatement insert,
+                                       PreparedStatement probe, List<EtlSourceColumn> columns,
+                                       List<EtlSourceColumn> keyColumns,
+                                       List<EtlSourceColumn> updateColumns,
+                                       List<Integer> updateIndexes, List<Integer> keyIndexes,
+                                       Object[] values, SqlDialect dialect) throws SQLException {
+        if (update != null) {
+            Object[] updateValues = new Object[updateIndexes.size()];
+            for (int i = 0; i < updateValues.length; i++) {
+                updateValues[i] = values[updateIndexes.get(i)];
+            }
+            bindRow(update, updateColumns, updateValues, dialect);
+            if (update.executeUpdate() > 0) {
+                return;
+            }
+        }
+        if (exists(probe, keyColumns, values, keyIndexes, dialect)) {
+            return;
+        }
+        bindRow(insert, columns, values, dialect);
+        try {
+            insert.executeUpdate();
+        } catch (SQLException e) {
+            // A concurrent writer may have inserted this key between our probe and the
+            // INSERT. Only a collision on a key the target now holds is absorbed; any other
+            // integrity violation must surface instead of silently dropping the row.
+            if (!UniqueViolations.isUniqueViolation(e)
+                    || !exists(probe, keyColumns, values, keyIndexes, dialect)) {
+                throw e;
+            }
+        }
+    }
+
+    private static boolean exists(PreparedStatement probe, List<EtlSourceColumn> keyColumns,
+                                  Object[] values, List<Integer> keyIndexes, SqlDialect dialect)
+            throws SQLException {
+        Object[] keyValues = new Object[keyIndexes.size()];
+        for (int i = 0; i < keyValues.length; i++) {
+            keyValues[i] = values[keyIndexes.get(i)];
+        }
+        bindRow(probe, keyColumns, keyValues, dialect);
+        try (ResultSet rs = probe.executeQuery()) {
+            return rs.next();
+        }
+    }
+
+    /**
+     * Bind order of the emulated UPDATE: every non-key column (SET clause, in result order),
+     * then every key (WHERE clause, in the order the operator configured).
+     */
+    private static List<Integer> upsertBindingIndexes(List<String> columnNames,
+                                                      List<String> keyColumns) {
+        List<Integer> indexes = new ArrayList<>();
+        for (int i = 0; i < columnNames.size(); i++) {
+            if (!keyColumns.contains(columnNames.get(i))) {
+                indexes.add(i);
+            }
+        }
+        for (String key : keyColumns) {
+            indexes.add(columnNames.indexOf(key));
+        }
+        return indexes;
+    }
+
     // --- target -------------------------------------------------------------------------
 
     private void ensureTargetTable(Connection target, SqlDialect dialect, DatabaseType sourceType,
                                    DatabaseConfig targetConfig, String configuredTable,
-                                   String targetName, List<EtlSourceColumn> columns)
+                                   String targetName, List<EtlSourceColumn> columns,
+                                   List<String> primaryKeyColumns)
             throws SQLException {
         if (EtlSqlSupport.exists(target, targetName)) {
             return;
@@ -322,6 +461,11 @@ public class EtlRunner {
             if (!column.isNullable()) {
                 ddl.append(" NOT NULL");
             }
+        }
+        if (!primaryKeyColumns.isEmpty()) {
+            // An upsert table created by Jync must enforce the key it matches on; otherwise
+            // a second run would insert the "existing" row again instead of updating it.
+            ddl.append(", PRIMARY KEY (").append(String.join(", ", primaryKeyColumns)).append(')');
         }
         ddl.append(')');
 

@@ -104,6 +104,17 @@ public class EtlPrecheckService {
             }
         }
 
+        if (task.getWriteMode() == EtlWriteMode.UPSERT && resultColumns != null) {
+            List<String> keys = EtlUpsertSql.parse(task.getUpsertKeyColumns());
+            if (!keys.isEmpty()) {
+                List<String> missing = EtlUpsertSql.unresolved(
+                        List.copyOf(resultColumns.values()), keys);
+                checks.add(missing.isEmpty()
+                        ? ok("etl.precheck.upsert.ok", String.join(", ", keys))
+                        : error("etl.precheck.upsert.keys.missing", String.join(", ", missing)));
+            }
+        }
+
         Connection target = null;
         try {
             target = connections.open(targetConfig);

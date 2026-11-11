@@ -102,6 +102,13 @@ public class EtlTask {
     @Column(name = "resume_key_column", length = 128)
     private String resumeKeyColumn;
 
+    /**
+     * Comma-separated result columns that identify a row for {@link EtlWriteMode#UPSERT}.
+     * A row whose key values already exist on the target updates that row; the rest insert.
+     */
+    @Column(name = "upsert_key_columns", length = 512)
+    private String upsertKeyColumns;
+
     /** Optional cron expression; blank means manual-only. */
     @Column(name = "cron_expression", length = 128)
     private String cronExpression;

@@ -24,5 +24,12 @@ public enum EtlWriteMode {
      * Delete only the rows matching the configured range condition, then copy the query
      * result. With a resume key, a continuation run skips the delete and resumes the copy.
      */
-    RANGE_OVERWRITE
+    RANGE_OVERWRITE,
+
+    /**
+     * Never delete. A result row whose configured key columns already exist on the target
+     * updates that row; every other row is inserted. This is the mode for refreshing a table
+     * from a query that already knows the natural key.
+     */
+    UPSERT
 }

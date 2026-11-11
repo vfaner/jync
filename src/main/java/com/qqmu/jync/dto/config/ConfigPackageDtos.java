@@ -154,6 +154,7 @@ public final class ConfigPackageDtos {
                              EtlWriteMode writeMode,
                              String rangeCondition,
                              String resumeKeyColumn,
+                             String upsertKeyColumns,
                              String cronExpression,
                              Boolean enabled,
                              Integer timeoutSeconds) {

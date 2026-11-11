@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.etl;
 
+import java.util.List;
 import java.util.Objects;
 
 import com.qqmu.jync.model.DatabaseConfig;
@@ -72,6 +73,17 @@ final class EtlTaskValidation {
         if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE
                 && (task.getRangeCondition() == null || task.getRangeCondition().isBlank())) {
             throw new IllegalArgumentException("error.etl.range.required");
+        }
+        if (task.getWriteMode() == EtlWriteMode.UPSERT) {
+            List<String> keys = EtlUpsertSql.parse(task.getUpsertKeyColumns());
+            if (keys.isEmpty()) {
+                throw new IllegalArgumentException("error.etl.upsertKey.required");
+            }
+            for (String key : keys) {
+                if (!EtlSqlSupport.RESUME_KEY.matcher(key).matches()) {
+                    throw new IllegalArgumentException("error.etl.upsertKey.invalid");
+                }
+            }
         }
         if (task.getResumeKeyColumn() != null && !task.getResumeKeyColumn().isBlank()
                 && !EtlSqlSupport.RESUME_KEY.matcher(task.getResumeKeyColumn().trim()).matches()) {

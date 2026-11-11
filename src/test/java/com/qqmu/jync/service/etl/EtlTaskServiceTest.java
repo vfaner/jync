@@ -98,6 +98,46 @@ class EtlTaskServiceTest {
     }
 
     @Test
+    void saveRejectsAnUpsertWithoutAKeyColumn() {
+        stubConnections(1L, 2L);
+        EtlTask task = form(1L, 2L);
+        task.setWriteMode(EtlWriteMode.UPSERT);
+
+        assertThatThrownBy(() -> service.save(task))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.upsertKey.required");
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void saveRejectsAnUpsertKeyThatIsNotAPlainColumnName() {
+        stubConnections(1L, 2L);
+        EtlTask task = form(1L, 2L);
+        task.setWriteMode(EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id; DROP TABLE dst");
+
+        assertThatThrownBy(() -> service.save(task))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.upsertKey.invalid");
+        verify(taskRepository, never()).save(any());
+    }
+
+    @Test
+    void saveAcceptsAnUpsertWithOneOrMoreKeys() {
+        stubConnections(1L, 2L);
+        EtlTask task = form(1L, 2L);
+        task.setWriteMode(EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("tenant_id, id");
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.save(task);
+
+        ArgumentCaptor<EtlTask> saved = ArgumentCaptor.forClass(EtlTask.class);
+        verify(taskRepository).save(saved.capture());
+        assertThat(saved.getValue().getUpsertKeyColumns()).isEqualTo("tenant_id, id");
+    }
+
+    @Test
     void saveRejectsAnInvalidCron() {
         stubConnections(1L, 2L);
         EtlTask task = form(1L, 2L);

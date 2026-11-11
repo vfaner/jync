@@ -155,6 +155,7 @@ public class EtlTaskService {
                 ? EtlWriteMode.OVERWRITE : form.getWriteMode());
         entity.setRangeCondition(trimToNull(form.getRangeCondition()));
         entity.setResumeKeyColumn(trimToNull(form.getResumeKeyColumn()));
+        entity.setUpsertKeyColumns(trimToNull(form.getUpsertKeyColumns()));
         entity.setPreSql(trimToNull(form.getPreSql()));
         entity.setPostSql(trimToNull(form.getPostSql()));
         // A member never schedules itself: the batch owns the cron and the enabled flag.
@@ -350,7 +351,9 @@ public class EtlTaskService {
                 || !Objects.equals(trim(before.getTargetTable()), trim(after.getTargetTable()))
                 || before.getWriteMode() != after.getWriteMode()
                 || !Objects.equals(trim(before.getRangeCondition()), trim(after.getRangeCondition()))
-                || !Objects.equals(trim(before.getResumeKeyColumn()), trim(after.getResumeKeyColumn()));
+                || !Objects.equals(trim(before.getResumeKeyColumn()), trim(after.getResumeKeyColumn()))
+                || !Objects.equals(trim(before.getUpsertKeyColumns()),
+                        trim(after.getUpsertKeyColumns()));
     }
 
     private static String trim(String value) {

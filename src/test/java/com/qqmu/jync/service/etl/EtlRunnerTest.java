@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.etl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -140,6 +141,88 @@ class EtlRunnerTest {
         assertThat(rows("SELECT id FROM dst ORDER BY id"))
                 .containsExactly("1", "2", "3", "4", "5");
         assertThat(checkpoints.load(7L).value()).isEqualTo("5");
+    }
+
+    /**
+     * The customer re-runs the same extraction to refresh a table: rows whose key already
+     * exists must take the new values, the missing ones must be inserted, and rows outside the
+     * result must survive.
+     */
+    @Test
+    void upsertUpdatesExistingKeysAndInsertsTheMissingRows() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO dst VALUES (1, 'old'), (2, 'stale'), (99, 'keep')");
+
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.rowsWritten()).isEqualTo(3);
+        assertThat(rows("SELECT id, name FROM dst ORDER BY id"))
+                .containsExactly("1|a", "2|b", "3|c", "99|keep");
+    }
+
+    @Test
+    void upsertMatchesOnEveryConfiguredKeyColumn() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (tenant INT, id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 10, 'a'), (2, 10, 'b')");
+        execute(TARGET_URL, "CREATE TABLE dst (tenant INT, id INT, name VARCHAR(20))",
+                "INSERT INTO dst VALUES (1, 10, 'old'), (1, 11, 'keep')");
+
+        EtlTask task = task("SELECT tenant, id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("tenant, id");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isTrue();
+        assertThat(rows("SELECT tenant, id, name FROM dst ORDER BY tenant, id"))
+                .containsExactly("1|10|a", "1|11|keep", "2|10|b");
+    }
+
+    @Test
+    void upsertCreatesTheTargetTableWithTheConfiguredPrimaryKey() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a')");
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+
+        assertThat(runner.run(task, source, target, connections).success()).isTrue();
+
+        // The key the upsert matches on must actually be enforced: a second row with the
+        // same key cannot slip in.
+        assertThatThrownBy(() -> execute(TARGET_URL, "INSERT INTO dst VALUES (1, 'dup')"))
+                .isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void upsertWithoutAKeyColumnIsRejectedBeforeTheTargetIsTouched() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)", "INSERT INTO dst VALUES (7)");
+
+        EtlRunResult result = runner.run(task("SELECT id FROM src", "dst",
+                EtlWriteMode.UPSERT), source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(rows("SELECT id FROM dst")).containsExactly("7");
+    }
+
+    @Test
+    void upsertWithAKeyMissingFromTheResultFailsBeforeTheTableIsCreated() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("tenant_id");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(result.errorMessage()).contains("tenant_id");
+        try (Connection targetConnection = DriverManager.getConnection(TARGET_URL, "sa", "")) {
+            assertThat(EtlSqlSupport.exists(targetConnection, "dst")).isFalse();
+        }
     }
 
     @Test

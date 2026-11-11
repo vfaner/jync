@@ -317,6 +317,7 @@ public class ConfigImportService {
             task.setWriteMode(dto.writeMode());
             task.setRangeCondition(dto.rangeCondition());
             task.setResumeKeyColumn(dto.resumeKeyColumn());
+            task.setUpsertKeyColumns(dto.upsertKeyColumns());
             task.setCronExpression(dto.cronExpression());
             task.setEnabled(dto.enabled());
             task.setTimeoutSeconds(dto.timeoutSeconds());

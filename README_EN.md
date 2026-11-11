@@ -30,7 +30,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 | **Download** | [Gitee release (split assets)](https://gitee.com/super_rgh/jync/releases/latest) · [GitHub Releases (single jar)](https://github.com/vfaner/jync/releases/latest) |
 | **Docs** | [Website](https://jync.qqmu.com) · [User Guide](https://jync.qqmu.com/docs/jync-user-guide.pdf) · [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf) · [Overview](https://jync.qqmu.com/docs/jync-overview.pdf) |
 | **Demo** | [Bilibili · 14 minutes, from connection to real-time sync](https://www.bilibili.com/video/BV1iHYJ6vEEd) |
-| **Changelog** | [Release notes by version](docs/release-notes/) (in Chinese; current: v2.0.0) |
+| **Changelog** | [Release notes by version](docs/release-notes/) (in Chinese) |
 | **Source** | [GitHub](https://github.com/vfaner/jync) · [Gitee](https://gitee.com/super_rgh/jync) · [AtomGit mirror](https://atomgit.com/vfaner/jync) (synced code and release assets) |
 
 > Downloads, issues and pull requests belong on Gitee / GitHub; AtomGit is a read-only mirror.
@@ -54,7 +54,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 | Log CDC | MySQL binlog, Oracle LogMiner, DM LogMiner, PostgreSQL-family logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency |
 | Redis cache projection | A real-time sync target can be Redis: CDC projects each row to `<prefix><table>:<primary key>` as JSON or HASH, with baseline, replay and prefix-scoped rebuild; log CDC only — see [Known limitations](docs/known-limitations.md) |
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
-| ETL | Copy result rows from a customer SQL query; 7 analytic engines; multi-statement scripts; overwrite / append / range overwrite; resumable runs; tables sharing a source and target can form a **batch** with one connection pair and one schedule |
+| ETL | Copy result rows from a customer SQL query; 7 analytic engines; multi-statement scripts; overwrite / append / range overwrite / upsert by key; resumable runs; tables sharing a source and target can form a **batch** with one connection pair and one schedule |
 | Dedicated migration | Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES copy whole objects over a connection model independent of JDBC; precheck, manual or cron runs, cancellation and run history |
 | System management | Configuration package export/import (passphrase-encrypted, optional runtime state, re-encrypted with the target key), metadata database connection tester, page-level force-HTTPS switch, in-app TLS certificate upload (PKCS#12 / JKS / PEM) |
 | Data shaping | Column cleansing (13 rule types, including phone/ID/name/email masking and SHA-256 hashing), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |

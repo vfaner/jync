@@ -162,6 +162,30 @@ class EtlFormTargetOptionsViewTest {
                 .contains("data-no-match-text=\"没有匹配的表\"");
     }
 
+    @Test
+    void theUpsertOptionAndItsKeyColumnsAreRenderedOnTheEditPage() throws Exception {
+        EtlTask task = new EtlTask();
+        task.setId(7L);
+        task.setName("refresh-orders");
+        task.setSourceDbId(1L);
+        task.setTargetDbId(2L);
+        task.setWriteMode(EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("tenant_id, id");
+        when(etlTaskService.findById(7L)).thenReturn(Optional.of(task));
+        when(etlTaskService.connections()).thenReturn(List.of(
+                connection(1L, "mysql-src", DatabaseType.MYSQL, ConnectionRole.SOURCE),
+                connection(2L, "mysql-dst", DatabaseType.MYSQL, ConnectionRole.TARGET)));
+
+        String page = html(mvc.perform(get("/etl/7/edit")
+                        .locale(Locale.SIMPLIFIED_CHINESE).with(asAdmin()))
+                .andExpect(status().isOk()));
+
+        assertThat(select(page, "writeMode")).contains("主键更新");
+        assertThat(page).contains("name=\"upsertKeyColumns\"")
+                .contains("value=\"tenant_id, id\"")
+                .contains("主键列");
+    }
+
     /**
      * The same legacy value must stay visible when it is the source: a connection reclassified
      * to TARGET after the task was saved would otherwise vanish from the edit page.
