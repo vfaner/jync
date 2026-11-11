@@ -21,6 +21,8 @@ import com.qqmu.jync.model.AlertWebhookFormat;
 import com.qqmu.jync.repository.AlertConfigRepository;
 import com.qqmu.jync.util.CryptoUtil;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Reads and writes the single alerting settings row.
  *
@@ -28,6 +30,7 @@ import com.qqmu.jync.util.CryptoUtil;
  * inline, and the evaluator must never start posting to a half-configured endpoint.
  */
 @Service
+@Slf4j
 public class AlertConfigService {
 
     /** Fixed primary key; the table is a settings singleton. */
@@ -71,7 +74,17 @@ public class AlertConfigService {
     /** The tail of the saved URL, for the settings page; null when none is stored. */
     @Transactional(readOnly = true)
     public String maskedUrl() {
-        String url = webhookUrlOrNull();
+        String url;
+        try {
+            url = webhookUrlOrNull();
+        } catch (IllegalStateException e) {
+            // Ciphertext under a key this instance no longer holds — the key file was replaced
+            // or sync.crypto-* changed. The page must still open: it is where the URL gets
+            // re-entered, so report it as not set (the controller's storedUrl() does the same).
+            log.warn("Stored webhook URL cannot be decrypted with the current crypto key; "
+                    + "showing it as not set: {}", e.toString());
+            return null;
+        }
         if (url == null) {
             return null;
         }
@@ -98,7 +111,7 @@ public class AlertConfigService {
             validateUrl(typed);
         }
         boolean willHaveUrl = typed != null || (!form.isClearWebhookUrl()
-                && config.getWebhookUrl() != null && !config.getWebhookUrl().isEmpty());
+                && hasReadableStoredUrl(config));
         if (form.isEnabled() && !willHaveUrl) {
             throw new IllegalArgumentException("error.alert.url.required");
         }
@@ -173,6 +186,26 @@ public class AlertConfigService {
             }
         } catch (URISyntaxException e) {
             throw new IllegalArgumentException("error.alert.url.invalid");
+        }
+    }
+
+    /**
+     * Whether the stored value is a URL the notifier could actually use.
+     *
+     * <p>Ciphertext under a key this instance no longer holds is not one: the page reports it as
+     * not set and enabling must demand a new one, instead of saving an enabled config whose URL
+     * nothing can decrypt.
+     */
+    private boolean hasReadableStoredUrl(AlertConfig config) {
+        String stored = config.getWebhookUrl();
+        if (stored == null || stored.isEmpty()) {
+            return false;
+        }
+        try {
+            crypto.decrypt(stored);
+            return true;
+        } catch (IllegalStateException e) {
+            return false;
         }
     }
 

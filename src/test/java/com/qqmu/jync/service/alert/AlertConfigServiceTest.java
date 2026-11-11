@@ -159,6 +159,49 @@ class AlertConfigServiceTest {
     }
 
     @Test
+    void anUndecryptableStoredUrlReadsAsNoneOnTheSettingsPage() {
+        // The key file was replaced, or sync.crypto-* was changed after the URL was saved: the
+        // ciphertext belongs to a key this instance no longer holds. The settings page must
+        // still open — that is where the address is re-entered — so the masked tail reads as
+        // "none stored". The send path stays strict: its callers decide what a failure means.
+        AlertConfig stored = new AlertConfig();
+        stored.setId(AlertConfigService.SINGLETON_ID);
+        stored.setWebhookUrl(new CryptoUtil(cryptoProperties("another-password", "0011223344556677"))
+                .encrypt("https://hooks.example.com/lost-7777"));
+        when(repository.findById(AlertConfigService.SINGLETON_ID))
+                .thenReturn(Optional.of(stored));
+
+        assertThat(service.maskedUrl()).isNull();
+        assertThatThrownBy(service::webhookUrlOrNull).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void enablingWithOnlyAnUndecryptableStoredUrlIsRefused() {
+        // "Unreadable" is the same as "none" on save too: flashing an enabled config whose URL
+        // nothing can decrypt would silently stop every notification with no error on the page.
+        AlertConfig stored = new AlertConfig();
+        stored.setId(AlertConfigService.SINGLETON_ID);
+        stored.setWebhookUrl(new CryptoUtil(cryptoProperties("another-password", "0011223344556677"))
+                .encrypt("https://hooks.example.com/lost-8888"));
+        when(repository.findById(AlertConfigService.SINGLETON_ID))
+                .thenReturn(Optional.of(stored));
+
+        AlertConfigForm form = form(true);
+        form.setWebhookUrl("   ");
+
+        assertThatThrownBy(() -> service.save(form))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.alert.url.required");
+    }
+
+    private static SyncProperties cryptoProperties(String password, String salt) {
+        SyncProperties properties = new SyncProperties();
+        properties.setCryptoPassword(password);
+        properties.setCryptoSalt(salt);
+        return properties;
+    }
+
+    @Test
     void anInvalidUrlSchemeIsRefused() {
         when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
         AlertConfigForm form = form(true);
