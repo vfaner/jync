@@ -80,6 +80,109 @@ class ChangeLogDetailsLocalizerTest {
                 .isEqualTo("CDC 窗口：写入 0 条，删除 5 条（至 0:1:2048）");
     }
 
+    /**
+     * Targeted repair writes this row itself; unlike a driver message it is Jync's own
+     * sentence, so it must follow the page language like every other writer's line.
+     */
+    @Test
+    void targetedRepairEntriesAreTranslated() {
+        String raw = "cdc target table repair: recreated target table customers and reloaded it"
+                + " from the source (4 row(s) written); the CDC position was left untouched, so"
+                + " replay continues from the same point";
+
+        assertThat(localizer.localize(raw, ZH)).isEqualTo(
+                "CDC 目标表定向修复：已重建目标表 customers 并从源端重灌（写入 4 行）；"
+                        + "CDC 位点未移动，回放从原位点继续。");
+        assertThat(localizer.localize(raw, Locale.ENGLISH))
+                .isEqualTo("Targeted CDC repair: recreated target table customers and reloaded"
+                        + " it from the source (4 row(s) written); the CDC position was left"
+                        + " untouched, so replay continues from the same point.");
+    }
+
+    /**
+     * ERROR rows are where an operator first looks when a project stops. The row is Jync's
+     * sentence plus the database's, so the sentence is translated and the driver text after it
+     * reaches the operator exactly as the target said it.
+     */
+    @Test
+    void cdcFlushFailuresTranslateOurOwnSentencesAndKeepTheDriverText() {
+        String missing = "com.qqmu.jync.service.cdc.CdcTargetTableMissingException: cdc target"
+                + " table missing: source table customers cannot be applied to target"
+                + " jync_target.customers because that table does not exist (the target reported:"
+                + " table 'jync_target.customers' doesn't exist)";
+        assertThat(localizer.localize("CDC transaction flush failed: " + missing, ZH))
+                .isEqualTo("CDC 事务写入失败：CDC 目标表缺失：源表 customers 无法写入目标表"
+                        + " jync_target.customers，因为目标表不存在"
+                        + "（目标库报告：table 'jync_target.customers' doesn't exist）");
+
+        String driver = "java.sql.SQLSyntaxErrorException: Unknown column 'region' in 'field list'";
+        assertThat(localizer.localize("CDC transaction flush failed: " + driver, ZH))
+                .isEqualTo("CDC 事务写入失败：" + driver);
+
+        String ddl = "ALTER TABLE customers ADD COLUMN region VARCHAR(64)";
+        assertThat(localizer.localize("CDC target is missing a column the source has; the column"
+                + " is projected away until the target is aligned\nSkipped DDL (not applied to"
+                + " the target):\n" + ddl, ZH)).isEqualTo(
+                "CDC 目标表缺少源表已有的列，已暂时跳过该列，等待目标表对齐\n"
+                        + "未应用的 DDL（目标库未执行）：\n" + ddl);
+
+        assertThat(localizer.localize("CDC transaction flush failed: cdc target table missing:"
+                + " source table customers cannot be applied to target jync_target.customers"
+                + " because that table does not exist", Locale.ENGLISH)).isEqualTo(
+                "CDC transaction flush failed: cdc target table missing: source table customers"
+                        + " cannot be applied to target jync_target.customers because that table"
+                        + " does not exist");
+    }
+
+    /** The verdict label that starts every parked row, with the cause left verbatim. */
+    @Test
+    void aParkedProjectTranslatesItsVerdictLabel() {
+        assertThat(localizer.localize("AUTH_FAILURE: Access denied for user 'jync'@'10.0.0.5'", ZH))
+                .isEqualTo("认证失败（AUTH_FAILURE）：Access denied for user 'jync'@'10.0.0.5'");
+        assertThat(localizer.localize("PURGED: Could not find first log file name in binary log"
+                + " index file", ZH)).isEqualTo("日志已清除（PURGED）：Could not find first log"
+                + " file name in binary log index file");
+        assertThat(localizer.localize("SCHEMA_MISMATCH_STRIKE_OUT: the target kept rejecting rows"
+                + " for a column the source has", ZH)).isEqualTo(
+                "目标列缺失连续失败（SCHEMA_MISMATCH_STRIKE_OUT）：目标表持续拒绝源表已有列的行");
+        assertThat(localizer.localize("DESERIALIZATION_STRIKE_OUT: repeated binlog deserialization"
+                + " failures", ZH)).isEqualTo(
+                "反序列化连续失败（DESERIALIZATION_STRIKE_OUT）：binlog 反序列化连续失败");
+        // English keeps the stored wording byte-for-byte.
+        assertThat(localizer.localize("AUTH_FAILURE: access denied", Locale.ENGLISH))
+                .isEqualTo("AUTH_FAILURE: access denied");
+    }
+
+    /** The targeted-repair feature parks with its own reason; the status and reason are ours. */
+    @Test
+    void aParkedTargetedRepairExplainsItsReason() {
+        assertThat(localizer.localize("TARGET_TABLE_MISSING: targeted repair CAP_REACHED: the"
+                + " target table was missing in 2 consecutive repair cycles (limit 2), so the"
+                + " cause is still present; fix it, then restart the project or re-baseline", ZH))
+                .isEqualTo("目标表缺失（TARGET_TABLE_MISSING）：定向修复已达重试上限："
+                        + "目标表已连续 2 轮修复仍缺失（上限 2），原因仍在；"
+                        + "请先修好，再重启项目或重建基线");
+        assertThat(localizer.localize("TARGET_TABLE_MISSING: targeted repair DISABLED: targeted"
+                + " repair is disabled (sync.cdc.target-table-repair-enabled=false)", ZH))
+                .isEqualTo("目标表缺失（TARGET_TABLE_MISSING）：定向修复已停用："
+                        + "目标表定向修复已关闭（sync.cdc.target-table-repair-enabled=false）");
+        assertThat(localizer.localize("TARGET_TABLE_MISSING: targeted repair FAILED: the target"
+                + " still lacks [orders] after the repair cycle", ZH)).isEqualTo(
+                "目标表缺失（TARGET_TABLE_MISSING）：定向修复失败：修复周期结束后目标库仍缺少 [orders]");
+        assertThat(localizer.localize("TARGET_TABLE_MISSING: targeted repair NOT_APPLICABLE:"
+                + " targeted repair is not wired on this engine", Locale.ENGLISH)).isEqualTo(
+                "TARGET_TABLE_MISSING: targeted repair NOT_APPLICABLE: targeted repair is not"
+                        + " wired on this engine");
+    }
+
+    @Test
+    void aRebaselineRestartFailureIsTranslated() {
+        assertThat(localizer.localize("baseline reset; consumer restart failed", ZH))
+                .isEqualTo("基线已重置，但消费器重启失败");
+        assertThat(localizer.localize("baseline reset; consumer restart failed", Locale.ENGLISH))
+                .isEqualTo("baseline reset; consumer restart failed");
+    }
+
     @Test
     void tableCreationKeepsItsOptionalPhrases() {
         assertThat(localizer.localize("Created table customers", ZH)).isEqualTo("已创建表 customers");

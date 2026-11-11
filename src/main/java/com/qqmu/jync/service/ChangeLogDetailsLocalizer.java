@@ -44,6 +44,39 @@ public class ChangeLogDetailsLocalizer {
             Pattern.compile("^(\\w+) consumer failed: (.+)$", Pattern.DOTALL);
     private static final Pattern CDC_WINDOW = Pattern.compile(
             "^CDC window: (\\d+) upserts, (\\d+) deletes(?: \\(through (.+)\\))?$");
+    private static final Pattern CDC_TARGET_REPAIRED = Pattern.compile(
+            "^cdc target table repair: recreated target table (\\S+) and reloaded it from the"
+                    + " source \\((\\d+) row\\(s\\) written\\); the CDC position was left"
+                    + " untouched, so replay continues from the same point$");
+    private static final Pattern CDC_FLUSH_FAILED =
+            Pattern.compile("^CDC transaction flush failed: (.+)$", Pattern.DOTALL);
+    private static final String CDC_SCHEMA_MISMATCH = "CDC target is missing a column the source"
+            + " has; the column is projected away until the target is aligned";
+    private static final String SKIPPED_DDL_MARKER =
+            "\nSkipped DDL (not applied to the target):\n";
+    private static final Pattern OWN_EXCEPTION =
+            Pattern.compile("^com\\.qqmu\\.jync\\.[\\w.$]+: (.*)$", Pattern.DOTALL);
+    private static final Pattern CDC_TARGET_MISSING = Pattern.compile(
+            "^cdc target table missing: source table (.+?) cannot be applied to target (.+?)"
+                    + " because that table does not exist(?: \\(the target reported: (.+)\\))?$",
+            Pattern.DOTALL);
+    /** The verdict label that starts every row a parked consumer leaves behind. */
+    private static final Pattern CDC_PARKED = Pattern.compile(
+            "^(PURGED|SERVER_ID_CONFLICT|AUTH_FAILURE|SCHEMA_CONFLICT|XA_ORDERING|SCHEMA_DRIFT"
+                    + "|TRANSACTION_TOO_LARGE|YSTREAM_BLOCKED|TARGET_TABLE_MISSING"
+                    + "|SCHEMA_MISMATCH_STRIKE_OUT|DESERIALIZATION_STRIKE_OUT|APPLY_STRIKE_OUT"
+                    + "|PARSE_STRIKE_OUT): (.+)$", Pattern.DOTALL);
+    private static final Pattern CDC_TARGETED_REPAIR = Pattern.compile(
+            "^targeted repair (REPAIRED|FAILED|CAP_REACHED|DISABLED|NOT_APPLICABLE): (.+)$",
+            Pattern.DOTALL);
+    private static final Pattern REPAIR_CAP_REACHED = Pattern.compile(
+            "^the target table was missing in (\\d+) consecutive repair cycles \\(limit (\\d+)\\),"
+                    + " so the cause is still present; fix it, then restart the project or"
+                    + " re-baseline$");
+    private static final Pattern REPAIR_STILL_MISSING = Pattern.compile(
+            "^the target still lacks (.+) after the repair cycle$", Pattern.DOTALL);
+    private static final Pattern REPAIR_ENUMERATE = Pattern.compile(
+            "^could not enumerate the target tables: (.+)$", Pattern.DOTALL);
 
     private static final Pattern DATA_ROWS = Pattern.compile(
             "^(Initial load|Incremental sync): (\\d+) row\\(s\\) (inserted|updated)"
@@ -214,7 +247,183 @@ public class ChangeLogDetailsLocalizer {
                     : get(locale, "log.detail.cdc.windowThrough", m.group(1), m.group(2),
                             m.group(3));
         }
+        m = CDC_TARGET_REPAIRED.matcher(details);
+        if (m.matches()) {
+            return get(locale, "log.detail.cdc.targetRepaired", m.group(1), m.group(2));
+        }
+        m = CDC_FLUSH_FAILED.matcher(details);
+        if (m.matches()) {
+            return flushFailure(m.group(1), locale);
+        }
+        if (details.startsWith(CDC_SCHEMA_MISMATCH)) {
+            String text = schemaMismatch(details.substring(CDC_SCHEMA_MISMATCH.length()), locale);
+            if (text != null) {
+                return text;
+            }
+        }
+        m = CDC_PARKED.matcher(details);
+        if (m.matches()) {
+            return parked(m.group(1), m.group(2), locale);
+        }
+        if ("baseline reset; consumer restart failed".equals(details)) {
+            return get(locale, "log.detail.cdc.baselineRestartFailed");
+        }
         return null;
+    }
+
+    /** "CDC transaction flush failed: <cause>" plus the optional skipped-DDL tail. */
+    private String flushFailure(String tail, Locale locale) {
+        int ddlAt = tail.indexOf(SKIPPED_DDL_MARKER);
+        String cause = failureCause(ddlAt < 0 ? tail : tail.substring(0, ddlAt), locale);
+        String ddl = ddlAt < 0 ? ""
+                : skippedDdl(tail.substring(ddlAt + SKIPPED_DDL_MARKER.length()), locale);
+        String text = get(locale, "log.detail.cdc.flushFailed", cause);
+        return text == null ? null : text + ddl;
+    }
+
+    /** The fixed schema-mismatch sentence, with the skipped DDL kept verbatim when present. */
+    private String schemaMismatch(String tail, Locale locale) {
+        String ddl;
+        if (tail.isEmpty()) {
+            ddl = "";
+        } else if (tail.startsWith(SKIPPED_DDL_MARKER)) {
+            ddl = skippedDdl(tail.substring(SKIPPED_DDL_MARKER.length()), locale);
+        } else {
+            return null;
+        }
+        String text = get(locale, "log.detail.cdc.schemaMismatch");
+        return text == null ? null : text + ddl;
+    }
+
+    private String skippedDdl(String sql, Locale locale) {
+        String text = get(locale, "log.detail.cdc.skippedDdl", sql);
+        return text == null ? SKIPPED_DDL_MARKER + sql : text;
+    }
+
+    /**
+     * The cause of a flush failure: our own exception wrapper and sentence are ours to
+     * translate, everything after them is the driver's text and stays exactly as reported.
+     */
+    private String failureCause(String raw, Locale locale) {
+        String text = stripOwnExceptionPrefix(raw);
+        String translated = targetMissing(text, locale);
+        return translated == null ? text : translated;
+    }
+
+    /** Peels {@code com.qqmu.jync.…Exception: } wrappers the storage format keeps. */
+    private static String stripOwnExceptionPrefix(String text) {
+        String current = text;
+        for (int i = 0; i < 4; i++) {
+            Matcher m = OWN_EXCEPTION.matcher(current);
+            if (!m.matches()) {
+                break;
+            }
+            current = m.group(1);
+        }
+        return current;
+    }
+
+    private String targetMissing(String text, Locale locale) {
+        Matcher m = CDC_TARGET_MISSING.matcher(text);
+        if (!m.matches()) {
+            return null;
+        }
+        return m.group(3) == null
+                ? get(locale, "log.detail.cdc.targetMissing", m.group(1), m.group(2))
+                : get(locale, "log.detail.cdc.targetMissingCause", m.group(1), m.group(2),
+                        m.group(3));
+    }
+
+    /** "&lt;VERDICT&gt;: &lt;cause&gt;" — the row a parked consumer leaves in the change log. */
+    private String parked(String label, String cause, Locale locale) {
+        String labelText = get(locale, "log.detail.cdc.label." + labelKey(label));
+        return labelText == null ? null
+                : get(locale, "log.detail.cdc.parked", labelText, parkedCause(cause, locale));
+    }
+
+    private String parkedCause(String cause, Locale locale) {
+        Matcher m = CDC_TARGETED_REPAIR.matcher(cause);
+        if (m.matches()) {
+            String status = get(locale,
+                    "log.detail.cdc.repairStatus." + repairStatusKey(m.group(1)));
+            if (status == null) {
+                return cause;
+            }
+            String reason = repairReason(m.group(2), locale);
+            String text = get(locale, "log.detail.cdc.repair", status,
+                    reason == null ? m.group(2) : reason);
+            return text == null ? cause : text;
+        }
+        String sentence = sentence(cause, locale);
+        return sentence == null ? cause : sentence;
+    }
+
+    private String repairReason(String reason, Locale locale) {
+        Matcher m = REPAIR_CAP_REACHED.matcher(reason);
+        if (m.matches()) {
+            return get(locale, "log.detail.cdc.repairCapReached", m.group(1), m.group(2));
+        }
+        m = REPAIR_STILL_MISSING.matcher(reason);
+        if (m.matches()) {
+            return get(locale, "log.detail.cdc.repairStillMissing", m.group(1));
+        }
+        m = REPAIR_ENUMERATE.matcher(reason);
+        if (m.matches()) {
+            return get(locale, "log.detail.cdc.repairEnumerate", m.group(1));
+        }
+        return sentence(reason, locale);
+    }
+
+    /** Fixed sentences the CDC writers park with; {@code null} for an unknown shape. */
+    private String sentence(String text, Locale locale) {
+        String key = switch (text) {
+            case "repeated binlog deserialization failures" -> "repeatedDeserialization";
+            case "repeated PG failures" -> "repeatedPg";
+            case "repeated LogMiner failures" -> "repeatedLogMiner";
+            case "repeated SQLServer CDC failures" -> "repeatedSqlServer";
+            case "repeated YStream failures" -> "repeatedYStream";
+            case "the target kept rejecting rows for a column the source has" ->
+                    "targetRejectsColumn";
+            case "not a missing-target-table fault" -> "repairNotMissing";
+            case "no project context" -> "repairNoContext";
+            case "targeted repair only applies to relational targets" -> "repairRelationalOnly";
+            case "data sync is off, so a reload could not restore any rows" -> "repairDataSyncOff";
+            case "targeted repair is disabled (sync.cdc.target-table-repair-enabled=false)" ->
+                    "repairDisabled";
+            case "the source no longer has the table named by the fault" -> "repairSourceGone";
+            case "the repair cycle did not succeed" -> "repairCycleFailed";
+            case "targeted repair is not wired on this engine" -> "repairNotWired";
+            default -> null;
+        };
+        return key == null ? null : get(locale, "log.detail.cdc.sentence." + key);
+    }
+
+    private static String labelKey(String label) {
+        return switch (label) {
+            case "PURGED" -> "purged";
+            case "SERVER_ID_CONFLICT" -> "serverIdConflict";
+            case "AUTH_FAILURE" -> "authFailure";
+            case "SCHEMA_CONFLICT" -> "schemaConflict";
+            case "XA_ORDERING" -> "xaOrdering";
+            case "SCHEMA_DRIFT" -> "schemaDrift";
+            case "TRANSACTION_TOO_LARGE" -> "transactionTooLarge";
+            case "YSTREAM_BLOCKED" -> "ystreamBlocked";
+            case "TARGET_TABLE_MISSING" -> "targetTableMissing";
+            case "SCHEMA_MISMATCH_STRIKE_OUT" -> "schemaMismatchStrikeOut";
+            case "DESERIALIZATION_STRIKE_OUT" -> "deserializationStrikeOut";
+            case "APPLY_STRIKE_OUT" -> "applyStrikeOut";
+            default -> "parseStrikeOut";
+        };
+    }
+
+    private static String repairStatusKey(String status) {
+        return switch (status) {
+            case "REPAIRED" -> "repaired";
+            case "CAP_REACHED" -> "capReached";
+            case "DISABLED" -> "disabled";
+            case "NOT_APPLICABLE" -> "notApplicable";
+            default -> "failed";
+        };
     }
 
     /**
