@@ -134,7 +134,10 @@
 
     <!-- One shared dialog for every DDL task: the status tag fills it in (bindDdlOpen).
          The per-row <details> only shows the statement; the dialog is where it is run. -->
-    <div class="modal" id="ddl-execute-modal" aria-hidden="true" role="dialog" aria-modal="true">
+    <!--/* 三个动作按钮的 URL 前缀由服务端给出：context-path 不是 / 时根绝对路径会 404，
+           而这是会改动目标库的操作，静默失败不可接受。 */-->
+    <div class="modal" id="ddl-execute-modal" aria-hidden="true" role="dialog" aria-modal="true"
+         th:attr="data-action-base=@{/change-logs}">
         <div class="modal-mask" data-role="ddl-close"></div>
         <div class="modal-dialog" style="max-width:820px">
             <button type="button" class="modal-close" data-role="ddl-close"

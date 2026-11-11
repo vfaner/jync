@@ -21,22 +21,30 @@
         <div th:if="${precheck != null}">
             <div class="mb-12">
                 <span class="badge"
-                      th:class="${precheck.passed()} ? 'badge-ok' : 'badge-danger'"
+                      th:classappend="${precheck.passed()} ? 'badge-ok' : 'badge-danger'"
                       th:text="#{${precheck.passed() ? 'etl.precheck.summary.passed' : 'etl.precheck.summary.failed'}}">
                     Passed / Failed
                 </span>
-                <span class="small muted ml-8" th:text="#{etl.precheck.columns}">Columns in result: {0}</span>
+                <span class="small muted ml-8"
+                      th:text="#{etl.precheck.columns(${precheck.columns.size()})}">Columns in result: {0}</span>
             </div>
 
             <div class="grid" style="grid-template-columns: 1fr 1fr; gap:16px">
                 <div>
                     <h3 class="small" th:text="#{etl.precheck.checks}">Checks</h3>
-                    <div th:if="${precheck.checks.isEmpty()}" class="small muted">No checks performed (empty task?)</div>
-                    <div th:each="check : ${precheck.checks}" class="mb-4">
+                    <div th:if="${precheck.checks.isEmpty()}" class="small muted"
+                         th:text="#{etl.precheck.noChecks}">No checks performed (empty task?)</div>
+                    <!--/* 服务把 code 作 i18n 键给出，detail 是它要嵌进句子的原文；句子已经带上
+                           detail 时不再重复显示，只有 target.ok 这类无占位符的消息才单列。 */-->
+                    <div th:each="check : ${precheck.checks}" class="mb-4"
+                         th:with="detail=${check.detail},
+                                  message=${#strings.isEmpty(detail)} ? #{${check.code}} : #{${check.code}(${detail})}">
                         <span class="badge"
-                              th:class="${check.level.name() == 'OK' ? 'badge-ok' : check.level.name() == 'WARN' ? 'badge-warn' : 'badge-danger'}"
-                              th:text="${check.code}">Code</span>
-                        <span class="small" th:text="${check.detail}">(detail)</span>
+                              th:classappend="${check.level.name() == 'OK' ? 'badge-ok' : check.level.name() == 'WARN' ? 'badge-warn' : 'badge-danger'}"
+                              th:text="${message}">Message</span>
+                        <span class="small muted ml-8"
+                              th:if="${!#strings.isEmpty(detail) and !message.contains(detail)}"
+                              th:text="${detail}">(detail)</span>
                     </div>
                 </div>
                 <div>

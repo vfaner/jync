@@ -106,6 +106,9 @@
       if (window.console) { console.warn('[jync] the DDL dialog is missing on this page'); }
       return;
     }
+    var modal = document.getElementById('ddl-execute-modal');
+    // 服务端渲染的前缀（context-path 感知）；弹窗缺失时退回默认部署的根路径。
+    var base = (modal && modal.getAttribute('data-action-base')) || '/change-logs';
     var id = btn.getAttribute('data-ddl-id') || '';
     var sql = retargetDdlSql(btn);
     if (!sql) {
@@ -120,11 +123,11 @@
     var replayed = btn.getAttribute('data-ddl-replayed') === 'true';
     // 已关闭（已执行或已处理）的任务服务端一律拒绝执行：按钮不能看起来可用。
     exec.disabled = executed || replayed;
-    exec.setAttribute('data-action', '/change-logs/' + id + '/execute');
+    exec.setAttribute('data-action', base + '/' + id + '/execute');
     if (retry) {
       // 目标库还没执行这条 DDL，重放无从谈起（服务端也会拒绝）：执行之后才可用。
       retry.disabled = !executed || replayed;
-      retry.setAttribute('data-action', '/change-logs/' + id + '/retry');
+      retry.setAttribute('data-action', base + '/' + id + '/retry');
       retry.setAttribute('data-confirm-text', btn.getAttribute('data-ddl-confirm') || '');
       retry.setAttribute('title', executed ? '' : (btn.getAttribute('data-ddl-needs-ddl') || ''));
     }
@@ -138,7 +141,7 @@
     if (dismiss) {
       // A processed task has nothing left to close; an executed-but-not-replayed one does.
       dismiss.disabled = replayed;
-      dismiss.setAttribute('data-action', '/change-logs/' + id + '/dismiss');
+      dismiss.setAttribute('data-action', base + '/' + id + '/dismiss');
       dismiss.setAttribute('data-confirm-text',
         btn.getAttribute('data-ddl-dismiss-confirm') || '');
     }
