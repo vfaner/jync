@@ -474,6 +474,56 @@ class CdcEventStreamHandlerTest {
     }
 
     @Test
+    void ddlOfAnotherDatabaseIsNotFiledAsATask() {
+        List<String> captured = new ArrayList<>();
+        CdcEventStreamHandler withSink = new CdcEventStreamHandler(config, "app", supplier,
+                new CdcRowMapper(), stats, () -> "uuid:1-7", sink, null, 0L,
+                CdcTransactionBudget.unlimited(),
+                (db, statement, file, position) -> { captured.add(db); captured.add(statement); });
+        // The binlog is server-wide: a DDL from another schema is delivered to this stream
+        // too. The qualified and the unqualified spelling both have to be recognised.
+        QueryEventData qualified = new QueryEventData();
+        qualified.setSql("ALTER TABLE `reporting`.`daily` ADD COLUMN `x` INT");
+        qualified.setDatabase("reporting");
+        QueryEventData unqualified = new QueryEventData();
+        unqualified.setSql("ALTER TABLE orders ADD COLUMN `x` INT");
+        unqualified.setDatabase("reporting");
+
+        withSink.onEvent(event(EventType.QUERY, qualified, 330L));
+        withSink.onEvent(event(EventType.QUERY, unqualified, 340L));
+
+        // Filing another application's DDL opens a task this project can never resolve:
+        // the column projection stays on across every restart, and executing the task
+        // would rewrite the foreign schema onto this project's target.
+        assertThat(captured).isEmpty();
+        assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(0L);
+    }
+
+    @Test
+    void ddlForATableTheProjectDoesNotSyncIsNotFiledAsATask() {
+        List<String> captured = new ArrayList<>();
+        CdcEventStreamHandler withSink = new CdcEventStreamHandler(config, "app", supplier,
+                new CdcRowMapper(), stats, () -> "uuid:1-7", sink, null, 0L,
+                CdcTransactionBudget.unlimited(),
+                (db, statement, file, position) -> { captured.add(db); captured.add(statement); });
+        QueryEventData notSelected = new QueryEventData();
+        notSelected.setSql("ALTER TABLE `app`.`audit_log` ADD COLUMN `x` INT");
+        notSelected.setDatabase("app");
+        QueryEventData selected = new QueryEventData();
+        selected.setSql("ALTER TABLE `app`.`orders` ADD COLUMN `note` INT");
+        selected.setDatabase("app");
+
+        withSink.onEvent(event(EventType.QUERY, notSelected, 330L));
+        withSink.onEvent(event(EventType.QUERY, selected, 340L));
+
+        // config selects only `orders`: the other table's DDL cannot leave a gap in this
+        // project, so it is not work for its operator. A selected table still files.
+        assertThat(captured).containsExactly(
+                "app", "ALTER TABLE `app`.`orders` ADD COLUMN `note` INT");
+        assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(1L);
+    }
+
+    @Test
     void beginAndCommitQueriesAreNoOps() {
         tableMap(11L, "app", "orders");
         write(11L, row(1L, "a"));
@@ -606,8 +656,8 @@ class CdcEventStreamHandlerTest {
 
     @Test
     void ddlWhileABranchIsPreparedIsFatal() {
-        // DDL 会 invalidate 缓存并 clearBuffer —— 已准备分支的行就躺在这个 buffer 里,
-        // 清掉之后它提交时无事可 flush(源端已提交、目标端永久缺失)。
+        // 被跟踪表的 DDL 会 invalidate 缓存并 clearBuffer —— 已准备分支的行就躺在这个
+        // buffer 里,清掉之后它提交时无事可 flush(源端已提交、目标端永久缺失)。
         tableMap(11L, "app", "orders");
         query("XA START 'branchA'");
         write(11L, row(1L, "a"));
@@ -615,12 +665,49 @@ class CdcEventStreamHandlerTest {
         query("XA PREPARE 'branchA'");
 
         QueryEventData ddl = new QueryEventData();
-        ddl.setSql("ALTER TABLE other_table ADD COLUMN note VARCHAR(64)");
+        ddl.setSql("ALTER TABLE `app`.`orders` ADD COLUMN note VARCHAR(64)");
         ddl.setDatabase("app");
         assertThatThrownBy(() -> handler.onEvent(event(EventType.QUERY, ddl, 450L)))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining(CdcEventStreamHandler.XA_ORDERING_MARKER);
         assertThat(sink.changes).isEmpty();
+    }
+
+    @Test
+    void ddlOfAnotherSchemaWhileABranchIsPreparedIsIgnored() {
+        // 别的库的 DDL 既不改被跟踪表的结构,也不进 buffer:没有理由为它清掉已准备
+        // 分支的行,更没有理由让整个项目致命停车(停车后必须人工处置)。
+        tableMap(11L, "app", "orders");
+        query("XA START 'branchA'");
+        write(11L, row(1L, "a"));
+        query("XA END 'branchA'");
+        query("XA PREPARE 'branchA'");
+
+        QueryEventData ddl = new QueryEventData();
+        ddl.setSql("ALTER TABLE `reporting`.`daily` ADD COLUMN `x` INT");
+        ddl.setDatabase("reporting");
+        handler.onEvent(event(EventType.QUERY, ddl, 450L));
+
+        query("XA COMMIT 'branchA'");
+        assertThat(sink.changes).hasSize(1);
+    }
+
+    @Test
+    void ddlForAnUnsyncedTableWhileABranchIsPreparedIsIgnored() {
+        // 同库但不在同步清单里的表同理:它的 DDL 不会让目标少列,分支的行应照常提交。
+        tableMap(11L, "app", "orders");
+        query("XA START 'branchA'");
+        write(11L, row(1L, "a"));
+        query("XA END 'branchA'");
+        query("XA PREPARE 'branchA'");
+
+        QueryEventData ddl = new QueryEventData();
+        ddl.setSql("ALTER TABLE `app`.`audit_log` ADD COLUMN `note` INT");
+        ddl.setDatabase("app");
+        handler.onEvent(event(EventType.QUERY, ddl, 450L));
+
+        query("XA COMMIT 'branchA'");
+        assertThat(sink.changes).hasSize(1);
     }
 
     @Test

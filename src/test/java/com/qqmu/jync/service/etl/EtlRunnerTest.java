@@ -667,6 +667,27 @@ class EtlRunnerTest {
     }
 
     @Test
+    void aMissingDatabaseIsNotAnAbsentTable() throws SQLException {
+        // Hive says "Database does not exist" and ClickHouse "Database foo doesn't exist".
+        // Reading either as a missing table sends the run into CREATE TABLE over a schema
+        // that is not there, after a precheck already promised the table would be created.
+        for (SQLException missingDatabase : List.of(
+                new SQLException("Error while compiling statement: FAILED: SemanticException"
+                        + " [Error 10072]: Database does not exist: reporting", "42000", 10072),
+                new SQLException("Code: 81. DB::Exception: Database reporting doesn't exist."
+                        + " (UNKNOWN_DATABASE)", null, 81))) {
+            Connection connection = mock(Connection.class);
+            Statement statement = mock(Statement.class);
+            when(connection.createStatement()).thenReturn(statement);
+            when(statement.executeQuery(anyString())).thenThrow(missingDatabase);
+
+            assertThatThrownBy(() -> EtlSqlSupport.exists(connection, "dst"))
+                    .as(missingDatabase.getMessage())
+                    .isInstanceOf(SQLException.class);
+        }
+    }
+
+    @Test
     void aSourceThatCannotOpenIsBlamedOnTheSource() {
         // The stage still said PROGRAM when the source connection was opened, so an
         // unreachable source database was reported as a program error. The operator then

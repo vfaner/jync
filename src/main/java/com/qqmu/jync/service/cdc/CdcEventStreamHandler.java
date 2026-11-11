@@ -512,6 +512,28 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                     data.getDatabase(), normalized);
             return;
         }
+        // The binlog is server-wide: another schema's DDL arrives on this stream too. It
+        // cannot leave a gap in this project, and filing it would open a task nobody here
+        // can resolve — the column projection would stay on across restarts, and executing
+        // it would rewrite the foreign schema onto this project's target.
+        //
+        // This filter sits above the XA guard on purpose: the statement touches neither a
+        // tracked table nor the buffer, so there is nothing to invalidate and no reason to
+        // park the project fatal. The buffered rows keep their own transaction boundary.
+        String statementSchema = CdcDdlTaskService.qualifiedSchema(normalized);
+        String owningSchema = statementSchema == null ? data.getDatabase() : statementSchema;
+        if (owningSchema != null && !owningSchema.equalsIgnoreCase(sourceSchema)) {
+            log.debug("Ignoring DDL of schema {} in the CDC stream of {}: {}",
+                    owningSchema, sourceSchema, normalized);
+            return;
+        }
+        // Same for a table this project does not sync. Only a shape that names exactly one
+        // table is judged this way: a multi-table DROP or a RENAME may still touch one.
+        String singleTable = CdcDdlTaskService.exclusivelyNamedTable(normalized);
+        if (singleTable != null && !config.includesTable(singleTable)) {
+            log.debug("Ignoring DDL for unsynced table {}: {}", singleTable, normalized);
+            return;
+        }
         if (xaPrepared) {
             // clearBuffer() below would drop the prepared branch's rows: its XA COMMIT
             // would then flush nothing and the source's committed rows would never reach

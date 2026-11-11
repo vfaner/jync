@@ -64,8 +64,52 @@ final class CdcDdlStatements {
     private CdcDdlStatements() {
     }
 
+    /** One identifier, quoted or plain, as the parser of a statement head needs it. */
+    private static final String IDENT =
+            "(?:`[^`]+`|\"[^\"]+\"|\\[[^\\]]+\\]|[A-Za-z0-9_$]+)";
+
+    private static final java.util.regex.Pattern USE_PREFIX = java.util.regex.Pattern.compile(
+            "(?is)^USE\\s+" + IDENT + "\\s*;?\\s*");
+
+    /**
+     * Drops the leading comments and {@code USE} prefixes a statement may carry.
+     *
+     * <p>The binlog QUERY text keeps the comments the client sent, and a multi-statement
+     * batch can prefix {@code USE db;}. Both sit in front of the head keyword, so every
+     * rule anchored on {@code ^ALTER / ^RENAME / ^DROP} silently stopped matching: the
+     * schema was never rewritten, the table never mapped and the clauses never read.
+     */
+    static String stripLeadingNoise(String sql) {
+        String statement = sql == null ? "" : sql;
+        while (true) {
+            statement = statement.stripLeading();
+            if (statement.startsWith("/*")) {
+                int end = statement.indexOf("*/", 2);
+                if (end < 0) {
+                    return statement;
+                }
+                statement = statement.substring(end + 2);
+                continue;
+            }
+            if (statement.startsWith("--") || statement.startsWith("#")) {
+                int end = statement.indexOf('\n');
+                if (end < 0) {
+                    return statement;
+                }
+                statement = statement.substring(end + 1);
+                continue;
+            }
+            java.util.regex.Matcher use = USE_PREFIX.matcher(statement);
+            if (use.find()) {
+                statement = statement.substring(use.end());
+                continue;
+            }
+            return statement;
+        }
+    }
+
     static boolean changesTableStructure(String sql) {
-        String upper = sql == null ? "" : sql.trim().toUpperCase(Locale.ROOT);
+        String upper = stripLeadingNoise(sql).trim().toUpperCase(Locale.ROOT);
         while (upper.endsWith(";")) {
             upper = upper.substring(0, upper.length() - 1).trim();
         }

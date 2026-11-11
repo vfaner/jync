@@ -832,4 +832,150 @@ class CdcDdlTaskServiceTest {
         assertThat(clauses).hasSize(3);
         assertThat(clauses.get(1)).isEqualTo("ADD COLUMN b VARCHAR(8) COMMENT 'it\\'s, ok'");
     }
+
+    private static String mapOrders(String name) {
+        return "orders".equalsIgnoreCase(name) ? "orders_tgt" : name;
+    }
+
+    private static String mapOrdersAndItems(String name) {
+        if ("orders".equalsIgnoreCase(name)) {
+            return "orders_tgt";
+        }
+        return "items".equalsIgnoreCase(name) ? "items_tgt" : name;
+    }
+
+    private static ChangeLog skippedDdl(String statement) {
+        ChangeLog log = ChangeLog.of(3L, ObjectType.PROJECT, "source_db", ChangeType.ERROR,
+                SyncStateWriter.SKIPPED_DDL_PREFIX + statement);
+        log.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+        log.setDdlExecuted(false);
+        log.setTargetDdlSql(statement);
+        return log;
+    }
+
+    @Test
+    void anIndexIsRewrittenAndMappedThroughItsOnTable() {
+        // CREATE/DROP INDEX name their table after ON, not right after the head. Run
+        // verbatim they leak the source schema, and with a table mapping they create the
+        // index on a table the sync never writes — or on someone else's same-named table.
+        assertThat(CdcDdlTaskService.targetize(
+                "CREATE UNIQUE INDEX `idx_note` ON `src_db`.`orders` (`note`)",
+                "target_db", "`"))
+                .isEqualTo("CREATE UNIQUE INDEX `idx_note` ON `target_db`.`orders` (`note`)");
+        assertThat(CdcDdlTaskService.targetize(
+                "DROP INDEX `idx_note` ON `src_db`.`orders`", "target_db", "`"))
+                .isEqualTo("DROP INDEX `idx_note` ON `target_db`.`orders`");
+        assertThat(CdcDdlTaskService.retargetTables(
+                "CREATE INDEX `idx_note` ON `tgt_db`.`orders` (`note`)",
+                CdcDdlTaskServiceTest::mapOrders, "`"))
+                .isEqualTo("CREATE INDEX `idx_note` ON `tgt_db`.`orders_tgt` (`note`)");
+        assertThat(CdcDdlTaskService.retargetTables(
+                "DROP INDEX `idx_note` ON `tgt_db`.`orders`",
+                CdcDdlTaskServiceTest::mapOrders, "`"))
+                .isEqualTo("DROP INDEX `idx_note` ON `tgt_db`.`orders_tgt`");
+        assertThat(CdcDdlTaskService.alteredTable(
+                "CREATE INDEX `idx_note` ON `src_db`.`orders` (`note`)"))
+                .isEqualTo("orders");
+    }
+
+    @Test
+    void everyTableOfAMultiTableDropKeepsItsOwnMapping() {
+        // A source DROP may list several tables. Mapping only the first one drops the
+        // target's unmapped same-named table — possibly another project's — and leaves
+        // this project's mapped copy behind.
+        assertThat(CdcDdlTaskService.retargetTables(
+                "DROP TABLE IF EXISTS `tgt_db`.`orders`, `tgt_db`.`items`",
+                CdcDdlTaskServiceTest::mapOrdersAndItems, "`"))
+                .isEqualTo("DROP TABLE IF EXISTS `tgt_db`.`orders_tgt`, `tgt_db`.`items_tgt`");
+    }
+
+    @Test
+    void aRenameMapsTheNewNameAsWell() {
+        // After the rename the source table is named items, and the project maps that name
+        // too: the target must end up with the name the following row events will write to.
+        assertThat(CdcDdlTaskService.retargetTables(
+                "RENAME TABLE `tgt_db`.`orders` TO `tgt_db`.`items`",
+                CdcDdlTaskServiceTest::mapOrdersAndItems, "`"))
+                .isEqualTo("RENAME TABLE `tgt_db`.`orders_tgt` TO `tgt_db`.`items_tgt`");
+        // A name with no mapping is left exactly as the source wrote it.
+        assertThat(CdcDdlTaskService.retargetTables(
+                "RENAME TABLE `tgt_db`.`orders` TO `tgt_db`.`archive`",
+                CdcDdlTaskServiceTest::mapOrders, "`"))
+                .isEqualTo("RENAME TABLE `tgt_db`.`orders_tgt` TO `tgt_db`.`archive`");
+    }
+
+    @Test
+    void aFailedAttemptCanBeRetriedWithThePrefilledRewrittenStatement() throws Exception {
+        ChangeLog log = skippedDdl(
+                "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig target = target();
+        target.setType(DatabaseType.MYSQL);
+        target.setDatabaseName("tgt_db");
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target));
+        Connection connection = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        when(connection.createStatement()).thenReturn(statement);
+        // First attempt fails; the retry — the statement the dialog now prefills — works.
+        when(statement.execute(anyString()))
+                .thenThrow(new SQLException("boom", "42000", 1064)).thenReturn(false);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+        SyncConfig config = new SyncConfig();
+        config.setTableNameMapping(Map.of("orders", "orders_tgt"));
+        when(contextFactory.parseConfig(any())).thenReturn(config);
+
+        assertThatThrownBy(() -> service.executeDdl(9L,
+                "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)"))
+                .hasMessageStartingWith("error.ddl.execute:");
+        String prefilled = log.getTargetDdlSql();
+        assertThat(prefilled).contains("orders_tgt");
+
+        service.executeDdl(9L, prefilled);
+
+        // The prefilled statement is one this service produced itself. Rejecting it as a
+        // structural change strands every mapped project after a single failed attempt,
+        // because the admin cannot know the source table name has to be typed back.
+        assertThat(log.getDdlExecuted()).isTrue();
+        assertThat(log.getResolutionStatus()).isNotEqualTo(ChangeLog.RESOLUTION_FAILED);
+    }
+
+    @Test
+    void aViewIsRefusedRatherThanExecutedWithSourceSchemaNames() throws Exception {
+        ChangeLog log = skippedDdl(
+                "CREATE VIEW `src_db`.`v` AS SELECT * FROM `src_db`.`orders`");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+
+        assertThatThrownBy(() -> service.executeDdl(9L,
+                "CREATE VIEW `src_db`.`v` AS SELECT * FROM `src_db`.`orders`"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.ddl.unsupportedStatement");
+
+        // The head is neither a table nor an index, so no rule rewrites its schema or its
+        // SELECT body. Running it verbatim would create the view (and resolve its body)
+        // against whatever schema of that name the target server happens to have.
+        verify(dataSourceManager, never()).getConnection(any());
+    }
+
+    @Test
+    void aLeadingCommentOrUseDoesNotHideTheStatementHead() {
+        assertThat(CdcDdlTaskService.alteredTable(
+                "/* deleted by hand */ ALTER TABLE `src_db`.`orders` ADD COLUMN c INT"))
+                .isEqualTo("orders");
+        assertThat(CdcDdlTaskService.targetize(
+                "/* who */ ALTER TABLE `src_db`.`orders` ADD COLUMN c INT", "target_db", "`"))
+                .isEqualTo("ALTER TABLE `target_db`.`orders` ADD COLUMN c INT");
+        assertThat(CdcDdlTaskService.targetize(
+                "USE `src_db`; ALTER TABLE `src_db`.`orders` ADD COLUMN c INT",
+                "target_db", "`"))
+                .isEqualTo("ALTER TABLE `target_db`.`orders` ADD COLUMN c INT");
+        assertThat(CdcDdlTaskService.hasColumnGap(
+                "/* who */ ALTER TABLE t ADD COLUMN c INT")).isTrue();
+        assertThat(CdcDdlTaskService.addedColumns(
+                "/* who */ ALTER TABLE t ADD COLUMN c INT")).containsExactly("c");
+        assertThat(CdcDdlTaskService.retargetTables(
+                "-- note\nALTER TABLE `tgt_db`.`orders` ADD COLUMN c INT",
+                CdcDdlTaskServiceTest::mapOrders, "`"))
+                .isEqualTo("ALTER TABLE `tgt_db`.`orders_tgt` ADD COLUMN c INT");
+    }
 }

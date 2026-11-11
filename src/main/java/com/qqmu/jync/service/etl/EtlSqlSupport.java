@@ -139,6 +139,9 @@ public final class EtlSqlSupport {
                         return true;
                     }
                 }
+                if (TABLE_DOES_NOT_EXIST.matcher(lower).find()) {
+                    return true;
+                }
             }
         }
         return false;
@@ -152,9 +155,21 @@ public final class EtlSqlSupport {
      * means the object is absent.
      */
     private static final String[] MISSING_TABLE_MARKERS = {
-            "does not exist", "doesn't exist", "table not found", "no such table",
-            "unknown table", "invalid object name", "invalid table name",
-            "invalid table or view name", "无效的表或视图名", "表或视图不存在"};
+            "table not found", "no such table", "unknown table",
+            "invalid object name", "invalid table name", "invalid table or view name",
+            "无效的表或视图名", "表或视图不存在"};
+
+    /**
+     * The analytic engines' "&lt;table&gt; does not exist" wording.
+     *
+     * <p>The noun must sit right next to the phrase: Hive says "Database does not exist"
+     * and ClickHouse "Database foo doesn't exist", and reading either as a missing table
+     * sends the run into CREATE TABLE over a schema that is not there.
+     */
+    private static final Pattern TABLE_DOES_NOT_EXIST = Pattern.compile(
+            "(?:table|relation|view|object|entity|collection|表|视图)"
+                    + "[^\\n]{0,80}?(?:does not exist|doesn't exist|不存在)",
+            Pattern.CASE_INSENSITIVE);
 
     private static void rollbackQuietly(Connection connection) {
         try {

@@ -302,6 +302,22 @@ public class CdcDdlTaskService {
                     + "|TRUNCATE\\s+(?:TABLE\\s+)?"
                     + "|RENAME\\s+TABLE\\s+";
 
+    /**
+     * An index statement names its table after {@code ON}, not right after the head.
+     * Leaving it alone runs the statement against the source schema — or, once an admin
+     * drops the qualifier by hand, against the unmapped source table name on the target.
+     */
+    private static final String INDEX_HEAD =
+            "(?:CREATE\\s+(?:UNIQUE\\s+|FULLTEXT\\s+|SPATIAL\\s+)?INDEX\\s+" + IDENT
+                    + "\\s+ON\\s+"
+                    + "|DROP\\s+INDEX\\s+" + IDENT + "\\s+ON\\s+)";
+
+    /** A CREATE/ALTER/TRUNCATE or an index statement always names exactly one table. */
+    private static final String SINGLE_TABLE_HEAD =
+            "(?:ALTER|CREATE)\\s+TABLE\\s+(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?"
+                    + "|TRUNCATE\\s+(?:TABLE\\s+)?"
+                    + "|" + INDEX_HEAD;
+
     /** One identifier, optionally schema-qualified: t, `db`.`t`, db.t, [db].[t]. */
     private static final java.util.regex.Pattern TABLE_IDENTIFIER = java.util.regex.Pattern.compile(
             "^(?:" + IDENT + ")(?:\\s*\\.\\s*(?:" + IDENT + "))?");
@@ -315,9 +331,9 @@ public class CdcDdlTaskService {
      * know; a multi-table {@code DROP} names its first table.
      */
     static String alteredTable(String sql) {
-        String statement = sql == null ? "" : sql.trim();
+        String statement = CdcDdlStatements.stripLeadingNoise(sql).trim();
         java.util.regex.Matcher matcher = java.util.regex.Pattern
-                .compile("(?is)^(?:" + TABLE_HEAD + ")(.+)$")
+                .compile("(?is)^(?:(?:" + TABLE_HEAD + ")|(?:" + INDEX_HEAD + "))(.+)$")
                 .matcher(statement);
         if (!matcher.matches()) {
             return null;
@@ -335,6 +351,60 @@ public class CdcDdlTaskService {
         return name.isBlank() ? null : name;
     }
 
+    /**
+     * Whether the execute path knows how to rewrite the statement's head.
+     *
+     * <p>Only table statements and index statements do: both carry their table token where
+     * the schema and mapping rules look for it. Everything else is refused rather than run
+     * verbatim against the target.
+     */
+    static boolean isSupportedStatement(String sql) {
+        String statement = CdcDdlStatements.stripLeadingNoise(sql);
+        return java.util.regex.Pattern
+                .compile("(?is)^(?:(?:" + TABLE_HEAD + ")|(?:" + INDEX_HEAD + "))")
+                .matcher(statement).find();
+    }
+
+    /** The schema qualifier in front of the table a statement head names, or null. */
+    static String qualifiedSchema(String sql) {
+        String statement = CdcDdlStatements.stripLeadingNoise(sql);
+        java.util.regex.Matcher head = java.util.regex.Pattern
+                .compile("(?is)^(?:(?:" + TABLE_HEAD + ")|(?:" + INDEX_HEAD + "))(.+)$")
+                .matcher(statement);
+        if (!head.matches()) {
+            return null;
+        }
+        java.util.regex.Matcher qualified = java.util.regex.Pattern
+                .compile("(?is)^\\s*(" + IDENT + ")\\s*\\.\\s*" + IDENT)
+                .matcher(head.group(1));
+        return qualified.find() ? unquoteIdentifier(qualified.group(1)) : null;
+    }
+
+    /**
+     * The one table a statement names, or null when its shape may name several.
+     *
+     * <p>Used to tell whether the statement can only touch a table the project syncs. A
+     * {@code DROP TABLE} list or a {@code RENAME} returns null: deciding from one name
+     * could drop a change to another selected table.
+     */
+    static String exclusivelyNamedTable(String sql) {
+        String statement = CdcDdlStatements.stripLeadingNoise(sql);
+        java.util.regex.Matcher head = java.util.regex.Pattern
+                .compile("(?is)^(?:" + SINGLE_TABLE_HEAD + ")(.+)$")
+                .matcher(statement);
+        if (!head.matches()) {
+            return null;
+        }
+        java.util.regex.Matcher identifier = TABLE_IDENTIFIER.matcher(head.group(1).trim());
+        if (!identifier.find()) {
+            return null;
+        }
+        String name = identifier.group();
+        int dot = name.lastIndexOf('.');
+        name = unquoteIdentifier(dot >= 0 ? name.substring(dot + 1) : name);
+        return name.isBlank() ? null : name;
+    }
+
     /** The ALTER TABLE clauses, split on the commas that separate them. */
     static List<String> alterClauses(String sql) {
         return alterClauses(sql, true);
@@ -347,7 +417,7 @@ public class CdcDdlTaskService {
      *                         followed by the next clause separator.
      */
     static List<String> alterClauses(String sql, boolean backslashEscapes) {
-        String statement = sql == null ? "" : sql.trim();
+        String statement = CdcDdlStatements.stripLeadingNoise(sql).trim();
         java.util.regex.Matcher matcher = java.util.regex.Pattern
                 .compile("(?is)^ALTER\\s+TABLE\\s+(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?(.+)$")
                 .matcher(statement);
@@ -489,6 +559,12 @@ public class CdcDdlTaskService {
         if (statement.isEmpty() || statement.length() > 20_000) {
             throw new IllegalStateException("error.ddl.invalid");
         }
+        if (!isSupportedStatement(statement)) {
+            // Views, triggers and the rest have no rule that rewrites their schema or the
+            // tables they reference. Running one verbatim resolves those names on the
+            // target server, where a schema of the same name may hold an unrelated table.
+            throw new IllegalStateException("error.ddl.unsupportedStatement");
+        }
         assertStructureUnchanged(entry, statement);
         Project project = projectRepository.findById(entry.getProjectId())
                 .orElseThrow(() -> new IllegalStateException("error.ddl.noTarget"));
@@ -505,8 +581,8 @@ public class CdcDdlTaskService {
         boolean gap = hasColumnGap(statement, backslashEscapes);
         List<String> dropped = droppedColumns(statement, backslashEscapes);
         // The binlog names the source table; the project may map it to a different target
-        // name. Without the mapping the DDL lands on a table the sync never writes.
-        String sourceTable = alteredTable(stripPrefix(entry.getDetails()));
+        // name. Without the mapping the DDL lands on a table the sync never writes. Every
+        // table reference is mapped: a DROP/RENAME may name more than one.
         SyncConfig targetConfig = contextFactory == null ? null
                 : contextFactory.parseConfig(project);
         try (Connection connection = dataSourceManager.getConnection(target)) {
@@ -515,9 +591,10 @@ public class CdcDdlTaskService {
             // or service name and qualifying with it would fail on a healthy target.
             statement = targetize(statement, executionSchema(target, connection),
                     identifierQuote);
-            statement = retargetTable(statement, sourceTable,
-                    targetConfig == null ? null : targetConfig.targetTableName(sourceTable),
-                    identifierQuote);
+            if (targetConfig != null) {
+                statement = retargetTables(statement, targetConfig::targetTableName,
+                        identifierQuote);
+            }
             // Idempotent: "Duplicate column name" (MySQL 1060) means the target is already
             // aligned, which is the desired end state after a retry or a second admin click.
             new DdlExecutor(connection).executeIdempotentCreate(statement);
@@ -903,12 +980,18 @@ public class CdcDdlTaskService {
         if (sql == null) {
             return "";
         }
+        // Comments and a USE prefix sit in front of the head keyword; the rewrite is
+        // anchored on it, so they are dropped first.
+        String statement = CdcDdlStatements.stripLeadingNoise(sql);
         String name = targetSchema == null ? "" : targetSchema.trim();
         String qualifier = name.isEmpty()
                 ? "" : java.util.regex.Matcher.quoteReplacement(
                         com.qqmu.jync.util.JdbcUtil.quotedIdentifier(identifierQuote, name) + ".");
-        String rewritten = sql.replaceFirst(
-                "(?is)^(\\s*(?:" + TABLE_HEAD + "))" + IDENT + "\\s*\\.\\s*",
+        // Index statements name their table after ON; the head pattern carries that token
+        // so the qualifier in front of the table is what gets replaced.
+        String rewritten = statement.replaceFirst(
+                "(?is)^(\\s*(?:(?:" + TABLE_HEAD + ")|(?:" + INDEX_HEAD + ")))"
+                        + IDENT + "\\s*\\.\\s*",
                 qualifier.isEmpty() ? "$1" : "$1" + qualifier);
         if (listsSeveralTables(rewritten)) {
             // RENAME names its second side after TO; DROP may list several tables. Every
@@ -927,12 +1010,168 @@ public class CdcDdlTaskService {
     }
 
     /**
+     * Rewrites every table name a statement names through the project's mapping.
+     *
+     * <p>Only table references are touched; columns and clauses stay exactly as submitted.
+     * A {@code DROP TABLE} may list several tables and a {@code RENAME TABLE} names both
+     * sides: mapping only the first reference drops (or leaves behind) the wrong target
+     * table — possibly another project's same-named one. A blank mapping, an unknown source
+     * table, or a mapping to the same name leaves that reference unchanged.
+     */
+    static String retargetTables(String sql,
+                                 java.util.function.UnaryOperator<String> mapping,
+                                 String identifierQuote) {
+        if (sql == null || mapping == null) {
+            return sql;
+        }
+        String statement = CdcDdlStatements.stripLeadingNoise(sql);
+        java.util.regex.Matcher drop = java.util.regex.Pattern
+                .compile("(?is)^(\\s*DROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?)(.+)$")
+                .matcher(statement);
+        if (drop.matches()) {
+            return drop.group(1) + mapTableList(drop.group(2), mapping, identifierQuote);
+        }
+        java.util.regex.Matcher rename = java.util.regex.Pattern
+                .compile("(?is)^(\\s*RENAME\\s+TABLE\\s+)(.+)$")
+                .matcher(statement);
+        if (rename.matches()) {
+            return rename.group(1) + mapRenamePairs(rename.group(2), mapping, identifierQuote);
+        }
+        java.util.regex.Matcher single = java.util.regex.Pattern
+                .compile("(?is)^(\\s*" + SINGLE_TABLE_HEAD + ")(.+)$")
+                .matcher(statement);
+        if (!single.matches()) {
+            return sql;
+        }
+        return single.group(1) + mapLeadingTable(single.group(2), mapping, identifierQuote);
+    }
+
+    /** Maps the table reference at the start of {@code text}, keeping the rest untouched. */
+    private static String mapLeadingTable(String text,
+                                          java.util.function.UnaryOperator<String> mapping,
+                                          String identifierQuote) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(?is)^(\\s*)((?:" + IDENT + "\\s*\\.\\s*)?)(" + IDENT + ")(.*)$")
+                .matcher(text);
+        if (!matcher.matches()) {
+            return text;
+        }
+        return matcher.group(1) + matcher.group(2)
+                + mappedIdentifier(matcher.group(3), mapping, identifierQuote)
+                + matcher.group(4);
+    }
+
+    /** Maps every table reference of a {@code DROP TABLE} list, one by one. */
+    private static String mapTableList(String list,
+                                       java.util.function.UnaryOperator<String> mapping,
+                                       String identifierQuote) {
+        List<String> items = splitTopLevel(list);
+        for (int i = 0; i < items.size(); i++) {
+            items.set(i, mapLeadingTable(items.get(i), mapping, identifierQuote));
+        }
+        return String.join(",", items);
+    }
+
+    /** Maps both sides of every {@code old TO new} pair of a RENAME TABLE statement. */
+    private static String mapRenamePairs(String list,
+                                         java.util.function.UnaryOperator<String> mapping,
+                                         String identifierQuote) {
+        List<String> pairs = splitTopLevel(list);
+        for (int i = 0; i < pairs.size(); i++) {
+            java.util.regex.Matcher pair = java.util.regex.Pattern
+                    .compile("(?is)^(\\s*)((?:" + IDENT + "\\s*\\.\\s*)?)(" + IDENT + ")"
+                            + "(\\s+TO\\s+)((?:" + IDENT + "\\s*\\.\\s*)?)(" + IDENT + ")"
+                            + "(\\s*)$")
+                    .matcher(pairs.get(i));
+            if (!pair.matches()) {
+                continue;
+            }
+            pairs.set(i, pair.group(1)
+                    + mapQualifiedRef(pair.group(2) + pair.group(3), mapping, identifierQuote)
+                    + pair.group(4)
+                    + mapQualifiedRef(pair.group(5) + pair.group(6), mapping, identifierQuote)
+                    + pair.group(7));
+        }
+        return String.join(",", pairs);
+    }
+
+    /** Maps the name part of one (optionally schema-qualified) table reference. */
+    private static String mapQualifiedRef(String ref,
+                                          java.util.function.UnaryOperator<String> mapping,
+                                          String identifierQuote) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(?is)^(\\s*)((?:" + IDENT + "\\s*\\.\\s*)?)(" + IDENT + ")(\\s*)$")
+                .matcher(ref);
+        if (!matcher.matches()) {
+            return ref;
+        }
+        return matcher.group(1) + matcher.group(2)
+                + mappedIdentifier(matcher.group(3), mapping, identifierQuote)
+                + matcher.group(4);
+    }
+
+    private static String mappedIdentifier(String raw,
+                                           java.util.function.UnaryOperator<String> mapping,
+                                           String identifierQuote) {
+        String name = unquoteIdentifier(raw);
+        String mapped = mapping.apply(name);
+        if (mapped == null || mapped.isBlank() || mapped.equalsIgnoreCase(name)) {
+            return raw;
+        }
+        return com.qqmu.jync.util.JdbcUtil.quotedIdentifier(identifierQuote, mapped.trim());
+    }
+
+    /**
+     * Splits a comma-separated list outside quotes and parentheses.
+     *
+     * <p>A quoted identifier may contain a comma, and a column list in parentheses must not
+     * be split at all — a naive {@code split(",")} would cut a table name in two.
+     */
+    private static List<String> splitTopLevel(String text) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        char quote = 0;
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (quote != 0) {
+                current.append(c);
+                if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+            if (c == '`' || c == '"') {
+                quote = c;
+                current.append(c);
+                continue;
+            }
+            if (c == '[') {
+                quote = ']';
+                current.append(c);
+                continue;
+            }
+            if (c == '(') {
+                depth++;
+            } else if (c == ')' && depth > 0) {
+                depth--;
+            }
+            if (c == ',' && depth == 0) {
+                parts.add(current.toString());
+                current.setLength(0);
+                continue;
+            }
+            current.append(c);
+        }
+        parts.add(current.toString());
+        return parts;
+    }
+
+    /**
      * Rewrites the table a DDL statement changes to the project's mapped target name.
      *
-     * <p>Only the statement head is touched: the table token after the head keyword and its
-     * optional schema qualifier. Columns and clauses stay exactly as submitted. A blank
-     * mapping, an unknown source table, or a mapping to the same name leaves the statement
-     * unchanged.
+     * <p>Kept for the single-table callers; {@link #retargetTables} is what the execute path
+     * uses, because a statement may name more than one table.
      */
     static String retargetTable(String sql, String sourceTable, String targetTable,
                                 String identifierQuote) {
@@ -1021,9 +1260,19 @@ public class CdcDdlTaskService {
     private static void assertStructureUnchanged(ChangeLog entry, String edited) {
         String original = entry.getDetails()
                 .substring(SyncStateWriter.SKIPPED_DDL_PREFIX.length());
-        if (!normalizeDdl(original).equals(normalizeDdl(edited))) {
-            throw new IllegalStateException("error.ddl.statementChanged");
+        String expected = normalizeDdl(edited);
+        if (normalizeDdl(original).equals(expected)) {
+            return;
         }
+        // A failed attempt stores the statement the service itself produced — schema
+        // rewritten, table mapped — and the dialog prefills exactly that text on retry.
+        // It is the same statement, already accepted once; rejecting it would strand every
+        // mapped project until the admin types the source table name back by hand.
+        String lastAttempt = entry.getTargetDdlSql();
+        if (lastAttempt != null && normalizeDdl(lastAttempt).equals(expected)) {
+            return;
+        }
+        throw new IllegalStateException("error.ddl.statementChanged");
     }
 
     static String normalizeDdl(String sql) {
