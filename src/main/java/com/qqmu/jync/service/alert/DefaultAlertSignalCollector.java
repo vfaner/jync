@@ -33,6 +33,7 @@ import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcRuntimeStats;
+import com.qqmu.jync.service.cdc.CdcTargetRepairService;
 import com.qqmu.jync.service.connection.DatabaseHealthService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -124,6 +125,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         collectSyncFailures(now, events);
         collectProjectConditions(now, events);
         collectDrift(now, events);
+        collectTargetRepairs(now, events);
         collectConnectionHealth(now, events);
         return events;
     }
@@ -390,6 +392,45 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
     private static Long surplusOf(ChangeLog row) {
         Matcher m = ROW_COUNT_SURPLUS.matcher(row.getDetails());
         return m.find() ? Long.valueOf(m.group(1)) : null;
+    }
+
+    // ── CDC 目标表定向修复 ─────────────────────────────────────────────────────
+
+    /**
+     * A repair the stream performed on its own is an event: the target lost a table and got it
+     * back. It is read from the change log the repair wrote, so it survives restarts and is
+     * visible on nodes that did not run the consumer. One repair is announced once — several
+     * entries for the same table inside the window collapse to the newest.
+     */
+    private void collectTargetRepairs(Instant now, List<AlertEvent> events) {
+        List<ChangeLog> rows;
+        try {
+            rows = changeLogRepository
+                    .findByChangeTypeAndOccurredAtAfter(ChangeType.INFO,
+                            now.minus(DRIFT_WINDOW));
+        } catch (RuntimeException e) {
+            log.debug("Cannot read targeted repairs for alerting: {}", e.toString());
+            return;
+        }
+        Map<String, ChangeLog> newest = new LinkedHashMap<>();
+        for (ChangeLog row : rows) {
+            if (row.getDetails() == null
+                    || !row.getDetails().startsWith(CdcTargetRepairService.REPAIR_LOG_MARKER)) {
+                continue;
+            }
+            String key = row.getProjectId() + "|" + row.getObjectName();
+            ChangeLog previous = newest.get(key);
+            if (previous == null || row.getOccurredAt().isAfter(previous.getOccurredAt())) {
+                newest.put(key, row);
+            }
+        }
+        Map<Long, String> names = projectNames(projectIdsOf(newest.values()));
+        for (ChangeLog row : newest.values()) {
+            events.add(new AlertEvent(AlertCategory.CDC_TARGET_REPAIRED, row.getProjectId(),
+                    names.get(row.getProjectId()), row.getObjectName(),
+                    "alert.detail.cdcTargetRepaired",
+                    new Object[]{row.getObjectName()}, row.getOccurredAt()));
+        }
     }
 
     private static Set<Long> projectIdsOf(Iterable<ChangeLog> rows) {

@@ -377,6 +377,66 @@ class DefaultAlertSignalCollectorTest {
         assertThat(event.detailKey()).isNotEqualTo("alert.detail.dataSurplus");
     }
 
+    // ── CDC 目标表定向修复 ─────────────────────────────────────────────────────
+
+    private static ChangeLog repair(long projectId, String table, Instant at) {
+        ChangeLog row = failure(projectId, ObjectType.TABLE, table, ChangeType.INFO, at);
+        row.setDetails(com.qqmu.jync.service.cdc.CdcTargetRepairService.REPAIR_LOG_MARKER
+                + "recreated target table " + table + " and reloaded it from the source"
+                + " (12 row(s) written); the CDC position was left untouched, so replay"
+                + " continues from the same point");
+        return row;
+    }
+
+    /**
+     * A repair the stream performed on its own is exactly the kind of thing an operator must
+     * hear about: the target lost a table, and it silently came back. It is an event, not a
+     * condition — there is nothing to report as recovered.
+     */
+    @Test
+    void aSuccessfulTargetedRepairBecomesItsOwnEvent() {
+        when(projectRepository.findAllById(any())).thenReturn(List.of(project(1L, "orders")));
+        ChangeLog repaired = repair(1L, "ORDERS", T0.minusSeconds(60));
+        when(changeLogRepository.findByChangeTypeAndOccurredAtAfter(any(), any()))
+                .thenReturn(List.of(repaired));
+
+        AlertEvent event = only(collect(),
+                com.qqmu.jync.model.AlertCategory.CDC_TARGET_REPAIRED);
+
+        assertThat(event.projectId()).isEqualTo(1L);
+        assertThat(event.subject()).isEqualTo("orders");
+        assertThat(event.object()).isEqualTo("ORDERS");
+        assertThat(event.detailKey()).isEqualTo("alert.detail.cdcTargetRepaired");
+        assertThat(event.detailArgs()[0]).isEqualTo("ORDERS");
+        assertThat(event.occurredAt()).isEqualTo(repaired.getOccurredAt());
+    }
+
+    @Test
+    void aRepairEntryIsNotMistakenForDataDrift() {
+        ChangeLog repaired = repair(1L, "ORDERS", T0.minusSeconds(60));
+        when(changeLogRepository.findByChangeTypeAndOccurredAtAfter(any(), any()))
+                .thenReturn(List.of(repaired));
+
+        assertThat(collect()).noneMatch(
+                e -> e.category() == com.qqmu.jync.model.AlertCategory.DATA_DRIFT);
+    }
+
+    /** One repair is reported once, even when several surfaces wrote the same incident. */
+    @Test
+    void severalEntriesForOneRepairCollapseToTheNewest() {
+        ChangeLog older = repair(1L, "ORDERS", T0.minusSeconds(120));
+        older.setDetails(com.qqmu.jync.service.cdc.CdcTargetRepairService.REPAIR_LOG_MARKER
+                + "first attempt");
+        ChangeLog newest = repair(1L, "ORDERS", T0.minusSeconds(30));
+        when(changeLogRepository.findByChangeTypeAndOccurredAtAfter(any(), any()))
+                .thenReturn(List.of(older, newest));
+
+        AlertEvent event = only(collect(),
+                com.qqmu.jync.model.AlertCategory.CDC_TARGET_REPAIRED);
+
+        assertThat(event.occurredAt()).isEqualTo(newest.getOccurredAt());
+    }
+
     @Test
     void threeFailedHealthChecksAreNeededBeforeAConnectionIsReported() {
         DatabaseConfig config = new DatabaseConfig();

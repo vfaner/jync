@@ -172,6 +172,21 @@ public class SyncEngine {
 
             DatabaseMeta sourceMeta = readSourceMetadata(sourceConn, ctx);
 
+            // 定向修复:只处理点名的表。空集合表示"没有需要修复的表",不能落进
+            // "null = 全部"的语义里,所以直接返回。读到的元数据也可能超出名单
+            // (读库实现按清单过滤,但手工构造的上下文不保证),这里再按名单收一次。
+            boolean repairRun = ctx.getRepairTables() != null;
+            if (repairRun) {
+                if (ctx.getRepairTables().isEmpty()) {
+                    log.info("Project '{}': targeted repair requested with no tables to repair",
+                            ctx.projectName());
+                    return result;
+                }
+                sourceMeta.setTables(sourceMeta.getTables().stream()
+                        .filter(t -> containsIgnoreCase(ctx.getRepairTables(), t.getName()))
+                        .collect(java.util.stream.Collectors.toList()));
+            }
+
             // Validate the name mapping against the tables that actually exist: the save-time
             // check cannot see an unmapped source table whose name another table maps onto
             // (e.g. A -> B while B exists). Such a pair writes one shared target, so the cycle
@@ -225,14 +240,18 @@ public class SyncEngine {
             // "sync nothing" project would still issue DDL against its target each cycle.
             boolean noTableSelected = ctx.getConfig().isObjectSelectionExplicit()
                     && ctx.getConfig().getTables().isEmpty();
-            if (!noTableSelected && ctx.getConfig().isSyncStructure()
+            // 定向修复不跑结构差分:那一轮会消费掉源端的 DDL 并写进快照,而本次周期
+            // 只针对被删的目标表重建,其他表的 DDL 该留给下一轮正常周期处理。重试失败
+            // 索引同样不在这一轮的范围里(修复只读点名的表,列表之外的表不该被碰)。
+            if (!repairRun && !noTableSelected && ctx.getConfig().isSyncStructure()
                     && ctx.getConfig().isSyncIndexes()) {
                 retryFailedIndexes(targetConn, ctx, result);
             }
 
             Set<String> blockedTables = Set.of();
-            if (ctx.getConfig().isSyncStructure() || ctx.getConfig().isSyncViews()
-                    || ctx.getConfig().isSyncProcedures()) {
+            if (!repairRun && (ctx.getConfig().isSyncStructure()
+                    || ctx.getConfig().isSyncViews()
+                    || ctx.getConfig().isSyncProcedures())) {
                 blockedTables = applyStructuralChanges(sourceMeta, sourceConn, targetConn, ctx,
                         result);
             }
@@ -298,6 +317,18 @@ public class SyncEngine {
      * toggle at all (Oracle and its look-alikes, PostgreSQL), which leaves them on regardless
      * of the switch.
      */
+    private static boolean containsIgnoreCase(Set<String> names, String candidate) {
+        if (candidate == null) {
+            return false;
+        }
+        for (String name : names) {
+            if (candidate.equalsIgnoreCase(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean dataPhaseNeedsForeignKeys(SyncContext ctx) {
         if (!ctx.getConfig().isSyncData()) {
             return false;
@@ -308,12 +339,22 @@ public class SyncEngine {
 
     DatabaseMeta readSourceMetadata(Connection sourceConn, SyncContext ctx)
             throws SQLException {
-        List<String> tables = selection(ctx.getConfig().getTables(),
-                ctx.getConfig().isObjectSelectionExplicit());
-        List<String> views = selection(ctx.getConfig().getViews(),
-                ctx.getConfig().isObjectSelectionExplicit());
-        List<String> procs = selection(ctx.getConfig().getProcedures(),
-                ctx.getConfig().isObjectSelectionExplicit());
+        List<String> tables;
+        List<String> views;
+        List<String> procs;
+        if (ctx.getRepairTables() != null) {
+            // 修复名单取代项目的表选择;视图与存储过程属于结构差分,本轮不处理。
+            tables = List.copyOf(ctx.getRepairTables());
+            views = List.of();
+            procs = List.of();
+        } else {
+            tables = selection(ctx.getConfig().getTables(),
+                    ctx.getConfig().isObjectSelectionExplicit());
+            views = selection(ctx.getConfig().getViews(),
+                    ctx.getConfig().isObjectSelectionExplicit());
+            procs = selection(ctx.getConfig().getProcedures(),
+                    ctx.getConfig().isObjectSelectionExplicit());
+        }
 
         // Structure sync off means change detection never runs, so the index and comment
         // dictionaries have no consumer this cycle: skip them rather than fetch and discard
@@ -914,7 +955,9 @@ public class SyncEngine {
         // CDC 项目的数据只允许从基线全量 + binlog 回放两条路进目标库:常规轮询周期若也
         // 跑数据阶段,会和流式回放双写同一张表,DELETE 语义直接冲突(B6/B8)。
         CaptureStrategy strategy = ctx.getConfig().getCaptureStrategyOrDefault();
-        if (strategy.isLogCdc() && !ctx.isCdcBaselineRun()) {
+        // 定向修复是第三条允许写数据的路径:它重建并重灌的正是被删掉的那张表,不写就
+        // 没有任何东西能把丢失的行补回来。名单之外的走查仍被 readSourceMetadata 挡在外面。
+        if (strategy.isLogCdc() && !ctx.isCdcBaselineRun() && !ctx.isCdcRepairRun()) {
             log.info("Project {} uses {} capture; skipping polling data phase",
                     ctx.getProject() == null ? "?" : ctx.getProject().getId(), strategy);
             return;
@@ -1140,14 +1183,18 @@ public class SyncEngine {
             return;
         }
         table = ensured.table();
-        if (ensured.created()) {
+        // 修复周期里,目标表可能仍存在(重建后被空表顶替,或者删除与修复之间被手工
+        // 重建):它上面的游标一律不可信,必须从零重灌,和 polling 重建表后的行为一致。
+        if (ensured.created() || ctx.isCdcRepairRun()) {
             // The target table Jync just built holds nothing, so the stored progress describes
             // a target that no longer exists: rows below the cursor are missing and an
             // incremental window never looks back. Start this table over as a first load —
             // which also files its rows as inserts instead of falling into the phase heuristic
             // reserved for revisions.
-            log.info("Target table {} was created this cycle; resetting its progress so it is"
-                    + " loaded from scratch", ctx.getConfig().targetTableName(table.getName()));
+            log.info("Resetting the progress of {} so it is loaded from scratch ({})",
+                    ctx.getConfig().targetTableName(table.getName()),
+                    ensured.created() ? "the target table was created this cycle"
+                            : "targeted repair");
             progress = stateWriter.forceReload(progress);
         }
 
@@ -1225,7 +1272,9 @@ public class SyncEngine {
         }
 
         int deleted = 0;
-        if (ctx.getConfig().isSyncDeletes()) {
+        // 修复周期不做删除检测:上一轮周期记下的删除窗口属于那张已经不存在的目标表,
+        // 拿它来比对只会在刚灌回来的数据上凭空删行。全量重灌已经覆盖了源端当前的行集。
+        if (!ctx.isCdcRepairRun() && ctx.getConfig().isSyncDeletes()) {
             warnIfDeletionsAreSkipped(ctx, table);
             try {
                 deleted = dataSync.syncDeletions(sourceConn, targetConn, table, ctx);
@@ -1312,7 +1361,11 @@ public class SyncEngine {
         // cursor claims to have delivered can now be read back on both sides. The audit is a
         // diagnostic: it never changes this table's result, and runContentAudit swallows its
         // failures for the same reason.
-        runContentAudit(sourceConn, targetConn, table, strategy, progress, ctx, auditBudget);
+        // 修复周期跳过行数核对:它要对照游标声称已投递的窗口,而这张表的游标刚被清空、
+        // 目标刚被重灌,核对没有可对照的对象。全量重灌本身就是最彻底的一次核对。
+        if (!ctx.isCdcRepairRun()) {
+            runContentAudit(sourceConn, targetConn, table, strategy, progress, ctx, auditBudget);
+        }
 
         // Keep the table snapshot current even when only data moved, so a later structural
         // diff is not confused by a stale shape. Two guards:
@@ -1322,7 +1375,10 @@ public class SyncEngine {
         // - the table must not carry a failed or skipped structural event from this cycle.
         //   Its withheld snapshot is the retry record; writing the fresh shape here would
         //   undo exactly the protection applyStructuralChanges set up.
-        if (ctx.getConfig().isSyncStructure() && !blockedTables.contains(table.getName())) {
+        // 修复周期不刷新快照:本轮根本没有做结构差分,把源表当前结构写进快照等于宣称
+        // "两边结构已收敛",而下一轮正常周期本该去应用的那些 DDL 就不会有人再提了。
+        if (!ctx.isCdcRepairRun() && ctx.getConfig().isSyncStructure()
+                && !blockedTables.contains(table.getName())) {
             if (structureSync.hasPendingIndexes(ctx.projectId(), table.getName())) {
                 // Same rule as the structure phase: while an index is queued, the snapshot must
                 // not claim convergence. Deleting it also covers a table whose snapshot this

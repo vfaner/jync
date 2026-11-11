@@ -78,6 +78,8 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     private final LogMinerSessionFactory sessionFactory;
 
     private final CdcTargetTransactionFactory targetTransactions;
+    /** 目标表被删时的定向修复;null 表示本实例没有接线(测试/手工构造),遇到即停机。 */
+    private final CdcTargetRepairService targetRepair;
     private final SqlRedoParser parser = new SqlRedoParser();
     private final BindingSupplier supplier = new BindingSupplier();
 
@@ -143,6 +145,18 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                                CdcRuntimeStats stats, SyncProperties properties,
                                LogMinerSessionFactory sessionFactory,
                                CdcTargetTransactionFactory targetTransactions) {
+        this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
+                dataSourceManager, stats, properties, sessionFactory, targetTransactions, null);
+    }
+
+    public LogMinerCdcConsumer(Project project, SyncLockService.LockHandle lock,
+                               SyncContext ctx, CdcPositionStore positionStore,
+                               CdcBaselineService baselineService, SyncTaskStore taskStore,
+                               SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
+                               CdcRuntimeStats stats, SyncProperties properties,
+                               LogMinerSessionFactory sessionFactory,
+                               CdcTargetTransactionFactory targetTransactions,
+                               CdcTargetRepairService targetRepair) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -155,6 +169,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         this.properties = properties;
         this.sessionFactory = sessionFactory;
         this.targetTransactions = targetTransactions;
+        this.targetRepair = targetRepair;
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
                 taskStore, properties.getCdc().getChangeWindowMs());
     }
@@ -163,6 +178,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     public void run() {
         long projectId = project.getId();
         taskStore.markCdcRunning(projectId);
+        // A fresh consumer run starts a fresh repair budget: the cause a previous run could
+        // not clear deserves another look now that a human restarted the project.
+        if (targetRepair != null) {
+            targetRepair.resetAttempts(projectId);
+        }
         // Pair the stop line with a start line so restarts do not read as a crash loop.
         try {
             stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
@@ -288,6 +308,24 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 CdcFailureClassifier.Kind kind = failure == null
                         ? CdcFailureClassifier.Kind.TRANSIENT
                         : CdcFailureClassifier.classify(failure);
+                // 目标表被删:重建并重灌这一张(或这几张)表,位点不动。修复成功就立刻
+                // 重放同一笔事务;修复没成功才停机,并把修复给出的原因带进 ERROR。
+                CdcTargetRepairService.Outcome repair = CdcTargetRepairGate.attempt(
+                        targetRepair, ctx, failure);
+                if (repair != null) {
+                    if (repair.repaired()) {
+                        applyFailures.set(0);
+                        parseFailures.set(0);
+                        stats.setLastError(null);
+                        log.warn("LogMiner consumer for project {}: {}; replaying from the"
+                                + " same SCN", projectId, repair.detail());
+                        continue;
+                    }
+                    fatalStop(projectId, new SQLException("targeted repair "
+                            + repair.status() + ": " + repair.detail()),
+                            CdcFailureClassifier.Kind.TARGET_TABLE_MISSING, lastScn);
+                    break;
+                }
                 if (kind != CdcFailureClassifier.Kind.TRANSIENT
                         || parseStrikeOut() || applyStrikeOut()) {
                     fatalStop(projectId, failure, kind, lastScn);
@@ -662,6 +700,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
         ctx.requireLease();
         positionStore.advanceScn(projectId, csn);
         stats.recordPositionScn(csn);
+        if (targetRepair != null) {
+            // A transaction landed: the repair incident is over, so a later drop gets the
+            // full allowance instead of inheriting this one's spent attempts.
+            targetRepair.resetAttempts(projectId);
+        }
         parseFailures.set(0);
         // F-12: a transaction genuinely landed — any earlier failed cycles are old news
         // and must not park the project later.

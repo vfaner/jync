@@ -130,6 +130,8 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 | `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | 复制槽滞留 WAL 的面板告警阈值（4 GiB） |
 | `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲休眠 |
 | `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口；`0` 关闭 |
+| `sync.cdc.target-table-repair-enabled` | `true` | 回放发现目标表被删时，只重建并重灌这张（这几张）表，位点不动 |
+| `sync.cdc.target-table-repair-max-attempts` | `3` | 连续修复仍缺表的上限，达到即停车；任何成功事务都会重置计数 |
 
 > 连接密码、AI 密钥与告警 Webhook 地址以 AES-256 加密存储，`enc:` 前缀防止重复加密；密钥留空时首启自动生成并写入 `data/<库名>.key`。
 

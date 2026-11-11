@@ -88,6 +88,11 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     private final SyncProperties properties;
 
     private final CdcTargetTransactionFactory targetTransactions;
+    /**
+     * Targeted repair for a deleted target table; null when the engine was built without
+     * it (tests, hand-built consumers) — then a missing table parks instead of looping.
+     */
+    private final CdcTargetRepairService targetRepair;
     private final PgTestDecodingParser parser = new PgTestDecodingParser();
     private final BindingSupplier supplier = new BindingSupplier();
 
@@ -166,6 +171,17 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
                                 CdcRuntimeStats stats, SyncProperties properties,
                                 CdcTargetTransactionFactory targetTransactions) {
+        this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
+                dataSourceManager, stats, properties, targetTransactions, null);
+    }
+
+    public PgLogicalCdcConsumer(Project project, SyncLockService.LockHandle lock,
+                                SyncContext ctx, CdcPositionStore positionStore,
+                                CdcBaselineService baselineService, SyncTaskStore taskStore,
+                                SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
+                                CdcRuntimeStats stats, SyncProperties properties,
+                                CdcTargetTransactionFactory targetTransactions,
+                                CdcTargetRepairService targetRepair) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -177,6 +193,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         this.stats = stats;
         this.properties = properties;
         this.targetTransactions = targetTransactions;
+        this.targetRepair = targetRepair;
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
                 taskStore, properties.getCdc().getChangeWindowMs());
     }
@@ -185,6 +202,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     public void run() {
         long projectId = project.getId();
         taskStore.markCdcRunning(projectId);
+        if (targetRepair != null) {
+            targetRepair.resetAttempts(projectId);
+        }
         // Pair the stop line with a start line so restarts do not read as a crash loop.
         try {
             stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
@@ -297,6 +317,24 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 CdcFailureClassifier.Kind kind = failure == null
                         ? CdcFailureClassifier.Kind.TRANSIENT
                         : CdcFailureClassifier.classify(failure);
+                // 目标表被删:重建并重灌这一张(或这几张)表,位点不动。修复成功就立刻
+                // 重放同一笔事务;修复没成功才停机,并把修复给出的原因带进 ERROR。
+                CdcTargetRepairService.Outcome repair = CdcTargetRepairGate.attempt(
+                        targetRepair, ctx, failure);
+                if (repair != null) {
+                    if (repair.repaired()) {
+                        parseFailures.set(0);
+                        applyFailures.set(0);
+                        stats.setLastError(null);
+                        log.warn("PG consumer for project {}: {}; replaying from the same"
+                                + " LSN", projectId, repair.detail());
+                        continue;
+                    }
+                    fatalStop(projectId, new SQLException("targeted repair "
+                            + repair.status() + ": " + repair.detail()),
+                            CdcFailureClassifier.Kind.TARGET_TABLE_MISSING);
+                    break;
+                }
                 if (kind != CdcFailureClassifier.Kind.TRANSIENT
                         || parseStrikeOut() || applyStrikeOut()) {
                     fatalStop(projectId, failure, kind);
@@ -736,6 +774,11 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         // F-10:一个事务完整落库即证明毒事务已消失(DBA 补了列/目标恢复),连续失败
         // 计数必须清零 —— 否则偶发几次抖动后长期健康运行也会被老账 park。
         applyFailures.set(0);
+        if (targetRepair != null) {
+            // A committed transaction proves the target is healthy again, so a later
+            // deletion gets the full repair budget instead of the exhausted one.
+            targetRepair.resetAttempts(projectId);
+        }
     }
 
     private boolean matchesProjectTable(String qualified) {

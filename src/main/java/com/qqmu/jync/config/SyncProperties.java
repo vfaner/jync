@@ -389,6 +389,25 @@ public class SyncProperties {
          */
         private long maxTransactionBytes = 536_870_912L;
 
+        /**
+         * Whether a CDC project whose target table was dropped recreates and reloads that one
+         * table instead of parking for a manual re-baseline. On by default: polling has always
+         * silently rebuilt a missing target table, and users expect the same of CDC. The
+         * reload touches only the affected tables — never the whole project — and is bounded
+         * by {@link #targetTableRepairMaxAttempts}.
+         */
+        private boolean targetTableRepairEnabled = true;
+
+        /**
+         * How many consecutive repair cycles a project may run without a single streamed
+         * transaction committing. The budget reopens after a successful transaction, so a
+         * table dropped years into a healthy run gets the full allowance. Reaching the cap
+         * parks the project with an ERROR rather than rebuilding the table forever — a
+         * persistent cause (a trigger or permission that drops the table again, a DDL the
+         * source keeps replaying) must reach a human.
+         */
+        private int targetTableRepairMaxAttempts = 3;
+
         /** Oracle LogMiner tuning (v1.6.0) — only consulted when a project runs LOGMINER_CDC. */
         private final Logminer logminer = new Logminer();
 

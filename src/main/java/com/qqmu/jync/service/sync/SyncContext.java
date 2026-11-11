@@ -7,6 +7,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.metadata.MetadataReader;
 
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 import lombok.Builder;
@@ -113,6 +114,23 @@ public class SyncContext {
      * 阶段,只有基线跑({@code CdcBaselineService.runBaseline})才真正做全量写入。
      */
     private final boolean cdcBaselineRun;
+
+    /**
+     * CDC 定向修复专用:只同步这些表(表名与源库目录一致,大小写不敏感),其余已选表一律
+     * 忽略。{@code null} 表示普通周期(按项目的表选择执行),空集合在修复语境下表示"没有
+     * 需要修复的表",必须直接返回 —— 前者是"全部",后者是"没有",不能混用。
+     *
+     * <p>这是与基线重跑的本质区别:基线会清空每个游标、重灌所有已选表;修复只重建并重灌
+     * 目标表被删掉的那几张,位点不动。
+     */
+    private final Set<String> repairTables;
+
+    /**
+     * 本次周期是否为 CDC 定向修复。为 {@code true} 时 {@link SyncEngine} 放开日志 CDC
+     * 项目的数据阶段(常规轮询必须跳过),并跳过结构差分、删除检测、行数核对与快照刷新:
+     * 这些描述的都是"这张表还完整存在"的那个窗口,而修复面对的正是它不存在。
+     */
+    private final boolean cdcRepairRun;
 
     /** The family the source actually speaks; a custom connection's declared one. */
     public DatabaseType.DialectFamily resolveSourceFamily() {

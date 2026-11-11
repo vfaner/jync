@@ -103,6 +103,11 @@ public class CdcConsumerManager {
     private final YStreamServiceLifecycle yStreamLifecycle;
     private final RedisTargetService redisTargets;
     private final RedisProjectionWriter redisProjectionWriter;
+    /**
+     * Target-table repair handed to every engine it supports; null in hand-built managers
+     * (tests), where a missing target table parks instead of looping.
+     */
+    private final CdcTargetRepairService targetRepair;
 
     /** projectId -> live consumer of THIS node. Absent = not owned here (other node or stopped). */
     private final Map<Long, Registration> registry = new ConcurrentHashMap<>();
@@ -143,11 +148,12 @@ public class CdcConsumerManager {
                               YStreamClientFactory yStreamClientFactory,
                               YStreamServiceLifecycle yStreamLifecycle,
                               RedisTargetService redisTargets,
-                              RedisProjectionWriter redisProjectionWriter) {
+                              RedisProjectionWriter redisProjectionWriter,
+                              CdcTargetRepairService targetRepair) {
         this(projectRepository, taskRepository, lockService, contextFactory, clientFactory,
                 positionStore, baselineService, taskStore, stateWriter, dataSourceManager,
                 properties, DEFAULT_STARTER, logMinerSessionFactory, yStreamClientFactory,
-                yStreamLifecycle, redisTargets, redisProjectionWriter);
+                yStreamLifecycle, redisTargets, redisProjectionWriter, targetRepair);
     }
 
     public CdcConsumerManager(ProjectRepository projectRepository,
@@ -167,6 +173,30 @@ public class CdcConsumerManager {
                               YStreamServiceLifecycle yStreamLifecycle,
                               RedisTargetService redisTargets,
                               RedisProjectionWriter redisProjectionWriter) {
+        this(projectRepository, taskRepository, lockService, contextFactory, clientFactory,
+                positionStore, baselineService, taskStore, stateWriter, dataSourceManager,
+                properties, starter, logMinerSessionFactory, yStreamClientFactory,
+                yStreamLifecycle, redisTargets, redisProjectionWriter, null);
+    }
+
+    public CdcConsumerManager(ProjectRepository projectRepository,
+                              SyncTaskRepository taskRepository,
+                              SyncLockService lockService,
+                              SyncContextFactory contextFactory,
+                              BinlogClientFactory clientFactory,
+                              CdcPositionStore positionStore,
+                              CdcBaselineService baselineService,
+                              SyncTaskStore taskStore,
+                              SyncStateWriter stateWriter,
+                              DataSourceManager dataSourceManager,
+                              SyncProperties properties,
+                              ConsumerStarter starter,
+                              LogMinerSessionFactory logMinerSessionFactory,
+                              YStreamClientFactory yStreamClientFactory,
+                              YStreamServiceLifecycle yStreamLifecycle,
+                              RedisTargetService redisTargets,
+                              RedisProjectionWriter redisProjectionWriter,
+                              CdcTargetRepairService targetRepair) {
         this.projectRepository = projectRepository;
         this.taskRepository = taskRepository;
         this.lockService = lockService;
@@ -184,6 +214,7 @@ public class CdcConsumerManager {
         this.yStreamLifecycle = yStreamLifecycle;
         this.redisTargets = redisTargets;
         this.redisProjectionWriter = redisProjectionWriter;
+        this.targetRepair = targetRepair;
     }
 
     /**
@@ -322,27 +353,28 @@ public class CdcConsumerManager {
         if (strategy == CaptureStrategy.LOGMINER_CDC) {
             return new LogMinerCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
-                    stats, properties, logMinerSessionFactory, targetTransactions);
+                    stats, properties, logMinerSessionFactory, targetTransactions,
+                    targetRepair);
         }
         if (strategy == CaptureStrategy.PG_LOGICAL_CDC) {
             return new PgLogicalCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
-                    stats, properties, targetTransactions);
+                    stats, properties, targetTransactions, targetRepair);
         }
         if (strategy == CaptureStrategy.SQLSERVER_CDC) {
             return new SqlServerCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
-                    stats, properties, targetTransactions);
+                    stats, properties, targetTransactions, targetRepair);
         }
         if (strategy == CaptureStrategy.YSTREAM_CDC) {
             return new YStreamCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,
                     stats, properties, yStreamClientFactory, yStreamLifecycle,
-                    JdbcYStreamServiceOps::new, targetTransactions);
+                    JdbcYStreamServiceOps::new, targetTransactions, targetRepair);
         }
         return new CdcConsumer(project, lock, ctx, clientFactory,
                 positionStore, baselineService, taskStore, stateWriter,
-                dataSourceManager, stats, properties, targetTransactions);
+                dataSourceManager, stats, properties, targetTransactions, targetRepair);
     }
 
     /**

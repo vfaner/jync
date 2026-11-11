@@ -88,6 +88,11 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     private final SyncProperties properties;
 
     private final CdcTargetTransactionFactory targetTransactions;
+    /**
+     * Targeted repair for a deleted target table; null when the engine was built without
+     * it (tests, hand-built consumers) — then a missing table parks instead of looping.
+     */
+    private final CdcTargetRepairService targetRepair;
     private final CdcEventStreamHandler.TransactionSink sink;
     private final BindingSupplier supplier;
 
@@ -152,6 +157,17 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                        SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
                        CdcRuntimeStats stats, SyncProperties properties,
                        CdcTargetTransactionFactory targetTransactions) {
+        this(project, lock, ctx, clientFactory, positionStore, baselineService, taskStore,
+                stateWriter, dataSourceManager, stats, properties, targetTransactions, null);
+    }
+
+    public CdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,
+                       BinlogClientFactory clientFactory, CdcPositionStore positionStore,
+                       CdcBaselineService baselineService, SyncTaskStore taskStore,
+                       SyncStateWriter stateWriter, DataSourceManager dataSourceManager,
+                       CdcRuntimeStats stats, SyncProperties properties,
+                       CdcTargetTransactionFactory targetTransactions,
+                       CdcTargetRepairService targetRepair) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -166,6 +182,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         // R3: the same timeout source DataSyncService uses (SyncProperties.queryTimeoutSeconds),
         // so CDC apply statements are bounded exactly like polling write statements.
         this.targetTransactions = targetTransactions;
+        this.targetRepair = targetRepair;
         // 聚合变更日志:按表累计 upsert/delete,到龄一条;停机兜底刷剩余。
         this.windowLogger = new CdcChangeWindowLogger(project.getId(), stats, stateWriter,
                 taskStore, properties.getCdc().getChangeWindowMs());
@@ -177,6 +194,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     public void run() {
         long projectId = project.getId();
         taskStore.markCdcRunning(projectId);
+        if (targetRepair != null) {
+            targetRepair.resetAttempts(projectId);
+        }
         // The stop line alone reads like a crash loop on the change log: every restart
         // writes "stopped" but nothing says a new consumer came up. Pair it with a start
         // line so a restart is visibly one stop + one start. Best-effort: a failed audit
@@ -254,6 +274,24 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 CdcFailureClassifier.Kind kind = failure == null
                         ? CdcFailureClassifier.Kind.TRANSIENT
                         : CdcFailureClassifier.classify(failure);
+                // 目标表被删:重建并重灌这一张(或这几张)表,位点不动。修复成功就立刻
+                // 重放同一笔事务;修复没成功才停机,并把修复给出的原因带进 ERROR。
+                CdcTargetRepairService.Outcome repair = CdcTargetRepairGate.attempt(
+                        targetRepair, ctx, failure);
+                if (repair != null) {
+                    if (repair.repaired()) {
+                        deserializationFailures.set(0);
+                        schemaMismatchFailures.set(0);
+                        stats.setLastError(null);
+                        log.warn("CDC consumer for project {}: {}; replaying from the same"
+                                + " position", projectId, repair.detail());
+                        continue;
+                    }
+                    fatalStop(projectId, new SQLException("targeted repair "
+                            + repair.status() + ": " + repair.detail()),
+                            CdcFailureClassifier.Kind.TARGET_TABLE_MISSING.name());
+                    break;
+                }
                 if (kind != CdcFailureClassifier.Kind.TRANSIENT || deserializationStrikeOut()
                         || schemaMismatchStrikeOut()) {
                     // The classification only knows the driver's wording; the strike-out
@@ -573,6 +611,11 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             stats.touchActivity();
             deserializationFailures.set(0);                      // 成功事务:清零连败计数
             schemaMismatchFailures.set(0);                      // 成功事务:结构漂移连败也清零
+            if (targetRepair != null) {
+                // A committed transaction proves the target is healthy again, so a later
+                // deletion gets the full repair budget instead of the exhausted one.
+                targetRepair.resetAttempts(projectId);
+            }
             // 目标已跟上:此前的跳过 DDL 不再解释之后的失败(列投影也已生效),
             // 留着会把一个已解决的结构问题挂到无关的写失败上。
             lastSkippedDdl.set(null);

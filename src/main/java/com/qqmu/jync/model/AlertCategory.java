@@ -34,7 +34,15 @@ public enum AlertCategory {
      * behind the source's, so the next row carrying a new column can fail the whole stream.
      * Announced as an event: nothing "recovers" until an operator aligns the two schemas.
      */
-    DDL_SKIPPED("alert.category.ddlSkipped");
+    DDL_SKIPPED("alert.category.ddlSkipped"),
+
+    /**
+     * A CDC stream found its target table gone and rebuilt and reloaded that one table. This is
+     * the automatic repair polling has always performed, now also available to CDC — and an
+     * operator must hear about it: a target that lost a table is an incident even when nothing
+     * stopped syncing.
+     */
+    CDC_TARGET_REPAIRED("alert.category.cdcTargetRepaired");
 
     private final String messageKey;
 
@@ -56,7 +64,7 @@ public enum AlertCategory {
      * own, and the count only ever grows until the consumer restarts.
      */
     public boolean isEvent() {
-        return this == DATA_DRIFT || this == DDL_SKIPPED;
+        return this == DATA_DRIFT || this == DDL_SKIPPED || this == CDC_TARGET_REPAIRED;
     }
 
     /** Comma-separated form used by the settings row. */

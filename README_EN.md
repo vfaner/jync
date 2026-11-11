@@ -51,7 +51,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 |---|---|
 | Full load | Keyset chunking + in-table parallelism + streamed reads + per-chunk checkpoints; INSERT-first into empty targets, deferred secondary indexes; 200,000 rows/s range |
 | Incremental sync | Timestamp, row SCN, identity column or full comparison, selected automatically; one cursor-range query; safety-lagged watermark; cursor advances only after commit |
-| Log CDC | MySQL binlog, Oracle LogMiner, DM LogMiner, PostgreSQL-family logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency; when source DDL leaves the target short of columns, rows are pruned in-stream and a DDL task is filed — the stream keeps running |
+| Log CDC | MySQL binlog, Oracle LogMiner, DM LogMiner, PostgreSQL-family logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency; when source DDL leaves the target short of columns, rows are pruned in-stream and a DDL task is filed — the stream keeps running; a deleted target table is recreated and reloaded on its own without moving the position (bounded attempts) |
 | Redis cache projection | A real-time sync target can be Redis: CDC projects each row to `<prefix><table>:<primary key>` as JSON or HASH, with baseline, replay and prefix-scoped rebuild; log CDC only — see [Known limitations](docs/known-limitations.md) |
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
 | ETL | Copy result rows from a customer SQL query; 7 analytic engines; multi-statement scripts; overwrite / append / range overwrite / upsert by key; resumable runs; tables sharing a source and target can form a **batch** with one connection pair and one schedule |
@@ -59,7 +59,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 | System management | Configuration package export/import (passphrase-encrypted, optional runtime state, re-encrypted with the target key), metadata database connection tester, page-level force-HTTPS switch, in-app TLS certificate upload (PKCS#12 / JKS / PEM) |
 | Data shaping | Column cleansing (13 rule types, including phone/ID/name/email masking and SHA-256 hashing), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
 | AI assist (optional) | The model drafts candidate SQL for procedures and functions; nothing is stored until a person approves it, and AI never takes part in synchronization |
-| Alerting | Webhook pushes for sync failures, stuck polling, projects not running, CDC stalls, data drift, unhealthy connections and PG slot backlog; DingTalk / WeCom / Feishu / generic JSON; cooldown and recovery notices |
+| Alerting | Webhook pushes for sync failures, stuck polling, projects not running, CDC stalls, data drift, unhealthy connections and PG slot backlog, plus "CDC target table repaired"; DingTalk / WeCom / Feishu / generic JSON; cooldown and recovery notices |
 | Reliability and observability | Idempotent upsert, checkpoint resume, database leases, at-least-once; dashboard, change / audit / system logs, performance charts, optional Prometheus scrape endpoint |
 | Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout; local accounts plus three SSO modes |
 
