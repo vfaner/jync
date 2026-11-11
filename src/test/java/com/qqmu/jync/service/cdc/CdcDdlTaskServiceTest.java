@@ -333,6 +333,17 @@ class CdcDdlTaskServiceTest {
     }
 
     @Test
+    void constraintAndPartitionRenamesOpenNoGap() {
+        // Oracle and DM spell a table-level object rename inside ALTER TABLE. The object
+        // carries no row values, so the projection left nothing behind and replaying the
+        // table would only re-read the very rows it already delivered.
+        assertThat(CdcDdlTaskService.hasColumnGap(
+                "ALTER TABLE t RENAME CONSTRAINT fk_old TO fk_new")).isFalse();
+        assertThat(CdcDdlTaskService.hasColumnGap(
+                "ALTER TABLE t RENAME PARTITION p_old TO p_new")).isFalse();
+    }
+
+    @Test
     void aTableLevelClauseNeedsNoReplaySoTheTaskClosesRightAway() throws Exception {
         ChangeLog log = pendingLog();
         log.setDetails(SyncStateWriter.SKIPPED_DDL_PREFIX + "ALTER TABLE t ADD INDEX idx_name (name)");

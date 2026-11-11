@@ -133,11 +133,14 @@ public class CdcDdlTaskService {
         if (head.startsWith("RENAME ")) {
             String target = head.substring("RENAME ".length()).trim();
             // RENAME TO / AS renames the table itself: every value already on the target
-            // moved with it, and replaying the old name would find no table. RENAME INDEX
-            // and RENAME KEY move a table-level object, which carries no data either.
-            // RENAME COLUMN leaves the gap window's rows behind, so it stays a gap.
+            // moved with it, and replaying the old name would find no table. RENAME INDEX,
+            // RENAME KEY, RENAME CONSTRAINT and RENAME PARTITION move a table-level object,
+            // which carries no data either — Oracle and DM spell constraint and partition
+            // renames this way, and treating them as gaps forced a needless full replay of
+            // the table. RENAME COLUMN leaves the gap window's rows behind, so it stays a gap.
             return !target.startsWith("TO ") && !target.startsWith("AS ")
-                    && !target.startsWith("INDEX ") && !target.startsWith("KEY ");
+                    && !target.startsWith("INDEX ") && !target.startsWith("KEY ")
+                    && !target.startsWith("CONSTRAINT ") && !target.startsWith("PARTITION ");
         }
         if (head.startsWith("ALTER ")) {
             String rest = head.substring("ALTER ".length()).trim();
