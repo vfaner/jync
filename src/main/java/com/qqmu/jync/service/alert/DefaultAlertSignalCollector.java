@@ -38,7 +38,7 @@ import com.qqmu.jync.service.connection.DatabaseHealthService;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * The seven alert rules, each answered from state the application already keeps.
+ * The alert rules, each answered from state the application already keeps.
  *
  * <p>Read-only and additive: a signal source that throws costs its own category for that run,
  * never the others. Nothing here starts, stops or retries a sync — that remains the scheduler's
@@ -83,6 +83,12 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
     private final Map<Long, String> healthNames = new ConcurrentHashMap<>();
     private final Map<Long, String> healthMessages = new ConcurrentHashMap<>();
     private Instant lastHealthCheckAt;
+
+    /**
+     * Skipped-DDL counter already announced per project. The counter belongs to one consumer
+     * run and resets when that consumer restarts, so a decrease re-arms the rule.
+     */
+    private final Map<Long, Long> announcedDdlCount = new ConcurrentHashMap<>();
 
     @Autowired
     public DefaultAlertSignalCollector(ProjectRepository projectRepository,
@@ -254,6 +260,20 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
             disconnectStreak.remove(id);
             return;
         }
+        // A skipped DDL leaves the target behind the source: the next row carrying a new
+        // column can fail the whole stream (MySQL 1054). Announce the growth of the counter,
+        // not its value — the stats are cumulative for one consumer run and start at zero
+        // again when the consumer restarts, which must re-arm the rule.
+        long skippedDdl = stats.getSkippedDdl();
+        Long previous = announcedDdlCount.get(id);
+        long baseline = previous == null || skippedDdl < previous ? 0L : previous;
+        if (skippedDdl > baseline) {
+            events.add(new AlertEvent(AlertCategory.DDL_SKIPPED, id, project.getName(), "",
+                    "alert.detail.ddlSkipped",
+                    new Object[]{skippedDdl - baseline, skippedDdl}, now));
+        }
+        announcedDdlCount.put(id, skippedDdl);
+
         boolean disconnected = !stats.isConnected() && stats.getLastError() != null;
         int streak = disconnected
                 ? disconnectStreak.merge(id, 1, Integer::sum)

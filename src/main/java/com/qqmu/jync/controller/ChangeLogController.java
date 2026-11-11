@@ -1,19 +1,28 @@
 package com.qqmu.jync.controller;
 
+import java.util.Map;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.MessageSource;
+import org.springframework.context.NoSuchMessageException;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.service.ChangeLogService;
 import com.qqmu.jync.service.ProjectService;
+import com.qqmu.jync.service.cdc.CdcDdlTaskService;
 
 /** Paged, filterable view of the change log. */
 @Controller
@@ -21,6 +30,18 @@ public class ChangeLogController {
 
     private final ChangeLogService changeLogService;
     private final ProjectService projectService;
+
+    /**
+     * The DDL tasks a skipped statement opens live in their own service. The field is
+     * optional so the WebMvcTest slices that only exercise the log view still wire the
+     * controller; in the running application it is always present.
+     */
+    @Autowired(required = false)
+    private CdcDdlTaskService ddlTaskService;
+
+    /** Optional so @WebMvcTest slices that omit the message source still wire the controller. */
+    @Autowired(required = false)
+    private MessageSource messageSource;
 
     public ChangeLogController(ChangeLogService changeLogService,
                                ProjectService projectService) {
@@ -48,6 +69,10 @@ public class ChangeLogController {
         model.addAttribute("pager", pager);
         model.addAttribute("projects", projectService.findAll());
         model.addAttribute("selectedProjectId", projectId);
+        // A binlog DDL qualifies the table with the source database; the target's own name
+        // is what the statement has to run against.
+        model.addAttribute("targetDatabaseName", ddlTaskService == null
+                ? null : ddlTaskService.targetDatabaseName(projectId));
         model.addAttribute("failedOnly", errorsOnly);
         return "change-logs";
     }
@@ -73,5 +98,70 @@ public class ChangeLogController {
             url.append(hasProject ? '&' : '?').append("failedOnly=true");
         }
         return "redirect:" + url;
+    }
+
+    /**
+     * Executes an administrator-edited DDL for a skipped CDC change on the target database.
+     * POST endpoints are ADMIN-only in the security filter chain; the service resolves the
+     * target connection from the log's own project, never from request parameters.
+     */
+    @PostMapping("/change-logs/{id}/execute")
+    @ResponseBody
+    public Map<String, Object> executeDdl(@PathVariable Long id,
+                                          @RequestParam("sql") String sql) {
+        try {
+            if (ddlTaskService == null) {
+                throw new IllegalStateException("error.ddl.notFound");
+            }
+            CdcDdlTaskService.DdlTaskOutcome outcome = ddlTaskService.executeDdl(id, sql);
+            if (outcome == null) {
+                throw new IllegalStateException("error.ddl.notFound");
+            }
+            return Map.of("success", true, "message", text("msg.ddl.executed"),
+                    "needsReplay", outcome.needsReplay(),
+                    "affectedTables", outcome.affectedTables() == null
+                            ? "" : outcome.affectedTables());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return Map.of("success", false, "message", text(e.getMessage()));
+        }
+    }
+
+    /**
+     * Replays the rows that were not replicated while the target was missing a column.
+     * The affected tables are re-read from the source and upserted over the target; the
+     * target is never truncated.
+     */
+    @PostMapping("/change-logs/{id}/retry")
+    @ResponseBody
+    public Map<String, Object> retryDdl(@PathVariable Long id) {
+        try {
+            if (ddlTaskService == null) {
+                throw new IllegalStateException("error.ddl.notFound");
+            }
+            ddlTaskService.replayDdl(id);
+            return Map.of("success", true, "message", text("msg.ddl.replayed"));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return Map.of("success", false, "message", text(e.getMessage()));
+        }
+    }
+
+    /** Resolves "key" / "key:detail" into a localised sentence for the AJAX toast. */
+    private String text(String key) {
+        if (key == null) {
+            return "";
+        }
+        int colon = key.indexOf(':');
+        String head = colon >= 0 ? key.substring(0, colon) : key;
+        String suffix = colon >= 0 ? key.substring(colon + 1) : "";
+        String translated = head;
+        if (messageSource != null) {
+            try {
+                translated = messageSource.getMessage(head, null,
+                        LocaleContextHolder.getLocale());
+            } catch (NoSuchMessageException ignored) {
+                // Keep the key as a readable fallback when a slice has no bundles.
+            }
+        }
+        return suffix.isEmpty() ? translated : translated + ": " + suffix;
     }
 }

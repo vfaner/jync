@@ -54,8 +54,6 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
-    /** DDL SQL_REDO truncation for WARN logs — same cap as the binlog handler (200 chars). */
-    private static final int DDL_LOG_SQL_CHARS = 200;
     /** Named in warnings and in the fail-policy park message, so the remedy is searchable. */
     static final String MISSING_LOB_POLICY_KEY = "sync.cdc.logminer.missing-lob-policy";
     /** Parse strike-out: same threshold as {@link CdcConsumer} (5 consecutive poison rows). */
@@ -499,9 +497,13 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     // log and invalidated caches.
                     stats.addSkippedDdl(1);
                     String sql = row.sqlRedo == null ? "" : row.sqlRedo;
-                    log.warn("Skipping DDL in LogMiner stream ({}): {}", row.segOwner,
-                            sql.length() > DDL_LOG_SQL_CHARS
-                                    ? sql.substring(0, DDL_LOG_SQL_CHARS) + "..." : sql);
+                    log.error("Skipping DDL in LogMiner stream ({}): {}", row.segOwner, sql);
+                    try {
+                        stateWriter.recordSkippedDdl(projectId, row.segOwner, sql);
+                    } catch (RuntimeException e) {
+                        log.debug("Could not file the skipped DDL in the change log: {}",
+                                e.toString());
+                    }
                     supplier.invalidate(row.segOwner, row.tableName);
                     continue;
                 }

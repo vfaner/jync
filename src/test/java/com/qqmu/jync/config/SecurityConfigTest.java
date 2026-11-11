@@ -340,6 +340,23 @@ class SecurityConfigTest {
                 .andExpect(redirectedUrl("/"));
     }
 
+    /**
+     * Chrome asks for this path whenever DevTools opens. It must answer without a session —
+     * and it must not become the destination of the next sign-in, which used to land the
+     * administrator on a 404 right after logging in.
+     */
+    @Test
+    void aBrowserWellKnownProbeIsAnsweredWithoutASession() throws Exception {
+        mvc.perform(get("/.well-known/appspecific/com.chrome.devtools.json"))
+                .andExpect(status().isNotFound());
+
+        mvc.perform(post("/login").with(csrf())
+                        .param("username", "admin")
+                        .param("password", "123456"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/"));
+    }
+
     // ── Admin audit trail ──────────────────────────────────────────────────────
 
     @Autowired

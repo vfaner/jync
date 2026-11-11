@@ -27,7 +27,14 @@ public enum AlertCategory {
     DB_UNHEALTHY("alert.category.dbUnhealthy"),
 
     /** A PostgreSQL logical slot is holding back more WAL than the configured ceiling. */
-    PG_SLOT_BACKLOG("alert.category.pgSlotBacklog");
+    PG_SLOT_BACKLOG("alert.category.pgSlotBacklog"),
+
+    /**
+     * A DDL statement was seen in a CDC stream and skipped. The target's structure is now
+     * behind the source's, so the next row carrying a new column can fail the whole stream.
+     * Announced as an event: nothing "recovers" until an operator aligns the two schemas.
+     */
+    DDL_SKIPPED("alert.category.ddlSkipped");
 
     private final String messageKey;
 
@@ -44,11 +51,12 @@ public enum AlertCategory {
      * Whether this category describes a condition that ends, or a single event.
      *
      * <p>A condition is notified once when it starts, repeated after the cooldown, and answered
-     * with a recovery message when it disappears. An event (a detected drift) has no recovery:
-     * the repair it triggers either works or shows up as a sync failure of its own.
+     * with a recovery message when it disappears. An event (a detected drift or a skipped DDL)
+     * has no recovery: the repair it triggers either works or shows up as a sync failure of its
+     * own, and the count only ever grows until the consumer restarts.
      */
     public boolean isEvent() {
-        return this == DATA_DRIFT;
+        return this == DATA_DRIFT || this == DDL_SKIPPED;
     }
 
     /** Comma-separated form used by the settings row. */

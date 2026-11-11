@@ -118,6 +118,49 @@ class DefaultAlertSignalCollectorTest {
     }
 
     @Test
+    void skippedCdcDdlIsAnnouncedOnlyWhenTheCounterGrows() {
+        Project project = project(3L, "ag_jhxy");
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project));
+        when(cdcManager.strategyOf(project)).thenReturn(CaptureStrategy.BINLOG_CDC);
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        stats.setConnected(true);
+        stats.addSkippedDdl(2);
+        when(cdcManager.statsFor(3L)).thenReturn(stats);
+
+        AlertEvent first = only(collect(), com.qqmu.jync.model.AlertCategory.DDL_SKIPPED);
+        assertThat(first.detailKey()).isEqualTo("alert.detail.ddlSkipped");
+        assertThat(first.detailArgs()[0]).isEqualTo(2L);
+        assertThat(first.detailArgs()[1]).isEqualTo(2L);
+
+        // The same cumulative count must not be announced again on the next minute's run.
+        assertThat(collect()).noneMatch(
+                e -> e.category() == com.qqmu.jync.model.AlertCategory.DDL_SKIPPED);
+
+        stats.addSkippedDdl(1);
+        AlertEvent next = only(collect(), com.qqmu.jync.model.AlertCategory.DDL_SKIPPED);
+        assertThat(next.detailArgs()[0]).isEqualTo(1L);
+        assertThat(next.detailArgs()[1]).isEqualTo(3L);
+    }
+
+    @Test
+    void aRestartedConsumerReArmsTheDdlRule() {
+        Project project = project(3L, "ag_jhxy");
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project));
+        when(cdcManager.strategyOf(project)).thenReturn(CaptureStrategy.BINLOG_CDC);
+        CdcRuntimeStats before = new CdcRuntimeStats();
+        before.setConnected(true);
+        before.addSkippedDdl(5);
+        CdcRuntimeStats after = new CdcRuntimeStats();
+        after.setConnected(true);
+        after.addSkippedDdl(1);
+        when(cdcManager.statsFor(3L)).thenReturn(before, after);
+
+        only(collect(), com.qqmu.jync.model.AlertCategory.DDL_SKIPPED);
+        AlertEvent restarted = only(collect(), com.qqmu.jync.model.AlertCategory.DDL_SKIPPED);
+        assertThat(restarted.detailArgs()[0]).isEqualTo(1L);
+    }
+
+    @Test
     void threeFailuresOfTheSameTableBecomeOneSyncFailureEvent() {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, "orders")));
         when(projectRepository.findAllById(any())).thenReturn(List.of(project(1L, "orders")));

@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.sync.SyncContext;
 
@@ -357,5 +358,126 @@ class CdcEventApplierTest {
         public boolean supportsNativeUpsert() {
             return true;
         }
+    }
+
+    private CdcEventApplier projectingApplier() {
+        SyncContext ctx = SyncContext.builder()
+                .config(new SyncConfig())
+                .targetDialect(new GenericSqlDialect())
+                .targetType(DatabaseType.MYSQL)
+                .batchSize(2)
+                .build();
+        // The projection only runs when the stream has seen a DDL (or a write proved the
+        // target drifted) — otherwise the dictionary read would be pure overhead.
+        stats.addSkippedDdl(1);
+        return new CdcEventApplier(ctx, stats);
+    }
+
+    @Test
+    void withoutADdlTheTargetDictionaryIsNotReadAtAll() throws SQLException {
+        // The steady state: no DDL in the stream, so the target layout equals the source
+        // one and no dictionary query may be issued per transaction.
+        SyncContext ctx = SyncContext.builder()
+                .config(new SyncConfig())
+                .targetDialect(new GenericSqlDialect())
+                .targetType(DatabaseType.MYSQL)
+                .batchSize(2)
+                .build();
+        Connection target = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        when(target.createStatement()).thenReturn(statement);
+        when(statement.execute(anyString())).thenReturn(1);
+
+        new CdcEventApplier(ctx, stats).applyUpserts(target, binding,
+                List.of(row(1L, "a", null)));
+
+        verify(target, never()).getMetaData();
+    }
+
+    @Test
+    void aTargetMissingAColumnTurnsTheProjectionOnAndFailsTheTransactionForReplay()
+            throws SQLException {
+        // The target lost a column the source has (a DDL ran after this consumer started).
+        // The write is rejected, the projection is switched on and the transaction is
+        // failed with the sentinel, so the replayed transaction gets the column projected
+        // away instead of failing again.
+        TableMeta meta = new TableMeta();
+        meta.setName("orders");
+        meta.getColumns().add(column("id", Types.BIGINT, true));
+        meta.getColumns().add(column("name", Types.VARCHAR, false));
+        meta.getColumns().add(column("suffix", Types.VARCHAR, false));
+        meta.getPrimaryKeys().add("id");
+        CdcTableBinding withNewColumn =
+                CdcTableBinding.of("src", "orders", meta, "orders", null);
+        Map<String, Object> row = row(1L, "a", null);
+        row.put("suffix", "txt");
+        SyncContext ctx = SyncContext.builder()
+                .config(new SyncConfig())
+                .targetDialect(new GenericSqlDialect())
+                .targetType(DatabaseType.MYSQL)
+                .batchSize(2)
+                .build();
+        CdcEventApplier applier = new CdcEventApplier(ctx, stats);
+
+        assertThatThrownBy(() -> applier.applyUpserts(target, withNewColumn, List.of(row)))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("cdc schema mismatch");
+
+        assertThat(stats.getSchemaMismatches()).isEqualTo(1L);
+        assertThat(stats.projectionRequired()).isTrue();
+    }
+
+    @Test
+    void aSourceColumnTheTargetLacksIsProjectedAwayInsteadOfFailingTheStream()
+            throws SQLException {
+        // The source gained `suffix` through a DDL the CDC stream skipped; the target table
+        // created in setUp has only id/name/amount. Writing the source layout verbatim is
+        // what used to raise `Unknown column 'suffix'` and park the project in ERROR.
+        TableMeta meta = new TableMeta();
+        meta.setName("orders");
+        meta.getColumns().add(column("id", Types.BIGINT, true));
+        meta.getColumns().add(column("name", Types.VARCHAR, false));
+        meta.getColumns().add(column("amount", Types.DECIMAL, false));
+        meta.getColumns().add(column("suffix", Types.VARCHAR, false));
+        meta.getPrimaryKeys().add("id");
+        CdcTableBinding withNewColumn =
+                CdcTableBinding.of("src", "orders", meta, "orders", null);
+        Map<String, Object> row = row(1L, "a", "1.00");
+        row.put("suffix", "txt");
+
+        projectingApplier().applyUpserts(target, withNewColumn, List.of(row));
+
+        try (Statement st = target.createStatement();
+             ResultSet rs = st.executeQuery("SELECT id, name, amount FROM orders")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getLong("id")).isEqualTo(1L);
+        }
+        // The omission is visible, never silent.
+        assertThat(stats.getPrunedColumns()).isEqualTo(1L);
+        assertThat(stats.snapshot()).containsEntry("prunedColumns", 1L);
+        // ... and it names the table and the column a replay has to bring over.
+        assertThat(stats.prunedGaps()).containsOnlyKeys("orders");
+        assertThat(stats.prunedGaps().get("orders")).containsExactly("suffix");
+    }
+
+    @Test
+    void aMissingPrimaryKeyColumnIsNeverProjectedAway() {
+        TableMeta meta = new TableMeta();
+        meta.setName("orders");
+        meta.getColumns().add(column("missing_pk", Types.BIGINT, true));
+        meta.getColumns().add(column("name", Types.VARCHAR, false));
+        meta.getPrimaryKeys().add("missing_pk");
+        CdcTableBinding unmatched =
+                CdcTableBinding.of("src", "orders", meta, "orders", null);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("missing_pk", 1L);
+        row.put("name", "a");
+
+        // Projecting the key away would make upserts and deletes target nothing, so the
+        // database must still reject the write and keep the position where it is.
+        assertThatThrownBy(() -> projectingApplier()
+                .applyUpserts(target, unmatched, List.of(row)))
+                .isInstanceOf(SQLException.class);
+        assertThat(stats.getPrunedColumns()).isZero();
     }
 }

@@ -6,15 +6,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.model.AuditAction;
-import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.repository.ChangeLogRepository;
+import com.qqmu.jync.service.audit.AuditDetail;
 
 /**
- * Read and maintenance operations over the change log.
+ * The change log: what happened, in order.
  *
- * <p>The write path lives here rather than on the controller so the transaction boundary
- * sits with the rest of the application's writes, in the service layer.
+ * <p>Read-only apart from {@link #clear}. The tasks a skipped DDL opens live in
+ * {@link com.qqmu.jync.service.cdc.CdcDdlTaskService}: a task is work that is still open,
+ * while a log row is a record of what already happened — mixing the two in one service
+ * made both harder to read.
  */
 @Service
 public class ChangeLogService {

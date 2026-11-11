@@ -9,9 +9,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
@@ -80,6 +82,15 @@ public final class CdcRuntimeStats {
      * the warning line scrolled away, and verify or re-baseline the affected table.
      */
     private final AtomicLong uncapturedGaps = new AtomicLong();
+    /**
+     * Source columns deliberately left out of CDC writes because a skipped DDL means the
+     * target does not have them yet. Counted so the panel exposes data that is NOT being
+     * replicated — a silent projection would be silent data loss.
+     */
+    private final AtomicLong prunedColumns = new AtomicLong();
+    /** Throttles the projection warning to one line per minute on a busy stream. */
+    private final AtomicLong lastPrunedWarnAt = new AtomicLong();
+    private static final long PRUNED_WARN_INTERVAL_MS = 60_000L;
     /** Per-table tallies of the same, plus each table's last warning time (throttling). */
     private final ConcurrentMap<String, MissingLobTable> missingLobTables =
             new ConcurrentSkipListMap<>(String.CASE_INSENSITIVE_ORDER);
@@ -152,6 +163,44 @@ public final class CdcRuntimeStats {
     private volatile long connectedAtMillis = -1L;
     private volatile long startedAtMillis;
 
+    /**
+     * Per target table, the source columns the projection had to leave out because the
+     * target did not have them yet. This is exactly the data that is NOT replicated
+     * between a skipped DDL and the target being aligned; the change-log task row carries
+     * it so the gap can be replayed afterwards.
+     */
+    private final ConcurrentMap<String, Set<String>> prunedGaps = new ConcurrentSkipListMap<>();
+
+    /**
+     * Set when the target turned out to lack a column the source has — the write failed
+     * with "Unknown column" while the projection was still switched off. The flag turns the
+     * projection on for the rest of this consumer run, so the replayed transaction gets the
+     * missing column projected away instead of failing again.
+     */
+    private final AtomicBoolean projectionForced = new AtomicBoolean();
+
+    /** How often the target rejected a write for a column the source has. */
+    private final AtomicLong schemaMismatches = new AtomicLong();
+
+    /**
+     * Target column names, cached for a short while. Reading them is the price of the
+     * projection, and a target whose shape did not change keeps the same answer, so the
+     * dictionary is queried once per table instead of once per transaction.
+     */
+    private final ConcurrentMap<String, CachedColumns> targetColumns = new ConcurrentHashMap<>();
+    private static final long TARGET_COLUMNS_TTL_MILLIS = 30_000L;
+
+    /** One cached column set and the moment it was read. */
+    private static final class CachedColumns {
+        private final Map<String, String> columns;
+        private final long readAt;
+
+        CachedColumns(Map<String, String> columns, long readAt) {
+            this.columns = columns;
+            this.readAt = readAt;
+        }
+    }
+
     // —— counters ——
 
     public void addUpserts(long n) {
@@ -160,6 +209,11 @@ public final class CdcRuntimeStats {
 
     public void addSkippedDdl(long n) {
         skippedDdl.addAndGet(n);
+    }
+
+    /** Cumulative DDL statements skipped by this consumer run; resets with the consumer. */
+    public long getSkippedDdl() {
+        return skippedDdl.get();
     }
 
     public void addSkippedUnsupported(long n) {
@@ -172,6 +226,90 @@ public final class CdcRuntimeStats {
 
     public void addZeroDateCoerced(long n) {
         zeroDateCoerced.addAndGet(n);
+    }
+
+    /**
+     * Records omitted columns and answers whether a warning is due (at most one per minute),
+     * so a busy stream replaying the same missing-column list cannot flood the log.
+     */
+    public boolean recordPrunedColumns(long n) {
+        prunedColumns.addAndGet(n);
+        long now = System.currentTimeMillis();
+        long last = lastPrunedWarnAt.get();
+        return now - last >= PRUNED_WARN_INTERVAL_MS
+                && lastPrunedWarnAt.compareAndSet(last, now);
+    }
+
+    /** Cumulative source columns omitted from writes because the target lacks them. */
+    public long getPrunedColumns() {
+        return prunedColumns.get();
+    }
+
+    /** Records that the given source columns had to be omitted for this target table. */
+    public void recordPrunedGap(String targetTable, List<String> columns) {
+        if (targetTable == null || columns == null || columns.isEmpty()) {
+            return;
+        }
+        prunedGaps.computeIfAbsent(targetTable, key -> new ConcurrentSkipListSet<>())
+                .addAll(columns);
+    }
+
+    /** The omitted columns per target table — the data a replay has to bring over. */
+    public Map<String, Set<String>> prunedGaps() {
+        Map<String, Set<String>> copy = new LinkedHashMap<>();
+        prunedGaps.forEach((table, columns) -> copy.put(table, new LinkedHashSet<>(columns)));
+        return copy;
+    }
+
+    /**
+     * Turns the column projection on for the rest of this run.
+     *
+     * <p>The projection normally stays off: without a DDL in the stream the target layout
+     * equals the source one, and reading the target dictionary on every transaction would
+     * be pure overhead. A write rejected for a missing column proves the two have drifted,
+     * so the projection is switched on and the replayed transaction gets the missing column
+     * projected away.
+     */
+    public void forceProjection() {
+        projectionForced.set(true);
+    }
+
+    /** Whether the projection has to run for this transaction. */
+    public boolean projectionRequired() {
+        return projectionForced.get() || skippedDdl.get() > 0;
+    }
+
+    public void addSchemaMismatch() {
+        schemaMismatches.incrementAndGet();
+    }
+
+    public long getSchemaMismatches() {
+        return schemaMismatches.get();
+    }
+
+    /** The cached column names of a target table, or null when the entry is cold or stale. */
+    public Map<String, String> cachedTargetColumns(String key) {
+        CachedColumns cached = targetColumns.get(key);
+        if (cached == null
+                || System.currentTimeMillis() - cached.readAt > TARGET_COLUMNS_TTL_MILLIS) {
+            return null;
+        }
+        return cached.columns;
+    }
+
+    public void cacheTargetColumns(String key, Map<String, String> columns) {
+        if (key == null || columns == null || columns.isEmpty()) {
+            return;
+        }
+        targetColumns.put(key, new CachedColumns(columns, System.currentTimeMillis()));
+    }
+
+    /**
+     * Drops the cached column sets: the target's shape may have changed under us — a
+     * write rejected for a missing column is exactly that moment.
+     */
+    public void invalidateTargetColumns() {
+        targetColumns.clear();
     }
 
     // —— uncaptured windows ——
@@ -533,6 +671,10 @@ public final class CdcRuntimeStats {
         snapshot.put("eventsPerSecond", eventsPerSecond());
         snapshot.put("rowsApplied", getRowsApplied());
         snapshot.put("skippedDdl", skippedDdl.get());
+        snapshot.put("prunedColumns", prunedColumns.get());
+        snapshot.put("schemaMismatches", schemaMismatches.get());
+        snapshot.put("projectionForced", projectionForced.get());
+        snapshot.put("prunedGapTables", prunedGaps.size());
         snapshot.put("skippedUnsupported", skippedUnsupported.get());
         snapshot.put("unmappable", unmappable.get());
         snapshot.put("zeroDateCoerced", zeroDateCoerced.get());
