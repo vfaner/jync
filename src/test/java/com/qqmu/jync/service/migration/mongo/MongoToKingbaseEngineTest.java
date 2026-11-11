@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
@@ -345,6 +346,33 @@ class MongoToKingbaseEngineTest {
         assertThat(result.indices().get(0).status()).isEqualTo(Status.FAILED);
         assertThat(result.indices().get(1).status()).isEqualTo(Status.SUCCESS);
         assertThat(result.indicesSucceeded()).isEqualTo(1);
+    }
+
+    @Test
+    void aFailedSqlStatementRollsBackSoTheNextCollectionCanRun() throws Exception {
+        lenient().when(sourceGateway.listCollections()).thenReturn(List.of(
+                new MongoCollectionInfo("bad", "collection"),
+                new MongoCollectionInfo("orders", "collection")));
+        lenient().when(sourceGateway.sample(eq("bad"), anyInt()))
+                .thenReturn(List.of(new Document("_id", "1")));
+        lenient().when(sourceGateway.sample(eq("orders"), anyInt()))
+                .thenReturn(List.of(new Document("_id", "2")));
+        // PostgreSQL-family servers abort the transaction after any failed statement: without a
+        // rollback every later collection would fail with "current transaction is aborted".
+        when(writer.tableExists("bad")).thenThrow(new SQLException("create failed"));
+        lenient().when(sourceGateway.find(eq("orders"), anyInt(), anyBoolean()))
+                .thenReturn(cursor(List.of(new Document("_id", "2"))));
+        lenient().when(sourceGateway.countDocuments("orders")).thenReturn(1L);
+        lenient().when(writer.countRows("orders")).thenReturn(1L);
+        lenient().when(writer.idExists(eq("orders"), any(ColumnMeta.class), any()))
+                .thenReturn(true);
+
+        MigrationRunResult result = run();
+
+        verify(writer).rollbackQuietly();
+        assertThat(result.indices()).hasSize(2);
+        assertThat(result.indices().get(0).status()).isEqualTo(Status.FAILED);
+        assertThat(result.indices().get(1).status()).isEqualTo(Status.SUCCESS);
     }
 
     @Test

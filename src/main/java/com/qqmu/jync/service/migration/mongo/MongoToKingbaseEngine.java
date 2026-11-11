@@ -224,6 +224,11 @@ final class MongoToKingbaseEngine {
             return new IndexResult(sourceName, targetName, Status.SUCCESS, counters.read,
                     counters.written, warnings.isEmpty() ? null : String.join("; ", warnings));
         } catch (SQLException e) {
+            // The connection runs with auto-commit off, and PostgreSQL-family servers abort the
+            // whole transaction after a failed statement. Without this rollback every later
+            // collection would fail with "current transaction is aborted", defeating
+            // continueOnError after one bad table.
+            writer.rollbackQuietly();
             throw new IllegalStateException(sqlMessage(e), e);
         }
     }

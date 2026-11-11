@@ -77,6 +77,22 @@ public class KingbaseTableWriter {
         execute(dialect.getCreateTableSql(table, schema, targetTable, SOURCE));
     }
 
+    /**
+     * Rolls back the current transaction, ignoring a failure so the original error survives.
+     *
+     * <p>PostgreSQL-family servers mark the transaction aborted after any failed statement;
+     * without this, one failed collection would make every later collection fail with "current
+     * transaction is aborted" even when the run asked to continue on error.
+     */
+    public void rollbackQuietly() {
+        try {
+            connection.rollback();
+        } catch (SQLException ignored) {
+            // The connection is already unusable; the statement error that led here is the one
+            // worth reporting.
+        }
+    }
+
     public long countRows(String table) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT COUNT(*) FROM " + qualified(table))) {
