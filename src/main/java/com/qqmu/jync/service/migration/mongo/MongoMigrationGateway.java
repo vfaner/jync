@@ -12,6 +12,13 @@ public interface MongoMigrationGateway extends AutoCloseable {
 
     void ping();
 
+    /**
+     * The server-reported identity of the database this gateway is connected to, or null when
+     * the server cannot answer. Lets a run refuse a source and target that are the same database
+     * even when their URIs spell the host differently.
+     */
+    MongoServerIdentity serverIdentity();
+
     /** Every entry of {@code listCollections}, including views and time-series collections. */
     List<MongoCollectionInfo> listCollections();
 

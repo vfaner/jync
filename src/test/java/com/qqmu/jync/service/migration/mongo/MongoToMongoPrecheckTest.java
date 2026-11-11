@@ -1,7 +1,10 @@
 package com.qqmu.jync.service.migration.mongo;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
@@ -94,6 +97,29 @@ class MongoToMongoPrecheckTest {
 
         assertThat(result.passed()).isFalse();
         assertThat(has(result, Level.ERROR, "migration.precheck.index.targetName")).isTrue();
+    }
+
+    @Test
+    void pointingAtTheSameDatabaseIsAnErrorCheck() {
+        MigrationConnection sourceAlias = connection(1L, "app");
+        MigrationConnection targetAlias = connection(2L, "app");
+        targetAlias.setBaseUrl("mongodb://127.0.0.1:27017/app");
+        when(gatewayFactory.open(sourceAlias)).thenReturn(sourceGateway);
+        when(gatewayFactory.open(targetAlias)).thenReturn(targetGateway);
+        when(sourceGateway.listCollections()).thenReturn(List.of(
+                new MongoCollectionInfo("orders", "collection")));
+        MongoServerIdentity identity =
+                new MongoServerIdentity("app", "rs0", "process-1", "mongo1:27017");
+        when(sourceGateway.serverIdentity()).thenReturn(identity);
+        when(targetGateway.serverIdentity()).thenReturn(identity);
+
+        MigrationPrecheckResult result = handler.precheck(task,
+                options("{\"writeMode\":\"FAIL_IF_EXISTS\"}"), sourceAlias, targetAlias);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(has(result, Level.ERROR, "error.migration.mongo.sameDatabase")).isTrue();
+        // The check is decisive, so the per-collection probes are skipped.
+        verify(targetGateway, never()).collectionExists(anyString());
     }
 
     @Test

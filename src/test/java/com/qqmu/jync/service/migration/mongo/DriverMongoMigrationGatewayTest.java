@@ -16,12 +16,14 @@ import java.util.Set;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
 import org.bson.Document;
+import org.bson.types.ObjectId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 
 import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoCommandException;
 import com.mongodb.ServerAddress;
 import com.mongodb.bulk.BulkWriteError;
 import com.mongodb.bulk.BulkWriteResult;
@@ -160,6 +162,46 @@ class DriverMongoMigrationGatewayTest {
                 new Document("cursor", new Document("firstBatch", List.of())));
         assertThat(gateway.collectionExists("missing")).isFalse();
         assertThat(gateway.collectionOptions("missing")).isEmpty();
+    }
+
+    @Test
+    void serverIdentityExposesTheProcessIdThatIdentifiesTheServer() {
+        when(database.getName()).thenReturn("app");
+        ObjectId processId = new ObjectId("64b7f0c2a1b2c3d4e5f60718");
+        when(database.runCommand(any(Document.class))).thenReturn(
+                new Document("topologyVersion", new Document("processId", processId))
+                        .append("setName", "rs0")
+                        .append("me", "mongo1:27017"));
+
+        MongoServerIdentity identity = gateway.serverIdentity();
+
+        assertThat(identity).isEqualTo(new MongoServerIdentity(
+                "app", "rs0", processId.toHexString(), "mongo1:27017"));
+    }
+
+    @Test
+    void serverIdentityFallsBackToIsMasterWhenHelloIsNotSupported() {
+        when(database.getName()).thenReturn("app");
+        when(database.runCommand(any(Document.class)))
+                .thenThrow(mock(MongoCommandException.class))
+                .thenReturn(new Document("me", "mongo1:27017"));
+        ArgumentCaptor<Document> commands = ArgumentCaptor.forClass(Document.class);
+
+        MongoServerIdentity identity = gateway.serverIdentity();
+
+        assertThat(identity.me()).isEqualTo("mongo1:27017");
+        verify(database, times(2)).runCommand(commands.capture());
+        assertThat(commands.getAllValues().get(0)).containsKey("hello");
+        assertThat(commands.getAllValues().get(1)).containsKey("isMaster");
+    }
+
+    @Test
+    void serverIdentityIsNullWhenNeitherCommandAnswers() {
+        when(database.runCommand(any(Document.class)))
+                .thenThrow(new IllegalStateException("network down"));
+
+        assertThat(gateway.serverIdentity()).isNull();
+        verify(database).runCommand(any(Document.class));
     }
 
     @Test

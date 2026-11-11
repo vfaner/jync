@@ -84,6 +84,9 @@ public class MongoToMongoHandler implements MigrationTypeHandler {
                                             MigrationConnection target) {
         MongoToMongoOptions options = MongoToMongoOptions.parse(optionsNode);
         List<Check> checks = new ArrayList<>();
+        if (MongoConnectionIdentity.sameDatabase(source, target)) {
+            return result(checks, Level.ERROR, "error.migration.mongo.sameDatabase", null);
+        }
 
         MongoMigrationGateway sourceGateway;
         try {
@@ -125,6 +128,13 @@ public class MongoToMongoHandler implements MigrationTypeHandler {
                         describe(e));
             }
             try (targetGateway) {
+                // Same reasoning as the run itself: the URI spelling misses aliases and seed
+                // lists, so the servers are asked before any per-collection probe.
+                MongoServerIdentity sourceIdentity = sourceGateway.serverIdentity();
+                if (sourceIdentity != null
+                        && sourceIdentity.sameDatabaseAs(targetGateway.serverIdentity())) {
+                    return result(checks, Level.ERROR, "error.migration.mongo.sameDatabase", null);
+                }
                 for (MongoCollectionInfo info : collections) {
                     String targetName;
                     try {

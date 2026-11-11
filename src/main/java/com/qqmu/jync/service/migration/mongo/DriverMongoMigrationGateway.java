@@ -4,8 +4,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.bson.Document;
+import org.bson.types.ObjectId;
 
 import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoCommandException;
 import com.mongodb.bulk.BulkWriteError;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
@@ -33,6 +35,33 @@ final class DriverMongoMigrationGateway implements MongoMigrationGateway {
     @Override
     public void ping() {
         database.runCommand(new Document("ping", 1));
+    }
+
+    @Override
+    public MongoServerIdentity serverIdentity() {
+        Document response;
+        try {
+            response = database.runCommand(new Document("hello", 1));
+        } catch (MongoCommandException helloUnsupported) {
+            // `hello` arrived in MongoDB 4.4; an older server answers `isMaster` instead.
+            try {
+                response = database.runCommand(new Document("isMaster", 1));
+            } catch (RuntimeException e) {
+                return null;
+            }
+        } catch (RuntimeException e) {
+            return null;
+        }
+        String processId = null;
+        Document topologyVersion = response.get("topologyVersion", Document.class);
+        if (topologyVersion != null) {
+            ObjectId id = topologyVersion.getObjectId("processId");
+            if (id != null) {
+                processId = id.toHexString();
+            }
+        }
+        return new MongoServerIdentity(database.getName(), response.getString("setName"),
+                processId, response.getString("me"));
     }
 
     @Override

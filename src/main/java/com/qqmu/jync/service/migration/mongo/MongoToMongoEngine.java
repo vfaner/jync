@@ -57,6 +57,14 @@ final class MongoToMongoEngine {
         try {
             sourceGateway = gatewayFactory.open(source);
             targetGateway = gatewayFactory.open(target);
+            // The URI spelling above only catches identical connection strings. Ask the servers
+            // too: `localhost`/`127.0.0.1` and a single host vs a seed list reach the same data,
+            // and OVERWRITE would drop the source along with the target.
+            MongoServerIdentity sourceIdentity = sourceGateway.serverIdentity();
+            if (sourceIdentity != null
+                    && sourceIdentity.sameDatabaseAs(targetGateway.serverIdentity())) {
+                return failedRun("error.migration.mongo.sameDatabase");
+            }
             return runWithGateways(options, sourceGateway, targetGateway, cancellation, progress);
         } catch (RuntimeException e) {
             return failedRun(describe(e));

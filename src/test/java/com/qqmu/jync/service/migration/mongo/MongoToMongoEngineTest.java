@@ -104,6 +104,77 @@ class MongoToMongoEngineTest {
     }
 
     @Test
+    void theSameServerSpelledTwoWaysIsRefusedBeforeAnythingIsCopied() {
+        MigrationConnection sourceAlias = connection(1L, "app");
+        MigrationConnection targetAlias = connection(2L, "app");
+        targetAlias.setBaseUrl("mongodb://127.0.0.1:27017/app");
+        lenient().when(gatewayFactory.open(sourceAlias)).thenReturn(sourceGateway);
+        lenient().when(gatewayFactory.open(targetAlias)).thenReturn(targetGateway);
+        MongoServerIdentity identity =
+                new MongoServerIdentity("app", "rs0", "process-1", "mongo1:27017");
+        when(sourceGateway.serverIdentity()).thenReturn(identity);
+        when(targetGateway.serverIdentity()).thenReturn(identity);
+
+        MigrationRunResult result = engine.run(task, options("{}"), sourceAlias, targetAlias,
+                new MigrationCancellation(), MigrationProgressListener.NONE);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.message()).isEqualTo("error.migration.mongo.sameDatabase");
+        verify(sourceGateway, never()).listCollections();
+        verify(targetGateway, never()).dropCollection(any());
+        verify(targetGateway, never()).insertMany(anyString(), anyList(), anyBoolean());
+    }
+
+    @Test
+    void twoProcessesBehindTheSameHostNameAreNotRefused() {
+        lenient().when(sourceGateway.serverIdentity())
+                .thenReturn(new MongoServerIdentity("app", "rs0", "process-1", "mongo1:27017"));
+        lenient().when(targetGateway.serverIdentity())
+                .thenReturn(new MongoServerIdentity("app", "rs0", "process-2", "mongo1:27017"));
+        stubOneCollection(List.of(new Document("_id", 1)));
+
+        MigrationRunResult result = engine.run(task, options("{}"), source, target,
+                new MigrationCancellation(), MigrationProgressListener.NONE);
+
+        // A restart changes the process id but not the advertised host name; that must not be
+        // mistaken for the same database.
+        assertThat(result.success()).isTrue();
+    }
+
+    @Test
+    void identitiesThatNameDifferentDatabasesAreNotRefused() {
+        lenient().when(sourceGateway.serverIdentity())
+                .thenReturn(new MongoServerIdentity("app", "rs0", "process-1", "mongo1:27017"));
+        lenient().when(targetGateway.serverIdentity())
+                .thenReturn(new MongoServerIdentity("archive", "rs0", "process-1", "mongo1:27017"));
+        stubOneCollection(List.of(new Document("_id", 1)));
+
+        MigrationRunResult result = engine.run(task, options("{}"), source, target,
+                new MigrationCancellation(), MigrationProgressListener.NONE);
+
+        assertThat(result.success()).isTrue();
+    }
+
+    @Test
+    void withoutAProcessIdTheHostAndReplicaSetStillRefuseTheSameDatabase() {
+        MigrationConnection sourceAlias = connection(1L, "app");
+        MigrationConnection targetAlias = connection(2L, "app");
+        targetAlias.setBaseUrl("mongodb://127.0.0.1:27017/app");
+        lenient().when(gatewayFactory.open(sourceAlias)).thenReturn(sourceGateway);
+        lenient().when(gatewayFactory.open(targetAlias)).thenReturn(targetGateway);
+        lenient().when(sourceGateway.serverIdentity())
+                .thenReturn(new MongoServerIdentity("app", "rs0", null, "mongo1:27017"));
+        lenient().when(targetGateway.serverIdentity())
+                .thenReturn(new MongoServerIdentity("app", "rs0", null, "mongo1:27017"));
+
+        MigrationRunResult result = engine.run(task, options("{}"), sourceAlias, targetAlias,
+                new MigrationCancellation(), MigrationProgressListener.NONE);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.message()).isEqualTo("error.migration.mongo.sameDatabase");
+    }
+
+    @Test
     void anEmptyMatchFailsInsteadOfReportingSuccess() {
         when(sourceGateway.listCollections()).thenReturn(List.of(
                 new MongoCollectionInfo("orders", "collection")));
