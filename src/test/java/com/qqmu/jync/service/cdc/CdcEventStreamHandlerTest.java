@@ -2,8 +2,10 @@ package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -401,7 +403,7 @@ class CdcEventStreamHandlerTest {
         CdcEventStreamHandler withSink = new CdcEventStreamHandler(config, "app", supplier,
                 new CdcRowMapper(), stats, () -> "uuid:1-7", sink, null, 0L,
                 CdcTransactionBudget.unlimited(),
-                (db, statement, position) -> { captured.add(db); captured.add(statement); });
+                (db, statement, file, position) -> { captured.add(db); captured.add(statement); });
         QueryEventData ddl = new QueryEventData();
         ddl.setSql(sql);
         ddl.setDatabase("app");
@@ -411,6 +413,64 @@ class CdcEventStreamHandlerTest {
         // No 200/4000-char cap anywhere on this path: every ADD COLUMN must reach the log.
         assertThat(captured).containsExactly("app", sql);
         assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(1L);
+    }
+
+    @Test
+    void aSkippedDdlCarriesTheFileItWasSeenIn() {
+        // The binlog position identifies the event only together with its file. A DDL that
+        // follows a rotation must be filed in the new file, not whichever file the last
+        // committed transaction happened to leave behind.
+        List<Object> captured = new ArrayList<>();
+        CdcEventStreamHandler withSink = new CdcEventStreamHandler(config, "app", supplier,
+                new CdcRowMapper(), stats, () -> "uuid:1-7", sink, null, 0L,
+                CdcTransactionBudget.unlimited(),
+                (db, statement, file, position) -> {
+                    captured.add(file);
+                    captured.add(position);
+                });
+        RotateEventData rotate = new RotateEventData();
+        rotate.setBinlogFilename("binlog.000002");
+        rotate.setBinlogPosition(4L);
+        withSink.onEvent(event(EventType.ROTATE, rotate, 100L));
+        QueryEventData ddl = new QueryEventData();
+        ddl.setSql("ALTER TABLE orders ADD COLUMN note VARCHAR(64)");
+        ddl.setDatabase("app");
+
+        withSink.onEvent(event(EventType.QUERY, ddl, 4000L));
+
+        assertThat(captured).containsExactly("binlog.000002", 4000L);
+    }
+
+    @Test
+    void administrativeStatementsAreNotFiledAsDdlTasks() {
+        List<String> captured = new ArrayList<>();
+        CdcEventStreamHandler withSink = new CdcEventStreamHandler(config, "app", supplier,
+                new CdcRowMapper(), stats, () -> "uuid:1-7", sink, null, 0L,
+                CdcTransactionBudget.unlimited(),
+                (db, statement, file, position) -> { captured.add(db); captured.add(statement); });
+        tableMap(11L, "app", "orders");
+        write(11L, row(1L, "a"));
+        for (String sql : List.of(
+                "GRANT SELECT ON app.* TO 'reader'@'%'",
+                "REVOKE SELECT ON app.* FROM 'reader'@'%'",
+                "ANALYZE TABLE orders",
+                "OPTIMIZE TABLE orders",
+                "FLUSH PRIVILEGES",
+                "CREATE USER 'reader'@'%' IDENTIFIED BY 'secret'",
+                "CREATE DATABASE reporting")) {
+            QueryEventData query = new QueryEventData();
+            query.setSql(sql);
+            query.setDatabase("app");
+            withSink.onEvent(event(EventType.QUERY, query, 330L));
+        }
+
+        // These never change a tracked table's structure: no task, no projected columns.
+        assertThat(captured).isEmpty();
+        assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(0L);
+        // And they must not discard the open transaction's rows either.
+        xid(331L);
+        assertThat(sink.changes).hasSize(1);
+        verify(supplier, never()).invalidate(any(), any());
     }
 
     @Test

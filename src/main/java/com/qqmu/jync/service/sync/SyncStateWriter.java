@@ -272,18 +272,22 @@ public class SyncStateWriter {
     public void recordSkippedDdl(Long projectId, String objectName, String sql,
                                   String ddlFile, Long ddlPos) {
         String statement = sql == null ? "" : sql;
+        String details = SKIPPED_DDL_PREFIX + statement;
         // The binlog position identifies the *event*. The same statement may legitimately
         // occur again later — a column is dropped and added again — and that is a new task,
-        // while the same event delivered twice after a reconnect is not. De-duplicating by
-        // statement text instead would swallow the second occurrence.
-        String key = ddlPos != null
-                ? "ddl:" + projectId + "\u0001" + objectName + "\u0001" + ddlFile + "\u0001" + ddlPos
-                : "ddl:" + projectId + "\u0001" + objectName + "\u0001" + statement;
-        if (isDuplicateFailure(key, System.currentTimeMillis())) {
+        // while the same event delivered twice after a reconnect is not. The open task row
+        // is the record of what was already filed: an in-memory window would forget it on
+        // the next restart and file the event again.
+        boolean alreadyOpen = ddlPos != null && ddlFile != null
+                ? changeLogRepository.countOpenDdlTasksAt(projectId, ddlFile, ddlPos) > 0
+                : changeLogRepository.countOpenDdlTasksByDetails(projectId, details) > 0;
+        if (alreadyOpen) {
+            log.debug("The skipped DDL of project {} at {}:{} already has an open task",
+                    projectId, ddlFile, ddlPos);
             return;
         }
         ChangeLog entry = ChangeLog.of(projectId, ObjectType.PROJECT, objectName,
-                ChangeType.ERROR, SKIPPED_DDL_PREFIX + statement);
+                ChangeType.ERROR, details);
         // A skipped DDL leaves the target unable to accept the next row: it is a real
         // error, so the list must show it in red and include it under "only failures".
         entry.setSuccess(false);

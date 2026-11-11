@@ -122,15 +122,15 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
 
     /**
      * Where a skipped DDL is reported: the database, the full statement and the binlog
-     * position it was seen at.
+     * file/position it was seen at.
      *
-     * <p>The position identifies the <em>event</em>: the same statement may legitimately
-     * occur again later — a column is dropped and added again — and that is a new task,
-     * while the same event delivered twice after a reconnect is not.
+     * <p>The position identifies the <em>event</em> — but only together with its file: the
+     * same offset occurs in every binlog file. The file is the one current when the DDL
+     * event was decoded, not the last committed transaction's.
      */
     @FunctionalInterface
     public interface DdlSink {
-        void accept(String database, String sql, long position);
+        void accept(String database, String sql, String file, long position);
     }
 
     /**
@@ -199,7 +199,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                           LobSpillStore spillStore, long spillThresholdBytes,
                           CdcTransactionBudget budget) {
         this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink,
-                spillStore, spillThresholdBytes, budget, (db, sql, position) -> { });
+                spillStore, spillThresholdBytes, budget, (db, sql, file, position) -> { });
     }
 
     /**
@@ -221,7 +221,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         this.spillStore = spillStore;
         this.spillThresholdBytes = Math.max(0L, spillThresholdBytes);
         this.budget = budget;
-        this.ddlSink = ddlSink == null ? (db, sql, position) -> { } : ddlSink;
+        this.ddlSink = ddlSink == null ? (db, sql, file, position) -> { } : ddlSink;
     }
 
     /**
@@ -504,6 +504,14 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                 || upper.startsWith("DROP TEMPORARY TABLE")) {
             return; // TEMPORARY tables are not tracked by CDC
         }
+        if (!CdcDdlStatements.changesTableStructure(normalized)) {
+            // GRANT / REVOKE / ANALYZE / FLUSH / account management: written to the binlog
+            // as statements, but no tracked table's structure changed — no task, and the
+            // open transaction's buffered rows stay.
+            log.debug("Ignoring non-structural statement in CDC stream (database {}): {}",
+                    data.getDatabase(), normalized);
+            return;
+        }
         if (xaPrepared) {
             // clearBuffer() below would drop the prepared branch's rows: its XA COMMIT
             // would then flush nothing and the source's committed rows would never reach
@@ -519,7 +527,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         log.error("Skipping DDL in CDC stream (database {}): {}", data.getDatabase(), normalized);
         try {
             long position = header.getNextPosition() > 0 ? header.getNextPosition() : lastNextPosition;
-            ddlSink.accept(data.getDatabase(), normalized, position);
+            ddlSink.accept(data.getDatabase(), normalized, currentFile, position);
         } catch (RuntimeException e) {
             // An audit write is never allowed to choke the binlog listener.
             log.debug("Could not file the skipped DDL in the change log: {}", e.toString());

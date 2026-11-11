@@ -21,6 +21,7 @@ import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChangeLogRepository;
@@ -235,9 +236,20 @@ public class CdcDdlTaskService {
         if (columns == null || columns.isEmpty()) {
             return;
         }
+        String executedTable = alteredTable(entry.getTargetDdlSql() != null
+                ? entry.getTargetDdlSql() : stripPrefix(entry.getDetails()));
         for (ChangeLog open : repository.findOpenDdlTasks(entry.getProjectId())) {
             if (open.getId() != null && open.getId().equals(entry.getId())) {
                 continue; // the task being executed must not close itself
+            }
+            String openSql = open.getTargetDdlSql() != null
+                    ? open.getTargetDdlSql() : stripPrefix(open.getDetails());
+            String openTable = alteredTable(openSql);
+            if (executedTable != null && openTable != null
+                    && !executedTable.equalsIgnoreCase(openTable)) {
+                // Same column name on a different table is a different gap: aligning one
+                // table says nothing about the other.
+                continue;
             }
             List<String> added = addedColumns(stripPrefix(open.getDetails()));
             for (String column : columns) {
@@ -316,6 +328,7 @@ public class CdcDdlTaskService {
         StringBuilder current = new StringBuilder();
         char quote = 0;
         boolean inBacktick = false;
+        int depth = 0;
         for (int i = 0; i < rest.length(); i++) {
             char c = rest.charAt(i);
             if (inBacktick) {
@@ -340,7 +353,14 @@ public class CdcDdlTaskService {
                 current.append(c);
                 continue;
             }
-            if (c == ',') {
+            if (c == '(') {
+                depth++;
+            } else if (c == ')' && depth > 0) {
+                depth--;
+            }
+            // Commas inside a type or a value list — DECIMAL(10,2), ENUM('a','b') —
+            // separate parts of the same clause, not clauses.
+            if (c == ',' && depth == 0) {
                 clauses.add(current.toString().trim());
                 current.setLength(0);
                 continue;
@@ -433,13 +453,24 @@ public class CdcDdlTaskService {
                 .orElseThrow(() -> new IllegalStateException("error.ddl.noTarget"));
         // The schema qualifier names the source database; the statement may only run against
         // the target, so it is rewritten here rather than trusted from the form.
-        statement = targetize(statement, target.getDatabaseName());
-
         // A statement that only drops things leaves no data behind; one that adds, renames
         // or retypes a column leaves that column's values unreplicated.
         boolean gap = hasColumnGap(statement);
         List<String> dropped = droppedColumns(statement);
+        // The binlog names the source table; the project may map it to a different target
+        // name. Without the mapping the DDL lands on a table the sync never writes.
+        String sourceTable = alteredTable(stripPrefix(entry.getDetails()));
+        SyncConfig targetConfig = contextFactory == null ? null
+                : contextFactory.parseConfig(project);
         try (Connection connection = dataSourceManager.getConnection(target)) {
+            String identifierQuote = com.qqmu.jync.util.JdbcUtil.identifierQuote(connection);
+            // ``target.getDatabaseName()`` is a schema only in MySQL; elsewhere it is a SID
+            // or service name and qualifying with it would fail on a healthy target.
+            statement = targetize(statement, executionSchema(target, connection),
+                    identifierQuote);
+            statement = retargetTable(statement, sourceTable,
+                    targetConfig == null ? null : targetConfig.targetTableName(sourceTable),
+                    identifierQuote);
             // Idempotent: "Duplicate column name" (MySQL 1060) means the target is already
             // aligned, which is the desired end state after a retry or a second admin click.
             new DdlExecutor(connection).executeIdempotentCreate(statement);
@@ -511,6 +542,14 @@ public class CdcDdlTaskService {
             }
         }
         String gaps = describeGaps(runningGaps(entry.getProjectId()));
+        if (gaps != null) {
+            // The task row now owns the gap; the live map must not hand it to the next
+            // task as well.
+            CdcRuntimeStats stats = statsFor(entry.getProjectId());
+            if (stats != null) {
+                stats.clearPrunedGaps();
+            }
+        }
         if (gaps == null) {
             // The running counters live only as long as the consumer process. A restart
             // between the DDL and the administrator's action would leave the task with
@@ -554,11 +593,16 @@ public class CdcDdlTaskService {
 
     /** The gaps the running consumer recorded, if it is still the one that saw the DDL. */
     private Map<String, Set<String>> runningGaps(Long projectId) {
+        CdcRuntimeStats stats = statsFor(projectId);
+        return stats == null ? null : stats.prunedGaps();
+    }
+
+    /** The live consumer's counters, or null when the project is not streaming. */
+    private CdcRuntimeStats statsFor(Long projectId) {
         if (cdcConsumerManager == null) {
             return null;
         }
-        CdcRuntimeStats stats = cdcConsumerManager.statsFor(projectId);
-        return stats == null ? null : stats.prunedGaps();
+        return cdcConsumerManager.statsFor(projectId);
     }
 
     /**
@@ -727,6 +771,34 @@ public class CdcDdlTaskService {
     }
 
     /**
+     * Closes a skipped-DDL task without touching the target.
+     *
+     * <p>Not every task needs the two-step flow: the administrator may have aligned the
+     * table by hand, or decided the affected rows do not matter. Without a way to close it,
+     * the task stays open forever — the column projection stays on and retention never
+     * prunes the row.
+     *
+     * <p>Idempotent: a double click (or a second administrator) finds it already processed.
+     */
+    public void dismissDdl(Long logId) {
+        ChangeLog entry = repository.findById(logId)
+                .orElseThrow(() -> new IllegalStateException("error.ddl.notFound"));
+        if (entry.getDetails() == null
+                || !entry.getDetails().startsWith(SyncStateWriter.SKIPPED_DDL_PREFIX)) {
+            throw new IllegalStateException("error.ddl.notPending");
+        }
+        if (ChangeLog.RESOLUTION_PROCESSED.equals(entry.getResolutionStatus())) {
+            return;
+        }
+        entry.setReplayDone(true);
+        entry.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
+        entry.setErrorDetail(null);
+        entry.setHandledBy(currentActor());
+        entry.setHandledAt(Instant.now());
+        repository.save(entry);
+    }
+
+    /**
      * The target database name of a project. A binlog DDL always qualifies the table with the
      * <em>source</em> database, which is rarely the target's, so the statement has to be
      * rewritten before it can run on the target.
@@ -752,17 +824,61 @@ public class CdcDdlTaskService {
      * was submitted is therefore replaced here instead of being trusted. A blank target name
      * drops the qualifier so the statement applies to the connection's default schema.
      */
-    static String targetize(String sql, String targetDatabase) {
+    static String targetize(String sql, String targetSchema, String identifierQuote) {
         if (sql == null) {
             return "";
         }
-        String name = targetDatabase == null ? "" : targetDatabase.trim();
+        String name = targetSchema == null ? "" : targetSchema.trim();
         String qualifier = name.isEmpty()
-                ? "" : java.util.regex.Matcher.quoteReplacement("`" + name + "`.");
+                ? "" : java.util.regex.Matcher.quoteReplacement(
+                        com.qqmu.jync.util.JdbcUtil.quotedIdentifier(identifierQuote, name) + ".");
         return sql.replaceAll(
                 "(?is)^(\\s*ALTER\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)"
                         + "(`[^`]+`|\"[^\"]+\"|[A-Za-z0-9_$]+)\\s*\\.\\s*",
                 qualifier.isEmpty() ? "$1" : "$1" + qualifier);
+    }
+
+    /**
+     * Rewrites the table an {@code ALTER TABLE} changes to the project's mapped target name.
+     *
+     * <p>Only the statement head is touched: the table token after {@code ALTER TABLE} and
+     * its optional schema qualifier. Columns and clauses stay exactly as submitted. A blank
+     * mapping, an unknown source table, or a mapping to the same name leaves the statement
+     * unchanged.
+     */
+    static String retargetTable(String sql, String sourceTable, String targetTable,
+                                String identifierQuote) {
+        String target = targetTable == null ? "" : targetTable.trim();
+        if (sql == null || target.isEmpty() || sourceTable == null
+                || target.equalsIgnoreCase(sourceTable.trim())) {
+            return sql;
+        }
+        String quoted = java.util.regex.Matcher.quoteReplacement(
+                com.qqmu.jync.util.JdbcUtil.quotedIdentifier(identifierQuote, target));
+        return sql.replaceFirst(
+                "(?is)^(\\s*ALTER\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)"
+                        + "((?:`[^`]+`|\"[^\"]+\"|[A-Za-z0-9_$]+)\\s*\\.\\s*)?"
+                        + "(`[^`]+`|\"[^\"]+\"|[A-Za-z0-9_$]+)",
+                "$1$2" + quoted);
+    }
+
+    /**
+     * The schema the statement must be applied to: the configured one, the database name for
+     * MySQL (where the two coincide), or the connection's current schema.
+     */
+    private static String executionSchema(DatabaseConfig target, Connection connection)
+            throws SQLException {
+        String schema = target.getSchemaName();
+        if (schema != null && !schema.isBlank()) {
+            schema = schema.trim();
+            return target.resolvedFamily() == DatabaseType.DialectFamily.ORACLE
+                    || target.resolvedFamily() == DatabaseType.DialectFamily.DB2
+                    ? schema.toUpperCase(Locale.ROOT) : schema;
+        }
+        if (target.resolvedFamily() == DatabaseType.DialectFamily.MYSQL) {
+            return target.getDatabaseName();
+        }
+        return connection.getSchema();
     }
 
     /**

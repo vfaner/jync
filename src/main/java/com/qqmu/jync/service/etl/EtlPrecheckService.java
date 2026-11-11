@@ -132,7 +132,7 @@ public class EtlPrecheckService {
 
     private void probeTarget(Connection target, EtlTask task, DatabaseConfig targetConfig,
                              int timeout, List<EtlPrecheckResult.Check> checks,
-                             Map<String, String> resultColumns) {
+                             Map<String, String> resultColumns) throws SQLException {
         String name = EtlSqlSupport.qualified(targetConfig, task.getTargetTable());
         if (!EtlSqlSupport.exists(target, name, timeout)) {
             // Creating the table is the runner's first step, so this is information, not a fault.

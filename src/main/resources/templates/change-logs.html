@@ -115,7 +115,7 @@
                                 <button type="button" class="badge badge-btn"
                                         th:if="${log.resolutionStatus != null}"
                                         th:classappend="${statusCls}"
-                                        th:attr="data-role=ddl-open,data-ddl-id=${log.id},data-ddl-sql=${log.targetDdlSql},data-ddl-src-db=${log.objectName},data-ddl-target-db=${targetDatabaseName},data-ddl-error=${log.errorDetail},data-ddl-executed=${log.ddlExecuted != null and log.ddlExecuted},data-ddl-replayed=${log.replayDone != null and log.replayDone},data-ddl-text-pending=#{log.ddl.pending},data-ddl-text-executed=#{log.ddl.awaitingReplay},data-ddl-text-processed=#{log.ddl.processed},data-ddl-confirm=#{log.ddl.retryConfirm},data-ddl-needs-ddl=#{log.ddl.retryNeedsDdl},data-ddl-gap=${log.affectedTables}"
+                                        th:attr="data-role=ddl-open,data-ddl-id=${log.id},data-ddl-sql=${log.targetDdlSql},data-ddl-src-db=${log.objectName},data-ddl-target-db=${targetDatabaseName},data-ddl-error=${log.errorDetail},data-ddl-executed=${log.ddlExecuted != null and log.ddlExecuted},data-ddl-replayed=${log.replayDone != null and log.replayDone},data-ddl-text-pending=#{log.ddl.pending},data-ddl-text-executed=#{log.ddl.awaitingReplay},data-ddl-text-processed=#{log.ddl.processed},data-ddl-confirm=#{log.ddl.retryConfirm},data-ddl-dismiss-confirm=#{log.ddl.dismissConfirm},data-ddl-needs-ddl=#{log.ddl.retryNeedsDdl},data-ddl-gap=${log.affectedTables}"
                                         th:text="#{${statusKey}}">pending</button>
                             </div>
                             <div th:unless="${skippedDdl}" class="wrap-detail"
@@ -156,6 +156,8 @@
             <div class="modal-actions">
                 <button type="button" class="btn btn-ghost btn-sm" data-role="ddl-close"
                         th:text="#{log.ddl.cancel}">Cancel</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-role="ddl-dismiss"
+                        th:text="#{log.ddl.dismiss}">Close without running</button>
                 <button type="button" class="btn btn-ghost btn-sm" data-role="ddl-retry"
                         th:text="#{log.ddl.retry}">Replay missing rows</button>
                 <button type="button" class="btn btn-primary btn-sm" data-role="ddl-execute"

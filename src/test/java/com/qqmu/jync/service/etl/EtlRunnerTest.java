@@ -144,6 +144,47 @@ class EtlRunnerTest {
     }
 
     /**
+     * A continuation reads only the keys after the checkpoint. Running the pre-sql again would
+     * let its documented cleanup DELETE remove the rows the first run already committed, and the
+     * continuation query would never bring them back.
+     */
+    @Test
+    void aContinuationRunDoesNotReplayThePreSqlThatWouldDeleteItsCommittedRows()
+            throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO dst VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+        checkpoints.save(7L, Types.INTEGER, "3");
+
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.APPEND);
+        task.setResumeKeyColumn("id");
+        task.setPreSql("DELETE FROM dst");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(result.rowsRead()).isEqualTo(2);
+        assertThat(rows("SELECT id FROM dst ORDER BY id"))
+                .containsExactly("1", "2", "3", "4", "5");
+    }
+
+    /** The skip belongs to continuations only: a first run still relies on its pre-sql. */
+    @Test
+    void aFirstRunStillRunsThePreSql() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY)", "INSERT INTO src VALUES (4)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY)",
+                "INSERT INTO dst VALUES (99)");
+
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.APPEND);
+        task.setResumeKeyColumn("id");
+        task.setPreSql("DELETE FROM dst WHERE id = 99");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(rows("SELECT id FROM dst ORDER BY id")).containsExactly("4");
+    }
+
+    /**
      * The customer re-runs the same extraction to refresh a table: rows whose key already
      * exists must take the new values, the missing ones must be inserted, and rows outside the
      * result must survive.
@@ -545,10 +586,47 @@ class EtlRunnerTest {
         Statement statement = mock(Statement.class);
         when(connection.createStatement()).thenReturn(statement);
         when(statement.executeQuery(anyString()))
-                .thenThrow(new SQLException("relation \"dst\" does not exist"));
+                .thenThrow(new SQLException("relation \"dst\" does not exist", "42P01", 0));
 
         assertThat(EtlSqlSupport.exists(connection, "dst")).isFalse();
         verify(connection).rollback();
+    }
+
+    @Test
+    void aPrivilegeErrorOnTheProbeSurfacesInsteadOfCreatingTheTable() throws SQLException {
+        // "Table does not exist" and "you may not read it" are the same boolean unless the
+        // error is classified. Treating the second as the first sends the runner into
+        // CREATE TABLE over an object the account cannot even see — and turns a permission
+        // problem into a confusing "table already exists" or DDL failure.
+        Connection connection = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(anyString()))
+                .thenThrow(new SQLException("permission denied for table dst", "42501", 0));
+
+        assertThatThrownBy(() -> EtlSqlSupport.exists(connection, "dst"))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("permission denied");
+        verify(connection).rollback();
+    }
+
+    @Test
+    void theDriversMissingTableStatesAllCountAsAbsent() throws SQLException {
+        // MySQL/SQL Server/DB2/Oracle each spell "no such table" differently; the probe has
+        // to recognise all of them, otherwise a perfectly normal auto-create is refused.
+        for (SQLException missing : List.of(
+                new SQLException("Table 'db.dst' doesn't exist", "42S02", 1146),
+                new SQLException("Invalid object name 'dst'.", "S0002", 208),
+                new SQLException("table or view does not exist", "42000", 942),
+                new SQLException("undefined name", "42704", -204),
+                new SQLException("Table \"DST\" not found", "42S02", 42102))) {
+            Connection connection = mock(Connection.class);
+            Statement statement = mock(Statement.class);
+            when(connection.createStatement()).thenReturn(statement);
+            when(statement.executeQuery(anyString())).thenThrow(missing);
+
+            assertThat(EtlSqlSupport.exists(connection, "dst")).as(missing.getMessage()).isFalse();
+        }
     }
 
     @Test

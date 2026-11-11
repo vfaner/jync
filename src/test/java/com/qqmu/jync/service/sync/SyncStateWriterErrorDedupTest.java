@@ -3,8 +3,10 @@ package com.qqmu.jync.service.sync;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -99,12 +101,43 @@ class SyncStateWriterErrorDedupTest {
 
     @Test
     void theSameDdlEventDeliveredTwiceIsWrittenOnce() {
-        // A reconnect replays the very same event from the unchanged position.
+        // A reconnect replays the very same event from the unchanged position. The first
+        // write is on record; the second consults it.
+        when(changeLogRepository.countOpenDdlTasksAt(PROJECT_ID, "binlog.000001", 100L))
+                .thenReturn(0L, 1L);
         writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
                 "binlog.000001", 100L);
         writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
                 "binlog.000001", 100L);
 
         verify(changeLogRepository, times(1)).save(any());
+    }
+
+    @Test
+    void aRestartStillRecognisesTheTaskFiledByThePreviousProcess() {
+        // The in-memory dedupe died with the previous process. The open task row is what
+        // survives a restart, so the check must consult the database — otherwise every
+        // reconnect files the same DDL again and buries the operator in duplicates.
+        when(changeLogRepository.countOpenDdlTasksAt(PROJECT_ID, "binlog.000001", 100L))
+                .thenReturn(1L);
+
+        writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
+                "binlog.000001", 100L);
+
+        verify(changeLogRepository, never()).save(any());
+    }
+
+    @Test
+    void aPositionlessDdlIsDedupedByItsStatementAcrossRestarts() {
+        // LogMiner DDL carries no binlog file/position: the statement text is all there is.
+        String details = SyncStateWriter.SKIPPED_DDL_PREFIX
+                + "ALTER TABLE \"SRC\".\"ORDERS\" ADD (\"NOTE\" VARCHAR2(64))";
+        when(changeLogRepository.countOpenDdlTasksByDetails(PROJECT_ID, details))
+                .thenReturn(1L);
+
+        writer.recordSkippedDdl(PROJECT_ID, "ORDERS",
+                "ALTER TABLE \"SRC\".\"ORDERS\" ADD (\"NOTE\" VARCHAR2(64))");
+
+        verify(changeLogRepository, never()).save(any());
     }
 }

@@ -135,8 +135,11 @@ class EtlRunnerUpsertTargetTest {
         if (tableExists) {
             when(statement.executeQuery(anyString())).thenReturn(mock(ResultSet.class));
         } else {
+            // A real driver reports "no such table" with its SQLState/vendor code; a bare
+            // SQLException is what a permission or lock failure looks like, and the probe must
+            // not mistake those for an absent table (it would CREATE over them).
             when(statement.executeQuery(anyString()))
-                    .thenThrow(new SQLException("table dst not found"));
+                    .thenThrow(new SQLException("table dst not found", "42S02", 42102));
         }
         when(connection.prepareStatement(anyString()))
                 .thenAnswer(invocation -> mock(PreparedStatement.class));

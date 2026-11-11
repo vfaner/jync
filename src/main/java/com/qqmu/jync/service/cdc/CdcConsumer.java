@@ -256,7 +256,14 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                         : CdcFailureClassifier.classify(failure);
                 if (kind != CdcFailureClassifier.Kind.TRANSIENT || deserializationStrikeOut()
                         || schemaMismatchStrikeOut()) {
-                    fatalStop(projectId, failure, kind);         // ERROR + recordLog + break
+                    // The classification only knows the driver's wording; the strike-out
+                    // counters know which repeated failure actually parked the project.
+                    String reason = kind != CdcFailureClassifier.Kind.TRANSIENT
+                            ? kind.name()
+                            : schemaMismatchStrikeOut()
+                                    ? "SCHEMA_MISMATCH_STRIKE_OUT"
+                                    : "DESERIALIZATION_STRIKE_OUT";
+                    fatalStop(projectId, failure, reason);       // ERROR + recordLog + break
                     break;
                 }
                 // R3b: reset the escalation only when the connection that just ended had
@@ -416,12 +423,12 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     }
 
     /** ERROR 帽子 + 审计日志,线程随后结束(B7:等人处置,不自动重启)。 */
-    private void fatalStop(long projectId, Throwable failure, CdcFailureClassifier.Kind kind) {
-        // A TRANSIENT kind can only reach fatalStop via the deserialization strike-out.
-        String label = kind == CdcFailureClassifier.Kind.TRANSIENT
-                ? "DESERIALIZATION_STRIKE_OUT" : kind.name();
+    private void fatalStop(long projectId, Throwable failure, String label) {
+        String fallback = "SCHEMA_MISMATCH_STRIKE_OUT".equals(label)
+                ? "the target kept rejecting rows for a column the source has"
+                : "repeated binlog deserialization failures";
         String detail = label + ": " + (failure == null
-                ? "repeated binlog deserialization failures"
+                ? fallback
                 : CdcFailureClassifier.describe(failure));
         stats.setLastError(detail);      // C3:面板与 sync_task 收到同一份措辞
         taskStore.recordCdcFailure(projectId, detail);
@@ -463,14 +470,16 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 client::getGtidSet, sink, spillStore(),
                 properties.getLob().getCdcSpillThresholdBytes(),
                 CdcTransactionBudget.from(properties),
-                (db, sql, position) -> {
+                (db, sql, file, position) -> {
                     lastSkippedDdl.set(sql);
-                    // The binlog position identifies this DDL event: the same statement may
-                    // legitimately occur again later (a column is dropped and added again)
-                    // and that is a new task, while a reconnect replaying the very same
-                    // event is not. The position also bounds the window in which the new
-                    // column's values are not replicated.
-                    stateWriter.recordSkippedDdl(project.getId(), db, sql, lastFile, position);
+                    // The file/position pair identifies this DDL event: the same statement
+                    // may legitimately occur again later (a column is dropped and added
+                    // again) and that is a new task, while a reconnect replaying the very
+                    // same event is not. The pair also bounds the window in which the new
+                    // column's values are not replicated. ``file`` is the handler's current
+                    // binlog file — ``lastFile`` only advances on a committed transaction,
+                    // so a DDL right after a rotation would be filed under the old file.
+                    stateWriter.recordSkippedDdl(project.getId(), db, sql, file, position);
                 });
         handler.attachClient(client);                            // R1:choke 时自行断连
         client.registerEventListener(handler);
@@ -564,6 +573,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             stats.touchActivity();
             deserializationFailures.set(0);                      // 成功事务:清零连败计数
             schemaMismatchFailures.set(0);                      // 成功事务:结构漂移连败也清零
+            // 目标已跟上:此前的跳过 DDL 不再解释之后的失败(列投影也已生效),
+            // 留着会把一个已解决的结构问题挂到无关的写失败上。
+            lastSkippedDdl.set(null);
         };
     }
 

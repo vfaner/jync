@@ -15,6 +15,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +31,7 @@ import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ChangeLogRepository;
@@ -216,6 +218,10 @@ class CdcDdlTaskServiceTest {
         assertThat(log.getGapEndFile()).isEqualTo("binlog.000042");
         assertThat(log.getGapEndPos()).isEqualTo(901743416L);
         assertThat(log.getAffectedTables()).isEqualTo("file_info(suffix)");
+        // The task row now owns the gap. The live counters keep running for the rest of
+        // the consumer's life; without clearing, every later DDL task inherits this
+        // table's columns and asks for a replay that was already done.
+        assertThat(stats.prunedGaps()).isEmpty();
     }
 
     @Test
@@ -450,10 +456,171 @@ class CdcDdlTaskServiceTest {
     void theSchemaQualifierIsRewrittenToTheTargetDatabase() {
         // The binlog statement names the source database; only the target may be touched.
         assertThat(CdcDdlTaskService.targetize("ALTER TABLE `src_db`.`t` ADD COLUMN c INT",
-                "target_db")).isEqualTo("ALTER TABLE `target_db`.`t` ADD COLUMN c INT");
+                "target_db", "`")).isEqualTo("ALTER TABLE `target_db`.`t` ADD COLUMN c INT");
         // Without a known target name the qualifier is dropped rather than kept.
-        assertThat(CdcDdlTaskService.targetize("ALTER TABLE `src_db`.`t` ADD COLUMN c INT", null))
-                .isEqualTo("ALTER TABLE `t` ADD COLUMN c INT");
+        assertThat(CdcDdlTaskService.targetize("ALTER TABLE `src_db`.`t` ADD COLUMN c INT",
+                null, "`")).isEqualTo("ALTER TABLE `t` ADD COLUMN c INT");
+    }
+
+    @Test
+    void aligningOneTableDoesNotCloseAnOpenTaskForAnotherTable() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+        // A different table that happens to gain a column with the same name.
+        ChangeLog otherTable = ChangeLog.of(3L, ObjectType.PROJECT, "source_db",
+                ChangeType.ERROR, SyncStateWriter.SKIPPED_DDL_PREFIX
+                        + "ALTER TABLE orders ADD COLUMN c INT");
+        otherTable.setId(10L);
+        otherTable.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+        when(changeLogRepository.findOpenDdlTasks(3L)).thenReturn(List.of(otherTable));
+
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+
+        // orders still needs its own column; only t was aligned.
+        assertThat(otherTable.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PENDING);
+        verify(changeLogRepository, never()).save(otherTable);
+    }
+
+    @Test
+    void aligningATableClosesAnOlderTaskForTheSameTable() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target()));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+        ChangeLog sameTable = ChangeLog.of(3L, ObjectType.PROJECT, "source_db",
+                ChangeType.ERROR, SyncStateWriter.SKIPPED_DDL_PREFIX
+                        + "ALTER TABLE `source_db`.`T` ADD COLUMN `c` INT");
+        sameTable.setId(10L);
+        sameTable.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+        when(changeLogRepository.findOpenDdlTasks(3L)).thenReturn(List.of(sameTable));
+
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+
+        assertThat(sameTable.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PROCESSED);
+        assertThat(sameTable.getReplayDone()).isTrue();
+    }
+
+    @Test
+    void aCommaInsideATypeDoesNotSplitTheClause() {
+        // DECIMAL(10,2) is one clause. Splitting it leaves a "2)" fragment that no clause
+        // reader recognises, and the pieces after it are parsed as if they started the
+        // table's clause list — the statement's columns are then read wrong.
+        assertThat(CdcDdlTaskService.alterClauses(
+                "ALTER TABLE t ADD COLUMN amount DECIMAL(10,2) NOT NULL, "
+                        + "ADD COLUMN flag TINYINT(1) DEFAULT 0"))
+                .containsExactly("ADD COLUMN amount DECIMAL(10,2) NOT NULL",
+                        "ADD COLUMN flag TINYINT(1) DEFAULT 0");
+    }
+
+    @Test
+    void aCommaInsideAQuotedEnumValueDoesNotSplitTheClause() {
+        assertThat(CdcDdlTaskService.alterClauses(
+                "ALTER TABLE t ADD COLUMN state ENUM('new,yet','done') NOT NULL"))
+                .containsExactly("ADD COLUMN state ENUM('new,yet','done') NOT NULL");
+    }
+
+    @Test
+    void theQualifierIsWrittenInTheTargetsOwnQuoteStyle() {
+        assertThat(CdcDdlTaskService.targetize("ALTER TABLE src.t ADD COLUMN c INT",
+                "target_db", "\"")).isEqualTo("ALTER TABLE \"target_db\".t ADD COLUMN c INT");
+        assertThat(CdcDdlTaskService.targetize("ALTER TABLE src.t ADD COLUMN c INT",
+                "target_db", "`")).isEqualTo("ALTER TABLE `target_db`.t ADD COLUMN c INT");
+    }
+
+    @Test
+    void executingAgainstOracleUsesTheSchemaNotTheServiceName() throws Exception {
+        ChangeLog log = pendingLog();
+        // The binlog statement carries the source schema qualifier.
+        log.setDetails(SyncStateWriter.SKIPPED_DDL_PREFIX
+                + "ALTER TABLE src.t ADD COLUMN c INT");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig oracle = target();
+        oracle.setType(DatabaseType.ORACLE);
+        oracle.setDatabaseName("ORCLPDB1");
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(oracle));
+        Connection connection = connectionExecuting(true);
+        when(connection.getSchema()).thenReturn("APP");
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+
+        service.executeDdl(9L, "ALTER TABLE src.t ADD COLUMN c INT");
+
+        // The service name addresses the database, not the schema; qualified with it the
+        // statement would fail on a healthy target.
+        assertThat(log.getTargetDdlSql()).isEqualTo("ALTER TABLE APP.t ADD COLUMN c INT");
+    }
+
+    @Test
+    void theTargetsTableMappingDecidesWhichTableTheDdlRunsAgainst() throws Exception {
+        // The binlog names the source table. A project that maps it to a different target
+        // name must get the DDL on the mapped table: running it under the source name
+        // touches a table the sync never writes, or fails because that table is absent.
+        ChangeLog log = pendingLog();
+        log.setDetails(SyncStateWriter.SKIPPED_DDL_PREFIX
+                + "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig target = target();
+        target.setType(DatabaseType.MYSQL);
+        target.setDatabaseName("tgt_db");
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target));
+        Connection connection = connectionExecuting(true);
+        when(dataSourceManager.getConnection(any())).thenReturn(connection);
+        SyncConfig config = new SyncConfig();
+        config.setTableNameMapping(Map.of("orders", "orders_tgt"));
+        when(contextFactory.parseConfig(any())).thenReturn(config);
+
+        service.executeDdl(9L,
+                "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)");
+
+        assertThat(log.getTargetDdlSql()).isEqualTo(
+                "ALTER TABLE tgt_db.orders_tgt ADD COLUMN `note` VARCHAR(64)");
+    }
+
+    @Test
+    void dismissingAnOpenTaskClosesItWithoutTouchingTheTarget() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+
+        service.dismissDdl(9L);
+
+        // The administrator decided the gap needs no action (fixed by hand, or the table
+        // is no longer synced). Without this the task stays open forever and keeps the
+        // column projection on.
+        assertThat(log.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PROCESSED);
+        assertThat(log.getReplayDone()).isTrue();
+        assertThat(log.getHandledBy()).isNotBlank();
+        assertThat(log.getHandledAt()).isNotNull();
+        verify(changeLogRepository).save(log);
+        verify(dataSourceManager, never()).getConnection(any());
+    }
+
+    @Test
+    void aDismissedTaskCannotBeDismissedTwice() {
+        ChangeLog log = pendingLog();
+        log.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+
+        service.dismissDdl(9L);
+
+        verify(changeLogRepository, never()).save(log);
+    }
+
+    @Test
+    void anOrdinaryAuditRowCannotBeDismissed() {
+        ChangeLog log = ChangeLog.of(3L, ObjectType.PROJECT, "db", ChangeType.INFO,
+                "baseline rebuilt");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+
+        assertThatThrownBy(() -> service.dismissDdl(9L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.ddl.notPending");
     }
 
     @Test

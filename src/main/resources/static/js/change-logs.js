@@ -133,6 +133,14 @@
           : (executed ? (btn.getAttribute('data-ddl-text-executed') || '')
           : (btn.getAttribute('data-ddl-text-pending') || ''));
     }
+    var dismiss = document.querySelector('[data-role="ddl-dismiss"]');
+    if (dismiss) {
+      // A processed task has nothing left to close; an executed-but-not-replayed one does.
+      dismiss.disabled = replayed;
+      dismiss.setAttribute('data-action', '/change-logs/' + id + '/dismiss');
+      dismiss.setAttribute('data-confirm-text',
+        btn.getAttribute('data-ddl-dismiss-confirm') || '');
+    }
     var err = document.getElementById('ddl-execute-error');
     if (err) { err.textContent = btn.getAttribute('data-ddl-error') || ''; }
     var gap = document.getElementById('ddl-execute-gap');
@@ -243,9 +251,34 @@
     });
   }
 
+  /**
+   * 直接关闭待办：不执行 DDL，也不重放数据。目标端可能由管理员手工对齐，或这些行
+   * 已不再重要；没有这个出口，待办永远开着，列投影也就永远关不掉。
+   */
+  function bindDismiss(btn) {
+    btn.addEventListener('click', function () {
+      if (!btn.dataset.action) { return; }
+      var run = function () {
+        btn.disabled = true;
+        postJson(btn.dataset.action, new FormData()).then(function (payload) {
+          afterResult(btn, payload);
+        }).catch(function () {
+          afterResult(btn, { success: false, message: 'Request failed' });
+        });
+      };
+      var confirmText = btn.getAttribute('data-confirm-text');
+      if (confirmText && dialog.confirm) {
+        dialog.confirm(confirmText, run);
+      } else {
+        run();
+      }
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     document.querySelectorAll('[data-role="ddl-execute"]').forEach(bindExecution);
     document.querySelectorAll('[data-role="ddl-retry"]').forEach(bindRetry);
+    document.querySelectorAll('[data-role="ddl-dismiss"]').forEach(bindDismiss);
     // 事件委托：行是服务端渲染的，列表局部刷新后新加的 tag 同样能打开弹窗。
     document.addEventListener('click', function (e) {
       var btn = e.target && e.target.closest ? e.target.closest('[data-role="ddl-open"]') : null;

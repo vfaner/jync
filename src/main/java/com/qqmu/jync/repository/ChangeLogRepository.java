@@ -108,6 +108,28 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
             + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')")
     long countOpenDdlTasks(@Param("projectId") Long projectId);
 
+    /**
+     * Whether the exact binlog event still has an open task.
+     *
+     * <p>A consumer restart re-reads a DDL it has already filed; the in-memory dedupe map
+     * died with the previous process, so this row is the only surviving record of the
+     * event. Position, not statement text, is the identity — a column dropped and added
+     * again is a new task even though the ALTER reads the same.
+     */
+    @Query("select count(c) from ChangeLog c where c.projectId = :projectId"
+            + " and c.details like 'CDC_SKIPPED_DDL:%'"
+            + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')"
+            + " and c.gapStartFile = :file and c.gapStartPos = :pos")
+    long countOpenDdlTasksAt(@Param("projectId") Long projectId,
+                             @Param("file") String file, @Param("pos") Long pos);
+
+    /** The same check for sources that report no binlog position (LogMiner): text identity. */
+    @Query("select count(c) from ChangeLog c where c.projectId = :projectId"
+            + " and c.details = :details"
+            + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')")
+    long countOpenDdlTasksByDetails(@Param("projectId") Long projectId,
+                                    @Param("details") String details);
+
     /** Successful rows of one type, used to spot row-count repairs in the last few minutes. */
     List<ChangeLog> findByChangeTypeAndOccurredAtAfter(ChangeType type, Instant since);
 

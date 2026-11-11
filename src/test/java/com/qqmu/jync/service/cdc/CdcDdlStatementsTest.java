@@ -1,0 +1,46 @@
+package com.qqmu.jync.service.cdc;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Test;
+
+/**
+ * The binlog's Query events carry more than table DDL: privileges, maintenance and account
+ * management are written as statements too. Filing those as skipped-DDL tasks turns every
+ * FLUSH PRIVILEGES into an "action required" row and forces column projection on.
+ */
+class CdcDdlStatementsTest {
+
+    @Test
+    void privilegedAndMaintenanceStatementsDoNotChangeTableStructure() {
+        assertThat(CdcDdlStatements.changesTableStructure(
+                "GRANT SELECT ON app.* TO 'reader'@'%'")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure(
+                "REVOKE ALL PRIVILEGES ON *.* FROM 'reader'@'%'")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure("ANALYZE TABLE orders")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure("OPTIMIZE TABLE orders")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure("FLUSH PRIVILEGES")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure(
+                "CREATE USER 'reader'@'%' IDENTIFIED BY 'secret'")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure("DROP USER 'reader'@'%'")).isFalse();
+        assertThat(CdcDdlStatements.changesTableStructure("CREATE DATABASE reporting")).isFalse();
+    }
+
+    @Test
+    void tableDdlStillChangesStructure() {
+        assertThat(CdcDdlStatements.changesTableStructure(
+                "ALTER TABLE orders ADD COLUMN note VARCHAR(64)")).isTrue();
+        assertThat(CdcDdlStatements.changesTableStructure("CREATE TABLE t (id INT)")).isTrue();
+        assertThat(CdcDdlStatements.changesTableStructure("DROP TABLE t")).isTrue();
+        assertThat(CdcDdlStatements.changesTableStructure("RENAME TABLE a TO b")).isTrue();
+        assertThat(CdcDdlStatements.changesTableStructure("TRUNCATE TABLE t")).isTrue();
+        // Unknown statements keep the conservative default: a task, never a silent skip.
+        assertThat(CdcDdlStatements.changesTableStructure("SOMETHING NEW")).isTrue();
+    }
+
+    @Test
+    void leadingWhitespaceAndCaseDoNotMatter() {
+        assertThat(CdcDdlStatements.changesTableStructure("  grant select on app.* to x"))
+                .isFalse();
+    }
+}

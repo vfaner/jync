@@ -83,6 +83,24 @@ class EtlUpsertIndexesTest {
     }
 
     @Test
+    void aPrefixIndexPartDoesNotCoverTheWholeColumn() throws SQLException {
+        // UNIQUE KEY uk_email (email(32)) matches only the first 32 characters: two distinct
+        // addresses that share that prefix must not be treated as the same key, or the
+        // native upsert silently overwrites one with the other.
+        Connection target = target(new IndexRow("UK_EMAIL", "EMAIL", "dst", true, 32));
+
+        assertThat(EtlUpsertIndexes.coversKeys(target, "dst", List.of("email"))).isFalse();
+    }
+
+    @Test
+    void aFullColumnUniqueIndexStillCoversAlthoughAnotherIsPrefixOnly() throws SQLException {
+        Connection target = target(new IndexRow("UK_EMAIL_PREFIX", "EMAIL", "dst", true, 16),
+                new IndexRow("UK_EMAIL_FULL", "EMAIL", "dst", true, null));
+
+        assertThat(EtlUpsertIndexes.coversKeys(target, "dst", List.of("email"))).isTrue();
+    }
+
+    @Test
     void unreadableMetadataIsNotACover() throws SQLException {
         Connection target = mock(Connection.class);
         when(target.getMetaData()).thenThrow(new SQLException("dictionary unavailable"));
@@ -111,6 +129,7 @@ class EtlUpsertIndexesTest {
                 case "INDEX_NAME" -> row.index();
                 case "COLUMN_NAME" -> row.column();
                 case "TABLE_NAME" -> row.table();
+                case "SUB_PART" -> row.subPart() == null ? null : row.subPart().toString();
                 default -> null;
             };
         });
@@ -118,6 +137,10 @@ class EtlUpsertIndexesTest {
         return connection;
     }
 
-    private record IndexRow(String index, String column, String table, boolean unique) {
+    private record IndexRow(String index, String column, String table, boolean unique,
+                            Integer subPart) {
+        IndexRow(String index, String column, String table, boolean unique) {
+            this(index, column, table, unique, null);
+        }
     }
 }

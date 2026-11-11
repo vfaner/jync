@@ -114,9 +114,19 @@ public class EtlRunner {
                 // first run would otherwise fail before the table was created. It still runs
                 // before the write-mode deletion and before any row is written. A failure is
                 // the target's, not the program's.
+                //
+                // A continuation never replays it: the cursor reads only the keys after the
+                // checkpoint, so a cleanup DELETE would remove the rows the first run already
+                // committed and the continuation query could never bring them back.
                 stage = Side.TARGET;
                 if (task.getPreSql() != null && !task.getPreSql().isBlank()) {
-                    executePreOrPost(target, task, task.getPreSql());
+                    if (checkpoint != null) {
+                        log.warn("ETL task {} resumes after a checkpoint; skipping pre-sql "
+                                + "so it cannot delete rows the first run already loaded",
+                                task.getId());
+                    } else {
+                        executePreOrPost(target, task, task.getPreSql());
+                    }
                 }
                 deleteForWriteMode(target, task, targetName, checkpoint);
 

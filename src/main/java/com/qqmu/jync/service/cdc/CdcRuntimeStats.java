@@ -262,6 +262,17 @@ public final class CdcRuntimeStats {
     }
 
     /**
+     * Drops the recorded gaps once a DDL task has taken them over.
+     *
+     * <p>The gap then lives on the task row, which is what a replay reads. This map keeps
+     * the consumer's whole lifetime; leaving it populated makes every later task inherit
+     * an earlier table's columns and replay data that was already brought over.
+     */
+    public void clearPrunedGaps() {
+        prunedGaps.clear();
+    }
+
+    /**
      * Turns the column projection on for the rest of this run.
      *
      * <p>The projection normally stays off: without a DDL in the stream the target layout

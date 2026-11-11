@@ -145,6 +145,25 @@ public class ChangeLogController {
         }
     }
 
+    /**
+     * Closes a skipped-DDL task without running anything: the table may already have been
+     * aligned by hand, or the affected rows may not matter. Otherwise the task stays open
+     * forever and keeps the column projection on.
+     */
+    @PostMapping("/change-logs/{id}/dismiss")
+    @ResponseBody
+    public Map<String, Object> dismissDdl(@PathVariable Long id) {
+        try {
+            if (ddlTaskService == null) {
+                throw new IllegalStateException("error.ddl.notFound");
+            }
+            ddlTaskService.dismissDdl(id);
+            return Map.of("success", true, "message", text("msg.ddl.dismissed"));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return Map.of("success", false, "message", text(e.getMessage()));
+        }
+    }
+
     /** Resolves "key" / "key:detail" into a localised sentence for the AJAX toast. */
     private String text(String key) {
         if (key == null) {

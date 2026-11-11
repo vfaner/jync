@@ -72,7 +72,7 @@ public final class EtlSqlSupport {
         return qualified(targetConfig, configuredTable).toUpperCase(java.util.Locale.ROOT);
     }
 
-    static boolean exists(Connection target, String qualifiedTable) {
+    static boolean exists(Connection target, String qualifiedTable) throws SQLException {
         return exists(target, qualifiedTable, 0);
     }
 
@@ -80,8 +80,13 @@ public final class EtlSqlSupport {
      * @param timeoutSeconds {@code > 0} bounds the probe. A precheck must not wait forever
      *                       behind a metadata lock that the load itself would only meet after
      *                       an operator has already decided to run it.
+     * @throws SQLException any failure other than "no such table". A permission error, a
+     *                      lock timeout or a dead connection is not the same fact as an
+     *                      absent table: answering {@code false} would send the caller into
+     *                      CREATE TABLE over an object it may not even be allowed to see.
      */
-    static boolean exists(Connection target, String qualifiedTable, int timeoutSeconds) {
+    static boolean exists(Connection target, String qualifiedTable, int timeoutSeconds)
+            throws SQLException {
         try (Statement probe = target.createStatement()) {
             if (timeoutSeconds > 0) {
                 probe.setQueryTimeout(timeoutSeconds);
@@ -93,8 +98,41 @@ public final class EtlSqlSupport {
             // The probe for a missing table is expected to fail, so clear that state before
             // the caller's CREATE TABLE; nothing has been written to the target at this point.
             rollbackQuietly(target);
-            return false;
+            if (isMissingTable(e)) {
+                return false;
+            }
+            throw e;
         }
+    }
+
+    /**
+     * The "no such table/view" spelling of every target family.
+     *
+     * <p>SQLSTATE alone is not enough: Oracle and DM keep SQLSTATE 42000 for everything and
+     * distinguish by vendor code, while DB2 and SQL Server use their own states.
+     */
+    private static boolean isMissingTable(SQLException failure) {
+        for (SQLException e = failure; e != null;
+                e = e.getNextException() == e ? null : e.getNextException()) {
+            String state = e.getSQLState();
+            int code = e.getErrorCode();
+            if ("42S02".equals(state)      // MySQL, H2 (non-empty db), SQL Server, DM
+                    || "42S04".equals(state) // H2: table not found because the database is empty
+                    || "42P01".equals(state) // PostgreSQL family
+                    || "S0002".equals(state) // SQL Server
+                    || "42704".equals(state)) { // DB2
+                return true;
+            }
+            if (code == 1146      // MySQL ER_NO_SUCH_TABLE
+                    || code == 942 // Oracle/DM ORA-00942
+                    || code == 208 // SQL Server invalid object name
+                    || code == -204 // DB2 undefined name
+                    || code == 42102 // H2 table not found
+                    || code == 42104) { // H2 table not found in an empty database
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void rollbackQuietly(Connection connection) {

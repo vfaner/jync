@@ -249,6 +249,46 @@ class LogMinerCdcConsumerTest {
         verify(reader, times(1)).readTable(any(), eq("SRC"), eq("OG_LOB"));
     }
 
+    @Test
+    void aSkippedDdlIsFiledUnderTheTableNotJustTheSchema() throws Exception {
+        Project project = project(11L);
+        SyncLockService.LockHandle lock = boundedLock(3);
+        SyncConfig cfg = new SyncConfig();
+        cfg.getTables().add("ORDERS");
+        SyncContext ctx = SyncContext.builder().project(project).config(cfg)
+                .sourceConfig(new DatabaseConfig()).sourceSchema("SRC").build();
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(11L)).thenReturn(Optional.of(scnPosition(11L, 100L)));
+        SyncStateWriter stateWriter = mock(SyncStateWriter.class);
+        DataSourceManager dataSourceManager = mock(DataSourceManager.class);
+        Connection sourceConn = mock(Connection.class);
+        Statement probeStmt = mock(Statement.class);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(probeStmt.executeQuery(anyString())).thenReturn(emptyRs);
+        when(sourceConn.createStatement()).thenReturn(probeStmt);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+        Timestamp now = new Timestamp(System.currentTimeMillis());
+        String ddl = "ALTER TABLE \"SRC\".\"ORDERS\" ADD (\"NOTE\" VARCHAR2(64));";
+        FakeSession session = new FakeSession(List.of(
+                new LogMinerSession.Row("rs1", 101L, "DDL", "SRC", "ORDERS", ddl, now, 0)));
+        SyncProperties properties = new SyncProperties();
+        properties.getCdc().setReconnectBackoffMs(1L);
+        properties.getCdc().setReconnectBackoffMaxMs(1L);
+        properties.getCdc().getLogminer().setIdlePollMs(1);
+
+        LogMinerCdcConsumer consumer = new LogMinerCdcConsumer(project, lock, ctx,
+                positionStore, mock(CdcBaselineService.class), mock(SyncTaskStore.class),
+                stateWriter, dataSourceManager, new CdcRuntimeStats(), properties,
+                (c, s, b) -> session);
+        Thread t = new Thread(consumer);
+        t.start();
+        t.join(5_000);
+
+        // The schema alone names every table at once; the operator needs the table.
+        verify(stateWriter).recordSkippedDdl(eq(11L), eq("ORDERS"), eq(ddl));
+    }
+
     /** Lock that allows {@code grants} renews, then reports the least lost. */
     private static SyncLockService.LockHandle boundedLock(int grants) {
         java.util.concurrent.atomic.AtomicInteger remaining =

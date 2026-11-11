@@ -499,7 +499,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     String sql = row.sqlRedo == null ? "" : row.sqlRedo;
                     log.error("Skipping DDL in LogMiner stream ({}): {}", row.segOwner, sql);
                     try {
-                        stateWriter.recordSkippedDdl(projectId, row.segOwner, sql);
+                        // The change log's object column names the table. The schema alone
+                        // ("APP") says nothing: several tables live in it.
+                        String objectName = row.tableName == null || row.tableName.isBlank()
+                                ? row.segOwner : row.tableName;
+                        stateWriter.recordSkippedDdl(projectId, objectName, sql);
                     } catch (RuntimeException e) {
                         log.debug("Could not file the skipped DDL in the change log: {}",
                                 e.toString());

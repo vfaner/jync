@@ -39,8 +39,11 @@ import org.mockito.ArgumentCaptor;
 
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
 import com.github.shyiko.mysql.binlog.event.Event;
+import com.github.shyiko.mysql.binlog.event.EventData;
 import com.github.shyiko.mysql.binlog.event.EventHeaderV4;
 import com.github.shyiko.mysql.binlog.event.EventType;
+import com.github.shyiko.mysql.binlog.event.QueryEventData;
+import com.github.shyiko.mysql.binlog.event.RotateEventData;
 import com.github.shyiko.mysql.binlog.event.TableMapEventData;
 import com.github.shyiko.mysql.binlog.network.ServerException;
 import com.qqmu.jync.config.SyncProperties;
@@ -248,6 +251,168 @@ class CdcConsumerTest {
                 new CdcPositionMark("mysql-bin.000004", 130L, null));
 
         assertThat(stats.lagSeconds()).isEqualTo(90L);
+    }
+
+    @Test
+    void aSkippedDdlIsFiledInTheFileItWasSeenIn() throws Exception {
+        // The consumer's lastFile only advances when a transaction commits. A DDL written
+        // right after a rotation, before any row transaction, belongs to the NEW file;
+        // filed under the old one its identity is wrong — dedupe can collide with another
+        // event and the gap window starts in the wrong file.
+        Project project = project(23L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(true, false);
+        SyncContext ctx = SyncContext.builder()
+                .project(project)
+                .config(new SyncConfig())
+                .sourceSchema("app")
+                .build();
+
+        AtomicBoolean connected = new AtomicBoolean();
+        BinaryLogClient client = mock(BinaryLogClient.class);
+        AtomicReference<BinaryLogClient.EventListener> listener = new AtomicReference<>();
+        AtomicReference<BinaryLogClient.LifecycleListener> lifecycle = new AtomicReference<>();
+        doAnswer(inv -> {
+            listener.set(inv.getArgument(0));
+            return null;
+        }).when(client).registerEventListener(any());
+        doAnswer(inv -> {
+            lifecycle.set(inv.getArgument(0));
+            return null;
+        }).when(client).registerLifecycleListener(any());
+        when(client.isConnected()).thenAnswer(inv -> connected.get());
+        String ddl = "ALTER TABLE `app`.`orders` ADD COLUMN `note` VARCHAR(64)";
+        doAnswer(inv -> {
+            connected.set(true);
+            lifecycle.get().onConnect(client);
+            RotateEventData rotate = new RotateEventData();
+            rotate.setBinlogFilename("binlog.000010");
+            rotate.setBinlogPosition(4L);
+            listener.get().onEvent(event(EventType.ROTATE, rotate, 100L));
+            QueryEventData query = new QueryEventData();
+            query.setDatabase("app");
+            query.setSql(ddl);
+            listener.get().onEvent(event(EventType.QUERY, query, 4100L));
+            connected.set(false);
+            return null;
+        }).when(client).connect(anyLong());
+        BinlogClientFactory factory = mock(BinlogClientFactory.class);
+        when(factory.createClient(any(), anyLong(), any())).thenReturn(client);
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(23L)).thenReturn(
+                Optional.of(baselineDonePosition(23L, "mysql-bin.000009")));
+        SyncStateWriter stateWriter = mock(SyncStateWriter.class);
+        CdcConsumer consumer = new CdcConsumer(project, lock, ctx, factory, positionStore,
+                mock(CdcBaselineService.class), mock(SyncTaskStore.class), stateWriter,
+                mock(DataSourceManager.class), new CdcRuntimeStats(), new SyncProperties());
+
+        Thread thread = new Thread(consumer, "cdc-test-23");
+        thread.start();
+        thread.join(10_000);
+
+        assertThat(thread.isAlive()).isFalse();
+        verify(stateWriter).recordSkippedDdl(23L, "app", ddl, "binlog.000010", 4100L);
+    }
+
+    private static Event event(EventType type, EventData data, long nextPosition) {
+        EventHeaderV4 header = new EventHeaderV4();
+        header.setEventType(type);
+        header.setNextPosition(nextPosition);
+        header.setTimestamp(0L);
+        return new Event(header, data);
+    }
+
+    @Test
+    void aSkippedDdlDoesNotDescribeAFlushFailureFromALaterTransaction() throws Exception {
+        // The skipped-DDL note explains the failures that follow it until the target
+        // catches up. Once a transaction commits — the projection is now in effect — the
+        // old statement has nothing to say about a later, unrelated flush failure; keeping
+        // it makes every such failure look like the same DDL never got applied, and the
+        // operator chases an already-solved problem.
+        Project project = project(21L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(true, false);
+        Connection target = mock(Connection.class);
+        when(target.getAutoCommit()).thenReturn(true);
+        AtomicInteger commits = new AtomicInteger();
+        doAnswer(inv -> {
+            if (commits.getAndIncrement() > 0) {
+                throw new SQLException("target down");
+            }
+            return null;
+        }).when(target).commit();
+        SyncContext ctx = SyncContext.builder()
+                .project(project)
+                .config(new SyncConfig())
+                .targetDialect(new GenericSqlDialect())
+                .batchSize(100)
+                .connectionProvider(config -> target)
+                .build();
+
+        AtomicBoolean connected = new AtomicBoolean();
+        AtomicReference<CdcConsumer> consumerRef = new AtomicReference<>();
+        BinaryLogClient client = mock(BinaryLogClient.class);
+        AtomicReference<BinaryLogClient.EventListener> listener = new AtomicReference<>();
+        AtomicReference<BinaryLogClient.LifecycleListener> lifecycle = new AtomicReference<>();
+        doAnswer(inv -> {
+            listener.set(inv.getArgument(0));
+            return null;
+        }).when(client).registerEventListener(any());
+        doAnswer(inv -> {
+            lifecycle.set(inv.getArgument(0));
+            return null;
+        }).when(client).registerLifecycleListener(any());
+        when(client.isConnected()).thenAnswer(inv -> connected.get());
+        AtomicInteger connects = new AtomicInteger();
+        doAnswer(inv -> {
+            connected.set(true);
+            lifecycle.get().onConnect(client);
+            if (connects.getAndIncrement() == 0) {
+                QueryEventData ddl = new QueryEventData();
+                ddl.setDatabase("app");
+                ddl.setSql("ALTER TABLE `app`.`orders` ADD COLUMN `note` VARCHAR(64)");
+                EventHeaderV4 header = new EventHeaderV4();
+                header.setEventType(EventType.QUERY);
+                header.setNextPosition(500L);
+                header.setTimestamp(0L);
+                listener.get().onEvent(new Event(header, ddl));
+                CdcConsumer consumer = consumerRef.get();
+                // First transaction succeeds: the target is current again.
+                consumer.sinkForTest().apply(List.of(),
+                        new CdcPositionMark("mysql-bin.000009", 500L, null));
+                try {
+                    consumer.sinkForTest().apply(List.of(),
+                            new CdcPositionMark("mysql-bin.000009", 600L, null));
+                } catch (Exception classifiedByTheRunLoop) {
+                    // swallowed the way the client swallows a listener rethrow
+                }
+            }
+            connected.set(false);
+            return null;
+        }).when(client).connect(anyLong());
+        BinlogClientFactory factory = mock(BinlogClientFactory.class);
+        when(factory.createClient(any(), anyLong(), any())).thenReturn(client);
+
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(21L)).thenReturn(
+                Optional.of(baselineDonePosition(21L, "mysql-bin.000009")));
+        SyncStateWriter stateWriter = mock(SyncStateWriter.class);
+        CdcConsumer consumer = new CdcConsumer(project, lock, ctx, factory, positionStore,
+                mock(CdcBaselineService.class), mock(SyncTaskStore.class), stateWriter,
+                mock(DataSourceManager.class), new CdcRuntimeStats(), new SyncProperties());
+        consumerRef.set(consumer);
+
+        Thread thread = new Thread(consumer, "cdc-test-21");
+        thread.start();
+        thread.join(10_000);
+
+        assertThat(thread.isAlive()).isFalse();
+        ArgumentCaptor<String> details = ArgumentCaptor.forClass(String.class);
+        verify(stateWriter, atLeastOnce())
+                .recordCdcFailureLog(eq(21L), eq("cdc-21"), details.capture());
+        assertThat(details.getAllValues().toString())
+                .contains("target down")
+                .doesNotContain("ALTER TABLE");
     }
 
     // —— FIX B(评审 Important):supplier 不得吞掉瞬态元数据失败 ——
@@ -536,6 +701,76 @@ class CdcConsumerTest {
                 .contains("target down");
         // 每次 choke 都当场断连(6 次),退出时 finally 再无条件断连一次以关掉 keepalive。
         verify(client, times(7)).disconnect();
+    }
+
+    @Test
+    void repeatedSchemaMismatchesParkUnderTheirOwnReason() throws Exception {
+        // A target that keeps rejecting rows for a column the source has is not a
+        // deserialization failure. Parking it under DESERIALIZATION_STRIKE_OUT sends the
+        // operator after the binlog format instead of the missing column, and hides the
+        // one action that would fix it (align the target).
+        Project project = project(22L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(true);
+        Connection target = mock(Connection.class);
+        when(target.getAutoCommit()).thenReturn(true);
+        doThrow(new SQLException("cdc schema mismatch: target lacks column note"))
+                .when(target).commit();
+        SyncContext ctx = SyncContext.builder()
+                .project(project)
+                .config(new SyncConfig())
+                .targetDialect(new GenericSqlDialect())
+                .batchSize(100)
+                .connectionProvider(config -> target)
+                .build();
+
+        AtomicBoolean connected = new AtomicBoolean();
+        AtomicReference<CdcConsumer> consumerRef = new AtomicReference<>();
+        BinaryLogClient client = mock(BinaryLogClient.class);
+        AtomicReference<BinaryLogClient.LifecycleListener> lifecycle = new AtomicReference<>();
+        doAnswer(inv -> {
+            lifecycle.set(inv.getArgument(0));
+            return null;
+        }).when(client).registerLifecycleListener(any());
+        when(client.isConnected()).thenAnswer(inv -> connected.get());
+        doAnswer(inv -> {
+            connected.set(true);
+            lifecycle.get().onConnect(client);
+            try {
+                consumerRef.get().sinkForTest().apply(List.of(),
+                        new CdcPositionMark("mysql-bin.000009", 700L, null));
+            } finally {
+                // The failure rethrows into connect(), exactly as a choking listener does:
+                // the run loop's catch stores it and classifies it.
+                connected.set(false);
+            }
+            return null;
+        }).when(client).connect(anyLong());
+        BinlogClientFactory factory = mock(BinlogClientFactory.class);
+        when(factory.createClient(any(), anyLong(), any())).thenReturn(client);
+        SyncTaskStore taskStore = mock(SyncTaskStore.class);
+        SyncProperties props = new SyncProperties();
+        props.getCdc().setReconnectBackoffMs(1L);
+        props.getCdc().setReconnectBackoffMaxMs(1L);
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(22L)).thenReturn(
+                Optional.of(baselineDonePosition(22L, "mysql-bin.000009")));
+        CdcConsumer consumer = new CdcConsumer(project, lock, ctx, factory, positionStore,
+                mock(CdcBaselineService.class), taskStore, mock(SyncStateWriter.class),
+                mock(DataSourceManager.class), new CdcRuntimeStats(), props);
+        consumerRef.set(consumer);
+
+        Thread thread = new Thread(consumer, "cdc-test-22");
+        thread.start();
+        thread.join(10_000);
+
+        assertThat(thread.isAlive()).isFalse();
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(taskStore).recordCdcFailure(eq(22L), detail.capture());
+        assertThat(detail.getValue())
+                .startsWith("SCHEMA_MISMATCH_STRIKE_OUT:")
+                .doesNotContain("DESERIALIZATION")
+                .contains("cdc schema mismatch");
     }
 
     @Test

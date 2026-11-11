@@ -77,6 +77,11 @@ final class EtlUpsertIndexes {
                     // is disqualified, not just the part.
                     if (column == null) {
                         withExpression.add(indexName);
+                    } else if (isPrefixPart(rs.getString("SUB_PART"))) {
+                        // UNIQUE KEY uk (email(32)) accepts a repeat of the suffix past the
+                        // prefix: treating it as coverage lets the native upsert overwrite
+                        // a row whose key differs only beyond the prefix.
+                        withExpression.add(indexName);
                     } else {
                         columnsByIndex.computeIfAbsent(indexName, k -> new HashSet<>())
                                 .add(column.toUpperCase(Locale.ROOT));
@@ -101,6 +106,18 @@ final class EtlUpsertIndexes {
         } catch (SQLException | RuntimeException e) {
             log.warn("Cannot read the unique indexes of {} ({}); using the emulated upsert",
                     targetName, e.toString());
+            return false;
+        }
+    }
+
+    /** Whether SUB_PART names a prefix length rather than the whole column. */
+    private static boolean isPrefixPart(String subPart) {
+        if (subPart == null || subPart.isBlank()) {
+            return false;
+        }
+        try {
+            return Long.parseLong(subPart.trim()) > 0;
+        } catch (NumberFormatException e) {
             return false;
         }
     }
