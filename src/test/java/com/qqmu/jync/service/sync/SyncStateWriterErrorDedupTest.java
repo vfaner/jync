@@ -84,4 +84,27 @@ class SyncStateWriterErrorDedupTest {
         assertThat(writer.isDuplicateFailure(key, 1_000 + SyncStateWriter.ERROR_DEDUP_WINDOW_MS + 1))
                 .as("a periodic reminder keeps a long-running failure visible").isFalse();
     }
+
+    @Test
+    void theSameDdlAtAnotherPositionIsANewTask() {
+        // A column is dropped and added again: the statement reads exactly the same, but it
+        // is a different binlog event — and therefore a different task.
+        writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
+                "binlog.000001", 100L);
+        writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
+                "binlog.000001", 200L);
+
+        verify(changeLogRepository, times(2)).save(any());
+    }
+
+    @Test
+    void theSameDdlEventDeliveredTwiceIsWrittenOnce() {
+        // A reconnect replays the very same event from the unchanged position.
+        writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
+                "binlog.000001", 100L);
+        writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
+                "binlog.000001", 100L);
+
+        verify(changeLogRepository, times(1)).save(any());
+    }
 }

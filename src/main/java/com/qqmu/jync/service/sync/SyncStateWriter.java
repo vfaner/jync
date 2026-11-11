@@ -246,6 +246,92 @@ public class SyncStateWriter {
         changeLogRepository.save(entry);
     }
 
+    /** Marks a change-log detail as a full DDL statement the CDC stream skipped. */
+    public static final String SKIPPED_DDL_PREFIX = "CDC_SKIPPED_DDL:";
+
+    /**
+     * Files a skipped CDC DDL together with its <em>complete</em> statement.
+     *
+     * <p>Deliberately bypasses {@link #recordLog}: an ALTER can carry several ADD COLUMN
+     * clauses and its 4000-char cap would drop the last ones — exactly the columns an
+     * operator needs in order to align the target by hand. {@code details} is a LOB, so the
+     * whole statement fits. The independent transaction keeps the entry even when the
+     * surrounding CDC transaction is rolled back.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordSkippedDdl(Long projectId, String objectName, String sql) {
+        recordSkippedDdl(projectId, objectName, sql, null, null);
+    }
+
+    /**
+     * Files a skipped CDC DDL together with its <em>complete</em> statement and the binlog
+     * position it was seen at — the start of the window in which the new column's values
+     * are not replicated.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordSkippedDdl(Long projectId, String objectName, String sql,
+                                  String ddlFile, Long ddlPos) {
+        String statement = sql == null ? "" : sql;
+        // The binlog position identifies the *event*. The same statement may legitimately
+        // occur again later — a column is dropped and added again — and that is a new task,
+        // while the same event delivered twice after a reconnect is not. De-duplicating by
+        // statement text instead would swallow the second occurrence.
+        String key = ddlPos != null
+                ? "ddl:" + projectId + "\u0001" + objectName + "\u0001" + ddlFile + "\u0001" + ddlPos
+                : "ddl:" + projectId + "\u0001" + objectName + "\u0001" + statement;
+        if (isDuplicateFailure(key, System.currentTimeMillis())) {
+            return;
+        }
+        ChangeLog entry = ChangeLog.of(projectId, ObjectType.PROJECT, objectName,
+                ChangeType.ERROR, SKIPPED_DDL_PREFIX + statement);
+        // A skipped DDL leaves the target unable to accept the next row: it is a real
+        // error, so the list must show it in red and include it under "only failures".
+        entry.setSuccess(false);
+        // Open a task: the target must be aligned and the gap replayed before this row is
+        // "processed". The stored SQL is editable — source and target may use different
+        // schema/table names, and the binlog QUERY text can carry a mojibake COMMENT.
+        entry.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+        entry.setDdlExecuted(false);
+        entry.setReplayDone(false);
+        entry.setTargetDdlSql(statement);
+        entry.setGapStartFile(ddlFile);
+        entry.setGapStartPos(ddlPos);
+        changeLogRepository.save(entry);
+    }
+
+    /**
+     * Whether the project still has an open DDL task, and whether that task is this very
+     * statement.
+     *
+     * <p>The consumer re-reads a DDL it has already seen whenever it restarts before the
+     * position moved past it, and a task row for that statement is already open — a second
+     * one would only repeat it. An open task also means the target may still be missing a
+     * column, so the column projection must stay on for the next run as well.
+     */
+    public boolean hasOpenDdlTask(Long projectId) {
+        return changeLogRepository.countOpenDdlTasks(projectId) > 0;
+    }
+
+    /**
+     * Files a CDC flush failure together with the complete DDL that caused it, if any.
+     *
+     * <p>Like {@link #recordSkippedDdl} this bypasses the 4000-char cap of
+     * {@link #recordLog}: the appended statement must not be cut in half. The key is hashed
+     * so a long statement does not sit in the in-memory dedupe map.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordCdcFailureLog(Long projectId, String objectName, String details) {
+        String key = "cdc:" + projectId + "\u0001" + details.hashCode()
+                + "\u0001" + details.length();
+        if (isDuplicateFailure(key, System.currentTimeMillis())) {
+            return;
+        }
+        ChangeLog entry = ChangeLog.of(projectId, ObjectType.PROJECT, objectName,
+                ChangeType.ERROR, details);
+        entry.setSuccess(false);
+        changeLogRepository.save(entry);
+    }
+
     /**
      * How long an identical failure is kept from being written again. Long enough that a
      * two-second poll cannot flood the log, short enough that a failure still in progress keeps

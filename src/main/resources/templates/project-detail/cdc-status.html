@@ -78,6 +78,14 @@
                     <dd th:text="${stats.skippedDdl}">0</dd>
                 </div>
                 <div class="kv">
+                    <dt th:text="#{cdc.status.pruned.columns}">Columns pruned</dt>
+                    <dd th:text="${stats.prunedColumns}">0</dd>
+                </div>
+                <div class="kv">
+                    <dt th:text="#{cdc.status.schema.mismatches}">Target missing a source column</dt>
+                    <dd th:text="${stats.schemaMismatches}">0</dd>
+                </div>
+                <div class="kv">
                     <dt th:text="#{cdc.status.skipped.unsupported}">Unsupported skipped</dt>
                     <dd th:text="${stats.skippedUnsupported}">0</dd>
                 </div>

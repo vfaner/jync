@@ -392,6 +392,28 @@ class CdcEventStreamHandlerTest {
     }
 
     @Test
+    void aSkippedDdlIsHandedToTheSinkInFull() {
+        String sql = "ALTER TABLE `app`.`orders` \n"
+                + "ADD COLUMN `note` varchar(64) NULL COMMENT '备注', \n"
+                + "ADD COLUMN `suffix` varchar(20) NULL AFTER `size`"
+                + ", filler".repeat(2000);
+        List<String> captured = new ArrayList<>();
+        CdcEventStreamHandler withSink = new CdcEventStreamHandler(config, "app", supplier,
+                new CdcRowMapper(), stats, () -> "uuid:1-7", sink, null, 0L,
+                CdcTransactionBudget.unlimited(),
+                (db, statement, position) -> { captured.add(db); captured.add(statement); });
+        QueryEventData ddl = new QueryEventData();
+        ddl.setSql(sql);
+        ddl.setDatabase("app");
+
+        withSink.onEvent(event(EventType.QUERY, ddl, 330L));
+
+        // No 200/4000-char cap anywhere on this path: every ADD COLUMN must reach the log.
+        assertThat(captured).containsExactly("app", sql);
+        assertThat(stats.snapshot().get("skippedDdl")).isEqualTo(1L);
+    }
+
+    @Test
     void beginAndCommitQueriesAreNoOps() {
         tableMap(11L, "app", "orders");
         write(11L, row(1L, "a"));

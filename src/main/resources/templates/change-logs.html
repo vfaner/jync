@@ -46,7 +46,7 @@
                   th:data-confirm="#{log.clear.confirm}">
                 <input type="hidden" name="projectId" th:value="${selectedProjectId}">
                 <input type="hidden" name="failedOnly" th:if="${failedOnly}" value="true">
-                <button type="submit" class="btn btn-ghost btn-sm btn-warn">
+                <button type="submit" class="btn btn-ghost btn-warn">
                     <svg class="ico"><use href="#trash"/></svg><span th:text="#{log.clear}">Clear</span></button>
             </form>
         </div>
@@ -78,12 +78,14 @@
                     </tr>
                     </thead>
                     <tbody>
-                    <tr th:each="log : ${logs.content}" th:classappend="${!log.success} ? 'row-bad' : ''">
+                    <tr th:each="log : ${logs.content}" th:classappend="${!log.success} ? 'row-bad' : ''"
+                        th:with="raw=${log.details},
+                                  skippedDdl=${log.details != null and log.details.startsWith('CDC_SKIPPED_DDL:')}">
                         <td class="small mono" style="white-space:nowrap"
                             th:text="${#temporals.format(log.occurredAt, 'yyyy-MM-dd HH:mm:ss')}">time</td>
                         <td>
                             <span class="badge badge-brand"
-                                  th:text="#{'objectType.' + ${log.objectType}}">Table</span>
+                                  th:text="${skippedDdl} ? #{log.ddl.objectType} : #{'objectType.' + ${log.objectType}}">Table</span>
                         </td>
                         <td class="mono small" th:text="${log.objectName ?: '—'}">object</td>
                         <td th:with="ct=${log.changeType.name()}">
@@ -96,8 +98,28 @@
                         <td class="num" th:text="${log.affectedRows ?: '—'}">0</td>
                         <td class="num small muted"
                             th:text="${log.durationMs != null and log.durationMs > 0} ? ${log.durationLabel} : '—'">—</td>
-                        <td>
-                            <div class="wrap-detail" th:classappend="${!log.success} ? '' : 'muted'"
+                        <td th:with="raw=${log.details},
+                                      skippedDdl=${log.details != null and log.details.startsWith('CDC_SKIPPED_DDL:')},
+                                      statusKey=${log.resolutionStatus == 'PROCESSED' ? 'log.ddl.processed' : (log.ddlExecuted != null and log.ddlExecuted ? 'log.ddl.awaitingReplay' : 'log.ddl.pending')},
+                                      statusCls=${log.resolutionStatus == 'PROCESSED' ? 'badge-ok' : (log.ddlExecuted != null and log.ddlExecuted ? 'badge-brand' : 'badge-warn')}" style="white-space:nowrap">
+                            <div th:if="${skippedDdl}" class="ddl-inline">
+                                <details class="ddl-detail">
+                                    <summary th:text="#{log.detail.cdc.ddlSkipped}">查看完整 DDL</summary>
+                                    <pre class="wrap-detail"
+                                         th:text="${raw.substring(raw.indexOf(':') + 1)}">ddl</pre>
+                                    <div th:if="${log.affectedTables != null}" class="small">
+                                        <span th:text="#{log.ddl.affectedTables}">未同步的表与列</span>:
+                                        <span class="mono" th:text="${log.affectedTables}">file_info(suffix)</span>
+                                    </div>
+                                </details>
+                                <button type="button" class="badge badge-btn"
+                                        th:if="${log.resolutionStatus != null}"
+                                        th:classappend="${statusCls}"
+                                        th:attr="data-role=ddl-open,data-ddl-id=${log.id},data-ddl-sql=${log.targetDdlSql},data-ddl-src-db=${log.objectName},data-ddl-target-db=${targetDatabaseName},data-ddl-error=${log.errorDetail},data-ddl-executed=${log.ddlExecuted != null and log.ddlExecuted},data-ddl-replayed=${log.replayDone != null and log.replayDone},data-ddl-text-pending=#{log.ddl.pending},data-ddl-text-executed=#{log.ddl.awaitingReplay},data-ddl-text-processed=#{log.ddl.processed},data-ddl-confirm=#{log.ddl.retryConfirm},data-ddl-needs-ddl=#{log.ddl.retryNeedsDdl},data-ddl-gap=${log.affectedTables}"
+                                        th:text="#{${statusKey}}">pending</button>
+                            </div>
+                            <div th:unless="${skippedDdl}" class="wrap-detail"
+                                 th:classappend="${!log.success} ? '' : 'muted'"
                                  th:style="${!log.success} ? 'color:var(--danger)' : ''"
                                  th:text="${@changeLogDetailsLocalizer.localize(log.details) ?: ''}">details</div>
                         </td>
@@ -110,9 +132,51 @@
         <div th:replace="~{fragments/pager :: pager(${pager}, ${pagerBase})}"></div>
     </div>
 
+    <!-- One shared dialog for every DDL task: the status tag fills it in (bindDdlOpen).
+         The per-row <details> only shows the statement; the dialog is where it is run. -->
+    <div class="modal" id="ddl-execute-modal" aria-hidden="true" role="dialog" aria-modal="true">
+        <div class="modal-mask" data-role="ddl-close"></div>
+        <div class="modal-dialog" style="max-width:820px">
+            <button type="button" class="modal-close" data-role="ddl-close"
+                    th:aria-label="#{log.ddl.cancel}">×</button>
+            <div class="modal-head">
+                <h3 th:text="#{log.ddl.dialogTitle}">Execute DDL on the target</h3>
+            </div>
+            <div class="preview-body" style="text-align: left;border: none;">
+                <p class="help small muted" th:text="#{log.ddl.editHint}">Only COMMENT text and
+                    dialect details may be edited; table and column names are locked.</p>
+                <label for="ddl-execute-sql" style="position:absolute;left:-9999px"
+                       th:text="#{log.ddl.viewStatement}">DDL statement</label>
+                <textarea id="ddl-execute-sql" class="input mono sql-edit" rows="10" wrap="soft"
+                          spellcheck="false" style="white-space:pre; overflow-x:auto"></textarea>
+                <div id="ddl-execute-error" class="small" style="color:var(--danger)"></div>
+                <div id="ddl-execute-state" class="small muted text-red"></div>
+                <div id="ddl-execute-gap" class="small mono" style="white-space:pre-wrap"></div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-ghost btn-sm" data-role="ddl-close"
+                        th:text="#{log.ddl.cancel}">Cancel</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-role="ddl-retry"
+                        th:text="#{log.ddl.retry}">Replay missing rows</button>
+                <button type="button" class="btn btn-primary btn-sm" data-role="ddl-execute"
+                        th:text="#{log.ddl.execute}">Execute on target</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 每行可编辑语句的副本：弹窗从这里取文本，避免把长 SQL 塞进 data 属性。 -->
+    <div th:each="log : ${logs.content}"
+         th:if="${log.details != null and log.details.startsWith('CDC_SKIPPED_DDL:')}"
+         style="display:none" th:id="${'ddl-sql-' + log.id}"
+         th:text="${log.targetDdlSql}">sql</div>
+
 </div>
 </th:block>
 
-<th:block th:fragment="scripts" th:remove="tag"></th:block>
+<th:block th:fragment="scripts" th:remove="tag">
+    <!--/* DDL 待办弹窗是本页私有的：app.js 只提供弹窗体、带 CSRF 的 POST 与提示框这些
+           通用能力，具体怎么填语句、怎么按行刷新按钮状态，都留在 change-logs.js 里。 */-->
+    <script th:src="@{/js/change-logs.js(v=${appVersion})}"></script>
+</th:block>
 </body>
 </html>

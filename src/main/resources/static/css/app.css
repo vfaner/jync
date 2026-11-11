@@ -145,7 +145,7 @@ a { color: var(--brand); text-decoration: none; transition: color .2s; }
 a:hover { color: var(--brand-dark); }
 
 code, .mono { font-family: var(--mono); font-size: .88em; }
-
+.text-red {color: red;}
 /* ─── 图标 ──────────────────────────────────────────────────
    引用内联 SVG 精灵表（vendor/icons.svg，由 build-icons.py 生成）。
    之所以不用图标字体：字体 CSS 里的路径是相对于样式表解析的，一旦目录结构
@@ -584,6 +584,7 @@ table.tbl th.num { text-align: right; }
   position: absolute; top: 1px; right: 1px; bottom: 1px; left: 1px; inset: 1px; z-index: 0;
   margin: 0; padding: 9px 12px; overflow: hidden; pointer-events: none;
   font-family: var(--mono); font-size: 13px; line-height: 1.55; white-space: pre;
+  text-align: left;
 }
 .text-danger { color: var(--danger); }
 /* 窄屏下并排会挤成两条不可读的细缝，改成上下 */
@@ -1183,6 +1184,15 @@ table.tbl td .btn-row > * { margin: 0 0 0 6px; }
 table.tbl td .btn-row > *:first-child { margin-left: 0; }
 table.tbl a.truncate { display: block; }
 .wrap-detail { max-width: 420px; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+
+/* 变更日志的 DDL 待办行：折叠的语句与可点击的状态 tag 并排。tag 用 button 实现，
+   才能既保留 badge 外观又可聚焦（键盘可达）。 */
+.ddl-inline { display: flex; gap: 10px; align-items: flex-start; }
+.ddl-inline > .ddl-detail { flex: 1 1 auto; min-width: 0; }
+.ddl-inline > .ddl-detail > summary { cursor: pointer; color: var(--ink-soft); font-size: 12.5px; }
+.badge-btn { cursor: pointer; border: 0; font: inherit; }
+/* 禁用的动作按钮要一眼看得出不可点，而不是只是点不动。 */
+.btn:disabled, .btn[disabled] { opacity: .45; cursor: not-allowed; }
 
 /* ─── 同步任务列表：手机布局 ─────────────────────────────
    五列塞进 390px 时，「详情」的 chip 会被压成一字一行 —— .chip 的

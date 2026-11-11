@@ -67,11 +67,11 @@ class AlertSettingsViewTest {
     }
 
     @Test
-    void thePageOffersAllSevenCategories() throws Exception {
+    void thePageOffersAllEightCategories() throws Exception {
         String page = render();
 
         assertThat(page).contains("同步失败", "轮询卡死", "项目未运行", "CDC 停摆",
-                "数据漂移", "连接健康", "PG slot 积压");
+                "数据漂移", "连接健康", "PG slot 积压", "CDC DDL 被跳过");
         assertThat(page).contains("发送测试消息");
     }
 

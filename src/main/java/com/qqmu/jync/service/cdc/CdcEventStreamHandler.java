@@ -85,8 +85,6 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         }
     }
 
-    private static final int DDL_LOG_SQL_CHARS = 200;
-
     /**
      * Message fragment of every fatal XA-ordering failure. {@link CdcFailureClassifier}
      * matches its lower-cased form so the project parks instead of hot-reconnecting: the
@@ -114,6 +112,26 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      * A hand-built handler in a test gets the unlimited budget unless it passes one.
      */
     private final CdcTransactionBudget budget;
+
+    /**
+     * Receives (database, complete SQL) for every DDL this stream skips, so the change log
+     * can show the statement an operator has to replay on the target. Never null; a no-op
+     * for hand-built handlers used by unit tests.
+     */
+    private final DdlSink ddlSink;
+
+    /**
+     * Where a skipped DDL is reported: the database, the full statement and the binlog
+     * position it was seen at.
+     *
+     * <p>The position identifies the <em>event</em>: the same statement may legitimately
+     * occur again later — a column is dropped and added again — and that is a new task,
+     * while the same event delivered twice after a reconnect is not.
+     */
+    @FunctionalInterface
+    public interface DdlSink {
+        void accept(String database, String sql, long position);
+    }
 
     /**
      * Owns the files of the transaction currently buffered. Created lazily on the first
@@ -180,6 +198,19 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                           Supplier<String> gtidSetSupplier, TransactionSink sink,
                           LobSpillStore spillStore, long spillThresholdBytes,
                           CdcTransactionBudget budget) {
+        this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink,
+                spillStore, spillThresholdBytes, budget, (db, sql, position) -> { });
+    }
+
+    /**
+     * Production overload: {@code ddlSink} is an observability side channel, so a failure
+     * there must never stop the stream (the caller guards it).
+     */
+    CdcEventStreamHandler(SyncConfig config, String sourceSchema, CdcTableMetaSupplier supplier,
+                          CdcRowMapper mapper, CdcRuntimeStats stats,
+                          Supplier<String> gtidSetSupplier, TransactionSink sink,
+                          LobSpillStore spillStore, long spillThresholdBytes,
+                          CdcTransactionBudget budget, DdlSink ddlSink) {
         this.config = config;
         this.sourceSchema = sourceSchema;
         this.supplier = supplier;
@@ -190,6 +221,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         this.spillStore = spillStore;
         this.spillThresholdBytes = Math.max(0L, spillThresholdBytes);
         this.budget = budget;
+        this.ddlSink = ddlSink == null ? (db, sql, position) -> { } : ddlSink;
     }
 
     /**
@@ -481,9 +513,17 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                     + " was prepared; clearing the buffer would discard its rows");
         }
         stats.addSkippedDdl(1);
-        log.warn("Skipping DDL in CDC stream (database {}): {}", data.getDatabase(),
-                normalized.length() > DDL_LOG_SQL_CHARS
-                        ? normalized.substring(0, DDL_LOG_SQL_CHARS) + "..." : normalized);
+        // ERROR, not WARN: the target is now one or more columns behind and the next row
+        // carrying a new column will fail the whole stream. Log the whole statement — a
+        // truncated ALTER drops the last ADD COLUMN clauses the operator has to replay.
+        log.error("Skipping DDL in CDC stream (database {}): {}", data.getDatabase(), normalized);
+        try {
+            long position = header.getNextPosition() > 0 ? header.getNextPosition() : lastNextPosition;
+            ddlSink.accept(data.getDatabase(), normalized, position);
+        } catch (RuntimeException e) {
+            // An audit write is never allowed to choke the binlog listener.
+            log.debug("Could not file the skipped DDL in the change log: {}", e.toString());
+        }
         supplier.invalidate(null, null);
         clearBuffer();
     }

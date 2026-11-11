@@ -84,6 +84,30 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     /** The alert evaluator's window: failed rows recent enough to describe a live fault. */
     List<ChangeLog> findBySuccessFalseAndOccurredAtAfter(Instant since);
 
+    /**
+     * The project's DDL tasks that are still open.
+     *
+     * <p>Used to tell whether a column is already covered by an open task — a column that
+     * an open task adds must not be replayed twice.
+     */
+    @Query("select c from ChangeLog c where c.projectId = :projectId"
+            + " and c.details like 'CDC_SKIPPED_DDL:%'"
+            + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')"
+            + " order by c.id desc")
+    List<ChangeLog> findOpenDdlTasks(@Param("projectId") Long projectId);
+
+    /**
+     * How many DDL tasks are still open for the project.
+     *
+     * <p>An open task means the target may still be missing a column, so the column
+     * projection has to stay on across a restart. A count keeps the CLOB details in the
+     * database.
+     */
+    @Query("select count(c) from ChangeLog c where c.projectId = :projectId"
+            + " and c.details like 'CDC_SKIPPED_DDL:%'"
+            + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')")
+    long countOpenDdlTasks(@Param("projectId") Long projectId);
+
     /** Successful rows of one type, used to spot row-count repairs in the last few minutes. */
     List<ChangeLog> findByChangeTypeAndOccurredAtAfter(ChangeType type, Instant since);
 
@@ -143,6 +167,7 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      */
     @Modifying
     @Transactional
-    @Query("delete from ChangeLog c where c.occurredAt < :before")
+    @Query("delete from ChangeLog c where c.occurredAt < :before"
+            + " and (c.resolutionStatus is null or c.resolutionStatus = 'PROCESSED')")
     int deleteOlderThan(@Param("before") Instant before);
 }

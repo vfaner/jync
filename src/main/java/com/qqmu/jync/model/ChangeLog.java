@@ -62,6 +62,53 @@ public class ChangeLog {
     @Column(name = "occurred_at", nullable = false)
     private Instant occurredAt;
 
+    // ── DDL 待办任务 ────────────────────────────────────────────────────────────
+    // A skipped CDC DDL is not just an audit line: it opens a task an administrator must
+    // close (execute the DDL on the target, then replay the gap). These columns stay null
+    // on every ordinary audit row, so history and the retention pruner are unaffected.
+
+    public static final String RESOLUTION_PENDING = "PENDING";
+    public static final String RESOLUTION_PROCESSED = "PROCESSED";
+    public static final String RESOLUTION_FAILED = "FAILED";
+
+    /** Null for ordinary rows; {@link #RESOLUTION_PENDING} until both steps are done. */
+    @Column(name = "resolution_status", length = 16)
+    private String resolutionStatus;
+
+    @Column(name = "ddl_executed")
+    private Boolean ddlExecuted;
+
+    @Column(name = "replay_done")
+    private Boolean replayDone;
+
+    /** Editable statement for the target; pre-filled with the source DDL. */
+    @Lob
+    @Column(name = "target_ddl_sql")
+    private String targetDdlSql;
+
+    /** Bounds of the window in which the new column's values were not replicated. */
+    @Column(name = "gap_start_file", length = 128)
+    private String gapStartFile;
+    @Column(name = "gap_start_pos")
+    private Long gapStartPos;
+    @Column(name = "gap_end_file", length = 128)
+    private String gapEndFile;
+    @Column(name = "gap_end_pos")
+    private Long gapEndPos;
+
+    /** Tables touched during the gap, used by the table-scoped replay. */
+    @Lob
+    @Column(name = "affected_tables")
+    private String affectedTables;
+
+    @Column(name = "handled_by", length = 128)
+    private String handledBy;
+    @Column(name = "handled_at")
+    private Instant handledAt;
+    @Lob
+    @Column(name = "error_detail")
+    private String errorDetail;
+
     /**
      * The duration as a human label for the change-log table ({@code 99550 ms} → {@code 1m 39s}).
      * Hibernate maps this entity by field, so this getter adds no column.

@@ -70,6 +70,11 @@ public final class CdcConsumer implements ManagedCdcConsumer {
      * transaction in between, are treated as fatal (data corruption / version skew). */
     private static final int MAX_DESERIALIZATION_FAILURES = 5;
 
+    /** Consecutive writes the target rejected for a column the source has, above this count
+     * with no successful transaction in between: the drift cannot be projected away (the
+     * missing column is the primary key, say), so replaying would fail the same way forever. */
+    private static final int MAX_SCHEMA_MISMATCH_FAILURES = 5;
+
     private final Project project;
     private final SyncLockService.LockHandle lock;
     private final SyncContext ctx;
@@ -101,6 +106,10 @@ public final class CdcConsumer implements ManagedCdcConsumer {
 
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
     private final AtomicInteger deserializationFailures = new AtomicInteger();
+    /** Consecutive writes the target rejected for a column the source has. */
+    private final AtomicInteger schemaMismatchFailures = new AtomicInteger();
+    /** Most recent skipped DDL, so a flush failure can name the statement that caused it. */
+    private final AtomicReference<String> lastSkippedDdl = new AtomicReference<>();
 
     /** Assigned in run() before the loop; the retry path consults it after the stream ends. */
     private CdcReconnectBackoff backoff;
@@ -245,7 +254,8 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 CdcFailureClassifier.Kind kind = failure == null
                         ? CdcFailureClassifier.Kind.TRANSIENT
                         : CdcFailureClassifier.classify(failure);
-                if (kind != CdcFailureClassifier.Kind.TRANSIENT || deserializationStrikeOut()) {
+                if (kind != CdcFailureClassifier.Kind.TRANSIENT || deserializationStrikeOut()
+                        || schemaMismatchStrikeOut()) {
                     fatalStop(projectId, failure, kind);         // ERROR + recordLog + break
                     break;
                 }
@@ -385,6 +395,26 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         return deserializationFailures.get() > MAX_DESERIALIZATION_FAILURES;
     }
 
+    /**
+     * The target kept rejecting the writes for a column the source has. Projecting cannot
+     * help when the missing column is the primary key, so replaying would fail identically
+     * forever — the project parks for a human, like any other unresolvable drift.
+     */
+    private boolean schemaMismatchStrikeOut() {
+        return schemaMismatchFailures.get() > MAX_SCHEMA_MISMATCH_FAILURES;
+    }
+
+    /** Whether the failure is the sentinel the applier raises for a missing target column. */
+    private static boolean isSchemaMismatch(Throwable failure) {
+        for (Throwable c = failure; c != null; c = c.getCause() == c ? null : c.getCause()) {
+            String message = c.getMessage();
+            if (message != null && message.contains("cdc schema mismatch")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** ERROR 帽子 + 审计日志,线程随后结束(B7:等人处置,不自动重启)。 */
     private void fatalStop(long projectId, Throwable failure, CdcFailureClassifier.Kind kind) {
         // A TRANSIENT kind can only reach fatalStop via the deserialization strike-out.
@@ -418,11 +448,30 @@ public final class CdcConsumer implements ManagedCdcConsumer {
 
     /** handler(每条连接新建)+ lifecycle 监听;GTID 集合直接取自客户端。 */
     private CdcEventStreamHandler wire(BinaryLogClient client) {
+        // An open DDL task means the target may still be missing a column. The projection
+        // gate lives in this run's counters, which a restart clears — so it is switched back
+        // on here. Without that the first transaction after a restart hits "Unknown column"
+        // again and files another failure row for a fault that is already on record.
+        if (stateWriter.hasOpenDdlTask(project.getId())) {
+            log.info("CDC project {} has an open DDL task: the target may still be missing a"
+                    + " column, so the column projection stays on for this run",
+                    project.getId());
+            stats.forceProjection();
+        }
         CdcEventStreamHandler handler = new CdcEventStreamHandler(
                 ctx.getConfig(), ctx.getSourceSchema(), supplier, new CdcRowMapper(), stats,
                 client::getGtidSet, sink, spillStore(),
                 properties.getLob().getCdcSpillThresholdBytes(),
-                CdcTransactionBudget.from(properties));
+                CdcTransactionBudget.from(properties),
+                (db, sql, position) -> {
+                    lastSkippedDdl.set(sql);
+                    // The binlog position identifies this DDL event: the same statement may
+                    // legitimately occur again later (a column is dropped and added again)
+                    // and that is a new task, while a reconnect replaying the very same
+                    // event is not. The position also bounds the window in which the new
+                    // column's values are not replicated.
+                    stateWriter.recordSkippedDdl(project.getId(), db, sql, lastFile, position);
+                });
         handler.attachClient(client);                            // R1:choke 时自行断连
         client.registerEventListener(handler);
         client.registerLifecycleListener(new BinaryLogClient.AbstractLifecycleListener() {
@@ -484,6 +533,19 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     target.applyDeletes(tc.binding, tc.deletes());
                 }
                 target.commit();
+            } catch (SQLException | RuntimeException e) {
+                // The failure is rethrown unchanged: the handler's choke path must still
+                // drop the connection and leave the position untouched. This only makes the
+                // replayed failure visible in the change log together with the DDL that
+                // caused the target to fall behind.
+                if (isSchemaMismatch(e)) {
+                    // The target lacks a column the source has. The applier has turned the
+                    // projection on, so the replayed transaction gets that column projected
+                    // away; a successful transaction clears the counter below.
+                    schemaMismatchFailures.incrementAndGet();
+                }
+                recordFlushFailure(projectId, e);
+                throw e;
             }
             ctx.requireLease();                                  // 丢租约 → 位点不动,接管方重放
             String file = mark.getFile() != null ? mark.getFile() : lastFile;
@@ -501,7 +563,30 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             // 按「现在」touch 一次会把那个数字覆盖成 0，延迟卡片就永远是 0。
             stats.touchActivity();
             deserializationFailures.set(0);                      // 成功事务:清零连败计数
+            schemaMismatchFailures.set(0);                      // 成功事务:结构漂移连败也清零
         };
+    }
+
+    /** Files a replayed flush failure with the complete DDL that left the target behind. */
+    private void recordFlushFailure(long projectId, Exception failure) {
+        String ddl = lastSkippedDdl.get();
+        // The DDL task row already tells this story; a second row for the same statement
+        // would only repeat it — and a restart would file that second row again.
+        if (ddl != null && stateWriter.hasOpenDdlTask(projectId)) {
+            return;
+        }
+        String head = isSchemaMismatch(failure)
+                ? "CDC target is missing a column the source has; the column is projected away"
+                        + " until the target is aligned"
+                : "CDC transaction flush failed: " + failure;
+        String details = head
+                + (ddl == null ? "" : "\nSkipped DDL (not applied to the target):\n" + ddl);
+        try {
+            stateWriter.recordCdcFailureLog(projectId, project.getName(), details);
+        } catch (RuntimeException e) {
+            log.debug("Could not file the CDC flush failure in the change log: {}",
+                    e.toString());
+        }
     }
 
     /**
