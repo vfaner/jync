@@ -178,6 +178,14 @@ final class MongoToKingbaseEngine {
                         "no documents to infer columns from");
             }
             List<EtlSourceColumn> columns = MongoSchemaInferrer.infer(sample);
+            // A field name longer than the server's identifier limit would be truncated while
+            // the table is created, and every insert would then target a missing column.
+            String tooLong = KingbaseTableName.firstColumnNameTooLong(
+                    columns.stream().map(EtlSourceColumn::name).toList());
+            if (tooLong != null) {
+                throw new IllegalStateException("column name exceeds "
+                        + KingbaseTableName.MAX_BYTES + " bytes: " + tooLong);
+            }
             EtlSourceColumn idColumn = idColumn(columns);
             if (idColumn == null) {
                 throw new IllegalStateException(

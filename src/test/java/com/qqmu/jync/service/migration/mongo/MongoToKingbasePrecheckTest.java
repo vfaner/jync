@@ -103,6 +103,21 @@ class MongoToKingbasePrecheckTest {
     }
 
     @Test
+    void aFieldNamePastTheSixtyThreeByteLimitBlocksTheMigration() {
+        String field = "x".repeat(64);
+        when(sourceGateway.sample(anyString(), anyInt())).thenReturn(List.of(
+                new Document("_id", "1").append(field, 2)));
+
+        MigrationPrecheckResult result = handler.precheck(task, options("{}"), source, target);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(result.checks().stream()
+                .anyMatch(check -> check.level() == Level.ERROR
+                        && check.code().equals("migration.precheck.mongo.fieldTooLong")
+                        && ("orders." + field).equals(check.detail()))).isTrue();
+    }
+
+    @Test
     void aCollectionWithoutIdBlocksTheMigration() {
         when(sourceGateway.sample(anyString(), anyInt())).thenReturn(List.of(
                 new Document("qty", 2)));

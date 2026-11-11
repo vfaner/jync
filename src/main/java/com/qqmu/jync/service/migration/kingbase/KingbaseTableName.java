@@ -3,6 +3,7 @@ package com.qqmu.jync.service.migration.kingbase;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.List;
 
 import com.qqmu.jync.service.migration.MigrationTargetNaming;
 
@@ -60,6 +61,20 @@ public final class KingbaseTableName {
 
     public static void validateSchema(String schema) {
         validate(schema, "error.migration.options.schema.invalid");
+    }
+
+    /**
+     * The first column name the server would silently truncate, or null when every name fits.
+     * MongoDB field names become column names verbatim, so they need the same byte limit as
+     * tables and schemas; the check runs before any DDL touches the target.
+     */
+    public static String firstColumnNameTooLong(List<String> columnNames) {
+        for (String name : columnNames) {
+            if (name != null && name.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES) {
+                return name;
+            }
+        }
+        return null;
     }
 
     private static void validate(String name, String errorKey) {

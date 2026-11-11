@@ -211,6 +211,13 @@ public class MongoToKingbaseHandler implements MigrationTypeHandler {
                         info.name()));
                 continue;
             }
+            String tooLong = KingbaseTableName.firstColumnNameTooLong(
+                    columns.stream().map(EtlSourceColumn::name).toList());
+            if (tooLong != null) {
+                checks.add(new Check(Level.ERROR, "migration.precheck.mongo.fieldTooLong",
+                        info.name() + "." + tooLong));
+                continue;
+            }
             if (options.getWriteMode() == MigrationWriteMode.FAIL_IF_EXISTS) {
                 if (tableExists(writer, targetName, checks)) {
                     checks.add(new Check(Level.ERROR,

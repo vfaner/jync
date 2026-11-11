@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -47,6 +48,22 @@ class KingbaseTableNameTest {
 
         assertThat(KingbaseTableName.resolve(
                 MigrationTargetNaming.SAME, "", "", "x".repeat(63))).hasSize(63);
+    }
+
+    @Test
+    void aColumnNamePastTheByteLimitIsReported() {
+        assertThat(KingbaseTableName.firstColumnNameTooLong(List.of("_id", "x".repeat(64))))
+                .isEqualTo("x".repeat(64));
+        assertThat(KingbaseTableName.firstColumnNameTooLong(List.of("_id", "x".repeat(63))))
+                .isNull();
+    }
+
+    @Test
+    void theColumnLimitCountsBytesNotCharacters() {
+        // Every CJK character below is three UTF-8 bytes: 21 fit, 22 do not.
+        assertThat(KingbaseTableName.firstColumnNameTooLong(List.of("库".repeat(21)))).isNull();
+        assertThat(KingbaseTableName.firstColumnNameTooLong(List.of("库".repeat(22))))
+                .isEqualTo("库".repeat(22));
     }
 
     @Test

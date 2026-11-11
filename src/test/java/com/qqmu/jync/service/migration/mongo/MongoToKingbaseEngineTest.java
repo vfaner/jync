@@ -257,6 +257,26 @@ class MongoToKingbaseEngineTest {
     }
 
     @Test
+    void aFieldNamePastTheSixtyThreeByteLimitFailsTheCollectionBeforeAnyDdl() throws Exception {
+        String field = "x".repeat(64);
+        stubCollection("orders", "collection",
+                List.of(new Document("_id", "1").append(field, 2)),
+                List.of(new Document("_id", "1").append(field, 2)));
+
+        MigrationRunResult result = run();
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.indicesFailed()).isEqualTo(1);
+        assertThat(result.indices().get(0).message()).contains(field).contains("63");
+        // The server would truncate the name while creating the table and every later insert
+        // would target a column that does not exist, so nothing may reach the target.
+        verify(writer, never()).tableExists(anyString());
+        verify(writer, never()).dropTable(anyString());
+        verify(writer, never()).createTable(any(TableMeta.class), anyString());
+        verify(writer, never()).openBatch(anyString(), any(TableMeta.class), anyBoolean());
+    }
+
+    @Test
     void aMissingIdFieldFailsTheCollection() throws Exception {
         stubCollection("orders", "collection",
                 List.of(new Document("qty", 2)),
