@@ -103,6 +103,26 @@ class JdbcEtlSourceTest {
         cursor.close();
     }
 
+    /**
+     * The enum and entity javadoc and the form hint all restrict resume keys to APPEND and
+     * RANGE_OVERWRITE. An upsert re-applies every result row by key, so a stored checkpoint
+     * must neither filter the query nor bind a resume value — doing so would silently skip the
+     * updates that are the whole point of the mode.
+     */
+    @Test
+    void doesNotWrapAnUpsertQueryEvenWithAResumeKey() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        EtlSourceCursor cursor = source.query(task(EtlWriteMode.UPSERT, "id"),
+                new EtlCheckpointValue(Types.INTEGER, "3"));
+
+        verify(connection).prepareStatement(SQL,
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+        verify(statement, never()).setLong(1, 3L);
+        assertThat(cursor.resumeKeyIndex()).isEqualTo(-1);
+        cursor.close();
+    }
+
     @Test
     void usesTheStreamingFetchSizeForMysql() throws SQLException {
         JdbcEtlSource source = source(DatabaseType.MYSQL);

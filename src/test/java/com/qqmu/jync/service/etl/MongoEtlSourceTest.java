@@ -121,6 +121,20 @@ class MongoEtlSourceTest {
         assertThat(cursor.resumeKeyIndex()).isEqualTo(-1);
     }
 
+    /** Resume keys belong to APPEND and RANGE_OVERWRITE; an upsert re-reads every row. */
+    @Test
+    void anUpsertRunNeitherSortsNorResumes() {
+        MongoEtlSource source = source();
+        EtlTask task = task(EtlWriteMode.UPSERT, "seq");
+
+        EtlSourceCursor cursor = source.query(task,
+                new EtlCheckpointValue(Types.INTEGER, "41"));
+
+        verify(gateway).find(eq(config), eq(COLLECTION), eq(new Document()),
+                isNull(), eq(1000), eq(0));
+        assertThat(cursor.resumeKeyIndex()).isEqualTo(-1);
+    }
+
     @Test
     void inferredColumnsComeFromTheSample() {
         MongoEtlSource source = source();

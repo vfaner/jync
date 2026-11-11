@@ -16,7 +16,6 @@ import java.util.List;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
-import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
 
 /**
@@ -232,7 +231,8 @@ final class JdbcEtlSource implements EtlSource {
 
     private static boolean resumable(EtlTask task) {
         String key = task.getResumeKeyColumn();
-        return task.getWriteMode() != EtlWriteMode.OVERWRITE && key != null && !key.isBlank();
+        return task.getWriteMode() != null && task.getWriteMode().supportsResume()
+                && key != null && !key.isBlank();
     }
 
     private static String sourceQuery(String select, EtlTask task, EtlCheckpointValue checkpoint,

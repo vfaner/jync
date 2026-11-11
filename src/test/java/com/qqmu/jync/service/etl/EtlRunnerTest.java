@@ -206,6 +206,33 @@ class EtlRunnerTest {
                 .containsExactly("1|a", "2|b", "3|c", "99|keep");
     }
 
+    /**
+     * A resume key is documented for APPEND and RANGE_OVERWRITE only. Treating it as active
+     * in UPSERT mode would read only the keys after the checkpoint, so a later run would
+     * never re-apply a changed row whose key was already loaded — the exact opposite of the
+     * mode's contract.
+     */
+    @Test
+    void upsertIgnoresTheCheckpointAndReappliesEveryRow() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'fresh'), (2, 'b'), (3, 'c')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO dst VALUES (1, 'stale'), (2, 'b'), (3, 'c')");
+        checkpoints.save(7L, Types.INTEGER, "3");
+
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+        task.setResumeKeyColumn("id");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.rowsRead()).isEqualTo(3);
+        assertThat(rows("SELECT id, name FROM dst ORDER BY id"))
+                .containsExactly("1|fresh", "2|b", "3|c");
+        // The stale checkpoint is neither loaded nor advanced.
+        assertThat(checkpoints.load(7L).value()).isEqualTo("3");
+    }
+
     @Test
     void upsertMatchesOnEveryConfiguredKeyColumn() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (tenant INT, id INT, name VARCHAR(20))",

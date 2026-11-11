@@ -10,7 +10,6 @@ import com.mongodb.MongoSocketException;
 import com.mongodb.MongoTimeoutException;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlTask;
-import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.etl.mongo.MongoCursorHandle;
 import com.qqmu.jync.service.etl.mongo.MongoFilterException;
 import com.qqmu.jync.service.etl.mongo.MongoFilterParser;
@@ -170,7 +169,8 @@ public final class MongoEtlSource implements EtlSource {
 
     private static boolean resumable(EtlTask task) {
         String key = task.getResumeKeyColumn();
-        return task.getWriteMode() != EtlWriteMode.OVERWRITE && key != null && !key.isBlank();
+        return task.getWriteMode() != null && task.getWriteMode().supportsResume()
+                && key != null && !key.isBlank();
     }
 
     private static int timeout(EtlTask task) {

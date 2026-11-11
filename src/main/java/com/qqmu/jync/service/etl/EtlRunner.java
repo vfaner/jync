@@ -74,7 +74,8 @@ public class EtlRunner {
             DatabaseType sourceType = sourceConfig.effectiveType();
             SqlDialect targetDialect = dialectFactory.forType(
                     targetConfig.effectiveType(), null, targetConfig.resolvedFamily());
-            boolean resumable = task.getWriteMode() != EtlWriteMode.OVERWRITE
+            boolean resumable = task.getWriteMode() != null
+                    && task.getWriteMode().supportsResume()
                     && notBlank(task.getResumeKeyColumn());
             EtlCheckpointValue checkpoint = resumable
                     ? checkpointStore.load(task.getId()) : null;

@@ -31,5 +31,15 @@ public enum EtlWriteMode {
      * updates that row; every other row is inserted. This is the mode for refreshing a table
      * from a query that already knows the natural key.
      */
-    UPSERT
+    UPSERT;
+
+    /**
+     * Whether a resume key applies to this mode. Only the two modes that copy the result
+     * without matching existing target rows read it: OVERWRITE starts from zero, and UPSERT
+     * re-applies every row by key, so honoring a stored checkpoint there would skip exactly
+     * the rows whose updates the mode exists to apply.
+     */
+    public boolean supportsResume() {
+        return this == APPEND || this == RANGE_OVERWRITE;
+    }
 }
