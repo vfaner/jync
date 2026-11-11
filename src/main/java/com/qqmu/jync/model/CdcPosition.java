@@ -52,7 +52,7 @@ public class CdcPosition {
 
     /** Executed GTID set to resume from; null when the source runs without GTIDs. */
     @Lob
-    @Column(name = "gtid_set")
+    @Column(name = "gtid_set", length = Integer.MAX_VALUE)
     private String gtidSet;
 
     /** The fake replica id this project presented when the position was taken. */
@@ -93,7 +93,7 @@ public class CdcPosition {
      * every other capture strategy and for a position written before this column existed.
      */
     @Lob
-    @Column(name = "schema_signatures")
+    @Column(name = "schema_signatures", length = Integer.MAX_VALUE)
     private String schemaSignatures;
 
     /**
@@ -107,7 +107,7 @@ public class CdcPosition {
      * instead of discovering it one failed key at a time.
      */
     @Lob
-    @Column(name = "projection_signature")
+    @Column(name = "projection_signature", length = Integer.MAX_VALUE)
     private String projectionSignature;
 
     @Getter(AccessLevel.NONE) // the accessor below is isBaselineDone(), per the store contract

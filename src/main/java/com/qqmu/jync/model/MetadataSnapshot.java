@@ -46,7 +46,7 @@ public class MetadataSnapshot {
     private String objectName;
 
     @Lob
-    @Column(name = "snapshot_json")
+    @Column(name = "snapshot_json", length = Integer.MAX_VALUE)
     private String snapshotJson;
 
     /** Hash of {@link #snapshotJson}, compared first to avoid parsing unchanged objects. */

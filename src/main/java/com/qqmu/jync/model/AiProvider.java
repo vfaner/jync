@@ -55,7 +55,7 @@ public class AiProvider {
 
     /** Stored encrypted; see {@link com.qqmu.jync.util.CryptoUtil}. */
     @Lob
-    @Column(name = "api_key_enc")
+    @Column(name = "api_key_enc", length = Integer.MAX_VALUE)
     private String apiKey;
 
     /** At most one row is enabled at a time. */

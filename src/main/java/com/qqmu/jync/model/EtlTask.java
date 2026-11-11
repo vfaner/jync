@@ -57,7 +57,7 @@ public class EtlTask {
 
     /** Customer-authored query; its result columns become the target column list. */
     @Lob
-    @Column(name = "source_sql", nullable = false)
+    @Column(name = "source_sql", nullable = false, length = Integer.MAX_VALUE)
     private String sourceSql;
 
     /**
@@ -127,7 +127,7 @@ public class EtlTask {
     private Boolean lastRunSuccess;
 
     @Lob
-    @Column(name = "last_run_result")
+    @Column(name = "last_run_result", length = Integer.MAX_VALUE)
     private String lastRunResult;
 
     @Column(name = "created_at")

@@ -37,7 +37,7 @@ public class AlertConfig {
 
     /** Ciphertext (see {@code CryptoUtil}); never rendered back into the form. */
     @Lob
-    @Column(name = "webhook_url")
+    @Column(name = "webhook_url", length = Integer.MAX_VALUE)
     private String webhookUrl;
 
     @Enumerated(EnumType.STRING)

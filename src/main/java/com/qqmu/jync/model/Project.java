@@ -54,7 +54,7 @@ public class Project {
 
     /** Serialized {@link com.qqmu.jync.dto.SyncConfig}. */
     @Lob
-    @Column(name = "sync_config")
+    @Column(name = "sync_config", length = Integer.MAX_VALUE)
     private String syncConfig;
 
     /** True when the Quartz job for this project should be scheduled. */

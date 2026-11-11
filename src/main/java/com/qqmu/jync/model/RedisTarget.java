@@ -57,7 +57,7 @@ public class RedisTarget {
     private String username;
 
     @Lob
-    @Column(name = "password_enc")
+    @Column(name = "password_enc", length = Integer.MAX_VALUE)
     private String passwordEnc;
 
     @Column(name = "tls_enabled", nullable = false)

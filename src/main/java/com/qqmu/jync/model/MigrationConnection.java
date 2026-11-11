@@ -65,12 +65,12 @@ public class MigrationConnection {
     private String username;
 
     @Lob
-    @Column(name = "password_enc")
+    @Column(name = "password_enc", length = Integer.MAX_VALUE)
     private String passwordEnc;
 
     /** Either the Base64 API key or an {@code id:key} pair; Jync normalises it when sending. */
     @Lob
-    @Column(name = "api_key_enc")
+    @Column(name = "api_key_enc", length = Integer.MAX_VALUE)
     private String apiKeyEnc;
 
     /** Extra driver options (Mongo URI options or JDBC parameters). Never holds credentials. */

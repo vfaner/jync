@@ -153,7 +153,7 @@ public class DatabaseConfig {
 
     /** Stored encrypted; see {@link com.qqmu.jync.util.CryptoUtil}. */
     @Lob
-    @Column(name = "password_enc")
+    @Column(name = "password_enc", length = Integer.MAX_VALUE)
     private String password;
 
     /**
@@ -167,12 +167,12 @@ public class DatabaseConfig {
 
     /** Stored encrypted like {@link #password}; blank on update keeps the existing secret. */
     @Lob
-    @Column(name = "miner_password_enc")
+    @Column(name = "miner_password_enc", length = Integer.MAX_VALUE)
     private String minerPassword;
 
     /** Full JDBC URL; required for {@link DatabaseType#CUSTOM}, overrides the generated URL otherwise. */
     @Lob
-    @Column(name = "custom_url")
+    @Column(name = "custom_url", length = Integer.MAX_VALUE)
     private String customUrl;
 
     /**
@@ -190,7 +190,7 @@ public class DatabaseConfig {
 
     /** Extra JDBC URL parameters, appended as {@code k=v&k=v}. */
     @Lob
-    @Column(name = "extra_params")
+    @Column(name = "extra_params", length = Integer.MAX_VALUE)
     private String extraParams;
 
     @Column(name = "created_at")

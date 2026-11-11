@@ -72,12 +72,12 @@ public class OaAuthConfig {
 
     /** Where an unauthenticated visitor is sent when there is no local form to show. */
     @Lob
-    @Column(name = "login_entry_url")
+    @Column(name = "login_entry_url", length = Integer.MAX_VALUE)
     private String loginEntryUrl;
 
     /** Where sign-out sends the browser; blank means the local login page. */
     @Lob
-    @Column(name = "logout_redirect_url")
+    @Column(name = "logout_redirect_url", length = Integer.MAX_VALUE)
     private String logoutRedirectUrl;
 
     /**
@@ -98,11 +98,11 @@ public class OaAuthConfig {
 
     /** Ciphertext (see {@code CryptoUtil}); never rendered back into the form. */
     @Lob
-    @Column(name = "secret_header_value")
+    @Column(name = "secret_header_value", length = Integer.MAX_VALUE)
     private String secretHeaderValue;
 
     @Lob
-    @Column(name = "validate_url")
+    @Column(name = "validate_url", length = Integer.MAX_VALUE)
     private String validateUrl;
 
     @Enumerated(EnumType.STRING)
@@ -113,7 +113,7 @@ public class OaAuthConfig {
     private String ticketParam = "ticket";
 
     @Lob
-    @Column(name = "login_url")
+    @Column(name = "login_url", length = Integer.MAX_VALUE)
     private String loginUrl;
 
     @Enumerated(EnumType.STRING)

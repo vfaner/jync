@@ -50,7 +50,7 @@ public class MigrationTask {
 
     /** The handler owns this shape; the generic module only stores and displays it. */
     @Lob
-    @Column(name = "options_json", nullable = false)
+    @Column(name = "options_json", nullable = false, length = Integer.MAX_VALUE)
     private String optionsJson;
 
     /** Optional cron expression; blank means manual-only. */
@@ -71,7 +71,7 @@ public class MigrationTask {
     private Boolean lastRunSuccess;
 
     @Lob
-    @Column(name = "last_run_result")
+    @Column(name = "last_run_result", length = Integer.MAX_VALUE)
     private String lastRunResult;
 
     @Column(name = "created_at")

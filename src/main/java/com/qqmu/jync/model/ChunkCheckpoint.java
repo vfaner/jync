@@ -89,7 +89,7 @@ public class ChunkCheckpoint {
      * {@link #STATUS_RANGE_DONE} rows.
      */
     @Lob
-    @Column(name = "last_pk_json")
+    @Column(name = "last_pk_json", length = Integer.MAX_VALUE)
     private String lastPkJson;
 
     @Column(name = "rows_copied")
@@ -117,12 +117,12 @@ public class ChunkCheckpoint {
      * whatever type the key has; null means the range is unbounded below.
      */
     @Lob
-    @Column(name = "range_lower_key")
+    @Column(name = "range_lower_key", length = Integer.MAX_VALUE)
     private String rangeLowerKey;
 
     /** Upper bound of the same sampled range as JSON; null means unbounded above. */
     @Lob
-    @Column(name = "range_upper_key")
+    @Column(name = "range_upper_key", length = Integer.MAX_VALUE)
     private String rangeUpperKey;
 
     /**

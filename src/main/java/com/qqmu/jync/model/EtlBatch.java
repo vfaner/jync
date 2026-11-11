@@ -64,7 +64,7 @@ public class EtlBatch {
     private Boolean lastRunSuccess;
 
     @Lob
-    @Column(name = "last_run_result")
+    @Column(name = "last_run_result", length = Integer.MAX_VALUE)
     private String lastRunResult;
 
     @Column(name = "created_at")

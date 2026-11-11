@@ -50,7 +50,7 @@ public class SyncTask {
     private Instant lastSuccessAt;
 
     @Lob
-    @Column(name = "last_sync_result")
+    @Column(name = "last_sync_result", length = Integer.MAX_VALUE)
     private String lastSyncResult;
 
     @Column(name = "consecutive_failures")

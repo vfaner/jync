@@ -61,7 +61,7 @@ public class SyncProgress {
      * full initial load.
      */
     @Lob
-    @Column(name = "last_sync_value")
+    @Column(name = "last_sync_value", length = Integer.MAX_VALUE)
     private String lastSyncValue;
 
     /** Column the cursor is read from, resolved once and cached here. */
