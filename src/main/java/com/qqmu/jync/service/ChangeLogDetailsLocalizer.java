@@ -47,7 +47,9 @@ public class ChangeLogDetailsLocalizer {
     private static final Pattern CDC_TARGET_REPAIRED = Pattern.compile(
             "^cdc target table repair: recreated target table (\\S+) and reloaded it from the"
                     + " source \\((\\d+) row\\(s\\) written\\); the CDC position was left"
-                    + " untouched, so replay continues from the same point$");
+                    + " untouched, so replay continues from the same point"
+                    + "(?:; closed (\\d+) open skipped-DDL task\\(s\\) as completed by the"
+                    + " rebuild)?$");
     private static final Pattern CDC_FLUSH_FAILED =
             Pattern.compile("^CDC transaction flush failed: (.+)$", Pattern.DOTALL);
     private static final String CDC_SCHEMA_MISMATCH = "CDC target is missing a column the source"
@@ -249,7 +251,14 @@ public class ChangeLogDetailsLocalizer {
         }
         m = CDC_TARGET_REPAIRED.matcher(details);
         if (m.matches()) {
-            return get(locale, "log.detail.cdc.targetRepaired", m.group(1), m.group(2));
+            String text = get(locale, "log.detail.cdc.targetRepaired", m.group(1), m.group(2));
+            if (text != null && m.group(3) != null) {
+                String closed = get(locale, "log.detail.cdc.targetRepairedClosed", m.group(3));
+                if (closed != null) {
+                    text += closed;
+                }
+            }
+            return text;
         }
         m = CDC_FLUSH_FAILED.matcher(details);
         if (m.matches()) {
@@ -384,6 +393,7 @@ public class ChangeLogDetailsLocalizer {
             case "repeated YStream failures" -> "repeatedYStream";
             case "the target kept rejecting rows for a column the source has" ->
                     "targetRejectsColumn";
+            case "the target kept refusing to apply transactions" -> "targetRefusesTransaction";
             case "not a missing-target-table fault" -> "repairNotMissing";
             case "no project context" -> "repairNoContext";
             case "targeted repair only applies to relational targets" -> "repairRelationalOnly";

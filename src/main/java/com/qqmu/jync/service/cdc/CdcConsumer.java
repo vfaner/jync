@@ -75,6 +75,12 @@ public final class CdcConsumer implements ManagedCdcConsumer {
      * missing column is the primary key, say), so replaying would fail the same way forever. */
     private static final int MAX_SCHEMA_MISMATCH_FAILURES = 5;
 
+    /** Consecutive transactions the target refused to apply (connection loss, deadlock,
+     * full disk) above this count with no success in between: reconnecting meets the same
+     * wall, so the project parks under APPLY_STRIKE_OUT — the verdict the other three
+     * engines already use for this failure. */
+    private static final int MAX_APPLY_FAILURES = 5;
+
     private final Project project;
     private final SyncLockService.LockHandle lock;
     private final SyncContext ctx;
@@ -113,6 +119,8 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     private final AtomicInteger deserializationFailures = new AtomicInteger();
     /** Consecutive writes the target rejected for a column the source has. */
     private final AtomicInteger schemaMismatchFailures = new AtomicInteger();
+    /** Consecutive transactions the target refused to apply for any other reason. */
+    private final AtomicInteger applyFailures = new AtomicInteger();
     /** Most recent skipped DDL, so a flush failure can name the statement that caused it. */
     private final AtomicReference<String> lastSkippedDdl = new AtomicReference<>();
 
@@ -282,6 +290,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     if (repair.repaired()) {
                         deserializationFailures.set(0);
                         schemaMismatchFailures.set(0);
+                        applyFailures.set(0);
                         stats.setLastError(null);
                         log.warn("CDC consumer for project {}: {}; replaying from the same"
                                 + " position", projectId, repair.detail());
@@ -293,14 +302,16 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     break;
                 }
                 if (kind != CdcFailureClassifier.Kind.TRANSIENT || deserializationStrikeOut()
-                        || schemaMismatchStrikeOut()) {
+                        || schemaMismatchStrikeOut() || applyStrikeOut()) {
                     // The classification only knows the driver's wording; the strike-out
                     // counters know which repeated failure actually parked the project.
                     String reason = kind != CdcFailureClassifier.Kind.TRANSIENT
                             ? kind.name()
                             : schemaMismatchStrikeOut()
                                     ? "SCHEMA_MISMATCH_STRIKE_OUT"
-                                    : "DESERIALIZATION_STRIKE_OUT";
+                                    : applyStrikeOut()
+                                            ? "APPLY_STRIKE_OUT"
+                                            : "DESERIALIZATION_STRIKE_OUT";
                     fatalStop(projectId, failure, reason);       // ERROR + recordLog + break
                     break;
                 }
@@ -449,6 +460,16 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         return schemaMismatchFailures.get() > MAX_SCHEMA_MISMATCH_FAILURES;
     }
 
+    /**
+     * The target kept refusing to apply transactions for reasons other than a missing
+     * column (connection loss, deadlock victim, full disk, constraint violation). The
+     * binlog side is healthy — reconnecting replays the same transaction into the same
+     * wall, so after the escalation budget the project parks under APPLY_STRIKE_OUT.
+     */
+    private boolean applyStrikeOut() {
+        return applyFailures.get() > MAX_APPLY_FAILURES;
+    }
+
     /** Whether the failure is the sentinel the applier raises for a missing target column. */
     private static boolean isSchemaMismatch(Throwable failure) {
         for (Throwable c = failure; c != null; c = c.getCause() == c ? null : c.getCause()) {
@@ -464,7 +485,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
     private void fatalStop(long projectId, Throwable failure, String label) {
         String fallback = "SCHEMA_MISMATCH_STRIKE_OUT".equals(label)
                 ? "the target kept rejecting rows for a column the source has"
-                : "repeated binlog deserialization failures";
+                : "APPLY_STRIKE_OUT".equals(label)
+                        ? "the target kept refusing to apply transactions"
+                        : "repeated binlog deserialization failures";
         String detail = label + ": " + (failure == null
                 ? fallback
                 : CdcFailureClassifier.describe(failure));
@@ -590,6 +613,10 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     // projection on, so the replayed transaction gets that column projected
                     // away; a successful transaction clears the counter below.
                     schemaMismatchFailures.incrementAndGet();
+                } else {
+                    // Any other apply failure (connection loss, deadlock, disk full) is a
+                    // target problem, not a binlog one; parked under its own verdict.
+                    applyFailures.incrementAndGet();
                 }
                 recordFlushFailure(projectId, e);
                 throw e;
@@ -611,6 +638,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             stats.touchActivity();
             deserializationFailures.set(0);                      // 成功事务:清零连败计数
             schemaMismatchFailures.set(0);                      // 成功事务:结构漂移连败也清零
+            applyFailures.set(0);                               // 成功事务:写入连败同样清零
             if (targetRepair != null) {
                 // A committed transaction proves the target is healthy again, so a later
                 // deletion gets the full repair budget instead of the exhausted one.

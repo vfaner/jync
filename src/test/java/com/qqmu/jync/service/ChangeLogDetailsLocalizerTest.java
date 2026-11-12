@@ -100,6 +100,30 @@ class ChangeLogDetailsLocalizerTest {
     }
 
     /**
+     * A repair that also closed open skipped-DDL tasks appends a second clause. The stored
+     * sentence is still ours and must translate in full: leaving the clause in English would
+     * show a Chinese page with an English tail on exactly the entries an operator reads when a
+     * rebuild unblocked the project.
+     */
+    @Test
+    void aTargetedRepairThatClosesDdlTasksTranslatesTheClosedCount() {
+        String raw = "cdc target table repair: recreated target table customers and reloaded it"
+                + " from the source (4 row(s) written); the CDC position was left untouched, so"
+                + " replay continues from the same point; closed 2 open skipped-DDL task(s) as"
+                + " completed by the rebuild";
+
+        assertThat(localizer.localize(raw, ZH)).isEqualTo(
+                "CDC 目标表定向修复：已重建目标表 customers 并从源端重灌（写入 4 行）；"
+                        + "CDC 位点未移动，回放从原位点继续。"
+                        + "同时把 2 个待处理的跳过 DDL 任务标记为已由本次重建完成。");
+        assertThat(localizer.localize(raw, Locale.ENGLISH)).isEqualTo(
+                "Targeted CDC repair: recreated target table customers and reloaded it from the"
+                        + " source (4 row(s) written); the CDC position was left untouched, so"
+                        + " replay continues from the same point. Closed 2 open skipped-DDL"
+                        + " task(s) as completed by the rebuild.");
+    }
+
+    /**
      * ERROR rows are where an operator first looks when a project stops. The row is Jync's
      * sentence plus the database's, so the sentence is translated and the driver text after it
      * reaches the operator exactly as the target said it.
@@ -148,6 +172,9 @@ class ChangeLogDetailsLocalizerTest {
         assertThat(localizer.localize("DESERIALIZATION_STRIKE_OUT: repeated binlog deserialization"
                 + " failures", ZH)).isEqualTo(
                 "反序列化连续失败（DESERIALIZATION_STRIKE_OUT）：binlog 反序列化连续失败");
+        assertThat(localizer.localize("APPLY_STRIKE_OUT: the target kept refusing to apply"
+                + " transactions", ZH)).isEqualTo(
+                "写入连续失败（APPLY_STRIKE_OUT）：目标库持续拒绝写入事务");
         // English keeps the stored wording byte-for-byte.
         assertThat(localizer.localize("AUTH_FAILURE: access denied", Locale.ENGLISH))
                 .isEqualTo("AUTH_FAILURE: access denied");

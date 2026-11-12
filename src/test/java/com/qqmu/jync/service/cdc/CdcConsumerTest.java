@@ -774,6 +774,74 @@ class CdcConsumerTest {
     }
 
     @Test
+    void repeatedTargetWriteFailuresParkUnderApplyStrikeOut() throws Exception {
+        // The target keeps failing to commit (failover, full disk, a partition that
+        // outlasts the backoff). That is an apply failure, not a binlog deserialization
+        // failure: parking it as DESERIALIZATION_STRIKE_OUT sends the operator after the
+        // replication format instead of the target — the other three engines already
+        // report it as APPLY_STRIKE_OUT.
+        Project project = project(23L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(true);
+        Connection target = mock(Connection.class);
+        when(target.getAutoCommit()).thenReturn(true);
+        doThrow(new SQLException("Communications link failure")).when(target).commit();
+        SyncContext ctx = SyncContext.builder()
+                .project(project)
+                .config(new SyncConfig())
+                .targetDialect(new GenericSqlDialect())
+                .batchSize(100)
+                .connectionProvider(config -> target)
+                .build();
+
+        AtomicBoolean connected = new AtomicBoolean();
+        AtomicReference<CdcConsumer> consumerRef = new AtomicReference<>();
+        BinaryLogClient client = mock(BinaryLogClient.class);
+        AtomicReference<BinaryLogClient.LifecycleListener> lifecycle = new AtomicReference<>();
+        doAnswer(inv -> {
+            lifecycle.set(inv.getArgument(0));
+            return null;
+        }).when(client).registerLifecycleListener(any());
+        when(client.isConnected()).thenAnswer(inv -> connected.get());
+        doAnswer(inv -> {
+            connected.set(true);
+            lifecycle.get().onConnect(client);
+            try {
+                consumerRef.get().sinkForTest().apply(List.of(),
+                        new CdcPositionMark("mysql-bin.000009", 700L, null));
+            } finally {
+                connected.set(false);
+            }
+            return null;
+        }).when(client).connect(anyLong());
+        BinlogClientFactory factory = mock(BinlogClientFactory.class);
+        when(factory.createClient(any(), anyLong(), any())).thenReturn(client);
+        SyncTaskStore taskStore = mock(SyncTaskStore.class);
+        SyncProperties props = new SyncProperties();
+        props.getCdc().setReconnectBackoffMs(1L);
+        props.getCdc().setReconnectBackoffMaxMs(1L);
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(23L)).thenReturn(
+                Optional.of(baselineDonePosition(23L, "mysql-bin.000009")));
+        CdcConsumer consumer = new CdcConsumer(project, lock, ctx, factory, positionStore,
+                mock(CdcBaselineService.class), taskStore, mock(SyncStateWriter.class),
+                mock(DataSourceManager.class), new CdcRuntimeStats(), props);
+        consumerRef.set(consumer);
+
+        Thread thread = new Thread(consumer, "cdc-test-23");
+        thread.start();
+        thread.join(10_000);
+
+        assertThat(thread.isAlive()).isFalse();
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(taskStore).recordCdcFailure(eq(23L), detail.capture());
+        assertThat(detail.getValue())
+                .startsWith("APPLY_STRIKE_OUT:")
+                .doesNotContain("DESERIALIZATION")
+                .contains("Communications link failure");
+    }
+
+    @Test
     void immediateDropsEscalateBackoffInsteadOfHotLoopReset() throws Exception {
         // 裁定 R3b:连上立刻被踢(存活 ~0ms)绝不许触发 backoff.reset —— 旧代码在
         // onConnect 无条件清零,accept-then-kick 的服务器把重试钉死在 1s 热循环;
