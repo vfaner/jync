@@ -2,12 +2,16 @@ package com.qqmu.jync.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.sql.Timestamp;
+import java.time.Instant;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.AuditEvent;
@@ -24,6 +28,8 @@ class AuditEventRepositoryDataTest {
 
     @Autowired
     private AuditEventRepository repository;
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     private void record(String actor, AuditAction action, String detail) {
         repository.save(AuditEvent.of(actor, action, detail));
@@ -50,5 +56,23 @@ class AuditEventRepositoryDataTest {
         assertThat(page.getContent()).extracting(AuditEvent::getDetail)
                 .containsExactly("third", "second");
         assertThat(page.hasNext()).isTrue();
+    }
+
+    @Test
+    void rowsWrittenByTheRemovedMetadataDbTesterStillLoad() {
+        // v2.0.x and v2.1.0 shipped a 系统配置 connection tester that appended SYSTEM_DB_TEST
+        // rows. The page and endpoint are gone, but an append-only trail keeps those rows, and
+        // @Enumerated(STRING) mapping is strict: dropping the constant would make this query
+        // (and therefore the whole audit page) fail on every upgraded installation.
+        jdbcTemplate.update("insert into audit_event (occurred_at, actor, action, detail)"
+                        + " values (?, ?, ?, ?)",
+                Timestamp.from(Instant.now()), "admin", "SYSTEM_DB_TEST",
+                "{audit.detail.dbTest}|jdbc:mysql://***:3306/jync|MySQL 8.0|OK");
+
+        Page<AuditEvent> page = repository.findAll(PageRequest.of(0, 10));
+
+        assertThat(page.getContent()).singleElement()
+                .extracting(AuditEvent::getAction).extracting(Enum::name)
+                .isEqualTo("SYSTEM_DB_TEST");
     }
 }

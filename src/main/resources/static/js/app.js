@@ -2286,6 +2286,10 @@
         || payload.ignored || !payload.latestVersion) {
       return;
     }
+    // 升级弹窗（下载中/已就绪）更紧要：它已经打开时不再叠一层「发现新版本」。
+    // 两个请求谁先回来都可能，另一侧的 bindUpgrade 也会把这里的弹窗收掉。
+    var upgradeModal = document.getElementById('upgrade-modal');
+    if (upgradeModal && upgradeModal.classList.contains('open')) { return; }
     var cached = readNavUpdateCache() || {};
     // 本次会话已经为这个版本弹过一次：关闭（X/遮罩）算「稍后」，刷新看板不再打扰
     if (cached.promptedVersion === payload.latestVersion) { return; }
@@ -2576,7 +2580,12 @@
       render(s);
       if (s.phase === 'DOWNLOADING') startPolling();
       if (s.phase === 'RESTARTING') watchForRestart(); // 重启途中手动刷新了页面
-      if (s.phase === 'READY' || s.phase === 'DOWNLOADING') setModalOpen(modal.id, true);
+      if (s.phase === 'READY' || s.phase === 'DOWNLOADING') {
+        // 两个弹窗不叠：升级状态更急，收掉可能已经打开的「发现新版本」
+        setModalOpen('update-available-modal', false);
+        updatePromptVersion = null;
+        setModalOpen(modal.id, true);
+      }
     });
   }
 

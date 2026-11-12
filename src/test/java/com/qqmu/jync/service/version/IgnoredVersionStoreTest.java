@@ -1,10 +1,14 @@
 package com.qqmu.jync.service.version;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import com.qqmu.jync.repository.UpdateVersionDismissalRepository;
 
@@ -78,5 +82,18 @@ class IgnoredVersionStoreTest {
 
         assertThat(repository.count()).isZero();
         assertThat(store.ignoredVersion()).isNull();
+    }
+
+    @Test
+    void aDatabaseFailureWhileIgnoringDoesNotBreakTheDialog() {
+        // /api/version/ignore promises success=true and the dashboard dialog closes on it.
+        // A metadata-database hiccup must not turn that click into a 500; the worst case is
+        // one extra prompt on a later visit, which is what "nothing ignored" means here.
+        UpdateVersionDismissalRepository broken = mock(UpdateVersionDismissalRepository.class);
+        when(broken.findById(any())).thenThrow(new DataAccessResourceFailureException("db down"));
+        JpaIgnoredVersionStore store = new JpaIgnoredVersionStore(broken);
+
+        assertThat(store.ignore("2.1.0")).isFalse();
+        assertThat(store.isIgnored("2.1.0")).isFalse();
     }
 }

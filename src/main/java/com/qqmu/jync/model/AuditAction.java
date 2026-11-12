@@ -52,5 +52,11 @@ public enum AuditAction {
     /** A TLS certificate was uploaded on the 系统配置 page (applies after a restart). */
     TLS_CONFIG_SAVE,
     /** The saved TLS certificate was removed on the 系统配置 page (applies after a restart). */
-    TLS_CONFIG_DELETE
+    TLS_CONFIG_DELETE,
+    /**
+     * Legacy: the 系统配置 metadata-database connection tester wrote this before it was
+     * removed. Kept so the append-only rows still load ({@code @Enumerated(STRING)} is
+     * strict); nothing records it any more.
+     */
+    SYSTEM_DB_TEST
 }

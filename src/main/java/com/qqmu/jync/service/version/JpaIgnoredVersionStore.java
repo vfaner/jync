@@ -53,16 +53,22 @@ public class JpaIgnoredVersionStore implements IgnoredVersionStore {
         if (normalized == null) {
             return false;
         }
-        UpdateVersionDismissal row = repository.findById(UpdateVersionDismissal.SINGLETON_ID)
-                .orElseGet(() -> {
-                    UpdateVersionDismissal fresh = new UpdateVersionDismissal();
-                    fresh.setId(UpdateVersionDismissal.SINGLETON_ID);
-                    return fresh;
-                });
-        row.setIgnoredVersion(normalized);
-        row.setDismissedAt(Instant.now());
-        repository.save(row);
-        return true;
+        try {
+            UpdateVersionDismissal row = repository.findById(UpdateVersionDismissal.SINGLETON_ID)
+                    .orElseGet(() -> {
+                        UpdateVersionDismissal fresh = new UpdateVersionDismissal();
+                        fresh.setId(UpdateVersionDismissal.SINGLETON_ID);
+                        return fresh;
+                    });
+            row.setIgnoredVersion(normalized);
+            row.setDismissedAt(Instant.now());
+            repository.save(row);
+            return true;
+        } catch (RuntimeException e) {
+            // The dashboard dialog closes on success=true; a metadata hiccup must not turn
+            // that click into a 500. Worst case the prompt reappears on a later visit.
+            return false;
+        }
     }
 
     /**

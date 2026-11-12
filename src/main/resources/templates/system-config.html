@@ -385,7 +385,7 @@
 </div>
 </th:block>
 
-<!--/* 测试器只在管理员页面出现；脚本做成渐进增强，禁用 JS 时表单照常提交。 */-->
+<!--/* 本页没有页面私有脚本：所有表单都是普通提交，禁用 JS 也能用。 */-->
 <th:block th:fragment="scripts" th:remove="tag"></th:block>
 </body>
 </html>
