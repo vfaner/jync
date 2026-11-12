@@ -122,15 +122,45 @@ class CdcConsumerManagerTest {
         when(contextFactory.build(any(), anyString(), any())).thenReturn(
                 SyncContext.builder().config(new SyncConfig()).build());
         starter = new RecordingStarter();
-        // SyncProperties 默认值即测试期望值:cdc.lockTtlMs=30_000(Task 1 钉死);
-        // taskRepository.findByProjectId 未 stub → Mockito 默认 Optional.empty → 无 ERROR 帽子,不挡启动
+        manager = newManager();
+        // 真应用里巡检要等 ApplicationReadyEvent 之后才接管;测试直接调 supervise,
+        // 必须先打开同一道门,否则所有巡检用例都会停在 readiness 检查上。
+        manager.onApplicationReady();
+    }
+
+    /**
+     * SyncProperties 默认值即测试期望值:cdc.lockTtlMs=30_000(Task 1 钉死);
+     * taskRepository.findByProjectId 未 stub → Mockito 默认 Optional.empty → 无 ERROR 帽子,不挡启动
+     */
+    private CdcConsumerManager newManager() {
         LogMinerSessionFactory sessionFactory = (source, startScn, batchSize) -> {
             throw new UnsupportedOperationException("session factory not exercised here");
         };
-        manager = new CdcConsumerManager(projectRepository, taskRepository, lockService,
+        return new CdcConsumerManager(projectRepository, taskRepository, lockService,
                 contextFactory, clientFactory, positionStore, baselineService, taskStore,
                 stateWriter, dataSourceManager, new SyncProperties(), starter, sessionFactory,
                 yStreamClientFactory, yStreamLifecycle, redisTargets, redisProjectionWriter);
+    }
+
+    /**
+     * 历史行的 details_hash 回填是 ApplicationRunner,而巡检是 @Scheduled:两者在启动期
+     * 并发。回填没跑完就开消费者,重连时同一个 DDL 会因哈希为空再记一条待办。巡检在
+     * ApplicationReadyEvent 之前必须什么都不做——启动失败的项目由同一时刻的
+     * SyncBootstrap 兜住。
+     */
+    @Test
+    void superviseDoesNothingUntilApplicationReady() {
+        CdcConsumerManager cold = newManager();
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(cdcProject(9L, true)));
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+
+        cold.supervise();
+        assertThat(starter.last).as("ready 之前不得启动消费者").isNull();
+
+        cold.onApplicationReady();
+        cold.supervise();
+        assertThat(starter.last).isNotNull();
+        cold.ensureStopped(9L);
     }
 
     @Test
@@ -447,6 +477,7 @@ class CdcConsumerManagerTest {
                 (source, startScn, batchSize) -> {
                     throw new UnsupportedOperationException();
                 }, yStreamClientFactory, yStreamLifecycle, redisTargets, redisProjectionWriter); // 从不 start → isAlive()==false
+        deadThreadManager.onApplicationReady();   // 巡检要等 ready 事件,这里直接打开
         when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
         when(taskRepository.findByProjectId(9L)).thenReturn(Optional.empty());
         Project project = cdcProject(9L, true);

@@ -7,6 +7,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -131,6 +132,16 @@ public class CdcConsumerManager {
      * is a new episode and warns again.
      */
     private final Set<Long> parkedWarned = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Set by the ready event. The legacy {@code details_hash} backfill is an
+     * {@code ApplicationRunner} while {@link #supervise} is {@code @Scheduled}: scheduled
+     * tasks start during refresh, before runners finish. A consumer opened while an old
+     * skipped-DDL row still lacks its hash could file that DDL a second time on reconnect,
+     * so supervision stays silent until the runners are done. {@code SyncBootstrap} starts
+     * the consumers at the same readiness point, so nothing is delayed.
+     */
+    private volatile boolean ready;
 
     @Autowired
     public CdcConsumerManager(ProjectRepository projectRepository,
@@ -447,6 +458,12 @@ public class CdcConsumerManager {
         return registration == null ? null : registration.stats;
     }
 
+    /** Opens {@link #supervise} once the application runners (hash backfill included) ran. */
+    @EventListener(ApplicationReadyEvent.class)
+    void onApplicationReady() {
+        ready = true;
+    }
+
     /**
      * The periodic convergence tick — the failover engine (B6). Every node runs it:
      * <ol>
@@ -466,9 +483,15 @@ public class CdcConsumerManager {
      * synchronized {@link #ensureStarted}/{@link #ensureStopped}, so holding the monitor
      * for the whole tick would only make a UI stop wait behind the rest of the tick's
      * projects — including their network connects.
+     *
+     * <p>A no-op until the application-ready event (see {@code ready}): the scheduled
+     * thread can run while the startup runners are still working.
      */
     @Scheduled(fixedDelayString = "${sync.cdc.supervise-interval-ms:10000}")
     public void supervise() {
+        if (!ready) {
+            return;
+        }
         registry.entrySet().removeIf(entry -> {
             if (entry.getValue().thread.isAlive()) {
                 return false;
