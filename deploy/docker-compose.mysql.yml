@@ -40,7 +40,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: jync:2.1.0
+    image: jync:2.2.0
     container_name: jync-mysql
     restart: unless-stopped
     # 等 mysql 的 healthcheck 通过再启动，避免首启连不上库

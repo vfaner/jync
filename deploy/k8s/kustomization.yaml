@@ -14,4 +14,4 @@ resources:
 # images:
 #   - name: jync
 #     newName: registry.example.com/qqmu/jync
-#     newTag: "2.1.0"
+#     newTag: "2.2.0"

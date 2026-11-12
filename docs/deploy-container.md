@@ -10,7 +10,7 @@
 - **运行阶段**：`eclipse-temurin:17-jre-jammy`，只带 JRE；`curl` 仅用于 HEALTHCHECK；以非 root 用户 `jync`（uid 10001）运行。
 
 ```bash
-docker build -t jync:2.1.0 .
+docker build -t jync:2.2.0 .
 ```
 
 构建时跳过测试（`-DskipTests`），测试请在 CI 或本地 `mvn clean test` 跑。
@@ -36,7 +36,7 @@ docker run -d --name jync \
   -v jync-logs:/app/logs \
   -e TZ=Asia/Shanghai \
   --restart unless-stopped \
-  jync:2.1.0
+  jync:2.2.0
 ```
 
 `-p 8443:8443` 只有用「应用内 TLS」（在「系统配置」上传证书或手填证书路径）时才需要；端口可在页面上改，改完同步改这里的映射。上传的密钥库落在数据卷 `/app/data/tls`，重启容器后生效。
@@ -50,7 +50,7 @@ docker run ... \
   -v /etc/jync/tls:/etc/jync/tls:ro \
   -e JYN_TLS_PEM_CERT_PATH=/etc/jync/tls/fullchain.pem \
   -e JYN_TLS_PEM_KEY_PATH=/etc/jync/tls/privkey.pem \
-  jync:2.1.0
+  jync:2.2.0
 ```
 
 密钥库同理（`JYN_TLS_KEYSTORE_PATH` + `JYN_TLS_KEYSTORE_PASSWORD`）。一旦配置，系统配置页的 TLS 卡片变为只读，改证书只需替换宿主机文件并重启容器。详见[配置文档](configuration.md)「应用内 TLS」。
@@ -95,8 +95,8 @@ docker compose -f deploy/docker-compose.mysql.yml up -d --build
 
 ```bash
 # 1) 构建并推送镜像到你的仓库
-docker build -t registry.example.com/qqmu/jync:2.1.0 .
-docker push registry.example.com/qqmu/jync:2.1.0
+docker build -t registry.example.com/qqmu/jync:2.2.0 .
+docker push registry.example.com/qqmu/jync:2.2.0
 
 # 2) 改 deploy/k8s/kustomization.yaml 里的 images 变换指向你的仓库
 
@@ -163,7 +163,7 @@ Jync 的同步正确性不依赖单实例，依赖的是**共享元数据库**�
 
 ```bash
 # Docker：换镜像标签重建容器，数据卷不动
-docker pull registry.example.com/qqmu/jync:2.1.0
+docker pull registry.example.com/qqmu/jync:2.2.0
 docker compose up -d
 
 # K8s：改 kustomization.yaml 的 newTag 后
