@@ -35,6 +35,18 @@
 | H2 | 仅元数据 | 内嵌 | `com.h2database:h2` | Jync 元数据库启动/迁移 | 自动化（单元/上下文测试） | v1.11.0 及以前持续回归 | 不作为同步源或目标 |
 | MongoDB（原生驱动） | 仅 ETL/专属迁移源 | `mongo:6` | `org.mongodb:mongodb-driver-sync` | ETL 取数、Mongo → Mongo、Mongo → KingbaseES | 自动化容器 | v1.11.0 | 不参与 JDBC 实时同步矩阵 |
 
+## 元数据库（metadata-store）
+
+Jync 自身的元数据（连接、任务、游标、变更日志等）走 Hibernate 建表与 JPA 查询，和同步源/目标的方言层是两套东西：**能做同步源/目标，不代表能当元数据库**。
+
+| 元数据库 | 状态 | 证据 |
+|---|---|---|
+| H2 文件库 | 默认 | 内嵌，`MODE=MySQL`，`ddl-auto: update` |
+| MySQL 8 / PostgreSQL 16 / Oracle 23 | 部署文档列出的已验证组合 | `MetadataStore*IT` 容器契约测试：启动建表、自增、LOB、图表聚合 |
+| MariaDB 11.4 | 容器契约测试通过（MySQL 协议族） | `MetadataStoreMariaDbIT` |
+
+契约测试指 `AbstractMetadataStoreIT`：空库首启建表、管理员播种、定时任务读写、`@Lob` 字段与看板/指标的按小时、分钟聚合。
+
 ## 环境变量（门控测试）
 
 | 测试类 | 必需变量 | 可选变量 | 说明 |
