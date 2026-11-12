@@ -6,13 +6,13 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import org.commonmark.parser.Parser;
 import org.commonmark.renderer.html.HtmlRenderer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.io.ClassPathResource;
@@ -23,6 +23,8 @@ import org.springframework.util.StringUtils;
 import org.springframework.boot.info.BuildProperties;
 
 import lombok.extern.slf4j.Slf4j;
+
+import com.qqmu.jync.service.settings.UpdateCheckResolver;
 
 /**
  * Knows the running version and how it compares to the newest GitHub release.
@@ -50,7 +52,8 @@ public class VersionService {
     private final ArtifactComparison artifactComparison;
     /** What an admin already acknowledged; null in tests that do not exercise dismissal. */
     private final ArtifactDismissal dismissal;
-    private final boolean enabled;
+    /** Read on every entry point: the 系统配置 switch may flip while the app is running. */
+    private final BooleanSupplier enabled;
     /** Runs the network call off the request thread; a fresh daemon thread per refresh. */
     private final Executor refreshExecutor;
     /** Guarantees a single in-flight check: page views never pile requests onto GitHub. */
@@ -81,7 +84,7 @@ public class VersionService {
                           SourceAwareFeed sourceAwareFeed,
                           ArtifactComparison artifactComparison,
                           ArtifactDismissal dismissal,
-                          @Value("${app.update-check.enabled:true}") boolean enabled) {
+                          UpdateCheckResolver updateCheckResolver) {
         this(() -> {
             BuildProperties props = buildProperties.getIfAvailable();
             if (props == null) {
@@ -89,11 +92,19 @@ public class VersionService {
             }
             String version = props.getVersion();
             return StringUtils.hasText(version) ? version.trim() : null;
-        }, feed, sourceAwareFeed, artifactComparison, dismissal, enabled, daemonExecutor());
+        }, feed, sourceAwareFeed, artifactComparison, dismissal,
+                updateCheckResolver::isEnabled, daemonExecutor());
     }
 
     /** Test seam: inject the "current" version and a fake feed; checks run inline. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed, boolean enabled) {
+        this(currentVersionSupplier, feed, asSourceAware(feed), null, null, () -> enabled,
+                Runnable::run);
+    }
+
+    /** Test seam for a switch that flips while the service runs (the 系统配置 toggle). */
+    VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
+                   BooleanSupplier enabled) {
         this(currentVersionSupplier, feed, asSourceAware(feed), null, null, enabled,
                 Runnable::run);
     }
@@ -101,21 +112,22 @@ public class VersionService {
     /** Test seam with a controllable executor so the non-blocking behavior is observable. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed, boolean enabled,
                    Executor refreshExecutor) {
-        this(currentVersionSupplier, feed, asSourceAware(feed), null, null, enabled,
+        this(currentVersionSupplier, feed, asSourceAware(feed), null, null, () -> enabled,
                 refreshExecutor);
     }
 
     /** Test seam for the click-triggered check, which needs to see each mirror's answer. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
                    SourceAwareFeed sourceAwareFeed, boolean enabled) {
-        this(currentVersionSupplier, feed, sourceAwareFeed, null, null, enabled, Runnable::run);
+        this(currentVersionSupplier, feed, sourceAwareFeed, null, null, () -> enabled,
+                Runnable::run);
     }
 
     /** Test seam for the artifact comparison (same-version, re-published jar). */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
                    ArtifactComparison artifactComparison, boolean enabled) {
-        this(currentVersionSupplier, feed, asSourceAware(feed), artifactComparison, null, enabled,
-                Runnable::run);
+        this(currentVersionSupplier, feed, asSourceAware(feed), artifactComparison, null,
+                () -> enabled, Runnable::run);
     }
 
     /** Test seam for the dismissal of a re-published artifact. */
@@ -123,15 +135,15 @@ public class VersionService {
                    ArtifactComparison artifactComparison, ArtifactDismissal dismissal,
                    boolean enabled) {
         this(currentVersionSupplier, feed, asSourceAware(feed), artifactComparison, dismissal,
-                enabled, Runnable::run);
+                () -> enabled, Runnable::run);
     }
 
     /** Test seam for both seams at once: per-mirror answers plus an artifact comparison. */
     VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
                    SourceAwareFeed sourceAwareFeed, ArtifactComparison artifactComparison,
                    boolean enabled) {
-        this(currentVersionSupplier, feed, sourceAwareFeed, artifactComparison, null, enabled,
-                Runnable::run);
+        this(currentVersionSupplier, feed, sourceAwareFeed, artifactComparison, null,
+                () -> enabled, Runnable::run);
     }
 
     private static SourceAwareFeed asSourceAware(ReleaseFeed feed) {
@@ -141,7 +153,7 @@ public class VersionService {
     private VersionService(Supplier<String> currentVersionSupplier, ReleaseFeed feed,
                            SourceAwareFeed sourceAwareFeed,
                            ArtifactComparison artifactComparison, ArtifactDismissal dismissal,
-                           boolean enabled, Executor refreshExecutor) {
+                           BooleanSupplier enabled, Executor refreshExecutor) {
         this.currentVersionSupplier = currentVersionSupplier;
         this.feed = feed;
         this.sourceAwareFeed = sourceAwareFeed;
@@ -163,7 +175,7 @@ public class VersionService {
     /** Warm the cache shortly after boot, off the startup path; failures just stay UNKNOWN. */
     @EventListener(ApplicationReadyEvent.class)
     public void warmUp() {
-        if (enabled) {
+        if (enabled.getAsBoolean()) {
             requestRefresh(currentVersionSupplier.get());
         }
     }
@@ -171,7 +183,7 @@ public class VersionService {
     public VersionInfo snapshot() {
         String current = currentVersionSupplier.get();
 
-        if (!enabled) {
+        if (!enabled.getAsBoolean()) {
             Notes notes = currentNotes(current);
             return VersionInfo.builder()
                     .currentVersion(current)
@@ -218,7 +230,7 @@ public class VersionService {
      */
     public UpdateCheck checkNow() {
         String current = currentVersionSupplier.get();
-        if (!enabled) {
+        if (!enabled.getAsBoolean()) {
             return new UpdateCheck(false, false, current, null, null, null, false);
         }
         ReleaseFeed.Release latest;

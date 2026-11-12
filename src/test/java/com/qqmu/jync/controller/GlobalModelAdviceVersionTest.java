@@ -1,6 +1,8 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -13,6 +15,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.info.BuildProperties;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.service.settings.UpdateCheckResolver;
 
 /**
  * The {@code appVersion} model attribute: {@code v}-prefixed BuildProperties version when the
@@ -31,33 +34,51 @@ class GlobalModelAdviceVersionTest {
     }
 
     /** Minimal ObjectProvider view: fixed instance or nothing, no bean factory involved. */
-    private static ObjectProvider<BuildProperties> providerOf(BuildProperties props) {
+    private static <T> ObjectProvider<T> providerOf(T value) {
         return new ObjectProvider<>() {
             @Override
-            public BuildProperties getObject() {
-                return props;
+            public T getObject() {
+                return value;
             }
 
             @Override
-            public BuildProperties getObject(Object... args) {
-                return props;
+            public T getObject(Object... args) {
+                return value;
             }
 
             @Override
-            public BuildProperties getIfAvailable() {
-                return props;
+            public T getIfAvailable() {
+                return value;
             }
 
             @Override
-            public BuildProperties getIfUnique() {
-                return props;
+            public T getIfUnique() {
+                return value;
             }
 
             @Override
-            public Iterator<BuildProperties> iterator() {
+            public Iterator<T> iterator() {
                 return Collections.emptyIterator();
             }
         };
+    }
+
+    @Test
+    void theSavedSwitchWinsOverTheConfigurationDefault() {
+        // The 系统配置 page saved "off" while app.update-check.enabled is unset (true here).
+        UpdateCheckResolver resolver = mock(UpdateCheckResolver.class);
+        when(resolver.isEnabled()).thenReturn(false);
+        GlobalModelAdvice advice = new GlobalModelAdvice(
+                "https://github.com/vfaner/jync", "https://jync.qqmu.com", new SyncProperties(),
+                providerOf(null), true, providerOf(resolver), ZoneId.systemDefault());
+
+        assertThat(advice.updateCheckEnabled()).isFalse();
+    }
+
+    @Test
+    void withoutTheResolverBeanTheConfigurationValueStandsIn() {
+        // An MVC slice imports this advice without the settings-backed resolver bean.
+        assertThat(adviceWith(null).updateCheckEnabled()).isTrue();
     }
 
     @Test

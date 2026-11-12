@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -464,6 +465,25 @@ class VersionServiceTest {
         assertThat(feed.latestCalls).hasValue(0);
         // Release notes come from the classpath/feed, not the /latest call, so they survive.
         assertThat(info.getCurrentNotesHtml()).contains("<h1>");
+    }
+
+    @Test
+    void turningTheSwitchOffAtRuntimeStopsAskingTheFeed() {
+        // The 系统配置 switch is read on every call, not captured at construction: an admin who
+        // turns it off must see the very next page request stop reaching GitHub/Gitee.
+        FakeFeed feed = new FakeFeed();
+        feed.latest = release("v1.1.1", "u", "body");
+        AtomicBoolean enabled = new AtomicBoolean(true);
+        VersionService service = new VersionService(() -> "1.1.1", feed, enabled::get);
+
+        assertThat(service.snapshot().getState()).isEqualTo(VersionInfo.State.UP_TO_DATE);
+        assertThat(feed.latestCalls).hasValue(1);
+
+        enabled.set(false);
+
+        assertThat(service.snapshot().getState()).isEqualTo(VersionInfo.State.DISABLED);
+        assertThat(service.checkNow().checked()).isFalse();
+        assertThat(feed.latestCalls).hasValue(1);
     }
 
     @Test

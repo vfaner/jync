@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.settings.UpdateCheckResolver;
 
 /**
  * Model attributes the shared layout needs on every page.
@@ -35,7 +36,9 @@ public class GlobalModelAdvice {
     private final String siteUrl;
     private final SyncProperties properties;
     private final ObjectProvider<BuildProperties> buildProperties;
-    private final boolean updateCheckEnabled;
+    /** The configuration-file value, and the stand-in when the resolver bean is absent. */
+    private final boolean configuredUpdateCheckEnabled;
+    private final ObjectProvider<UpdateCheckResolver> updateCheckResolver;
     private final DateTimeFormatter buildTimeFormatter;
 
     @Autowired
@@ -43,9 +46,10 @@ public class GlobalModelAdvice {
                              @Value("${app.site-url:}") String siteUrl,
                              SyncProperties properties,
                              ObjectProvider<BuildProperties> buildProperties,
-                             @Value("${app.update-check.enabled:true}") boolean updateCheckEnabled) {
+                             @Value("${app.update-check.enabled:true}") boolean updateCheckEnabled,
+                             ObjectProvider<UpdateCheckResolver> updateCheckResolver) {
         this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled,
-                ZoneId.systemDefault());
+                updateCheckResolver, ZoneId.systemDefault());
     }
 
     /** Test seam: the display zone is pinned so the rendered stamp does not depend on the JVM. */
@@ -55,11 +59,23 @@ public class GlobalModelAdvice {
                       ObjectProvider<BuildProperties> buildProperties,
                       boolean updateCheckEnabled,
                       ZoneId buildTimeZone) {
+        this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled, null,
+                buildTimeZone);
+    }
+
+    GlobalModelAdvice(String githubUrl,
+                      String siteUrl,
+                      SyncProperties properties,
+                      ObjectProvider<BuildProperties> buildProperties,
+                      boolean updateCheckEnabled,
+                      ObjectProvider<UpdateCheckResolver> updateCheckResolver,
+                      ZoneId buildTimeZone) {
         this.githubUrl = githubUrl;
         this.siteUrl = siteUrl;
         this.properties = properties;
         this.buildProperties = buildProperties;
-        this.updateCheckEnabled = updateCheckEnabled;
+        this.configuredUpdateCheckEnabled = updateCheckEnabled;
+        this.updateCheckResolver = updateCheckResolver;
         this.buildTimeFormatter = BUILD_TIME_FORMATTER.withZone(buildTimeZone);
     }
 
@@ -128,12 +144,18 @@ public class GlobalModelAdvice {
     }
 
     /**
-     * Whether the settings page may render the nav's update badge at all. The flag is read
-     * on every request so an air-gapped deployment can turn the check off without a rebuild.
+     * Whether the layout may render the update badge and the dashboard prompt at all.
+     *
+     * <p>Read on every request so an air-gapped deployment can turn the check off from the
+     * 系统配置 page without a rebuild. The page switch wins over the configuration default; a
+     * slice that imports this advice without the resolver bean (no database) keeps the
+     * configuration value it was handed, so layout tests stay self-contained.
      */
     @ModelAttribute("updateCheckEnabled")
     public boolean updateCheckEnabled() {
-        return updateCheckEnabled;
+        UpdateCheckResolver resolver = updateCheckResolver == null
+                ? null : updateCheckResolver.getIfAvailable();
+        return resolver == null ? configuredUpdateCheckEnabled : resolver.isEnabled();
     }
 
     /**

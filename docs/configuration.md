@@ -102,7 +102,7 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 | `sync.max-pool-size` | `5` | 每个数据库连接池上限 |
 | `sync.crypto-password` / `crypto-salt` | 留空自动生成 | 连接密码与告警地址的加密密钥 |
 | `sync.ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线 |
-| `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求 |
+| `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求。也可在「系统配置 → 更新检查」关闭；此处显式设置时页面开关变为只读 |
 | `metrics.enabled` | `true` | 性能采样总开关，关闭不影响同步链路 |
 | `sync.content-audit-interval-ms` | `900000` | 内容级校验间隔（15 分钟）；`0` 关闭。手工「检查内容」不受此值限制 |
 | `sync.content-audit-sample-size` | `50` | 每表抽样行数，范围 2–200 |

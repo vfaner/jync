@@ -17,6 +17,7 @@ import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.service.settings.SystemSettingService;
+import com.qqmu.jync.service.settings.UpdateCheckResolver;
 import com.qqmu.jync.service.tls.TlsCertificateService;
 import com.qqmu.jync.service.tls.TlsPageState;
 import com.qqmu.jync.util.AuditOrigin;
@@ -37,15 +38,18 @@ public class SystemConfigController {
     static final long PACKAGE_MAX_BYTES = 20L * 1024 * 1024;
 
     private final RequireHttpsResolver requireHttps;
+    private final UpdateCheckResolver updateCheck;
     private final SystemSettingService settings;
     private final AdminAuditService audit;
     private final TlsCertificateService tls;
 
     public SystemConfigController(RequireHttpsResolver requireHttps,
+                                  UpdateCheckResolver updateCheck,
                                   SystemSettingService settings,
                                   AdminAuditService audit,
                                   TlsCertificateService tls) {
         this.requireHttps = requireHttps;
+        this.updateCheck = updateCheck;
         this.settings = settings;
         this.audit = audit;
         this.tls = tls;
@@ -67,7 +71,43 @@ public class SystemConfigController {
         // 或当前请求本身就是 HTTPS（反代终止 TLS）。否则开启后除回环外全部 403。
         model.addAttribute("httpsEnableBlocked", !httpsAvailable(tlsState, request));
         model.addAttribute("httpsBlockedKey", httpsBlockedKey(tlsState));
+        model.addAttribute("updateCheck", updateCheck.effective());
+        model.addAttribute("updateCheckConfigControlled", updateCheck.isConfigControlled());
         return "system-config";
+    }
+
+    /**
+     * Turns the release check on or off on the page.
+     *
+     * <p>Unlike forced HTTPS there is nothing to protect and nothing to lock out: both
+     * directions are always allowed. A value pinned by the configuration file cannot be
+     * changed at all — the file is the operator's override, the page is the default one.
+     */
+    @PostMapping("/system-config/update-check")
+    public String saveUpdateCheck(@RequestParam(required = false) Boolean enabled,
+                                  HttpServletRequest request,
+                                  RedirectAttributes flash) {
+        if (enabled == null) {
+            flash.addFlashAttribute("error", "error.systemConfig.setting.invalid");
+            return "redirect:/system-config";
+        }
+        if (updateCheck.isConfigControlled()) {
+            flash.addFlashAttribute("error", "error.systemConfig.updateCheck.envControlled");
+            return "redirect:/system-config";
+        }
+
+        Optional<Boolean> previous =
+                settings.putBoolean(SystemSettingKey.UPDATE_CHECK_ENABLED, enabled);
+        audit.record(AuditAction.SYSTEM_SETTING_SAVE,
+                AuditDetail.of("audit.detail.systemSettingSave", AuditOrigin.of(request),
+                        SystemSettingKey.UPDATE_CHECK_ENABLED.key(),
+                        previous.map(String::valueOf).orElse(""),
+                        String.valueOf(enabled)));
+
+        flash.addFlashAttribute("message", enabled
+                ? "msg.systemConfig.updateCheck.enabled"
+                : "msg.systemConfig.updateCheck.disabled");
+        return "redirect:/system-config";
     }
 
     /**

@@ -4,7 +4,10 @@ package com.qqmu.jync.service.settings;
 public enum SystemSettingKey {
 
     /** Whether plaintext requests are refused; see {@link RequireHttpsResolver}. */
-    SECURITY_REQUIRE_HTTPS("security.require-https");
+    SECURITY_REQUIRE_HTTPS("security.require-https"),
+
+    /** Whether Jync asks GitHub/Gitee for newer releases; see {@code UpdateCheckResolver}. */
+    UPDATE_CHECK_ENABLED("update-check.enabled");
 
     private final String key;
 

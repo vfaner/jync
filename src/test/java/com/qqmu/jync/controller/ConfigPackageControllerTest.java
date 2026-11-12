@@ -41,6 +41,7 @@ import com.qqmu.jync.service.config.ConfigPackageException;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.service.settings.SystemSettingService;
+import com.qqmu.jync.service.settings.UpdateCheckResolver;
 import com.qqmu.jync.service.tls.TlsCertificateInfo;
 import com.qqmu.jync.service.tls.TlsCertificateService;
 import com.qqmu.jync.service.tls.TlsPageState;
@@ -71,6 +72,8 @@ class ConfigPackageControllerTest {
     private ConfigImportService importService;
     @MockitoBean
     private RequireHttpsResolver requireHttps;
+    @MockitoBean
+    private UpdateCheckResolver updateCheck;
     @MockitoBean
     private SystemSettingService systemSettings;
     @MockitoBean
@@ -396,6 +399,37 @@ class ConfigPackageControllerTest {
         ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
         verify(audit).record(eq(AuditAction.SYSTEM_SETTING_SAVE), detail.capture());
         assertThat(detail.getValue()).contains("security.require-https").contains("true");
+    }
+
+    @Test
+    void turningUpdateChecksOffStoresTheSettingAndAuditsIt() throws Exception {
+        when(updateCheck.isConfigControlled()).thenReturn(false);
+        when(systemSettings.putBoolean(SystemSettingKey.UPDATE_CHECK_ENABLED, false))
+                .thenReturn(Optional.of(true));
+
+        mvc.perform(post("/system-config/update-check").with(csrf())
+                        .param("enabled", "false"))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("message",
+                        "msg.systemConfig.updateCheck.disabled"));
+
+        verify(systemSettings).putBoolean(SystemSettingKey.UPDATE_CHECK_ENABLED, false);
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(audit).record(eq(AuditAction.SYSTEM_SETTING_SAVE), detail.capture());
+        assertThat(detail.getValue()).contains("update-check.enabled").contains("true");
+    }
+
+    @Test
+    void aPinnedUpdateCheckSwitchCannotBeChanged() throws Exception {
+        when(updateCheck.isConfigControlled()).thenReturn(true);
+
+        mvc.perform(post("/system-config/update-check").with(csrf())
+                        .param("enabled", "true"))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error",
+                        "error.systemConfig.updateCheck.envControlled"));
+
+        verify(systemSettings, never()).putBoolean(any(), anyBoolean());
     }
 
     // --- fixtures ------------------------------------------------------------------------

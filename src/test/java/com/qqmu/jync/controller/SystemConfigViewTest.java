@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -26,6 +27,7 @@ import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingService;
+import com.qqmu.jync.service.settings.UpdateCheckResolver;
 import com.qqmu.jync.service.tls.TlsCertificateInfo;
 import com.qqmu.jync.service.tls.TlsCertificateService;
 import com.qqmu.jync.service.tls.TlsPageState;
@@ -64,6 +66,8 @@ class SystemConfigViewTest {
     private CryptoUtil cryptoUtil;
     @MockitoBean
     private TlsCertificateService tlsCertificateService;
+    @MockitoBean
+    private UpdateCheckResolver updateCheckResolver;
 
     private static RequestPostProcessor as(UserRole role) {
         AppUser user = new AppUser();
@@ -80,9 +84,16 @@ class SystemConfigViewTest {
         return render(role, noTls());
     }
 
-    private String render(UserRole role, TlsPageState tls) throws Exception {
+    @BeforeEach
+    void defaultSwitches() {
         when(requireHttpsResolver.effective()).thenReturn(HTTPS_OFF);
         when(requireHttpsResolver.isConfigControlled()).thenReturn(false);
+        when(updateCheckResolver.effective()).thenReturn(
+                new UpdateCheckResolver.Effective(true, UpdateCheckResolver.Source.DEFAULT));
+        when(updateCheckResolver.isConfigControlled()).thenReturn(false);
+    }
+
+    private String render(UserRole role, TlsPageState tls) throws Exception {
         when(tlsCertificateService.pageState()).thenReturn(tls);
         return mvc.perform(get("/system-config").locale(Locale.SIMPLIFIED_CHINESE).with(as(role)))
                 .andExpect(status().isOk())
@@ -129,10 +140,42 @@ class SystemConfigViewTest {
         int pkg = page.indexOf("<span>配置包</span>");
         int diagnostics = page.indexOf("<span>诊断包</span>");
         int https = page.indexOf("<span>强制 HTTPS</span>");
+        int updateCheck = page.indexOf("<span>更新检查</span>");
         assertThat(tls).isGreaterThan(-1);
         assertThat(pkg).isGreaterThan(tls);
         assertThat(diagnostics).isGreaterThan(pkg);
         assertThat(https).isGreaterThan(diagnostics);
+        assertThat(updateCheck).isGreaterThan(https);
+    }
+
+    @Test
+    void theUpdateCheckCardIsAnActionOnThisPage() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).contains("<span>更新检查</span>")
+                .contains("action=\"/system-config/update-check\"");
+    }
+
+    @Test
+    void theUpdateCheckCardShowsTheOffStateAndWhereItWasSet() throws Exception {
+        when(updateCheckResolver.effective()).thenReturn(
+                new UpdateCheckResolver.Effective(false, UpdateCheckResolver.Source.DATABASE));
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).contains("未开启", "本页设置");
+    }
+
+    @Test
+    void aPinnedUpdateCheckSwitchIsReadOnly() throws Exception {
+        when(updateCheckResolver.effective()).thenReturn(
+                new UpdateCheckResolver.Effective(false, UpdateCheckResolver.Source.CONFIG));
+        when(updateCheckResolver.isConfigControlled()).thenReturn(true);
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).contains("该开关由配置文件固定");
+        int form = page.indexOf("action=\"/system-config/update-check\"");
+        assertThat(form).isGreaterThan(-1);
+        assertThat(page.substring(form, page.indexOf("</form>", form))).contains("disabled");
     }
 
     @Test

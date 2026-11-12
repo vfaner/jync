@@ -390,6 +390,52 @@
                 </div>
             </div>
 
+            <!-- 更新检查：关闭后不再向 GitHub / Gitee 发起任何请求（启动预热、导航圆点、
+                 看板升级提醒一起停下）。与强制 HTTPS 不同，这个开关双向都安全：关掉只是
+                 少了提示，没有可被锁死的恢复路径。配置文件显式设置时固定，页面只读。 -->
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#arrow-clockwise"/></svg>
+                        <span th:text="#{systemConfig.updateCheck}">Update check</span></h2>
+                </div>
+                <div class="card-body">
+                    <dl class="dl pairs">
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.updateCheckCurrent}">Current state</dt>
+                            <dd>
+                                <span class="chip chip-ok" th:if="${updateCheck.enabled}"
+                                      th:text="#{systemConfig.updateCheckOn}">On</span>
+                                <span class="chip" th:unless="${updateCheck.enabled}"
+                                      th:text="#{systemConfig.updateCheckOff}">Off</span>
+                            </dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.updateCheckSource}">Source</dt>
+                            <dd>
+                                <span class="chip" th:if="${updateCheck.source.name() == 'CONFIG'}"
+                                      th:text="#{systemConfig.updateCheckSourceConfig}">Configuration file</span>
+                                <span class="chip" th:if="${updateCheck.source.name() == 'DATABASE'}"
+                                      th:text="#{systemConfig.updateCheckSourceDatabase}">Set on this page</span>
+                                <span class="chip" th:if="${updateCheck.source.name() == 'DEFAULT'}"
+                                      th:text="#{systemConfig.updateCheckSourceDefault}">Default</span>
+                            </dd>
+                        </div>
+                    </dl>
+                    <p class="help" th:text="#{systemConfig.updateCheckHelp}">When off, no requests are made to GitHub or Gitee and the update prompts disappear.</p>
+                    <p class="help" th:if="${updateCheckConfigControlled}"
+                       th:text="#{systemConfig.updateCheckPinned}">This switch is pinned by the configuration file and cannot be changed here.</p>
+                    <div class="btn-row" style="margin-top:16px">
+                        <form method="post" th:action="@{/system-config/update-check}">
+                            <input type="hidden" name="enabled" th:value="${!updateCheck.enabled}"/>
+                            <button class="btn btn-sm" type="submit"
+                                    th:classappend="${updateCheck.enabled} ? 'btn-ghost' : 'btn-primary'"
+                                    th:disabled="${updateCheckConfigControlled}"
+                                    th:text="${updateCheck.enabled} ? #{systemConfig.updateCheckDisable} : #{systemConfig.updateCheckEnable}">Disable</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>
 
