@@ -21,7 +21,7 @@ docker build -t jync:2.1.0 .
 |---|---|---|
 | `/app/jync.jar` | 应用本体 | 随镜像升级 |
 | `/app/data` | H2 元数据库（连接、项目、游标、同步锁、变更日志、元数据快照都在库里） | **必须持久化** |
-| `/app/data/tls` | 应用内 HTTPS 的 `tls.properties` 边车（口令加密存放）、页面上传的密钥库，以及「服务器路径」模式派生的 `keystore-*` | 随 `/app/data` 一起备份；不用应用内 TLS 时为空目录 |
+| `/app/data/tls` | 应用内 HTTPS 的 `tls.properties` 边车（口令加密存放）、页面上传暂存的证书文件（`uploads/`），以及手填挂载路径时派生的 `keystore-*` | 随 `/app/data` 一起备份；不用应用内 TLS 时为空目录 |
 | `/app/logs` | 运行日志 | 持久化或走 stdout |
 
 `application.yml` 里这些是相对路径（`./data`、`./logs`），工作目录固定为 `/app`，所以挂卷即生效，无需改配置。
@@ -39,9 +39,9 @@ docker run -d --name jync \
   jync:2.1.0
 ```
 
-`-p 8443:8443` 只有用「应用内 TLS」（在「系统配置」上传证书或填写服务器路径）时才需要；端口可在页面上改，改完同步改这里的映射。上传的密钥库落在数据卷 `/app/data/tls`，重启容器后生效。
+`-p 8443:8443` 只有用「应用内 TLS」（在「系统配置」上传证书或手填证书路径）时才需要；端口可在页面上改，改完同步改这里的映射。上传的密钥库落在数据卷 `/app/data/tls`，重启容器后生效。
 
-**把证书挂载进容器、只让页面记地址**：`-v /etc/jync/tls:/etc/jync/tls:ro` 挂上宿主机证书，然后在「系统管理 → 系统配置 → TLS 证书 → 服务器路径」直接填 `/etc/jync/tls/...` 的绝对路径。证书不复制进数据卷，容器删除重建后路径依然有效（边车在 `/app/data/tls`，随数据卷保留）；换证书只需替换宿主机文件并重启容器。
+**把证书挂载进容器、只让页面记地址**：`-v /etc/jync/tls:/etc/jync/tls:ro` 挂上宿主机证书，然后在「系统管理 → 系统配置 → TLS 证书」，在路径输入框里直接填 `/etc/jync/tls/...` 的绝对路径（输入框旁的「上传…」会把文件暂存进数据卷，适合证书不在宿主机挂载点的场景）。证书不复制进数据卷，容器删除重建后路径依然有效（边车在 `/app/data/tls`，随数据卷保留）；换证书只需替换宿主机文件并重启容器。
 
 **或者完全交给部署配置**：把证书挂载进容器并在环境变量里指路，页面变为只读，容器删除重建也不会丢：
 
@@ -155,7 +155,7 @@ Jync 的同步正确性不依赖单实例，依赖的是**共享元数据库**�
 
 注意：对账只保证项目调度的**存在性**一致；轮询间隔/cron 的变更在保存它的那个节点立即生效，其他节点在该项目下次于本节点被调度时对齐。对同步语义无影响（锁互斥保证不会双跑）。
 
-**应用内 TLS 的页面配置是节点本地的**：边车和上传的证书存在各副本自己的 `/app/data/tls`，在一个副本的页面（经负载均衡落到哪个节点不确定）保存只会写到那个节点。要么把 `JYN_TLS_DIRECTORY` 指到所有副本共享的卷并设置 `JYN_TLS_REDIRECT_HOST`；要么把同一个 Secret 挂载到每个副本，各节点在页面「服务器路径」里各存一次地址；最稳妥是完全走配置文件模式：设置 `JYN_TLS_KEYSTORE_PATH` / `JYN_TLS_PEM_CERT_PATH` 等变量，页面只读、实例重建不丢。K8s 多副本一般由 Ingress 终止 TLS，此时各副本设 `JYN_TLS_ENABLED=false` 即可。
+**应用内 TLS 的页面配置是节点本地的**：边车和上传的证书存在各副本自己的 `/app/data/tls`，在一个副本的页面（经负载均衡落到哪个节点不确定）保存只会写到那个节点。要么把 `JYN_TLS_DIRECTORY` 指到所有副本共享的卷并设置 `JYN_TLS_REDIRECT_HOST`；要么把同一个 Secret 挂载到每个副本，各节点在页面里手填一次路径；最稳妥是完全走配置文件模式：设置 `JYN_TLS_KEYSTORE_PATH` / `JYN_TLS_PEM_CERT_PATH` 等变量，页面只读、实例重建不丢。K8s 多副本一般由 Ingress 终止 TLS，此时各副本设 `JYN_TLS_ENABLED=false` 即可。
 
 多实例场景请显式设置 `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT`（见上一节）：自动生成的密钥保存在本地 `<库名>.key`，外部元数据库场景下没有这个文件。若确实在同一台机器上用同一份 H2 数据目录起了多个进程，升级后的首次启动只有一个进程会执行密钥轮换，其余进程会在轮换期间拒绝启动并提示稍后重试（否则它会一直使用公开默认密钥加密新凭据）；轮换完成后重新启动即可。
 
@@ -184,6 +184,6 @@ kubectl apply -k deploy/k8s/
 | K8s 里探针失败但本地正常 | 启动慢于 startupProbe 预算（默认 30×2s）；大元数据库首启建表较慢，调大 `failureThreshold` |
 | HTTPS 下登录后立刻掉登录态 | 设 `JYN_COOKIE_SECURE=true` 且确认代理正确传递 `X-Forwarded-Proto` |
 | 启动失败，日志有 `ConnectorStartFailedException` 或 `Address already in use` | 应用内 TLS 的 HTTPS 端口被占（重复副本、旧容器未退，或与 8080 填成同一端口）。以 `JYN_TLS_ENABLED=false` 启动一次，在「系统配置」改端口或删除证书，再正常重启 |
-| 容器起不来，日志说密钥库不可读 / 摘要不符 / 缺少私钥 | 证书文件被替换或边车损坏。同上，用 `JYN_TLS_ENABLED=false` 救回实例后在页面上重新上传；服务器路径模式先确认挂载点文件存在且可读，再重新保存路径 |
+| 容器起不来，日志说密钥库不可读 / 摘要不符 / 缺少私钥 | 证书文件被替换或边车损坏。同上，用 `JYN_TLS_ENABLED=false` 救回实例后在页面上重新上传；手填路径的先确认挂载点文件存在且可读，再重新保存路径 |
 | 界面时间差 8 小时 | 容器缺 `TZ`，加 `TZ=Asia/Shanghai` |
 | `docker build` 拉基础镜像超时 | 国内网络给 Docker 配 registry mirror（`/etc/docker/daemon.json` 或 OrbStack 设置），或先在能出网的机器上构建后 `docker save` / 推私仓 |

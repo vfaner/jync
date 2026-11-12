@@ -2,6 +2,7 @@ package com.qqmu.jync.service.tls;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Locale;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -19,18 +20,26 @@ import org.springframework.stereotype.Component;
  * startup, where a broken path fails the boot exactly like a corrupt saved keystore. Exactly one
  * source may be configured; a PEM key without its certificate is rejected because there is
  * nothing to pair it with.
+ *
+ * <p>Values are validated lazily, on first use, not in the constructor. This bean is created
+ * before {@link TlsRuntimeState#load} gets to see {@code app.tls.enabled}; a contradictory or
+ * malformed {@code app.tls.*} value must not fail the boot when TLS is disabled, because that
+ * flag is the documented way back in to an instance whose TLS configuration is broken.
  */
 @Component
 public class TlsPathSource {
 
     static final int DEFAULT_HTTPS_PORT = 8443;
 
-    private final Path keystore;
+    private final String keystorePath;
     private final String keystorePassword;
-    private final Path pemCertificate;
-    private final Path pemKey;
-    private final int httpsPort;
-    private final boolean redirectHttp;
+    private final String pemCertificatePath;
+    private final String pemKeyPath;
+    private final String httpsPortValue;
+    private final String redirectHttpValue;
+
+    /** Parsed on first use; null until {@link #parsed()} completes. */
+    private volatile Parsed parsed;
 
     public TlsPathSource(@Value("${app.tls.keystore-path:}") String keystorePath,
                          @Value("${app.tls.keystore-password:}") String keystorePassword,
@@ -38,23 +47,12 @@ public class TlsPathSource {
                          @Value("${app.tls.pem-key-path:}") String pemKeyPath,
                          @Value("${app.tls.https-port:8443}") String httpsPort,
                          @Value("${app.tls.redirect-http:true}") String redirectHttp) {
-        this.keystore = path(keystorePath);
+        this.keystorePath = keystorePath;
         this.keystorePassword = keystorePassword == null ? "" : keystorePassword;
-        this.pemCertificate = path(pemCertificatePath);
-        this.pemKey = path(pemKeyPath);
-
-        boolean keystoreConfigured = this.keystore != null;
-        boolean pemConfigured = this.pemCertificate != null || this.pemKey != null;
-        if (keystoreConfigured && pemConfigured) {
-            throw new TlsKeystoreException("error.tls.configSourceConflict");
-        }
-        if (this.pemCertificate == null && this.pemKey != null) {
-            // A key alone cannot serve TLS; naming one without its certificate is a typo.
-            throw new TlsKeystoreException("error.tls.configSourceConflict");
-        }
-
-        this.httpsPort = parsePort(httpsPort);
-        this.redirectHttp = parseRedirect(redirectHttp);
+        this.pemCertificatePath = pemCertificatePath;
+        this.pemKeyPath = pemKeyPath;
+        this.httpsPortValue = httpsPort;
+        this.redirectHttpValue = redirectHttp;
     }
 
     /** No configured source, for callers that only know the managed TLS directory. */
@@ -63,11 +61,12 @@ public class TlsPathSource {
     }
 
     public boolean configured() {
-        return keystore != null || pemCertificate != null;
+        Parsed values = parsed();
+        return values.keystore() != null || values.pemCertificate() != null;
     }
 
     public Optional<Path> keystore() {
-        return Optional.ofNullable(keystore);
+        return Optional.ofNullable(parsed().keystore());
     }
 
     public String keystorePassword() {
@@ -75,20 +74,59 @@ public class TlsPathSource {
     }
 
     public Optional<Path> pemCertificate() {
-        return Optional.ofNullable(pemCertificate);
+        return Optional.ofNullable(parsed().pemCertificate());
     }
 
     /** Empty for a combined bundle that carries the key in the certificate file. */
     public Optional<Path> pemKey() {
-        return Optional.ofNullable(pemKey);
+        return Optional.ofNullable(parsed().pemKey());
     }
 
     public int httpsPort() {
-        return httpsPort;
+        return parsed().httpsPort();
     }
 
     public boolean redirectHttp() {
-        return redirectHttp;
+        return parsed().redirectHttp();
+    }
+
+    /**
+     * Parses every value once. All accessors go through here, so the first one called reports any
+     * malformed value; no caller ever observes half-parsed state.
+     */
+    private Parsed parsed() {
+        Parsed values = parsed;
+        if (values == null) {
+            synchronized (this) {
+                values = parsed;
+                if (values == null) {
+                    values = parse();
+                    parsed = values;
+                }
+            }
+        }
+        return values;
+    }
+
+    private Parsed parse() {
+        Path keystore = path(keystorePath);
+        Path pemCertificate = path(pemCertificatePath);
+        Path pemKey = path(pemKeyPath);
+
+        if (keystore != null && (pemCertificate != null || pemKey != null)) {
+            throw new TlsKeystoreException("error.tls.configSourceConflict");
+        }
+        if (pemCertificate == null && pemKey != null) {
+            // A key alone cannot serve TLS; naming one without its certificate is a typo.
+            throw new TlsKeystoreException("error.tls.configSourceConflict");
+        }
+
+        return new Parsed(keystore, pemCertificate, pemKey,
+                parsePort(httpsPortValue), parseRedirect(redirectHttpValue));
+    }
+
+    private record Parsed(Path keystore, Path pemCertificate, Path pemKey,
+                          int httpsPort, boolean redirectHttp) {
     }
 
     private static Path path(String raw) {
@@ -118,7 +156,7 @@ public class TlsPathSource {
         if (raw == null || raw.isBlank()) {
             return true;
         }
-        return switch (raw.strip().toLowerCase(java.util.Locale.ROOT)) {
+        return switch (raw.strip().toLowerCase(Locale.ROOT)) {
             case "true", "on", "yes", "1" -> true;
             case "false", "off", "no", "0" -> false;
             default -> throw new TlsKeystoreException("error.tls.configInvalid");
@@ -127,12 +165,17 @@ public class TlsPathSource {
 
     @Override
     public String toString() {
-        // The passphrase is a secret; a log line or an exception must never render it.
-        return "TlsPathSource[keystore=" + keystore
-                + ", pemCertificate=" + pemCertificate
-                + ", pemKey=" + pemKey
-                + ", httpsPort=" + httpsPort
-                + ", redirectHttp=" + redirectHttp
+        // Never parses, so it cannot throw while an error is being logged. The passphrase is a
+        // secret; a log line or an exception must never render it.
+        return "TlsPathSource[keystore=" + display(keystorePath)
+                + ", pemCertificate=" + display(pemCertificatePath)
+                + ", pemKey=" + display(pemKeyPath)
+                + ", httpsPort=" + display(httpsPortValue)
+                + ", redirectHttp=" + display(redirectHttpValue)
                 + ", keystorePassword=<redacted>]";
+    }
+
+    private static String display(String raw) {
+        return raw == null || raw.isBlank() ? "null" : raw.strip();
     }
 }

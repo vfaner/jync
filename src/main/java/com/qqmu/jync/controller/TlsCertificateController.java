@@ -1,12 +1,15 @@
 package com.qqmu.jync.controller;
 
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Map;
 
 import jakarta.servlet.http.HttpServletRequest;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
@@ -167,6 +170,34 @@ public class TlsCertificateController {
         }
 
         return recordSaved(saved, request, flash);
+    }
+
+    /**
+     * Stages one file for a path input and answers with where it landed.
+     *
+     * <p>The page's file fields are text inputs plus an upload button; the button calls this and
+     * writes the returned path into the input, so the operator can also choose to type a server
+     * path instead. The response is JSON because the page stays on the form and saves it later.
+     * Only the key ships on failure — a message could quote a path or a provider diagnostic.
+     */
+    @PostMapping("/system-config/tls/stage")
+    @ResponseBody
+    public Map<String, Object> stage(@RequestParam(value = "file", required = false)
+                                     MultipartFile file) {
+        try {
+            if (file == null || file.isEmpty()) {
+                throw new TlsKeystoreException("error.tls.fileRequired");
+            }
+            if (file.getSize() > TlsCertificateService.MAX_BYTES) {
+                throw new TlsKeystoreException("error.tls.fileTooLarge");
+            }
+            Path stored = service.stageUpload(file.getOriginalFilename(), file.getBytes());
+            return Map.of("success", true, "path", stored.toString());
+        } catch (TlsKeystoreException e) {
+            return Map.of("success", false, "error", e.messageKey());
+        } catch (IOException | RuntimeException e) {
+            return Map.of("success", false, "error", "error.tls.saveFailed");
+        }
     }
 
     private String recordSaved(TlsConfig saved, HttpServletRequest request,

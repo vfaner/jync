@@ -65,32 +65,42 @@ class TlsPathSourceTest {
 
     @Test
     void rejectsABothSourcesAtOnce() {
-        assertThatThrownBy(() -> new TlsPathSource("/certs/jync.p12", "changeit",
-                "/certs/fullchain.pem", "/certs/privkey.pem", null, null))
+        // Parsing is deferred to the first use: the bean must be constructible so that
+        // app.tls.enabled=false can still start an instance with a contradictory config.
+        TlsPathSource source = new TlsPathSource("/certs/jync.p12", "changeit",
+                "/certs/fullchain.pem", "/certs/privkey.pem", null, null);
+
+        assertThatThrownBy(source::configured)
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.configSourceConflict");
     }
 
     @Test
     void rejectsAPemKeyWithoutItsCertificate() {
-        assertThatThrownBy(() -> new TlsPathSource(null, null, "", "/etc/jync/tls/privkey.pem",
-                null, null))
+        TlsPathSource source = new TlsPathSource(null, null, "", "/etc/jync/tls/privkey.pem",
+                null, null);
+
+        assertThatThrownBy(source::configured)
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.configSourceConflict");
     }
 
     @Test
     void rejectsAPortOutsideTheRange() {
-        assertThatThrownBy(() -> new TlsPathSource("/certs/jync.p12", "changeit", null, null,
-                "70000", null))
+        TlsPathSource source = new TlsPathSource("/certs/jync.p12", "changeit", null, null,
+                "70000", null);
+
+        assertThatThrownBy(source::configured)
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.portInvalid");
     }
 
     @Test
     void rejectsANonBooleanRedirectValue() {
-        assertThatThrownBy(() -> new TlsPathSource("/certs/jync.p12", "changeit", null, null,
-                null, "sometimes"))
+        TlsPathSource source = new TlsPathSource("/certs/jync.p12", "changeit", null, null,
+                null, "sometimes");
+
+        assertThatThrownBy(source::configured)
                 .isInstanceOf(TlsKeystoreException.class)
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.configInvalid");
     }

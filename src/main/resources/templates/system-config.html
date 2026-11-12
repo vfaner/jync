@@ -181,33 +181,50 @@
                                id="tls-mode-pem" checked/>
                         <input class="mode-input" type="radio" name="tlsMode"
                                id="tls-mode-keystore"/>
-                        <input class="mode-input" type="radio" name="tlsMode"
-                               id="tls-mode-path"/>
                         <div class="mode-tabbar">
                             <label class="mode-tab" for="tls-mode-pem"
                                    th:text="#{systemConfig.tlsPemTab}">PEM certificate</label>
                             <label class="mode-tab" for="tls-mode-keystore"
                                    th:text="#{systemConfig.tlsKeystoreTab}">Keystore</label>
-                            <label class="mode-tab" for="tls-mode-path"
-                                   th:text="#{systemConfig.tlsPathTab}">Server path</label>
                         </div>
 
                         <!-- nginx 风格：证书链一个文件、私钥可以单独一个文件，也可以和证书链放进
                              同一个文件；无需口令。Jync 在内存里用随机口令封装成 PKCS#12 再落盘，
-                             私钥不会以明文保存。 -->
+                             连接器只读这份封装后的文件；源文件本身留在路径指向的位置。 -->
                         <section class="mode-panel" data-mode="pem">
-                            <form method="post" enctype="multipart/form-data"
-                                  th:action="@{/system-config/tls(_csrf=${_csrf.token})}">
+                            <form method="post"
+                                  th:action="@{/system-config/tls/path(_csrf=${_csrf.token})}">
+                                <input type="hidden" name="mode" value="pem"/>
                                 <div class="field">
-                                    <label for="tls-cert-file" th:text="#{systemConfig.tlsPemCertFile}">Certificate chain (PEM or DER)</label>
-                                    <input class="input" id="tls-cert-file" type="file" name="certFile"
-                                           accept=".pem,.crt,.cer" required/>
-                                    <div class="help" th:text="#{systemConfig.tlsPemHelp}">The server certificate first, then the intermediates; the private key may be in the same file. DER (.cer) is also accepted.</div>
+                                    <label for="tls-cert-path" th:text="#{systemConfig.tlsPathPemCert}">Certificate chain path</label>
+                                    <div class="input-group">
+                                        <input class="input mono" id="tls-cert-path" type="text"
+                                               name="pemCertPath"
+                                               th:value="${tls.serverPaths?.pemCertificatePath}"
+                                               placeholder="/etc/jync/tls/fullchain.pem" required/>
+                                        <input type="file" accept=".pem,.crt,.cer" hidden/>
+                                        <button type="button" class="btn btn-ghost btn-sm"
+                                                data-tls-upload="tls-cert-path"
+                                                th:attr="data-upload-url=@{/system-config/tls/stage},data-busy-text=#{systemConfig.tlsUploading}">
+                                            <span th:text="#{systemConfig.tlsBrowse}">Upload…</span>
+                                        </button>
+                                    </div>
+                                    <div class="help" th:text="#{systemConfig.tlsPathPemHelp}">Server certificate first, then the intermediates; the private key may live in the same file. Jync wraps the pair in a derived PKCS#12 under the data directory, so the plaintext key stays where you put it.</div>
                                 </div>
                                 <div class="field">
-                                    <label for="tls-key-file" th:text="#{systemConfig.tlsPemKeyFile}">Private key (PEM, optional)</label>
-                                    <input class="input" id="tls-key-file" type="file" name="keyFile"
-                                           accept=".pem,.key"/>
+                                    <label for="tls-key-path" th:text="#{systemConfig.tlsPathPemKey}">Private key path (optional)</label>
+                                    <div class="input-group">
+                                        <input class="input mono" id="tls-key-path" type="text"
+                                               name="pemKeyPath"
+                                               th:value="${tls.serverPaths?.pemKeyPath}"
+                                               placeholder="/etc/jync/tls/privkey.pem"/>
+                                        <input type="file" accept=".pem,.key" hidden/>
+                                        <button type="button" class="btn btn-ghost btn-sm"
+                                                data-tls-upload="tls-key-path"
+                                                th:attr="data-upload-url=@{/system-config/tls/stage},data-busy-text=#{systemConfig.tlsUploading}">
+                                            <span th:text="#{systemConfig.tlsBrowse}">Upload…</span>
+                                        </button>
+                                    </div>
                                     <div class="help" th:text="#{systemConfig.tlsPemKeyHelp}">An unencrypted PKCS#8 or PKCS#1 key; leave empty if the certificate file already contains it.</div>
                                 </div>
                                 <div class="field">
@@ -235,13 +252,24 @@
 
                         <section class="mode-panel" data-mode="keystore">
                             <p class="help" th:text="#{systemConfig.tlsHelp}">Upload a PKCS#12 or JKS keystore...</p>
-                            <form method="post" enctype="multipart/form-data"
-                                  th:action="@{/system-config/tls(_csrf=${_csrf.token})}">
+                            <form method="post"
+                                  th:action="@{/system-config/tls/path(_csrf=${_csrf.token})}">
+                                <input type="hidden" name="mode" value="keystore"/>
                                 <div class="field">
-                                    <label for="tls-file" th:text="#{systemConfig.tlsFile}">Keystore file</label>
-                                    <input class="input" id="tls-file" type="file" name="file"
-                                           accept=".p12,.pfx,.jks" required/>
-                                    <div class="help" th:text="#{systemConfig.tlsFileLimit}">At most 5 MB.</div>
+                                    <label for="tls-keystore-path" th:text="#{systemConfig.tlsPathKeystore}">Keystore path</label>
+                                    <div class="input-group">
+                                        <input class="input mono" id="tls-keystore-path" type="text"
+                                               name="keystorePath"
+                                               th:value="${tls.serverPaths?.keystorePath}"
+                                               placeholder="/etc/jync/tls/server.p12" required/>
+                                        <input type="file" accept=".p12,.pfx,.jks" hidden/>
+                                        <button type="button" class="btn btn-ghost btn-sm"
+                                                data-tls-upload="tls-keystore-path"
+                                                th:attr="data-upload-url=@{/system-config/tls/stage},data-busy-text=#{systemConfig.tlsUploading}">
+                                            <span th:text="#{systemConfig.tlsBrowse}">Upload…</span>
+                                        </button>
+                                    </div>
+                                    <div class="help" th:text="#{systemConfig.tlsPathKeystoreHelp}">An absolute path on this server; replacing the file in place is the renewal path, and the next start reads the new contents.</div>
                                 </div>
                                 <div class="field">
                                     <label for="tls-passphrase" th:text="#{systemConfig.tlsPassphrase}">Keystore passphrase</label>
@@ -267,96 +295,6 @@
                                     <button class="btn btn-primary btn-sm" type="submit">
                                         <svg class="ico"><use href="#lock-fill"/></svg>
                                         <span th:text="#{systemConfig.tlsUpload}">Save certificate</span>
-                                    </button>
-                                </div>
-                            </form>
-                        </section>
-
-                        <!-- 服务器路径：证书留在运维挂载的位置，边车只记绝对路径、口令与文件夹摘要。
-                             数据目录持久化时容器重建不丢；换证书只需替换原文件并重启。 -->
-                        <section class="mode-panel" data-mode="path">
-                            <p class="help" th:text="#{systemConfig.tlsPathHelp}">Name certificate files that already exist on this server. Jync reads them at every start and stores only their paths, so a persistent data directory keeps the configuration when the container is recreated.</p>
-
-                            <h3 style="font-size:14px;margin:4px 0 12px"
-                                th:text="#{systemConfig.tlsPathKeystoreHeading}">Keystore on the server</h3>
-                            <form method="post"
-                                  th:action="@{/system-config/tls/path(_csrf=${_csrf.token})}">
-                                <input type="hidden" name="mode" value="keystore"/>
-                                <div class="field">
-                                    <label for="tls-path-keystore" th:text="#{systemConfig.tlsPathKeystore}">Keystore path</label>
-                                    <input class="input mono" id="tls-path-keystore" type="text"
-                                           name="keystorePath"
-                                           th:value="${tls.serverPaths != null ? tls.serverPaths.keystorePath : ''}"
-                                           placeholder="/etc/jync/tls/server.p12" required/>
-                                    <div class="help" th:text="#{systemConfig.tlsPathKeystoreHelp}">An absolute path on this server; replacing the file in place is the renewal path, and the next start reads the new contents.</div>
-                                </div>
-                                <div class="field">
-                                    <label for="tls-path-passphrase" th:text="#{systemConfig.tlsPassphrase}">Keystore passphrase</label>
-                                    <input class="input" id="tls-path-passphrase" type="password"
-                                           name="passphrase" autocomplete="new-password" required/>
-                                    <div class="help" th:text="#{systemConfig.tlsPassphraseHelp}">The passphrase must open both the keystore and its private key; it is stored encrypted and never shown again.</div>
-                                </div>
-                                <div class="field">
-                                    <label for="tls-path-port" th:text="#{systemConfig.tlsHttpsPort}">HTTPS port</label>
-                                    <input class="input" id="tls-path-port" type="number" name="httpsPort"
-                                           min="1" max="65535" required
-                                           th:value="${tls.httpsPort != null ? tls.httpsPort : 8443}"/>
-                                </div>
-                                <div class="field">
-                                    <label class="check-inline">
-                                        <input type="checkbox" name="redirectHttp" value="true"
-                                               th:checked="${tls.httpsPort == null or tls.redirectHttp}"/>
-                                        <span th:text="#{systemConfig.tlsRedirect}">Redirect HTTP to HTTPS</span>
-                                    </label>
-                                </div>
-                                <div class="btn-row">
-                                    <button class="btn btn-primary btn-sm" type="submit">
-                                        <svg class="ico"><use href="#lock-fill"/></svg>
-                                        <span th:text="#{systemConfig.tlsPathKeystoreSave}">Save keystore path</span>
-                                    </button>
-                                </div>
-                            </form>
-
-                            <hr class="divider"/>
-
-                            <h3 style="font-size:14px;margin:4px 0 12px"
-                                th:text="#{systemConfig.tlsPathPemHeading}">PEM files on the server</h3>
-                            <form method="post"
-                                  th:action="@{/system-config/tls/path(_csrf=${_csrf.token})}">
-                                <input type="hidden" name="mode" value="pem"/>
-                                <div class="field">
-                                    <label for="tls-path-pem-cert" th:text="#{systemConfig.tlsPathPemCert}">Certificate chain path</label>
-                                    <input class="input mono" id="tls-path-pem-cert" type="text"
-                                           name="pemCertPath"
-                                           th:value="${tls.serverPaths != null ? tls.serverPaths.pemCertificatePath : ''}"
-                                           placeholder="/etc/jync/tls/fullchain.pem" required/>
-                                    <div class="help" th:text="#{systemConfig.tlsPathPemHelp}">Server certificate first, then the intermediates; the private key may live in the same file. Jync wraps the pair in a derived PKCS#12 under the data directory, so the plaintext key stays where you put it.</div>
-                                </div>
-                                <div class="field">
-                                    <label for="tls-path-pem-key" th:text="#{systemConfig.tlsPathPemKey}">Private key path (optional)</label>
-                                    <input class="input mono" id="tls-path-pem-key" type="text"
-                                           name="pemKeyPath"
-                                           th:value="${tls.serverPaths != null ? tls.serverPaths.pemKeyPath : ''}"
-                                           placeholder="/etc/jync/tls/privkey.pem"/>
-                                    <div class="help" th:text="#{systemConfig.tlsPemKeyHelp}">An unencrypted PKCS#8 or PKCS#1 key; leave empty if the certificate file already contains it.</div>
-                                </div>
-                                <div class="field">
-                                    <label for="tls-path-pem-port" th:text="#{systemConfig.tlsHttpsPort}">HTTPS port</label>
-                                    <input class="input" id="tls-path-pem-port" type="number" name="httpsPort"
-                                           min="1" max="65535" required
-                                           th:value="${tls.httpsPort != null ? tls.httpsPort : 8443}"/>
-                                </div>
-                                <div class="field">
-                                    <label class="check-inline">
-                                        <input type="checkbox" name="redirectHttp" value="true"
-                                               th:checked="${tls.httpsPort == null or tls.redirectHttp}"/>
-                                        <span th:text="#{systemConfig.tlsRedirect}">Redirect HTTP to HTTPS</span>
-                                    </label>
-                                </div>
-                                <div class="btn-row">
-                                    <button class="btn btn-primary btn-sm" type="submit">
-                                        <svg class="ico"><use href="#lock-fill"/></svg>
-                                        <span th:text="#{systemConfig.tlsPathPemSave}">Save PEM paths</span>
                                     </button>
                                 </div>
                             </form>

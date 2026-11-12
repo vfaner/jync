@@ -260,10 +260,8 @@ class SystemConfigViewTest {
         assertThat(page).doesNotContain("form-grid", "form-actions", "class=\"check\"");
 
         for (String id : List.of("export-passphrase", "export-passphrase-confirm",
-                "import-file", "import-passphrase", "tls-file", "tls-passphrase", "tls-port",
-                "tls-cert-file", "tls-key-file", "tls-pem-port", "tls-path-keystore",
-                "tls-path-passphrase", "tls-path-port", "tls-path-pem-cert",
-                "tls-path-pem-key", "tls-path-pem-port")) {
+                "import-file", "import-passphrase", "tls-keystore-path", "tls-passphrase",
+                "tls-port", "tls-cert-path", "tls-key-path", "tls-pem-port")) {
             int at = page.indexOf("id=\"" + id + "\"");
             assertThat(at).as("field %s", id).isGreaterThan(-1);
             String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
@@ -288,10 +286,10 @@ class SystemConfigViewTest {
                 configuredState(new TlsConfiguredPaths("/etc/jync/tls/jync.p12", null, null)));
 
         assertThat(page).contains("/etc/jync/tls/jync.p12", "app.tls.keystore-path");
-        assertThat(page).doesNotContain("id=\"tls-file\"", "id=\"tls-cert-file\"",
-                "id=\"tls-mode-pem\"", "id=\"tls-mode-path\"",
+        assertThat(page).doesNotContain("id=\"tls-keystore-path\"", "id=\"tls-cert-path\"",
+                "id=\"tls-key-path\"", "id=\"tls-mode-pem\"",
                 "action=\"/system-config/tls/delete\"", "action=\"/system-config/tls/path",
-                "重启 Jync 后保存的证书才会生效");
+                "data-upload-url=\"/system-config/tls/stage\"", "重启 Jync 后保存的证书才会生效");
     }
 
     @Test
@@ -301,28 +299,41 @@ class SystemConfigViewTest {
 
         assertThat(page).contains("app.tls.pem-cert-path",
                 "/etc/jync/tls/fullchain.pem", "/etc/jync/tls/privkey.pem");
-        assertThat(page).doesNotContain("id=\"tls-file\"", "action=\"/system-config/tls/delete\"");
+        assertThat(page).doesNotContain("id=\"tls-keystore-path\"",
+                "action=\"/system-config/tls/delete\"");
     }
 
     @Test
-    void tlsUploadFormIsMultipartAndCarriesCsrfInTheAction() throws Exception {
+    void theCertificateFieldsArePathInputsWithAnUploadButton() throws Exception {
+        // 文件字段是「路径输入框 + 上传按钮」：上传只把文件暂存到数据目录并回填绝对路径，
+        // 保存仍按路径处理；也可以直接手填服务器上已有的文件。
         String page = render(UserRole.ADMIN);
 
-        assertThat(page).contains("enctype=\"multipart/form-data\"")
-                .containsPattern("action=\"/system-config/tls[^\"]*_csrf=");
-        assertThat(page).containsPattern("accept=\"\\.p12,\\.pfx,\\.jks\"");
+        for (String id : List.of("tls-keystore-path", "tls-cert-path", "tls-key-path")) {
+            int at = page.indexOf("id=\"" + id + "\"");
+            assertThat(at).as("field %s", id).isGreaterThan(-1);
+            String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
+            assertThat(tag).as("field %s is a text input", id).contains("type=\"text\"");
+            assertThat(page).as("field %s has an upload button", id)
+                    .contains("data-tls-upload=\"" + id + "\"");
+        }
+        assertThat(page).containsPattern("action=\"/system-config/tls/path[^\"]*_csrf=")
+                .contains("data-upload-url=\"/system-config/tls/stage\"")
+                .containsPattern("accept=\"\\.p12,\\.pfx,\\.jks\"");
+        // 证书表单只提交路径；页面上仅剩「配置包导入」仍是 multipart 表单。
+        assertThat(page.split("enctype=\"multipart/form-data\"", -1)).hasSize(2);
     }
 
     @Test
-    void thePemFormTakesACertificateAndAKeyWithoutAPassphrase() throws Exception {
+    void thePemFormTakesACertificatePathAndAnOptionalKeyPathWithoutAPassphrase() throws Exception {
         String page = render(UserRole.ADMIN);
 
-        int cert = page.indexOf("id=\"tls-cert-file\"");
+        int cert = page.indexOf("id=\"tls-cert-path\"");
         assertThat(cert).isGreaterThan(-1);
         String form = page.substring(page.lastIndexOf("<form", cert),
                 page.indexOf("</form>", cert));
-        assertThat(form).contains("enctype=\"multipart/form-data\"", "name=\"certFile\"",
-                "name=\"keyFile\"", "name=\"httpsPort\"", "action=\"/system-config/tls");
+        assertThat(form).contains("name=\"pemCertPath\"", "name=\"pemKeyPath\"",
+                "name=\"httpsPort\"", "action=\"/system-config/tls/path");
         // nginx-style PEM has no keystore password; an encrypted key is rejected with its own key.
         assertThat(form).doesNotContain("type=\"password\"");
     }
@@ -341,41 +352,22 @@ class SystemConfigViewTest {
     }
 
     @Test
-    void theServerPathModeOffersBothPathForms() throws Exception {
-        String page = render(UserRole.ADMIN);
-
-        int path = page.indexOf("id=\"tls-mode-path\"");
-        assertThat(path).isGreaterThan(page.indexOf("id=\"tls-mode-keystore\""));
-        assertThat(page).contains("id=\"tls-path-keystore\"", "name=\"keystorePath\"",
-                "id=\"tls-path-pem-cert\"", "name=\"pemCertPath\"",
-                "id=\"tls-path-pem-key\"", "name=\"pemKeyPath\"",
-                "action=\"/system-config/tls/path");
-    }
-
-    @Test
-    void aSavedServerPathIsShownAndPrefilled() throws Exception {
+    void aSavedServerPathIsShownAndPrefilledInTheMatchingTab() throws Exception {
         String page = render(UserRole.ADMIN, serverPathState());
 
-        assertThat(page).contains("来自服务器路径", "/etc/jync/tls/server.p12")
-                .contains("value=\"/etc/jync/tls/server.p12\"");
-    }
-
-    @Test
-    void theServerPathPassphraseIsNeverRenderedBack() throws Exception {
-        String page = render(UserRole.ADMIN, serverPathState());
-
-        int field = page.indexOf("id=\"tls-path-passphrase\"");
+        assertThat(page).contains("来自服务器路径", "/etc/jync/tls/server.p12");
+        int field = page.indexOf("id=\"tls-keystore-path\"");
         assertThat(field).isGreaterThan(-1);
         String tag = page.substring(page.lastIndexOf('<', field), page.indexOf('>', field));
-        assertThat(tag).doesNotContain("value=");
+        assertThat(tag).contains("value=\"/etc/jync/tls/server.p12\"");
     }
 
     @Test
-    void thePemKeyFileIsOptionalForACombinedFile() throws Exception {
+    void thePemKeyPathIsOptionalForACombinedFile() throws Exception {
         // The certificate file may already carry the private key (HAProxy-style bundle).
         String page = render(UserRole.ADMIN);
 
-        int field = page.indexOf("id=\"tls-key-file\"");
+        int field = page.indexOf("id=\"tls-key-path\"");
         assertThat(field).isGreaterThan(-1);
         String tag = page.substring(page.lastIndexOf('<', field), page.indexOf('>', field));
         assertThat(tag).doesNotContain("required");
@@ -469,8 +461,7 @@ class SystemConfigViewTest {
         String page = render(UserRole.ADMIN, state(true, true, false, false, false, true, false,
                 null, certificate(Instant.now().plusSeconds(86_400)), false, false, 9443, false));
 
-        for (String id : List.of("tls-port", "tls-pem-port", "tls-path-port",
-                "tls-path-pem-port")) {
+        for (String id : List.of("tls-port", "tls-pem-port")) {
             int at = page.indexOf("id=\"" + id + "\"");
             assertThat(at).as("field %s", id).isGreaterThan(-1);
             String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
@@ -483,7 +474,7 @@ class SystemConfigViewTest {
             String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
             assertThat(tag).doesNotContain("checked");
         }
-        assertThat(found).as("every certificate form offers the redirect choice").isEqualTo(4);
+        assertThat(found).as("both certificate forms offer the redirect choice").isEqualTo(2);
     }
 
     @Test

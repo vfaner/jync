@@ -192,6 +192,35 @@ class TlsRuntimeStateTest {
     }
 
     @Test
+    void disablingTlsSkipsAConfigurationThatContradictsItself() {
+        // app.tls.enabled=false is the documented way back in: a contradictory or malformed
+        // app.tls.* value must not reach the bean constructor and fail the boot.
+        TlsConfiguredLoader loader = new TlsConfiguredLoader(new TlsPathSource(
+                dir.resolve("one.p12").toString(), "changeit",
+                dir.resolve("cert.pem").toString(), dir.resolve("key.pem").toString(),
+                null, null));
+
+        TlsRuntimeState state = TlsRuntimeState.load(false, store(),
+                new TlsCertificateInspector(), loader);
+
+        assertThat(state.enabled()).isFalse();
+        assertThat(state.active()).isEmpty();
+        assertThat(state.configuredPaths()).isEmpty();
+    }
+
+    @Test
+    void disablingTlsSkipsAPortThatDoesNotParse() {
+        TlsConfiguredLoader loader = new TlsConfiguredLoader(new TlsPathSource(
+                dir.resolve("absent.p12").toString(), "changeit", null, null,
+                "not-a-port", null));
+
+        TlsRuntimeState state = TlsRuntimeState.load(false, store(),
+                new TlsCertificateInspector(), loader);
+
+        assertThat(state.enabled()).isFalse();
+    }
+
+    @Test
     void toStringDoesNotContainThePassphrase() {
         TlsKeystoreStore store = mock(TlsKeystoreStore.class);
         TlsConfig config = new TlsConfig(TlsKeystoreFormat.PKCS12, "keystore-x.p12",

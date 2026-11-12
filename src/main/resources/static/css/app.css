@@ -371,14 +371,12 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .mode-tab:hover { color: var(--ink-soft); }
 #tls-mode-pem:checked ~ .mode-tabbar [for="tls-mode-pem"],
 #tls-mode-keystore:checked ~ .mode-tabbar [for="tls-mode-keystore"],
-#tls-mode-path:checked ~ .mode-tabbar [for="tls-mode-path"],
 #pkg-tab-export:checked ~ .mode-tabbar [for="pkg-tab-export"],
 #pkg-tab-import:checked ~ .mode-tabbar [for="pkg-tab-import"] {
   color: var(--brand); border-bottom-color: var(--brand);
 }
 #tls-mode-pem:focus-visible ~ .mode-tabbar [for="tls-mode-pem"],
 #tls-mode-keystore:focus-visible ~ .mode-tabbar [for="tls-mode-keystore"],
-#tls-mode-path:focus-visible ~ .mode-tabbar [for="tls-mode-path"],
 #pkg-tab-export:focus-visible ~ .mode-tabbar [for="pkg-tab-export"],
 #pkg-tab-import:focus-visible ~ .mode-tabbar [for="pkg-tab-import"] {
   outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px;
@@ -386,7 +384,6 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .mode-panel { display: none; }
 #tls-mode-pem:checked ~ .mode-panel[data-mode="pem"],
 #tls-mode-keystore:checked ~ .mode-panel[data-mode="keystore"],
-#tls-mode-path:checked ~ .mode-panel[data-mode="path"],
 #pkg-tab-export:checked ~ .mode-panel[data-mode="export"],
 #pkg-tab-import:checked ~ .mode-panel[data-mode="import"] { display: block; }
 
@@ -725,6 +722,8 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 .input-group { display: flex; gap: 8px; }
 .input-group .input { flex: 1; }
+/* 路径输入框旁的上传按钮：保持自己的宽度，不随长路径收缩或折行 */
+.input-group .btn { flex: 0 0 auto; white-space: nowrap; }
 
 /* 数据库类型选择器：分组 + 关键字搜索。原生 select 由 JS 隐藏，这里只画升级后的
    触发按钮和浮层；没有 JS 时 select 仍是普通下拉，样式不受影响。 */

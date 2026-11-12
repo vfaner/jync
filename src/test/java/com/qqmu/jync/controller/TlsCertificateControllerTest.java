@@ -14,9 +14,11 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.flash;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.nio.file.Path;
 import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
@@ -337,6 +339,69 @@ class TlsCertificateControllerTest {
                 .andExpect(status().isForbidden());
 
         verify(service, never()).saveKeystorePath(any(), any(), anyInt(), anyBoolean());
+    }
+
+    // ── Staged upload for the path inputs ─────────────────────────────────────
+
+    @Test
+    void anUploadIsStagedAndItsPathReturned() throws Exception {
+        Path staged = Path.of("/data/tls/uploads/server.p12");
+        when(service.stageUpload(eq("server.p12"), any(byte[].class))).thenReturn(staged);
+
+        mvc.perform(multipart("/system-config/tls/stage")
+                        .file(new MockMultipartFile("file", "server.p12",
+                                "application/octet-stream", new byte[] {1, 2}))
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.path").value(staged.toString()));
+    }
+
+    @Test
+    void anEmptyStagedUploadReturnsItsKey() throws Exception {
+        mvc.perform(multipart("/system-config/tls/stage")
+                        .file(new MockMultipartFile("file", "server.p12", null, new byte[0]))
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value("error.tls.fileRequired"));
+
+        verify(service, never()).stageUpload(any(), any());
+    }
+
+    @Test
+    void anOversizedStagedUploadReturnsItsKey() throws Exception {
+        mvc.perform(multipart("/system-config/tls/stage")
+                        .file(new MockMultipartFile("file", "server.p12", null,
+                                new byte[TlsCertificateService.MAX_BYTES + 1]))
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value("error.tls.fileTooLarge"));
+
+        verify(service, never()).stageUpload(any(), any());
+    }
+
+    @Test
+    void aRejectedStagedUploadReturnsItsKeyNotTheExceptionMessage() throws Exception {
+        when(service.stageUpload(any(), any()))
+                .thenThrow(new TlsKeystoreException("error.tls.pathInvalid"));
+
+        mvc.perform(multipart("/system-config/tls/stage")
+                        .file(new MockMultipartFile("file", "server.p12", null, new byte[] {1}))
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error").value("error.tls.pathInvalid"));
+    }
+
+    @Test
+    void stagingRequiresCsrf() throws Exception {
+        mvc.perform(multipart("/system-config/tls/stage")
+                        .file(new MockMultipartFile("file", "server.p12", null, new byte[] {1})))
+                .andExpect(status().isForbidden());
+
+        verify(service, never()).stageUpload(any(), any());
     }
 
     @Test

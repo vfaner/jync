@@ -139,6 +139,10 @@ public class TlsConfiguredLoader {
 
     private static byte[] read(Path path) {
         try {
+            // Same ceiling as a page upload: a misdirected variable must not OOM the boot.
+            if (Files.size(path) > TlsKeystoreStore.MAX_SOURCE_BYTES) {
+                throw new TlsKeystoreException("error.tls.fileTooLarge");
+            }
             return Files.readAllBytes(path);
         } catch (IOException e) {
             throw new TlsKeystoreException("error.tls.configLoadFailed", e);

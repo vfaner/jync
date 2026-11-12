@@ -479,6 +479,39 @@ class TlsCertificateServiceTest {
                 .hasFieldOrPropertyWithValue("messageKey", "error.tls.configControlled");
     }
 
+    // ── Staged uploads ─────────────────────────────────────────────────────────
+
+    @Test
+    void stagingAnUploadReturnsAPathThatThePathSaveAccepts() {
+        Path stored = service().stageUpload("server.p12", TestKeystores.pkcs12());
+
+        assertThat(stored).isAbsolute();
+        assertThat(stored.getFileName().toString()).endsWith("-server.p12");
+        TlsConfig saved = service().saveKeystorePath(stored.toString(), "changeit", httpsPort,
+                true);
+        assertThat(saved.file()).isEqualTo(stored.toString());
+    }
+
+    @Test
+    void stagingIsRefusedWhenTheConfigurationFileOwnsTheCertificate() throws Exception {
+        runtime = configuredRuntime();
+
+        assertThatThrownBy(() -> service().stageUpload("server.p12", TestKeystores.pkcs12()))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.configControlled");
+    }
+
+    @Test
+    void stagingRejectsAnEmptyOrOversizedFile() {
+        assertThatThrownBy(() -> service().stageUpload("server.p12", new byte[0]))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.fileRequired");
+        assertThatThrownBy(() -> service().stageUpload("server.p12",
+                new byte[TlsCertificateService.MAX_BYTES + 1]))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.fileTooLarge");
+    }
+
     // ── PEM upload ─────────────────────────────────────────────────────────────
 
     @Test

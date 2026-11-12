@@ -122,6 +122,18 @@ public class TlsCertificateService {
     }
 
     /**
+     * Stores an uploaded file in the managed uploads directory and returns its absolute path.
+     *
+     * <p>The page's certificate fields are path inputs; the upload button uses this to stage the
+     * file and fill the input, then the ordinary save validates and records the path. Nothing is
+     * trusted from the browser beyond the bytes: the name is reduced to one segment and bounded.
+     */
+    public Path stageUpload(String originalFilename, byte[] bytes) {
+        requirePageEditable();
+        return store.stageUpload(originalFilename, bytes);
+    }
+
+    /**
      * Validates a keystore the operator keeps on the server and remembers its path.
      *
      * <p>The file is read but not copied: the sidecar names where it lives, so a renewal can
@@ -226,6 +238,11 @@ public class TlsCertificateService {
 
     private static byte[] readSource(Path path) {
         try {
+            // Size first: reading a mistakenly named backup or log into a byte[] would OOM the
+            // request thread before the post-read limit could reject it.
+            if (Files.size(path) > MAX_BYTES) {
+                throw new TlsKeystoreException("error.tls.fileTooLarge");
+            }
             byte[] bytes = Files.readAllBytes(path);
             if (bytes.length > MAX_BYTES) {
                 throw new TlsKeystoreException("error.tls.fileTooLarge");

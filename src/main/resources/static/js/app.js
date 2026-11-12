@@ -781,6 +781,47 @@
   }
 
   /**
+   * 证书字段的「上传」按钮：先暂存文件，再把服务端返回的绝对路径写回旁边的输入框。
+   *
+   * 输入框本身始终可以手填服务器上的路径 —— 上传只是把「选本地文件」变成「拿到一个
+   * 可复制的路径」，所以保存仍然走表单提交的路径接口，两种来源共用同一条校验。
+   * 与输入框联动派发 input 事件，让 dirty 跟踪知道这个字段变了。
+   */
+  function bindTlsUpload(btn) {
+    var target = document.getElementById(btn.dataset.tlsUpload);
+    var group = btn.closest('.input-group');
+    var file = group ? group.querySelector('input[type="file"]') : null;
+    if (!target || !file || !btn.dataset.uploadUrl) { return; }
+
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      file.click();
+    });
+
+    file.addEventListener('change', function () {
+      if (!file.files || !file.files.length) { return; }
+      var data = new FormData();
+      data.append('file', file.files[0]);
+      withBusy(btn, busyLabel(btn), function () {
+        return postJson(btn.dataset.uploadUrl, data).then(function (payload) {
+          // 清空选择，同一个文件再次上传也会触发 change。
+          file.value = '';
+          if (payload.success && payload.path) {
+            target.value = payload.path;
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+          } else {
+            // 401 由 postJson 转成 message（页面随即重载），其余失败回 error key。
+            toast(t(payload.error || payload.message || 'error.tls.saveFailed'), 'danger');
+          }
+        }, function (err) {
+          file.value = '';
+          toast(describeError(err), 'danger');
+        });
+      });
+    });
+  }
+
+  /**
    * 配置表单的唯一提交入口。B8 的「切换到日志 CDC」确认框也收在这里：文案
    * （cdc.switch.confirm）明示两个后果——①目标库全量重建、②源库 DELETE 从此会同步
    * 删除目标数据（轮询看不到 DELETE）。data-original-strategy 是「已保存」策略：就绪
@@ -4362,6 +4403,7 @@
     bindInstantTips();
     initConfigDirtyTracking();
     bindConfigSave();
+    document.querySelectorAll('[data-tls-upload]').forEach(bindTlsUpload);
 
     // B9：顶部 Flash 横幅统一转成居中弹窗 —— 成功用自动消失的轻卡片，
     // 错误/无权限用必须点击的阻塞弹窗。读完文案即移除原 .alert 节点，

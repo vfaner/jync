@@ -18,6 +18,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
@@ -55,6 +56,21 @@ public class TlsKeystoreStore {
     static final String SIDECAR = "tls.properties";
     static final int VERSION = 1;
     static final String KEYSTORE_PREFIX = "keystore-";
+    /**
+     * The only names this store generates. Cleanup must match this shape, not just the prefix:
+     * a path-mode keystore such as {@code keystore-prod.p12} may live in the same directory and
+     * belongs to the operator — deleting it would destroy the configured certificate.
+     */
+    private static final java.util.regex.Pattern GENERATED_KEYSTORE =
+            java.util.regex.Pattern.compile(
+                    "^" + KEYSTORE_PREFIX + "\\d+-[0-9a-f]{8}\\.(p12|jks)$");
+    /** Where the page's upload button stages a file before the path save records it. */
+    static final String UPLOAD_DIR = "uploads";
+    /**
+     * How long an unreferenced staged file is kept before a save may delete it. Long enough for
+     * a form left open in another tab; short enough that abandoned uploads do not accumulate.
+     */
+    static final java.time.Duration STAGING_RETENTION = java.time.Duration.ofHours(1);
     static final String KEY_PASSPHRASE = "passphrase";
     static final String KEY_PASSPHRASE_NEXT = "passphrase.next";
     static final String KEY_SOURCE = "source";
@@ -168,6 +184,8 @@ public class TlsKeystoreStore {
             writeSidecar(config, SOURCE_KEYSTORE_PATH, absolute.toString(), null, null);
             // Generations from an earlier upload or PEM path are no longer referenced.
             cleanupOrphans(null);
+            // Staged by the page's upload button and not referenced by this save: stale.
+            pruneUploads(absolute);
             return config;
         } catch (IOException e) {
             throw new TlsKeystoreException("error.tls.saveFailed", e);
@@ -198,21 +216,58 @@ public class TlsKeystoreStore {
             writeSidecar(config, SOURCE_PEM_PATH, null, absoluteCertificate.toString(),
                     absoluteKey == null ? null : absoluteKey.toString());
             cleanupOrphans(file);
+            pruneUploads(absoluteCertificate, absoluteKey);
             return config;
         } catch (IOException e) {
             throw new TlsKeystoreException("error.tls.saveFailed", e);
         }
     }
 
-    /** Removes the sidecar and every generation; idempotent. */
+    /**
+     * Stores an uploaded file under {@code uploads/} and returns where it landed.
+     *
+     * <p>The page's file fields are path inputs with an upload button: the button calls this,
+     * then fills the input with the returned absolute path, so uploads and hand-typed paths share
+     * one save path and one renewal story (replace the file in place). The name is reduced to its
+     * last segment and rejected if it is not a plain file name, so a crafted original filename
+     * cannot escape the directory.
+     */
+    public synchronized Path stageUpload(String originalFilename, byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            throw new TlsKeystoreException("error.tls.fileRequired");
+        }
+        if (bytes.length > MAX_SOURCE_BYTES) {
+            throw new TlsKeystoreException("error.tls.fileTooLarge");
+        }
+        try {
+            createDirectory();
+            Path uploads = uploadDirectory();
+            Files.createDirectories(uploads);
+            setPermissions(uploads, PRIVATE_DIR);
+            Path target = uploads.resolve(stagedName(safeFileName(originalFilename))).normalize();
+            if (!uploads.equals(target.getParent())) {
+                throw new TlsKeystoreException("error.tls.pathInvalid");
+            }
+            // 新名字不会撞上已被配置引用的文件；保存被拒时旧文件原样保留。
+            Files.write(target, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            setPermissions(target, PRIVATE_FILE);
+            return target.toAbsolutePath().normalize();
+        } catch (IOException e) {
+            throw new TlsKeystoreException("error.tls.saveFailed", e);
+        }
+    }
+
+    /** Removes the sidecar, every generation and any staged uploads; idempotent. */
     public synchronized boolean delete() {
-        boolean present = Files.isRegularFile(sidecar()) || anyKeystorePresent();
+        boolean present = Files.isRegularFile(sidecar()) || anyKeystorePresent()
+                || anyStagedUpload();
         if (!present) {
             return false;
         }
         try {
             Files.deleteIfExists(sidecar());
             removeKeystores(null);
+            removeUploads();
             return true;
         } catch (IOException e) {
             throw new TlsKeystoreException("error.tls.deleteFailed", e);
@@ -426,6 +481,10 @@ public class TlsKeystoreStore {
             if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
                 throw new TlsKeystoreException("error.tls.pathMissing");
             }
+            // Check the size before reading: a mistyped path to a large backup would OOM.
+            if (Files.size(path) > MAX_SOURCE_BYTES) {
+                throw new TlsKeystoreException("error.tls.fileTooLarge");
+            }
             byte[] bytes = Files.readAllBytes(path);
             if (bytes.length > MAX_SOURCE_BYTES) {
                 throw new TlsKeystoreException("error.tls.fileTooLarge");
@@ -568,6 +627,113 @@ public class TlsKeystoreStore {
         }
     }
 
+    private Path uploadDirectory() {
+        return directory.resolve(UPLOAD_DIR);
+    }
+
+    /**
+     * A collision-free staged name, keeping the client name readable as the suffix.
+     *
+     * <p>Staging must never overwrite a file the saved configuration points at: a failed save
+     * (wrong passphrase, mismatched PEM pair, expired certificate) would otherwise destroy the
+     * certificate that is currently working.
+     */
+    private static String stagedName(String name) {
+        byte[] random = new byte[4];
+        RANDOM.nextBytes(random);
+        StringBuilder hex = new StringBuilder();
+        for (byte b : random) {
+            hex.append(String.format("%02x", b));
+        }
+        return "staged-" + System.currentTimeMillis() + "-" + hex + "-" + name;
+    }
+
+    /** The last segment of the client name, or a key if that is not a plain file name. */
+    private static String safeFileName(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            throw new TlsKeystoreException("error.tls.pathInvalid");
+        }
+        String name;
+        try {
+            Path path = Paths.get(originalFilename).getFileName();
+            name = path == null ? "" : path.toString();
+        } catch (InvalidPathException e) {
+            throw new TlsKeystoreException("error.tls.pathInvalid", e);
+        }
+        if (name.isBlank() || ".".equals(name) || "..".equals(name)
+                || name.indexOf('\\') >= 0 || name.chars().anyMatch(Character::isISOControl)) {
+            throw new TlsKeystoreException("error.tls.pathInvalid");
+        }
+        return name;
+    }
+
+    /**
+     * Removes staged files that are neither named by the new configuration nor recent enough to
+     * belong to a page still being filled in.
+     *
+     * <p>"Not named by this save" alone is not staleness: another tab (or another administrator)
+     * may have staged a file seconds ago and not saved yet, and deleting it would leave that
+     * path input pointing at nothing. Only files past {@link #STAGING_RETENTION} are removed. A
+     * hand-typed external path matches no staged file, so nothing outside {@code uploads/} is
+     * ever touched.
+     */
+    private void pruneUploads(Path... keep) {
+        Path uploads = uploadDirectory();
+        if (!Files.isDirectory(uploads)) {
+            return;
+        }
+        Instant cutoff = Instant.now().minus(STAGING_RETENTION);
+        Set<Path> retained = Arrays.stream(keep)
+                .filter(java.util.Objects::nonNull)
+                .map(path -> path.toAbsolutePath().normalize())
+                .collect(Collectors.toSet());
+        try (Stream<Path> stream = Files.list(uploads)) {
+            for (Path path : stream.collect(Collectors.toList())) {
+                if (Files.isRegularFile(path)
+                        && !retained.contains(path.toAbsolutePath().normalize())
+                        && olderThan(path, cutoff)) {
+                    Files.deleteIfExists(path);
+                }
+            }
+        } catch (IOException e) {
+            log.warn("Could not remove an older staged TLS upload: {}", e.toString());
+        }
+    }
+
+    /** An unreadable timestamp keeps the file: deleting on doubt is the worse failure. */
+    private static boolean olderThan(Path path, Instant cutoff) {
+        try {
+            return Files.getLastModifiedTime(path).toInstant().isBefore(cutoff);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private void removeUploads() throws IOException {
+        Path uploads = uploadDirectory();
+        if (!Files.isDirectory(uploads)) {
+            return;
+        }
+        try (Stream<Path> stream = Files.list(uploads)) {
+            for (Path path : stream.collect(Collectors.toList())) {
+                Files.deleteIfExists(path);
+            }
+        }
+        Files.deleteIfExists(uploads);
+    }
+
+    private boolean anyStagedUpload() {
+        Path uploads = uploadDirectory();
+        if (!Files.isDirectory(uploads)) {
+            return false;
+        }
+        try (Stream<Path> stream = Files.list(uploads)) {
+            return stream.anyMatch(Files::isRegularFile);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     private void cleanupOrphans(String keep) {
         try {
             removeKeystores(keep);
@@ -583,7 +749,7 @@ public class TlsKeystoreStore {
         try (Stream<Path> stream = Files.list(directory)) {
             for (Path path : stream.collect(Collectors.toList())) {
                 String name = path.getFileName().toString();
-                if (name.startsWith(KEYSTORE_PREFIX) && !name.equals(keep)) {
+                if (GENERATED_KEYSTORE.matcher(name).matches() && !name.equals(keep)) {
                     Files.deleteIfExists(path);
                 }
             }
@@ -595,8 +761,8 @@ public class TlsKeystoreStore {
             return false;
         }
         try (Stream<Path> stream = Files.list(directory)) {
-            return stream.anyMatch(path ->
-                    path.getFileName().toString().startsWith(KEYSTORE_PREFIX));
+            return stream.anyMatch(path -> GENERATED_KEYSTORE.matcher(
+                    path.getFileName().toString()).matches());
         } catch (IOException e) {
             return false;
         }

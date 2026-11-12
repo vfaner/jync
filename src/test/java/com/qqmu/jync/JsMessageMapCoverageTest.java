@@ -77,6 +77,19 @@ class JsMessageMapCoverageTest {
             "error.redis.target.not.found",
             "error.unexpected");
 
+    /**
+     * The TLS certificate fields' upload button answers failures with a toast. Those keys come
+     * back in the stage endpoint's JSON, not in a rendered page, so neither the bundle-parity
+     * check nor the controller scan below would notice them missing from the map — the toast
+     * would just show {@code error.tls.fileTooLarge} verbatim.
+     */
+    private static final List<String> TLS_STAGE_REFUSALS = List.of(
+            "error.tls.fileRequired",
+            "error.tls.fileTooLarge",
+            "error.tls.pathInvalid",
+            "error.tls.saveFailed",
+            "error.tls.configControlled");
+
     @Test
     @DisplayName("every key the map references exists in both bundles")
     void mapReferencesExistInBothBundles() throws Exception {
@@ -120,6 +133,14 @@ class JsMessageMapCoverageTest {
     void controlRefusalsAreInTheMap() throws Exception {
         assertThat(missing(new TreeSet<>(CONTROL_REFUSALS), mapKeys()))
                 .as("the button shows the raw key instead of this sentence")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("every refusal the TLS upload button can show is in the browser map")
+    void tlsStageRefusalsAreInTheMap() throws Exception {
+        assertThat(missing(new TreeSet<>(TLS_STAGE_REFUSALS), mapKeys()))
+                .as("the TLS upload toast shows the raw key instead of this sentence")
                 .isEmpty();
     }
 
