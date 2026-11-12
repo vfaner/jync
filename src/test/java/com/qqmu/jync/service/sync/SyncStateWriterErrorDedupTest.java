@@ -10,13 +10,16 @@ import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
+import com.qqmu.jync.util.DigestUtil;
 
 /**
  * A table that fails every cycle must not write one identical audit row every cycle.
@@ -102,12 +105,30 @@ class SyncStateWriterErrorDedupTest {
     private static final String DDL_DETAILS =
             SyncStateWriter.SKIPPED_DDL_PREFIX + "ALTER TABLE t ADD COLUMN c INT";
 
+    /** Dedupe compares a hash, never the {@code @Lob} text itself. */
+    private static String hash(String details) {
+        return DigestUtil.sha256Hex(details);
+    }
+
+    @Test
+    void aFiledDdlTaskStoresTheHashItsDedupeQueriesCompare() {
+        // The hash is the only surviving identity after a restart; a row without it can
+        // never be recognised again, and the same DDL is filed on every reconnect.
+        writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
+                "binlog.000001", 100L);
+
+        ArgumentCaptor<ChangeLog> saved = ArgumentCaptor.forClass(ChangeLog.class);
+        verify(changeLogRepository).save(saved.capture());
+        assertThat(saved.getValue().getDetails()).isEqualTo(DDL_DETAILS);
+        assertThat(saved.getValue().getDetailsHash()).isEqualTo(hash(DDL_DETAILS));
+    }
+
     @Test
     void theSameDdlEventDeliveredTwiceIsWrittenOnce() {
         // A reconnect replays the very same event from the unchanged position. The first
         // write is on record; the second consults it.
-        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L, DDL_DETAILS))
-                .thenReturn(0L, 1L);
+        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L,
+                hash(DDL_DETAILS))).thenReturn(0L, 1L);
         writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
                 "binlog.000001", 100L);
         writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
@@ -121,8 +142,8 @@ class SyncStateWriterErrorDedupTest {
         // The in-memory dedupe died with the previous process. The task row is what
         // survives a restart, so the check must consult the database — otherwise every
         // reconnect files the same DDL again and buries the operator in duplicates.
-        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L, DDL_DETAILS))
-                .thenReturn(1L);
+        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L,
+                hash(DDL_DETAILS))).thenReturn(1L);
 
         writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
                 "binlog.000001", 100L);
@@ -135,8 +156,8 @@ class SyncStateWriterErrorDedupTest {
         // Dismissed or already executed — the position did not move past the event, so a
         // restart re-reads the same statement. Counting only open tasks would raise the
         // alert again and resurrect a decision the administrator already made.
-        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L, DDL_DETAILS))
-                .thenReturn(1L);
+        when(changeLogRepository.countDdlTasksAt(PROJECT_ID, "binlog.000001", 100L,
+                hash(DDL_DETAILS))).thenReturn(1L);
 
         writer.recordSkippedDdl(PROJECT_ID, "app", "ALTER TABLE t ADD COLUMN c INT",
                 "binlog.000001", 100L);
@@ -149,7 +170,7 @@ class SyncStateWriterErrorDedupTest {
         // LogMiner DDL carries no binlog file/position: the statement text is all there is.
         String details = SyncStateWriter.SKIPPED_DDL_PREFIX
                 + "ALTER TABLE \"SRC\".\"ORDERS\" ADD (\"NOTE\" VARCHAR2(64))";
-        when(changeLogRepository.countOpenDdlTasksByDetails(PROJECT_ID, details))
+        when(changeLogRepository.countOpenDdlTasksByHash(PROJECT_ID, hash(details)))
                 .thenReturn(1L);
 
         writer.recordSkippedDdl(PROJECT_ID, "ORDERS",

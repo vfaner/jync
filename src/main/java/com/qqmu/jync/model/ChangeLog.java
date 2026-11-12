@@ -52,6 +52,20 @@ public class ChangeLog {
     @Lob
     private String details;
 
+    /**
+     * SHA-256 of {@link #details} on the rows that carry a skipped-DDL task; null elsewhere.
+     *
+     * <p>The DDL-task queries must match a statement, but {@code details} is a LOB and cannot
+     * be compared portably: PostgreSQL maps an unbounded {@code @Lob String} to {@code oid},
+     * where {@code = ?} silently compares two freshly-created large objects and {@code like}
+     * raises {@code operator does not exist: oid ~~ text}. A hash is a plain {@code varchar},
+     * so the identity predicate is the same SQL on every metadata store. Maintained by
+     * {@code SyncStateWriter#recordSkippedDdl}; rows written before the column existed are
+     * filled by {@code ChangeLogDdlHashBackfill} at startup.
+     */
+    @Column(name = "details_hash", length = 64)
+    private String detailsHash;
+
     /** True when the change was applied successfully. */
     @Column(nullable = false)
     private Boolean success = true;

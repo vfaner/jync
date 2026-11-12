@@ -36,6 +36,7 @@ import com.qqmu.jync.service.metrics.MetricsQueryService;
 import com.qqmu.jync.service.metrics.MetricsRange;
 import com.qqmu.jync.service.metrics.ProjectMetricsView;
 import com.qqmu.jync.service.metrics.SeriesPoint;
+import com.qqmu.jync.service.sync.SyncStateWriter;
 
 /**
  * 元数据库跑在真实数据库上时的契约测试。
@@ -82,6 +83,9 @@ abstract class AbstractMetadataStoreIT {
 
     @Autowired
     private MetricsQueryService metrics;
+
+    @Autowired
+    private SyncStateWriter stateWriter;
 
     @Test
     void hibernateCreatesEveryTable() throws Exception {
@@ -167,34 +171,57 @@ abstract class AbstractMetadataStoreIT {
     }
 
     /**
-     * 跳过 DDL 的去重查询必须在真实元数据库上可执行。
+     * 跳过 DDL 的登记、去重、待办查询与清理必须能在真实元数据库上执行。
      *
-     * <p>{@code details} 是 {@code @Lob}，在 Oracle 族里是 CLOB。用 {@code =} 比较 CLOB 会报
-     * ORA-00932，而这两条查询正是在 CDC 读到一条 DDL 时无条件执行的：查询一失败，项目就会被
-     * 当成流故障停摆。H2 的 {@code MODE=Oracle} 不会暴露这一点，只有真库才会。
+     * <p>{@code details} 是 {@code @Lob}：Oracle 族建成 CLOB，用 {@code =} 比较会报
+     * ORA-00932；PostgreSQL 把无界的 {@code @Lob String} 建成 {@code oid}，{@code =} 每次
+     * 绑定都是一个新的大对象（静默查不到），{@code like} 更是直接报
+     * {@code operator does not exist: oid ~~ text}。而这些 SQL 正是 CDC 读到一条 DDL 时
+     * 无条件执行的——查询一失败，项目就会被当成流故障停摆。H2 的兼容模式不会暴露这一点，
+     * 只有真库才会。这里走生产入口：登记（含重启后的同位置去重、LogMiner 的文本去重）、
+     * 待办判断、待办列表与清理。
      */
     @Test
     @Transactional
-    void skippedDdlDedupeQueriesRunOnTheMetadataDatabase() {
-        String details = "CDC_SKIPPED_DDL:ALTER TABLE t ADD COLUMN c INT";
-        ChangeLog entry = new ChangeLog();
-        entry.setProjectId(4242L);
-        entry.setObjectType(ObjectType.PROJECT);
-        entry.setObjectName("t");
-        entry.setChangeType(ChangeType.ERROR);
-        entry.setSuccess(false);
-        entry.setDetails(details);
-        entry.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
-        entry.setGapStartFile("binlog.000001");
-        entry.setGapStartPos(100L);
-        entry.setOccurredAt(Instant.now());
-        changeLogs.saveAndFlush(entry);
+    void skippedDdlTaskLifecycleRunsOnTheMetadataDatabase() {
+        long projectId = 4242L;
+        String statement = "ALTER TABLE t ADD COLUMN c INT";
 
-        assertThat(changeLogs.countDdlTasksAt(4242L, "binlog.000001", 100L, details))
-                .as("同一位置同一语句只算一件任务").isEqualTo(1);
-        assertThat(changeLogs.countDdlTasksAt(4242L, "binlog.000001", 200L, details)).isZero();
-        assertThat(changeLogs.countOpenDdlTasksByDetails(4242L, details))
-                .as("没有位置来源（LogMiner）按语句文本去重").isEqualTo(1);
+        // 先登记、后断言：MySQL/MariaDB 的测试事务是 REPEATABLE READ，而 recordSkippedDdl
+        // 走 REQUIRES_NEW，本事务第一次读之前提交的行才在快照里。
+        //
+        // 重启后从没推进过的位点重新读到同一个事件：只算一件任务。
+        stateWriter.recordSkippedDdl(projectId, "t", statement, "binlog.000001", 100L);
+        stateWriter.recordSkippedDdl(projectId, "t", statement, "binlog.000001", 100L);
+        // 同一语句出现在另一个位点：一个新事件，一件新任务。
+        stateWriter.recordSkippedDdl(projectId, "t", statement, "binlog.000001", 200L);
+        // LogMiner 没有位点：同一条语句只登记一次。
+        long positionlessProject = 4243L;
+        stateWriter.recordSkippedDdl(positionlessProject, "T", statement);
+        stateWriter.recordSkippedDdl(positionlessProject, "T", statement);
+        // 普通失败行：清理历史时可以删，DDL 待办必须留下。
+        ChangeLog failure = ChangeLog.of(projectId, ObjectType.TABLE, "t", ChangeType.ERROR,
+                "connection refused");
+        failure.setSuccess(false);
+        changeLogs.saveAndFlush(failure);
+
+        assertThat(stateWriter.hasOpenDdlTask(projectId))
+                .as("CDC 建流时无条件调用，元数据库上必须能执行").isTrue();
+        assertThat(changeLogs.countOpenDdlTasks(projectId)).isEqualTo(2);
+        assertThat(changeLogs.findOpenDdlTasks(projectId)).hasSize(2);
+        assertThat(changeLogs.countOpenDdlTasks(positionlessProject)).isEqualTo(1);
+
+        assertThat(changeLogs.deleteByProjectIdKeepingOpenDdlTasks(projectId))
+                .as("只删普通失败行").isEqualTo(1);
+        assertThat(changeLogs.findOpenDdlTasks(projectId)).hasSize(2);
+
+        // 处理完之后才随历史一起清掉。
+        for (ChangeLog open : changeLogs.findOpenDdlTasks(projectId)) {
+            open.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
+        }
+        changeLogs.flush();
+        assertThat(changeLogs.deleteByProjectIdKeepingOpenDdlTasks(projectId))
+                .as("已处理的 DDL 行只是历史").isEqualTo(2);
     }
 
     @Test

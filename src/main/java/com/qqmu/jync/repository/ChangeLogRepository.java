@@ -89,6 +89,14 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
 
     long countByProjectId(Long projectId);
 
+    /**
+     * Skipped-DDL task rows whose {@code details_hash} is still missing — rows written before
+     * the column existed. Has no LOB predicate on purpose: the statement is hashed in Java,
+     * because on PostgreSQL the {@code details} LOB is an {@code oid} that cannot be
+     * compared with text at all.
+     */
+    List<ChangeLog> findByResolutionStatusIsNotNullAndDetailsHashIsNull();
+
     /** The alert evaluator's window: failed rows recent enough to describe a live fault. */
     List<ChangeLog> findBySuccessFalseAndOccurredAtAfter(Instant since);
 
@@ -96,11 +104,15 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      * The project's DDL tasks that are still open.
      *
      * <p>Used to tell whether a column is already covered by an open task — a column that
-     * an open task adds must not be replayed twice.
+     * an open task adds must not be replayed twice. Only a skipped DDL opens a task, so a
+     * non-null {@code resolution_status} is the marker. The predicate deliberately does not
+     * look at {@code details}: that is a LOB, and on PostgreSQL ({@code oid}) a {@code like}
+     * on it raises {@code operator does not exist: oid ~~ text} — this query runs whenever a
+     * CDC consumer starts.
      */
     @Query("select c from ChangeLog c where c.projectId = :projectId"
-            + " and c.details like 'CDC_SKIPPED_DDL:%'"
-            + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')"
+            + " and c.resolutionStatus is not null"
+            + " and c.resolutionStatus <> 'PROCESSED'"
             + " order by c.id desc")
     List<ChangeLog> findOpenDdlTasks(@Param("projectId") Long projectId);
 
@@ -108,12 +120,12 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      * How many DDL tasks are still open for the project.
      *
      * <p>An open task means the target may still be missing a column, so the column
-     * projection has to stay on across a restart. A count keeps the CLOB details in the
-     * database.
+     * projection has to stay on across a restart. A count keeps the LOB details in the
+     * database; the open marker is {@code resolution_status}, never the LOB text.
      */
     @Query("select count(c) from ChangeLog c where c.projectId = :projectId"
-            + " and c.details like 'CDC_SKIPPED_DDL:%'"
-            + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')")
+            + " and c.resolutionStatus is not null"
+            + " and c.resolutionStatus <> 'PROCESSED'")
     long countOpenDdlTasks(@Param("projectId") Long projectId);
 
     /**
@@ -125,21 +137,22 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      * because a rebuilt binlog reuses an offset for a different statement. The task's
      * status is deliberately not part of the check — the position only advances on commit,
      * so a dismissed or already-executed task is still the same event and must not be
-     * raised again.
+     * raised again. The statement is matched by its {@code details_hash}, not the LOB.
      */
     @Query("select count(c) from ChangeLog c where c.projectId = :projectId"
-            + " and c.details = :details"
+            + " and c.detailsHash = :detailsHash"
             + " and c.gapStartFile = :file and c.gapStartPos = :pos")
     long countDdlTasksAt(@Param("projectId") Long projectId,
                          @Param("file") String file, @Param("pos") Long pos,
-                         @Param("details") String details);
+                         @Param("detailsHash") String detailsHash);
 
     /** The same check for sources that report no binlog position (LogMiner): text identity. */
     @Query("select count(c) from ChangeLog c where c.projectId = :projectId"
-            + " and c.details = :details"
-            + " and (c.resolutionStatus is null or c.resolutionStatus <> 'PROCESSED')")
-    long countOpenDdlTasksByDetails(@Param("projectId") Long projectId,
-                                    @Param("details") String details);
+            + " and c.detailsHash = :detailsHash"
+            + " and c.resolutionStatus is not null"
+            + " and c.resolutionStatus <> 'PROCESSED'")
+    long countOpenDdlTasksByHash(@Param("projectId") Long projectId,
+                                 @Param("detailsHash") String detailsHash);
 
     /** Successful rows of one type, used to spot row-count repairs in the last few minutes. */
     List<ChangeLog> findByChangeTypeAndOccurredAtAfter(ChangeType type, Instant since);
@@ -187,13 +200,13 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      *
      * <p>An open skipped-DDL task is a {@code success = false} row, but deleting it cancels
      * the projection gate and the replay entry point the administrator still needs. The
-     * retention pruner already keeps these rows; every clear path does the same. {@code null}
-     * details are excluded explicitly: a JPQL {@code not like} on a null is unknown, which
-     * would keep those ordinary rows forever.
+     * retention pruner already keeps these rows; every clear path does the same, with the
+     * very predicate the pruner uses. Only a skipped DDL sets {@code resolution_status}, so
+     * that column alone separates a task from history; the {@code details} LOB is not read
+     * (PostgreSQL stores it as {@code oid}, where {@code like} raises a type error) and its
+     * null handling no longer needs a special case.
      */
-    String CLEARABLE = " and (c.details is null"
-            + " or c.details not like 'CDC_SKIPPED_DDL:%'"
-            + " or c.resolutionStatus = 'PROCESSED')";
+    String CLEARABLE = " and (c.resolutionStatus is null or c.resolutionStatus = 'PROCESSED')";
 
     /** Remove only the failed entries of one project, in bulk. */
     @Modifying

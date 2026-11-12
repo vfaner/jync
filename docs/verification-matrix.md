@@ -45,7 +45,7 @@ Jync 自身的元数据（连接、任务、游标、变更日志等）走 Hiber
 | MySQL 8 / PostgreSQL 16 / Oracle 23 | 部署文档列出的已验证组合 | `MetadataStore*IT` 容器契约测试：启动建表、自增、LOB、图表聚合 |
 | MariaDB 11.4 | 容器契约测试通过（MySQL 协议族） | `MetadataStoreMariaDbIT` |
 
-契约测试指 `AbstractMetadataStoreIT`：空库首启建表、管理员播种、定时任务读写、`@Lob` 字段与看板/指标的按小时、分钟聚合。
+契约测试指 `AbstractMetadataStoreIT`：空库首启建表、管理员播种、定时任务读写、`@Lob` 字段、看板/指标的按小时、分钟聚合，以及 CDC 跳过 DDL 待办的登记、去重、查询与清理。最后一项曾经只在 PostgreSQL 上失败：`details` 是 `@Lob`，PG 建成 `oid`，`= ?` 静默查不到、`like` 直接报类型错误；现在语句身份走 `details_hash`，待办标记走 `resolution_status`，与方言无关。
 
 ## 环境变量（门控测试）
 

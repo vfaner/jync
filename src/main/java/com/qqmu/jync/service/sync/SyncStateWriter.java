@@ -16,6 +16,7 @@ import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.metadata.MetadataSnapshotService;
 import com.qqmu.jync.service.monitor.CursorStrategy;
+import com.qqmu.jync.util.DigestUtil;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -273,6 +274,10 @@ public class SyncStateWriter {
                                   String ddlFile, Long ddlPos) {
         String statement = sql == null ? "" : sql;
         String details = SKIPPED_DDL_PREFIX + statement;
+        // The statement is matched by hash: `details` is a LOB, and PostgreSQL stores an
+        // unbounded @Lob String as `oid`, where `=` compares large-object identities (a
+        // fresh one on every bind) and `like` does not exist at all.
+        String detailsHash = DigestUtil.sha256Hex(details);
         // The binlog position plus the statement identify the *event*. The same statement
         // may legitimately occur again later — a column is dropped and added again at a new
         // position — and that is a new task, while the same event delivered twice after a
@@ -280,8 +285,8 @@ public class SyncStateWriter {
         // commit, so a restart before that re-reads events whose task was already dismissed
         // or executed, and those must not be raised again.
         boolean alreadyFiled = ddlPos != null && ddlFile != null
-                ? changeLogRepository.countDdlTasksAt(projectId, ddlFile, ddlPos, details) > 0
-                : changeLogRepository.countOpenDdlTasksByDetails(projectId, details) > 0;
+                ? changeLogRepository.countDdlTasksAt(projectId, ddlFile, ddlPos, detailsHash) > 0
+                : changeLogRepository.countOpenDdlTasksByHash(projectId, detailsHash) > 0;
         if (alreadyFiled) {
             log.debug("The skipped DDL of project {} at {}:{} was already filed",
                     projectId, ddlFile, ddlPos);
@@ -289,6 +294,7 @@ public class SyncStateWriter {
         }
         ChangeLog entry = ChangeLog.of(projectId, ObjectType.PROJECT, objectName,
                 ChangeType.ERROR, details);
+        entry.setDetailsHash(detailsHash);
         // A skipped DDL leaves the target unable to accept the next row: it is a real
         // error, so the list must show it in red and include it under "only failures".
         entry.setSuccess(false);
