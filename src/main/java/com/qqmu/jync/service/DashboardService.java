@@ -2,7 +2,6 @@ package com.qqmu.jync.service;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -210,13 +209,10 @@ public class DashboardService {
         Map<Instant, long[]> syncByHour = new HashMap<>();
         Map<Instant, long[]> etlByHour = new HashMap<>();
 
-        for (Object[] row : changeLogRepository.hourlySeriesBetween(
-                new java.sql.Timestamp(start.toEpochMilli()),
-                new java.sql.Timestamp(now.toEpochMilli()))) {
-            Instant hour = hourOf(row[0]);
-            if (hour == null) continue;
-            long changes = ((Number) row[1]).longValue();
-            long rows = ((Number) row[2]).longValue();
+        for (Object[] row : changeLogRepository.hourlySeriesBetween(start, now)) {
+            Instant hour = hourOf(row);
+            long changes = ((Number) row[4]).longValue();
+            long rows = ((Number) row[5]).longValue();
             syncByHour.merge(hour, new long[] {changes, rows},
                     (left, right) -> new long[] {left[0] + right[0], left[1] + right[1]});
         }
@@ -254,22 +250,17 @@ public class DashboardService {
         return new MultiSeriesActivity(points, totalSyncChanges, totalSyncRows, totalEtlChanges, totalEtlRows);
     }
 
-    /** The hour boundary as an instant, whichever temporal type the driver handed back. */
-    private static Instant hourOf(Object value) {
-        if (value instanceof Instant instant) {
-            return instant;
-        }
-        if (value instanceof java.sql.Timestamp timestamp) {
-            return timestamp.toInstant();
-        }
-        if (value instanceof LocalDateTime local) {
-            // The session time zone is UTC (application.yml), so the wall clock is UTC.
-            return local.toInstant(ZoneOffset.UTC);
-        }
-        if (value instanceof OffsetDateTime offset) {
-            return offset.toInstant();
-        }
-        return null;
+    /**
+     * The UTC hour boundary the query's calendar fields describe.
+     *
+     * <p>The session time zone is pinned to UTC in application.yml, so the stored wall clock is
+     * UTC and no zone conversion belongs here.
+     */
+    private static Instant hourOf(Object[] row) {
+        return LocalDateTime.of(
+                        ((Number) row[0]).intValue(), ((Number) row[1]).intValue(),
+                        ((Number) row[2]).intValue(), ((Number) row[3]).intValue(), 0)
+                .toInstant(ZoneOffset.UTC);
     }
 
     /** One hour of the multi-series trend chart: sync and ETL values. */

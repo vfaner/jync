@@ -5,7 +5,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 
@@ -46,8 +45,8 @@ class DashboardServiceSeriesTest {
     void theSeriesIsTwentyFourConsecutiveHourlyBucketsEndingWithTheCurrentHour() {
         Instant now = Instant.parse("2026-01-01T10:25:00Z");
         when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.of(
-                new Object[] {Timestamp.from(Instant.parse("2026-01-01T10:00:00Z")), 3L, 12L},
-                new Object[] {Timestamp.from(Instant.parse("2025-12-31T20:00:00Z")), 1L, 4L}));
+                hourRow("2026-01-01T10:00:00Z", 3, 12),
+                hourRow("2025-12-31T20:00:00Z", 1, 4)));
 
         DashboardService.MultiSeriesActivity series = service.multiSeriesActivitySeries(now);
 
@@ -93,7 +92,7 @@ class DashboardServiceSeriesTest {
     void changeLogRowsStayOnTheSyncLineWhateverTheirChangeType() {
         Instant now = Instant.parse("2026-01-01T10:25:00Z");
         when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.<Object[]>of(
-                new Object[] {Timestamp.from(Instant.parse("2026-01-01T10:00:00Z")), 3L, 12L}));
+                hourRow("2026-01-01T10:00:00Z", 3, 12)));
         when(etlRunRepository.findByOccurredAtBetweenOrderByOccurredAtAsc(any(), any()))
                 .thenReturn(List.of());
 
@@ -128,8 +127,8 @@ class DashboardServiceSeriesTest {
     void theTotalsSumTheWholeWindow() {
         Instant now = Instant.parse("2026-01-01T10:25:00Z");
         when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.of(
-                new Object[] {Timestamp.from(Instant.parse("2026-01-01T10:00:00Z")), 3L, 12L},
-                new Object[] {Timestamp.from(Instant.parse("2025-12-31T20:00:00Z")), 1L, 4L}));
+                hourRow("2026-01-01T10:00:00Z", 3, 12),
+                hourRow("2025-12-31T20:00:00Z", 1, 4)));
 
         DashboardService.MultiSeriesActivity series = service.multiSeriesActivitySeries(now);
 
@@ -146,8 +145,7 @@ class DashboardServiceSeriesTest {
         service.multiSeriesActivitySeries(now);
 
         org.mockito.Mockito.verify(changeLogRepository)
-                .hourlySeriesBetween(java.sql.Timestamp.from(Instant.parse("2025-12-31T11:00:00Z")),
-                        java.sql.Timestamp.from(now));
+                .hourlySeriesBetween(Instant.parse("2025-12-31T11:00:00Z"), now);
     }
 
     /** Both lines describe the same 24 hours; the ETL history is read with the chart's window. */
@@ -174,8 +172,8 @@ class DashboardServiceSeriesTest {
         Instant now = Instant.parse("2026-01-01T10:25:00Z");
         Instant windowStart = Instant.parse("2025-12-31T11:00:00Z");
         when(changeLogRepository.hourlySeriesBetween(any(), any())).thenReturn(List.of(
-                new Object[] {Timestamp.from(Instant.parse("2026-01-01T10:00:00Z")), 3L, 12L},
-                new Object[] {Timestamp.from(Instant.parse("2025-12-31T20:00:00Z")), 1L, 4L}));
+                hourRow("2026-01-01T10:00:00Z", 3, 12),
+                hourRow("2025-12-31T20:00:00Z", 1, 4)));
         when(changeLogRepository.countByOccurredAtBetween(any(), any())).thenReturn(4L);
         when(changeLogRepository.sumAffectedRowsBetween(any(), any())).thenReturn(16L);
         // The same two runs seen by both queries: the tile's aggregates and the chart's list.
@@ -198,7 +196,7 @@ class DashboardServiceSeriesTest {
         org.mockito.Mockito.verify(changeLogRepository)
                 .sumAffectedRowsBetween(windowStart, now);
         org.mockito.Mockito.verify(changeLogRepository)
-                .hourlySeriesBetween(Timestamp.from(windowStart), Timestamp.from(now));
+                .hourlySeriesBetween(windowStart, now);
         org.mockito.Mockito.verify(etlRunRepository)
                 .countByOccurredAtBetween(windowStart, now);
         org.mockito.Mockito.verify(etlRunRepository)
@@ -233,6 +231,15 @@ class DashboardServiceSeriesTest {
 
         assertThat(series.points()).allSatisfy(point ->
                 assertThat(point.label()).matches("\\d{2}:\\d{2}"));
+    }
+
+    /** One aggregation row: the UTC calendar fields the query groups by, plus the totals. */
+    private static Object[] hourRow(String isoHour, long changes, long rows) {
+        Instant hour = Instant.parse(isoHour);
+        java.time.LocalDateTime local = java.time.LocalDateTime.ofInstant(
+                hour, java.time.ZoneOffset.UTC);
+        return new Object[] {local.getYear(), local.getMonthValue(), local.getDayOfMonth(),
+                local.getHour(), changes, rows};
     }
 
     private static EtlRun run(Instant occurredAt, Integer affectedRows) {

@@ -25,15 +25,15 @@ spring:
           time_zone: UTC
         type:
           # Hibernate 6+ maps Instant to TIMESTAMP WITH TIME ZONE by default, which changes
-          # the H2 column type and makes the native date_trunc queries (bound with
-          # java.sql.Timestamp) compare a UTC instant against a local one. Pinning the legacy
-          # TIMESTAMP mapping keeps the 2.7 schema and query semantics.
+          # the stored column type. Pinning the legacy TIMESTAMP mapping keeps the 2.7 schema
+          # and query semantics on every supported metadata store.
           preferred_instant_jdbc_type: TIMESTAMP
         query:
           native:
-            # Native scalars otherwise come back as LocalDateTime, which drops the UTC
-            # conversion jdbc.time_zone applies and shifts every chart bucket by the JVM
-            # offset. Keep the JDBC Timestamp the 2.7 queries were written against.
+            # Any native datetime scalar otherwise comes back as LocalDateTime, which drops
+            # the UTC conversion jdbc.time_zone applies. No production query returns one today;
+            # the setting keeps that behaviour from silently returning with a future native
+            # query (the change-log charts now group with portable HQL calendar functions).
             prefer_jdbc_datetime_types: true
   servlet:
     multipart:

@@ -29,7 +29,13 @@ import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.OaAuthConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncTaskRepository;
+import com.qqmu.jync.service.DashboardService;
 import com.qqmu.jync.service.auth.AppUserService;
+import com.qqmu.jync.service.metrics.ChartSeries;
+import com.qqmu.jync.service.metrics.MetricsQueryService;
+import com.qqmu.jync.service.metrics.MetricsRange;
+import com.qqmu.jync.service.metrics.ProjectMetricsView;
+import com.qqmu.jync.service.metrics.SeriesPoint;
 
 /**
  * 元数据库跑在真实数据库上时的契约测试。
@@ -70,6 +76,12 @@ abstract class AbstractMetadataStoreIT {
 
     @Autowired
     private OaAuthConfigRepository oaConfigs;
+
+    @Autowired
+    private DashboardService dashboard;
+
+    @Autowired
+    private MetricsQueryService metrics;
 
     @Test
     void hibernateCreatesEveryTable() throws Exception {
@@ -197,5 +209,65 @@ abstract class AbstractMetadataStoreIT {
         assertThat(oaConfigs.findById(1L).orElseThrow().getMode())
                 .as("mode 列在 Oracle 族是保留字，必须能在真实库上写入并读回")
                 .isEqualTo(OaAuthConfig.Mode.TICKET);
+    }
+
+    /**
+     * 看板趋势图与性能页的变更曲线必须能在真实元数据库上分桶。
+     *
+     * <p>这两条查询曾经是原生 SQL 里的 {@code date_trunc('hour'|'minute', ...)}：H2 和
+     * PostgreSQL 有，MySQL 没有。顾客把元数据库迁到 MySQL 之后，打开项目性能页
+     * （{@code GET /projects/{id}/metrics?range=24h}）直接 500：
+     * {@code FUNCTION jync.date_trunc does not exist}。这里在每种真实元数据库上调用同一对
+     * 服务入口（看板 24 小时趋势、项目 1 小时变更曲线），钉住「时间分桶与方言无关」。
+     */
+    @Test
+    @Transactional
+    void theChangeLogChartsAggregateOnTheMetadataDatabase() {
+        changeLogs.deleteAllBulk();
+
+        long projectId = 777_0001L;
+        Instant now = Instant.now();
+        chartEntry(projectId, ChangeType.INSERT, now.minusSeconds(90), 3);
+        chartEntry(projectId, ChangeType.INSERT, now.minusSeconds(80), 4);
+        chartEntry(projectId, ChangeType.UPDATE, now.minusSeconds(70), 1);
+        // 另一个项目：看板的 24 小时总量包含它，项目曲线必须排除它。
+        chartEntry(projectId + 1, ChangeType.DELETE, now.minusSeconds(60), 2);
+
+        DashboardService.MultiSeriesActivity chart = dashboard.activitySeries();
+        assertThat(chart.totalSyncChanges())
+                .as("看板趋势图必须按小时在元数据库里分组")
+                .isEqualTo(4L);
+        assertThat(chart.totalSyncRows()).isEqualTo(10L);
+
+        ProjectMetricsView view = metrics.project(projectId, MetricsRange.LAST_HOUR);
+        assertThat(chartTotal(view, "insert"))
+                .as("项目曲线的每分钟 INSERT 计数")
+                .isEqualTo(2.0);
+        assertThat(chartTotal(view, "update")).isEqualTo(1.0);
+        assertThat(chartTotal(view, "delete")).isZero();
+    }
+
+    private void chartEntry(long projectId, ChangeType type, Instant occurredAt, int rows) {
+        ChangeLog entry = new ChangeLog();
+        entry.setProjectId(projectId);
+        entry.setObjectType(ObjectType.TABLE);
+        entry.setObjectName("chart_t");
+        entry.setChangeType(type);
+        entry.setAffectedRows(rows);
+        entry.setSuccess(true);
+        entry.setOccurredAt(occurredAt);
+        changeLogs.saveAndFlush(entry);
+    }
+
+    private static double chartTotal(ProjectMetricsView view, String seriesKey) {
+        ChartSeries series = view.series().stream()
+                .filter(candidate -> seriesKey.equals(candidate.key()))
+                .findFirst()
+                .orElseThrow();
+        return series.points().stream()
+                .map(SeriesPoint::value)
+                .filter(value -> value != null)
+                .mapToDouble(Double::doubleValue)
+                .sum();
     }
 }

@@ -27,28 +27,33 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      * Per-hour totals for the dashboard trend chart, grouped in the database.
      *
      * <p>Bucketing in Java would mean loading a day of traffic into memory first, on the very
-     * metadata store the page exists to watch. The store is always H2, whose
-     * {@code date_trunc('hour', …)} cuts the bucket; the session time zone is pinned to UTC in
-     * application.yml, so the returned timestamp is the UTC hour boundary. Hours with no traffic
-     * are absent — the caller fills them, because a chart must not compress a quiet night.
+     * metadata store the page exists to watch. The bucket is grouped from the calendar fields:
+     * HQL's {@code year/month/day/hour} go through the Hibernate dialect, so the query runs on
+     * every supported metadata store. A native {@code date_trunc('hour', …)} did not — H2 and
+     * PostgreSQL have it, MySQL does not, and a deployment that moved its metadata to MySQL got
+     * {@code FUNCTION date_trunc does not exist} on the dashboard and the project performance
+     * page. The parameters are {@link Instant}, so Hibernate binds them in the session time zone
+     * pinned to UTC in application.yml.
+     *
+     * <p>Row shape: {@code (year, month, day, hour, count, affectedRows)}. The caller rebuilds
+     * the UTC hour boundary with {@code LocalDateTime.of(...).toInstant(UTC)}. Hours with no
+     * traffic are absent — the caller fills them, because a chart must not compress a quiet
+     * night.
      *
      * <p>One row per hour, whatever mix of change types the hour holds: the CDC window
      * summaries are {@code INFO} rows and the row changes they describe must land in the same
      * bucket. The dashboard's other line does not come from here — ETL runs have their own
      * history table.
-     *
-     * <p>Native rather than JPQL: Hibernate cannot resolve the return type of a
-     * {@code function(...)} call in the select list, and the timestamp parameter is bound as
-     * {@link java.sql.Timestamp} so no driver-side {@code Instant} conversion is involved.
      */
-    @Query(value = "select date_trunc('hour', occurred_at), count(*), "
-            + "coalesce(sum(affected_rows), 0) "
-            + "from change_log where occurred_at >= :since and occurred_at <= :until "
-            + "group by date_trunc('hour', occurred_at) "
-            + "order by date_trunc('hour', occurred_at)",
-            nativeQuery = true)
-    List<Object[]> hourlySeriesBetween(@Param("since") java.sql.Timestamp since,
-                                       @Param("until") java.sql.Timestamp until);
+    @Query("select year(c.occurredAt), month(c.occurredAt), day(c.occurredAt), "
+            + "hour(c.occurredAt), count(c), coalesce(sum(c.affectedRows), 0) "
+            + "from ChangeLog c where c.occurredAt >= :since and c.occurredAt <= :until "
+            + "group by year(c.occurredAt), month(c.occurredAt), day(c.occurredAt), "
+            + "hour(c.occurredAt) "
+            + "order by year(c.occurredAt), month(c.occurredAt), day(c.occurredAt), "
+            + "hour(c.occurredAt)")
+    List<Object[]> hourlySeriesBetween(@Param("since") Instant since,
+                                       @Param("until") Instant until);
 
     /**
      * Per-minute change counts for one project, split by change type.
@@ -56,17 +61,20 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
      * <p>Minute is the finest bucket any page asks for; the caller re-buckets into its range
      * (10 minutes, an hour) in memory. Grouping at minute granularity keeps the row count
      * bounded — at most {@code minutes × 3} rows for a week — so the page never loads a raw
-     * change log into memory just to draw a line. Same native {@code date_trunc} precedent as
-     * {@link #hourlySeriesBetween}.
+     * change log into memory just to draw a line.
+     *
+     * <p>Same dialect-portable calendar grouping as {@link #hourlySeriesBetween}; row shape is
+     * {@code (year, month, day, hour, minute, changeType, count)}.
      */
-    @Query(value = "select date_trunc('minute', occurred_at), change_type, count(*) "
-            + "from change_log where project_id = :projectId "
-            + "and occurred_at >= :since and occurred_at <= :until "
-            + "group by date_trunc('minute', occurred_at), change_type",
-            nativeQuery = true)
+    @Query("select year(c.occurredAt), month(c.occurredAt), day(c.occurredAt), "
+            + "hour(c.occurredAt), minute(c.occurredAt), c.changeType, count(c) "
+            + "from ChangeLog c where c.projectId = :projectId "
+            + "and c.occurredAt >= :since and c.occurredAt <= :until "
+            + "group by year(c.occurredAt), month(c.occurredAt), day(c.occurredAt), "
+            + "hour(c.occurredAt), minute(c.occurredAt), c.changeType")
     List<Object[]> minutelyChangesForProject(@Param("projectId") Long projectId,
-                                             @Param("since") java.sql.Timestamp since,
-                                             @Param("until") java.sql.Timestamp until);
+                                             @Param("since") Instant since,
+                                             @Param("until") Instant until);
 
     /** The hottest tables of one project in the window; the caller caps the page size. */
     @Query(value = "select object_name, count(*) from change_log "

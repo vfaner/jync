@@ -47,15 +47,23 @@ class ChangeLogAggregationQueryTest {
         repository.flush();
 
         List<Object[]> rows = repository.minutelyChangesForProject(PROJECT,
-                Timestamp.from(BASE.minusSeconds(60)), Timestamp.from(BASE.plusSeconds(300)));
+                BASE.minusSeconds(60), BASE.plusSeconds(300));
 
         assertThat(rows).hasSize(3);
-        // Hibernate 7 returns the date_trunc bucket as LocalDateTime (UTC wall clock); Hibernate
-        // 5 handed back java.sql.Timestamp. Both describe the same instant.
-        assertThat(rows).allSatisfy(row -> assertThat(row[0])
-                .isInstanceOfAny(Timestamp.class, java.time.LocalDateTime.class));
-        assertThat(rows).extracting(row -> row[1] + ":" + row[2])
+        // The query returns calendar fields, rebuilt into the UTC bucket by the caller. The two
+        // INSERTs and the UPDATE share 10:00; the DELETE a minute later.
+        assertThat(rows).filteredOn(row -> ChangeType.INSERT.equals(row[5]))
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(minuteOf(row)).isEqualTo(BASE);
+                    assertThat(((Number) row[6]).longValue()).isEqualTo(2L);
+                });
+        assertThat(rows).extracting(row -> row[5] + ":" + row[6])
                 .containsExactlyInAnyOrder("INSERT:2", "UPDATE:1", "DELETE:1");
+        assertThat(rows).filteredOn(row -> ChangeType.DELETE.equals(row[5]))
+                .singleElement()
+                .satisfies(row -> assertThat(minuteOf(row))
+                        .isEqualTo(BASE.plusSeconds(60)));
     }
 
     @Test
@@ -67,10 +75,10 @@ class ChangeLogAggregationQueryTest {
         repository.flush();
 
         List<Object[]> rows = repository.minutelyChangesForProject(PROJECT,
-                Timestamp.from(BASE.minusSeconds(60)), Timestamp.from(BASE.plusSeconds(300)));
+                BASE.minusSeconds(60), BASE.plusSeconds(300));
 
         assertThat(rows).singleElement()
-                .satisfies(row -> assertThat(((Number) row[2]).longValue()).isEqualTo(1L));
+                .satisfies(row -> assertThat(((Number) row[6]).longValue()).isEqualTo(1L));
     }
 
     @Test
@@ -94,5 +102,13 @@ class ChangeLogAggregationQueryTest {
         ChangeLog log = ChangeLog.of(PROJECT, ObjectType.TABLE, object, type, null);
         log.setOccurredAt(at);
         return log;
+    }
+
+    private static Instant minuteOf(Object[] row) {
+        return java.time.LocalDateTime.of(
+                        ((Number) row[0]).intValue(), ((Number) row[1]).intValue(),
+                        ((Number) row[2]).intValue(), ((Number) row[3]).intValue(),
+                        ((Number) row[4]).intValue())
+                .toInstant(java.time.ZoneOffset.UTC);
     }
 }

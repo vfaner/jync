@@ -194,14 +194,26 @@ public class MetricsQueryService {
 
     private List<MinuteChange> changes(long projectId, Instant from, Instant to) {
         List<MinuteChange> changes = new ArrayList<>();
-        for (Object[] row : changeLogs.minutelyChangesForProject(
-                projectId, Timestamp.from(from), Timestamp.from(to))) {
-            ChangeType type = parseType(row[1]);
+        for (Object[] row : changeLogs.minutelyChangesForProject(projectId, from, to)) {
+            ChangeType type = parseType(row[5]);
             if (type != null) {
-                changes.add(new MinuteChange(toInstant(row[0]), type, number((Number) row[2])));
+                changes.add(new MinuteChange(utcBucket(row), type, number((Number) row[6])));
             }
         }
         return changes;
+    }
+
+    /**
+     * The UTC minute boundary the query's calendar fields describe. The row is
+     * {@code (year, month, day, hour, minute, changeType, count)}; the session time zone is
+     * pinned to UTC in application.yml, so the stored wall clock is UTC.
+     */
+    private static Instant utcBucket(Object[] row) {
+        return java.time.LocalDateTime.of(
+                        ((Number) row[0]).intValue(), ((Number) row[1]).intValue(),
+                        ((Number) row[2]).intValue(), ((Number) row[3]).intValue(),
+                        ((Number) row[4]).intValue())
+                .toInstant(java.time.ZoneOffset.UTC);
     }
 
     private List<SeriesPoint> changeShare(List<MinuteChange> changes) {
@@ -294,17 +306,6 @@ public class MetricsQueryService {
         } catch (IllegalArgumentException e) {
             return null;
         }
-    }
-
-    private static Instant toInstant(Object raw) {
-        if (raw instanceof Timestamp timestamp) {
-            return timestamp.toInstant();
-        }
-        if (raw instanceof Instant instant) {
-            return instant;
-        }
-        return java.time.LocalDateTime.parse(String.valueOf(raw).replace(' ', 'T'))
-                .toInstant(java.time.ZoneOffset.UTC);
     }
 
     private record MinuteChange(Instant at, ChangeType type, double count) {

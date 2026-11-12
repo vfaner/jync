@@ -42,11 +42,12 @@ class ChangeLogHourlySeriesDataTest {
         repository.save(log);
     }
 
-    private static Instant instantOf(Object raw) {
-        if (raw instanceof java.sql.Timestamp timestamp) {
-            return timestamp.toInstant();
-        }
-        return ((java.time.LocalDateTime) raw).toInstant(java.time.ZoneOffset.UTC);
+    /** Row shape: (year, month, day, hour, count, affectedRows), rebuilt as the UTC hour. */
+    private static Instant hourOf(Object[] row) {
+        return java.time.LocalDateTime.of(
+                        ((Number) row[0]).intValue(), ((Number) row[1]).intValue(),
+                        ((Number) row[2]).intValue(), ((Number) row[3]).intValue(), 0)
+                .toInstant(java.time.ZoneOffset.UTC);
     }
 
     @Test
@@ -60,21 +61,20 @@ class ChangeLogHourlySeriesDataTest {
         entry(Instant.parse("2026-01-01T07:59:59Z"), 100);
 
         List<Object[]> rows = repository.hourlySeriesBetween(
-                java.sql.Timestamp.from(since),
-                java.sql.Timestamp.from(Instant.parse("2026-01-01T11:00:00Z")));
+                since, Instant.parse("2026-01-01T11:00:00Z"));
 
         Map<Instant, Object[]> byHour = new TreeMap<>();
         for (Object[] row : rows) {
-            byHour.put(instantOf(row[0]), row);
+            byHour.put(hourOf(row), row);
         }
         assertThat(byHour.keySet()).containsExactly(
                 Instant.parse("2026-01-01T09:00:00Z"),
                 Instant.parse("2026-01-01T10:00:00Z"));
-        assertThat(((Number) byHour.get(Instant.parse("2026-01-01T10:00:00Z"))[1]).longValue())
+        assertThat(((Number) byHour.get(Instant.parse("2026-01-01T10:00:00Z"))[4]).longValue())
                 .isEqualTo(3L);
-        assertThat(((Number) byHour.get(Instant.parse("2026-01-01T10:00:00Z"))[2]).longValue())
+        assertThat(((Number) byHour.get(Instant.parse("2026-01-01T10:00:00Z"))[5]).longValue())
                 .isEqualTo(12L);
-        assertThat(((Number) byHour.get(Instant.parse("2026-01-01T09:00:00Z"))[1]).longValue())
+        assertThat(((Number) byHour.get(Instant.parse("2026-01-01T09:00:00Z"))[4]).longValue())
                 .isEqualTo(1L);
     }
 
@@ -93,12 +93,12 @@ class ChangeLogHourlySeriesDataTest {
         entry(Instant.parse("2026-01-01T10:45:00Z"), 3, ChangeType.ERROR);
 
         List<Object[]> rows = repository.hourlySeriesBetween(
-                java.sql.Timestamp.from(since),
-                java.sql.Timestamp.from(Instant.parse("2026-01-01T11:00:00Z")));
+                since, Instant.parse("2026-01-01T11:00:00Z"));
 
         assertThat(rows).hasSize(1);
-        assertThat(((Number) rows.get(0)[1]).longValue()).isEqualTo(3L);
-        assertThat(((Number) rows.get(0)[2]).longValue()).isEqualTo(9L);
+        assertThat(hourOf(rows.get(0))).isEqualTo(Instant.parse("2026-01-01T10:00:00Z"));
+        assertThat(((Number) rows.get(0)[4]).longValue()).isEqualTo(3L);
+        assertThat(((Number) rows.get(0)[5]).longValue()).isEqualTo(9L);
     }
 
     /**
@@ -115,14 +115,13 @@ class ChangeLogHourlySeriesDataTest {
         entry(Instant.parse("2026-01-01T07:59:59Z"), 100);  // before
         entry(Instant.parse("2026-01-01T10:45:00Z"), 200);  // after
 
-        List<Object[]> rows = repository.hourlySeriesBetween(
-                java.sql.Timestamp.from(since), java.sql.Timestamp.from(until));
+        List<Object[]> rows = repository.hourlySeriesBetween(since, until);
 
         long changes = 0;
         long affected = 0;
         for (Object[] row : rows) {
-            changes += ((Number) row[1]).longValue();
-            affected += ((Number) row[2]).longValue();
+            changes += ((Number) row[4]).longValue();
+            affected += ((Number) row[5]).longValue();
         }
         assertThat(changes).isEqualTo(2L);
         assertThat(affected).isEqualTo(7L);

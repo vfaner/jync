@@ -14,6 +14,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.model.AppMetricSample;
+import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DbMetricSample;
 import com.qqmu.jync.model.TaskMetricSample;
 import com.qqmu.jync.repository.AppMetricSampleRepository;
@@ -159,10 +160,10 @@ class MetricsQueryServiceTest {
 
     @Test
     void changeCountsFeedTheCurveTheDonutAndTheHotTable() {
-        java.sql.Timestamp bucket = java.sql.Timestamp.from(Instant.parse("2026-11-01T11:59:00Z"));
+        // Row shape: (year, month, day, hour, minute, changeType, count), UTC calendar fields.
         when(changeLogs.minutelyChangesForProject(eq(7L), any(), any())).thenReturn(List.of(
-                new Object[] {bucket, "INSERT", 3L},
-                new Object[] {bucket, "UPDATE", 1L}));
+                new Object[] {2026, 11, 1, 11, 59, ChangeType.INSERT, 3L},
+                new Object[] {2026, 11, 1, 11, 59, ChangeType.UPDATE, 1L}));
         when(changeLogs.topChangedObjects(eq(7L), any(), any(), any())).thenReturn(
                 List.<Object[]>of(new Object[] {"orders", 7L}));
 
