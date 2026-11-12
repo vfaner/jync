@@ -45,13 +45,35 @@ docker run -d --name jync \
 
 ## 3. Docker Compose
 
-仓库根目录自带 `docker-compose.yml`（数据落在宿主机 `./data`、`./logs`）：
+**内置 H2**：仓库根目录自带 `docker-compose.yml`（数据落在宿主机 `./data`、`./logs`）：
 
 ```bash
 docker compose up -d --build
 ```
 
 Compose 文件里已写好常用环境变量的注释示例（HTTPS Cookie、外部 MySQL），按需要放开。
+
+**外部元数据库**：`deploy/` 下有三个可直接启动的示例，Jync 与数据库一起起，数据库 healthcheck 通过后才启动 Jync：
+
+| 文件 | 元数据库 | 说明 |
+|---|---|---|
+| `deploy/docker-compose.mysql.yml` | MySQL 8.4 | JDBC 连接带 `allowPublicKeyRetrieval=true`（容器默认 `caching_sha2_password` + 明文连接） |
+| `deploy/docker-compose.postgres.yml` | PostgreSQL 16 | — |
+| `deploy/docker-compose.oracle.yml` | Oracle Database Free 23ai | 镜像数 GB，首次启动建库需 2~5 分钟；默认 PDB 为 `FREEPDB1` |
+
+```bash
+# 以 MySQL 为例；另外两个把文件名换掉即可
+docker compose -f deploy/docker-compose.mysql.yml up -d --build
+```
+
+使用要点：
+
+- 示例里的口令、`SYNC_CRYPTO_*` 都是占位值，**上线前必须替换**。`SYNC_CRYPTO_PASSWORD/SALT` 不设会落到发行包里公开的默认密钥（等于没加密）；设置后必须长期保持不变，否则库里已存的连接密码无法解密，多实例也要每个节点一致。
+- 三个示例都映射 `8080:8080`，同时跑会端口冲突；只保留一个，或自行改端口。`name:` 已按数据库区分，不同示例的卷互不干扰。
+- 外部库场景下 `/app/data` 不再装元数据，但示例仍挂了 `jync-data` 卷：应用内 HTTPS 证书（`/app/data/tls`）和备份需要它，不建议省掉。
+- 生产环境建议用托管数据库：保留 `jync` 服务的 `SPRING_DATASOURCE_*` 环境变量，删掉对应的数据库服务即可。
+- 已有 H2 数据要迁到这些示例：先在旧实例「系统管理 → 系统配置 → 配置包」导出，启动示例后再导入；直接启动只会得到一个空库，见[元数据库迁移](configuration.md#元数据库迁移)。
+- Oracle 示例用社区维护的 `gvenzl/oracle-free` 镜像；宿主机为 arm64 且拉不到对应变体时，取消文件里 `platform: linux/amd64` 的注释用 amd64 模拟运行。
 
 ## 4. Kubernetes 部署
 

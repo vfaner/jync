@@ -1,0 +1,74 @@
+# Jync 捷同 · Docker Compose（外部元数据库：MySQL 8）
+#
+#   docker compose -f deploy/docker-compose.mysql.yml up -d --build
+#   浏览器打开 http://localhost:8080（默认 admin / 123456，登录后立即改密）
+#
+# 本文件把 Jync 和 MySQL 一起起起来，适合单机部署与快速验证。生产环境建议用
+# 托管 MySQL：把 jync 服务的 SPRING_DATASOURCE_* 指向它，删掉下面的 mysql 服务即可。
+#
+# 已有 H2 数据要迁过来：先在旧实例导出配置包，用本文件启动新实例后再导入
+# （见 docs/configuration.md#元数据库迁移）；直接启动只会得到一个空库。
+name: jync-mysql
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: jync-mysql-db
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: change-root-password
+      MYSQL_DATABASE: jync
+      MYSQL_USER: jync
+      MYSQL_PASSWORD: change-db-password
+    command:
+      # 元数据里有中文的项目名、连接名，库和连接都按 utf8mb4 建
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    # 只有本 compose 内的 jync 需要连库，不向宿主机暴露 3306；要在宿主机用
+    # 客户端连库时再放开下面这行
+    # ports: ["3306:3306"]
+
+  jync:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: jync:2.1.0
+    container_name: jync-mysql
+    restart: unless-stopped
+    # 等 mysql 的 healthcheck 通过再启动，避免首启连不上库
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Asia/Shanghai
+      # useSSL=false 时 MySQL 8 的 caching_sha2_password 首次认证需要取服务端
+      # 公钥，必须带 allowPublicKeyRetrieval=true；生产建议改成真正的 TLS 连接
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/jync?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8"
+      SPRING_DATASOURCE_USERNAME: jync
+      SPRING_DATASOURCE_PASSWORD: change-db-password
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+      # 外部元数据库没有本地 H2 文件可供生成密钥，不设这两项会落到发行包里公开的
+      # 默认密钥（等于没加密）。必须改成自己的长随机串并长期保持不变——修改后
+      # 数据库里已存的连接密码将无法解密。多实例部署也必须让每个节点用同一组值。
+      SYNC_CRYPTO_PASSWORD: change-crypto-password
+      SYNC_CRYPTO_SALT: change-crypto-salt
+    volumes:
+      # 元数据已经不在本地，但这个卷仍要保留：应用内 HTTPS 证书
+      # （/app/data/tls）和备份都放在这里
+      - jync-data:/app/data
+      - jync-logs:/app/logs
+
+volumes:
+  mysql-data:
+  jync-data:
+  jync-logs:

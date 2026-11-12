@@ -1,0 +1,65 @@
+# Jync 捷同 · Docker Compose（外部元数据库：Oracle Database Free 23ai）
+#
+#   docker compose -f deploy/docker-compose.oracle.yml up -d --build
+#   浏览器打开 http://localhost:8080（默认 admin / 123456，登录后立即改密）
+#
+# 注意：Oracle 镜像很大（数 GB），首次启动要 2~5 分钟建库，jync 会等它的
+# healthcheck 通过后再启动。本文件适合单机部署与快速验证；生产环境建议用
+# 现有 Oracle 实例：把 jync 服务的 SPRING_DATASOURCE_* 指向它，删掉下面的 oracle 服务。
+#
+# 已有 H2 数据要迁过来：先在旧实例导出配置包，用本文件启动新实例后再导入
+# （见 docs/configuration.md#元数据库迁移）；直接启动只会得到一个空库。
+name: jync-oracle
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: jync-oracle-db
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      # SYS / SYSTEM 口令
+      ORACLE_PASSWORD: change-sys-password
+      # 首次建库时在 FREEPDB1 里创建的业务用户，Jync 就用人证连这个 PDB
+      APP_USER: jync
+      APP_USER_PASSWORD: change-db-password
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    # 该镜像自带 HEALTHCHECK；若宿主机是 arm64 且拉不到对应变体，取消下面
+    # 注释用 amd64 模拟运行（明显更慢）
+    # platform: linux/amd64
+
+  jync:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: jync:2.1.0
+    container_name: jync-oracle
+    restart: unless-stopped
+    depends_on:
+      oracle:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: Asia/Shanghai
+      # 镜像默认建库 FREEPDB1；自定义 ORACLE_DATABASE 时同步改这里的服务名
+      SPRING_DATASOURCE_URL: "jdbc:oracle:thin:@//oracle:1521/FREEPDB1"
+      SPRING_DATASOURCE_USERNAME: jync
+      SPRING_DATASOURCE_PASSWORD: change-db-password
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: oracle.jdbc.OracleDriver
+      # 外部元数据库没有本地 H2 文件可供生成密钥，不设这两项会落到发行包里公开的
+      # 默认密钥（等于没加密）。必须改成自己的长随机串并长期保持不变——修改后
+      # 数据库里已存的连接密码将无法解密。多实例部署也必须让每个节点用同一组值。
+      SYNC_CRYPTO_PASSWORD: change-crypto-password
+      SYNC_CRYPTO_SALT: change-crypto-salt
+    volumes:
+      # 元数据已经不在本地，但这个卷仍要保留：应用内 HTTPS 证书
+      # （/app/data/tls）和备份都放在这里
+      - jync-data:/app/data
+      - jync-logs:/app/logs
+
+volumes:
+  oracle-data:
+  jync-data:
+  jync-logs:
