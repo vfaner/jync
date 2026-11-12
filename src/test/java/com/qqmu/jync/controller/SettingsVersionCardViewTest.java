@@ -425,6 +425,23 @@ class SettingsVersionCardViewTest {
         assertThat(page).doesNotContain("foot-ver");
     }
 
+    /**
+     * An exploded IDE run has no build-info, so the check may succeed but there is no current
+     * version to compare against. Saying "update check failed" there is wrong — the latest
+     * version is on screen.
+     */
+    @Test
+    void devBuildUnknownStateSaysComparisonIsSkipped() throws Exception {
+        String page = render(base()
+                .currentVersion(null)
+                .state(VersionInfo.State.UNKNOWN)
+                .latestVersion("2.1.0")
+                .build());
+
+        assertThat(page).contains("开发构建，跳过版本比较");
+        assertThat(page).doesNotContain("更新检查失败");
+    }
+
     @Test
     void buildTimeStampIsShownNextToCurrentVersion() throws Exception {
         // Same version string can belong to several repackaged jars; the build stamp lets

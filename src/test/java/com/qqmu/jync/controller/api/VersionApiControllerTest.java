@@ -15,6 +15,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.qqmu.jync.service.version.IgnoredVersionStore;
 import com.qqmu.jync.service.version.VersionService;
 import com.qqmu.jync.service.version.VersionService.UpdateCheck;
 
@@ -29,6 +30,7 @@ class VersionApiControllerTest {
 
     @Autowired private MockMvc mvc;
     @MockitoBean private VersionService versionService;
+    @MockitoBean private IgnoredVersionStore ignoredVersions;
 
     @Test
     void checkSerializesEverythingTheBadgeNeeds() throws Exception {
@@ -102,5 +104,53 @@ class VersionApiControllerTest {
                 .andExpect(jsonPath("$.checked").value(false))
                 .andExpect(jsonPath("$.updateAvailable").value(false))
                 .andExpect(jsonPath("$.artifactUpdated").value(false));
+    }
+
+    /**
+     * The dashboard dialog asks the server whether this release was already acknowledged. An
+     * ignored version must be flagged so a page reload does not open the dialog again.
+     */
+    @Test
+    void anIgnoredReleaseIsFlaggedSoTheDashboardDialogStaysQuiet() throws Exception {
+        when(versionService.checkNow()).thenReturn(new UpdateCheck(true, true, "2.0.9",
+                "2.1.0", "v2.1.0",
+                "https://github.com/vfaner/jync/releases/tag/v2.1.0", false));
+        when(ignoredVersions.isIgnored("2.1.0")).thenReturn(true);
+
+        mvc.perform(get("/api/version/check"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ignored").value(true));
+    }
+
+    @Test
+    void anUnignoredReleaseIsNotFlagged() throws Exception {
+        when(versionService.checkNow()).thenReturn(new UpdateCheck(true, true, "2.0.9",
+                "2.1.0", "v2.1.0",
+                "https://github.com/vfaner/jync/releases/tag/v2.1.0", false));
+
+        mvc.perform(get("/api/version/check"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ignored").value(false));
+    }
+
+    @Test
+    void ignoringAVersionRecordsItAndAnswersWhatHappened() throws Exception {
+        when(ignoredVersions.ignore("v2.1.0")).thenReturn(true);
+
+        mvc.perform(post("/api/version/ignore").param("version", "v2.1.0").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.dismissed").value(true));
+        verify(ignoredVersions).ignore("v2.1.0");
+    }
+
+    @Test
+    void ignoringWithNoVersionAnswersQuietly() throws Exception {
+        when(ignoredVersions.ignore(null)).thenReturn(false);
+
+        mvc.perform(post("/api/version/ignore").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.dismissed").value(false));
     }
 }

@@ -70,5 +70,7 @@ class SettingsUpdateBadgeDisabledViewTest {
         assertThat(page).contains("已关闭更新检查");
         assertThat(page).doesNotContain("nav-update-badge");
         assertThat(page).doesNotContain("/api/version/check");
+        assertThat(page).doesNotContain("update-available-modal");
+        assertThat(page).doesNotContain("/api/version/ignore");
     }
 }

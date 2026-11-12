@@ -75,11 +75,45 @@ class NavUpdateBadgeViewTest {
         assertThat(page).containsPattern("id=\"nav-update-badge\"[^>]*\\shidden");
     }
 
+    /**
+     * The dot used to live only inside the 系统管理 dropdown, invisible while it was closed.
+     * The trigger now carries a second one so the hint survives the collapsed nav.
+     */
+    @Test
+    void theSystemTriggerAlsoCarriesTheDot() throws Exception {
+        String page = dashboardAs(UserRole.ADMIN);
+
+        assertThat(page).contains("id=\"nav-update-badge-top\"");
+        assertThat(page).containsPattern(
+                "(?s)<button[^>]*class=\"[^\"]*nav-trigger[^\"]*\"[^>]*>.*?"
+                + "id=\"nav-update-badge-top\"");
+        assertThat(page).contains("nav-update-dot-trigger");
+    }
+
+    /**
+     * Dashboard is where the new-version dialog opens. It rides on the check the nav badge
+     * already performs — no extra request — and reuses the settings-page upgrade dialog.
+     */
+    @Test
+    void theDashboardCarriesTheNewVersionDialogAndItsUpgradeDialog() throws Exception {
+        String page = dashboardAs(UserRole.ADMIN);
+
+        assertThat(page).contains("id=\"update-available-modal\"");
+        assertThat(page).contains("data-ignore-url=\"/api/version/ignore\"");
+        assertThat(page).contains("立即更新");
+        assertThat(page).contains("忽略此版本");
+        assertThat(page).contains("id=\"upgrade-modal\"");
+        assertThat(page).contains("/api/upgrade/start");
+        assertThat(page).contains("/api/upgrade/status");
+    }
+
     @Test
     void viewerGetsNeitherTheDotNorTheCheck() throws Exception {
         String page = dashboardAs(UserRole.VIEWER);
 
         assertThat(page).doesNotContain("nav-update-badge");
         assertThat(page).doesNotContain("/api/version/check");
+        assertThat(page).doesNotContain("update-available-modal");
+        assertThat(page).doesNotContain("upgrade-modal");
     }
 }

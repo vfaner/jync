@@ -578,7 +578,15 @@
                     <svg class="ico spinning"><use href="#arrow-clockwise"/></svg>
                     <span th:text="#{settings.checking}">Checking for updates…</span>
                 </span>
-                <span class="badge badge-mute" th:if="${versionInfo.state.name() == 'UNKNOWN'}">
+                <!--/* UNKNOWN 有两种来源：真的两边都没查到，或开发构建（没有 build-info）根本
+                       没法比较版本。后者网络可能完全正常，说「检查失败」会误导，单独给文案。 */-->
+                <span class="badge badge-mute"
+                      th:if="${versionInfo.state.name() == 'UNKNOWN' and versionInfo.currentVersion == null}">
+                    <svg class="ico"><use href="#info-circle"/></svg>
+                    <span th:text="#{settings.devBuildSkip}">Development build — version comparison skipped</span>
+                </span>
+                <span class="badge badge-mute"
+                      th:if="${versionInfo.state.name() == 'UNKNOWN' and versionInfo.currentVersion != null}">
                     <svg class="ico"><use href="#info-circle"/></svg>
                     <span th:text="#{settings.checkFailed}">Update check failed; will retry shortly</span>
                 </span>
@@ -671,81 +679,6 @@
                     </tr>
                     </tbody>
                 </table>
-            </div>
-        </div>
-    </div>
-
-    <!--/* 升级弹窗（仅管理员渲染）：选下载源 → 下载并替换 jync.jar（旧文件保留 .bak）→
-         选择立即重启或稍后手动重启。交互逻辑在 app.js 的 bindUpgrade()，
-         服务端只渲染结构与文案；接口地址经 th:data-* 带上 context-path。 */-->
-    <div class="modal" id="upgrade-modal" aria-hidden="true" role="dialog" aria-modal="true"
-         th:if="${isAdmin}" th:aria-label="#{settings.upgradeTitle}"
-         th:data-start-url="@{/api/upgrade/start}"
-         th:data-status-url="@{/api/upgrade/status}"
-         th:data-restart-url="@{/api/upgrade/restart}"
-         th:data-login-url="@{/login/local}">
-        <div class="modal-mask" data-close-modal="upgrade-modal"></div>
-        <div class="modal-dialog">
-            <button type="button" class="modal-close" data-close-modal="upgrade-modal"
-                    th:title="#{common.close}" th:aria-label="#{common.close}">
-                <svg class="ico"><use href="#x-lg"/></svg>
-            </button>
-            <div class="modal-head">
-                <h3 th:text="#{settings.upgradeTitle}">One-click upgrade</h3>
-            </div>
-
-            <div class="field" data-role="upgrade-source-group">
-                <label><span th:text="#{settings.upgradeSource}">Download source</span></label>
-                <div class="role-group">
-                    <label class="role-pick">
-                        <input type="radio" name="upgrade-source" value="GITEE" checked>
-                        <span class="role-text">
-                            <strong th:text="#{settings.upgradeSourceGitee}">Gitee</strong>
-                            <span class="help" th:text="#{settings.upgradeSourceGiteeHelp}">Faster in China</span>
-                        </span>
-                    </label>
-                    <label class="role-pick">
-                        <input type="radio" name="upgrade-source" value="GITHUB">
-                        <span class="role-text">
-                            <strong th:text="#{settings.upgradeSourceGithub}">GitHub</strong>
-                            <span class="help" th:text="#{settings.upgradeSourceGithubHelp}">Faster elsewhere</span>
-                        </span>
-                    </label>
-                </div>
-                <div class="help" th:text="#{settings.upgradeHint}">Downloads and replaces jync.jar…</div>
-            </div>
-
-            <div class="field" data-role="upgrade-progress" hidden>
-                <label><span th:text="#{settings.upgradeDownloading}">Downloading…</span></label>
-                <progress max="100" value="0" style="width: 100%"></progress>
-                <div class="help" data-role="upgrade-progress-text"></div>
-            </div>
-
-            <div class="field" data-role="upgrade-message" hidden>
-                <div class="help" data-role="upgrade-message-text"></div>
-            </div>
-
-            <p class="help" data-role="upgrade-restart-warn"
-               th:text="#{settings.upgradeRestartWarn}">Restart warning</p>
-
-            <div class="modal-actions" data-role="upgrade-actions-idle">
-                <button type="button" class="btn btn-ghost" data-close-modal="upgrade-modal"
-                        th:text="#{common.cancel}">Cancel</button>
-                <button type="button" class="btn btn-warn" data-role="upgrade-start">
-                    <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
-                    <span th:text="#{settings.upgradeStart}">Download and install</span>
-                </button>
-            </div>
-            <div class="modal-actions" data-role="upgrade-actions-ready" hidden>
-                <button type="button" class="btn btn-ghost" data-close-modal="upgrade-modal"
-                        th:text="#{settings.upgradeRestartLater}">Restart manually later</button>
-                <button type="button" class="btn btn-warn" data-role="upgrade-restart">
-                    <svg class="ico"><use href="#arrow-clockwise"/></svg>
-                    <span th:text="#{settings.upgradeRestartNow}">Restart now</span>
-                </button>
-            </div>
-            <div class="modal-actions" data-role="upgrade-actions-restarting" hidden>
-                <span class="small soft" th:text="#{settings.upgradeRestarting}">Restarting…</span>
             </div>
         </div>
     </div>

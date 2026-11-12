@@ -142,7 +142,8 @@
             </div>
             <!--/* 系统管理：系统配置（元数据库、强制 HTTPS、配置包）只对管理员可见，它同时
                    也是 /system-config 的 ADMIN-only 规则在导航上的投影；系统信息对所有登录
-                   用户可见，更新圆点留在这一项里，位置与 id 都不变。 */-->
+                   用户可见。更新提示放两处：折叠状态下挂在「系统管理」触发器角上，展开后
+                   「系统信息」项角上仍有一枚，位置与 id 都与旧版一致。 */-->
             <div class="nav-group nav-links-group nav-system"
                  th:classappend="${activeNav == 'settings' or activeNav == 'systemConfig'} ? 'is-active' : ''">
                 <button type="button" class="nav-trigger nav-link-trigger"
@@ -150,6 +151,16 @@
                     <svg class="ico"><use href="#gear"/></svg>
                     <span th:text="#{nav.system}">System</span>
                     <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
+                    <!--/* 折叠状态也能看到的橙色圆点；文案与请求参数都挂在这里，JS 再同步到
+                           下拉项里的第二枚圆点。看板不强制重查（data-refresh=false），保持
+                           原先「一次会话查一次」的网络节奏，内网无感。 */-->
+                    <span class="nav-update-dot nav-update-dot-trigger" id="nav-update-badge-top"
+                          th:if="${updateCheckEnabled and isAdmin}"
+                          th:data-url="@{/api/version/check}"
+                          th:data-label="#{settings.updateAvailable}"
+                          th:data-label-artifact="#{settings.artifactUpdatedShort}"
+                          th:data-refresh="${activeNav == 'settings'}"
+                          hidden>!</span>
                 </button>
                 <div class="nav-menu">
                     <a class="menu-item" th:if="${isAdmin}" th:href="@{/system-config}">
@@ -158,17 +169,10 @@
                     </a>
                     <a class="menu-item nav-settings" th:href="@{/settings}">
                         <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">System info</span>
-                        <!--/* 更新提示圆点：管理员在每个页面都拿到它，登录后首次加载由 app.js 查一次，
-                               之后靠 sessionStorage 留在导航上；进入系统信息页再强制查一次。
-                               服务端先查 GitHub、超时无结果再查 Gitee；两边都失败就保持隐藏，不打扰用户。
-                               未开启更新检查（app.update-check.enabled=false）时整个圆点不渲染。 */-->
+                        <!--/* 展开后的第二枚圆点：文案与请求参数都在顶部触发器那枚上，这里只负责显示；
+                               app.js 把两枚一起揭开/收起。未开启更新检查时整块不渲染。 */-->
                         <span class="nav-update-dot" id="nav-update-badge"
-                              th:if="${updateCheckEnabled and isAdmin}"
-                              th:data-url="@{/api/version/check}"
-                              th:data-label="#{settings.updateAvailable}"
-                              th:data-label-artifact="#{settings.artifactUpdatedShort}"
-                              th:data-refresh="${activeNav == 'settings'}"
-                              hidden>!</span>
+                              th:if="${updateCheckEnabled and isAdmin}" hidden>!</span>
                     </a>
                 </div>
             </div>
@@ -479,6 +483,117 @@
             </a>
             <a class="btn btn-ghost btn-sm" th:href="|${githubUrl}/issues|"
                target="_blank" rel="noopener noreferrer" th:text="#{donate.issue}">Send feedback</a>
+        </div>
+    </div>
+</div>
+
+<!--/* 升级弹窗（仅管理员，且只在能用它的两页渲染）：选下载源 → 下载并替换 jync.jar
+     （旧文件保留 .bak）→ 选择立即重启或稍后手动重启。交互逻辑在 app.js 的 bindUpgrade()，
+     服务端只渲染结构与文案；接口地址经 th:data-* 带上 context-path。
+
+     放在 layout 而不是设置页，是因为看板的「发现新版本」弹窗点「立即更新」时要打开同一套
+     下载源选择。只在 settings / dashboard 渲染，其他页面不会多发一次 /api/upgrade/status。 */-->
+<div class="modal" id="upgrade-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:if="${isAdmin and (activeNav == 'settings' or activeNav == 'dashboard')}"
+     th:aria-label="#{settings.upgradeTitle}"
+     th:data-start-url="@{/api/upgrade/start}"
+     th:data-status-url="@{/api/upgrade/status}"
+     th:data-restart-url="@{/api/upgrade/restart}"
+     th:data-login-url="@{/login/local}">
+    <div class="modal-mask" data-close-modal="upgrade-modal"></div>
+    <div class="modal-dialog">
+        <button type="button" class="modal-close" data-close-modal="upgrade-modal"
+                th:title="#{common.close}" th:aria-label="#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 th:text="#{settings.upgradeTitle}">One-click upgrade</h3>
+        </div>
+
+        <div class="field" data-role="upgrade-source-group">
+            <label><span th:text="#{settings.upgradeSource}">Download source</span></label>
+            <div class="role-group">
+                <label class="role-pick">
+                    <input type="radio" name="upgrade-source" value="GITEE" checked>
+                    <span class="role-text">
+                        <strong th:text="#{settings.upgradeSourceGitee}">Gitee</strong>
+                        <span class="help" th:text="#{settings.upgradeSourceGiteeHelp}">Faster in China</span>
+                    </span>
+                </label>
+                <label class="role-pick">
+                    <input type="radio" name="upgrade-source" value="GITHUB">
+                    <span class="role-text">
+                        <strong th:text="#{settings.upgradeSourceGithub}">GitHub</strong>
+                        <span class="help" th:text="#{settings.upgradeSourceGithubHelp}">Faster elsewhere</span>
+                    </span>
+                </label>
+            </div>
+            <div class="help" th:text="#{settings.upgradeHint}">Downloads and replaces jync.jar…</div>
+        </div>
+
+        <div class="field" data-role="upgrade-progress" hidden>
+            <label><span th:text="#{settings.upgradeDownloading}">Downloading…</span></label>
+            <progress max="100" value="0" style="width: 100%"></progress>
+            <div class="help" data-role="upgrade-progress-text"></div>
+        </div>
+
+        <div class="field" data-role="upgrade-message" hidden>
+            <div class="help" data-role="upgrade-message-text"></div>
+        </div>
+
+        <p class="help" data-role="upgrade-restart-warn"
+           th:text="#{settings.upgradeRestartWarn}">Restart warning</p>
+
+        <div class="modal-actions" data-role="upgrade-actions-idle">
+            <button type="button" class="btn btn-ghost" data-close-modal="upgrade-modal"
+                    th:text="#{common.cancel}">Cancel</button>
+            <button type="button" class="btn btn-warn" data-role="upgrade-start">
+                <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                <span th:text="#{settings.upgradeStart}">Download and install</span>
+            </button>
+        </div>
+        <div class="modal-actions" data-role="upgrade-actions-ready" hidden>
+            <button type="button" class="btn btn-ghost" data-close-modal="upgrade-modal"
+                    th:text="#{settings.upgradeRestartLater}">Restart manually later</button>
+            <button type="button" class="btn btn-warn" data-role="upgrade-restart">
+                <svg class="ico"><use href="#arrow-clockwise"/></svg>
+                <span th:text="#{settings.upgradeRestartNow}">Restart now</span>
+            </button>
+        </div>
+        <div class="modal-actions" data-role="upgrade-actions-restarting" hidden>
+            <span class="small soft" th:text="#{settings.upgradeRestarting}">Restarting…</span>
+        </div>
+    </div>
+</div>
+
+<!--/* 管理员登录后落到看板、且查到了更高版本时自动打开（app.js 的 maybeShowUpdatePrompt）。
+     只在看板渲染：其他页面保持安静，检查失败（内网）时 updateAvailable=false，永远不弹。
+     「忽略此版本」写服务端，之后同版本或更旧都不再弹；「立即更新」直接打开上面的升级弹窗。 */-->
+<div class="modal" id="update-available-modal" aria-hidden="true" role="dialog"
+     aria-modal="true"
+     th:if="${isAdmin and updateCheckEnabled and activeNav == 'dashboard'}"
+     th:aria-label="#{update.prompt.title}"
+     th:data-ignore-url="@{/api/version/ignore}">
+    <div class="modal-mask" data-close-modal="update-available-modal"></div>
+    <div class="modal-dialog">
+        <button type="button" class="modal-close" data-close-modal="update-available-modal"
+                th:title="#{common.close}" th:aria-label="#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3>
+                <span th:text="#{update.prompt.title}">New version available</span>
+                <span class="chip mono" data-role="update-prompt-version"></span>
+            </h3>
+            <p th:text="#{update.prompt.desc}">A newer release is available. Download and replace jync.jar now?</p>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" data-role="update-ignore"
+                    th:text="#{update.prompt.ignore}">Ignore this version</button>
+            <button type="button" class="btn btn-warn" data-role="update-now">
+                <svg class="ico"><use href="#box-arrow-in-down-left"/></svg>
+                <span th:text="#{update.prompt.now}">Update now</span>
+            </button>
         </div>
     </div>
 </div>

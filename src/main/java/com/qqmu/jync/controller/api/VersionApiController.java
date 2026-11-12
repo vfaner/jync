@@ -6,8 +6,10 @@ import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.qqmu.jync.service.version.IgnoredVersionStore;
 import com.qqmu.jync.service.version.VersionService;
 import com.qqmu.jync.service.version.VersionService.UpdateCheck;
 
@@ -24,9 +26,12 @@ import com.qqmu.jync.service.version.VersionService.UpdateCheck;
 public class VersionApiController {
 
     private final VersionService versionService;
+    private final IgnoredVersionStore ignoredVersions;
 
-    public VersionApiController(VersionService versionService) {
+    public VersionApiController(VersionService versionService,
+                                IgnoredVersionStore ignoredVersions) {
         this.versionService = versionService;
+        this.ignoredVersions = ignoredVersions;
     }
 
     @GetMapping("/check")
@@ -42,6 +47,24 @@ public class VersionApiController {
         body.put("latestVersion", check.latestVersion());
         body.put("latestTag", check.latestTag());
         body.put("releaseUrl", check.releaseUrl());
+        // The dashboard's "new version" dialog stays quiet for an acknowledged release; a
+        // newer one answers false and is announced again.
+        body.put("ignored", ignoredVersions.isIgnored(check.latestVersion()));
+        return body;
+    }
+
+    /**
+     * "Ignore this version" for the dashboard dialog. POST is admin-only by the blanket rule in
+     * {@code SecurityConfig}; a viewer is never shown the dialog anyway.
+     *
+     * <p>Always answers {@code success=true}; {@code dismissed} says whether a version was
+     * actually recorded. Blank input is not an error — the dialog closes either way.
+     */
+    @PostMapping("/ignore")
+    public Map<String, Object> ignore(@RequestParam(required = false) String version) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("dismissed", ignoredVersions.ignore(version));
         return body;
     }
 

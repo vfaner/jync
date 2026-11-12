@@ -2196,6 +2196,9 @@
      服务端先查 GitHub、超时无结果再查 Gitee；两边都失败就静默返回。 */
   var NAV_UPDATE_CACHE_KEY = 'jync.navUpdateCheck';
 
+  /** 当前打开的「发现新版本」弹窗对应的版本；关闭/忽略后清空。 */
+  var updatePromptVersion = null;
+
   function readNavUpdateCache() {
     try {
       return JSON.parse(window.sessionStorage.getItem(NAV_UPDATE_CACHE_KEY) || 'null');
@@ -2204,50 +2207,133 @@
     }
   }
 
-  function showNavUpdateBadge(badge, payload) {
-    if (!payload || !payload.updateAvailable) {
-      badge.hidden = true;
-      return;
+  /** 合并写入缓存：忽略版本、已弹过提示等状态不能把上一次的检查结果抹掉。 */
+  function patchNavUpdateCache(patch) {
+    var current = readNavUpdateCache() || {};
+    for (var key in patch) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) { current[key] = patch[key]; }
     }
-    // 同一版本号、只有安装包被重新发布时，不能用「发现新版本」的措辞
-    var text = (payload.artifactUpdated
-      ? (badge.dataset.labelArtifact || badge.dataset.label)
-      : badge.dataset.label) || '';
-    if (payload.latestVersion) {
-      text += ' v' + payload.latestVersion;
+    try {
+      window.sessionStorage.setItem(NAV_UPDATE_CACHE_KEY, JSON.stringify(current));
+    } catch (e) {
+      // 隐私模式禁用 storage：退化为每次页面加载都查，不影响功能
     }
-    badge.title = text;
-    badge.setAttribute('aria-label', text);
-    // 点「系统信息」时直接落到版本卡，而不是页面顶部
-    var link = badge.closest('a');
-    if (link && link.getAttribute('href')) {
-      link.href = link.getAttribute('href').split('#')[0] + '#version-info';
+    return current;
+  }
+
+  /**
+   * 同时照顾两枚圆点：「系统管理」触发器角上（折叠可见）和「系统信息」项角上。
+   * 文案与请求参数都来自带 data-url 的那一枚；只有「系统信息」链接会被改到版本卡锚点。
+   */
+  function applyNavUpdateBadges(payload) {
+    var dots = document.querySelectorAll('.nav-update-dot');
+    var source = document.querySelector('.nav-update-dot[data-url]');
+    if (!dots.length || !source) { return; }
+    var show = payload && payload.updateAvailable;
+    for (var i = 0; i < dots.length; i++) {
+      var dot = dots[i];
+      if (!show) { dot.hidden = true; continue; }
+      // 同一版本号、只有安装包被重新发布时，不能用「发现新版本」的措辞
+      var text = (payload.artifactUpdated
+        ? (source.dataset.labelArtifact || source.dataset.label)
+        : source.dataset.label) || '';
+      if (payload.latestVersion) {
+        text += ' v' + payload.latestVersion;
+      }
+      dot.title = text;
+      dot.setAttribute('aria-label', text);
+      // 点「系统信息」时直接落到版本卡，而不是页面顶部
+      var link = dot.closest('a');
+      if (link && link.getAttribute('href')) {
+        link.href = link.getAttribute('href').split('#')[0] + '#version-info';
+      }
+      dot.hidden = false;
     }
-    badge.hidden = false;
   }
 
   function bindNavUpdateBadge() {
-    var badge = document.getElementById('nav-update-badge');
-    if (!badge || !badge.dataset.url) { return; }
+    var source = document.querySelector('.nav-update-dot[data-url]');
+    if (!source) { return; }
     var cached = readNavUpdateCache();
-    if (cached) { showNavUpdateBadge(badge, cached); }
+    if (cached) {
+      applyNavUpdateBadges(cached);
+      maybeShowUpdatePrompt(cached);
+    }
     // 普通页面有缓存就不再请求；系统信息页每次都刷新
-    if (cached && badge.dataset.refresh !== 'true') { return; }
-    getJson(badge.dataset.url).then(function (payload) {
+    if (cached && source.dataset.refresh !== 'true') { return; }
+    getJson(source.dataset.url).then(function (payload) {
       if (!payload) { return; }
-      try {
-        window.sessionStorage.setItem(NAV_UPDATE_CACHE_KEY, JSON.stringify({
-          updateAvailable: !!payload.updateAvailable,
-          artifactUpdated: !!payload.artifactUpdated,
-          latestVersion: payload.latestVersion || null
-        }));
-      } catch (e) {
-        // 隐私模式禁用 storage：退化为每次页面加载都查，不影响功能
-      }
-      showNavUpdateBadge(badge, payload);
+      var entry = patchNavUpdateCache({
+        updateAvailable: !!payload.updateAvailable,
+        artifactUpdated: !!payload.artifactUpdated,
+        latestVersion: payload.latestVersion || null,
+        // 内网检查失败时 checked=false，字段为空，同样写入缓存：整个会话只试一次
+        ignored: !!payload.ignored
+      });
+      applyNavUpdateBadges(payload);
+      maybeShowUpdatePrompt(entry);
     }).catch(function () {
       // 离线或请求超时：有缓存就保留，没有就保持安静
     });
+  }
+
+  /* ─── 看板的「发现新版本」弹窗（仅管理员，layout 里只在看板渲染） ──
+     同版本重发（artifactUpdated）不弹，交给设置页的「忽略此提示」；
+     服务端记住的忽略版本 >= 最新版本时也不弹，直到发布更高版本。 */
+  function maybeShowUpdatePrompt(payload) {
+    var modal = document.getElementById('update-available-modal');
+    if (!modal || !payload || !payload.updateAvailable || payload.artifactUpdated
+        || payload.ignored || !payload.latestVersion) {
+      return;
+    }
+    var cached = readNavUpdateCache() || {};
+    // 本次会话已经为这个版本弹过一次：关闭（X/遮罩）算「稍后」，刷新看板不再打扰
+    if (cached.promptedVersion === payload.latestVersion) { return; }
+    updatePromptVersion = payload.latestVersion;
+    var chip = modal.querySelector('[data-role="update-prompt-version"]');
+    if (chip) { chip.textContent = 'v' + payload.latestVersion; }
+    patchNavUpdateCache({ promptedVersion: payload.latestVersion });
+    setModalOpen('update-available-modal', true);
+  }
+
+  function bindUpdatePrompt() {
+    var modal = document.getElementById('update-available-modal');
+    if (!modal) { return; }
+
+    modal.querySelectorAll('[data-close-modal="update-available-modal"]').forEach(function (el) {
+      el.addEventListener('click', function () { updatePromptVersion = null; });
+    });
+
+    var ignoreBtn = modal.querySelector('[data-role="update-ignore"]');
+    if (ignoreBtn) {
+      ignoreBtn.addEventListener('click', function () {
+        if (!updatePromptVersion || !modal.dataset.ignoreUrl) {
+          setModalOpen('update-available-modal', false);
+          return;
+        }
+        ignoreBtn.disabled = true;
+        postJson(modal.dataset.ignoreUrl + '?version=' + encodeURIComponent(updatePromptVersion))
+          .then(function (payload) {
+            ignoreBtn.disabled = false;
+            if (payload && payload.success) {
+              patchNavUpdateCache({ ignored: true });
+              setModalOpen('update-available-modal', false);
+              updatePromptVersion = null;
+            }
+          }).catch(function () {
+            ignoreBtn.disabled = false;
+          });
+      });
+    }
+
+    // 「立即更新」复用设置页的一键升级弹窗：选 GitHub / Gitee 下载源，下载完再决定何时重启
+    var nowBtn = modal.querySelector('[data-role="update-now"]');
+    if (nowBtn) {
+      nowBtn.addEventListener('click', function () {
+        setModalOpen('update-available-modal', false);
+        setModalOpen('upgrade-modal', true);
+      });
+    }
   }
 
   /* ─── 忽略「同一版本号的安装包已重新发布」提示（settings 页，仅管理员） ──
@@ -4256,6 +4342,7 @@
     bindDonate();
     bindGenericModals();
     bindNavUpdateBadge();
+    bindUpdatePrompt();
     bindArtifactDismiss();
     bindUpgrade();
     bindUserMenu();
