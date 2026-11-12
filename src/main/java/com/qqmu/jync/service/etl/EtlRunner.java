@@ -265,6 +265,16 @@ public class EtlRunner {
                 executePreOrPost(target, task, task.getPostSql());
             }
 
+            // A finished range refresh is one generation, not a high-water mark: the next
+            // run must delete its range again and re-read it from the start, otherwise a
+            // source-side update or delete inside the range would never reach the target.
+            // Only a failed run keeps the checkpoint, which is what lets it continue.
+            // APPEND keeps its checkpoint on purpose; OVERWRITE already cleared its own
+            // before the copy.
+            if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE) {
+                checkpointStore.clear(task.getId());
+            }
+
             return EtlRunResult.success(rowsRead, rowsWritten);
         } catch (EtlProgramException e) {
             return EtlRunResult.failure(rowsRead, rowsWritten, Side.PROGRAM, e.getMessage());

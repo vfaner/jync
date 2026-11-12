@@ -124,6 +124,35 @@ class EtlRunnerTest {
                 .containsExactly("1|a", "2|b", "3|c", "99|keep");
     }
 
+    /**
+     * A completed range refresh is one generation, not a high-water mark. If the checkpoint
+     * survived a successful run, the next scheduled run would skip the range delete and read
+     * only the keys above the last one — a source-side update or delete inside the range could
+     * never reach the target again, and pre-sql would never run. The next run must therefore
+     * start from zero, exactly like the first one.
+     */
+    @Test
+    void aCompletedRangeOverwriteStartsTheNextRunFromScratch() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a'), (2, 'b')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO dst VALUES (1, 'a'), (2, 'b'), (99, 'keep')");
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.RANGE_OVERWRITE);
+        task.setResumeKeyColumn("id");
+        task.setRangeCondition("id < 3");
+
+        assertThat(runner.run(task, source, target, connections).success()).isTrue();
+        assertThat(checkpoints.load(7L)).as("a finished generation leaves no checkpoint").isNull();
+
+        // The source rewrites an in-range row after the first run; the scheduled refresh must
+        // carry that change even though its key is below the first run's last key.
+        execute(SOURCE_URL, "UPDATE src SET name = 'fresh' WHERE id = 1");
+
+        assertThat(runner.run(task, source, target, connections).success()).isTrue();
+        assertThat(rows("SELECT id, name FROM dst ORDER BY id"))
+                .containsExactly("1|fresh", "2|b", "99|keep");
+    }
+
     @Test
     void appendResumesAfterTheCheckpointedKey() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",

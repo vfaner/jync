@@ -22,7 +22,9 @@ public enum EtlWriteMode {
 
     /**
      * Delete only the rows matching the configured range condition, then copy the query
-     * result. With a resume key, a continuation run skips the delete and resumes the copy.
+     * result. With a resume key, a run that fails part way resumes after the last committed
+     * key without deleting again; a finished run clears the checkpoint, so the next one
+     * deletes and re-reads the whole range as a new generation.
      */
     RANGE_OVERWRITE,
 
