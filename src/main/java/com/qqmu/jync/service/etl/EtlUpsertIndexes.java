@@ -92,17 +92,27 @@ final class EtlUpsertIndexes {
             for (String key : keyColumns) {
                 wanted.add(key.toUpperCase(Locale.ROOT));
             }
+            // An unreadable unique index (expression, prefix) can collide on values outside
+            // the configured keys, so it disqualifies the whole native statement: any conflict
+            // it causes would update a row with a different key.
+            if (!withExpression.isEmpty()) {
+                return false;
+            }
+            boolean exact = false;
             for (Map.Entry<String, Set<String>> index : columnsByIndex.entrySet()) {
-                if (withExpression.contains(index.getKey())) {
-                    continue;
-                }
-                // Exactly the keys: an index on more columns cannot collide on the keys
-                // alone, and one on fewer leaves part of the key unmatched.
                 if (index.getValue().equals(wanted)) {
-                    return true;
+                    // Exactly the keys: an equal key is guaranteed to collide (detection).
+                    exact = true;
+                } else if (!index.getValue().containsAll(wanted)) {
+                    // MySQL raises ON DUPLICATE KEY on ANY unique index. An index that does
+                    // not contain every key column can match a row whose key differs, and
+                    // the statement would silently update that unrelated row.
+                    return false;
                 }
             }
-            return false;
+            // A unique index on a strict superset cannot guarantee that equal keys collide
+            // unless one index is exactly the keys.
+            return exact;
         } catch (SQLException | RuntimeException e) {
             log.warn("Cannot read the unique indexes of {} ({}); using the emulated upsert",
                     targetName, e.toString());

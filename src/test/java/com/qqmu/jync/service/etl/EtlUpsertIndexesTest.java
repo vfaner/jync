@@ -93,11 +93,35 @@ class EtlUpsertIndexesTest {
     }
 
     @Test
-    void aFullColumnUniqueIndexStillCoversAlthoughAnotherIsPrefixOnly() throws SQLException {
+    void aSecondUniqueIndexOnOtherColumnsDisqualifiesTheNativeUpsert() throws SQLException {
+        // MySQL fires ON DUPLICATE KEY UPDATE on ANY unique index. With a primary key on the
+        // configured id and a second UNIQUE(email), a source row whose email already exists
+        // under another id updates THAT row instead of inserting id — silent corruption.
+        Connection target = target(new IndexRow("PRIMARY", "ID", "dst", true),
+                new IndexRow("UK_EMAIL", "EMAIL", "dst", true));
+
+        assertThat(EtlUpsertIndexes.coversKeys(target, "dst", List.of("id"))).isFalse();
+    }
+
+    @Test
+    void aSupersetUniqueIndexDoesNotDisqualifyTheNativeUpsert() throws SQLException {
+        // Every part of the key is in this index, so a conflict on it always names a row with
+        // the same key; the primary key on the keys guarantees equal keys collide.
+        Connection target = target(new IndexRow("PRIMARY", "ID", "dst", true),
+                new IndexRow("UK_ID_NAME", "ID", "dst", true),
+                new IndexRow("UK_ID_NAME", "NAME", "dst", true));
+
+        assertThat(EtlUpsertIndexes.coversKeys(target, "dst", List.of("id"))).isTrue();
+    }
+
+    @Test
+    void aPrefixOnlyUniqueIndexDisqualifiesEvenWhenAFullIndexExists() throws SQLException {
+        // UNIQUE(email(16)) can collide between two distinct addresses that share a prefix,
+        // so the native upsert could land on a row with a different key.
         Connection target = target(new IndexRow("UK_EMAIL_PREFIX", "EMAIL", "dst", true, 16),
                 new IndexRow("UK_EMAIL_FULL", "EMAIL", "dst", true, null));
 
-        assertThat(EtlUpsertIndexes.coversKeys(target, "dst", List.of("email"))).isTrue();
+        assertThat(EtlUpsertIndexes.coversKeys(target, "dst", List.of("email"))).isFalse();
     }
 
     @Test

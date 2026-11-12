@@ -42,6 +42,9 @@ public class EtlRunner {
 
     private static final int BATCH_SIZE = 500;
 
+    /** Matches {@code EtlCheckpoint.keyValue}'s 1024-character column. */
+    private static final int MAX_CHECKPOINT_KEY_LENGTH = 1024;
+
     private final SqlDialectFactory dialectFactory;
     private final EtlCheckpointStore checkpointStore;
     private final EtlSourceFactory sourceFactory;
@@ -211,6 +214,24 @@ public class EtlRunner {
                         if (keyIndex > 0) {
                             keyType = columns.get(keyIndex - 1).jdbcType();
                             keyValue = cursor.getString(keyIndex);
+                            if (resumable && keyValue == null) {
+                                // The continuation query filters with `key > ?`, which never
+                                // matches NULL. Copying this row now and then excluding it from
+                                // every continuation is silent row loss that still reports
+                                // SUCCESS — fail the full run while the NULL is still visible.
+                                // Clear whatever an earlier batch saved: a checkpoint would let
+                                // the retry resume past this row and report success again.
+                                checkpointStore.clear(task.getId());
+                                throw new EtlProgramException("error.etl.resumeKey.null:"
+                                        + columnNames.get(keyIndex - 1));
+                            }
+                            if (resumable && keyValue.length() > MAX_CHECKPOINT_KEY_LENGTH) {
+                                // The checkpoint column cannot store it. Detecting this at the
+                                // row keeps the run from committing a batch it can never record,
+                                // which would replay (and duplicate) that batch on every retry.
+                                throw new EtlProgramException("error.etl.resumeKey.tooLong:"
+                                        + columnNames.get(keyIndex - 1));
+                            }
                         }
                         stage = Side.TARGET;
                         if (emulatedUpsert) {

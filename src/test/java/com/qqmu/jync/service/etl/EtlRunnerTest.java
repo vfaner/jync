@@ -173,6 +173,57 @@ class EtlRunnerTest {
     }
 
     /**
+     * A NULL resume key cannot be resumed: the continuation query is {@code WHERE key > ?},
+     * and three-valued logic never matches NULL. A full run copies the row once, then every
+     * later run silently excludes it while still reporting SUCCESS — permanent row loss.
+     * The only run that can see the NULL key is the full one, so it must fail there.
+     */
+    @Test
+    void aNullResumeKeyFailsTheFullRunInsteadOfLosingRowsOnEveryContinuation()
+            throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a'), (NULL, 'b')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT, name VARCHAR(20))");
+
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.APPEND);
+        task.setResumeKeyColumn("id");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(result.errorMessage())
+                .contains("error.etl.resumeKey.null")
+                .containsIgnoringCase("id");
+        assertThat(checkpoints.load(7L)).as("no checkpoint past a NULL key").isNull();
+        assertThat(rows("SELECT id FROM dst")).as("the batch is rolled back").isEmpty();
+    }
+
+    /**
+     * The checkpoint column holds 1024 characters. A longer key would fail only at the JPA
+     * flush, after the batch was committed — every retry then re-reads and re-inserts the same
+     * batch. Detect it while reading the row, before anything is written.
+     */
+    @Test
+    void aResumeKeyLongerThanTheCheckpointColumnFailsBeforeTheBatchIsCommitted()
+            throws SQLException {
+        String tooLong = "k".repeat(1100);
+        execute(SOURCE_URL, "CREATE TABLE src (id VARCHAR(2000), name VARCHAR(20))",
+                "INSERT INTO src VALUES ('" + tooLong + "', 'a')");
+        execute(TARGET_URL, "CREATE TABLE dst (id VARCHAR(2000), name VARCHAR(20))");
+
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.APPEND);
+        task.setResumeKeyColumn("id");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(result.errorMessage()).contains("error.etl.resumeKey.tooLong");
+        assertThat(rows("SELECT id FROM dst")).as("nothing committed before the key check")
+                .isEmpty();
+        assertThat(checkpoints.load(7L)).isNull();
+    }
+
+    /**
      * A continuation reads only the keys after the checkpoint. Running the pre-sql again would
      * let its documented cleanup DELETE remove the rows the first run already committed, and the
      * continuation query would never bring them back.
