@@ -145,15 +145,16 @@ class SystemConfigViewTest {
     }
 
     @Test
-    void theMetadataTestFormNeverCarriesAPasswordBack() throws Exception {
+    void thePageNoLongerOffersAMetadataDatabaseConnectionTester() throws Exception {
+        // The metadata database is chosen by SPRING_DATASOURCE_* at startup; a connection probe
+        // on this page added a form, a script and an endpoint without changing anything it
+        // showed. Validation stays with whatever client the operator already has.
         String page = render(UserRole.ADMIN);
 
-        int field = page.indexOf("id=\"db-test-password\"");
-        assertThat(field).as("the metadata test form has a password field").isGreaterThan(-1);
-        String tag = page.substring(field, page.indexOf('>', field));
-        // Nothing was typed, so there is nothing to echo — and after a failed test the browser
-        // must not have last request's password sitting in the field.
-        assertThat(tag).doesNotContain("value=");
+        assertThat(page).doesNotContain("metadata-db-test-form")
+                .doesNotContain("/system-config/db-test")
+                .doesNotContain("id=\"db-test-url\"")
+                .doesNotContain("system-config.js");
     }
 
     @Test
@@ -164,8 +165,7 @@ class SystemConfigViewTest {
         // as bare stacked labels and default browser controls.
         assertThat(page).doesNotContain("form-grid", "form-actions", "class=\"check\"");
 
-        for (String id : List.of("db-test-url", "db-test-driver", "db-test-username",
-                "db-test-password", "export-passphrase", "export-passphrase-confirm",
+        for (String id : List.of("export-passphrase", "export-passphrase-confirm",
                 "import-file", "import-passphrase", "tls-file", "tls-passphrase", "tls-port",
                 "tls-cert-file", "tls-key-file", "tls-pem-port")) {
             int at = page.indexOf("id=\"" + id + "\"");

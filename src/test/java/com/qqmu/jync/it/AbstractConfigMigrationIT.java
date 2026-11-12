@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
-import com.qqmu.jync.dto.MetadataDbTestForm;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.AlertConfig;
 import com.qqmu.jync.model.AppUser;
@@ -49,7 +48,6 @@ import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.repository.SystemSettingRepository;
 import com.qqmu.jync.service.config.ConfigExportService;
 import com.qqmu.jync.service.config.ConfigImportService;
-import com.qqmu.jync.service.settings.MetadataDbTester;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.util.CryptoUtil;
 
@@ -82,8 +80,6 @@ abstract class AbstractConfigMigrationIT {
     private ConfigImportService importService;
     @Autowired
     private CryptoUtil cryptoUtil;
-    @Autowired
-    private MetadataDbTester tester;
 
     @Autowired
     private DatabaseConfigRepository databaseConfigs;
@@ -212,22 +208,6 @@ abstract class AbstractConfigMigrationIT {
         assertThat(users.findByUsername("ops")).isPresent();
         assertThat(changeLogs.count()).as("history does not travel with a package")
                 .isEqualTo(changeLogsBefore);
-    }
-
-    @Test
-    void thePageTesterCanReachThisContainer() {
-        MetadataDbTestForm form = new MetadataDbTestForm();
-        form.setUrl(jdbcUrl());
-        form.setDriverClass(driverClass());
-        form.setUsername(username());
-        form.setPassword(password());
-
-        MetadataDbTester.Result result = tester.test(form);
-
-        assertThat(result.success()).as(result.message()).isTrue();
-        assertThat(result.product()).isNotBlank();
-        assertThat(result.envBlock()).contains("SPRING_DATASOURCE_URL=")
-                .contains("SPRING_DATASOURCE_DRIVER_CLASS_NAME='" + driverClass() + "'");
     }
 
     // --- fixtures ------------------------------------------------------------------------

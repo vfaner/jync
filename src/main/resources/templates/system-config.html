@@ -52,49 +52,6 @@
                         </dd>
                     </dl>
                     <p class="help" th:text="#{systemConfig.metadataHelp}">The metadata database is chosen at startup by SPRING_DATASOURCE_*; changing it takes a restart.</p>
-
-                    <hr class="divider"/>
-
-                    <form method="post" th:action="@{/system-config/db-test}"
-                          th:id="metadata-db-test-form">
-                        <div class="field">
-                            <label for="db-test-url" th:text="#{systemConfig.dbTestUrl}">JDBC URL</label>
-                            <input class="input mono" id="db-test-url" type="text" name="url"
-                                   spellcheck="false" autocomplete="off"
-                                   placeholder="jdbc:mysql://host:3306/jync?useSSL=false"/>
-                            <div class="help" th:text="#{systemConfig.dbTestHelp}">MySQL, MariaDB, PostgreSQL and Oracle; the password is used for this test only.</div>
-                        </div>
-                        <div class="grid-2">
-                            <div class="field">
-                                <label for="db-test-driver" th:text="#{systemConfig.dbTestDriver}">Driver class</label>
-                                <input class="input mono" id="db-test-driver" type="text" name="driverClass"
-                                       spellcheck="false" autocomplete="off"
-                                       placeholder="com.mysql.cj.jdbc.Driver"/>
-                            </div>
-                            <div class="field">
-                                <label for="db-test-username" th:text="#{systemConfig.dbTestUser}">Username</label>
-                                <input class="input" id="db-test-username" type="text" name="username"
-                                       autocomplete="off"/>
-                            </div>
-                        </div>
-                        <div class="field">
-                            <label for="db-test-password" th:text="#{systemConfig.dbTestPassword}">Password</label>
-                            <input class="input" id="db-test-password" type="password" name="password"
-                                   autocomplete="new-password"/>
-                        </div>
-                        <div class="btn-row">
-                            <button class="btn btn-primary btn-sm" type="submit">
-                                <svg class="ico"><use href="#plug"/></svg>
-                                <span th:text="#{systemConfig.dbTestRun}">Test connection</span>
-                            </button>
-                        </div>
-                    </form>
-                    <!-- 结果面板由 system-config.js 填充。标签放在 data-* 上，脚本就不必
-                         自带一份翻译表，也避免密码字段之外的文案在 JS 里硬编码。 -->
-                    <div id="metadata-db-test-result" class="small" hidden style="margin-top:12px"
-                         th:attr="data-product=#{systemConfig.dbTestProduct},
-                                  data-version=#{systemConfig.dbTestVersion},
-                                  data-env=#{systemConfig.dbTestEnv}"></div>
                 </div>
             </div>
 
@@ -429,8 +386,6 @@
 </th:block>
 
 <!--/* 测试器只在管理员页面出现；脚本做成渐进增强，禁用 JS 时表单照常提交。 */-->
-<th:block th:fragment="scripts" th:remove="tag">
-    <script th:src="@{/js/system-config.js(v=${appVersion})}"></script>
-</th:block>
+<th:block th:fragment="scripts" th:remove="tag"></th:block>
 </body>
 </html>

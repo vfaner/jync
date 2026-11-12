@@ -57,7 +57,7 @@
 | ETL | 按客户取数 SQL 复制结果行；7 种分析型引擎；多语句脚本；覆盖 / 追加 / 范围覆盖 / 主键更新；断点续跑；同源同目标的表可组成**批次**共享连接与调度 |
 | 专属迁移 | Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES 三种整库复制，连接模型独立于 JDBC；带预检，手动或 cron 运行，可取消并查看运行历史 |
 | 数据加工 | 列清洗（13 种规则，含手机号/身份证/姓名/邮箱掩码与 SHA-256 哈希）、表名映射、只读数据预览、按需行数核对、任务克隆、批量建任务（按表大小分箱） |
-| 系统管理 | 配置包导出/导入（口令加密、可选运行状态、目标密钥重加密）、元数据库连接测试器、强制 HTTPS 页面开关、应用内 TLS 证书上传（PKCS#12 / JKS / PEM） |
+| 系统管理 | 配置包导出/导入（口令加密、可选运行状态、目标密钥重加密）、强制 HTTPS 页面开关、应用内 TLS 证书上传（PKCS#12 / JKS / PEM） |
 | AI 辅助（可选） | 模型起草存储过程/函数的候选 SQL，人工审阅后才落库；AI 永不参与同步 |
 | 告警通知 | Webhook 推送同步失败、轮询卡死、项目未运行、CDC 停摆、数据漂移、连接健康、PG slot 积压，以及「CDC 目标表已自动修复」；钉钉 / 企业微信 / 飞书 / 通用 JSON；冷却与恢复通知 |
 | 可靠性与可观测 | 幂等 upsert、检查点续传、数据库租约锁、at-least-once；看板、变更 / 审计 / 系统日志、性能曲线、可选 Prometheus 指标端点 |
@@ -151,7 +151,7 @@ sync:
   crypto-salt: ""
 ```
 
-首次访问 `http://<服务器>:8080`，使用 `admin / 123456`（管理员）或 `view / 123456`（访客），**首次登录强制修改密码**（未修改前只能停留在改密页）。生产部署、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)、[部署页](https://jync.qqmu.com/deploy.html)与[容器部署说明](docs/deploy-container.md)。HTTPS 有两种方式：前置反向代理终止 TLS（推荐），或直接在「系统管理 → 系统配置」上传 PKCS#12 / JKS 密钥库或 PEM 证书与私钥，由 Jync 自己监听 HTTPS，重启后生效；同一页还可开关强制 HTTPS、导出/导入配置包、测试候选元数据库——细节见[配置文档](docs/configuration.md)。
+首次访问 `http://<服务器>:8080`，使用 `admin / 123456`（管理员）或 `view / 123456`（访客），**首次登录强制修改密码**（未修改前只能停留在改密页）。生产部署、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)、[部署页](https://jync.qqmu.com/deploy.html)与[容器部署说明](docs/deploy-container.md)。HTTPS 有两种方式：前置反向代理终止 TLS（推荐），或直接在「系统管理 → 系统配置」上传 PKCS#12 / JKS 密钥库或 PEM 证书与私钥，由 Jync 自己监听 HTTPS，重启后生效；同一页还可开关强制 HTTPS、导出/导入配置包——细节见[配置文档](docs/configuration.md)。
 
 > 🔐 升级前备份 `./data`（连同 `<库名>.key`）、`./logs` 与 `application.yml`。密钥丢失后，已保存的连接密码、AI 密钥与告警地址将无法解密。
 
