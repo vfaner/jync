@@ -118,15 +118,6 @@ abstract class AbstractConfigMigrationIT {
     @Autowired
     private ChangeLogRepository changeLogs;
 
-    /** The container's JDBC URL, as an operator would type it into the page. */
-    protected abstract String jdbcUrl();
-
-    protected abstract String driverClass();
-
-    protected abstract String username();
-
-    protected abstract String password();
-
     @Test
     void aPackageSurvivesADifferentDatabaseAndADifferentKey() {
         long changeLogsBefore = changeLogs.count();

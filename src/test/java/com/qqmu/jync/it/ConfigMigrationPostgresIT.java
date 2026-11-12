@@ -30,24 +30,4 @@ class ConfigMigrationPostgresIT extends AbstractConfigMigrationIT {
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
-
-    @Override
-    protected String jdbcUrl() {
-        return POSTGRES.getJdbcUrl();
-    }
-
-    @Override
-    protected String driverClass() {
-        return POSTGRES.getDriverClassName();
-    }
-
-    @Override
-    protected String username() {
-        return POSTGRES.getUsername();
-    }
-
-    @Override
-    protected String password() {
-        return POSTGRES.getPassword();
-    }
 }

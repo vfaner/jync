@@ -29,24 +29,4 @@ class ConfigMigrationMysqlIT extends AbstractConfigMigrationIT {
         registry.add("spring.datasource.username", MYSQL::getUsername);
         registry.add("spring.datasource.password", MYSQL::getPassword);
     }
-
-    @Override
-    protected String jdbcUrl() {
-        return MYSQL.getJdbcUrl();
-    }
-
-    @Override
-    protected String driverClass() {
-        return MYSQL.getDriverClassName();
-    }
-
-    @Override
-    protected String username() {
-        return MYSQL.getUsername();
-    }
-
-    @Override
-    protected String password() {
-        return MYSQL.getPassword();
-    }
 }
