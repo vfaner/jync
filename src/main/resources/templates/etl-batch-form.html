@@ -210,8 +210,8 @@
                                     <span class="badge"
                                           th:if="${member.lastRunResult != null}"
                                           th:classappend="${member.lastRunSuccess} ? 'badge-ok' : 'badge-danger'"
-                                          th:title="${member.lastRunResult}"
-                                          th:text="${#strings.abbreviate(member.lastRunResult, 60)}">result</span>
+                                          th:title="${@etlResultText.display(member.lastRunResult)}"
+                                          th:text="${#strings.abbreviate(@etlResultText.display(member.lastRunResult), 60)}">result</span>
                                 </td>
                                 <td>
                                     <div class="btn-row" style="justify-content:flex-end">

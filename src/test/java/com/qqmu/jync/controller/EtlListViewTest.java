@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
+import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,7 @@ import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.etl.EtlBatchService;
 import com.qqmu.jync.service.etl.EtlPrecheckService;
+import com.qqmu.jync.service.etl.EtlResultText;
 import com.qqmu.jync.service.etl.EtlTaskService;
 
 /**
@@ -32,7 +34,7 @@ import com.qqmu.jync.service.etl.EtlTaskService;
  * tasks that keep their own schedule. A member belongs to exactly one of them.
  */
 @WebMvcTest(EtlController.class)
-@Import(GlobalModelAdvice.class)
+@Import({GlobalModelAdvice.class, EtlResultText.class})
 @TestPropertySource(properties = "app.github-url=https://example.com/repo")
 class EtlListViewTest {
 
@@ -71,6 +73,28 @@ class EtlListViewTest {
         String standalone = page.substring(page.indexOf(STANDALONE_MARKER));
         assertThat(batches).contains("nightly").contains("orders-member").contains("0 0 3 * * *");
         assertThat(standalone).contains("lone-task").doesNotContain("orders-member");
+    }
+
+    /**
+     * A program failure stores its i18n key in {@code lastRunResult}. The badge must show the
+     * sentence, not {@code error.etl.*} with a column name glued on.
+     */
+    @Test
+    void aFailedSummaryShowsTheTranslatedReason() throws Exception {
+        EtlTask lone = task(9L, "lone-task", null, "people");
+        lone.setLastRunSuccess(false);
+        lone.setLastRunResult("FAILED side=PROGRAM error=error.etl.resumeKey.null:id");
+        when(etlTaskService.findAll()).thenReturn(List.of(lone));
+        when(etlTaskService.connections()).thenReturn(List.of());
+        when(etlTaskService.isRunning(9L)).thenReturn(false);
+        when(etlBatchService.findAll()).thenReturn(List.of());
+
+        String page = mvc.perform(get("/etl").locale(Locale.SIMPLIFIED_CHINESE).with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("取数结果中的续传键值为 NULL，续跑永远读不到该行。")
+                .doesNotContain("error.etl.resumeKey.null");
     }
 
     @Test

@@ -11,7 +11,7 @@
            th:text="${task.lastRunTime != null}
                     ? ${#temporals.format(task.lastRunTime, 'yyyy-MM-dd HH:mm:ss')}
                     : #{common.never}">Never</p>
-        <pre class="small" style="white-space:pre-wrap" th:text="${task.lastRunResult}">result</pre>
+        <pre class="small" style="white-space:pre-wrap" th:text="${@etlResultText.display(task.lastRunResult)}">result</pre>
         <span class="badge badge-ok" th:if="${running}"
               th:text="#{etl.running}">Running</span>
     </div>
