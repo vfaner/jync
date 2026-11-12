@@ -239,6 +239,200 @@ class TlsKeystoreStoreTest {
     }
 
     @Test
+    void readsAConfiguredKeystoreFromAnAbsolutePathOutsideTheDirectory() throws Exception {
+        // app.tls.keystore-path points at a mounted file; the store must not confine it to the
+        // managed directory, while still refusing relative names that escape it.
+        Path external = Files.createTempFile("jync-configured-", ".p12");
+        Files.write(external, TestKeystores.pkcs12());
+        TlsConfig config = new TlsConfig(TlsKeystoreFormat.PKCS12, external.toString(),
+                "changeit", 8443, false, java.time.Instant.now(), "00");
+
+        assertThat(store().keystorePath(config)).isEqualTo(external);
+        assertThat(store().keystoreBytes(config)).containsExactly(TestKeystores.pkcs12());
+    }
+
+    // ── Server-side paths ─────────────────────────────────────────────────────
+
+    @Test
+    void saveKeystorePathPointsAtTheFileInsteadOfCopyingIt() throws Exception {
+        Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
+        TlsKeystoreStore store = store();
+
+        TlsConfig saved = store.saveKeystorePath(external, TestKeystores.pkcs12(),
+                TlsKeystoreFormat.PKCS12, PASSPHRASE.toCharArray(), 8443, true);
+
+        assertThat(saved.file()).isEqualTo(external.toAbsolutePath().normalize().toString());
+        assertThat(saved.sha256()).isEqualTo(sha256(TestKeystores.pkcs12()));
+        assertThat(listNames()).containsExactlyInAnyOrder("tls.properties", "mounted.p12");
+
+        TlsStoreSnapshot snapshot = store.snapshot();
+        assertThat(snapshot.problemKey()).isNull();
+        assertThat(snapshot.config()).isPresent();
+        assertThat(snapshot.config().get().passphrase()).isEqualTo(PASSPHRASE);
+        assertThat(snapshot.config().get().httpsPort()).isEqualTo(8443);
+        assertThat(snapshot.serverPaths())
+                .isEqualTo(new TlsConfiguredPaths(saved.file(), null, null));
+    }
+
+    @Test
+    void aReplacedKeystoreAtTheConfiguredPathIsPickedUpWithoutADigestError() throws Exception {
+        Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
+        TlsKeystoreStore store = store();
+        store.saveKeystorePath(external, TestKeystores.pkcs12(), TlsKeystoreFormat.PKCS12,
+                PASSPHRASE.toCharArray(), 8443, true);
+
+        // certbot and the operator replace the mounted file in place; the old digest must not
+        // turn the file into a boot failure, and the container may even change type.
+        byte[] renewed = TestKeystores.jks();
+        Files.write(external, renewed);
+
+        TlsStoreSnapshot snapshot = store.snapshot();
+
+        assertThat(snapshot.problemKey()).isNull();
+        assertThat(snapshot.config().get().format()).isEqualTo(TlsKeystoreFormat.JKS);
+        assertThat(snapshot.config().get().sha256()).isEqualTo(sha256(renewed));
+    }
+
+    @Test
+    void aMissingKeystoreAtTheConfiguredPathIsReportedAsSuch() throws Exception {
+        Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
+        TlsKeystoreStore store = store();
+        store.saveKeystorePath(external, TestKeystores.pkcs12(), TlsKeystoreFormat.PKCS12,
+                PASSPHRASE.toCharArray(), 8443, true);
+        Files.delete(external);
+
+        assertThat(store.snapshot().problemKey()).isEqualTo("error.tls.pathMissing");
+    }
+
+    @Test
+    void deletingAKeystorePathConfigurationLeavesTheExternalFile() throws Exception {
+        Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
+        TlsKeystoreStore store = store();
+        store.saveKeystorePath(external, TestKeystores.pkcs12(), TlsKeystoreFormat.PKCS12,
+                PASSPHRASE.toCharArray(), 8443, true);
+
+        assertThat(store.delete()).isTrue();
+
+        assertThat(external).exists();
+        assertThat(dir.resolve("tls.properties")).doesNotExist();
+        assertThat(store.snapshot().config()).isEmpty();
+    }
+
+    @Test
+    void savePemPathDerivesAKeystoreAndRemembersTheSourceFiles() throws Exception {
+        Path certificate = Files.writeString(dir.resolve("fullchain.pem"),
+                TestKeystores.certificatePem());
+        Path key = Files.writeString(dir.resolve("privkey.pem"), TestKeystores.privateKeyPem());
+        byte[] certBytes = Files.readAllBytes(certificate);
+        byte[] keyBytes = Files.readAllBytes(key);
+        byte[] pkcs12 = PemKeyPairLoader.load(certBytes, keyBytes).toPkcs12(PASSPHRASE.toCharArray());
+
+        TlsConfig saved = store().savePemPath(certificate, key, certBytes, keyBytes, pkcs12,
+                PASSPHRASE.toCharArray(), 8443, true);
+
+        assertThat(saved.file()).startsWith("keystore-");
+        assertThat(dir.resolve(saved.file())).hasBinaryContent(pkcs12);
+        TlsStoreSnapshot snapshot = store().snapshot();
+        assertThat(snapshot.problemKey()).isNull();
+        assertThat(snapshot.config().get().format()).isEqualTo(TlsKeystoreFormat.PKCS12);
+        assertThat(snapshot.serverPaths()).isEqualTo(new TlsConfiguredPaths(
+                null, certificate.toAbsolutePath().normalize().toString(),
+                key.toAbsolutePath().normalize().toString()));
+    }
+
+    @Test
+    void changingThePemSourcesRebuildsTheDerivedKeystore() throws Exception {
+        Path certificate = Files.writeString(dir.resolve("fullchain.pem"),
+                TestKeystores.certificatePem());
+        Path key = Files.writeString(dir.resolve("privkey.pem"), TestKeystores.privateKeyPem());
+        byte[] certBytes = Files.readAllBytes(certificate);
+        byte[] keyBytes = Files.readAllBytes(key);
+        byte[] pkcs12 = PemKeyPairLoader.load(certBytes, keyBytes).toPkcs12(PASSPHRASE.toCharArray());
+        TlsKeystoreStore store = store();
+        TlsConfig first = store.savePemPath(certificate, key, certBytes, keyBytes, pkcs12,
+                PASSPHRASE.toCharArray(), 8443, true);
+
+        // A renewal rewrites the mounted PEM files; a trailing newline is enough to prove the
+        // store notices and rebuilds instead of serving the old key material.
+        Files.writeString(certificate, TestKeystores.certificatePem() + "\n");
+
+        TlsStoreSnapshot snapshot = store.snapshot();
+
+        assertThat(snapshot.problemKey()).isNull();
+        assertThat(snapshot.config().get().sha256()).isNotEqualTo(first.sha256());
+        assertThat(snapshot.config().get().file()).isNotEqualTo(first.file());
+        assertThat(dir.resolve(first.file())).doesNotExist();
+        TlsCertificateInfo info = new TlsCertificateInspector().inspect(
+                Files.readAllBytes(dir.resolve(snapshot.config().get().file())),
+                TlsKeystoreFormat.PKCS12, snapshot.config().get().passphrase().toCharArray());
+        assertThat(info.subject()).contains("CN=misconfigured.example");
+    }
+
+    @Test
+    void aMissingPemSourceIsReportedAsSuch() throws Exception {
+        Path certificate = Files.writeString(dir.resolve("fullchain.pem"),
+                TestKeystores.certificatePem());
+        Path key = Files.writeString(dir.resolve("privkey.pem"), TestKeystores.privateKeyPem());
+        byte[] certBytes = Files.readAllBytes(certificate);
+        byte[] keyBytes = Files.readAllBytes(key);
+        byte[] pkcs12 = PemKeyPairLoader.load(certBytes, keyBytes).toPkcs12(PASSPHRASE.toCharArray());
+        TlsKeystoreStore store = store();
+        store.savePemPath(certificate, key, certBytes, keyBytes, pkcs12, PASSPHRASE.toCharArray(), 8443, true);
+        Files.delete(key);
+
+        assertThat(store.snapshot().problemKey()).isEqualTo("error.tls.pathMissing");
+    }
+
+    @Test
+    void deletingAPemPathConfigurationLeavesThePemFiles() throws Exception {
+        Path certificate = Files.writeString(dir.resolve("fullchain.pem"),
+                TestKeystores.certificatePem());
+        Path key = Files.writeString(dir.resolve("privkey.pem"), TestKeystores.privateKeyPem());
+        byte[] certBytes = Files.readAllBytes(certificate);
+        byte[] keyBytes = Files.readAllBytes(key);
+        byte[] pkcs12 = PemKeyPairLoader.load(certBytes, keyBytes).toPkcs12(PASSPHRASE.toCharArray());
+        TlsKeystoreStore store = store();
+        TlsConfig saved = store.savePemPath(certificate, key, certBytes, keyBytes, pkcs12,
+                PASSPHRASE.toCharArray(), 8443, true);
+
+        assertThat(store.delete()).isTrue();
+
+        assertThat(certificate).exists();
+        assertThat(key).exists();
+        assertThat(dir.resolve(saved.file())).doesNotExist();
+    }
+
+    @Test
+    void theSidecarRecordsWhichPathModeWasSavedWithoutThePassphrase() throws Exception {
+        Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
+        store().saveKeystorePath(external, TestKeystores.pkcs12(), TlsKeystoreFormat.PKCS12,
+                PASSPHRASE.toCharArray(), 8443, true);
+
+        String keystoreSidecar = Files.readString(dir.resolve("tls.properties"),
+                StandardCharsets.UTF_8);
+        assertThat(keystoreSidecar)
+                .contains("source=keystore-path")
+                .contains("keystorePath=" + external.toAbsolutePath().normalize())
+                .doesNotContain(PASSPHRASE);
+
+        Path certificate = Files.writeString(dir.resolve("fullchain.pem"),
+                TestKeystores.certificatePem());
+        Path key = Files.writeString(dir.resolve("privkey.pem"), TestKeystores.privateKeyPem());
+        byte[] certBytes = Files.readAllBytes(certificate);
+        byte[] keyBytes = Files.readAllBytes(key);
+        byte[] pkcs12 = PemKeyPairLoader.load(certBytes, keyBytes).toPkcs12(PASSPHRASE.toCharArray());
+        store().savePemPath(certificate, key, certBytes, keyBytes, pkcs12, PASSPHRASE.toCharArray(), 8443, true);
+
+        String pemSidecar = Files.readString(dir.resolve("tls.properties"),
+                StandardCharsets.UTF_8);
+        assertThat(pemSidecar)
+                .contains("source=pem-path")
+                .contains("pemCertPath=" + certificate.toAbsolutePath().normalize())
+                .contains("pemKeyPath=" + key.toAbsolutePath().normalize())
+                .doesNotContain(PASSPHRASE);
+    }
+
+    @Test
     void reencryptPassphrasesIsANoOpWhenNothingIsSaved() {
         TlsKeystoreStore store = store();
         store.reencryptPassphrases(Encryptors.delux("rotated-password", "fedcba9876543210"));

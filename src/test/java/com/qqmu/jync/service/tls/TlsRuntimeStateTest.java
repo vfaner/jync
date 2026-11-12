@@ -7,6 +7,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Optional;
@@ -151,6 +153,42 @@ class TlsRuntimeStateTest {
 
         assertThat(state.active()).isPresent();
         assertThat(store.snapshot().config()).isEmpty();
+    }
+
+    @Test
+    void theConfiguredKeystoreWinsOverAnUploadedOne() throws IOException {
+        // The configuration file is the operator's override; an older upload must not shadow it
+        // until the operator removes the configured path.
+        TlsKeystoreStore store = store();
+        store.save(TestKeystores.pkcs12(), TlsKeystoreFormat.PKCS12,
+                TestKeystores.PASSPHRASE, 8443, true);
+        Path pinned = Files.write(dir.resolve("pinned.p12"), TestKeystores.pkcs12());
+        TlsConfiguredLoader loader = new TlsConfiguredLoader(new TlsPathSource(
+                pinned.toString(), "changeit", null, null, "9443", "false"));
+
+        TlsRuntimeState state = TlsRuntimeState.load(true, store,
+                new TlsCertificateInspector(), loader);
+
+        assertThat(state.active()).isPresent();
+        assertThat(state.active().get().httpsPort()).isEqualTo(9443);
+        assertThat(state.active().get().file()).isEqualTo(pinned.toString());
+        assertThat(state.configuredPaths()).contains(
+                new TlsConfiguredPaths(pinned.toString(), null, null));
+        assertThat(state.info()).isPresent();
+    }
+
+    @Test
+    void disablingTlsSkipsAConfiguredPathThatDoesNotExist() {
+        // The escape hatch must work even when the configured certificate is the broken thing.
+        TlsConfiguredLoader loader = new TlsConfiguredLoader(new TlsPathSource(
+                dir.resolve("absent.p12").toString(), "changeit", null, null, null, null));
+
+        TlsRuntimeState state = TlsRuntimeState.load(false, store(),
+                new TlsCertificateInspector(), loader);
+
+        assertThat(state.enabled()).isFalse();
+        assertThat(state.active()).isEmpty();
+        assertThat(state.configuredPaths()).isEmpty();
     }
 
     @Test

@@ -163,6 +163,16 @@ app:
     # HTTP→HTTPS 307 重定向的目标主机名（如 jync.example.com）。留空表示用请求的 Host。
     # 只在已加载证书、且上传时勾选了「重定向 HTTP」后才重定向；非法 Host 直接返回 400。
     redirect-host: ${JYN_TLS_REDIRECT_HOST:}
+    # 证书也可以完全不走页面，由配置文件指定（路径可以是容器里挂载的绝对路径）。
+    # 一旦指定，启动时直接读取该文件，系统配置页变为只读；容器重建、镜像升级都不会丢。
+    # 密钥库与 PEM 二选一，同时指定会拒绝启动。
+    keystore-path: ${JYN_TLS_KEYSTORE_PATH:}
+    keystore-password: ${JYN_TLS_KEYSTORE_PASSWORD:}
+    pem-cert-path: ${JYN_TLS_PEM_CERT_PATH:}
+    pem-key-path: ${JYN_TLS_PEM_KEY_PATH:}
+    # 配置证书时使用的 HTTPS 端口与 HTTP 跳转开关；页面上传时这两个值来自表单。
+    https-port: ${JYN_TLS_HTTPS_PORT:8443}
+    redirect-http: ${JYN_TLS_REDIRECT_HTTP:true}
 
 sync:
   # Default polling interval in milliseconds for change detection

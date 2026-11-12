@@ -30,6 +30,7 @@ import com.qqmu.jync.service.settings.SystemSettingService;
 import com.qqmu.jync.service.settings.UpdateCheckResolver;
 import com.qqmu.jync.service.tls.TlsCertificateInfo;
 import com.qqmu.jync.service.tls.TlsCertificateService;
+import com.qqmu.jync.service.tls.TlsConfiguredPaths;
 import com.qqmu.jync.service.tls.TlsPageState;
 import com.qqmu.jync.util.CryptoUtil;
 
@@ -113,7 +114,19 @@ class SystemConfigViewTest {
                                       boolean redirectHttp) {
         return new TlsPageState(saved, active, pendingRestart, removalPending, disabled, canRemove,
                 defaultKey, problemKey, certificate, null, expired, expiresSoon, httpsPort,
-                redirectHttp, null);
+                redirectHttp, null, null, null);
+    }
+
+    private static TlsPageState configuredState(TlsConfiguredPaths paths) {
+        return new TlsPageState(true, true, false, false, false, false, false, null,
+                certificate(Instant.now().plusSeconds(86_400)), null, false, false, 8443, true,
+                null, paths, null);
+    }
+
+    private static TlsPageState serverPathState() {
+        return new TlsPageState(true, false, true, false, false, true, false, null,
+                certificate(Instant.now().plusSeconds(86_400)), null, false, false, 8443, true,
+                null, null, new TlsConfiguredPaths("/etc/jync/tls/server.p12", null, null));
     }
 
     private static TlsCertificateInfo certificate(Instant notAfter) {
@@ -132,20 +145,20 @@ class SystemConfigViewTest {
     void theTlsFormOwnsTheWiderLeftColumnAndTheActionsStackOnTheRight() throws Exception {
         // .split gives the first column 1.35fr and the second 1fr, and cards render in document
         // order. The tall certificate card with its form fields needs the wider column, so it
-        // comes first; the short action cards (package, diagnostics, HTTPS) share the right one.
-        // The read-only metadata database block moved to 系统信息.
+        // comes first; the short action cards share the right one, with the transport switch at
+        // its top. The read-only metadata database block moved to 系统信息.
         String page = render(UserRole.ADMIN);
 
         int tls = page.indexOf("<span>TLS 证书</span>");
+        int https = page.indexOf("<span>强制 HTTPS</span>");
         int pkg = page.indexOf("<span>配置包</span>");
         int diagnostics = page.indexOf("<span>诊断包</span>");
-        int https = page.indexOf("<span>强制 HTTPS</span>");
         int updateCheck = page.indexOf("<span>更新检查</span>");
         assertThat(tls).isGreaterThan(-1);
-        assertThat(pkg).isGreaterThan(tls);
+        assertThat(https).isGreaterThan(tls);
+        assertThat(pkg).isGreaterThan(https);
         assertThat(diagnostics).isGreaterThan(pkg);
-        assertThat(https).isGreaterThan(diagnostics);
-        assertThat(updateCheck).isGreaterThan(https);
+        assertThat(updateCheck).isGreaterThan(diagnostics);
     }
 
     @Test
@@ -248,7 +261,9 @@ class SystemConfigViewTest {
 
         for (String id : List.of("export-passphrase", "export-passphrase-confirm",
                 "import-file", "import-passphrase", "tls-file", "tls-passphrase", "tls-port",
-                "tls-cert-file", "tls-key-file", "tls-pem-port")) {
+                "tls-cert-file", "tls-key-file", "tls-pem-port", "tls-path-keystore",
+                "tls-path-passphrase", "tls-path-port", "tls-path-pem-cert",
+                "tls-path-pem-key", "tls-path-pem-port")) {
             int at = page.indexOf("id=\"" + id + "\"");
             assertThat(at).as("field %s", id).isGreaterThan(-1);
             String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
@@ -262,6 +277,31 @@ class SystemConfigViewTest {
                 null, certificate(Instant.now().plusSeconds(86_400)), false, false, 8443, true));
 
         assertThat(page).contains("已保存", "仅 HTTP", "等待重启生效", "8443");
+    }
+
+    @Test
+    void aCertificateFromTheConfigurationFileMakesTheTlsCardReadOnly() throws Exception {
+        // Container deployments mount the certificate read-only and name it in app.tls.*;
+        // a page that still offered upload/delete would write into app.tls.directory, which the
+        // next container recreation throws away.
+        String page = render(UserRole.ADMIN,
+                configuredState(new TlsConfiguredPaths("/etc/jync/tls/jync.p12", null, null)));
+
+        assertThat(page).contains("/etc/jync/tls/jync.p12", "app.tls.keystore-path");
+        assertThat(page).doesNotContain("id=\"tls-file\"", "id=\"tls-cert-file\"",
+                "id=\"tls-mode-pem\"", "id=\"tls-mode-path\"",
+                "action=\"/system-config/tls/delete\"", "action=\"/system-config/tls/path",
+                "重启 Jync 后保存的证书才会生效");
+    }
+
+    @Test
+    void aConfiguredPemPairShowsBothFiles() throws Exception {
+        String page = render(UserRole.ADMIN, configuredState(new TlsConfiguredPaths(null,
+                "/etc/jync/tls/fullchain.pem", "/etc/jync/tls/privkey.pem")));
+
+        assertThat(page).contains("app.tls.pem-cert-path",
+                "/etc/jync/tls/fullchain.pem", "/etc/jync/tls/privkey.pem");
+        assertThat(page).doesNotContain("id=\"tls-file\"", "action=\"/system-config/tls/delete\"");
     }
 
     @Test
@@ -298,6 +338,36 @@ class SystemConfigViewTest {
         assertThat(page.substring(pem, page.indexOf('>', pem))).contains("checked");
         assertThat(page.indexOf("data-mode=\"pem\""))
                 .isLessThan(page.indexOf("data-mode=\"keystore\""));
+    }
+
+    @Test
+    void theServerPathModeOffersBothPathForms() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        int path = page.indexOf("id=\"tls-mode-path\"");
+        assertThat(path).isGreaterThan(page.indexOf("id=\"tls-mode-keystore\""));
+        assertThat(page).contains("id=\"tls-path-keystore\"", "name=\"keystorePath\"",
+                "id=\"tls-path-pem-cert\"", "name=\"pemCertPath\"",
+                "id=\"tls-path-pem-key\"", "name=\"pemKeyPath\"",
+                "action=\"/system-config/tls/path");
+    }
+
+    @Test
+    void aSavedServerPathIsShownAndPrefilled() throws Exception {
+        String page = render(UserRole.ADMIN, serverPathState());
+
+        assertThat(page).contains("来自服务器路径", "/etc/jync/tls/server.p12")
+                .contains("value=\"/etc/jync/tls/server.p12\"");
+    }
+
+    @Test
+    void theServerPathPassphraseIsNeverRenderedBack() throws Exception {
+        String page = render(UserRole.ADMIN, serverPathState());
+
+        int field = page.indexOf("id=\"tls-path-passphrase\"");
+        assertThat(field).isGreaterThan(-1);
+        String tag = page.substring(page.lastIndexOf('<', field), page.indexOf('>', field));
+        assertThat(tag).doesNotContain("value=");
     }
 
     @Test
@@ -399,7 +469,8 @@ class SystemConfigViewTest {
         String page = render(UserRole.ADMIN, state(true, true, false, false, false, true, false,
                 null, certificate(Instant.now().plusSeconds(86_400)), false, false, 9443, false));
 
-        for (String id : List.of("tls-port", "tls-pem-port")) {
+        for (String id : List.of("tls-port", "tls-pem-port", "tls-path-port",
+                "tls-path-pem-port")) {
             int at = page.indexOf("id=\"" + id + "\"");
             assertThat(at).as("field %s", id).isGreaterThan(-1);
             String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
@@ -412,7 +483,7 @@ class SystemConfigViewTest {
             String tag = page.substring(page.lastIndexOf('<', at), page.indexOf('>', at));
             assertThat(tag).doesNotContain("checked");
         }
-        assertThat(found).as("both upload forms offer the redirect choice").isEqualTo(2);
+        assertThat(found).as("every certificate form offers the redirect choice").isEqualTo(4);
     }
 
     @Test

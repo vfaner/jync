@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
@@ -30,8 +31,10 @@ import org.springframework.boot.web.servlet.ServletContextInitializer;
 
 import com.qqmu.jync.service.tls.TestKeystores;
 import com.qqmu.jync.service.tls.TlsCertificateInspector;
+import com.qqmu.jync.service.tls.TlsConfiguredLoader;
 import com.qqmu.jync.service.tls.TlsKeystoreFormat;
 import com.qqmu.jync.service.tls.TlsKeystoreStore;
+import com.qqmu.jync.service.tls.TlsPathSource;
 import com.qqmu.jync.service.tls.TlsRuntimeState;
 import com.qqmu.jync.util.CryptoUtil;
 
@@ -98,6 +101,40 @@ class TlsConnectorConfigTest {
             HttpsURLConnection connection = (HttpsURLConnection) new java.net.URL(
                     "https://127.0.0.1:" + connector.getLocalPort() + "/")
                     .openConnection();
+            connection.setSSLSocketFactory(trustAll().getSocketFactory());
+            connection.setHostnameVerifier((host, session) -> true);
+
+            assertThat(connection.getResponseCode()).isEqualTo(200);
+            X509Certificate leaf = (X509Certificate) connection.getServerCertificates()[0];
+            assertThat(leaf.getSubjectX500Principal().getName())
+                    .contains("CN=misconfigured.example");
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void servesAConfiguredKeystoreOutsideTheTlsDirectory() throws Exception {
+        // app.tls.keystore-path is the mounted-file mode: the connector must read that file
+        // directly, with no copy into app.tls.directory.
+        Path pinned = Files.createTempFile("jync-pinned-", ".p12");
+        Files.write(pinned, TestKeystores.pkcs12());
+        int port = freePort();
+        TlsRuntimeState state = TlsRuntimeState.load(true, store(),
+                new TlsCertificateInspector(),
+                new TlsConfiguredLoader(new TlsPathSource(pinned.toString(), "changeit",
+                        null, null, String.valueOf(port), "false")));
+
+        TomcatServletWebServerFactory factory = new TomcatServletWebServerFactory();
+        factory.setPort(0);
+        TlsConnectorConfig.customize(factory, state, store());
+
+        TomcatWebServer server = start(factory);
+        try {
+            Connector connector = httpsConnector(server);
+            assertThat(connector.getLocalPort()).isEqualTo(port);
+            HttpsURLConnection connection = (HttpsURLConnection) new java.net.URL(
+                    "https://127.0.0.1:" + port + "/").openConnection();
             connection.setSSLSocketFactory(trustAll().getSocketFactory());
             connection.setHostnameVerifier((host, session) -> true);
 

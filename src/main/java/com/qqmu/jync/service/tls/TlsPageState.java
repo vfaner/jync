@@ -13,6 +13,10 @@ import java.time.Instant;
  * template nor a log line can print it.
  *
  * @param problemKey why the saved configuration is unusable, or {@code null}
+ * @param configuredPaths where {@code app.tls.*} points, when the certificate came from the
+ *                        configuration file; the card is read-only then
+ * @param serverPaths the files a page-entered path names, or {@code null} when the certificate
+ *                    was uploaded to the managed directory
  */
 public record TlsPageState(boolean saved,
                            boolean active,
@@ -28,5 +32,7 @@ public record TlsPageState(boolean saved,
                            boolean expiresSoon,
                            Integer httpsPort,
                            boolean redirectHttp,
-                           Instant updatedAt) {
+                           Instant updatedAt,
+                           TlsConfiguredPaths configuredPaths,
+                           TlsConfiguredPaths serverPaths) {
 }

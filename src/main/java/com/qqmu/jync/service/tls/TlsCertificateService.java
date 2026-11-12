@@ -3,6 +3,10 @@ package com.qqmu.jync.service.tls;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
@@ -31,8 +35,8 @@ import com.qqmu.jync.util.CryptoUtil;
 public class TlsCertificateService {
 
     /** Tomcat's default multipart ceiling is applied again in the controller; this is the
-     * same number in one place. */
-    public static final int MAX_BYTES = 5 * 1024 * 1024;
+     * same number in one place. A server-side path is held to the same limit. */
+    public static final int MAX_BYTES = TlsKeystoreStore.MAX_SOURCE_BYTES;
 
     /** Long enough for any real passphrase, short enough to bound a password encoder call. */
     static final int MAX_PASSPHRASE = 1024;
@@ -68,6 +72,7 @@ public class TlsCertificateService {
      */
     public TlsConfig save(byte[] bytes, String filename, String passphrase, int httpsPort,
                           boolean redirectHttp) {
+        requirePageEditable();
         if (bytes == null || bytes.length == 0) {
             throw new TlsKeystoreException("error.tls.fileRequired");
         }
@@ -97,6 +102,7 @@ public class TlsCertificateService {
      */
     public TlsConfig savePem(byte[] certificatePem, byte[] privateKeyPem, int httpsPort,
                              boolean redirectHttp) {
+        requirePageEditable();
         if (certificatePem == null || certificatePem.length == 0) {
             throw new TlsKeystoreException("error.tls.pemCertRequired");
         }
@@ -115,9 +121,65 @@ public class TlsCertificateService {
                 redirectHttp);
     }
 
+    /**
+     * Validates a keystore the operator keeps on the server and remembers its path.
+     *
+     * <p>The file is read but not copied: the sidecar names where it lives, so a renewal can
+     * replace it in place and a container recreation keeps the configuration with the data
+     * directory. Every check below happens before the sidecar is written.
+     */
+    public TlsConfig saveKeystorePath(String path, String passphrase, int httpsPort,
+                                      boolean redirectHttp) {
+        requirePageEditable();
+        Path keystore = requirePath(path);
+        if (passphrase == null || passphrase.isEmpty()) {
+            throw new TlsKeystoreException("error.tls.passphraseRequired");
+        }
+        if (passphrase.length() > MAX_PASSPHRASE) {
+            throw new TlsKeystoreException("error.tls.passphraseTooLong");
+        }
+        byte[] bytes = readSource(keystore);
+        char[] secret = passphrase.toCharArray();
+        TlsKeystoreFormat format = TlsConfiguredLoader.detectFormat(keystore, bytes, secret);
+        validateConnector(inspector.inspect(bytes, format, secret), httpsPort);
+        return store.saveKeystorePath(keystore, bytes, format, secret, httpsPort, redirectHttp);
+    }
+
+    /**
+     * Validates a PEM pair kept on the server and remembers both source paths.
+     *
+     * <p>The same wrapping as an upload: the pair is checked against each other and written as a
+     * derived PKCS#12 under a generated passphrase, so the plaintext key never lands in Jync's
+     * data directory. A later renewal of the mounted PEM files is detected on read.
+     */
+    public TlsConfig savePemPath(String certificatePath, String privateKeyPath, int httpsPort,
+                                 boolean redirectHttp) {
+        requirePageEditable();
+        Path certificate = requirePath(certificatePath);
+        Path key = privateKeyPath == null || privateKeyPath.isBlank()
+                ? null : requirePath(privateKeyPath);
+        byte[] certificatePem = readSource(certificate);
+        byte[] privateKeyPem = key == null ? null : readSource(key);
+
+        PemKeyPair pair = privateKeyPem == null
+                ? PemKeyPairLoader.load(certificatePem)
+                : PemKeyPairLoader.load(certificatePem, privateKeyPem);
+        char[] secret = randomPassphrase();
+        byte[] keystore = pair.toPkcs12(secret);
+        validateConnector(inspector.inspect(keystore, TlsKeystoreFormat.PKCS12, secret),
+                httpsPort);
+        return store.savePemPath(certificate, key, certificatePem, privateKeyPem, keystore,
+                secret, httpsPort, redirectHttp);
+    }
+
     private TlsConfig validateAndStore(byte[] bytes, TlsKeystoreFormat format, char[] secret,
                                        int httpsPort, boolean redirectHttp) {
         TlsCertificateInfo info = inspector.inspect(bytes, format, secret);
+        validateConnector(info, httpsPort);
+        return store.save(bytes, format, secret, httpsPort, redirectHttp);
+    }
+
+    private void validateConnector(TlsCertificateInfo info, int httpsPort) {
         Instant now = Instant.now();
         if (info.isExpired(now)) {
             throw new TlsKeystoreException("error.tls.expired");
@@ -140,8 +202,38 @@ public class TlsCertificateService {
         if (!isTheActivePort) {
             requireFreePort(httpsPort);
         }
+    }
 
-        return store.save(bytes, format, secret, httpsPort, redirectHttp);
+    /** A page-entered path must be absolute and point at a readable regular file. */
+    private static Path requirePath(String value) {
+        if (value == null || value.isBlank()) {
+            throw new TlsKeystoreException("error.tls.pathInvalid");
+        }
+        Path path;
+        try {
+            path = Paths.get(value.trim());
+        } catch (InvalidPathException e) {
+            throw new TlsKeystoreException("error.tls.pathInvalid", e);
+        }
+        if (!path.isAbsolute()) {
+            throw new TlsKeystoreException("error.tls.pathInvalid");
+        }
+        if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+            throw new TlsKeystoreException("error.tls.pathMissing");
+        }
+        return path.normalize();
+    }
+
+    private static byte[] readSource(Path path) {
+        try {
+            byte[] bytes = Files.readAllBytes(path);
+            if (bytes.length > MAX_BYTES) {
+                throw new TlsKeystoreException("error.tls.fileTooLarge");
+            }
+            return bytes;
+        } catch (IOException e) {
+            throw new TlsKeystoreException("error.tls.pathMissing", e);
+        }
     }
 
     /** 32 URL-safe characters — long enough that the keystore is not guessable. */
@@ -153,10 +245,26 @@ public class TlsCertificateService {
 
     /** @return whether anything was removed */
     public boolean delete() {
+        requirePageEditable();
         return store.delete();
     }
 
+    /**
+     * Uploads and removal belong to the managed directory. A certificate named in the
+     * configuration file is the operator's own; the page cannot replace it, and a write would
+     * land in a directory the next container recreation discards.
+     */
+    private void requirePageEditable() {
+        if (runtime.configuredPaths().isPresent()) {
+            throw new TlsKeystoreException("error.tls.configControlled");
+        }
+    }
+
     public TlsPageState pageState() {
+        if (runtime.configuredPaths().isPresent()) {
+            return configuredPageState(runtime.configuredPaths().get());
+        }
+
         TlsStoreSnapshot snapshot = store.snapshot();
         Optional<TlsConfig> saved = snapshot.config();
         Optional<TlsConfig> active = runtime.active();
@@ -200,7 +308,41 @@ public class TlsCertificateService {
                 // so the card has to describe that connector rather than a default.
                 saved.map(TlsConfig::redirectHttp)
                         .orElse(active.map(TlsConfig::redirectHttp).orElse(false)),
-                saved.map(TlsConfig::updatedAt).orElse(null));
+                saved.map(TlsConfig::updatedAt).orElse(null),
+                null,
+                snapshot.serverPaths());
+    }
+
+    /**
+     * The page's view when {@code app.tls.*} names the certificate: always active (it was loaded
+     * at startup), never editable, and no managed-directory state to remove or restart for.
+     */
+    private TlsPageState configuredPageState(TlsConfiguredPaths paths) {
+        TlsConfig active = runtime.active().orElse(null);
+        TlsCertificateInfo certificate = runtime.info().orElse(null);
+        Instant now = Instant.now();
+        boolean expired = certificate != null && certificate.isExpired(now);
+        boolean expiresSoon = certificate != null
+                && certificate.expiresWithin(now, EXPIRY_WARNING);
+
+        return new TlsPageState(
+                true,
+                active != null,
+                false,
+                false,
+                !runtime.enabled(),
+                false,
+                false,
+                null,
+                certificate,
+                certificate,
+                expired,
+                expiresSoon,
+                active == null ? null : active.httpsPort(),
+                active != null && active.redirectHttp(),
+                active == null ? null : active.updatedAt(),
+                paths,
+                null);
     }
 
     /** Whether the saved configuration describes the connector that is actually listening. */

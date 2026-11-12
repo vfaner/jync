@@ -259,7 +259,7 @@ class ConfigPackageControllerTest {
         // Saved and valid, but app.tls.enabled=false keeps the connector from ever starting.
         when(tlsCertificateService.pageState()).thenReturn(new TlsPageState(
                 true, false, true, false, true, true, false, null, null, null,
-                false, false, 8443, true, null));
+                false, false, 8443, true, null, null, null));
 
         mvc.perform(post("/system-config/require-https").with(csrf())
                         .param("enabled", "true")
@@ -278,7 +278,7 @@ class ConfigPackageControllerTest {
         // "upload a certificate" is the wrong instruction for this state.
         when(tlsCertificateService.pageState()).thenReturn(new TlsPageState(
                 false, false, false, false, true, false, false, null, null, null,
-                false, false, null, false, null));
+                false, false, null, false, null, null, null));
 
         mvc.perform(post("/system-config/require-https").with(csrf())
                         .param("enabled", "true")
@@ -295,7 +295,7 @@ class ConfigPackageControllerTest {
         // saved=true but the key cannot be opened, so a restart is not the fix.
         when(tlsCertificateService.pageState()).thenReturn(new TlsPageState(
                 true, false, true, false, false, true, false, "error.tls.unreadable",
-                null, null, false, false, 8443, true, null));
+                null, null, false, false, 8443, true, null, null, null));
 
         mvc.perform(post("/system-config/require-https").with(csrf())
                         .param("enabled", "true")
@@ -461,6 +461,6 @@ class ConfigPackageControllerTest {
                 : null;
         return new TlsPageState(saved, active, saved && !active, false, false, saved, false,
                 null, certificate, active ? certificate : null, expired, false,
-                saved ? 8443 : null, true, null);
+                saved ? 8443 : null, true, null, null, null);
     }
 }

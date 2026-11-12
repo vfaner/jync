@@ -162,7 +162,7 @@ Jync 的元数据（连接、同步任务、ETL、专属迁移、用户、系统
 - **目标库必须是空的**：`database_config`、`redis_target`、`migration_connection`、`project`、`etl_*`、`migration_task` 等配置/状态表必须 0 行。`app_user`、`alert_config`、`oa_auth_config`、`system_setting` 例外：用户按用户名合并（同名保留目标端的口令哈希与角色），单例与设置按覆盖/upsert 处理。导入后必须至少还有一个管理员，否则整次导入回滚。
 - **密钥随包走**：包内 `meta.json` 携带导出端的 `sync.crypto-*`（外面还有口令加密），导入时先用它解开 `enc:`，再用新部署的密钥重新加密。所以包里带着旧密钥——导入完成后请销毁包文件。
 - **强制 HTTPS 的例外**：包里的 `security.require-https=true` 只在导入请求本身是 HTTPS 时保留；明文导入会写成 `false` 并在页面提示，否则新实例导入完就把管理员自己锁在 403 里。
-- **不迁移的内容**：变更日志、审计、性能采样、ETL/迁移运行历史、`sync_task` 租约行都不进包，新库从零开始记。TLS 证书与口令存在数据目录（`data/tls`）而不是元数据库，同样不进包；换实例后在「系统配置」重新上传并重启。
+- **不迁移的内容**：变更日志、审计、性能采样、ETL/迁移运行历史、`sync_task` 租约行都不进包，新库从零开始记。TLS 证书与口令存在数据目录（`data/tls`）而不是元数据库，同样不进包；换实例后在「系统配置」重新上传（或填服务器路径——证书文件本来就在挂载点上，只需重存一次地址）并重启，或直接用配置文件模式（`app.tls.keystore-path` / `app.tls.pem-cert-path`）指向挂载的证书。
 - **迁移时机**：`chunk_checkpoint`（分块全量的表内断点）也不进包。键表在迁移后重跑一遍是幂等的；但**无主键表**如果在全量装载进行中迁移、目标表又已经写入了部分行，新实例没有断点标记，会把「目标非空」当作「别人填过」，回退到流式全量并按行插入，可能产生重复行。请尽量在全量装载结束后再迁移，或在迁移后核对无主键表的行数。
 - **源库残留与名称冲突**：PostgreSQL 逻辑复制槽名为 `sync.cdc.pg.slot-prefix` + project id，崖山 YStream 服务名为 `JYNC_<project id>_<随机后缀>`。导入后 id 会重新分配，位点在换名后的资源上无法续接；导入时**基线完成标记不会被恢复**，首次启动会重新做一次全量加载。PG 槽名只含 project id，因此存在**名称冲突**：新 id 可能恰好等于旧实例上另一个项目的 id，新任务首次启动就会接到那个仍在运行的旧槽上。迁移前请先停掉旧实例的 CDC，或修改 `sync.cdc.pg.slot-prefix` 使名称不可能重叠；YStream 名带随机后缀，冲突概率低，但旧服务同样需要清理。确认不再使用后，请在源库手工清理旧槽（`SELECT pg_drop_replication_slot('<旧槽名>')`）和旧 YStream 服务，否则源库会持续保留 WAL/日志。
 - **上限**：单包 ≤ 20 MB，解压后 ≤ 40 MB；超限时导出直接拒绝，请先清理变更日志或不要勾选状态。
@@ -232,7 +232,7 @@ JYN_REQUIRE_HTTPS=true
 JYN_COOKIE_SECURE=true
 ```
 
-### 应用内 TLS：在「系统配置」上传证书
+### 应用内 TLS：上传证书或由配置文件指定
 
 不需要反向代理，Jync 自己监听 HTTPS 端口（建议 8443，可与 HTTP 并存）：
 
@@ -261,19 +261,62 @@ JYN_COOKIE_SECURE=true
    - 私钥与证书合并在同一个文件时，把私钥块追加到证书链后面，私钥文件字段留空即可；私钥单独一个文件时，在该字段选择它。
    - Jync 会验证私钥与叶子证书是否配对，不匹配直接拒绝，不会留到下次启动才失败。
 
-2. 以管理员进入「系统管理 → 系统配置 → TLS 证书」。上传方式用卡片里的标签页切换：默认「PEM 证书」，选择证书链和（可选的）私钥；「密钥库」标签页上传 PKCS#12/JKS 并填写口令。填写 HTTPS 端口，按需勾选「重定向 HTTP」，保存。每个文件上限 5 MB；证书已过期或尚未生效会被直接拒绝。
+2. 以管理员进入「系统管理 → 系统配置 → TLS 证书」。卡片里有三个标签页：「PEM 证书」（默认）选择证书链和（可选的）私钥；「密钥库」上传 PKCS#12/JKS 并填写口令；「服务器路径」直接填服务器上已有的绝对路径（见下一节，证书不必复制进数据目录）。填写 HTTPS 端口，按需勾选「重定向 HTTP」，保存。每个文件上限 5 MB；证书已过期或尚未生效会被直接拒绝。
 3. **重启 Jync**。连接器在启动时创建，保存只写文件——页面显示「等待重启生效」，重启后才变成「已生效」。
 4. 验证：`https://<主机>:8443/login` 能打开；勾选了重定向时，`http://<主机>:8080/login` 返回 307 并指向 HTTPS。
+
+#### 服务器路径模式：证书放在挂载点，页面只记地址
+
+上传会把证书复制进 `app.tls.directory`（默认 `./data/tls`），容器重建时没挂数据卷就会丢。若运维已经把证书挂载进容器，用「服务器路径」标签页填**绝对路径**即可：Jync 原地读取挂载的文件，页面只保存地址与端口。既保留页面可改的便利，又不需要把证书放进数据目录。
+
+- **密钥库**：填 PKCS#12/JKS 的绝对路径和口令。文件不复制、不改写；边车里记 `source=keystore-path` 和路径，口令仍以 `sync.crypto-*` 加密。格式（PKCS#12 / JKS）按文件内容自动识别，替换成另一种格式也能直接读。
+- **PEM**：填证书链路径和（可选的）私钥路径，规则与上传相同（服务器证书在前、无口令 PKCS#8/PKCS#1、私钥与证书配对校验）。Jync 在 `data/tls` 生成一个供连接器启动时读取的派生 PKCS#12，明文私钥留在挂载点。
+- 保存时当场验证：相对路径、文件不存在或不可读、口令打不开、私钥不配对、证书过期或未生效都会立即拒绝，不会留到下次启动才失败。单个文件上限 5 MB。
+- **续期**：替换挂载点上的文件并**重启 Jync**，页面无需操作。Jync 每次启动按当前文件内容重新计算摘要，所以原地替换不会再报「密钥库已变更」；PEM 源文件变化时派生 PKCS#12 会自动重建。
+- **删除**只清理 `data/tls` 里的边车和派生的 `keystore-*` 文件，绝不删除挂载进来的证书。
+- **优先级**：`app.tls.*` / `JYN_TLS_*` 最高，配置了路径时页面只读；否则页面保存的「上传」与「服务器路径」以最后一次保存为准，二选一生效。
+
+#### 配置文件模式：路径写在配置里，容器重建不丢
+
+页面上传把证书写进 `app.tls.directory`（默认 `./data/tls`）。容器被删除重建、又没有挂载该目录时，证书会一起丢失，下次启动就没有 HTTPS 了。希望仍在页面里管理，就用上一节的「服务器路径」标签页；想让部署配置完全接管（页面只读），则把证书路径写进配置或环境变量：文件由运维挂载，Jync 每次启动直接读取。
+
+```yaml
+app:
+  tls:
+    # 二选一：密钥库，或 PEM 证书对
+    keystore-path: /etc/jync/tls/jync.p12
+    keystore-password: changeit
+    # pem-cert-path: /etc/jync/tls/fullchain.pem
+    # pem-key-path:  /etc/jync/tls/privkey.pem
+    https-port: 8443
+    redirect-http: true
+```
+
+环境变量写法：`JYN_TLS_KEYSTORE_PATH`、`JYN_TLS_KEYSTORE_PASSWORD`、`JYN_TLS_PEM_CERT_PATH`、`JYN_TLS_PEM_KEY_PATH`、`JYN_TLS_HTTPS_PORT`、`JYN_TLS_REDIRECT_HTTP`。规则：
+
+- **密钥库与 PEM 只能配一种**，同时指定、只给 `pem-key-path` 不给 `pem-cert-path`、端口非法都会在启动时报 `error.tls.config*` 并拒绝启动——宁可起不来，也不要悄悄跑在错误证书上。
+- 路径可以是绝对路径（容器里挂载的文件），相对路径按启动工作目录解析。文件缺失、口令错误、证书与私钥不匹配同样拒绝启动。
+- PEM 模式在启动时于系统临时目录生成一个随机口令的 PKCS#12（`jync-tls-*.p12`，权限 0600、退出时删除），明文私钥不会落盘；PEM 即可组合文件（证书链 + 私钥同一文件），也可分开。
+- 一旦配置了路径，**「系统配置」的 TLS 卡片变为只读**：显示文件位置，上传与删除按钮隐藏；改证书要在配置文件里改并重启。`app.tls.enabled=false` 始终优先，配置了路径也不读取。
+- 配置文件模式不受 `app.tls.directory` 影响，也不写 `tls.properties` 边车。
+
+证书续期后替换挂载文件并重启即可，页面不需要任何操作。
 
 | 键 / 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `app.tls.enabled` / `JYN_TLS_ENABLED` | `true` | 设为 `false` 时不读取证书、不添加 HTTPS 连接器。用于证书损坏或端口被占导致启动失败时救回实例 |
 | `app.tls.directory` / `JYN_TLS_DIRECTORY` | `./data/tls` | 密钥库与 `tls.properties` 边车的目录；口令在边车里用 `sync.crypto-*` 加密。**不在配置包里**，备份数据目录时要一起备份 |
 | `app.tls.redirect-host` / `JYN_TLS_REDIRECT_HOST` | 空 | HTTP→HTTPS 重定向使用的固定主机名。留空表示沿用请求的 `Host`（严格校验，非法值返回 400，不转发到外部） |
+| `app.tls.keystore-path` / `JYN_TLS_KEYSTORE_PATH` | 空 | 密钥库文件路径（绝对路径即挂载点）。非空即进入配置文件模式：启动时读取该文件，页面只读 |
+| `app.tls.keystore-password` / `JYN_TLS_KEYSTORE_PASSWORD` | 空 | 配置密钥库的口令；必须同时打开库和私钥 |
+| `app.tls.pem-cert-path` / `JYN_TLS_PEM_CERT_PATH` | 空 | PEM 证书链路径（与 `keystore-path` 二选一），服务器证书在前、私钥可与之同文件 |
+| `app.tls.pem-key-path` / `JYN_TLS_PEM_KEY_PATH` | 空 | PEM 私钥路径（无口令 PKCS#8/PKCS#1），可选；不给时从证书文件里找 |
+| `app.tls.https-port` / `JYN_TLS_HTTPS_PORT` | `8443` | 配置文件模式下的 HTTPS 端口；页面保存（上传或服务器路径）时端口来自表单 |
+| `app.tls.redirect-http` / `JYN_TLS_REDIRECT_HTTP` | `true` | 配置文件模式下是否把 HTTP 请求 307 到 HTTPS |
 
 - **续期**：在新文件上重新导出、再次上传、重启生效；页面在到期前 30 天提示。证书过期后运行中的实例仍会继续用它提供服务（浏览器会报证书过期），删除证书也不会让运行中的实例停止 HTTPS——两种情况都要重新上传或重启。
 - **默认密钥告警**：`sync.crypto-*` 仍是随包默认值时，页面会警告边车口令受该密钥保护；应先换成部署专用密钥（见上文密钥说明），再上传证书。
-- **多实例**：`data/tls` 是实例本地目录。共享同一张证书时让 `JYN_TLS_DIRECTORY` 指向共享卷，并设置 `JYN_TLS_REDIRECT_HOST`，别让各节点按自己的 `Host` 做重定向。
+- **多实例**：`data/tls` 是实例本地目录。共享同一张证书时让 `JYN_TLS_DIRECTORY` 指向共享卷，并设置 `JYN_TLS_REDIRECT_HOST`，别让各节点按自己的 `Host` 做重定向；「服务器路径」模式可以给每个副本挂同一份证书、在每个副本的页面各保存一次路径，证书本身不依赖共享卷；最推荐配置文件模式——把同一份证书分别挂载到各副本并在环境变量里指路，页面读取一致。
 - **与 `require-https` 的关系**：可以同时开启。已加载证书且上传时勾选了重定向时，**所有**明文请求（包括本机 localhost）一律 307 到 HTTPS；不带 Cookie 的 `GET /login` 健康探针除外。未勾选重定向时由 `require-https` 决定：有证书在跑则回环也返回 403，没有可用证书时回环放行作为应急通道。
 - **开启强制 HTTPS 的前提**：页面开关只有在应用内证书已生效、当前访问本身是 HTTPS（反代终止 TLS），两者满足其一时才允许打开。证书尚未重启生效、已过期或根本没有证书时，页面拒绝开启并说明原因——否则没有 HTTPS 入口时，除回环应急通道外的请求都会被 403 锁住。
 - **HTTP/2 与 SNI**：内置连接器只提供这张证书，不支持按域名切换证书（多证书 SNI）；需要多个站点证书时用反向代理方式。
@@ -283,7 +326,8 @@ JYN_COOKIE_SECURE=true
 | 现象 | 处理 |
 |---|---|
 | 启动失败，日志有 `ConnectorStartFailedException` / `Address already in use` | HTTPS 端口被占（重复启动的实例，或 HTTP 与 HTTPS 填了同一个端口）。先以 `JYN_TLS_ENABLED=false` 启动，进页面改端口 |
-| 启动失败，页面进不去，日志说密钥库不可读 / 摘要不符 / 缺少私钥 | 文件被替换或边车损坏。以 `JYN_TLS_ENABLED=false` 启动一次，在页面上重新上传或删除证书 |
+| 启动失败，页面进不去，日志说密钥库不可读 / 摘要不符 / 缺少私钥 | 文件被替换或边车损坏。以 `JYN_TLS_ENABLED=false` 启动一次，在页面上重新上传或删除证书；服务器路径模式先确认挂载文件仍在保存的路径上且可读，再重新保存一次 |
+| 启动失败，日志有 `error.tls.configFileMissing` / `configSourceConflict` / `configInvalid` | 配置文件模式写错了：检查挂载文件是否存在于该路径、是否同时配了密钥库和 PEM、`https-port` 与 `redirect-http` 是否合法。改好后重启；临时救回用 `JYN_TLS_ENABLED=false` |
 | PEM 上传被拒绝：私钥受口令保护 / 与证书不匹配 | 用 `openssl pkcs8 -topk8 -nocrypt` 去掉私钥口令；并确认私钥与证书来自同一对密钥 |
 | 保存成功但 `https://` 打不开 | 还没重启；或防火墙 / 容器端口映射没放行 HTTPS 端口 |
 | 浏览器提示证书不受信任 | 自签证书的正常现象；生产用 CA 签发 |

@@ -371,12 +371,14 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .mode-tab:hover { color: var(--ink-soft); }
 #tls-mode-pem:checked ~ .mode-tabbar [for="tls-mode-pem"],
 #tls-mode-keystore:checked ~ .mode-tabbar [for="tls-mode-keystore"],
+#tls-mode-path:checked ~ .mode-tabbar [for="tls-mode-path"],
 #pkg-tab-export:checked ~ .mode-tabbar [for="pkg-tab-export"],
 #pkg-tab-import:checked ~ .mode-tabbar [for="pkg-tab-import"] {
   color: var(--brand); border-bottom-color: var(--brand);
 }
 #tls-mode-pem:focus-visible ~ .mode-tabbar [for="tls-mode-pem"],
 #tls-mode-keystore:focus-visible ~ .mode-tabbar [for="tls-mode-keystore"],
+#tls-mode-path:focus-visible ~ .mode-tabbar [for="tls-mode-path"],
 #pkg-tab-export:focus-visible ~ .mode-tabbar [for="pkg-tab-export"],
 #pkg-tab-import:focus-visible ~ .mode-tabbar [for="pkg-tab-import"] {
   outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px;
@@ -384,6 +386,7 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .mode-panel { display: none; }
 #tls-mode-pem:checked ~ .mode-panel[data-mode="pem"],
 #tls-mode-keystore:checked ~ .mode-panel[data-mode="keystore"],
+#tls-mode-path:checked ~ .mode-panel[data-mode="path"],
 #pkg-tab-export:checked ~ .mode-panel[data-mode="export"],
 #pkg-tab-import:checked ~ .mode-panel[data-mode="import"] { display: block; }
 

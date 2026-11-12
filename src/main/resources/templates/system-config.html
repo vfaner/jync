@@ -60,11 +60,37 @@
                         <div class="alert-body" th:text="#{systemConfig.tlsDefaultKey}">The built-in key protects the stored passphrase.</div>
                     </div>
 
+                    <!-- 配置文件模式：证书由运维挂载并在 app.tls.* 里指定，随容器重建存活。
+                         页面上传/删除会写到 app.tls.directory，容器重建即丢失，所以这里只读。 -->
+                    <dl class="dl pairs" th:if="${tls.configuredPaths != null}">
+                        <div class="kv" th:if="${tls.configuredPaths.keystorePath != null}">
+                            <dt th:text="#{systemConfig.tlsConfigKeystore}">Keystore file</dt>
+                            <dd><code class="mono" style="overflow-wrap:anywhere"
+                                      th:text="${tls.configuredPaths.keystorePath}">/etc/jync/tls/jync.p12</code></dd>
+                        </div>
+                        <div class="kv" th:if="${tls.configuredPaths.pemCertificatePath != null}">
+                            <dt th:text="#{systemConfig.tlsConfigPemCert}">Certificate file</dt>
+                            <dd><code class="mono" style="overflow-wrap:anywhere"
+                                      th:text="${tls.configuredPaths.pemCertificatePath}">/etc/jync/tls/fullchain.pem</code></dd>
+                        </div>
+                        <div class="kv" th:if="${tls.configuredPaths.pemKeyPath != null}">
+                            <dt th:text="#{systemConfig.tlsConfigPemKey}">Private key file</dt>
+                            <dd><code class="mono" style="overflow-wrap:anywhere"
+                                      th:text="${tls.configuredPaths.pemKeyPath}">/etc/jync/tls/privkey.pem</code></dd>
+                        </div>
+                    </dl>
+                    <p class="help" th:if="${tls.configuredPaths != null}"
+                       th:text="#{systemConfig.tlsConfigSource}">The certificate is configured in the configuration file (app.tls.keystore-path / app.tls.pem-cert-path); this page is read-only. Restart after changing it.</p>
+
                     <dl class="dl pairs">
                         <div class="kv">
                             <dt th:text="#{systemConfig.tlsState}">Saved</dt>
                             <dd>
-                                <span class="chip chip-ok" th:if="${tls.saved}"
+                                <span class="chip chip-ok" th:if="${tls.saved and tls.configuredPaths != null}"
+                                      th:text="#{systemConfig.tlsConfiguredChip}">From configuration file</span>
+                                <span class="chip chip-ok" th:if="${tls.saved and tls.serverPaths != null}"
+                                      th:text="#{systemConfig.tlsServerPathChip}">From server path</span>
+                                <span class="chip chip-ok" th:if="${tls.saved and tls.configuredPaths == null and tls.serverPaths == null}"
                                       th:text="#{systemConfig.tlsSaved}">Saved</span>
                                 <span class="chip" th:unless="${tls.saved}"
                                       th:text="#{systemConfig.tlsNotSaved}">Not configured</span>
@@ -89,6 +115,24 @@
                                 <span class="chip chip-ok" th:if="${tls.redirectHttp}" th:text="#{systemConfig.httpsOn}">On</span>
                                 <span class="chip" th:unless="${tls.redirectHttp}" th:text="#{systemConfig.httpsOff}">Off</span>
                             </dd>
+                        </div>
+                    </dl>
+
+                    <dl class="dl pairs" th:if="${tls.serverPaths != null}">
+                        <div class="kv" th:if="${tls.serverPaths.keystorePath != null}">
+                            <dt th:text="#{systemConfig.tlsPathKeystore}">Keystore path</dt>
+                            <dd><code class="mono" style="overflow-wrap:anywhere"
+                                      th:text="${tls.serverPaths.keystorePath}">/etc/jync/tls/server.p12</code></dd>
+                        </div>
+                        <div class="kv" th:if="${tls.serverPaths.pemCertificatePath != null}">
+                            <dt th:text="#{systemConfig.tlsPathPemCert}">Certificate chain path</dt>
+                            <dd><code class="mono" style="overflow-wrap:anywhere"
+                                      th:text="${tls.serverPaths.pemCertificatePath}">/etc/jync/tls/fullchain.pem</code></dd>
+                        </div>
+                        <div class="kv" th:if="${tls.serverPaths.pemKeyPath != null}">
+                            <dt th:text="#{systemConfig.tlsPathPemKey}">Private key path (optional)</dt>
+                            <dd><code class="mono" style="overflow-wrap:anywhere"
+                                      th:text="${tls.serverPaths.pemKeyPath}">/etc/jync/tls/privkey.pem</code></dd>
                         </div>
                     </dl>
 
@@ -123,8 +167,10 @@
                         </div>
                     </dl>
 
-                    <p class="help" th:text="#{systemConfig.tlsRestartRequired}">Restart Jync to apply the saved certificate.</p>
+                    <p class="help" th:if="${tls.configuredPaths == null}"
+                       th:text="#{systemConfig.tlsRestartRequired}">Restart Jync to apply the saved certificate.</p>
 
+                    <th:block th:if="${tls.configuredPaths == null}">
                     <hr class="divider"/>
 
                     <!-- 两种上传方式是二选一，不是两个步骤。radio + label 做标签页，只靠 CSS 切换
@@ -135,11 +181,15 @@
                                id="tls-mode-pem" checked/>
                         <input class="mode-input" type="radio" name="tlsMode"
                                id="tls-mode-keystore"/>
+                        <input class="mode-input" type="radio" name="tlsMode"
+                               id="tls-mode-path"/>
                         <div class="mode-tabbar">
                             <label class="mode-tab" for="tls-mode-pem"
                                    th:text="#{systemConfig.tlsPemTab}">PEM certificate</label>
                             <label class="mode-tab" for="tls-mode-keystore"
                                    th:text="#{systemConfig.tlsKeystoreTab}">Keystore</label>
+                            <label class="mode-tab" for="tls-mode-path"
+                                   th:text="#{systemConfig.tlsPathTab}">Server path</label>
                         </div>
 
                         <!-- nginx 风格：证书链一个文件、私钥可以单独一个文件，也可以和证书链放进
@@ -221,9 +271,100 @@
                                 </div>
                             </form>
                         </section>
-                    </div>
 
-                    <div th:if="${tls.canRemove}">
+                        <!-- 服务器路径：证书留在运维挂载的位置，边车只记绝对路径、口令与文件夹摘要。
+                             数据目录持久化时容器重建不丢；换证书只需替换原文件并重启。 -->
+                        <section class="mode-panel" data-mode="path">
+                            <p class="help" th:text="#{systemConfig.tlsPathHelp}">Name certificate files that already exist on this server. Jync reads them at every start and stores only their paths, so a persistent data directory keeps the configuration when the container is recreated.</p>
+
+                            <h3 style="font-size:14px;margin:4px 0 12px"
+                                th:text="#{systemConfig.tlsPathKeystoreHeading}">Keystore on the server</h3>
+                            <form method="post"
+                                  th:action="@{/system-config/tls/path(_csrf=${_csrf.token})}">
+                                <input type="hidden" name="mode" value="keystore"/>
+                                <div class="field">
+                                    <label for="tls-path-keystore" th:text="#{systemConfig.tlsPathKeystore}">Keystore path</label>
+                                    <input class="input mono" id="tls-path-keystore" type="text"
+                                           name="keystorePath"
+                                           th:value="${tls.serverPaths != null ? tls.serverPaths.keystorePath : ''}"
+                                           placeholder="/etc/jync/tls/server.p12" required/>
+                                    <div class="help" th:text="#{systemConfig.tlsPathKeystoreHelp}">An absolute path on this server; replacing the file in place is the renewal path, and the next start reads the new contents.</div>
+                                </div>
+                                <div class="field">
+                                    <label for="tls-path-passphrase" th:text="#{systemConfig.tlsPassphrase}">Keystore passphrase</label>
+                                    <input class="input" id="tls-path-passphrase" type="password"
+                                           name="passphrase" autocomplete="new-password" required/>
+                                    <div class="help" th:text="#{systemConfig.tlsPassphraseHelp}">The passphrase must open both the keystore and its private key; it is stored encrypted and never shown again.</div>
+                                </div>
+                                <div class="field">
+                                    <label for="tls-path-port" th:text="#{systemConfig.tlsHttpsPort}">HTTPS port</label>
+                                    <input class="input" id="tls-path-port" type="number" name="httpsPort"
+                                           min="1" max="65535" required
+                                           th:value="${tls.httpsPort != null ? tls.httpsPort : 8443}"/>
+                                </div>
+                                <div class="field">
+                                    <label class="check-inline">
+                                        <input type="checkbox" name="redirectHttp" value="true"
+                                               th:checked="${tls.httpsPort == null or tls.redirectHttp}"/>
+                                        <span th:text="#{systemConfig.tlsRedirect}">Redirect HTTP to HTTPS</span>
+                                    </label>
+                                </div>
+                                <div class="btn-row">
+                                    <button class="btn btn-primary btn-sm" type="submit">
+                                        <svg class="ico"><use href="#lock-fill"/></svg>
+                                        <span th:text="#{systemConfig.tlsPathKeystoreSave}">Save keystore path</span>
+                                    </button>
+                                </div>
+                            </form>
+
+                            <hr class="divider"/>
+
+                            <h3 style="font-size:14px;margin:4px 0 12px"
+                                th:text="#{systemConfig.tlsPathPemHeading}">PEM files on the server</h3>
+                            <form method="post"
+                                  th:action="@{/system-config/tls/path(_csrf=${_csrf.token})}">
+                                <input type="hidden" name="mode" value="pem"/>
+                                <div class="field">
+                                    <label for="tls-path-pem-cert" th:text="#{systemConfig.tlsPathPemCert}">Certificate chain path</label>
+                                    <input class="input mono" id="tls-path-pem-cert" type="text"
+                                           name="pemCertPath"
+                                           th:value="${tls.serverPaths != null ? tls.serverPaths.pemCertificatePath : ''}"
+                                           placeholder="/etc/jync/tls/fullchain.pem" required/>
+                                    <div class="help" th:text="#{systemConfig.tlsPathPemHelp}">Server certificate first, then the intermediates; the private key may live in the same file. Jync wraps the pair in a derived PKCS#12 under the data directory, so the plaintext key stays where you put it.</div>
+                                </div>
+                                <div class="field">
+                                    <label for="tls-path-pem-key" th:text="#{systemConfig.tlsPathPemKey}">Private key path (optional)</label>
+                                    <input class="input mono" id="tls-path-pem-key" type="text"
+                                           name="pemKeyPath"
+                                           th:value="${tls.serverPaths != null ? tls.serverPaths.pemKeyPath : ''}"
+                                           placeholder="/etc/jync/tls/privkey.pem"/>
+                                    <div class="help" th:text="#{systemConfig.tlsPemKeyHelp}">An unencrypted PKCS#8 or PKCS#1 key; leave empty if the certificate file already contains it.</div>
+                                </div>
+                                <div class="field">
+                                    <label for="tls-path-pem-port" th:text="#{systemConfig.tlsHttpsPort}">HTTPS port</label>
+                                    <input class="input" id="tls-path-pem-port" type="number" name="httpsPort"
+                                           min="1" max="65535" required
+                                           th:value="${tls.httpsPort != null ? tls.httpsPort : 8443}"/>
+                                </div>
+                                <div class="field">
+                                    <label class="check-inline">
+                                        <input type="checkbox" name="redirectHttp" value="true"
+                                               th:checked="${tls.httpsPort == null or tls.redirectHttp}"/>
+                                        <span th:text="#{systemConfig.tlsRedirect}">Redirect HTTP to HTTPS</span>
+                                    </label>
+                                </div>
+                                <div class="btn-row">
+                                    <button class="btn btn-primary btn-sm" type="submit">
+                                        <svg class="ico"><use href="#lock-fill"/></svg>
+                                        <span th:text="#{systemConfig.tlsPathPemSave}">Save PEM paths</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </section>
+                    </div>
+                    </th:block>
+
+                    <div th:if="${tls.canRemove and tls.configuredPaths == null}">
                         <hr class="divider"/>
                         <p class="help" th:text="#{systemConfig.tlsDeleteHelp}">Removing applies after a restart.</p>
                         <div class="btn-row">
@@ -240,6 +381,58 @@
         </div>
 
         <div>
+            <!-- 强制 HTTPS：显式配置优先；页面值即时生效，但开启只能从 HTTPS 或本机发起，
+                 否则一次误操作就把后续所有明文管理员请求锁在 403 里。放在右列顶部：
+                 它是这一页最常用的传输安全开关。 -->
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#shield-check"/></svg>
+                        <span th:text="#{systemConfig.https}">Require HTTPS</span></h2>
+                </div>
+                <div class="card-body">
+                    <dl class="dl pairs">
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.httpsCurrent}">Current state</dt>
+                            <dd>
+                                <span class="chip chip-ok" th:if="${httpsRequired}"
+                                      th:text="#{systemConfig.httpsOn}">On</span>
+                                <span class="chip" th:unless="${httpsRequired}"
+                                      th:text="#{systemConfig.httpsOff}">Off</span>
+                            </dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.httpsSource}">Source</dt>
+                            <dd>
+                                <span class="chip" th:if="${httpsSource == 'CONFIG'}"
+                                      th:text="#{systemConfig.httpsSourceConfig}">Configuration file</span>
+                                <span class="chip" th:if="${httpsSource == 'DATABASE'}"
+                                      th:text="#{systemConfig.httpsSourceDatabase}">Set on this page</span>
+                                <span class="chip" th:if="${httpsSource == 'DEFAULT'}"
+                                      th:text="#{systemConfig.httpsSourceDefault}">Default</span>
+                            </dd>
+                        </div>
+                    </dl>
+                    <p class="help" th:text="#{systemConfig.httpsHelp}">When on, plaintext requests are refused. If the built-in HTTPS endpoint is running they are redirected to it; otherwise loopback and an unauthenticated GET /login stay reachable for recovery.</p>
+                    <p class="help" th:if="${httpsConfigControlled}"
+                       th:text="#{systemConfig.httpsPinned}">This switch is pinned by the configuration file and cannot be changed here.</p>
+                    <!-- 开启前必须已经有一条 HTTPS 通路：应用内证书已生效，或当前请求本身就是
+                         HTTPS（反代终止 TLS）。否则开启后没有 HTTPS 可供跳转，除回环与探针外
+                         全部 403，管理员会被锁在外面。 -->
+                    <p class="help" th:if="${not httpsRequired and not httpsConfigControlled and httpsEnableBlocked}"
+                       th:text="${#messages.msgOrNull(httpsBlockedKey) ?: httpsBlockedKey}">Upload a valid certificate first.</p>
+
+                    <div class="btn-row" style="margin-top:16px">
+                        <form method="post" th:action="@{/system-config/require-https}">
+                            <input type="hidden" name="enabled" th:value="${!httpsRequired}"/>
+                            <button class="btn btn-sm" type="submit"
+                                    th:classappend="${httpsRequired} ? 'btn-ghost' : 'btn-primary'"
+                                    th:disabled="${httpsConfigControlled or (not httpsRequired and httpsEnableBlocked)}"
+                                    th:text="${httpsRequired} ? #{systemConfig.httpsDisable} : #{systemConfig.httpsEnable}">Enable</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
             <!-- 配置包：逻辑导出，跨 H2/MySQL/PostgreSQL/Oracle 都能导入。包内密文在导入时
                  用目标部署的密钥重新加密，否则换库后所有 enc: 值都会解不开。
                  导出与导入共用一张卡、切成两个标签页（radio + 兄弟选择器，不依赖 JS）。
@@ -336,57 +529,6 @@
                             <span th:text="#{systemConfig.diagnosticsDownload}">Download bundle</span>
                         </button>
                     </form>
-                </div>
-            </div>
-
-            <!-- 强制 HTTPS：显式配置优先；页面值即时生效，但开启只能从 HTTPS 或本机发起，
-                 否则一次误操作就把后续所有明文管理员请求锁在 403 里。 -->
-            <div class="card">
-                <div class="card-head">
-                    <h2><svg class="ico"><use href="#shield-check"/></svg>
-                        <span th:text="#{systemConfig.https}">Require HTTPS</span></h2>
-                </div>
-                <div class="card-body">
-                    <dl class="dl pairs">
-                        <div class="kv">
-                            <dt th:text="#{systemConfig.httpsCurrent}">Current state</dt>
-                            <dd>
-                                <span class="chip chip-ok" th:if="${httpsRequired}"
-                                      th:text="#{systemConfig.httpsOn}">On</span>
-                                <span class="chip" th:unless="${httpsRequired}"
-                                      th:text="#{systemConfig.httpsOff}">Off</span>
-                            </dd>
-                        </div>
-                        <div class="kv">
-                            <dt th:text="#{systemConfig.httpsSource}">Source</dt>
-                            <dd>
-                                <span class="chip" th:if="${httpsSource == 'CONFIG'}"
-                                      th:text="#{systemConfig.httpsSourceConfig}">Configuration file</span>
-                                <span class="chip" th:if="${httpsSource == 'DATABASE'}"
-                                      th:text="#{systemConfig.httpsSourceDatabase}">Set on this page</span>
-                                <span class="chip" th:if="${httpsSource == 'DEFAULT'}"
-                                      th:text="#{systemConfig.httpsSourceDefault}">Default</span>
-                            </dd>
-                        </div>
-                    </dl>
-                    <p class="help" th:text="#{systemConfig.httpsHelp}">When on, plaintext requests are refused. If the built-in HTTPS endpoint is running they are redirected to it; otherwise loopback and an unauthenticated GET /login stay reachable for recovery.</p>
-                    <p class="help" th:if="${httpsConfigControlled}"
-                       th:text="#{systemConfig.httpsPinned}">This switch is pinned by the configuration file and cannot be changed here.</p>
-                    <!-- 开启前必须已经有一条 HTTPS 通路：应用内证书已生效，或当前请求本身就是
-                         HTTPS（反代终止 TLS）。否则开启后没有 HTTPS 可供跳转，除回环与探针外
-                         全部 403，管理员会被锁在外面。 -->
-                    <p class="help" th:if="${not httpsRequired and not httpsConfigControlled and httpsEnableBlocked}"
-                       th:text="${#messages.msgOrNull(httpsBlockedKey) ?: httpsBlockedKey}">Upload a valid certificate first.</p>
-
-                    <div class="btn-row" style="margin-top:16px">
-                        <form method="post" th:action="@{/system-config/require-https}">
-                            <input type="hidden" name="enabled" th:value="${!httpsRequired}"/>
-                            <button class="btn btn-sm" type="submit"
-                                    th:classappend="${httpsRequired} ? 'btn-ghost' : 'btn-primary'"
-                                    th:disabled="${httpsConfigControlled or (not httpsRequired and httpsEnableBlocked)}"
-                                    th:text="${httpsRequired} ? #{systemConfig.httpsDisable} : #{systemConfig.httpsEnable}">Enable</button>
-                        </form>
-                    </div>
                 </div>
             </div>
 

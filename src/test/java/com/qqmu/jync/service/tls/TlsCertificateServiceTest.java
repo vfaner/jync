@@ -8,6 +8,7 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.KeyStore;
 import java.time.Instant;
 import java.util.Optional;
@@ -305,6 +306,177 @@ class TlsCertificateServiceTest {
         Mockito.when(runtime.enabled()).thenReturn(false);
 
         assertThat(service().pageState().disabled()).isTrue();
+    }
+
+    // ── Configuration-file mode ────────────────────────────────────────────────
+
+    /** A runtime started from app.tls.keystore-path, as a container mount would be. */
+    private TlsRuntimeState configuredRuntime() throws IOException {
+        Path pinned = Files.write(dir.resolve("pinned.p12"), TestKeystores.pkcs12());
+        TlsConfiguredLoader loader = new TlsConfiguredLoader(new TlsPathSource(
+                pinned.toString(), "changeit", null, null, "9443", "true"));
+        return TlsRuntimeState.load(true, store, inspector, loader);
+    }
+
+    @Test
+    void pageStateInConfigurationModeIsReadOnlyAndNamesThePaths() throws IOException {
+        runtime = configuredRuntime();
+
+        TlsPageState state = service().pageState();
+
+        assertThat(state.configuredPaths()).isNotNull();
+        assertThat(state.configuredPaths().keystorePath()).endsWith("pinned.p12");
+        assertThat(state.saved()).isTrue();
+        assertThat(state.active()).isTrue();
+        assertThat(state.pendingRestart()).isFalse();
+        // Nothing on this page may delete a file the operator mounted and configured.
+        assertThat(state.canRemove()).isFalse();
+        assertThat(state.certificate()).isNotNull();
+        assertThat(state.httpsPort()).isEqualTo(9443);
+        assertThat(state.redirectHttp()).isTrue();
+    }
+
+    @Test
+    void thePageCannotOverwriteAConfiguredCertificate() throws IOException {
+        runtime = configuredRuntime();
+
+        assertThatThrownBy(() -> service().save(TestKeystores.pkcs12(), "certificate.p12",
+                "changeit", httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.configControlled");
+        assertThatThrownBy(() -> service().savePem(bytes(TestKeystores.certificatePem()),
+                bytes(TestKeystores.privateKeyPem()), httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.configControlled");
+        assertThatThrownBy(() -> service().delete())
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.configControlled");
+    }
+
+    @Test
+    void pageStateStillReadsTheConfiguredCertificateWhenATemporaryKeystoreIsDeleted()
+            throws IOException {
+        // The configured PEM path is wrapped in a temporary file; the page must not fall back to
+        // store bytes for it, which would report a missing keystore after the temp file is gone.
+        Path certificate = Files.write(dir.resolve("fullchain.pem"),
+                bytes(TestKeystores.certificatePem()));
+        Path key = Files.write(dir.resolve("privkey.pem"),
+                bytes(TestKeystores.privateKeyPem()));
+        TlsConfiguredLoader loader = new TlsConfiguredLoader(new TlsPathSource(null, null,
+                certificate.toString(), key.toString(), null, null));
+        runtime = TlsRuntimeState.load(true, store, inspector, loader);
+        Files.delete(Paths.get(runtime.active().orElseThrow().file()));
+
+        TlsPageState state = service().pageState();
+
+        assertThat(state.configuredPaths().pemCertificatePath()).isEqualTo(certificate.toString());
+        assertThat(state.certificate()).isNotNull();
+        assertThat(state.problemKey()).isNull();
+    }
+
+    // ── Server-side paths ─────────────────────────────────────────────────────
+
+    @Test
+    void saveKeystorePathStoresThePathInsteadOfACopy() throws Exception {
+        Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
+
+        TlsConfig saved = service().saveKeystorePath(external.toString(), "changeit",
+                httpsPort, true);
+
+        assertThat(saved.file()).isEqualTo(external.toAbsolutePath().normalize().toString());
+        assertThat(service().pageState().serverPaths())
+                .isEqualTo(new TlsConfiguredPaths(saved.file(), null, null));
+    }
+
+    @Test
+    void saveKeystorePathRejectsARelativePath() {
+        assertThatThrownBy(() -> service().saveKeystorePath("cert.p12", "changeit",
+                httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.pathInvalid");
+    }
+
+    @Test
+    void saveKeystorePathRejectsAMissingFile() {
+        assertThatThrownBy(() -> service().saveKeystorePath(
+                dir.resolve("absent.p12").toString(), "changeit", httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.pathMissing");
+    }
+
+    @Test
+    void saveKeystorePathRejectsTheWrongPassphraseWithoutWritingAnything() throws Exception {
+        Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
+
+        assertThatThrownBy(() -> service().saveKeystorePath(external.toString(), "wrong",
+                httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.unreadable");
+        assertThat(Files.exists(dir.resolve(TlsKeystoreStore.SIDECAR))).isFalse();
+    }
+
+    @Test
+    void savePemPathStoresTheSourcePathsAndDerivesAKeystore() throws Exception {
+        Path certificate = Files.writeString(dir.resolve("fullchain.pem"),
+                TestKeystores.certificatePem());
+        Path key = Files.writeString(dir.resolve("privkey.pem"), TestKeystores.privateKeyPem());
+
+        TlsConfig saved = service().savePemPath(certificate.toString(), key.toString(),
+                httpsPort, true);
+
+        assertThat(store.snapshot().serverPaths()).isEqualTo(new TlsConfiguredPaths(null,
+                certificate.toAbsolutePath().normalize().toString(),
+                key.toAbsolutePath().normalize().toString()));
+        TlsCertificateInfo info = inspector.inspect(store.keystoreBytes(saved),
+                saved.format(), saved.passphrase().toCharArray());
+        assertThat(info.subject()).contains("CN=misconfigured.example");
+    }
+
+    @Test
+    void savePemPathAcceptsACombinedBundleWithoutAKeyPath() throws Exception {
+        Path combined = Files.writeString(dir.resolve("bundle.pem"),
+                TestKeystores.certificatePem() + TestKeystores.privateKeyPem());
+
+        service().savePemPath(combined.toString(), null, httpsPort, true);
+
+        assertThat(store.snapshot().serverPaths().pemKeyPath()).isNull();
+    }
+
+    @Test
+    void savePemPathRejectsARelativeKeyPath() throws Exception {
+        Path certificate = Files.writeString(dir.resolve("fullchain.pem"),
+                TestKeystores.certificatePem());
+
+        assertThatThrownBy(() -> service().savePemPath(certificate.toString(), "privkey.pem",
+                httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.pathInvalid");
+    }
+
+    @Test
+    void savePemPathRejectsAMissingCertificateFile() {
+        assertThatThrownBy(() -> service().savePemPath(
+                dir.resolve("absent.pem").toString(), null, httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.pathMissing");
+    }
+
+    @Test
+    void pathSavingIsRefusedWhenTheConfigurationFileOwnsTheCertificate() throws Exception {
+        runtime = configuredRuntime();
+        Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
+        Path certificate = Files.writeString(dir.resolve("fullchain.pem"),
+                TestKeystores.certificatePem());
+        Path key = Files.writeString(dir.resolve("privkey.pem"), TestKeystores.privateKeyPem());
+
+        assertThatThrownBy(() -> service().saveKeystorePath(external.toString(), "changeit",
+                httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.configControlled");
+        assertThatThrownBy(() -> service().savePemPath(certificate.toString(), key.toString(),
+                httpsPort, false))
+                .isInstanceOf(TlsKeystoreException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.tls.configControlled");
     }
 
     // ── PEM upload ─────────────────────────────────────────────────────────────

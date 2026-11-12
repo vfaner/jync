@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.qqmu.jync.service.tls.TlsCertificateInspector;
+import com.qqmu.jync.service.tls.TlsConfiguredLoader;
 import com.qqmu.jync.service.tls.TlsKeystoreStore;
 import com.qqmu.jync.service.tls.TlsRuntimeState;
 
@@ -45,8 +46,9 @@ public class TlsConnectorConfig {
     public static TlsRuntimeState tlsRuntimeState(
             @Value("${app.tls.enabled:true}") boolean enabled,
             TlsKeystoreStore store,
-            TlsCertificateInspector inspector) {
-        return TlsRuntimeState.load(enabled, store, inspector);
+            TlsCertificateInspector inspector,
+            TlsConfiguredLoader configuredLoader) {
+        return TlsRuntimeState.load(enabled, store, inspector, configuredLoader);
     }
 
     @Bean

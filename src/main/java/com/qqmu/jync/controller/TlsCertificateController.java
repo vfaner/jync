@@ -124,6 +124,51 @@ public class TlsCertificateController {
         return recordSaved(saved, request, flash);
     }
 
+    /**
+     * Saves a certificate that stays where the operator put it on this server.
+     *
+     * <p>Two forms share the endpoint and a hidden {@code mode} says which one was submitted.
+     * Only the two known modes are accepted; anything else is refused before the service is
+     * reached, so a hand-crafted request cannot fall through to a default path.
+     */
+    @PostMapping("/system-config/tls/path")
+    public String savePath(@RequestParam(defaultValue = "") String mode,
+                           @RequestParam(required = false) String keystorePath,
+                           @RequestParam(required = false) String passphrase,
+                           @RequestParam(required = false) String pemCertPath,
+                           @RequestParam(required = false) String pemKeyPath,
+                           @RequestParam(value = "httpsPort", required = false) String httpsPort,
+                           @RequestParam(defaultValue = "false") boolean redirectHttp,
+                           HttpServletRequest request,
+                           RedirectAttributes flash) {
+        Integer port = parsePort(httpsPort);
+        if (port == null) {
+            flash.addFlashAttribute("error", "error.tls.portInvalid");
+            return PAGE;
+        }
+
+        TlsConfig saved;
+        try {
+            if ("keystore".equals(mode)) {
+                saved = service.saveKeystorePath(keystorePath, passphrase, port, redirectHttp);
+            } else if ("pem".equals(mode)) {
+                saved = service.savePemPath(pemCertPath, pemKeyPath, port, redirectHttp);
+            } else {
+                flash.addFlashAttribute("error", "error.tls.pathInvalid");
+                return PAGE;
+            }
+        } catch (TlsKeystoreException e) {
+            flash.addFlashAttribute("error", e.messageKey());
+            return PAGE;
+        } catch (RuntimeException e) {
+            // The message may quote a path or a provider diagnostic; only the key ships.
+            flash.addFlashAttribute("error", "error.tls.saveFailed");
+            return PAGE;
+        }
+
+        return recordSaved(saved, request, flash);
+    }
+
     private String recordSaved(TlsConfig saved, HttpServletRequest request,
                                RedirectAttributes flash) {
         audit.record(AuditAction.TLS_CONFIG_SAVE,

@@ -245,6 +245,100 @@ class TlsCertificateControllerTest {
         verify(service, never()).savePem(any(), any(), anyInt(), anyBoolean());
     }
 
+    // ── Server-side paths ─────────────────────────────────────────────────────
+
+    @Test
+    void aKeystorePathIsSaved() throws Exception {
+        when(service.saveKeystorePath("/etc/jync/tls/server.p12", "changeit", 8443, true))
+                .thenReturn(config());
+
+        mvc.perform(post("/system-config/tls/path")
+                        .param("mode", "keystore")
+                        .param("keystorePath", "/etc/jync/tls/server.p12")
+                        .param("passphrase", "changeit")
+                        .param("httpsPort", "8443")
+                        .param("redirectHttp", "true")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("message", "msg.systemConfig.tls.saved"));
+
+        verify(service).saveKeystorePath("/etc/jync/tls/server.p12", "changeit", 8443, true);
+        verify(service, never()).save(any(), anyString(), anyString(), anyInt(), anyBoolean());
+        verify(audit).record(eq(AuditAction.TLS_CONFIG_SAVE), anyString());
+    }
+
+    @Test
+    void aPemPathIsSaved() throws Exception {
+        when(service.savePemPath("/etc/jync/tls/fullchain.pem", "/etc/jync/tls/privkey.pem",
+                8443, false)).thenReturn(config());
+
+        mvc.perform(post("/system-config/tls/path")
+                        .param("mode", "pem")
+                        .param("pemCertPath", "/etc/jync/tls/fullchain.pem")
+                        .param("pemKeyPath", "/etc/jync/tls/privkey.pem")
+                        .param("httpsPort", "8443")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("message", "msg.systemConfig.tls.saved"));
+
+        verify(service).savePemPath("/etc/jync/tls/fullchain.pem", "/etc/jync/tls/privkey.pem",
+                8443, false);
+    }
+
+    @Test
+    void aPathSaveWithANonNumericPortIsRefusedBeforeTheService() throws Exception {
+        mvc.perform(post("/system-config/tls/path")
+                        .param("mode", "keystore")
+                        .param("keystorePath", "/etc/jync/tls/server.p12")
+                        .param("passphrase", "changeit")
+                        .param("httpsPort", "eighty")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.tls.portInvalid"));
+
+        verify(service, never()).saveKeystorePath(any(), any(), anyInt(), anyBoolean());
+    }
+
+    @Test
+    void anUnknownPathModeIsRefused() throws Exception {
+        mvc.perform(post("/system-config/tls/path")
+                        .param("mode", "upload")
+                        .param("httpsPort", "8443")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.tls.pathInvalid"));
+
+        verify(service, never()).saveKeystorePath(any(), any(), anyInt(), anyBoolean());
+        verify(service, never()).savePemPath(any(), any(), anyInt(), anyBoolean());
+    }
+
+    @Test
+    void aRejectedPathShowsItsKeyNotTheExceptionMessage() throws Exception {
+        when(service.saveKeystorePath(any(), any(), anyInt(), anyBoolean()))
+                .thenThrow(new TlsKeystoreException("error.tls.pathMissing"));
+
+        mvc.perform(post("/system-config/tls/path")
+                        .param("mode", "keystore")
+                        .param("keystorePath", "/etc/jync/tls/absent.p12")
+                        .param("passphrase", "changeit")
+                        .param("httpsPort", "8443")
+                        .with(csrf()))
+                .andExpect(redirectedUrl("/system-config"))
+                .andExpect(flash().attribute("error", "error.tls.pathMissing"));
+    }
+
+    @Test
+    void pathSaveRequiresCsrf() throws Exception {
+        mvc.perform(post("/system-config/tls/path")
+                        .param("mode", "keystore")
+                        .param("keystorePath", "/etc/jync/tls/server.p12")
+                        .param("passphrase", "changeit")
+                        .param("httpsPort", "8443"))
+                .andExpect(status().isForbidden());
+
+        verify(service, never()).saveKeystorePath(any(), any(), anyInt(), anyBoolean());
+    }
+
     @Test
     void uploadRequiresCsrf() throws Exception {
         mvc.perform(multipart("/system-config/tls")

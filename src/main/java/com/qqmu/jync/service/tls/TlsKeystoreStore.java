@@ -6,6 +6,7 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
@@ -56,6 +57,16 @@ public class TlsKeystoreStore {
     static final String KEYSTORE_PREFIX = "keystore-";
     static final String KEY_PASSPHRASE = "passphrase";
     static final String KEY_PASSPHRASE_NEXT = "passphrase.next";
+    static final String KEY_SOURCE = "source";
+    static final String KEY_KEYSTORE_PATH = "keystorePath";
+    static final String KEY_PEM_CERT_PATH = "pemCertPath";
+    static final String KEY_PEM_KEY_PATH = "pemKeyPath";
+    static final String SOURCE_UPLOAD = "upload";
+    static final String SOURCE_KEYSTORE_PATH = "keystore-path";
+    static final String SOURCE_PEM_PATH = "pem-path";
+
+    /** Upper bound for a page-entered path source; the same ceiling as an upload. */
+    public static final int MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 
     private static final Logger log = LoggerFactory.getLogger(TlsKeystoreStore.class);
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -79,12 +90,22 @@ public class TlsKeystoreStore {
             return read();
         } catch (TlsKeystoreException e) {
             return new TlsStoreSnapshot(java.util.Optional.empty(), e.messageKey(),
-                    Files.isRegularFile(sidecar()), anyKeystorePresent());
+                    Files.isRegularFile(sidecar()), anyKeystorePresent(), null);
         }
     }
 
-    /** Absolute location of a generation, for the connector's keystore attribute. */
+    /**
+     * Absolute location of a generation, for the connector's keystore attribute.
+     *
+     * <p>Managed generations are simple file names inside {@link #directory}. A configured
+     * source ({@code app.tls.keystore-path}) names a file the operator mounted anywhere, so an
+     * absolute path is used as-is; relative names still may not escape the managed directory.
+     */
     public Path keystorePath(TlsConfig config) {
+        Path path = Paths.get(config.file());
+        if (path.isAbsolute()) {
+            return path;
+        }
         return resolveContained(config.file());
     }
 
@@ -118,7 +139,64 @@ public class TlsKeystoreStore {
             TlsConfig config = new TlsConfig(format, file,
                     passphrase == null ? "" : new String(passphrase),
                     httpsPort, redirectHttp, Instant.now(), sha256Hex(keystore));
-            writeSidecar(config);
+            writeSidecar(config, SOURCE_UPLOAD, null, null, null);
+            cleanupOrphans(file);
+            return config;
+        } catch (IOException e) {
+            throw new TlsKeystoreException("error.tls.saveFailed", e);
+        }
+    }
+
+    /**
+     * Remembers a keystore that stays where the operator put it.
+     *
+     * <p>Nothing is copied: the sidecar names the absolute path and holds the encrypted
+     * passphrase. A container recreation keeps the configuration as long as the data directory is
+     * persistent, and a renewed file at the same path is picked up at the next read.
+     *
+     * @param bytes the bytes already validated by the caller, used for the digest
+     */
+    public synchronized TlsConfig saveKeystorePath(Path keystore, byte[] bytes,
+                                                   TlsKeystoreFormat format, char[] passphrase,
+                                                   int httpsPort, boolean redirectHttp) {
+        try {
+            createDirectory();
+            Path absolute = keystore.toAbsolutePath().normalize();
+            TlsConfig config = new TlsConfig(format, absolute.toString(),
+                    passphrase == null ? "" : new String(passphrase),
+                    httpsPort, redirectHttp, Instant.now(), sha256Hex(bytes));
+            writeSidecar(config, SOURCE_KEYSTORE_PATH, absolute.toString(), null, null);
+            // Generations from an earlier upload or PEM path are no longer referenced.
+            cleanupOrphans(null);
+            return config;
+        } catch (IOException e) {
+            throw new TlsKeystoreException("error.tls.saveFailed", e);
+        }
+    }
+
+    /**
+     * Remembers a PEM pair kept on the server and stores the PKCS#12 derived from it.
+     *
+     * <p>The sidecar names both source files and the digest of their bytes. The derived keystore
+     * is a managed generation so Tomcat has something to open; a later read that sees different
+     * source bytes rebuilds it. The private key itself never reaches the sidecar.
+     */
+    public synchronized TlsConfig savePemPath(Path certificate, Path privateKey,
+                                              byte[] certificatePem, byte[] privateKeyPem,
+                                              byte[] pkcs12, char[] passphrase, int httpsPort,
+                                              boolean redirectHttp) {
+        try {
+            createDirectory();
+            String file = generationName(TlsKeystoreFormat.PKCS12);
+            writePrivate(directory.resolve(file), pkcs12);
+            Path absoluteCertificate = certificate.toAbsolutePath().normalize();
+            Path absoluteKey = privateKey == null ? null : privateKey.toAbsolutePath().normalize();
+            TlsConfig config = new TlsConfig(TlsKeystoreFormat.PKCS12, file,
+                    passphrase == null ? "" : new String(passphrase),
+                    httpsPort, redirectHttp, Instant.now(),
+                    sourceDigest(certificatePem, privateKeyPem));
+            writeSidecar(config, SOURCE_PEM_PATH, null, absoluteCertificate.toString(),
+                    absoluteKey == null ? null : absoluteKey.toString());
             cleanupOrphans(file);
             return config;
         } catch (IOException e) {
@@ -175,13 +253,32 @@ public class TlsKeystoreStore {
         }
     }
 
-    private TlsStoreSnapshot read() {
+    /**
+     * Reads the configured certificate, whichever way it was configured.
+     *
+     * <p>Synchronized because a PEM path mode may rebuild its derived keystore here: the mounted
+     * PEM files are the source of truth, and replacing them is how an operator renews the
+     * certificate. The rebuild goes through the same generation file + atomic sidecar replace as
+     * an upload, so a crash leaves the previous generation readable.
+     */
+    private synchronized TlsStoreSnapshot read() {
         Path sidecar = sidecar();
         if (!Files.isRegularFile(sidecar)) {
             return TlsStoreSnapshot.empty();
         }
         Properties properties = loadProperties(sidecar);
+        requireSupportedVersion(properties);
 
+        String source = properties.getProperty(KEY_SOURCE, SOURCE_UPLOAD);
+        return switch (source) {
+            case SOURCE_UPLOAD -> readUpload(properties);
+            case SOURCE_KEYSTORE_PATH -> readKeystorePath(properties);
+            case SOURCE_PEM_PATH -> readPemPath(properties);
+            default -> throw new TlsKeystoreException("error.tls.storeCorrupt");
+        };
+    }
+
+    private void requireSupportedVersion(Properties properties) {
         int version;
         try {
             version = Integer.parseInt(properties.getProperty("version", ""));
@@ -194,7 +291,10 @@ public class TlsKeystoreStore {
         if (version != VERSION) {
             throw new TlsKeystoreException("error.tls.storeCorrupt");
         }
+    }
 
+    /** The managed-directory upload: generation file copied in, digest checked every read. */
+    private TlsStoreSnapshot readUpload(Properties properties) {
         TlsKeystoreFormat format;
         try {
             format = TlsKeystoreFormat.valueOf(properties.getProperty("format", ""));
@@ -211,8 +311,75 @@ public class TlsKeystoreStore {
             throw new TlsKeystoreException("error.tls.keystoreChanged");
         }
 
-        String passphrase = decryptPassphrase(properties);
+        TlsConfig config = new TlsConfig(format, file, decryptPassphrase(properties),
+                readHttpsPort(properties), readRedirectHttp(properties), readUpdatedAt(properties),
+                properties.getProperty("sha256", "").toLowerCase(Locale.ROOT));
+        return new TlsStoreSnapshot(java.util.Optional.of(config), null, true, true, null);
+    }
 
+    /**
+     * A keystore the operator keeps on the server. The file is read where it is, so replacing it
+     * in place is the renewal path; the digest is recomputed instead of compared, and the format
+     * is proven by opening the current bytes.
+     */
+    private TlsStoreSnapshot readKeystorePath(Properties properties) {
+        Path keystore = requireAbsolutePath(properties.getProperty(KEY_KEYSTORE_PATH));
+        byte[] bytes = readSource(keystore);
+        String passphrase = decryptPassphrase(properties);
+        TlsKeystoreFormat format = TlsConfiguredLoader.detectFormat(keystore, bytes,
+                passphrase.toCharArray());
+
+        String path = keystore.toString();
+        TlsConfig config = new TlsConfig(format, path, passphrase, readHttpsPort(properties),
+                readRedirectHttp(properties), readUpdatedAt(properties), sha256Hex(bytes));
+        return new TlsStoreSnapshot(java.util.Optional.of(config), null, true, true,
+                new TlsConfiguredPaths(path, null, null));
+    }
+
+    /**
+     * A PEM pair the operator keeps on the server. Tomcat cannot read PEM, so the pair is wrapped
+     * in a managed PKCS#12 at save time; a read that sees different source bytes rebuilds it.
+     */
+    private TlsStoreSnapshot readPemPath(Properties properties) {
+        Path certificate = requireAbsolutePath(properties.getProperty(KEY_PEM_CERT_PATH));
+        String keyValue = properties.getProperty(KEY_PEM_KEY_PATH);
+        Path key = keyValue == null || keyValue.isBlank() ? null : requireAbsolutePath(keyValue);
+        byte[] certificatePem = readSource(certificate);
+        byte[] privateKeyPem = key == null ? null : readSource(key);
+
+        String digest = sourceDigest(certificatePem, privateKeyPem);
+        String passphrase = decryptPassphrase(properties);
+        String file = properties.getProperty("file");
+        Path derived = containedOrNull(file);
+        boolean changed = derived == null || !Files.isRegularFile(derived)
+                || !digest.equalsIgnoreCase(properties.getProperty("sha256", ""));
+        if (changed) {
+            PemKeyPair pair = privateKeyPem == null
+                    ? PemKeyPairLoader.load(certificatePem)
+                    : PemKeyPairLoader.load(certificatePem, privateKeyPem);
+            byte[] keystore = pair.toPkcs12(passphrase.toCharArray());
+            file = generationName(TlsKeystoreFormat.PKCS12);
+            try {
+                writePrivate(directory.resolve(file), keystore);
+                properties.setProperty("file", file);
+                properties.setProperty("format", TlsKeystoreFormat.PKCS12.name());
+                properties.setProperty("sha256", digest);
+                writePropertiesAtomic(properties);
+            } catch (IOException e) {
+                throw new TlsKeystoreException("error.tls.saveFailed", e);
+            }
+            cleanupOrphans(file);
+        }
+
+        TlsConfig config = new TlsConfig(TlsKeystoreFormat.PKCS12, file, passphrase,
+                readHttpsPort(properties), readRedirectHttp(properties), readUpdatedAt(properties),
+                digest);
+        return new TlsStoreSnapshot(java.util.Optional.of(config), null, true, true,
+                new TlsConfiguredPaths(null, certificate.toString(),
+                        key == null ? null : key.toString()));
+    }
+
+    private static int readHttpsPort(Properties properties) {
         int httpsPort;
         try {
             httpsPort = Integer.parseInt(properties.getProperty("httpsPort", ""));
@@ -222,19 +389,59 @@ public class TlsKeystoreStore {
         if (httpsPort < 1 || httpsPort > 65535) {
             throw new TlsKeystoreException("error.tls.portInvalid");
         }
+        return httpsPort;
+    }
 
-        Instant updatedAt;
+    private static Instant readUpdatedAt(Properties properties) {
         try {
-            updatedAt = Instant.parse(properties.getProperty("updatedAt", ""));
+            return Instant.parse(properties.getProperty("updatedAt", ""));
         } catch (DateTimeParseException e) {
             throw new TlsKeystoreException("error.tls.storeCorrupt", e);
         }
+    }
 
-        boolean redirectHttp = Boolean.parseBoolean(properties.getProperty("redirectHttp", "false"));
-        String sha256 = properties.getProperty("sha256", "").toLowerCase(Locale.ROOT);
+    private static boolean readRedirectHttp(Properties properties) {
+        return Boolean.parseBoolean(properties.getProperty("redirectHttp", "false"));
+    }
 
-        return new TlsStoreSnapshot(java.util.Optional.of(new TlsConfig(format, file, passphrase,
-                httpsPort, redirectHttp, updatedAt, sha256)), null, true, true);
+    /** A page-entered path must be absolute: a relative one would move with the working directory. */
+    private static Path requireAbsolutePath(String value) {
+        if (value == null || value.isBlank()) {
+            throw new TlsKeystoreException("error.tls.pathInvalid");
+        }
+        Path path;
+        try {
+            path = Paths.get(value);
+        } catch (InvalidPathException e) {
+            throw new TlsKeystoreException("error.tls.pathInvalid", e);
+        }
+        if (!path.isAbsolute()) {
+            throw new TlsKeystoreException("error.tls.pathInvalid");
+        }
+        return path.normalize();
+    }
+
+    private static byte[] readSource(Path path) {
+        try {
+            if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+                throw new TlsKeystoreException("error.tls.pathMissing");
+            }
+            byte[] bytes = Files.readAllBytes(path);
+            if (bytes.length > MAX_SOURCE_BYTES) {
+                throw new TlsKeystoreException("error.tls.fileTooLarge");
+            }
+            return bytes;
+        } catch (IOException e) {
+            throw new TlsKeystoreException("error.tls.pathMissing", e);
+        }
+    }
+
+    /** A sidecar generation name, or {@code null} when it is missing; traversal still fails. */
+    private Path containedOrNull(String file) {
+        if (file == null || file.isBlank()) {
+            return null;
+        }
+        return resolveContained(file);
     }
 
     private Properties loadProperties(Path sidecar) {
@@ -284,9 +491,11 @@ public class TlsKeystoreStore {
         return null;
     }
 
-    private void writeSidecar(TlsConfig config) throws IOException {
+    private void writeSidecar(TlsConfig config, String source, String keystorePath,
+                              String pemCertPath, String pemKeyPath) throws IOException {
         Properties properties = new Properties();
         properties.setProperty("version", String.valueOf(VERSION));
+        properties.setProperty(KEY_SOURCE, source);
         properties.setProperty("format", config.format().name());
         properties.setProperty("file", config.file());
         properties.setProperty(KEY_PASSPHRASE, crypto.encrypt(config.passphrase()));
@@ -294,6 +503,15 @@ public class TlsKeystoreStore {
         properties.setProperty("redirectHttp", String.valueOf(config.redirectHttp()));
         properties.setProperty("updatedAt", config.updatedAt().toString());
         properties.setProperty("sha256", config.sha256());
+        if (keystorePath != null) {
+            properties.setProperty(KEY_KEYSTORE_PATH, keystorePath);
+        }
+        if (pemCertPath != null) {
+            properties.setProperty(KEY_PEM_CERT_PATH, pemCertPath);
+        }
+        if (pemKeyPath != null) {
+            properties.setProperty(KEY_PEM_KEY_PATH, pemKeyPath);
+        }
         writePropertiesAtomic(properties);
     }
 
@@ -401,6 +619,24 @@ public class TlsKeystoreStore {
     private static String sha256Hex(byte[] bytes) {
         try {
             return hex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required by the JRE", e);
+        }
+    }
+
+    /**
+     * The identity of a PEM pair. Hashing the sources, not the derived PKCS#12, keeps the digest
+     * stable across restarts: PKCS#12 writing uses random salts, so the same pair produces
+     * different bytes every time it is wrapped.
+     */
+    private static String sourceDigest(byte[] certificatePem, byte[] privateKeyPem) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(certificatePem);
+            if (privateKeyPem != null) {
+                digest.update(privateKeyPem);
+            }
+            return hex(digest.digest());
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is required by the JRE", e);
         }
