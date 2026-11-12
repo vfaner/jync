@@ -24,7 +24,9 @@ import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionService;
+import com.qqmu.jync.util.CryptoUtil;
 import com.qqmu.jync.util.HttpsSupport;
+import com.qqmu.jync.util.JdbcUrlSanitizer;
 
 /** Read-only view of effective global settings and runtime state. */
 @Controller
@@ -42,10 +44,15 @@ public class SettingsController {
     private final String contactWechat;
     private final long reconcileIntervalMs;
     private final RequireHttpsResolver requireHttpsResolver;
+    private final CryptoUtil crypto;
+    private final String datasourceUrl;
+    private final String datasourceUsername;
 
     public SettingsController(SyncProperties properties, SyncScheduler scheduler,
                               SyncLockService lockService, VersionService versionService,
-                              RequireHttpsResolver requireHttpsResolver,
+                              RequireHttpsResolver requireHttpsResolver, CryptoUtil crypto,
+                              @Value("${spring.datasource.url:}") String datasourceUrl,
+                              @Value("${spring.datasource.username:}") String datasourceUsername,
                               @Value("${app.gitee-url:}") String giteeUrl,
                               @Value("${app.site-url:}") String siteUrl,
                               @Value("${app.contact-qq:}") String contactQq,
@@ -65,6 +72,9 @@ public class SettingsController {
         this.contactEmail = contactEmail;
         this.contactWechat = contactWechat;
         this.requireHttpsResolver = requireHttpsResolver;
+        this.crypto = crypto;
+        this.datasourceUrl = datasourceUrl;
+        this.datasourceUsername = datasourceUsername;
         this.reconcileIntervalMs = reconcileIntervalMs;
     }
 
@@ -89,6 +99,13 @@ public class SettingsController {
         model.addAttribute("properties", properties);
         model.addAttribute("reconcileIntervalMs", reconcileIntervalMs);
         model.addAttribute("supportedTypes", DatabaseType.values());
+        // Read-only: which metadata database is in use is decided by SPRING_DATASOURCE_* at
+        // startup, and the page never switches it. Rendered for admins only — the URL and the
+        // key posture describe the installation, not the task list a viewer came for.
+        model.addAttribute("datasourceUrl", JdbcUrlSanitizer.sanitize(datasourceUrl));
+        model.addAttribute("datasourceUsername",
+                datasourceUsername == null ? "" : datasourceUsername);
+        model.addAttribute("defaultCryptoKey", crypto.isUsingDefaultKey());
         model.addAttribute("scheduledProjectIds", scheduler.scheduledProjectIds());
         model.addAttribute("instanceId", lockService.getOwnerId());
         model.addAttribute("javaVersion", System.getProperty("java.version"));

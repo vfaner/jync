@@ -29,148 +29,6 @@
 
     <div class="split split-cols">
         <div>
-            <!-- 元数据库：只读展示当前生效的连接。换库靠 SPRING_DATASOURCE_* + 重启，
-                 页面不持有「当前启用库」指针，避免出现两份互相矛盾的事实来源。 -->
-            <div class="card">
-                <div class="card-head">
-                    <h2><svg class="ico"><use href="#database"/></svg>
-                        <span th:text="#{systemConfig.metadata}">Metadata database</span></h2>
-                </div>
-                <div class="card-body">
-                    <dl class="dl">
-                        <dt th:text="#{systemConfig.metadataUrl}">Current connection</dt>
-                        <dd><code class="mono" style="overflow-wrap:anywhere"
-                                  th:text="${datasourceUrl}">jdbc:h2:file:./data/jync</code></dd>
-                        <dt th:text="#{systemConfig.metadataUser}">Username</dt>
-                        <dd><span class="chip" th:text="${datasourceUsername}">sa</span></dd>
-                        <dt th:text="#{systemConfig.metadataCrypto}">Connection key</dt>
-                        <dd>
-                            <span class="chip chip-danger" th:if="${defaultCryptoKey}"
-                                  th:text="#{systemConfig.cryptoDefault}">Using the shipped default key</span>
-                            <span class="chip chip-ok" th:unless="${defaultCryptoKey}"
-                                  th:text="#{systemConfig.cryptoCustom}">Using a dedicated key</span>
-                        </dd>
-                    </dl>
-                    <p class="help" th:text="#{systemConfig.metadataHelp}">The metadata database is chosen at startup by SPRING_DATASOURCE_*; changing it takes a restart.</p>
-                </div>
-            </div>
-
-            <!-- 配置包：逻辑导出，跨 H2/MySQL/PostgreSQL/Oracle 都能导入。包内密文在导入时
-                 用目标部署的密钥重新加密，否则换库后所有 enc: 值都会解不开。
-                 与元数据库同列：都是「换库」相关的一次性操作，右列留给传输安全。 -->
-            <div class="card">
-                <div class="card-head">
-                    <h2><svg class="ico"><use href="#download"/></svg>
-                        <span th:text="#{systemConfig.package}">Configuration package</span></h2>
-                </div>
-                <div class="card-body">
-                    <p class="help" style="margin-bottom:16px" th:text="#{systemConfig.packageHelp}">Export before switching databases, then import on the fresh database. The package is encrypted with the passphrase you choose.</p>
-
-                    <form method="post" th:action="@{/system-config/export}">
-                        <div class="grid-2">
-                            <div class="field">
-                                <label for="export-passphrase" th:text="#{systemConfig.passphrase}">Passphrase</label>
-                                <input class="input" id="export-passphrase" type="password" name="passphrase"
-                                       autocomplete="new-password" minlength="8" required/>
-                            </div>
-                            <div class="field">
-                                <label for="export-passphrase-confirm" th:text="#{systemConfig.passphraseConfirm}">Confirm passphrase</label>
-                                <input class="input" id="export-passphrase-confirm" type="password"
-                                       name="confirmPassphrase" autocomplete="new-password"
-                                       minlength="8" required/>
-                            </div>
-                        </div>
-                        <div class="field">
-                            <label class="check-inline">
-                                <input type="checkbox" name="includeState" value="true"/>
-                                <span th:text="#{systemConfig.includeState}">Include sync progress and cursors</span>
-                            </label>
-                        </div>
-                        <div class="btn-row">
-                            <button class="btn btn-primary btn-sm" type="submit">
-                                <svg class="ico"><use href="#download"/></svg>
-                                <span th:text="#{systemConfig.export}">Export</span>
-                            </button>
-                        </div>
-                    </form>
-
-                    <hr class="divider"/>
-
-                    <form method="post" enctype="multipart/form-data"
-                          th:action="@{/system-config/import(_csrf=${_csrf.token})}">
-                        <div class="field">
-                            <label for="import-file" th:text="#{systemConfig.file}">Package file</label>
-                            <input class="input" id="import-file" type="file" name="file" accept=".jync" required/>
-                        </div>
-                        <div class="field">
-                            <label for="import-passphrase" th:text="#{systemConfig.passphrase}">Passphrase</label>
-                            <input class="input" id="import-passphrase" type="password" name="passphrase"
-                                   autocomplete="new-password" required/>
-                            <div class="help" th:text="#{systemConfig.packageLimit}">One package may be at most 20 MB.</div>
-                        </div>
-                        <div class="btn-row">
-                            <button class="btn btn-warn btn-sm" type="submit">
-                                <svg class="ico"><use href="#download"/></svg>
-                                <span th:text="#{systemConfig.import}">Import</span>
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        </div>
-
-        <div>
-            <!-- 强制 HTTPS：显式配置优先；页面值即时生效，但开启只能从 HTTPS 或本机发起，
-                 否则一次误操作就把后续所有明文管理员请求锁在 403 里。 -->
-            <div class="card">
-                <div class="card-head">
-                    <h2><svg class="ico"><use href="#shield-check"/></svg>
-                        <span th:text="#{systemConfig.https}">Require HTTPS</span></h2>
-                </div>
-                <div class="card-body">
-                    <dl class="dl pairs">
-                        <div class="kv">
-                            <dt th:text="#{systemConfig.httpsCurrent}">Current state</dt>
-                            <dd>
-                                <span class="chip chip-ok" th:if="${httpsRequired}"
-                                      th:text="#{systemConfig.httpsOn}">On</span>
-                                <span class="chip" th:unless="${httpsRequired}"
-                                      th:text="#{systemConfig.httpsOff}">Off</span>
-                            </dd>
-                        </div>
-                        <div class="kv">
-                            <dt th:text="#{systemConfig.httpsSource}">Source</dt>
-                            <dd>
-                                <span class="chip" th:if="${httpsSource == 'CONFIG'}"
-                                      th:text="#{systemConfig.httpsSourceConfig}">Configuration file</span>
-                                <span class="chip" th:if="${httpsSource == 'DATABASE'}"
-                                      th:text="#{systemConfig.httpsSourceDatabase}">Set on this page</span>
-                                <span class="chip" th:if="${httpsSource == 'DEFAULT'}"
-                                      th:text="#{systemConfig.httpsSourceDefault}">Default</span>
-                            </dd>
-                        </div>
-                    </dl>
-                    <p class="help" th:text="#{systemConfig.httpsHelp}">When on, plaintext requests are refused. If the built-in HTTPS endpoint is running they are redirected to it; otherwise loopback and an unauthenticated GET /login stay reachable for recovery.</p>
-                    <p class="help" th:if="${httpsConfigControlled}"
-                       th:text="#{systemConfig.httpsPinned}">This switch is pinned by the configuration file and cannot be changed here.</p>
-                    <!-- 开启前必须已经有一条 HTTPS 通路：应用内证书已生效，或当前请求本身就是
-                         HTTPS（反代终止 TLS）。否则开启后没有 HTTPS 可供跳转，除回环与探针外
-                         全部 403，管理员会被锁在外面。 -->
-                    <p class="help" th:if="${not httpsRequired and not httpsConfigControlled and httpsEnableBlocked}"
-                       th:text="${#messages.msgOrNull(httpsBlockedKey) ?: httpsBlockedKey}">Upload a valid certificate first.</p>
-
-                    <div class="btn-row" style="margin-top:16px">
-                        <form method="post" th:action="@{/system-config/require-https}">
-                            <input type="hidden" name="enabled" th:value="${!httpsRequired}"/>
-                            <button class="btn btn-sm" type="submit"
-                                    th:classappend="${httpsRequired} ? 'btn-ghost' : 'btn-primary'"
-                                    th:disabled="${httpsConfigControlled or (not httpsRequired and httpsEnableBlocked)}"
-                                    th:text="${httpsRequired} ? #{systemConfig.httpsDisable} : #{systemConfig.httpsEnable}">Enable</button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-
             <!-- TLS 证书：密钥库与口令存在数据目录（默认 ./data/tls），连接器在启动时创建，
                  所以保存后必须重启才生效。页面把「已保存」「已生效」「等待重启」「移除待重启」
                  四个事实分开显示，避免把文件状态说成运行状态。 -->
@@ -271,23 +129,23 @@
 
                     <!-- 两种上传方式是二选一，不是两个步骤。radio + label 做标签页，只靠 CSS 切换
                          面板：禁用 JS 时仍可切换，两个表单也照常提交。 -->
-                    <div class="tls-mode" role="radiogroup"
+                    <div class="mode" role="radiogroup"
                          th:attr="aria-label=#{systemConfig.tlsUploadMode}">
-                        <input class="tls-mode-input" type="radio" name="tlsMode"
+                        <input class="mode-input" type="radio" name="tlsMode"
                                id="tls-mode-pem" checked/>
-                        <input class="tls-mode-input" type="radio" name="tlsMode"
+                        <input class="mode-input" type="radio" name="tlsMode"
                                id="tls-mode-keystore"/>
-                        <div class="tls-mode-tabs">
-                            <label class="tls-mode-tab" for="tls-mode-pem"
+                        <div class="mode-tabbar">
+                            <label class="mode-tab" for="tls-mode-pem"
                                    th:text="#{systemConfig.tlsPemTab}">PEM certificate</label>
-                            <label class="tls-mode-tab" for="tls-mode-keystore"
+                            <label class="mode-tab" for="tls-mode-keystore"
                                    th:text="#{systemConfig.tlsKeystoreTab}">Keystore</label>
                         </div>
 
                         <!-- nginx 风格：证书链一个文件、私钥可以单独一个文件，也可以和证书链放进
                              同一个文件；无需口令。Jync 在内存里用随机口令封装成 PKCS#12 再落盘，
                              私钥不会以明文保存。 -->
-                        <section class="tls-mode-panel" data-mode="pem">
+                        <section class="mode-panel" data-mode="pem">
                             <form method="post" enctype="multipart/form-data"
                                   th:action="@{/system-config/tls(_csrf=${_csrf.token})}">
                                 <div class="field">
@@ -325,7 +183,7 @@
                             </form>
                         </section>
 
-                        <section class="tls-mode-panel" data-mode="keystore">
+                        <section class="mode-panel" data-mode="keystore">
                             <p class="help" th:text="#{systemConfig.tlsHelp}">Upload a PKCS#12 or JKS keystore...</p>
                             <form method="post" enctype="multipart/form-data"
                                   th:action="@{/system-config/tls(_csrf=${_csrf.token})}">
@@ -379,6 +237,159 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <div>
+            <!-- 配置包：逻辑导出，跨 H2/MySQL/PostgreSQL/Oracle 都能导入。包内密文在导入时
+                 用目标部署的密钥重新加密，否则换库后所有 enc: 值都会解不开。
+                 导出与导入共用一张卡、切成两个标签页（radio + 兄弟选择器，不依赖 JS）。
+                 这一列（1fr，右侧）放短卡片；1.35fr 的左列留给 TLS 证书表单。 -->
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#download"/></svg>
+                        <span th:text="#{systemConfig.package}">Configuration package</span></h2>
+                </div>
+                <div class="card-body">
+                    <p class="help" style="margin-bottom:16px" th:text="#{systemConfig.packageHelp}">Export before switching databases, then import on the fresh database. The package is encrypted with the passphrase you choose.</p>
+
+                    <div class="mode">
+                        <input class="mode-input" type="radio" name="package-mode"
+                               id="pkg-tab-export" checked/>
+                        <input class="mode-input" type="radio" name="package-mode"
+                               id="pkg-tab-import"/>
+                        <div class="mode-tabbar">
+                            <label class="mode-tab" for="pkg-tab-export"
+                                   th:text="#{systemConfig.export}">Export</label>
+                            <label class="mode-tab" for="pkg-tab-import"
+                                   th:text="#{systemConfig.import}">Import</label>
+                        </div>
+
+                        <section class="mode-panel" data-mode="export">
+                            <form method="post" th:action="@{/system-config/export}">
+                                <div class="grid-2">
+                                    <div class="field">
+                                        <label for="export-passphrase" th:text="#{systemConfig.passphrase}">Passphrase</label>
+                                        <input class="input" id="export-passphrase" type="password" name="passphrase"
+                                               autocomplete="new-password" minlength="8" required/>
+                                    </div>
+                                    <div class="field">
+                                        <label for="export-passphrase-confirm" th:text="#{systemConfig.passphraseConfirm}">Confirm passphrase</label>
+                                        <input class="input" id="export-passphrase-confirm" type="password"
+                                               name="confirmPassphrase" autocomplete="new-password"
+                                               minlength="8" required/>
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label class="check-inline">
+                                        <input type="checkbox" name="includeState" value="true"/>
+                                        <span th:text="#{systemConfig.includeState}">Include sync progress and cursors</span>
+                                    </label>
+                                </div>
+                                <div class="btn-row">
+                                    <button class="btn btn-primary btn-sm" type="submit">
+                                        <svg class="ico"><use href="#download"/></svg>
+                                        <span th:text="#{systemConfig.export}">Export</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </section>
+
+                        <section class="mode-panel" data-mode="import">
+                            <form method="post" enctype="multipart/form-data"
+                                  th:action="@{/system-config/import(_csrf=${_csrf.token})}">
+                                <div class="field">
+                                    <label for="import-file" th:text="#{systemConfig.file}">Package file</label>
+                                    <input class="input" id="import-file" type="file" name="file" accept=".jync" required/>
+                                </div>
+                                <div class="field">
+                                    <label for="import-passphrase" th:text="#{systemConfig.passphrase}">Passphrase</label>
+                                    <input class="input" id="import-passphrase" type="password" name="passphrase"
+                                           autocomplete="new-password" required/>
+                                    <div class="help" th:text="#{systemConfig.packageLimit}">One package may be at most 20 MB.</div>
+                                </div>
+                                <div class="btn-row">
+                                    <button class="btn btn-warn btn-sm" type="submit">
+                                        <svg class="ico"><use href="#download"/></svg>
+                                        <span th:text="#{systemConfig.import}">Import</span>
+                                    </button>
+                                </div>
+                            </form>
+                        </section>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 诊断包：POST 下载 zip，CSRF 由 Thymeleaf 表单自动注入。整页仅管理员可访问，
+                 所以不需要再按角色判断。 -->
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#download"/></svg>
+                        <span th:text="#{systemConfig.diagnostics}">Diagnostics bundle</span></h2>
+                    <span class="hint" th:text="#{systemConfig.diagnosticsHint}">For support</span>
+                </div>
+                <div class="card-body">
+                    <p class="small soft" style="margin:0 0 16px"
+                       th:text="#{systemConfig.diagnosticsNote}">note</p>
+                    <form method="post" th:action="@{/api/diagnostics/bundle}">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <svg class="ico"><use href="#download"/></svg>
+                            <span th:text="#{systemConfig.diagnosticsDownload}">Download bundle</span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- 强制 HTTPS：显式配置优先；页面值即时生效，但开启只能从 HTTPS 或本机发起，
+                 否则一次误操作就把后续所有明文管理员请求锁在 403 里。 -->
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#shield-check"/></svg>
+                        <span th:text="#{systemConfig.https}">Require HTTPS</span></h2>
+                </div>
+                <div class="card-body">
+                    <dl class="dl pairs">
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.httpsCurrent}">Current state</dt>
+                            <dd>
+                                <span class="chip chip-ok" th:if="${httpsRequired}"
+                                      th:text="#{systemConfig.httpsOn}">On</span>
+                                <span class="chip" th:unless="${httpsRequired}"
+                                      th:text="#{systemConfig.httpsOff}">Off</span>
+                            </dd>
+                        </div>
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.httpsSource}">Source</dt>
+                            <dd>
+                                <span class="chip" th:if="${httpsSource == 'CONFIG'}"
+                                      th:text="#{systemConfig.httpsSourceConfig}">Configuration file</span>
+                                <span class="chip" th:if="${httpsSource == 'DATABASE'}"
+                                      th:text="#{systemConfig.httpsSourceDatabase}">Set on this page</span>
+                                <span class="chip" th:if="${httpsSource == 'DEFAULT'}"
+                                      th:text="#{systemConfig.httpsSourceDefault}">Default</span>
+                            </dd>
+                        </div>
+                    </dl>
+                    <p class="help" th:text="#{systemConfig.httpsHelp}">When on, plaintext requests are refused. If the built-in HTTPS endpoint is running they are redirected to it; otherwise loopback and an unauthenticated GET /login stay reachable for recovery.</p>
+                    <p class="help" th:if="${httpsConfigControlled}"
+                       th:text="#{systemConfig.httpsPinned}">This switch is pinned by the configuration file and cannot be changed here.</p>
+                    <!-- 开启前必须已经有一条 HTTPS 通路：应用内证书已生效，或当前请求本身就是
+                         HTTPS（反代终止 TLS）。否则开启后没有 HTTPS 可供跳转，除回环与探针外
+                         全部 403，管理员会被锁在外面。 -->
+                    <p class="help" th:if="${not httpsRequired and not httpsConfigControlled and httpsEnableBlocked}"
+                       th:text="${#messages.msgOrNull(httpsBlockedKey) ?: httpsBlockedKey}">Upload a valid certificate first.</p>
+
+                    <div class="btn-row" style="margin-top:16px">
+                        <form method="post" th:action="@{/system-config/require-https}">
+                            <input type="hidden" name="enabled" th:value="${!httpsRequired}"/>
+                            <button class="btn btn-sm" type="submit"
+                                    th:classappend="${httpsRequired} ? 'btn-ghost' : 'btn-primary'"
+                                    th:disabled="${httpsConfigControlled or (not httpsRequired and httpsEnableBlocked)}"
+                                    th:text="${httpsRequired} ? #{systemConfig.httpsDisable} : #{systemConfig.httpsEnable}">Enable</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>
 

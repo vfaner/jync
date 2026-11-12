@@ -30,6 +30,7 @@ import com.qqmu.jync.service.version.VersionInfo;
 import com.qqmu.jync.service.version.VersionService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * The settings-page version card: green badge when current, amber button when a newer release
@@ -56,6 +57,8 @@ class SettingsVersionCardViewTest {
 
     @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
+    @MockitoBean
+    private CryptoUtil cryptoUtil;
 
     @BeforeEach
     void defaultHttpsSource() {

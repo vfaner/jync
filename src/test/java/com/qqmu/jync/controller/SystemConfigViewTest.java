@@ -32,8 +32,9 @@ import com.qqmu.jync.service.tls.TlsPageState;
 import com.qqmu.jync.util.CryptoUtil;
 
 /**
- * The administrator's 系统配置 page: metadata database, the HTTPS switch, and the configuration
- * package.
+ * The administrator's 系统配置 page: the configuration package, the diagnostics bundle, the
+ * HTTPS switch and the TLS certificate. Read-only facts about the instance — including the
+ * metadata database — live on 系统信息.
  *
  * <p>It never offers a field for {@code app.security.trusted-proxies}: that list decides which
  * peers may assert HTTPS and which forwarding headers are believed, so editing it from a web
@@ -110,25 +111,62 @@ class SystemConfigViewTest {
     }
 
     @Test
-    void thePageCarriesTheFourConfigurationCards() throws Exception {
+    void thePageCarriesTheAdministrativeCards() throws Exception {
         String page = render(UserRole.ADMIN);
 
-        assertThat(page).contains("元数据库", "强制 HTTPS", "TLS 证书", "配置包");
+        assertThat(page).contains("配置包", "强制 HTTPS", "TLS 证书", "诊断包");
     }
 
     @Test
-    void thePackageCardSitsInTheLeftColumn() throws Exception {
-        // Cards render in document order, so the package before the HTTPS card means it is in
-        // the left column: the two "switch databases" chores share one side, transport security
-        // takes the other.
+    void theTlsFormOwnsTheWiderLeftColumnAndTheActionsStackOnTheRight() throws Exception {
+        // .split gives the first column 1.35fr and the second 1fr, and cards render in document
+        // order. The tall certificate card with its form fields needs the wider column, so it
+        // comes first; the short action cards (package, diagnostics, HTTPS) share the right one.
+        // The read-only metadata database block moved to 系统信息.
         String page = render(UserRole.ADMIN);
 
-        int database = page.indexOf("<span>元数据库</span>");
+        int tls = page.indexOf("<span>TLS 证书</span>");
         int pkg = page.indexOf("<span>配置包</span>");
+        int diagnostics = page.indexOf("<span>诊断包</span>");
         int https = page.indexOf("<span>强制 HTTPS</span>");
-        assertThat(database).isGreaterThan(-1);
-        assertThat(pkg).isGreaterThan(database);
-        assertThat(pkg).isLessThan(https);
+        assertThat(tls).isGreaterThan(-1);
+        assertThat(pkg).isGreaterThan(tls);
+        assertThat(diagnostics).isGreaterThan(pkg);
+        assertThat(https).isGreaterThan(diagnostics);
+    }
+
+    @Test
+    void theMetadataDatabaseBlockIsNoLongerOnThisPage() throws Exception {
+        // It is read-only, so it belongs with the other instance facts on 系统信息; this page is
+        // the administrator's action list.
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).doesNotContain("连接密钥", "<span>元数据库</span>");
+    }
+
+    @Test
+    void theDiagnosticsBundleIsOfferedHere() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).contains("下载诊断包")
+                .contains("action=\"/api/diagnostics/bundle\"");
+    }
+
+    @Test
+    void exportAndImportShareOneCardAsTabsWithExportFirst() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        int exportTab = page.indexOf("id=\"pkg-tab-export\"");
+        int importTab = page.indexOf("id=\"pkg-tab-import\"");
+        assertThat(exportTab).isGreaterThan(-1);
+        assertThat(importTab).isGreaterThan(exportTab);
+        assertThat(page.substring(exportTab, page.indexOf('>', exportTab))).contains("checked");
+        assertThat(page.substring(importTab, page.indexOf('>', importTab)))
+                .doesNotContain("checked");
+        // Panels switch with the radios alone: no JavaScript, so the forms still work with
+        // scripting disabled.
+        assertThat(page.indexOf("data-mode=\"export\""))
+                .isLessThan(page.indexOf("data-mode=\"import\""));
     }
 
     @Test

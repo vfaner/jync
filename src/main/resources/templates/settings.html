@@ -12,8 +12,8 @@
         </div>
     </div>
 
-    <!-- 左列叠两张卡（运行时信息 + 项目与作者），累加高度与右列同步默认值接近，
-         消掉原先「左矮右高」留下的 L 形空白；wrapper 用普通 div 做列容器 -->
+    <!-- 左列叠两张卡（运行时信息 + 项目与作者），右列是元数据库（仅管理员）+ 同步默认值，
+         两列高度接近，消掉原先「左矮右高」留下的 L 形空白；wrapper 用普通 div 做列容器 -->
     <div class="split split-cols">
         <div>
             <div class="card">
@@ -159,6 +159,33 @@
         </div>
 
         <div>
+            <!--/* 元数据库：只读展示当前生效的连接（原在「系统配置」，与诊断包对调）。
+                 换库靠 SPRING_DATASOURCE_* + 重启，页面不持有「当前启用库」指针。
+                 仅管理员可见：JDBC 地址与密钥姿态描述的是这台实例的基础设施。 */-->
+            <div class="card" th:if="${isAdmin}">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#database"/></svg>
+                        <span th:text="#{settings.metadata}">Metadata database</span></h2>
+                </div>
+                <div class="card-body">
+                    <dl class="dl">
+                        <dt th:text="#{settings.metadataUrl}">Current connection</dt>
+                        <dd><code class="mono" style="overflow-wrap:anywhere"
+                                  th:text="${datasourceUrl}">jdbc:h2:file:./data/jync</code></dd>
+                        <dt th:text="#{settings.metadataUser}">Username</dt>
+                        <dd><span class="chip" th:text="${datasourceUsername}">sa</span></dd>
+                        <dt th:text="#{settings.metadataCrypto}">Connection key</dt>
+                        <dd>
+                            <span class="chip chip-danger" th:if="${defaultCryptoKey}"
+                                  th:text="#{settings.cryptoDefault}">Using the shipped default key</span>
+                            <span class="chip chip-ok" th:unless="${defaultCryptoKey}"
+                                  th:text="#{settings.cryptoCustom}">Using a dedicated key</span>
+                        </dd>
+                    </dl>
+                    <p class="help" th:text="#{settings.metadataHelp}">The metadata database is chosen at startup by SPRING_DATASOURCE_*, and changing it takes a restart.</p>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-head">
                     <h2><svg class="ico"><use href="#sliders2"/></svg> <span th:text="#{settings.syncDefaults}">Defaults</span></h2>
@@ -204,25 +231,6 @@
                 </div>
             </div>
 
-            <!--/* 一键诊断包：仅管理员可见，POST 下载 zip；CSRF 由 Thymeleaf 表单自动注入。
-                 放在摘要区右列，与左列「项目与作者」同排，排障入口不必翻到页尾。 */-->
-            <div class="card" th:if="${isAdmin}">
-                <div class="card-head">
-                    <h2><svg class="ico"><use href="#download"/></svg>
-                        <span th:text="#{settings.diagnostics}">Diagnostics bundle</span></h2>
-                    <span class="hint" th:text="#{settings.diagnosticsHint}">For support</span>
-                </div>
-                <div class="card-body">
-                    <p class="small soft" style="margin:0 0 16px"
-                       th:text="#{settings.diagnosticsNote}">note</p>
-                    <form method="post" th:action="@{/api/diagnostics/bundle}">
-                        <button type="submit" class="btn btn-primary btn-sm">
-                            <svg class="ico"><use href="#download"/></svg>
-                            <span th:text="#{settings.diagnosticsDownload}">Download bundle</span>
-                        </button>
-                    </form>
-                </div>
-            </div>
         </div>
     </div>
 

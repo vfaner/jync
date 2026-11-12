@@ -28,6 +28,7 @@ import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionInfo;
 import com.qqmu.jync.service.version.VersionService;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * The donate dialog's support notice links out to the public sponsor board on the official
@@ -55,6 +56,8 @@ class DonateModalViewTest {
 
     @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
+    @MockitoBean
+    private CryptoUtil cryptoUtil;
 
     @BeforeEach
     void defaultHttpsSource() {

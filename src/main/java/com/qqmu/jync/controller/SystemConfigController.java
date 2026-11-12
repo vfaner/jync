@@ -4,7 +4,6 @@ import java.util.Optional;
 
 import jakarta.servlet.http.HttpServletRequest;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,18 +21,14 @@ import com.qqmu.jync.service.tls.TlsCertificateService;
 import com.qqmu.jync.service.tls.TlsPageState;
 import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
-import com.qqmu.jync.util.CryptoUtil;
 import com.qqmu.jync.util.HttpsSupport;
-import com.qqmu.jync.util.JdbcUrlSanitizer;
 
 /**
- * The administrator's 系统配置 page: metadata database, transport security, configuration
- * package.
+ * The administrator's 系统配置 page: configuration package, diagnostics bundle and transport
+ * security.
  *
- * <p>The metadata database block is informational — which database is in use is decided by
- * {@code SPRING_DATASOURCE_*} and only changes on restart. The page can test a candidate
- * connection and print the environment block to paste, but it never switches anything at
- * runtime.
+ * <p>Every card here is an action. Read-only facts about the running instance — including which
+ * metadata database is in use — live on 系统信息.
  */
 @Controller
 public class SystemConfigController {
@@ -44,25 +39,16 @@ public class SystemConfigController {
     private final RequireHttpsResolver requireHttps;
     private final SystemSettingService settings;
     private final AdminAuditService audit;
-    private final CryptoUtil crypto;
     private final TlsCertificateService tls;
-    private final String datasourceUrl;
-    private final String datasourceUsername;
 
     public SystemConfigController(RequireHttpsResolver requireHttps,
                                   SystemSettingService settings,
                                   AdminAuditService audit,
-                                  CryptoUtil crypto,
-                                  TlsCertificateService tls,
-                                  @Value("${spring.datasource.url:}") String datasourceUrl,
-                                  @Value("${spring.datasource.username:}") String datasourceUsername) {
+                                  TlsCertificateService tls) {
         this.requireHttps = requireHttps;
         this.settings = settings;
         this.audit = audit;
-        this.crypto = crypto;
         this.tls = tls;
-        this.datasourceUrl = datasourceUrl;
-        this.datasourceUsername = datasourceUsername;
     }
 
     @GetMapping("/system-config")
@@ -73,10 +59,6 @@ public class SystemConfigController {
         model.addAttribute("httpsConfigControlled", requireHttps.isConfigControlled());
         model.addAttribute("requestSecure", HttpsSupport.isSecure(request));
         model.addAttribute("requestLoopback", ClientIpResolver.isLoopback(request.getRemoteAddr()));
-        model.addAttribute("datasourceUrl", JdbcUrlSanitizer.sanitize(datasourceUrl));
-        model.addAttribute("datasourceUsername",
-                datasourceUsername == null ? "" : datasourceUsername);
-        model.addAttribute("defaultCryptoKey", crypto.isUsingDefaultKey());
         model.addAttribute("packageMaxBytes", PACKAGE_MAX_BYTES);
         TlsPageState tlsState = tls.pageState();
         model.addAttribute("tls", tlsState);

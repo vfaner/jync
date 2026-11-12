@@ -28,6 +28,7 @@ import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionInfo;
 import com.qqmu.jync.service.version.VersionService;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * The settings-page author card: repository links with brand icons plus the author's
@@ -58,6 +59,8 @@ class SettingsAuthorCardViewTest {
 
     @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
+    @MockitoBean
+    private CryptoUtil cryptoUtil;
 
     @BeforeEach
     void defaultHttpsSource() {

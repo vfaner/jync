@@ -24,6 +24,7 @@ import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionInfo;
 import com.qqmu.jync.service.version.VersionService;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * With {@code app.update-check.enabled=false} the settings page must not even render the
@@ -45,6 +46,8 @@ class SettingsUpdateBadgeDisabledViewTest {
 
     @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
+    @MockitoBean
+    private CryptoUtil cryptoUtil;
 
     @BeforeEach
     void defaultHttpsSource() {

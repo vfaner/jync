@@ -30,6 +30,7 @@ import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionInfo;
 import com.qqmu.jync.service.version.VersionService;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * The 运行时信息 card names the machine the numbers elsewhere describe.
@@ -39,7 +40,11 @@ import com.qqmu.jync.service.version.VersionService;
  */
 @WebMvcTest(SettingsController.class)
 @Import(GlobalModelAdvice.class)
-@TestPropertySource(properties = "sync.reconcile-interval-ms=30000")
+@TestPropertySource(properties = {
+        "sync.reconcile-interval-ms=30000",
+        "spring.datasource.url=jdbc:h2:file:./data/jync",
+        "spring.datasource.username=sa"
+})
 class SettingsRuntimeCardViewTest {
 
     @Autowired
@@ -53,6 +58,8 @@ class SettingsRuntimeCardViewTest {
     private VersionService versionService;
     @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
+    @MockitoBean
+    private CryptoUtil cryptoUtil;
 
     private static final RequireHttpsResolver.Effective HTTPS_OFF =
             new RequireHttpsResolver.Effective(false, RequireHttpsResolver.Source.DEFAULT);
@@ -67,6 +74,15 @@ class SettingsRuntimeCardViewTest {
 
     private String render(Locale locale, boolean secure,
                           RequireHttpsResolver.Effective https) throws Exception {
+        return render(locale, secure, https, UserRole.ADMIN);
+    }
+
+    private String render(Locale locale, UserRole role) throws Exception {
+        return render(locale, false, HTTPS_OFF, role);
+    }
+
+    private String render(Locale locale, boolean secure,
+                          RequireHttpsResolver.Effective https, UserRole role) throws Exception {
         when(requireHttpsResolver.effective()).thenReturn(https);
         when(scheduler.scheduledProjectIds()).thenReturn(List.of());
         when(versionService.snapshot()).thenReturn(VersionInfo.builder()
@@ -75,7 +91,7 @@ class SettingsRuntimeCardViewTest {
                 .latestVersion("1.8.1").latestTag("v1.8.1")
                 .build());
 
-        return mvc.perform(get("/settings").locale(locale).secure(secure).with(asAdmin()))
+        return mvc.perform(get("/settings").locale(locale).secure(secure).with(as(role)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
     }
@@ -95,19 +111,48 @@ class SettingsRuntimeCardViewTest {
     }
 
     @Test
-    void theDiagnosticsBundleSitsInTheTopSummaryRow() throws Exception {
+    void theMetadataDatabaseCardSitsInTheTopSummaryRow() throws Exception {
+        // Read-only facts about the running instance live here; the diagnostics download is an
+        // administrator action and moved to 系统配置.
         String html = render(Locale.SIMPLIFIED_CHINESE);
 
         int projectAuthor = html.indexOf("项目与作者");
-        int diagnostics = html.indexOf("下载诊断包");
+        int metadata = html.indexOf("<span>元数据库</span>");
         int supported = html.indexOf("支持的数据库");
 
         assertThat(projectAuthor).isGreaterThan(-1);
-        assertThat(diagnostics).as("管理员必须能看到诊断包入口").isGreaterThan(-1);
+        assertThat(metadata).as("管理员必须能看到元数据库信息").isGreaterThan(-1);
         assertThat(supported).isGreaterThan(-1);
-        assertThat(diagnostics)
-                .as("诊断包放在上方摘要区、与「项目与作者」同排，而不是页面末尾")
+        assertThat(metadata)
+                .as("元数据库卡放在上方摘要区、与「项目与作者」同排，而不是页面末尾")
                 .isGreaterThan(projectAuthor).isLessThan(supported);
+        assertThat(html).contains("jdbc:h2:file:./data/jync", "连接密钥")
+                .contains("正在使用专用密钥");
+        // The metadata card leads the right column; the longer sync-defaults card follows it.
+        assertThat(html.indexOf("<span>同步默认值</span>")).isGreaterThan(metadata);
+    }
+
+    @Test
+    void theDefaultCryptoKeyIsCalledOut() throws Exception {
+        when(cryptoUtil.isUsingDefaultKey()).thenReturn(true);
+        String html = render(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains("正在使用内置默认密钥");
+    }
+
+    @Test
+    void viewersDoNotSeeTheMetadataDatabaseCard() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE, UserRole.VIEWER);
+
+        assertThat(html).doesNotContain("连接密钥", "<span>元数据库</span>");
+    }
+
+    @Test
+    void theDiagnosticsBundleIsNoLongerOnThisPage() throws Exception {
+        String html = render(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).doesNotContain("下载诊断包")
+                .doesNotContain("/api/diagnostics/bundle");
     }
 
     @Test
@@ -188,12 +233,12 @@ class SettingsRuntimeCardViewTest {
         assertThat(html).doesNotContain("resource-gauges");
     }
 
-    private static RequestPostProcessor asAdmin() {
+    private static RequestPostProcessor as(UserRole role) {
         AppUser user = new AppUser();
         user.setId(1L);
-        user.setUsername("admin");
+        user.setUsername(role == UserRole.ADMIN ? "admin" : "view");
         user.setPasswordHash("not-checked-here");
-        user.setRole(UserRole.ADMIN);
+        user.setRole(role);
         SyncUserDetails principal = new SyncUserDetails(user, false);
         return authentication(new UsernamePasswordAuthenticationToken(
                 principal, null, principal.getAuthorities()));

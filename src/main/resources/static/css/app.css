@@ -346,37 +346,46 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .conn-tab:hover { color: var(--ink-soft); }
 .conn-tab[aria-current="page"] { color: var(--brand); border-bottom-color: var(--brand); }
 
-/* ─── TLS 证书上传方式 ──────────────────────────────────── */
-/* 两种上传方式是二选一：radio 保存选择，label 当标签，兄弟选择器切换面板。
-   不依赖 JS；键盘在 radio 组内用方向键切换，焦点环落在对应标签上。 */
-.tls-mode { position: relative; }
-.tls-mode-input {
+/* ─── 二选一标签页（TLS 上传方式、配置包导出/导入） ────────── */
+/* radio 保存选择，label 当标签，兄弟选择器切换面板：不依赖 JS，
+   禁用脚本时两个面板各自仍是可提交的独立表单。
+   键盘在 radio 组内用方向键切换，焦点环落在对应标签上。
+   每个 radio 只影响同一 .mode 容器里它后面的兄弟，所以选中态和面板
+   切换按 input id 写规则。 */
+.mode { position: relative; }
+.mode-input {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%);
   white-space: nowrap; border: 0;
 }
-.tls-mode-tabs {
+.mode-tabbar {
   display: flex; flex-wrap: wrap; margin: 0 0 16px;
   border-bottom: 1px solid var(--line);
 }
-.tls-mode-tab {
+.mode-tab {
   padding: 8px 12px; margin: 0 6px -1px 0;
   font-size: 13.5px; font-weight: 600; color: var(--ink-mute);
   border-bottom: 2px solid transparent; cursor: pointer;
   -webkit-user-select: none; user-select: none;
 }
-.tls-mode-tab:hover { color: var(--ink-soft); }
-#tls-mode-pem:checked ~ .tls-mode-tabs [for="tls-mode-pem"],
-#tls-mode-keystore:checked ~ .tls-mode-tabs [for="tls-mode-keystore"] {
+.mode-tab:hover { color: var(--ink-soft); }
+#tls-mode-pem:checked ~ .mode-tabbar [for="tls-mode-pem"],
+#tls-mode-keystore:checked ~ .mode-tabbar [for="tls-mode-keystore"],
+#pkg-tab-export:checked ~ .mode-tabbar [for="pkg-tab-export"],
+#pkg-tab-import:checked ~ .mode-tabbar [for="pkg-tab-import"] {
   color: var(--brand); border-bottom-color: var(--brand);
 }
-#tls-mode-pem:focus-visible ~ .tls-mode-tabs [for="tls-mode-pem"],
-#tls-mode-keystore:focus-visible ~ .tls-mode-tabs [for="tls-mode-keystore"] {
+#tls-mode-pem:focus-visible ~ .mode-tabbar [for="tls-mode-pem"],
+#tls-mode-keystore:focus-visible ~ .mode-tabbar [for="tls-mode-keystore"],
+#pkg-tab-export:focus-visible ~ .mode-tabbar [for="pkg-tab-export"],
+#pkg-tab-import:focus-visible ~ .mode-tabbar [for="pkg-tab-import"] {
   outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px;
 }
-.tls-mode-panel { display: none; }
-#tls-mode-pem:checked ~ .tls-mode-panel[data-mode="pem"],
-#tls-mode-keystore:checked ~ .tls-mode-panel[data-mode="keystore"] { display: block; }
+.mode-panel { display: none; }
+#tls-mode-pem:checked ~ .mode-panel[data-mode="pem"],
+#tls-mode-keystore:checked ~ .mode-panel[data-mode="keystore"],
+#pkg-tab-export:checked ~ .mode-panel[data-mode="export"],
+#pkg-tab-import:checked ~ .mode-panel[data-mode="import"] { display: block; }
 
 .page-head {
   display: flex; justify-content: space-between; align-items: flex-start;

@@ -28,6 +28,7 @@ import com.qqmu.jync.service.task.SyncScheduler;
 import com.qqmu.jync.service.version.VersionInfo;
 import com.qqmu.jync.service.version.VersionService;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
+import com.qqmu.jync.util.CryptoUtil;
 
 /**
  * An internal deployment blanks the Gitee mirror and the contact handles by overriding
@@ -57,6 +58,8 @@ class SettingsAuthorCardBlankViewTest {
 
     @MockitoBean
     private RequireHttpsResolver requireHttpsResolver;
+    @MockitoBean
+    private CryptoUtil cryptoUtil;
 
     @BeforeEach
     void defaultHttpsSource() {
