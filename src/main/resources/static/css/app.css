@@ -1170,6 +1170,17 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .muted { color: var(--ink-mute); }
 .soft { color: var(--ink-soft); }
 .small { font-size: 12.5px; }
+/* 显示方式与间距的小工具类，数字即像素。ETL 预检卡片等模板一直在用它们，
+   但样式表此前从未定义：元素按默认盒模型排版，内联的 grid-template-columns
+   没有 display:grid 可依附，两栏被排成上下两段。由
+   TemplateUtilityClassCoverageTest 钉住“用了就必须有定义”。 */
+.flex { display: flex; }
+.grid { display: grid; }
+.justify-between { justify-content: space-between; }
+.mb-2 { margin-bottom: 2px; }
+.mb-4 { margin-bottom: 4px; }
+.mb-12 { margin-bottom: 12px; }
+.ml-8 { margin-left: 8px; }
 .chip {
   display: inline-block; padding: 2px 7px; border-radius: 6px;
   background: var(--bg-tint); font-family: var(--mono); font-size: 12px;
