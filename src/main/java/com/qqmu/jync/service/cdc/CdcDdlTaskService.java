@@ -232,7 +232,7 @@ public class CdcDdlTaskService {
     }
 
     /** The statement behind a change-log row's "CDC_SKIPPED_DDL:" prefix. */
-    private static String stripPrefix(String details) {
+    static String stripPrefix(String details) {
         if (details == null) {
             return "";
         }

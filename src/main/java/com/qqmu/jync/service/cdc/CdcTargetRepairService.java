@@ -80,16 +80,20 @@ public class CdcTargetRepairService {
     private final DataSourceManager dataSourceManager;
     private final SyncEngine syncEngine;
     private final SyncStateWriter stateWriter;
+    private final CdcDdlTaskReconciler ddlTaskReconciler;
     private final SyncProperties properties;
 
     /** 每个项目连续未成功提交的修复轮次;成功提交一笔事务后由调用方清零。 */
     private final ConcurrentHashMap<Long, AtomicInteger> attempts = new ConcurrentHashMap<>();
 
     public CdcTargetRepairService(DataSourceManager dataSourceManager, SyncEngine syncEngine,
-                                  SyncStateWriter stateWriter, SyncProperties properties) {
+                                  SyncStateWriter stateWriter,
+                                  CdcDdlTaskReconciler ddlTaskReconciler,
+                                  SyncProperties properties) {
         this.dataSourceManager = dataSourceManager;
         this.syncEngine = syncEngine;
         this.stateWriter = stateWriter;
+        this.ddlTaskReconciler = ddlTaskReconciler;
         this.properties = properties;
     }
 
@@ -170,7 +174,22 @@ public class CdcTargetRepairService {
             return Outcome.of(Status.FAILED, repairTables, detail);
         }
 
-        recordRepair(ctx, repairTables, result.getRowsInserted());
+        // The rebuilt table now carries the source's current structure, and the reload closed
+        // the data gap: every skipped-DDL task on these tables describes work this cycle has
+        // already done. Leave them open and the log keeps asking for an ALTER whose column
+        // already exists, while the column projection stays forced on across restarts.
+        int closedTasks;
+        try {
+            closedTasks = ddlTaskReconciler.resolveAfterTargetRebuild(projectId, repairTables);
+        } catch (RuntimeException e) {
+            // Closing is bookkeeping; failing it must not turn a successful repair into an
+            // outage. The tasks simply stay pending, exactly as they were.
+            log.warn("Project {}: repaired the target table(s) but could not close their open"
+                    + " DDL task(s): {}", projectId, e.toString());
+            closedTasks = 0;
+        }
+
+        recordRepair(ctx, repairTables, result.getRowsInserted(), closedTasks);
         return Outcome.of(Status.REPAIRED, repairTables,
                 "recreated and reloaded " + repairTables);
     }
@@ -248,14 +267,18 @@ public class CdcTargetRepairService {
         return name;
     }
 
-    private void recordRepair(SyncContext ctx, List<String> sourceTables, long rows) {
+    private void recordRepair(SyncContext ctx, List<String> sourceTables, long rows,
+                              int closedTasks) {
+        String closed = closedTasks == 0 ? ""
+                : "; closed " + closedTasks + " open skipped-DDL task(s) as completed by"
+                        + " the rebuild";
         for (String sourceTable : sourceTables) {
             String targetTable = ctx.getConfig().targetTableName(sourceTable);
             String detail = REPAIR_LOG_MARKER + "recreated target table "
                     + (targetTable == null ? sourceTable : targetTable)
                     + " and reloaded it from the source (" + rows
                     + " row(s) written); the CDC position was left untouched, so replay"
-                    + " continues from the same point";
+                    + " continues from the same point" + closed;
             stateWriter.recordLog(ctx.projectId(), ObjectType.TABLE, sourceTable,
                     ChangeType.INFO, detail, true, 0L, (int) Math.min(Integer.MAX_VALUE, rows));
         }

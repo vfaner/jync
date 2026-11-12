@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -54,6 +55,7 @@ class CdcTargetRepairServiceTest {
     private DataSourceManager dataSourceManager;
     private SyncEngine engine;
     private SyncStateWriter stateWriter;
+    private CdcDdlTaskReconciler ddlTaskReconciler;
     private MetadataReader sourceReader;
     private SyncProperties properties;
     private CdcTargetRepairService service;
@@ -68,9 +70,11 @@ class CdcTargetRepairServiceTest {
         dataSourceManager = mock(DataSourceManager.class);
         engine = mock(SyncEngine.class);
         stateWriter = mock(SyncStateWriter.class);
+        ddlTaskReconciler = mock(CdcDdlTaskReconciler.class);
         sourceReader = mock(MetadataReader.class);
         properties = new SyncProperties();
-        service = new CdcTargetRepairService(dataSourceManager, engine, stateWriter, properties);
+        service = new CdcTargetRepairService(dataSourceManager, engine, stateWriter,
+                ddlTaskReconciler, properties);
 
         sourceConn = DriverManager.getConnection("jdbc:h2:mem:repair_service_src", "sa", "");
         targetConn = DriverManager.getConnection("jdbc:h2:mem:repair_service_tgt", "sa", "");
@@ -235,6 +239,35 @@ class CdcTargetRepairServiceTest {
                 .startsWith(CdcTargetRepairService.REPAIR_LOG_MARKER)
                 .contains("ORDERS")
                 .contains("12");
+    }
+
+    @Test
+    void closesTheOpenDdlTasksOfTheRebuiltTables() throws Exception {
+        when(engine.runCycle(any())).thenAnswer(inv -> {
+            createTable(targetConn, "ORDERS");
+            createTable(targetConn, "CUSTOMERS");
+            return new SyncResult();
+        });
+        when(ddlTaskReconciler.resolveAfterTargetRebuild(eq(PROJECT_ID), any())).thenReturn(2);
+
+        service.repair(ctx(), missing("ORDERS"));
+
+        verify(ddlTaskReconciler).resolveAfterTargetRebuild(eq(PROJECT_ID),
+                argThat(tables -> tables.contains("ORDERS") && tables.contains("CUSTOMERS")));
+        ArgumentCaptor<String> details = ArgumentCaptor.forClass(String.class);
+        verify(stateWriter).recordLog(eq(PROJECT_ID), eq(ObjectType.TABLE), eq("ORDERS"),
+                eq(ChangeType.INFO), details.capture(), eq(true), anyLong(), any());
+        assertThat(details.getValue()).contains("closed 2 open skipped-DDL task");
+    }
+
+    @Test
+    void aFailedRepairLeavesTheDdlTasksOpen() throws Exception {
+        // The target still lacks the table after the cycle: the task is still real work.
+        when(engine.runCycle(any())).thenReturn(new SyncResult());
+
+        assertThat(service.repair(ctx(), missing("ORDERS")).status())
+                .isEqualTo(CdcTargetRepairService.Status.FAILED);
+        verify(ddlTaskReconciler, never()).resolveAfterTargetRebuild(any(), any());
     }
 
     @Test
