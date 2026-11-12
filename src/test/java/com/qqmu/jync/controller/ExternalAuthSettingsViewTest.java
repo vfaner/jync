@@ -118,15 +118,53 @@ class ExternalAuthSettingsViewTest {
         int password = page.indexOf("data-mode-section=\"PASSWORD\"");
         assertThat(common).isGreaterThan(-1);
         assertThat(password).isGreaterThan(common);
-        // Password mode posts to the OA API; the browser is never sent to a portal from here,
-        // so offering this field next to the login URL is what made the two look duplicated.
-        assertThat(page.substring(common, password)).doesNotContain("loginEntryUrl");
 
-        int portal = page.indexOf("data-mode-any=\"HEADER,TICKET\"");
+        // 门户入口只在 HEADER/TICKET 模式下显示，由卡片上的 data-mode-any 决定；两栏布局后
+        // 它不再与登录 URL 相邻，所以不能再靠文档位置判断，检查卡片自己的作用域。
+        int portal = page.indexOf("class=\"card oa-card-portal\"");
         assertThat(portal).isGreaterThan(-1);
-        int nextCard = page.indexOf("<div class=\"card\"", portal);
+        // 带尾随空格，避开卡内的 <div class="card-head">。
+        int nextCard = page.indexOf("<div class=\"card ", portal);
         String portalCard = page.substring(portal, nextCard < 0 ? page.length() : nextCard);
-        assertThat(portalCard).contains("loginEntryUrl", "门户登录入口");
+        assertThat(portalCard).contains("loginEntryUrl", "门户登录入口",
+                "data-mode-any=\"HEADER,TICKET\"");
+    }
+
+    @Test
+    void theDesktopLayoutPutsTheModeAndMappingCardsInTheirOwnColumn() throws Exception {
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andReturn().getResponse().getContentAsString();
+
+        int split = page.indexOf("class=\"split oa-cols\"");
+        int common = page.indexOf("data-mode-section=\"COMMON\"");
+        int portal = page.indexOf("data-mode-any=\"HEADER,TICKET\"");
+        int password = page.indexOf("data-mode-section=\"PASSWORD\"");
+        // PASSWORD,TICKET 这个标记在通用设置卡里也出现过，用映射卡自己的字段定位。
+        int mapping = page.indexOf("id=\"successField\"");
+
+        // 两栏并排：通用设置（连同门户入口）在左，模式卡与响应映射在右。原先单栏堆叠把页面
+        // 拉得很长，屏幕右侧却一直空着；窄屏由 .split 的断点收回单列。
+        assertThat(split).as("the form uses the two-column settings layout").isNotNegative();
+        assertThat(portal).isGreaterThan(common);
+        assertThat(password).as("the right column starts after the left one").isGreaterThan(portal);
+        assertThat(mapping).isGreaterThan(password);
+    }
+
+    @Test
+    void theSaveBarAndConnectivityTestSitUnderTheLeftColumn() throws Exception {
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andReturn().getResponse().getContentAsString();
+
+        int common = page.indexOf("data-mode-section=\"COMMON\"");
+        int save = page.indexOf("保存设置");
+        int test = page.indexOf("id=\"external-auth-test-result\"");
+        int password = page.indexOf("data-mode-section=\"PASSWORD\"");
+
+        // 保存与连通性测试并入左栏，紧接通用设置向下排，不再各占一整行；
+        // 右栏只留模式卡与响应映射。
+        assertThat(save).as("the save button").isGreaterThan(common);
+        assertThat(test).as("the connectivity test card").isGreaterThan(save);
+        assertThat(test).as("both stay in the left column").isLessThan(password);
     }
 
     @Test

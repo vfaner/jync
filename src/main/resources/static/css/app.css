@@ -1239,6 +1239,22 @@ table.tbl a.truncate { display: block; }
 /* 设置页：split 后面跟的全宽卡不满足 .card + .card，拿不到上边距，由 split 补下边距 */
 .split-cols { margin-bottom: 18px; }
 
+/* 外部认证页：左栏（通用设置 + 保存 + 连通性测试）与右栏（模式卡 + 响应映射）各自向下排，
+   两栏高度互不牵制。窄屏拆平两栏后，保存与测试必须插回模式卡之后——否则保存按钮会出现在
+   尚未看到的模式设置前面。display:contents 让卡片重新成为单列网格的直接子项，order 生效；
+   间距已经由网格 gap 提供，不再叠加 .card + .card 的上边距。 */
+.oa-cols > .oa-col { min-width: 0; }
+@media (max-width: 1100px) {
+  .oa-cols > .oa-col { display: contents; }
+  .oa-cols .card { margin-top: 0; }
+  .oa-card-common { order: 1; }
+  .oa-card-mode { order: 2; }
+  .oa-card-portal { order: 3; }
+  .oa-card-mapping { order: 4; }
+  .oa-card-save { order: 5; }
+  .oa-card-test { order: 6; }
+}
+
 /* 页脚 */
 .foot {
   max-width: 1440px; margin: 0 auto; padding: 20px 28px 30px;
