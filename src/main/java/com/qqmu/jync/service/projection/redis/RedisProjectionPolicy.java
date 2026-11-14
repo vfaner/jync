@@ -20,8 +20,9 @@ import com.qqmu.jync.service.task.SyncContextFactory;
  *
  * <p>Kept out of {@code ProjectService} on purpose: a database project's save path should not
  * grow a branch for every cache rule, and the rules are only meaningful together — a Redis
- * target without a log-CDC strategy writes nothing, and two projects on one target sharing a
- * prefix silently overwrite each other's keys. {@code ProjectService} calls two methods.
+ * target without a log-CDC strategy writes nothing, and two projects on one target whose key
+ * prefixes overlap own the same namespace — the broader prefix sweeps the narrower one's keys
+ * away on a rebuild. {@code ProjectService} calls two methods.
  *
  * <p>All refusals are bare i18n keys; the controller renders them like every other save error.
  */
@@ -141,6 +142,11 @@ public class RedisProjectionPolicy {
      * <p>Shared with the precheck: a save refuses the conflict, and a report has to name the
      * project that owns the keys. Blank or missing identity means "not saved yet", which cannot
      * conflict with anything.
+     *
+     * <p>Containment counts as a conflict, not just equality: a rebuild's sweep deletes every
+     * key matching {@code <prefix>*}, so a project on {@code jync:} would take every
+     * {@code jync:<id>:} project's keys with it. Sibling namespaces that merely share a
+     * spelling ({@code jync:1:} and {@code jync:12:}) stay disjoint and are allowed.
      */
     public Project conflictingProject(Project project, String prefix) {
         if (project == null || project.getId() == null || project.getTargetRedisId() == null
@@ -161,7 +167,7 @@ public class RedisProjectionPolicy {
                 continue;
             }
             String otherPrefix = normalizePrefix(otherProjection.getKeyPrefix(), other.getId());
-            if (prefix.equals(otherPrefix)) {
+            if (prefix.startsWith(otherPrefix) || otherPrefix.startsWith(prefix)) {
                 return other;
             }
         }
