@@ -44,7 +44,7 @@ class IgnoredVersionStoreTest {
         assertThat(store.isIgnored("2.1.0")).isTrue();
         assertThat(store.isIgnored("v2.1.0")).isTrue();
         assertThat(store.isIgnored("2.0.9")).isTrue();
-        assertThat(store.isIgnored("2.2.0")).isFalse();
+        assertThat(store.isIgnored("2.2.1")).isFalse();
     }
 
     @Test
@@ -52,11 +52,11 @@ class IgnoredVersionStoreTest {
         JpaIgnoredVersionStore store = store();
         store.ignore("v2.1.0");
 
-        assertThat(store.isIgnored("2.2.0")).isFalse();
+        assertThat(store.isIgnored("2.2.1")).isFalse();
 
-        store.ignore("2.2.0");
+        store.ignore("2.2.1");
         assertThat(store.isIgnored("2.1.0")).isTrue();
-        assertThat(store.isIgnored("2.2.0")).isTrue();
+        assertThat(store.isIgnored("2.2.1")).isTrue();
         assertThat(store.isIgnored("2.3.0")).isFalse();
     }
 
@@ -65,10 +65,10 @@ class IgnoredVersionStoreTest {
         JpaIgnoredVersionStore store = store();
 
         store.ignore("2.1.0");
-        store.ignore("2.2.0");
+        store.ignore("2.2.1");
 
         assertThat(repository.count()).isEqualTo(1);
-        assertThat(store.ignoredVersion()).isEqualTo("2.2.0");
+        assertThat(store.ignoredVersion()).isEqualTo("2.2.1");
     }
 
     @Test
