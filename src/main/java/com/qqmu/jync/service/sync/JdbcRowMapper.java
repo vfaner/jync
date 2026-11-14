@@ -690,7 +690,7 @@ public final class JdbcRowMapper {
      * <p>The fraction is appended because {@code LocalDateTime.toString()} omits a zero
      * seconds component and local time formatting would otherwise drop sub-second values.
      */
-    static String wallClockToString(LocalDateTime value) {
+    public static String wallClockToString(LocalDateTime value) {
         String text = value.format(WALL_CLOCK_FORMAT);
         int nanos = value.getNano();
         if (nanos == 0) {

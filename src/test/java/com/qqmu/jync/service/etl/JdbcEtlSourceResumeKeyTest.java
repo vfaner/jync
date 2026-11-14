@@ -7,9 +7,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
@@ -99,5 +102,77 @@ class JdbcEtlSourceResumeKeyTest {
                 DatabaseType.ORACLE);
 
         verify(ps).setLong(1, 42L);
+    }
+
+    /**
+     * Oracle renders DATE/TIMESTAMP through the session's NLS formats, not as ISO text, and
+     * {@link JdbcEtlSource#bindResumeKey} can only read an ISO wall clock back. Storing the
+     * NLS text made every resume of an interrupted Oracle extraction fail as "stored resume
+     * value ... cannot be read back".
+     */
+    @Test
+    void anOracleNlsTimestampTextIsRewrittenAsAWallClock() {
+        String driverText = "14-NOV-26 10.00.00.123456 AM";
+
+        String stored = JdbcEtlSource.resumeKeyText(Types.TIMESTAMP,
+                LocalDateTime.of(2026, 11, 14, 10, 0, 0, 123_456_000), driverText);
+
+        assertThat(stored).isEqualTo("2026-11-14 10:00:00.123456");
+    }
+
+    @Test
+    void aDateOnlyNlsTextKeepsTheTypedTimeOfDay() {
+        // Oracle's default NLS_DATE_FORMAT carries no time of day at all; the wall clock
+        // must come from the value, not from the truncated driver text.
+        String stored = JdbcEtlSource.resumeKeyText(Types.TIMESTAMP,
+                LocalDateTime.of(2026, 11, 14, 10, 30), "14-NOV-26");
+
+        assertThat(stored).isEqualTo("2026-11-14 10:30:00");
+    }
+
+    @Test
+    void anOracleNlsDateKeyIsRewrittenAsAnIsoDate() {
+        String stored = JdbcEtlSource.resumeKeyText(Types.DATE,
+                LocalDate.of(2026, 11, 14), "14-NOV-26");
+
+        assertThat(stored).isEqualTo("2026-11-14");
+    }
+
+    @Test
+    void aDriverTextThatAlreadyParsesIsStoredVerbatim() {
+        // MySQL renders TIMESTAMP in the session zone; that text must survive untouched or
+        // a server zone that differs from the JVM zone would shift the resume boundary.
+        String driverText = "2026-11-14 10:00:00";
+
+        String stored = JdbcEtlSource.resumeKeyText(Types.TIMESTAMP,
+                Timestamp.valueOf(driverText), driverText);
+
+        assertThat(stored).isSameAs(driverText);
+    }
+
+    @Test
+    void aNonTemporalKeyKeepsItsText() {
+        assertThat(JdbcEtlSource.resumeKeyText(Types.BIGINT, 42L, "42")).isEqualTo("42");
+    }
+
+    @Test
+    void anUnparseableTextWithoutATypedTemporalValueIsKept() {
+        // Nothing usable to rewrite from: keep the driver text rather than inventing one.
+        assertThat(JdbcEtlSource.resumeKeyText(Types.TIMESTAMP, "14-NOV-26", "14-NOV-26"))
+                .isEqualTo("14-NOV-26");
+    }
+
+    @Test
+    void theRewrittenTextBindsBackThroughTheResumeKey() throws Exception {
+        LocalDateTime wall = LocalDateTime.of(2026, 11, 14, 10, 0);
+        String stored = JdbcEtlSource.resumeKeyText(Types.TIMESTAMP, wall,
+                "14-NOV-26 10.00.00.000000 AM");
+        PreparedStatement ps = mock(PreparedStatement.class);
+
+        JdbcEtlSource.bindResumeKey(ps, new EtlCheckpointValue(Types.TIMESTAMP, stored),
+                DatabaseType.ORACLE);
+
+        verify(ps).setTimestamp(eq(1), eq(Timestamp.from(wall.toInstant(ZoneOffset.UTC))),
+                any(java.util.Calendar.class));
     }
 }

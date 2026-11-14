@@ -343,6 +343,85 @@ final class JdbcEtlSource implements EtlSource {
         return type != null && type.needsConnectorJStreamingSentinel() ? Integer.MIN_VALUE : FETCH_SIZE;
     }
 
+    /**
+     * The text a checkpoint stores for the resume key.
+     *
+     * <p>{@link #bindResumeKey} reads that text back with {@code Timestamp.valueOf},
+     * {@code Date.valueOf} and similar parsers, so it has to be an ISO wall clock. Most
+     * drivers already render temporal columns that way, but Oracle formats them with the
+     * session's NLS settings ({@code 14-NOV-26 10.00.00.123456 AM} — and its default
+     * {@code NLS_DATE_FORMAT} carries no time of day at all). Storing that text made every
+     * resume of an interrupted Oracle extraction fail as "stored resume value ... cannot be
+     * read back", so the run could never continue.
+     *
+     * <p>Text that already round-trips is kept verbatim: MySQL renders TIMESTAMP in the
+     * server session zone, and re-rendering it through the JVM zone would move the resume
+     * boundary whenever the two differ. Only text the binder cannot read is replaced by the
+     * typed value rendered as a wall clock.
+     */
+    static String resumeKeyText(int jdbcType, Object value, String driverText) {
+        if (driverText == null || parsesBack(jdbcType, driverText.trim())) {
+            return driverText;
+        }
+        String canonical = wallClockText(jdbcType, value);
+        return canonical == null ? driverText : canonical;
+    }
+
+    /** Whether {@link #bindResumeKey} can read this text back for the given type. */
+    private static boolean parsesBack(int jdbcType, String text) {
+        try {
+            switch (jdbcType) {
+                case Types.DATE:
+                    Date.valueOf(text);
+                    return true;
+                case Types.TIME:
+                    Time.valueOf(text);
+                    return true;
+                case Types.TIMESTAMP:
+                    return wallClock(text) != null;
+                default:
+                    return true;
+            }
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /** The typed value as the ISO text {@link #bindResumeKey} expects, or null. */
+    private static String wallClockText(int jdbcType, Object value) {
+        switch (jdbcType) {
+            case Types.DATE:
+                if (value instanceof java.time.LocalDate date) {
+                    return date.toString();
+                }
+                if (value instanceof Date date) {
+                    return date.toLocalDate().toString();
+                }
+                if (value instanceof java.time.LocalDateTime wall) {
+                    return wall.toLocalDate().toString();
+                }
+                return null;
+            case Types.TIME:
+                if (value instanceof java.time.LocalTime time) {
+                    return Time.valueOf(time).toString();
+                }
+                if (value instanceof Time time) {
+                    return time.toString();
+                }
+                return null;
+            case Types.TIMESTAMP:
+                if (value instanceof java.time.LocalDateTime wall) {
+                    return JdbcRowMapper.wallClockToString(wall);
+                }
+                if (value instanceof Timestamp stamp) {
+                    return JdbcRowMapper.wallClockToString(stamp.toLocalDateTime());
+                }
+                return null;
+            default:
+                return null;
+        }
+    }
+
     static void bindResumeKey(PreparedStatement statement, EtlCheckpointValue checkpoint,
                               DatabaseType sourceType) throws SQLException {
         String value = checkpoint.value();

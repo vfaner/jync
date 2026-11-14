@@ -217,7 +217,18 @@ public class EtlRunner {
                         }
                         if (keyIndex > 0) {
                             keyType = columns.get(keyIndex - 1).jdbcType();
-                            keyValue = cursor.getString(keyIndex);
+                            // The driver's own text unless it cannot be read back — Oracle
+                            // renders temporal columns through NLS formats, which the resume
+                            // binder cannot parse (see JdbcEtlSource.resumeKeyText). A native
+                            // Mongo cursor is not a driver: its text is already
+                            // MongoResumeKeyCodec's canonical encoding (an ISO instant for a
+                            // date), and rewriting it to a wall clock would make decode()
+                            // reject every continuation as "error.etl.mongo.resume.invalid".
+                            String driverText = cursor.getString(keyIndex);
+                            keyValue = sourceType == DatabaseType.MONGODB_NATIVE
+                                    ? driverText
+                                    : JdbcEtlSource.resumeKeyText(keyType,
+                                            values[keyIndex - 1], driverText);
                             if (resumable && keyValue == null) {
                                 // The continuation query filters with `key > ?`, which never
                                 // matches NULL. Copying this row now and then excluding it from
