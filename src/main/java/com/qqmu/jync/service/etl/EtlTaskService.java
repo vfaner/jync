@@ -92,7 +92,7 @@ public class EtlTaskService {
             entity = taskRepository.findById(form.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
             extractionChanged = extractionChanged(entity, form);
-            if (extractionChanged && guard.isRunning(form.getId())) {
+            if (extractionChanged && guard.isLeased(form.getId())) {
                 // The runner read its SQL, target and resume key when it started. Clearing the
                 // checkpoint now would be undone by the old query's next checkpoint write, and
                 // the next run could resume from a watermark the new query never produced.
@@ -205,11 +205,14 @@ public class EtlTaskService {
         if (task.getBatchId() != null) {
             throw new IllegalStateException("error.etl.batch.managed");
         }
-        if (guard.isRunning(id)) {
+        if (guard.isLeased(id)) {
             throw new IllegalStateException("error.etl.running");
         }
         checkpointStore.clear(id);
         taskRepository.deleteById(id);
+        // Belt and braces: a lease row that appeared after the check above, or that the check
+        // could not read, must not outlive the task it named.
+        guard.discard(id);
         events.publishEvent(new EtlTaskChangedEvent(id, true));
     }
 

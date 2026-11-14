@@ -157,17 +157,18 @@ public class EtlBatchService {
         if (!batchId.equals(member.getBatchId())) {
             throw new IllegalArgumentException("error.etl.not.found");
         }
-        if (isRunning(batchId)) {
+        if (guard.isLeased(batchKey(batchId))) {
             // The batch run took its member list when it started; removing one now leaves the
             // runner executing a deleted row and clearing a checkpoint that is still being written.
             throw new IllegalStateException("error.etl.batch.running");
         }
-        if (guard.isRunning(taskId)) {
+        if (guard.isLeased(taskId)) {
             throw new IllegalStateException("error.etl.batch.memberRunning");
         }
         // The task row and its resume position go together; a checkpoint without its source is noise.
         checkpointStore.clear(taskId);
         taskRepository.delete(member);
+        guard.discard(taskId);
         events.publishEvent(new EtlTaskChangedEvent(taskId, true));
 
         if (taskRepository.findByBatchIdOrderByIdAsc(batchId).isEmpty() && Boolean.TRUE.equals(batch.getEnabled())) {
@@ -320,12 +321,12 @@ public class EtlBatchService {
     public void delete(Long id) {
         EtlBatch batch = batchRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
-        if (isRunning(id)) {
+        if (guard.isLeased(batchKey(id))) {
             throw new IllegalStateException("error.etl.batch.running");
         }
         List<EtlTask> members = taskRepository.findByBatchIdOrderByIdAsc(id);
         for (EtlTask member : members) {
-            if (guard.isRunning(member.getId())) {
+            if (guard.isLeased(member.getId())) {
                 throw new IllegalStateException("error.etl.batch.memberRunning");
             }
         }
@@ -335,6 +336,10 @@ public class EtlBatchService {
         }
         taskRepository.deleteAll(members);
         batchRepository.delete(batch);
+        guard.discard(batchKey(id));
+        for (EtlTask member : members) {
+            guard.discard(member.getId());
+        }
         events.publishEvent(new EtlBatchChangedEvent(id, true));
     }
 

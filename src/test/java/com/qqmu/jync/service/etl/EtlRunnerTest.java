@@ -7,8 +7,12 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -16,6 +20,7 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.junit.jupiter.api.AfterEach;
@@ -397,9 +402,63 @@ class EtlRunnerTest {
         }
     }
 
+    /**
+     * A steady-state upsert touches mostly existing keys, and the emulation used to run one
+     * UPDATE round trip per row. The UPDATEs are sent as one batch per transaction instead;
+     * rows whose update matched nothing (or whose count the driver will not report) are then
+     * probed and inserted individually, so correctness does not depend on the count alone.
+     */
     @Test
-    void overwriteIgnoresAndClearsTheCheckpoint() throws SQLException {
+    void emulatedUpsertSendsTheUpdatesAsOneBatch() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO dst VALUES (1, 'old'), (2, 'old')");
+
+        BatchCounter counter = new BatchCounter();
+        EtlConnectionProvider counting = config -> counter.wrap(
+                DriverManager.getConnection(urlOf(config), "sa", ""));
+
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+        EtlRunResult result = runner.run(task, source, target, counting);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(rows("SELECT id, name FROM dst ORDER BY id"))
+                .containsExactly("1|a", "2|b", "3|c");
+        assertThat(counter.calls("update", "addBatch"))
+                .as("one batched UPDATE per source row")
+                .isEqualTo(3);
+        assertThat(counter.calls("update", "executeBatch"))
+                .as("the batch is sent once, not once per row")
+                .isEqualTo(1);
+        assertThat(counter.calls("update", "executeUpdate"))
+                .as("no per-row UPDATE round trips")
+                .isZero();
+    }
+
+    /**
+     * A source query may legitimately return the same key twice. Sequential writes end with the
+     * last row's values, and batching must not change that: the first occurrence's update finds
+     * no row, and inserting both would either duplicate the key or keep the first row.
+     */
+    @Test
+    void aDuplicateKeyInsideOneBatchKeepsTheLastRow() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'first'), (2, 'x'), (1, 'last')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR(20))");
+
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(rows("SELECT id, name FROM dst ORDER BY id"))
+                .containsExactly("1|last", "2|x");
+    }
+
+    @Test
+    void overwriteIgnoresAndClearsTheCheckpoint() throws SQLException {        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
                 "INSERT INTO src VALUES (1, 'a'), (2, 'b')");
         execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY, name VARCHAR(20))");
         checkpoints.save(7L, Types.INTEGER, "99");
@@ -846,6 +905,10 @@ class EtlRunnerTest {
         return config;
     }
 
+    private static String urlOf(DatabaseConfig config) {
+        return config.getId() == 1L ? SOURCE_URL : TARGET_URL;
+    }
+
     private static void reset(String url) throws SQLException {
         try (Connection c = DriverManager.getConnection(url, "sa", "");
              Statement s = c.createStatement()) {
@@ -880,6 +943,65 @@ class EtlRunnerTest {
             }
         }
         return values;
+    }
+
+    /**
+     * Counts the JDBC calls the runner makes, by statement kind and method, while passing
+     * everything through to the real H2 driver — the assertions stay on behavior, not on a mock.
+     */
+    private static final class BatchCounter {
+
+        private final Map<String, Integer> calls = new HashMap<>();
+
+        Connection wrap(Connection delegate) {
+            return (Connection) Proxy.newProxyInstance(
+                    BatchCounter.class.getClassLoader(),
+                    new Class<?>[]{Connection.class},
+                    (proxy, method, args) -> {
+                        Object result = invoke(method, delegate, args);
+                        if (result instanceof PreparedStatement statement
+                                && args != null && args.length > 0 && args[0] instanceof String sql) {
+                            return counting(statement, kind(sql));
+                        }
+                        return result;
+                    });
+        }
+
+        private PreparedStatement counting(PreparedStatement delegate, String kind) {
+            return (PreparedStatement) Proxy.newProxyInstance(
+                    BatchCounter.class.getClassLoader(),
+                    new Class<?>[]{PreparedStatement.class},
+                    (proxy, method, args) -> {
+                        calls.merge(kind + "." + method.getName(), 1, Integer::sum);
+                        return invoke(method, delegate, args);
+                    });
+        }
+
+        int calls(String kind, String method) {
+            return calls.getOrDefault(kind + "." + method, 0);
+        }
+
+        private static String kind(String sql) {
+            String flat = sql.stripLeading().toLowerCase(Locale.ROOT);
+            if (flat.startsWith("update")) {
+                return "update";
+            }
+            if (flat.startsWith("insert")) {
+                return "insert";
+            }
+            if (flat.startsWith("select")) {
+                return "select";
+            }
+            return "other";
+        }
+
+        private static Object invoke(Method method, Object target, Object[] args) throws Throwable {
+            try {
+                return method.invoke(target, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        }
     }
 
     private static final class MemoryCheckpoints implements EtlCheckpointStore {

@@ -43,7 +43,7 @@ class AlertConfigServiceTest {
     @BeforeEach
     void setUp() {
         crypto = new CryptoUtil(new SyncProperties());
-        service = new AlertConfigService(repository, crypto);
+        service = new AlertConfigService(repository, crypto, false);
     }
 
     private static AlertConfigForm form(boolean enabled) {
@@ -251,6 +251,76 @@ class AlertConfigServiceTest {
         assertThatThrownBy(() -> service.save(form))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.alert.url.invalid");
+    }
+
+    /**
+     * The URL is typed by an administrator but fetched by the server process, so an address
+     * that only means something from inside this host turns "save a webhook" into a request
+     * the operator never sees. Loopback, private ranges and the IPv6 unique-local range are
+     * refused unless the deployment states that its webhooks live on the intranet.
+     */
+    @Test
+    void aWebhookOnTheLoopbackInterfaceIsRefusedByDefault() {
+        when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
+        AlertConfigForm form = form(true);
+        form.setWebhookUrl("http://127.0.0.1:8080/hook");
+
+        assertThatThrownBy(() -> service.save(form))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.alert.url.private");
+    }
+
+    @Test
+    void aWebhookOnAPrivateNetworkIsRefusedByDefault() {
+        when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
+        AlertConfigForm form = form(true);
+        form.setWebhookUrl("https://10.1.2.3/hook");
+
+        assertThatThrownBy(() -> service.save(form))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.alert.url.private");
+    }
+
+    @Test
+    void anIPv6UniqueLocalWebhookIsRefusedByDefault() {
+        when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
+        AlertConfigForm form = form(true);
+        // fc00::/7 is the IPv6 counterpart of RFC 1918; Java's isSiteLocalAddress does not
+        // recognise it, so it is the explicit prefix check that catches it.
+        form.setWebhookUrl("http://[fd00::1]/hook");
+
+        assertThatThrownBy(() -> service.save(form))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.alert.url.private");
+    }
+
+    /** The cloud metadata endpoint answers from inside the host even on an otherwise public IP. */
+    @Test
+    void theCloudMetadataAddressIsRefusedEvenWhenPrivateTargetsAreAllowed() {
+        AlertConfigService permissive = new AlertConfigService(repository, crypto, true);
+        when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
+        AlertConfigForm form = form(true);
+        form.setWebhookUrl("http://100.100.100.200/latest/meta-data");
+
+        assertThatThrownBy(() -> permissive.save(form))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.alert.url.invalid");
+    }
+
+    /** An intranet deployment sets the flag and keeps its existing private webhook. */
+    @Test
+    void aPrivateWebhookIsAcceptedWhenTheOperatorOptsIn() {
+        AlertConfigService permissive = new AlertConfigService(repository, crypto, true);
+        when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
+        AlertConfigForm form = form(true);
+        form.setWebhookUrl("http://10.1.2.3/hook");
+
+        permissive.save(form);
+
+        ArgumentCaptor<AlertConfig> saved = ArgumentCaptor.forClass(AlertConfig.class);
+        verify(repository).save(saved.capture());
+        assertThat(crypto.decrypt(saved.getValue().getWebhookUrl()))
+                .isEqualTo("http://10.1.2.3/hook");
     }
 
     @Test

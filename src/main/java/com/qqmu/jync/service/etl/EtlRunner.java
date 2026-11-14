@@ -7,7 +7,10 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -166,6 +169,10 @@ public class EtlRunner {
                         .map(columnNames::indexOf).toList();
                 List<EtlSourceColumn> keyColumns = keyIndexes.stream()
                         .map(columns::get).toList();
+                // Rows of the transaction being written. Only the emulation needs them: its
+                // UPDATEs are queued, and their counts alone cannot tell a missing key from an
+                // unchanged row, so the values are kept until the batch has been sent.
+                List<Object[]> pendingUpsertRows = new ArrayList<>();
 
                 stage = Side.TARGET;
                 try (PreparedStatement insert = target.prepareStatement(writeSql);
@@ -235,9 +242,8 @@ public class EtlRunner {
                         }
                         stage = Side.TARGET;
                         if (emulatedUpsert) {
-                            writeUpsertRow(update, insert, probe, columns, keyColumns,
-                                    updateColumns, updateIndexes, keyIndexes,
-                                    values, targetDialect);
+                            queueUpsertRow(update, updateColumns, updateIndexes,
+                                    values, targetDialect, pendingUpsertRows);
                         } else {
                             bindRow(insert, columns, values, targetDialect);
                             insert.addBatch();
@@ -246,9 +252,12 @@ public class EtlRunner {
 
                         if (pending >= BATCH_SIZE) {
                             stage = Side.TARGET;
-                            // The emulation already executed each row's statements; only the
-                            // committed transaction boundary is left to draw.
-                            if (!emulatedUpsert) {
+                            if (emulatedUpsert) {
+                                // One round trip for the transaction's UPDATEs, then the
+                                // insert path only for the keys the batch could not update.
+                                flushUpsertRows(update, insert, probe, columns, keyColumns,
+                                        keyIndexes, pendingUpsertRows, targetDialect);
+                            } else {
                                 insert.executeBatch();
                             }
                             target.commit();
@@ -264,7 +273,10 @@ public class EtlRunner {
 
                     if (pending > 0) {
                         stage = Side.TARGET;
-                        if (!emulatedUpsert) {
+                        if (emulatedUpsert) {
+                            flushUpsertRows(update, insert, probe, columns, keyColumns,
+                                    keyIndexes, pendingUpsertRows, targetDialect);
+                        } else {
                             insert.executeBatch();
                         }
                         target.commit();
@@ -414,43 +426,100 @@ public class EtlRunner {
     }
 
     /**
-     * Writes one row in an emulated upsert: update by key, insert only when the key is absent.
+     * Queues one row's UPDATE for the emulated upsert and keeps the row's values.
      *
-     * <p>The existence probe is what makes this correct on every target: some drivers report
-     * the number of <em>changed</em> rows, so an update that matched an identical row answers
-     * zero. Treating that as "missing" would then insert a second copy.
+     * <p>The values are kept because an update count of zero is not proof that the key is
+     * missing (see {@link #flushUpsertRows}), so the decision is made after the batch reports.
+     *
+     * <p>A key-only table has no non-key column to update; every row goes straight to the
+     * probe-and-insert path.
      */
-    private static void writeUpsertRow(PreparedStatement update, PreparedStatement insert,
-                                       PreparedStatement probe, List<EtlSourceColumn> columns,
-                                       List<EtlSourceColumn> keyColumns,
+    private static void queueUpsertRow(PreparedStatement update,
                                        List<EtlSourceColumn> updateColumns,
-                                       List<Integer> updateIndexes, List<Integer> keyIndexes,
-                                       Object[] values, SqlDialect dialect) throws SQLException {
+                                       List<Integer> updateIndexes, Object[] values,
+                                       SqlDialect dialect, List<Object[]> rows) throws SQLException {
         if (update != null) {
             Object[] updateValues = new Object[updateIndexes.size()];
             for (int i = 0; i < updateValues.length; i++) {
                 updateValues[i] = values[updateIndexes.get(i)];
             }
             bindRow(update, updateColumns, updateValues, dialect);
-            if (update.executeUpdate() > 0) {
-                return;
+            update.addBatch();
+        }
+        rows.add(values);
+    }
+
+    /**
+     * Completes one transaction's emulated upsert: send the queued UPDATEs, then insert the
+     * keys they did not reach.
+     *
+     * <p>A positive count means the row was updated. Anything else — zero, or
+     * {@code SUCCESS_NO_INFO} from a driver that does not report counts — is decided by the
+     * probe: some drivers count <em>changed</em> rows, so an UPDATE that matched an identical
+     * row answers zero, and inserting then would create a second copy.
+     *
+     * <p>A key repeated inside the batch is handled only at its last occurrence. Sequential
+     * writes ended with the last row's values (each repeated UPDATE simply ran again); with the
+     * inserts deferred to the flush, inserting every occurrence would either leave the first
+     * row's values or collide on the target's unique key.
+     */
+    private static void flushUpsertRows(PreparedStatement update, PreparedStatement insert,
+                                        PreparedStatement probe, List<EtlSourceColumn> columns,
+                                        List<EtlSourceColumn> keyColumns,
+                                        List<Integer> keyIndexes, List<Object[]> rows,
+                                        SqlDialect dialect) throws SQLException {
+        int[] counts = null;
+        if (update != null && !rows.isEmpty()) {
+            counts = update.executeBatch();
+            update.clearBatch();
+        }
+        if (!rows.isEmpty()) {
+            Map<List<Object>, Integer> lastOccurrence = new HashMap<>();
+            for (int i = 0; i < rows.size(); i++) {
+                lastOccurrence.put(keyOf(rows.get(i), keyIndexes), i);
+            }
+            for (int i = 0; i < rows.size(); i++) {
+                int count = counts == null || i >= counts.length ? -1 : counts[i];
+                if (count == Statement.EXECUTE_FAILED) {
+                    // Never reported without an exception by the drivers used here, but a
+                    // failed UPDATE must not fall through to a silent insert.
+                    throw new SQLException("the batched upsert UPDATE failed for row " + (i + 1));
+                }
+                if (count > 0) {
+                    continue;
+                }
+                Object[] values = rows.get(i);
+                Integer last = lastOccurrence.get(keyOf(values, keyIndexes));
+                if (last == null || last != i) {
+                    continue;
+                }
+                if (exists(probe, keyColumns, values, keyIndexes, dialect)) {
+                    continue;
+                }
+                bindRow(insert, columns, values, dialect);
+                try {
+                    insert.executeUpdate();
+                } catch (SQLException e) {
+                    // A concurrent writer may have inserted this key between our probe and
+                    // the INSERT. Only a collision on a key the target now holds is absorbed;
+                    // any other integrity violation must surface instead of dropping the row.
+                    if (!UniqueViolations.isUniqueViolation(e)
+                            || !exists(probe, keyColumns, values, keyIndexes, dialect)) {
+                        throw e;
+                    }
+                }
             }
         }
-        if (exists(probe, keyColumns, values, keyIndexes, dialect)) {
-            return;
+        rows.clear();
+    }
+
+    /** A row's key values, in the order the operator configured — the map key for de-duplication. */
+    private static List<Object> keyOf(Object[] values, List<Integer> keyIndexes) {
+        Object[] key = new Object[keyIndexes.size()];
+        for (int i = 0; i < key.length; i++) {
+            key[i] = values[keyIndexes.get(i)];
         }
-        bindRow(insert, columns, values, dialect);
-        try {
-            insert.executeUpdate();
-        } catch (SQLException e) {
-            // A concurrent writer may have inserted this key between our probe and the
-            // INSERT. Only a collision on a key the target now holds is absorbed; any other
-            // integrity violation must surface instead of silently dropping the row.
-            if (!UniqueViolations.isUniqueViolation(e)
-                    || !exists(probe, keyColumns, values, keyIndexes, dialect)) {
-                throw e;
-            }
-        }
+        return Arrays.asList(key);
     }
 
     private static boolean exists(PreparedStatement probe, List<EtlSourceColumn> keyColumns,

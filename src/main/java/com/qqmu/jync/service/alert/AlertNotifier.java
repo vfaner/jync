@@ -170,9 +170,19 @@ public class AlertNotifier {
     }
 
     /** Keeps a platform message on one line and small enough for the settings page. */
-    private static String truncate(String value) {
+    static String truncate(String value) {
         String flat = value.replaceAll("[\\r\\n\\t]+", " ").trim();
-        return flat.length() <= 200 ? flat : flat.substring(0, 200) + "…";
+        if (flat.length() <= 200) {
+            return flat;
+        }
+        int end = 200;
+        if (Character.isHighSurrogate(flat.charAt(end - 1))) {
+            // The cut is a UTF-16 offset: landing between the halves of a surrogate pair would
+            // leave an unpaired surrogate — a replacement glyph on the page, and a character
+            // some JSON writers refuse to encode. Drop the pair rather than half of it.
+            end--;
+        }
+        return flat.substring(0, end) + "…";
     }
 
     /**

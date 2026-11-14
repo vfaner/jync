@@ -25,6 +25,21 @@ class AlertNotifierTest {
 
     private final ObjectMapper json = new ObjectMapper();
 
+    /**
+     * A platform's error text is cut to 200 characters before the settings page shows it. The
+     * cut index is a UTF-16 offset, so an emoji straddling it would leave an unpaired surrogate
+     * — a replacement glyph on the page, and a character some JSON writers refuse to encode.
+     */
+    @Test
+    void aTruncatedPlatformMessageDoesNotSplitASurrogatePair() {
+        String message = "a".repeat(199) + "😀" + "tail";
+
+        String truncated = AlertNotifier.truncate(message);
+
+        assertThat(truncated).isEqualTo("a".repeat(199) + "…");
+        assertThat(Character.isHighSurrogate(truncated.charAt(truncated.length() - 2))).isFalse();
+    }
+
     @Test
     void theGenericShapeCarriesTheMessageAsJson() throws Exception {
         JsonNode body = json.readTree(AlertNotifier.payload(AlertWebhookFormat.GENERIC, "hello"));

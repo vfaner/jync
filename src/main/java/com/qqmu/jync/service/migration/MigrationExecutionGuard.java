@@ -8,9 +8,10 @@ import org.springframework.stereotype.Component;
 /**
  * One in-process slot per migration task, plus the cancellation token belonging to that run.
  *
- * <p>Deliberately in-memory, like {@code EtlExecutionGuard}: a dedicated migration is an
- * operator-started batch, and running the same task on two nodes is not coordinated. The
- * visible partial target index lets an operator re-run with {@code OVERWRITE} to converge.
+ * <p>Deliberately in-memory: a dedicated migration is an operator-started batch, and running
+ * the same task on two nodes is not coordinated (the ETL guard, unlike this one, has a shared
+ * lease row). The visible partial target index lets an operator re-run with
+ * {@code OVERWRITE} to converge.
  */
 @Component
 public class MigrationExecutionGuard {

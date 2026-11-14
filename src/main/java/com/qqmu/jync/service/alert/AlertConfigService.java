@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -46,9 +47,20 @@ public class AlertConfigService {
     private final AlertConfigRepository repository;
     private final CryptoUtil crypto;
 
-    public AlertConfigService(AlertConfigRepository repository, CryptoUtil crypto) {
+    /**
+     * Whether a webhook may point inside the private network. Off by default: the URL is typed
+     * by an administrator but fetched by this process, so a loopback or RFC 1918 address lets
+     * "save a webhook" become a request to an internal service. Intranet deployments that
+     * genuinely post to a private address turn it on.
+     */
+    private final boolean allowPrivateWebhook;
+
+    public AlertConfigService(AlertConfigRepository repository, CryptoUtil crypto,
+                              @Value("${alert.webhook.allow-private:false}")
+                              boolean allowPrivateWebhook) {
         this.repository = repository;
         this.crypto = crypto;
+        this.allowPrivateWebhook = allowPrivateWebhook;
     }
 
     /** The stored settings, or an all-default disabled instance when nothing was saved yet. */
@@ -217,7 +229,7 @@ public class AlertConfigService {
         return categories;
     }
 
-    private static void validateUrl(String url) {
+    private void validateUrl(String url) {
         if (url.length() > MAX_URL_LENGTH) {
             throw new IllegalArgumentException("error.alert.url.invalid");
         }
@@ -229,14 +241,17 @@ public class AlertConfigService {
                     || uri.getHost() == null || uri.getHost().isBlank()) {
                 throw new IllegalArgumentException("error.alert.url.invalid");
             }
-            // Resolve the host to refuse link-local/cloud-metadata targets. A host that does
-            // not resolve right now is accepted: an intranet webhook may be unreachable from
-            // this node (or DNS may be down), and the POST will report the failure anyway.
+            // Resolve the host to refuse addresses that only mean something from inside this
+            // host or network. A host that does not resolve right now is accepted: an intranet
+            // webhook may be unreachable from this node (or DNS may be down), and the POST
+            // will report the failure anyway.
             try {
                 InetAddress address = InetAddress.getByName(uri.getHost());
-                if (address.isLinkLocalAddress()
-                        || "100.100.100.200".equals(address.getHostAddress())) {
+                if (isNeverAPublicWebhookTarget(address)) {
                     throw new IllegalArgumentException("error.alert.url.invalid");
+                }
+                if (!allowPrivateWebhook && isPrivateOrReserved(address)) {
+                    throw new IllegalArgumentException("error.alert.url.private");
                 }
             } catch (UnknownHostException e) {
                 // Accepted; see above.
@@ -244,6 +259,40 @@ public class AlertConfigService {
         } catch (URISyntaxException e) {
             throw new IllegalArgumentException("error.alert.url.invalid");
         }
+    }
+
+    /**
+     * Addresses with no public meaning at all: "any address", multicast, link-local (which
+     * includes the cloud metadata endpoints 169.254.169.254 and 100.100.100.200, the latter
+     * reported by Java as neither link-local nor site-local and therefore named explicitly).
+     * Refused even when private targets are allowed.
+     */
+    private static boolean isNeverAPublicWebhookTarget(InetAddress address) {
+        return address.isAnyLocalAddress()
+                || address.isMulticastAddress()
+                || address.isLinkLocalAddress()
+                || "100.100.100.200".equals(address.getHostAddress());
+    }
+
+    /**
+     * Loopback, RFC 1918, IPv6 unique-local (fc00::/7), carrier-grade NAT, benchmarking and
+     * the reserved 240/4 block. Java reports IPv4-mapped literals ({@code ::ffff:10.1.2.3})
+     * as {@link java.net.Inet4Address}, so the byte checks below cover both spellings.
+     */
+    private static boolean isPrivateOrReserved(InetAddress address) {
+        if (address.isLoopbackAddress() || address.isSiteLocalAddress()) {
+            return true;
+        }
+        byte[] bytes = address.getAddress();
+        if (bytes.length == 16) {
+            return (bytes[0] & 0xFE) == 0xFC;
+        }
+        int first = bytes[0] & 0xFF;
+        int second = bytes[1] & 0xFF;
+        return first == 0                                   // 0.0.0.0/8 "this network"
+                || (first == 100 && (second & 0xC0) == 64)  // 100.64/10 carrier-grade NAT
+                || (first == 198 && (second == 18 || second == 19)) // 198.18/15 benchmarking
+                || first >= 240;                            // 240/4 reserved
     }
 
     /**

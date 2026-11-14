@@ -99,6 +99,13 @@ metrics:
   # The token is the only gate — scrapers cannot hold a Jync session.
   prometheus-token: ${JYN_METRICS_TOKEN:}
 
+alert:
+  webhook:
+    # 默认拒绝指向本机/内网的告警 Webhook（回环、10/8、172.16/12、192.168/16、100.64/10、
+    # fc00::/7）：地址由管理员填写、由服务端发起请求，内网地址等于把「保存告警」变成对服务端
+    # 所在内网的探测。告警确实要发到内网聊天服务时设为 true；云元数据地址始终拒绝。
+    allow-private: ${JYN_ALERT_WEBHOOK_ALLOW_PRIVATE:false}
+
 app:
   # The banner reads this; @project.version@ is filtered from pom.xml at build time,
   # so the startup banner follows the POM without a second place to edit.
