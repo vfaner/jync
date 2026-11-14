@@ -15,6 +15,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.MessageSource;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -72,6 +74,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
     private final DatabaseConfigService databaseConfigService;
     private final DatabaseHealthService healthService;
     private final ChangeLogRepository changeLogRepository;
+    private final MessageSource messages;
     private final Clock clock;
 
     /**
@@ -97,9 +100,10 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
                                        CdcConsumerManager cdcManager,
                                        DatabaseConfigService databaseConfigService,
                                        DatabaseHealthService healthService,
-                                       ChangeLogRepository changeLogRepository) {
+                                       ChangeLogRepository changeLogRepository,
+                                       MessageSource messages) {
         this(projectRepository, projectService, cdcManager, databaseConfigService,
-                healthService, changeLogRepository, Clock.systemUTC());
+                healthService, changeLogRepository, messages, Clock.systemUTC());
     }
 
     DefaultAlertSignalCollector(ProjectRepository projectRepository,
@@ -108,6 +112,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
                                 DatabaseConfigService databaseConfigService,
                                 DatabaseHealthService healthService,
                                 ChangeLogRepository changeLogRepository,
+                                MessageSource messages,
                                 Clock clock) {
         this.projectRepository = projectRepository;
         this.projectService = projectService;
@@ -115,6 +120,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         this.databaseConfigService = databaseConfigService;
         this.healthService = healthService;
         this.changeLogRepository = changeLogRepository;
+        this.messages = messages;
         this.clock = clock;
     }
 
@@ -248,7 +254,12 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
             return;
         }
 
-        if (task != null && task.getStatus() == TaskStatus.ERROR) {
+        // A parked task means the consumer already stopped: the stats below describe a run that
+        // is over. Reporting the disconnected streak too would put two events on the same dedup
+        // key ("CDC_STOPPED:<id>:"), and the later one would replace the parked message that
+        // carries the reason.
+        boolean parked = task != null && task.getStatus() == TaskStatus.ERROR;
+        if (parked) {
             events.add(new AlertEvent(AlertCategory.CDC_STOPPED, id, project.getName(), "",
                     "alert.detail.cdcParked",
                     new Object[]{task.getLastSyncResult() == null
@@ -276,7 +287,8 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         }
         announcedDdlCount.put(id, skippedDdl);
 
-        boolean disconnected = !stats.isConnected() && stats.getLastError() != null;
+        boolean disconnected = !parked && !stats.isConnected()
+                && stats.getLastError() != null;
         int streak = disconnected
                 ? disconnectStreak.merge(id, 1, Integer::sum)
                 : reset(disconnectStreak, id);
@@ -461,7 +473,26 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
             events.add(new AlertEvent(AlertCategory.DB_UNHEALTHY, 0L,
                     healthNames.getOrDefault(id, "#" + id), "#" + id,
                     "alert.detail.dbUnhealthy",
-                    new Object[]{healthMessages.getOrDefault(id, "")}, now));
+                    new Object[]{localize(healthMessages.getOrDefault(id, ""))}, now));
+        }
+    }
+
+    /**
+     * Health verdicts carry either an i18n key (probe timeout, invalid connection) or the
+     * driver's own text. The alert body must read like the connections page, so a value that
+     * resolves is translated and everything else is left exactly as written.
+     */
+    private String localize(String message) {
+        if (message == null || message.isEmpty()) {
+            return "";
+        }
+        try {
+            String translated = messages.getMessage(message, null, message,
+                    LocaleContextHolder.getLocale());
+            return translated == null ? message : translated;
+        } catch (RuntimeException e) {
+            // A missing translation must not cost the alert itself.
+            return message;
         }
     }
 

@@ -95,6 +95,19 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- 最近一次投递：只有进程内记忆，重启后从"尚未投递"重新开始。
+                         平台返回 200 但业务拒绝的情况也在这里可见。 -->
+                    <div class="help" th:if="${lastDelivery}">
+                        <strong th:text="#{alert.lastDelivery}">Last delivery</strong>
+                        <span th:text="${#temporals.format(lastDelivery.at(), 'yyyy-MM-dd HH:mm:ss')}">2026-11-14 10:00:00</span>
+                        —
+                        <span th:if="${lastDelivery.ok()}" th:text="#{alert.lastDeliveryOk}">succeeded</span>
+                        <span th:unless="${lastDelivery.ok()}"
+                              th:text="#{alert.lastDeliveryFailed}">failed</span>
+                        <span th:unless="${lastDelivery.ok()}"
+                              th:text="|(${lastDelivery.detail()})|">reason</span>
+                    </div>
                 </div>
             </div>
             </div>

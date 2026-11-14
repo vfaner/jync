@@ -118,6 +118,9 @@ public class AlertSettingsController {
         String masked = configService.maskedUrl();
         model.addAttribute("maskedUrl", masked);
         model.addAttribute("urlSet", masked != null);
+        // In-memory and instance-wide: a down channel that only wrote debug logs looked
+        // healthy from this page, which is the one place an operator checks.
+        model.addAttribute("lastDelivery", notifier.lastDelivery());
     }
 
     private static Locale locale() {

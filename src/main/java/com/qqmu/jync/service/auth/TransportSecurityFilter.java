@@ -150,14 +150,18 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
     /**
      * Sends the browser to the app-terminated HTTPS port, preserving method and body.
      *
-     * <p>The authority comes from the request's server name (or an explicit
-     * {@code app.tls.redirect-host}), never from {@code X-Forwarded-Host}: an attacker-supplied
-     * Host would otherwise turn this into an open redirect. An unsafe value is refused outright
+     * <p>The authority never comes from a request header. {@code getServerName()} is derived
+     * from {@code Host}, so a domain that resolves to this server — and then to the attacker
+     * once the scheme changes — would turn the 307 into a hop to an attacker-controlled HTTPS
+     * site; {@code X-Forwarded-Host} is equally untrusted. Only two sources are safe: the
+     * explicitly configured {@code app.tls.redirect-host}, or the local address of the
+     * connection itself, which is the address the client actually dialled. Deployments reached
+     * by a name behind NAT must set the configured host; an unsafe value is refused outright
      * rather than guessed at.
      */
     private void redirectToHttps(HttpServletRequest request, HttpServletResponse response,
                                  int httpsPort) throws IOException {
-        String host = redirectHost.isEmpty() ? request.getServerName() : redirectHost;
+        String host = redirectHost.isEmpty() ? localAuthority(request) : redirectHost;
         String authority = urlAuthority(host);
         if (authority == null) {
             response.sendError(HttpServletResponse.SC_BAD_REQUEST,
@@ -177,6 +181,12 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
 
         response.setStatus(HttpServletResponse.SC_TEMPORARY_REDIRECT);
         response.setHeader("Location", location.toString());
+    }
+
+    /** The address the client dialled; server-controlled, unlike {@code Host}. */
+    private static String localAuthority(HttpServletRequest request) {
+        String address = request.getLocalAddr();
+        return address == null || address.isBlank() ? request.getLocalName() : address;
     }
 
     /** The URL authority, or {@code null} when the value is not a plain host or IP. */

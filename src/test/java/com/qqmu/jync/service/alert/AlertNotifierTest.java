@@ -2,8 +2,10 @@ package com.qqmu.jync.service.alert;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
@@ -99,5 +101,100 @@ class AlertNotifierTest {
         AlertNotifier notifier = new AlertNotifier();
 
         assertThat(notifier.sendNow("not a url", AlertWebhookFormat.GENERIC, "x")).isFalse();
+    }
+
+    /**
+     * WeCom, DingTalk and Feishu answer a rejected message with HTTP 200 and put the verdict in
+     * the body. Reading the status alone made the test button promise success and made a
+     * silently dropped production alert look delivered.
+     */
+    @Test
+    void aBusinessRejectionOnHttp200IsReportedAsAFailure() throws Exception {
+        AlertNotifier notifier = new AlertNotifier();
+
+        withService(200, "{\"errcode\":93000,\"errmsg\":\"invalid webhook url\"}", url -> {
+            assertThat(notifier.sendNow(url, AlertWebhookFormat.WE_COM, "告警")).isFalse();
+
+            AlertNotifier.Delivery delivery = notifier.lastDelivery();
+            assertThat(delivery).isNotNull();
+            assertThat(delivery.ok()).isFalse();
+            assertThat(delivery.detail()).contains("93000").contains("invalid webhook url");
+        });
+    }
+
+    @Test
+    void anErrcodeOfZeroIsAnAcceptedMessage() throws Exception {
+        AlertNotifier notifier = new AlertNotifier();
+
+        withService(200, "{\"errcode\":0,\"errmsg\":\"ok\"}", url -> {
+            assertThat(notifier.sendNow(url, AlertWebhookFormat.DING_TALK, "x")).isTrue();
+            assertThat(notifier.lastDelivery().ok()).isTrue();
+        });
+    }
+
+    @Test
+    void feishuUsesItsCodeFieldForTheVerdict() throws Exception {
+        AlertNotifier notifier = new AlertNotifier();
+
+        withService(200, "{\"code\":19001,\"msg\":\"param invalid\"}", url -> {
+            assertThat(notifier.sendNow(url, AlertWebhookFormat.FEISHU, "x")).isFalse();
+            assertThat(notifier.lastDelivery().detail()).contains("19001");
+        });
+    }
+
+    @Test
+    void aGenericEndpointIsJudgedByStatusAlone() throws Exception {
+        AlertNotifier notifier = new AlertNotifier();
+
+        withService(200, "{\"errcode\":93000}", url ->
+                assertThat(notifier.sendNow(url, AlertWebhookFormat.GENERIC, "x")).isTrue());
+    }
+
+    @Test
+    void anHttpErrorIsRememberedWithItsStatus() throws Exception {
+        AlertNotifier notifier = new AlertNotifier();
+
+        withService(500, "boom", url -> {
+            assertThat(notifier.sendNow(url, AlertWebhookFormat.GENERIC, "x")).isFalse();
+            assertThat(notifier.lastDelivery().detail()).contains("500");
+        });
+    }
+
+    @Test
+    void anUnreachableEndpointIsRememberedAsAFailedDelivery() {
+        AlertNotifier notifier = new AlertNotifier();
+
+        notifier.sendNow("http://127.0.0.1:1/hook", AlertWebhookFormat.GENERIC, "x");
+
+        assertThat(notifier.lastDelivery()).isNotNull();
+        assertThat(notifier.lastDelivery().ok()).isFalse();
+        assertThat(notifier.lastDelivery().at()).isNotNull();
+    }
+
+    private interface Servlet {
+        void run(String url) throws Exception;
+    }
+
+    private void withService(int status, String body, Servlet assertion) throws Exception {
+        HttpServer server = responding(status, body);
+        try {
+            assertion.run("http://127.0.0.1:" + server.getAddress().getPort() + "/hook");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private static HttpServer responding(int status, String body) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/hook", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        return server;
     }
 }

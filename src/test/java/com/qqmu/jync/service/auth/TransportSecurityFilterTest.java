@@ -212,23 +212,23 @@ class TransportSecurityFilterTest {
     @Test
     void redirectsPlaintextToTheActiveHttpsConnector() throws Exception {
         MockHttpServletRequest request = request("GET", "/projects?x=1", "203.0.113.9");
-        request.setServerName("example.com");
+        request.setLocalAddr("192.0.2.10");
 
         MockHttpServletResponse response = runWithTls(state(8443, true), false, "", request);
 
         assertThat(response.getStatus()).isEqualTo(307);
         assertThat(response.getHeader("Location"))
-                .isEqualTo("https://example.com:8443/projects?x=1");
+                .isEqualTo("https://192.0.2.10:8443/projects?x=1");
         assertThat(chain.getRequest()).isNull();
     }
 
     @Test
     void omitsThePortWhenHttpsRunsOn443() throws Exception {
         MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
-        request.setServerName("example.com");
+        request.setLocalAddr("192.0.2.10");
 
         assertThat(runWithTls(state(443, true), false, "", request).getHeader("Location"))
-                .isEqualTo("https://example.com/");
+                .isEqualTo("https://192.0.2.10/");
     }
 
     @Test
@@ -272,12 +272,11 @@ class TransportSecurityFilterTest {
         // Once there is a real HTTPS endpoint, the source address stops mattering: this is
         // what every mainstream stack does, and it is what makes the switch mean one thing.
         MockHttpServletRequest request = request("GET", "/projects?x=1", "127.0.0.1");
-        request.setServerName("localhost");
 
         MockHttpServletResponse response = runWithTls(state(8443, true), false, "", request);
 
         assertThat(response.getStatus()).isEqualTo(307);
-        assertThat(response.getHeader("Location")).isEqualTo("https://localhost:8443/projects?x=1");
+        assertThat(response.getHeader("Location")).isEqualTo("https://127.0.0.1:8443/projects?x=1");
         assertThat(chain.getRequest()).isNull();
     }
 
@@ -322,10 +321,29 @@ class TransportSecurityFilterTest {
         assertThat(response.getHeader("Strict-Transport-Security")).isNotNull();
     }
 
+    /**
+     * The Host header is attacker-supplied: with the redirect built from it, a domain that
+     * resolves to this server turns the 307 into a hop to the attacker's own HTTPS site. The
+     * authority must come from the connection's local address (or the configured host).
+     */
     @Test
-    void rejectsAnUnsafeHostInsteadOfRedirecting() throws Exception {
+    void aForgedHostHeaderCannotSteerTheHttpsRedirect() throws Exception {
+        MockHttpServletRequest request = request("GET", "/projects", "203.0.113.9");
+        request.setLocalAddr("192.0.2.10");
+        request.setServerName("attacker.example");
+
+        MockHttpServletResponse response = runWithTls(state(8443, true), false, "", request);
+
+        assertThat(response.getStatus()).isEqualTo(307);
+        assertThat(response.getHeader("Location"))
+                .isEqualTo("https://192.0.2.10:8443/projects")
+                .doesNotContain("attacker.example");
+    }
+
+    @Test
+    void rejectsAnUnsafeLocalAddressInsteadOfRedirecting() throws Exception {
         MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
-        request.setServerName("evil.example/path");
+        request.setLocalAddr("evil.example/path");
 
         MockHttpServletResponse response = runWithTls(state(8443, true), false, "", request);
 
@@ -334,18 +352,18 @@ class TransportSecurityFilterTest {
     }
 
     @Test
-    void configuredRedirectHostOverridesTheRequestHost() throws Exception {
+    void configuredRedirectHostOverridesTheLocalAddress() throws Exception {
         MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
-        request.setServerName("10.0.0.5");
+        request.setLocalAddr("10.0.0.5");
 
         assertThat(runWithTls(state(8443, true), false, "jync.example.com", request)
                 .getHeader("Location")).isEqualTo("https://jync.example.com:8443/");
     }
 
     @Test
-    void ipv6ServerNameIsBracketed() throws Exception {
+    void ipv6LocalAddressIsBracketed() throws Exception {
         MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
-        request.setServerName("::1");
+        request.setLocalAddr("::1");
 
         assertThat(runWithTls(state(8443, true), false, "", request).getHeader("Location"))
                 .isEqualTo("https://[::1]:8443/");
@@ -354,20 +372,21 @@ class TransportSecurityFilterTest {
     @Test
     void rejectsAnIpv6ZoneId() throws Exception {
         MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
-        request.setServerName("fe80::1%en0");
+        request.setLocalAddr("fe80::1%en0");
 
         assertThat(runWithTls(state(8443, true), false, "", request).getStatus())
                 .isEqualTo(400);
     }
 
     @Test
-    void ignoresXForwardedHost() throws Exception {
+    void ignoresAForwardedHostHeader() throws Exception {
         MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+        request.setLocalAddr("192.0.2.10");
         request.setServerName("example.com");
         request.addHeader("X-Forwarded-Host", "evil.example");
 
         assertThat(runWithTls(state(8443, true), false, "", request).getHeader("Location"))
-                .isEqualTo("https://example.com:8443/");
+                .isEqualTo("https://192.0.2.10:8443/");
     }
 
     @Test

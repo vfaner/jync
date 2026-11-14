@@ -15,6 +15,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.MessageSource;
 
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeLog;
@@ -57,6 +59,7 @@ class DefaultAlertSignalCollectorTest {
     @Mock private DatabaseConfigService databaseConfigService;
     @Mock private DatabaseHealthService healthService;
     @Mock private ChangeLogRepository changeLogRepository;
+    @Mock private MessageSource messages;
 
     private MutableClock clock;
     private DefaultAlertSignalCollector collector;
@@ -65,7 +68,8 @@ class DefaultAlertSignalCollectorTest {
     void setUp() {
         clock = new MutableClock(T0);
         collector = new DefaultAlertSignalCollector(projectRepository, projectService,
-                cdcManager, databaseConfigService, healthService, changeLogRepository, clock);
+                cdcManager, databaseConfigService, healthService, changeLogRepository,
+                messages, clock);
         lenient().when(projectRepository.findByEnabledTrue()).thenReturn(new ArrayList<>());
         lenient().when(projectService.findTasks(any())).thenReturn(Map.of());
         lenient().when(projectRepository.findAllById(any())).thenReturn(new ArrayList<>());
@@ -252,6 +256,30 @@ class DefaultAlertSignalCollectorTest {
 
         AlertEvent event = only(collect(), com.qqmu.jync.model.AlertCategory.CDC_STOPPED);
         assertThat(event.detailKey()).isEqualTo("alert.detail.cdcDisconnected");
+    }
+
+    /**
+     * A parked project and a dropped consumer are the same incident. Both events used the empty
+     * object key, so the evaluator's map kept only the later one — the disconnected text
+     * replaced the parked message that carries the reason.
+     */
+    @Test
+    void aParkedProjectDoesNotAlsoReportADroppedConsumer() {
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, "orders")));
+        when(cdcManager.strategyOf(any())).thenReturn(CaptureStrategy.BINLOG_CDC);
+        when(projectService.findTasks(any())).thenReturn(
+                Map.of(1L, task(1L, TaskStatus.ERROR, "park: fatal stream failure")));
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        stats.setConnected(false);
+        stats.setLastError("connection reset");
+        when(cdcManager.statsFor(1L)).thenReturn(stats);
+
+        for (int minute = 0; minute < 3; minute++) {
+            AlertEvent event = only(collect(),
+                    com.qqmu.jync.model.AlertCategory.CDC_STOPPED);
+            assertThat(event.detailKey()).isEqualTo("alert.detail.cdcParked");
+            clock.advance(Duration.ofMinutes(1));
+        }
     }
 
     @Test
@@ -494,6 +522,53 @@ class DefaultAlertSignalCollectorTest {
         assertThat(unhealthy).extracting(AlertEvent::subject)
                 .containsExactlyInAnyOrder("prod", "stage");
         assertThat(unhealthy).extracting(AlertEvent::dedupKey).doesNotHaveDuplicates();
+    }
+
+    /**
+     * A probe timeout is reported as an i18n key. The webhook used to carry that key verbatim
+     * ("连接探测失败：error.db.health.timeout"); it must read like the connections page instead.
+     */
+    @Test
+    void aHealthMessageThatIsATranslationKeyIsResolvedBeforeItReachesTheAlert() {
+        DatabaseConfig config = new DatabaseConfig();
+        config.setId(7L);
+        config.setName("prod");
+        when(databaseConfigService.findAll()).thenReturn(List.of(config));
+        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+                new DatabaseHealthService.Health(7L, false, 12, "error.db.health.timeout")));
+        when(messages.getMessage(eq("error.db.health.timeout"), any(),
+                eq("error.db.health.timeout"), any(Locale.class))).thenReturn("检测超时");
+
+        collect();
+        clock.advance(Duration.ofMinutes(5));
+        collect();
+        clock.advance(Duration.ofMinutes(5));
+
+        AlertEvent event = only(collect(),
+                com.qqmu.jync.model.AlertCategory.DB_UNHEALTHY);
+        assertThat(event.detailArgs()[0]).isEqualTo("检测超时");
+    }
+
+    /** Driver text is not a translation key: an unresolved lookup leaves it untouched. */
+    @Test
+    void aDriverMessageIsNeverReplacedByATranslation() {
+        DatabaseConfig config = new DatabaseConfig();
+        config.setId(7L);
+        config.setName("prod");
+        when(databaseConfigService.findAll()).thenReturn(List.of(config));
+        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+                new DatabaseHealthService.Health(7L, false, 12, "Connection refused")));
+        when(messages.getMessage(eq("Connection refused"), any(),
+                eq("Connection refused"), any(Locale.class))).thenReturn(null);
+
+        collect();
+        clock.advance(Duration.ofMinutes(5));
+        collect();
+        clock.advance(Duration.ofMinutes(5));
+
+        AlertEvent event = only(collect(),
+                com.qqmu.jync.model.AlertCategory.DB_UNHEALTHY);
+        assertThat(event.detailArgs()[0]).isEqualTo("Connection refused");
     }
 
     @Test

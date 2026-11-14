@@ -127,7 +127,7 @@ Spring 的 relaxed binding 让所有配置项都能用环境变量覆盖，无�
 | `JYN_REQUIRE_HTTPS` | `app.security.require-https` | `true` 时非 TLS 请求返回 403（不带 Cookie 的 `GET /login`，以及没有可用 HTTPS 端点时的回环应急通道除外；应用内证书在跑时回环也按规则处理）。不设时由「系统管理 → 系统配置」页面决定，改完即时生效；一旦显式设置（含 `false`），页面开关变为只读。直连 8080 的部署不要在页面上打开；配置见[配置文档](configuration.md)「HTTPS 与等保部署」 |
 | `JYN_TLS_ENABLED` | `app.tls.enabled` | 默认 `true`。设为 `false` 时不读取证书、不加 HTTPS 连接器——用于证书损坏或 8443 被占导致启动失败时救回实例 |
 | `JYN_TLS_DIRECTORY` | `app.tls.directory` | 边车与派生密钥库目录，默认 `./data/tls`（即 `/app/data/tls`）；页面上传的密钥库也放这里。**证书不在配置包里**，换机或迁移时重新上传/重存路径，备份数据卷即可包含 |
-| `JYN_TLS_REDIRECT_HOST` | `app.tls.redirect-host` | HTTP→HTTPS 重定向固定使用的主机名；留空沿用请求 `Host`（严格校验，非法值 400）。应用内 TLS 配置见[配置文档](configuration.md)「HTTPS 与等保部署」 |
+| `JYN_TLS_REDIRECT_HOST` | `app.tls.redirect-host` | HTTP→HTTPS 重定向固定使用的主机名；留空使用连接的本机地址（按域名访问或 NAT 之后必须设置，否则跳到 IP 会与证书域名不匹配；非法值 400）。应用内 TLS 配置见[配置文档](configuration.md)「HTTPS 与等保部署」 |
 | `JYN_TLS_KEYSTORE_PATH` / `JYN_TLS_KEYSTORE_PASSWORD` | `app.tls.keystore-path` / `app.tls.keystore-password` | 配置文件模式：挂载的密钥库路径与口令。指定后启动即读取、页面只读，容器重建不丢；与 PEM 二选一 |
 | `JYN_TLS_PEM_CERT_PATH` / `JYN_TLS_PEM_KEY_PATH` | `app.tls.pem-cert-path` / `app.tls.pem-key-path` | 配置文件模式：PEM 证书链与（可选的）私钥路径；启动时在内存封装成临时 PKCS#12，明文私钥不落盘 |
 | `JYN_TLS_HTTPS_PORT` / `JYN_TLS_REDIRECT_HTTP` | `app.tls.https-port` / `app.tls.redirect-http` | 配置文件模式下的 HTTPS 端口（默认 8443）与 HTTP→HTTPS 跳转（默认 `true`） |

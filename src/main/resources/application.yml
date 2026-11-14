@@ -160,8 +160,10 @@ app:
     enabled: ${JYN_TLS_ENABLED:true}
     # 密钥库文件与 tls.properties 边车的存放目录（相对工作目录）。口令在边车里用 sync.crypto-* 加密。
     directory: ${JYN_TLS_DIRECTORY:./data/tls}
-    # HTTP→HTTPS 307 重定向的目标主机名（如 jync.example.com）。留空表示用请求的 Host。
-    # 只在已加载证书、且上传时勾选了「重定向 HTTP」后才重定向；非法 Host 直接返回 400。
+    # HTTP→HTTPS 307 重定向的目标主机名（如 jync.example.com）。
+    # 留空表示用连接的本机地址（客户端实际访问的 IP）；按域名访问或 NAT 之后必须设置，
+    # 否则浏览器会被跳到 IP 导致证书域名不匹配。不采信可伪造的 Host/X-Forwarded-Host。
+    # 只在已加载证书、且上传时勾选了「重定向 HTTP」后才重定向；非法值直接返回 400。
     redirect-host: ${JYN_TLS_REDIRECT_HOST:}
     # 证书也可以完全不走页面，由配置文件指定（路径可以是容器里挂载的绝对路径）。
     # 一旦指定，启动时直接读取该文件，系统配置页变为只读；容器重建、镜像升级都不会丢。

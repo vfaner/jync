@@ -66,6 +66,27 @@ class AlertSettingsViewTest {
                 .andReturn().getResponse().getContentAsString();
     }
 
+    /**
+     * A channel that has been rejected for weeks looks exactly like a healthy one from this
+     * page unless the most recent outcome is shown. Success is quiet; a failure carries the
+     * platform's reason.
+     */
+    @Test
+    void thePageShowsTheMostRecentDeliveryOutcome() throws Exception {
+        when(configService.load()).thenReturn(config(true, "enc:super-secret-token-1234"));
+        when(configService.maskedUrl()).thenReturn("••••1234");
+        when(notifier.lastDelivery()).thenReturn(new AlertNotifier.Delivery(
+                java.time.Instant.parse("2026-11-14T02:03:04Z"), false,
+                "errcode 93000: invalid webhook url"));
+
+        String page = mvc.perform(get("/alert-settings").header("Accept-Language", "zh-CN")
+                        .with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("最近一次投递", "失败", "errcode 93000");
+    }
+
     @Test
     void thePageOffersAllEightCategories() throws Exception {
         String page = render();

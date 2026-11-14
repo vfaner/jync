@@ -307,7 +307,7 @@ app:
 |---|---|---|
 | `app.tls.enabled` / `JYN_TLS_ENABLED` | `true` | 设为 `false` 时不读取证书、不添加 HTTPS 连接器。用于证书损坏或端口被占导致启动失败时救回实例 |
 | `app.tls.directory` / `JYN_TLS_DIRECTORY` | `./data/tls` | 密钥库与 `tls.properties` 边车的目录；口令在边车里用 `sync.crypto-*` 加密。**不在配置包里**，备份数据目录时要一起备份 |
-| `app.tls.redirect-host` / `JYN_TLS_REDIRECT_HOST` | 空 | HTTP→HTTPS 重定向使用的固定主机名。留空表示沿用请求的 `Host`（严格校验，非法值返回 400，不转发到外部） |
+| `app.tls.redirect-host` / `JYN_TLS_REDIRECT_HOST` | 空 | HTTP→HTTPS 重定向使用的固定主机名。留空表示使用连接的本机地址（即客户端实际访问的 IP；非法值返回 400）。按域名访问（尤其是 NAT 之后）时必须显式设置，否则浏览器会被跳到 IP，证书域名不匹配 |
 | `app.tls.keystore-path` / `JYN_TLS_KEYSTORE_PATH` | 空 | 密钥库文件路径（绝对路径即挂载点）。非空即进入配置文件模式：启动时读取该文件，页面只读 |
 | `app.tls.keystore-password` / `JYN_TLS_KEYSTORE_PASSWORD` | 空 | 配置密钥库的口令；必须同时打开库和私钥 |
 | `app.tls.pem-cert-path` / `JYN_TLS_PEM_CERT_PATH` | 空 | PEM 证书链路径（与 `keystore-path` 二选一），服务器证书在前、私钥可与之同文件 |
@@ -317,7 +317,7 @@ app:
 
 - **续期**：在新文件上重新导出、再次上传、重启生效；页面在到期前 30 天提示。证书过期后运行中的实例仍会继续用它提供服务（浏览器会报证书过期），删除证书也不会让运行中的实例停止 HTTPS——两种情况都要重新上传或重启。
 - **默认密钥告警**：`sync.crypto-*` 仍是随包默认值时，页面会警告边车口令受该密钥保护；应先换成部署专用密钥（见上文密钥说明），再上传证书。
-- **多实例**：`data/tls` 是实例本地目录。共享同一张证书时让 `JYN_TLS_DIRECTORY` 指向共享卷，并设置 `JYN_TLS_REDIRECT_HOST`，别让各节点按自己的 `Host` 做重定向；手填挂载路径的方式可以给每个副本挂同一份证书、在每个副本的页面各保存一次路径，证书本身不依赖共享卷；最推荐配置文件模式——把同一份证书分别挂载到各副本并在环境变量里指路，页面读取一致。
+- **多实例**：`data/tls` 是实例本地目录。共享同一张证书时让 `JYN_TLS_DIRECTORY` 指向共享卷，并设置 `JYN_TLS_REDIRECT_HOST`（主机名必须显式指定——各节点不会也不能按请求的 `Host` 去拼跳转目标）；手填挂载路径的方式可以给每个副本挂同一份证书、在每个副本的页面各保存一次路径，证书本身不依赖共享卷；最推荐配置文件模式——把同一份证书分别挂载到各副本并在环境变量里指路，页面读取一致。
 - **与 `require-https` 的关系**：可以同时开启。已加载证书且上传时勾选了重定向时，**所有**明文请求（包括本机 localhost）一律 307 到 HTTPS；不带 Cookie 的 `GET /login` 健康探针除外。未勾选重定向时由 `require-https` 决定：有证书在跑则回环也返回 403，没有可用证书时回环放行作为应急通道。
 - **开启强制 HTTPS 的前提**：页面开关只有在应用内证书已生效、当前访问本身是 HTTPS（反代终止 TLS），两者满足其一时才允许打开。证书尚未重启生效、已过期或根本没有证书时，页面拒绝开启并说明原因——否则没有 HTTPS 入口时，除回环应急通道外的请求都会被 403 锁住。
 - **HTTP/2 与 SNI**：内置连接器只提供这张证书，不支持按域名切换证书（多证书 SNI）；需要多个站点证书时用反向代理方式。
@@ -336,7 +336,7 @@ app:
 - **直接暴露 8080、又没上传证书的部署不要打开 `require-https`**：没有代理时所有请求都判定为明文，除了本机回环应急通道全部返回 403。用应用内 TLS 时，勾选重定向后**所有**明文请求（含本机 localhost）都会 307 到 HTTPS，不会再落到 403；本机脚本用 `curl` 验证时要加 `-L`，或直接访问 HTTPS 端口。
 - **HTTPS 生效时**响应带 `Strict-Transport-Security: max-age=31536000; includeSubDomains`；HSTS 一旦被浏览器记住，回退到 HTTP 会打不开页面，切换前先确认证书长期可用。
 - 所有响应带 `Content-Security-Policy`（仅允许同源资源）、`Referrer-Policy: same-origin`、`Permissions-Policy`（关闭定位/麦克风/摄像头），`X-Frame-Options: DENY` 由 Spring Security 默认提供。
-- `require-https` 用 403 而不是重定向：它不知道 HTTPS 端口在哪，也不该拿可伪造的 `Host` 去拼跳转目标。应用内 TLS 的重定向（307）只在证书已加载且上传时勾选后生效，主机名只取严格校验过的 `Host` 或 `app.tls.redirect-host`，不采信 `X-Forwarded-Host`，非法值返回 400。反向代理部署的 HTTP→HTTPS 301 仍由上面的 Nginx 完成。
+- `require-https` 用 403 而不是重定向：它不知道 HTTPS 端口在哪，也不该拿可伪造的 `Host` 去拼跳转目标。应用内 TLS 的重定向（307）只在证书已加载且上传时勾选后生效，主机名只取连接的本机地址或 `app.tls.redirect-host`，不采信可伪造的 `Host` 与 `X-Forwarded-Host`，非法值返回 400。反向代理部署的 HTTP→HTTPS 301 仍由上面的 Nginx 完成。
 - **反向代理不要开启 `server.forward-headers-strategy=framework`** 之类的全局转发头解析：那会让客户端自带的 `X-Forwarded-For` 改写 `getRemoteAddr()`，绕过登录失败锁定与审计里的真实来源。
 
 ## 日志 CDC 前提
