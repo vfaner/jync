@@ -382,6 +382,12 @@ public class DataSyncService {
             return result;
         }
 
+        if (result.initialLoad && table.getPrimaryKeys().isEmpty()
+                && refuseKeylessLoadIntoNonEmptyTarget(targetConn, ctx, table, targetTable,
+                        result)) {
+            return result;
+        }
+
         boolean insertFirst = useInsertFirst(targetConn, ctx, targetTable,
                 table.getPrimaryKeys());
 
@@ -567,6 +573,40 @@ public class DataSyncService {
                     + " upsert", targetTable, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Refuses a keyless table's initial load when the target is not confirmed empty.
+     *
+     * <p>Without a primary key the write path has no upsert: every loaded row is a plain
+     * INSERT. On a target that already holds rows — a user reset, a pre-populated table, or a
+     * resumed load whose marker was lost — that would insert the whole source again on top of
+     * what is there, and nothing can absorb the duplicates. A reset used to do exactly that
+     * silently. The load is refused with an actionable error instead; the remedies are
+     * emptying the target or turning on "Empty target table before the first load", which
+     * leaves the table empty by the time this point is reached.
+     *
+     * <p>"Could not tell" is refused too: the probe failing is not evidence of emptiness, and
+     * the closest idempotent fallback a keyed table has does not exist here.
+     *
+     * @return true when the load was refused and {@code result.error} explains why
+     */
+    private boolean refuseKeylessLoadIntoNonEmptyTarget(Connection targetConn, SyncContext ctx,
+                                                        TableMeta table, String targetTable,
+                                                        TableSyncResult result) {
+        Boolean empty = probeTargetEmpty(targetConn, ctx, targetTable);
+        if (Boolean.TRUE.equals(empty)) {
+            return false;
+        }
+        String state = empty == null ? "could not be checked for emptiness"
+                : "already holds rows";
+        result.error = "Full load of keyless table " + table.getName() + " was skipped: the"
+                + " target table " + targetTable + " " + state + ", and without a primary key"
+                + " a full load would insert every source row again as a duplicate. Empty the"
+                + " target table first, or enable \"Empty target table before the first load\""
+                + " for this project.";
+        log.warn("{}", result.error);
+        return true;
     }
 
     /** Reads and upserts only rows inside {@code (lastCursor, watermark]}. */

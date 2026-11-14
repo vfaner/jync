@@ -174,20 +174,44 @@ class DataSyncServiceKeylessChunkedLoadTest {
     }
 
     @Test
-    void aNonEmptyTargetWithoutResumeStateKeepsTheClassicLoad() throws SQLException {
+    void aNonEmptyTargetWithoutResumeStateIsRefusedInsteadOfDuplicated() throws SQLException {
         createTables();
         insertEvents(1, 5);
         insertEvents(target, 99, 99);
 
         DataSyncService.TableSyncResult result =
-                service(2).syncTable(source, target, eventsMeta(), FULL_ONLY,
+                service(2).syncTable(record(source), target, eventsMeta(), FULL_ONLY,
                         new SyncProgress(), ctx);
 
-        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        // A keyless table has no upsert to absorb a replay: the classic streamed read is a
+        // plain INSERT of every source row. Loading on top of a target that already holds
+        // rows duplicates all of them, so the load is refused with a remedy instead.
+        assertThat(result.isSuccess()).as(result.getError()).isFalse();
+        assertThat(result.getError())
+                .contains("without a primary key").contains("duplicate")
+                .contains("Empty target table before the first load");
         assertThat(result.getResumableLoad()).isFalse();
         verify(checkpoints, never()).save(any(ChunkCheckpoint.class));
-        // The classic load cannot dedupe; that behavior is unchanged and the UI says so.
-        assertThat(count("EVENTS")).isEqualTo(6);
+        assertThat(prepared).isEmpty();
+        assertThat(count("EVENTS")).isEqualTo(1);
+    }
+
+    @Test
+    void aKeylessTableWithChunkingOffAlsoRefusesANonEmptyTarget() throws SQLException {
+        createTables();
+        insertEvents(1, 5);
+        insertEvents(target, 99, 99);
+
+        // chunk-size 0 turns the chunked load off entirely; the keyless guard must still stand
+        // between the non-empty target and the classic plain-INSERT path.
+        DataSyncService.TableSyncResult result =
+                service(0).syncTable(record(source), target, eventsMeta(), FULL_ONLY,
+                        new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isFalse();
+        assertThat(result.getError()).contains("without a primary key");
+        assertThat(prepared).isEmpty();
+        assertThat(count("EVENTS")).isEqualTo(1);
     }
 
     @Test
@@ -247,6 +271,28 @@ class DataSyncServiceKeylessChunkedLoadTest {
         assertThat(count("EVENTS")).isEqualTo(2);
         assertThat(result.getResumableLoad()).isFalse();
         verify(checkpoints, never()).save(any(ChunkCheckpoint.class));
+    }
+
+    @Test
+    void aDialectWithoutOffsetPagingAlsoRefusesANonEmptyTarget() throws SQLException {
+        createTables();
+        insertEvents(1, 2);
+        insertEvents(target, 99, 99);
+
+        // The streamed fallback exists for tables that cannot be walked by OFFSET, but it is
+        // still a plain INSERT: on a target that already holds rows it duplicates them.
+        DataSyncService.TableSyncResult result =
+                service(1).syncTable(source, target, eventsMeta(), FULL_ONLY,
+                        new SyncProgress(), context(new GenericSqlDialect() {
+                            @Override
+                            public boolean supportsOffsetPaging() {
+                                return false;
+                            }
+                        }));
+
+        assertThat(result.isSuccess()).as(result.getError()).isFalse();
+        assertThat(result.getError()).contains("without a primary key");
+        assertThat(count("EVENTS")).isEqualTo(1);
     }
 
     @Test
