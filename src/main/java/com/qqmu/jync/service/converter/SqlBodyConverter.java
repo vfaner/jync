@@ -1419,10 +1419,6 @@ public class SqlBodyConverter {
             Set.of("SYSDATE", "CURRENT_TIMESTAMP", "CURRENT DATE", "CURRENT_DATE",
                     "CURRENT TIMESTAMP");
 
-    /** Empty RAND() → RANDOM() on PostgreSQL-family targets; seeded RAND(seed) is left alone. */
-    private static final Pattern EMPTY_RAND = Pattern.compile(
-            "(?i)\\bRAND\\s*\\(\\s*\\)");
-
     /**
      * Applies whole-word function name substitutions for the target family.
      *

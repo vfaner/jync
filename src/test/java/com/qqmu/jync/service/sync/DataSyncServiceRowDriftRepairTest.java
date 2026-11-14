@@ -240,6 +240,16 @@ class DataSyncServiceRowDriftRepairTest {
                 .isEqualTo(DataSyncService.normalizedKey(java.util.List.of(time)));
     }
 
+    @Test
+    void aBlankPaddedCharKeyMatchesItsTrimmedSpelling() {
+        // A CHAR primary key is padded to its declared width by Oracle, DB2, SQL Server and H2
+        // but trimmed by MySQL-family drivers (and the width may differ between the two
+        // tables). Without normalisation the walk reads every shared key as missing and the
+        // repair re-copies — or, past the ceiling, forces a full table reload — every cycle.
+        assertThat(DataSyncService.normalizedKey(java.util.List.of("A   ")))
+                .isEqualTo(DataSyncService.normalizedKey(java.util.List.of("A")));
+    }
+
     // --- helpers ---------------------------------------------------------------------
 
     private SyncProperties propertiesWithCeiling(int maxRows) {

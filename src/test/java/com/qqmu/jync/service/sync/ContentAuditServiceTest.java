@@ -354,6 +354,29 @@ class ContentAuditServiceTest {
     }
 
     @Test
+    void charPaddingIsNotReportedAsDrift() throws SQLException {
+        // A fixed-width CHAR column comes back blank-padded from Oracle, DB2, SQL Server and
+        // H2, but trimmed from MySQL-family drivers (the same fact keyPartOf documents). The
+        // audit compares values read through both drivers, so without normalising the padding
+        // every row of a CHAR column synced across those families is reported as drift.
+        exec(target, "ALTER TABLE ITEMS ALTER COLUMN NAME SET DATA TYPE CHAR(10)");
+        insert(source, 1, "a", true);
+        insert(target, 1, "a", true);
+
+        TableContentAudit result = auditNow("1");
+
+        assertThat(result.status()).isEqualTo(Status.OK);
+        assertThat(result.mismatched()).isZero();
+        assertThat(result.mismatchColumns()).isEmpty();
+    }
+
+    @Test
+    void canonicalValueIgnoresFixedWidthPadding() {
+        assertThat(ContentAuditService.canonicalValue("a         "))
+                .isEqualTo(ContentAuditService.canonicalValue("a"));
+    }
+
+    @Test
     void canonicalizesNumbersTemporalValuesAndBooleans() {
         assertThat(ContentAuditService.canonicalValue(new BigDecimal("5.00")))
                 .isEqualTo(ContentAuditService.canonicalValue(5L));

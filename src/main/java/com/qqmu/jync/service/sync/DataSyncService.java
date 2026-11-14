@@ -1291,6 +1291,15 @@ public class DataSyncService {
                 sb.append(instantKey(instant, instant.getNano()));
             } else if (value instanceof byte[]) {
                 sb.append(java.util.Arrays.toString((byte[]) value));
+            } else if (value instanceof CharSequence) {
+                // Same rule as keyPartOf: a fixed-width CHAR comes back blank-padded from
+                // Oracle, DB2, SQL Server and H2 but trimmed from MySQL-family drivers, and
+                // the same logical column may be CHAR on one side and VARCHAR on the other.
+                // SQL treats CHAR trailing blanks as insignificant, so leaving the padding in
+                // makes every row of such a column look missing or drifted across families.
+                // The cost is that a VARCHAR value genuinely ending in spaces loses them
+                // here too, which can only hide a target-side edit of that whitespace.
+                sb.append(trimTrailingSpaces(value.toString()));
             } else {
                 sb.append(value);
             }
@@ -4318,14 +4327,18 @@ public class DataSyncService {
             // side and VARCHAR on the other. SQL compares CHAR values with trailing blanks
             // insignificant, so the padding must not make one key render as two; the
             // comparison otherwise reads every padded target row as deleted at source.
-            String text = value.toString();
-            int end = text.length();
-            while (end > 0 && text.charAt(end - 1) == ' ') {
-                end--;
-            }
-            return text.substring(0, end);
+            return trimTrailingSpaces(value.toString());
         }
         return String.valueOf(value);
+    }
+
+    /** The text without its trailing spaces; see the CHAR-padding note on {@link #keyPartOf}. */
+    static String trimTrailingSpaces(String text) {
+        int end = text.length();
+        while (end > 0 && text.charAt(end - 1) == ' ') {
+            end--;
+        }
+        return end == text.length() ? text : text.substring(0, end);
     }
 
     /**
