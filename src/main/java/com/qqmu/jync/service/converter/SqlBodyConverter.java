@@ -1201,61 +1201,100 @@ public class SqlBodyConverter {
         String result = sql;
         if (from == DatabaseType.DialectFamily.MYSQL) {
             // Backtick-quoted identifiers -> target quoting.
-            result = replaceQuoted(result, '`', '`', to);
+            result = replaceDelimited(result, from, '`', '`', to);
         } else if (from == DatabaseType.DialectFamily.SQLSERVER) {
-            result = replaceBracketQuoted(result, to);
+            result = replaceDelimited(result, from, '[', ']', to);
         } else if (to == DatabaseType.DialectFamily.MYSQL) {
             // Double-quoted identifiers would be read as string literals by MySQL unless
             // ANSI_QUOTES is set, so convert them to backticks.
-            result = replaceQuoted(result, '"', '"', to);
+            result = replaceDelimited(result, from, '"', '"', to);
         }
         return result;
     }
 
-    private String replaceQuoted(String sql, char open, char close,
-                                 DatabaseType.DialectFamily to) {
+    /**
+     * Replaces {@code open}…{@code close} delimiters outside literals and comments.
+     *
+     * <p>This runs before the rest of the pipeline, so it cannot lean on {@link #scan}: the
+     * delimiters it rewrites are exactly what that scanner treats as non-code. It therefore
+     * carries the same lexical rules itself — line and block comments, doubled delimiters,
+     * and (from MySQL) backslash escapes. Reading the body with nothing but the apostrophe let
+     * a comment's contraction flip the string state: a later identifier was then missed, and
+     * quote characters inside a real literal were rewritten — a silent data change rather than
+     * a loud failure.
+     */
+    private String replaceDelimited(String sql, DatabaseType.DialectFamily from,
+                                    char open, char close, DatabaseType.DialectFamily to) {
+        // Backslash escapes are a MySQL extension; assuming them elsewhere would mis-read an
+        // Oracle literal that legitimately ends in a backslash.
+        boolean backslashEscapes = from == DatabaseType.DialectFamily.MYSQL;
         StringBuilder sb = new StringBuilder(sql.length());
-        boolean inside = false;
-        boolean inString = false;
-        for (int i = 0; i < sql.length(); i++) {
+        int i = 0;
+        int n = sql.length();
+        while (i < n) {
             char c = sql.charAt(i);
-            if (c == '\'' && !inside) {
-                inString = !inString;
-                sb.append(c);
+            if (c == '-' && i + 1 < n && sql.charAt(i + 1) == '-') {
+                int end = sql.indexOf('\n', i);
+                end = end < 0 ? n : end + 1;
+                sb.append(sql, i, end);
+                i = end;
                 continue;
             }
-            if (inString) {
-                sb.append(c);
+            if (c == '/' && i + 1 < n && sql.charAt(i + 1) == '*') {
+                int end = sql.indexOf("*/", i + 2);
+                end = end < 0 ? n : end + 2;
+                sb.append(sql, i, end);
+                i = end;
                 continue;
             }
-            if (!inside && c == open) {
-                inside = true;
-                sb.append(openQuoteFor(to));
-            } else if (inside && c == close) {
-                inside = false;
-                sb.append(closeQuoteFor(to));
-            } else {
-                sb.append(c);
-            }
-        }
-        return sb.toString();
-    }
-
-    private String replaceBracketQuoted(String sql, DatabaseType.DialectFamily to) {
-        StringBuilder sb = new StringBuilder(sql.length());
-        boolean inString = false;
-        for (int i = 0; i < sql.length(); i++) {
-            char c = sql.charAt(i);
             if (c == '\'') {
-                inString = !inString;
-                sb.append(c);
-            } else if (!inString && c == '[') {
-                sb.append(openQuoteFor(to));
-            } else if (!inString && c == ']') {
-                sb.append(closeQuoteFor(to));
-            } else {
-                sb.append(c);
+                int j = i + 1;
+                while (j < n) {
+                    char d = sql.charAt(j);
+                    if (backslashEscapes && d == '\\' && j + 1 < n) {
+                        j += 2;
+                        continue;
+                    }
+                    if (d == '\'') {
+                        if (j + 1 < n && sql.charAt(j + 1) == '\'') {
+                            j += 2;
+                            continue;
+                        }
+                        j++;
+                        break;
+                    }
+                    j++;
+                }
+                int end = Math.min(j, n);
+                sb.append(sql, i, end);
+                i = end;
+                continue;
             }
+            if (c == open) {
+                sb.append(openQuoteFor(to));
+                int j = i + 1;
+                while (j < n) {
+                    char d = sql.charAt(j);
+                    if (d == close) {
+                        // A doubled delimiter is one literal delimiter inside the name
+                        // (`it``s`, "a""b", [a]]b]); brackets spell it the same way.
+                        if (j + 1 < n && sql.charAt(j + 1) == close) {
+                            sb.append(d);
+                            j += 2;
+                            continue;
+                        }
+                        sb.append(closeQuoteFor(to));
+                        j++;
+                        break;
+                    }
+                    sb.append(d);
+                    j++;
+                }
+                i = j;
+                continue;
+            }
+            sb.append(c);
+            i++;
         }
         return sb.toString();
     }

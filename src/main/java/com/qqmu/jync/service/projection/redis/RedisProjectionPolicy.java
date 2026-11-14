@@ -96,6 +96,9 @@ public class RedisProjectionPolicy {
             config.setRedisProjection(projection);
         }
         projection.setKeyPrefix(normalizePrefix(projection.getKeyPrefix(), project.getId()));
+        if (hasScanPatternCharacters(projection.getKeyPrefix())) {
+            throw new IllegalArgumentException("error.project.redis.prefixGlob");
+        }
         if (projection.getValueFormat() == null) {
             projection.setValueFormat(RedisValueFormat.JSON);
         }
@@ -184,5 +187,31 @@ public class RedisProjectionPolicy {
             prefix = RedisProjectionConfig.defaultKeyPrefix(projectId);
         }
         return prefix.endsWith(":") ? prefix : prefix + ":";
+    }
+
+    /** Characters {@code SCAN MATCH} reads as pattern syntax. */
+    private static final String SCAN_PATTERN_CHARACTERS = "*?[]\\";
+
+    /**
+     * Whether {@code prefix} contains a character the sweep's {@code SCAN MATCH} reads as
+     * pattern syntax.
+     *
+     * <p>The prefix is the literal stem of {@code <prefix>*}, never a pattern, so a pattern
+     * character widens the sweep beyond the project's namespace — {@code jync:*:} matches every
+     * key starting with {@code jync:}, including other projects' keys that the sweep would
+     * then UNLINK. The save path refuses one and the precheck reports it; the sweeper refuses
+     * it again, because a clone or a direct database edit can deliver a prefix that never went
+     * through the save path.
+     */
+    public static boolean hasScanPatternCharacters(String prefix) {
+        if (prefix == null) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length(); i++) {
+            if (SCAN_PATTERN_CHARACTERS.indexOf(prefix.charAt(i)) >= 0) {
+                return true;
+            }
+        }
+        return false;
     }
 }

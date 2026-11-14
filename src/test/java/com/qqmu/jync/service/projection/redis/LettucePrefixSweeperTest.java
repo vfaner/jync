@@ -93,6 +93,27 @@ class LettucePrefixSweeperTest {
         assertThat(connected[0]).isFalse();
     }
 
+    /**
+     * A prefix is a namespace, not a pattern. {@code jync:*:} would make MATCH
+     * {@code jync:*:*} and sweep every key under {@code jync:} — other projects' keys
+     * included. The save path refuses such a prefix, but a clone or a direct database edit
+     * can still deliver one, so the sweep must refuse it too.
+     */
+    @Test
+    void aPrefixWithPatternCharactersIsRefusedBeforeAnyCommand() {
+        boolean[] connected = {false};
+
+        for (String prefix : List.of("jync:*:", "jync:?:", "jync:[ab]:", "jync:\\:")) {
+            assertThatThrownBy(() -> new LettucePrefixSweeper(null, target -> {
+                connected[0] = true;
+                return List.of();
+            }).sweep(target(), prefix))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("pattern");
+        }
+        assertThat(connected[0]).isFalse();
+    }
+
     @Test
     void deletingInBatchesKeepsOneScanPageFromBecomingOneHugeCommand() {
         List<String> keys = new ArrayList<>();

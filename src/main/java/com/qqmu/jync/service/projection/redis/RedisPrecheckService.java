@@ -240,6 +240,11 @@ public class RedisPrecheckService {
                     "precheck.redis.prefix.format", prefix));
             return;
         }
+        if (RedisProjectionPolicy.hasScanPatternCharacters(prefix)) {
+            checks.add(error("redis.prefix", PROJECT, project.getName(),
+                    "precheck.redis.prefix.glob", prefix));
+            return;
+        }
         Project conflict = policy.conflictingProject(project, prefix);
         if (conflict != null) {
             checks.add(error("redis.prefix", PROJECT, project.getName(),

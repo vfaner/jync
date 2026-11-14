@@ -74,6 +74,7 @@ class JsMessageMapCoverageTest {
             "error.project.redis.cdcOnly",
             "error.project.redis.projection.rebuildRequired",
             "error.project.redis.prefixConflict",
+            "error.project.redis.prefixGlob",
             "error.redis.target.not.found",
             "error.unexpected");
 

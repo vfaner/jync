@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.projection.redis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.dto.RedisProjectionConfig;
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.RedisTargetRepository;
@@ -62,6 +64,24 @@ class RedisProjectionPolicyTest {
         when(projects.findByTargetRedisId(TARGET_ID)).thenReturn(List.of(project, sibling));
 
         assertThat(policy.conflictingProject(project, "jync:1:")).isNull();
+    }
+
+    /**
+     * The sweep builds {@code "<prefix>*"}, so a Redis pattern character in the prefix widens
+     * MATCH beyond the project's namespace — {@code jync:*:} matches every key starting with
+     * {@code jync:}, including other projects' keys that the sweep would then UNLINK.
+     */
+    @Test
+    void aPrefixWithRedisPatternCharactersIsRefusedAtSave() {
+        Project project = project(1L, "jync:*:");
+        SyncConfig config = new SyncConfig();
+        RedisProjectionConfig projection = new RedisProjectionConfig();
+        projection.setKeyPrefix("jync:*:");
+        config.setRedisProjection(projection);
+
+        assertThatThrownBy(() -> policy.apply(project, config, CaptureStrategy.BINLOG_CDC, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.redis.prefixGlob");
     }
 
     private Project project(long id, String prefix) {

@@ -55,6 +55,13 @@ public class LettucePrefixSweeper implements RedisPrefixSweeper {
             // An empty prefix would become "*" and delete every key in the database.
             throw new IllegalArgumentException("A Redis key prefix is required to sweep");
         }
+        if (RedisProjectionPolicy.hasScanPatternCharacters(base)) {
+            // The pattern is "<prefix>*", so pattern characters in the prefix would widen it
+            // past this project's namespace and UNLINK another project's keys. The save path
+            // refuses these, but a clone or a direct database edit never ran it.
+            throw new IllegalArgumentException(
+                    "A Redis key prefix must not contain pattern characters to sweep");
+        }
         if (!base.endsWith(":")) {
             base += ":";
         }

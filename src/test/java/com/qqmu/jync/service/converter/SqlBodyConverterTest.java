@@ -101,6 +101,66 @@ class SqlBodyConverterTest {
         assertThat(toMysql(sql)).hasSameSizeAs(sql);
     }
 
+    // --- Identifier quoting follows the same lexical rules ----------------------------
+
+    /**
+     * Identifier conversion used to track string state with nothing but the apostrophe, so a
+     * comment's contraction flipped it for the rest of the body: later quoted identifiers were
+     * left in the source dialect (a loud failure) and quote characters inside real literals
+     * were rewritten (a silent data change).
+     */
+    @Test
+    void anApostropheInACommentDoesNotStopIdentifierConversion() {
+        String sql = "SELECT \"order_id\" FROM t -- don't rename\nWHERE c = \"customer_id\"";
+
+        String out = converter.convertIdentifierQuotes(
+                sql, DatabaseType.ORACLE.getFamily(), DatabaseType.MYSQL.getFamily());
+
+        assertThat(out).contains("`order_id`").contains("`customer_id`")
+                .contains("-- don't rename");
+    }
+
+    @Test
+    void aQuoteCharacterInsideALiteralSurvivesACommentContraction() {
+        String sql = "SELECT \"a\" FROM t /* user's note */ WHERE x = 'p\"q'";
+
+        String out = converter.convertIdentifierQuotes(
+                sql, DatabaseType.ORACLE.getFamily(), DatabaseType.MYSQL.getFamily());
+
+        assertThat(out).contains("`a`").contains("'p\"q'").contains("/* user's note */");
+    }
+
+    @Test
+    void mysqlBackslashEscapedLiteralDoesNotHideALaterIdentifier() {
+        String sql = "SELECT 'it\\'s ok' AS note, `b` FROM t";
+
+        String out = converter.convertIdentifierQuotes(
+                sql, DatabaseType.MYSQL.getFamily(), DatabaseType.ORACLE.getFamily());
+
+        assertThat(out).contains("'it\\'s ok'").contains("\"b\"");
+    }
+
+    @Test
+    void aQuoteInsideALiteralIsNotRewrittenFromSqlServer() {
+        String sql = "-- don't\nSELECT [a] FROM t WHERE x = 'p]q'";
+
+        String out = converter.convertIdentifierQuotes(
+                sql, DatabaseType.SQLSERVER.getFamily(), DatabaseType.ORACLE.getFamily());
+
+        assertThat(out).contains("\"a\"").contains("'p]q'");
+    }
+
+    /** {@code [a]]b]} is SQL Server's spelling of the identifier {@code a]b}. */
+    @Test
+    void aDoubledCloseBracketStaysInsideOneIdentifier() {
+        String sql = "SELECT [a]]b] FROM t";
+
+        String out = converter.convertIdentifierQuotes(
+                sql, DatabaseType.SQLSERVER.getFamily(), DatabaseType.ORACLE.getFamily());
+
+        assertThat(out).isEqualTo("SELECT \"a]b\" FROM t");
+    }
+
     // --- Format strings are not translatable by renaming ------------------------------
 
     /**

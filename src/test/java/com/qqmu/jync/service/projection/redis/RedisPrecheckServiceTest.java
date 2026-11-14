@@ -310,6 +310,18 @@ class RedisPrecheckServiceTest {
     }
 
     @Test
+    void aPrefixWithRedisPatternCharactersIsAnError() {
+        // SCAN MATCH reads these as pattern syntax, so the sweep would reach keys outside this
+        // project's namespace.
+        projection.setKeyPrefix("jync*:");
+
+        PrecheckReport.Check prefix = check(checks(), "redis.prefix");
+
+        assertThat(prefix.severity()).isEqualTo(PrecheckReport.Severity.ERROR);
+        assertThat(prefix.messageKey()).isEqualTo("precheck.redis.prefix.glob");
+    }
+
+    @Test
     void aPrefixUsedByAnotherProjectIsAnError() {
         Project sibling = new Project();
         sibling.setId(7L);

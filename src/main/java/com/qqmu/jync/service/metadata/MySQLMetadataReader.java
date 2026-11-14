@@ -215,7 +215,29 @@ public class MySQLMetadataReader extends GenericMetadataReader {
         if (scope.length() >= 2 && scope.startsWith("`") && scope.endsWith("`")) {
             scope = scope.substring(1, scope.length() - 1).replace("``", "`");
         }
-        return scope.equalsIgnoreCase(schema);
+        return unescapeGrantIdentifier(scope).equalsIgnoreCase(schema);
+    }
+
+    /**
+     * Undoes the escaping {@code SHOW GRANTS} applies to the database name.
+     *
+     * <p>A grant target is itself a LIKE pattern, so MySQL prints a literal {@code _},
+     * {@code %} or {@code \} as {@code \_}, {@code \%} or {@code \\}. Comparing the raw text
+     * would leave every database whose name contains an underscore looking unfiltered — which
+     * silently disables source-side drop detection for it, since the listing is then never
+     * considered authoritative.
+     */
+    private static String unescapeGrantIdentifier(String scope) {
+        StringBuilder sb = new StringBuilder(scope.length());
+        for (int i = 0; i < scope.length(); i++) {
+            char c = scope.charAt(i);
+            if (c == '\\' && i + 1 < scope.length()) {
+                sb.append(scope.charAt(++i));
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     private static boolean grantsSelect(String privileges) {

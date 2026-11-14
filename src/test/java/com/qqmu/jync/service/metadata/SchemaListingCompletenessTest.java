@@ -63,6 +63,23 @@ class SchemaListingCompletenessTest {
                 "GRANT SELECT ON `shop.archive`.* TO `jync`@`%`", "shop.archive")).isTrue();
     }
 
+    /**
+     * {@code SHOW GRANTS} escapes the {@code _} and {@code %} wildcards in the database name
+     * (`` `shop_db` `` is printed `` `shop\_db` ``), because a grant target is itself a LIKE
+     * pattern. Comparing the raw text would leave every database with an underscore in its
+     * name looking unfiltered — which turns source-side drop detection off silently.
+     */
+    @Test
+    void aGrantOnAnUnderscoredDatabaseNameIsStillSchemaWide() {
+        assertThat(MySQLMetadataReader.grantCoversWholeSchema(
+                "GRANT SELECT ON `shop\\_db`.* TO `jync`@`%`", "shop_db")).isTrue();
+        assertThat(MySQLMetadataReader.grantCoversWholeSchema(
+                "GRANT ALL PRIVILEGES ON `shop\\_db`.* TO `jync`@`%`", "shop_db")).isTrue();
+        // The same escape is not a match for a different schema.
+        assertThat(MySQLMetadataReader.grantCoversWholeSchema(
+                "GRANT SELECT ON `shop\\_db`.* TO `jync`@`%`", "shopXdb")).isFalse();
+    }
+
     @Test
     void aTableScopedOrUnrelatedGrantLeavesTheMysqlListingFiltered() {
         // The hazardous case: a table-level grant can be revoked, and the table then looks
