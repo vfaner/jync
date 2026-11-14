@@ -138,7 +138,8 @@ public final class CdcEventApplier {
      */
     static boolean isMissingColumn(SQLException failure) {
         for (SQLException current = failure; current != null;
-                current = current.getNextException()) {
+                current = current.getNextException() == current
+                        ? null : current.getNextException()) {
             String state = current.getSQLState();
             int code = current.getErrorCode();
             if ("42S22".equals(state) || "42122".equals(state)

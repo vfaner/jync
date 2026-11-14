@@ -510,9 +510,10 @@ public class CdcDdlTaskService {
      * the target, so a plain drop has nothing left to remove — the target is already in the
      * state the statement asks for.
      */
-    private static boolean isMissingObject(SQLException failure) {
+    static boolean isMissingObject(SQLException failure) {
         for (SQLException current = failure; current != null;
-                current = current.getNextException()) {
+                current = current.getNextException() == current
+                        ? null : current.getNextException()) {
             if (current.getErrorCode() == 1091) {
                 return true;
             }
