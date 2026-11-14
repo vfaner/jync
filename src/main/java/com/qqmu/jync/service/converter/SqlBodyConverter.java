@@ -612,8 +612,22 @@ public class SqlBodyConverter {
         if (i + word.length() > n || !sql.regionMatches(true, i, word, 0, word.length())) {
             return false;
         }
+        // A name character before the match means this is the tail of a longer identifier
+        // (FN_DECODE, MY_NVL2): a different function, which every rewrite built on this
+        // helper must leave alone. Matching it and replacing from the tail produced
+        // "FN_CASE a WHEN 1 THEN 2 END" — invalid SQL that failed the object creation with
+        // a message about the target's parser rather than about the conversion. A dot stays
+        // allowed so an explicitly qualified name is still recognised.
+        if (i > 0 && isIdentifierChar(sql.charAt(i - 1))) {
+            return false;
+        }
         int after = i + word.length();
-        return after == n || !Character.isLetterOrDigit(sql.charAt(after));
+        return after == n || !isIdentifierChar(sql.charAt(after));
+    }
+
+    /** The characters a SQL identifier may contain beyond letters and digits. */
+    private static boolean isIdentifierChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$' || c == '#';
     }
 
     /**

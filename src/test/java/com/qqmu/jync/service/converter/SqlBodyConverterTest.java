@@ -937,6 +937,30 @@ class SqlBodyConverterTest {
         assertThat(out).doesNotContain("NVL2");
     }
 
+    /**
+     * A user function whose name merely <em>ends</em> in DECODE is not Oracle's conditional.
+     * Matching the tail of the name rewrote from the "D" onward and emitted
+     * {@code FN_CASE a WHEN 1 THEN 2 END}, which the target rejects with a parser error that
+     * says nothing about the conversion. The leading name character is the boundary.
+     */
+    @Test
+    void aUserFunctionWhoseNameEndsInDecodeIsLeftAlone() {
+        String out = conv("SELECT FN_DECODE(a, 1, 2) FROM t",
+                DatabaseType.ORACLE, DatabaseType.MYSQL);
+
+        assertThat(out).contains("FN_DECODE(a, 1, 2)");
+        assertThat(out).doesNotContain("CASE");
+    }
+
+    @Test
+    void aUserFunctionWhoseNameEndsInNvl2IsLeftAlone() {
+        String out = conv("SELECT MY_NVL2(name, name, 'none') FROM t",
+                DatabaseType.ORACLE, DatabaseType.MYSQL);
+
+        assertThat(out).contains("MY_NVL2(name, name, 'none')");
+        assertThat(out).doesNotContain("CASE");
+    }
+
     // --- B4: SQL Server / MySQL CONVERT(...) becomes CAST, or blocks -------------------
 
     @Test
