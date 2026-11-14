@@ -16,7 +16,6 @@ import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
-import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -125,15 +124,29 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
     }
 
     @Override
-    public List<AlertEvent> collect() {
+    public List<AlertEvent> collect(Locale locale) {
         Instant now = clock.instant();
         List<AlertEvent> events = new ArrayList<>();
         collectSyncFailures(now, events);
         collectProjectConditions(now, events);
-        collectDrift(now, events);
-        collectTargetRepairs(now, events);
-        collectConnectionHealth(now, events);
+        // Drift detection and targeted repairs read the same five-minute INFO window; one query
+        // serves both, and a failure costs both categories rather than one.
+        List<ChangeLog> infoRows = infoWindow(now);
+        collectDrift(events, infoRows);
+        collectTargetRepairs(events, infoRows);
+        collectConnectionHealth(now, events, locale);
         return events;
+    }
+
+    /** @return the INFO rows of the last {@link #DRIFT_WINDOW}, or null when the read failed */
+    private List<ChangeLog> infoWindow(Instant now) {
+        try {
+            return changeLogRepository.findByChangeTypeAndOccurredAtAfter(
+                    ChangeType.INFO, now.minus(DRIFT_WINDOW));
+        } catch (RuntimeException e) {
+            log.debug("Cannot read recent repairs for alerting: {}", e.toString());
+            return null;
+        }
     }
 
     // ── 同步失败 ────────────────────────────────────────────────────────────────
@@ -311,14 +324,8 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
 
     // ── 数据漂移 ────────────────────────────────────────────────────────────────
 
-    private void collectDrift(Instant now, List<AlertEvent> events) {
-        List<ChangeLog> rows;
-        try {
-            rows = changeLogRepository
-                    .findByChangeTypeAndOccurredAtAfter(ChangeType.INFO,
-                            now.minus(DRIFT_WINDOW));
-        } catch (RuntimeException e) {
-            log.debug("Cannot read row-count repairs for alerting: {}", e.toString());
+    private void collectDrift(List<AlertEvent> events, List<ChangeLog> rows) {
+        if (rows == null) {
             return;
         }
         // One repair can be reported once; several rows for one table inside the window must
@@ -414,14 +421,8 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
      * visible on nodes that did not run the consumer. One repair is announced once — several
      * entries for the same table inside the window collapse to the newest.
      */
-    private void collectTargetRepairs(Instant now, List<AlertEvent> events) {
-        List<ChangeLog> rows;
-        try {
-            rows = changeLogRepository
-                    .findByChangeTypeAndOccurredAtAfter(ChangeType.INFO,
-                            now.minus(DRIFT_WINDOW));
-        } catch (RuntimeException e) {
-            log.debug("Cannot read targeted repairs for alerting: {}", e.toString());
+    private void collectTargetRepairs(List<AlertEvent> events, List<ChangeLog> rows) {
+        if (rows == null) {
             return;
         }
         Map<String, ChangeLog> newest = new LinkedHashMap<>();
@@ -455,7 +456,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
 
     // ── 连接健康 ────────────────────────────────────────────────────────────────
 
-    private void collectConnectionHealth(Instant now, List<AlertEvent> events) {
+    private void collectConnectionHealth(Instant now, List<AlertEvent> events, Locale locale) {
         boolean due = lastHealthCheckAt == null
                 || !now.isBefore(lastHealthCheckAt.plus(HEALTH_INTERVAL));
         if (due) {
@@ -473,7 +474,7 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
             events.add(new AlertEvent(AlertCategory.DB_UNHEALTHY, 0L,
                     healthNames.getOrDefault(id, "#" + id), "#" + id,
                     "alert.detail.dbUnhealthy",
-                    new Object[]{localize(healthMessages.getOrDefault(id, ""))}, now));
+                    new Object[]{localize(healthMessages.getOrDefault(id, ""), locale)}, now));
         }
     }
 
@@ -482,13 +483,12 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
      * driver's own text. The alert body must read like the connections page, so a value that
      * resolves is translated and everything else is left exactly as written.
      */
-    private String localize(String message) {
+    private String localize(String message, Locale locale) {
         if (message == null || message.isEmpty()) {
             return "";
         }
         try {
-            String translated = messages.getMessage(message, null, message,
-                    LocaleContextHolder.getLocale());
+            String translated = messages.getMessage(message, null, message, locale);
             return translated == null ? message : translated;
         } catch (RuntimeException e) {
             // A missing translation must not cost the alert itself.

@@ -106,7 +106,26 @@ class DefaultAlertSignalCollectorTest {
     }
 
     private List<AlertEvent> collect() {
-        return collector.collect();
+        return collect(Locale.SIMPLIFIED_CHINESE);
+    }
+
+    /**
+     * Drift detection and targeted repairs read the same five-minute INFO window. Running the
+     * query twice per evaluation doubled the work for one identical result.
+     */
+    @Test
+    void theInfoWindowIsReadOncePerCollection() {
+        when(changeLogRepository.findByChangeTypeAndOccurredAtAfter(eq(ChangeType.INFO), any()))
+                .thenReturn(List.of());
+
+        collector.collect(Locale.SIMPLIFIED_CHINESE);
+
+        org.mockito.Mockito.verify(changeLogRepository, org.mockito.Mockito.times(1))
+                .findByChangeTypeAndOccurredAtAfter(eq(ChangeType.INFO), any());
+    }
+
+    private List<AlertEvent> collect(Locale locale) {
+        return collector.collect(locale);
     }
 
     private static AlertEvent only(List<AlertEvent> events, com.qqmu.jync.model.AlertCategory
@@ -547,6 +566,32 @@ class DefaultAlertSignalCollectorTest {
         AlertEvent event = only(collect(),
                 com.qqmu.jync.model.AlertCategory.DB_UNHEALTHY);
         assertThat(event.detailArgs()[0]).isEqualTo("检测超时");
+    }
+
+    /**
+     * The collector runs in a scheduler thread with no request locale. The language the
+     * evaluator passes in (from the alert settings) must reach the message lookup.
+     */
+    @Test
+    void healthMessagesUseTheLocaleTheEvaluatorPasses() {
+        DatabaseConfig config = new DatabaseConfig();
+        config.setId(7L);
+        config.setName("prod");
+        when(databaseConfigService.findAll()).thenReturn(List.of(config));
+        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+                new DatabaseHealthService.Health(7L, false, 12, "error.db.health.timeout")));
+        when(messages.getMessage(eq("error.db.health.timeout"), any(),
+                eq("error.db.health.timeout"), eq(Locale.ENGLISH)))
+                .thenReturn("Health check timed out");
+
+        collect();
+        clock.advance(Duration.ofMinutes(5));
+        collect();
+        clock.advance(Duration.ofMinutes(5));
+
+        AlertEvent event = only(collect(Locale.ENGLISH),
+                com.qqmu.jync.model.AlertCategory.DB_UNHEALTHY);
+        assertThat(event.detailArgs()[0]).isEqualTo("Health check timed out");
     }
 
     /** Driver text is not a translation key: an unresolved lookup leaves it untouched. */

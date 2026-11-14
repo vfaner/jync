@@ -188,7 +188,8 @@ public final class ConfigPackageDtos {
                                  String webhookUrl,
                                  AlertWebhookFormat format,
                                  String categories,
-                                 Integer cooldownMinutes) {
+                                 Integer cooldownMinutes,
+                                 String language) {
     }
 
     public record OaAuthConfigDto(boolean enabled,

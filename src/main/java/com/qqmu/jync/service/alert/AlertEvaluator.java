@@ -11,7 +11,6 @@ import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
-import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -27,8 +26,12 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>A condition that starts is announced once, repeated after the configured cooldown while it
  * lasts, and answered with a recovery message when it clears. An event category (data drift) is
- * announced once per distinct event and has no recovery. States live in the database so two
- * nodes and a failover share one clock.
+ * announced once per distinct event and has no recovery.
+ *
+ * <p>States live in the database, but a shared row is not enough to stop two nodes from both
+ * sending: both read the same values before either writes. Every announcement therefore goes
+ * through a conditional update on the row (see {@link AlertStateRepository}), and a node that
+ * loses that update stays quiet. The insert path relies on the unique key for the same reason.
  *
  * <p>Every failure is contained: the scheduled run must survive a collector exception, an
  * undecryptable URL or a single unsaveable row.
@@ -89,7 +92,9 @@ public class AlertEvaluator {
 
         List<AlertEvent> events;
         try {
-            events = collector.collect();
+            // Scheduler threads carry no request locale: the configured alert language decides
+            // how the message text reads, including the health verdicts collected here.
+            events = collector.collect(config.alertLocale());
         } catch (RuntimeException e) {
             // One broken signal source must not silence every other alert this minute.
             log.warn("Alert signal collection failed: {}", e.toString());
@@ -116,9 +121,13 @@ public class AlertEvaluator {
                 if (state == null) {
                     state = stateRepository.findByCategoryAndProjectIdAndObjectKey(
                                     event.category(), event.projectId(), event.object())
-                            .orElseGet(() -> newState(event));
+                            .orElse(null);
                 }
-                handleActive(event, state, config, url, now);
+                if (state == null) {
+                    announceNew(event, config, url, now);
+                } else {
+                    handleActive(event, state, config, url, now);
+                }
             } catch (RuntimeException e) {
                 log.warn("Alert state for {} could not be updated: {}",
                         event.dedupKey(), e.toString());
@@ -135,35 +144,62 @@ public class AlertEvaluator {
                 log.warn("Alert state {} could not be cleared: {}", key(state), e.toString());
             }
         }
+
+        try {
+            stateRepository.deleteInactive();
+        } catch (RuntimeException e) {
+            // Housekeeping only: the next run tries again, and no alert depends on it.
+            log.debug("Cleared alert states could not be pruned: {}", e.toString());
+        }
     }
 
-    private AlertState newState(AlertEvent event) {
+    /**
+     * The first announcement of a fault. The insert is the claim: the unique key lets exactly
+     * one node through, and the loser's save fails — it must not send.
+     */
+    private void announceNew(AlertEvent event, AlertConfig config, String url, Instant now) {
         AlertState state = new AlertState();
         state.setCategory(event.category());
         state.setProjectId(event.projectId());
         state.setObjectKey(event.object());
         state.setSubject(event.subject());
-        return state;
+        state.setActive(true);
+        state.setFirstSeenAt(now);
+        state.setLastNotifiedAt(now);
+        if (event.category().isEvent()) {
+            state.setLastEventAt(event.occurredAt());
+        }
+        if (!save(state)) {
+            return;
+        }
+        notifier.send(url, config.formatOrDefault(), message(event, config.alertLocale()));
     }
 
     private void handleActive(AlertEvent event, AlertState state, AlertConfig config,
                               String url, Instant now) {
-        String text;
+        Locale locale = config.alertLocale();
         if (!state.isActive()) {
+            boolean eventCategory = event.category().isEvent();
+            Instant lastEventAt = eventCategory ? event.occurredAt() : null;
+            if (stateRepository.claimStart(state.getId(), now, event.subject(), now,
+                    lastEventAt) == 0) {
+                return;
+            }
             state.setActive(true);
             state.setFirstSeenAt(now);
             state.setSubject(event.subject());
-            text = message(event);
             state.setLastNotifiedAt(now);
-            state.setLastEventAt(event.occurredAt());
+            state.setLastEventAt(lastEventAt);
         } else if (event.category().isEvent()) {
             // An event is news, not a condition: only a row newer than the one already
-            // announced is worth another message.
+            // announced is worth another message, and only one node may announce it.
             Instant last = state.getLastEventAt();
             if (last != null && !event.occurredAt().isAfter(last)) {
                 return;
             }
-            text = message(event);
+            if (stateRepository.claimEvent(state.getId(), now, event.occurredAt()) == 0) {
+                return;
+            }
             state.setLastNotifiedAt(now);
             state.setLastEventAt(event.occurredAt());
         } else {
@@ -172,51 +208,52 @@ public class AlertEvaluator {
             if (last != null && now.toEpochMilli() - last.toEpochMilli() < cooldownMs) {
                 return;
             }
-            text = message(event);
+            if (stateRepository.claimRepeat(state.getId(), now, now.minusMillis(cooldownMs)) == 0) {
+                return;
+            }
             state.setLastNotifiedAt(now);
         }
-        save(state);
-        notifier.send(url, config.formatOrDefault(), text);
+        notifier.send(url, config.formatOrDefault(), message(event, locale));
     }
 
     private void clearance(AlertState state, Set<AlertCategory> enabled, String url,
                            AlertConfig config, Instant now) {
+        if (stateRepository.claimClearance(state.getId()) == 0) {
+            // Another node cleared it in the same minute and sends the recovery, if any.
+            return;
+        }
         state.setActive(false);
-        save(state);
         if (!enabled.contains(state.getCategory()) || state.getCategory().isEvent()) {
             return;
         }
+        Locale locale = config.alertLocale();
         notifier.send(url, config.formatOrDefault(),
                 messages.getMessage("alert.webhook.recovery",
-                        new Object[]{categoryLabel(state.getCategory()),
+                        new Object[]{categoryLabel(state.getCategory(), locale),
                                 state.getSubject() == null ? "-" : state.getSubject(),
                                 display(state.getObjectKey())},
-                        locale()));
+                        locale));
     }
 
-    private String message(AlertEvent event) {
-        String detail = render(event.detailKey(), event.detailArgs());
+    private String message(AlertEvent event, Locale locale) {
+        String detail = render(event.detailKey(), event.detailArgs(), locale);
         return messages.getMessage("alert.webhook.message",
-                new Object[]{categoryLabel(event.category()), event.subject(),
+                new Object[]{categoryLabel(event.category(), locale), event.subject(),
                         display(event.object()), detail},
-                locale());
+                locale);
     }
 
-    private String categoryLabel(AlertCategory category) {
-        return render(category.messageKey(), new Object[0]);
+    private String categoryLabel(AlertCategory category, Locale locale) {
+        return render(category.messageKey(), new Object[0], locale);
     }
 
-    private String render(String key, Object[] args) {
+    private String render(String key, Object[] args, Locale locale) {
         try {
-            return messages.getMessage(key, args, locale());
+            return messages.getMessage(key, args, locale);
         } catch (RuntimeException e) {
             // A missing translation must not cost the alert itself.
             return key;
         }
-    }
-
-    private static Locale locale() {
-        return LocaleContextHolder.getLocale();
     }
 
     private static String display(String object) {
@@ -228,13 +265,18 @@ public class AlertEvaluator {
                 + state.getObjectKey();
     }
 
-    private void save(AlertState state) {
+    /**
+     * @return true when this node inserted the row, false when another node got there first
+     *         (the unique key refused the insert) or storage failed — in both cases the caller
+     *         must not send, because it does not own the announcement
+     */
+    private boolean save(AlertState state) {
         try {
             stateRepository.save(state);
+            return true;
         } catch (RuntimeException e) {
-            // A cross-node insert race lands here; the other node's row wins and the next
-            // evaluation reads it.
             log.debug("Alert state could not be saved: {}", e.toString());
+            return false;
         }
     }
 }

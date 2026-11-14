@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Controller;
@@ -19,8 +21,12 @@ import com.qqmu.jync.dto.AlertConfigForm;
 import com.qqmu.jync.model.AlertCategory;
 import com.qqmu.jync.model.AlertConfig;
 import com.qqmu.jync.model.AlertWebhookFormat;
+import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.alert.AlertConfigService;
 import com.qqmu.jync.service.alert.AlertNotifier;
+import com.qqmu.jync.service.audit.AuditDetail;
+import com.qqmu.jync.util.AuditOrigin;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -39,13 +45,16 @@ public class AlertSettingsController {
     private final AlertConfigService configService;
     private final AlertNotifier notifier;
     private final MessageSource messages;
+    private final AdminAuditService audit;
 
     public AlertSettingsController(AlertConfigService configService,
                                    AlertNotifier notifier,
-                                   MessageSource messages) {
+                                   MessageSource messages,
+                                   AdminAuditService audit) {
         this.configService = configService;
         this.notifier = notifier;
         this.messages = messages;
+        this.audit = audit;
     }
 
     @GetMapping
@@ -55,6 +64,7 @@ public class AlertSettingsController {
         form.setEnabled(config.isEnabled());
         form.setFormat(config.formatOrDefault());
         form.setCooldownMinutes(config.cooldownMinutesOrDefault());
+        form.setLanguage(config.languageOrDefault());
         List<String> selected = new ArrayList<>();
         for (AlertCategory category : config.enabledCategorySet()) {
             selected.add(category.name());
@@ -66,9 +76,22 @@ public class AlertSettingsController {
 
     @PostMapping
     public String save(@ModelAttribute("form") AlertConfigForm form,
-                       Model model, RedirectAttributes flash) {
+                       Model model, RedirectAttributes flash, HttpServletRequest request) {
         try {
             configService.save(form);
+            // The webhook URL is a bearer credential: the detail names the shape of the change
+            // and never the target, nor its tail.
+            AlertWebhookFormat format = form.getFormat() == null
+                    ? AlertWebhookFormat.GENERIC : form.getFormat();
+            audit.record(AuditAction.ALERT_CONFIG_SAVE,
+                    AuditDetail.of("audit.detail.alertConfigSave", AuditOrigin.of(request),
+                            form.isEnabled() ? "@msg:audit.value.enabled" : "@msg:audit.value.disabled",
+                            "@msg:" + format.messageKey(),
+                            String.valueOf(form.getCooldownMinutes() == null
+                                    ? AlertConfigService.DEFAULT_COOLDOWN_MINUTES
+                                    : form.getCooldownMinutes()),
+                            String.valueOf(form.getCategories() == null
+                                    ? 0 : form.getCategories().size())));
             flash.addFlashAttribute("message", "alert.saved");
             return "redirect:/alert-settings";
         } catch (IllegalArgumentException | IllegalStateException e) {

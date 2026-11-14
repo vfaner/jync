@@ -61,6 +61,22 @@ class AlertNotifierTest {
         assertThat(body.path("text").asString()).isEqualTo(text);
     }
 
+    /**
+     * WeCom caps a text message at 2048 bytes and rejects a longer one with HTTP 200 plus a
+     * non-zero errcode — the alert would silently disappear. Cutting on a code-point boundary
+     * keeps the JSON valid and the platform's limit satisfied.
+     */
+    @Test
+    void aWeComMessageIsTrimmedToThePlatformsByteLimit() throws Exception {
+        JsonNode body = json.readTree(
+                AlertNotifier.payload(AlertWebhookFormat.WE_COM, "超".repeat(1000)));
+        String content = body.path("text").path("content").asString();
+
+        assertThat(content.getBytes(StandardCharsets.UTF_8).length)
+                .isLessThanOrEqualTo(AlertNotifier.WE_COM_MAX_CONTENT_BYTES);
+        assertThat(content).startsWith("超").endsWith("…").doesNotContain("�");
+    }
+
     @Test
     void aSuccessfulPostPutsThePayloadOnTheWire() throws Exception {
         AtomicReference<String> received = new AtomicReference<>();

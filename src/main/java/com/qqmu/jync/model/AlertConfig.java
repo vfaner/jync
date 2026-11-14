@@ -2,6 +2,7 @@ package com.qqmu.jync.model;
 
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.Locale;
 import java.util.Set;
 
 import jakarta.persistence.Column;
@@ -29,6 +30,10 @@ import lombok.Setter;
 @Setter
 public class AlertConfig {
 
+    /** The product's primary language, and the default for a pre-column row. */
+    public static final String LANGUAGE_ZH_CN = "zh_CN";
+    public static final String LANGUAGE_EN = "en";
+
     @Id
     private Long id;
 
@@ -51,8 +56,27 @@ public class AlertConfig {
     @Column(name = "cooldown_minutes", nullable = false)
     private Integer cooldownMinutes = 30;
 
+    /**
+     * The language scheduled alerts are written in. Evaluation runs in a scheduler thread with
+     * no request locale, so without this the JVM default would silently pick one. Null on a row
+     * written before the column existed, which reads as {@link #LANGUAGE_ZH_CN}.
+     */
+    @Column(name = "alert_language", length = 16)
+    private String language;
+
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    /** The stored language, defaulted for a pre-column row. */
+    public String languageOrDefault() {
+        return LANGUAGE_EN.equalsIgnoreCase(language) ? LANGUAGE_EN : LANGUAGE_ZH_CN;
+    }
+
+    /** The locale the evaluator and collector render messages in. */
+    public Locale alertLocale() {
+        return LANGUAGE_EN.equals(languageOrDefault())
+                ? Locale.ENGLISH : Locale.SIMPLIFIED_CHINESE;
+    }
 
     /**
      * The selected categories.

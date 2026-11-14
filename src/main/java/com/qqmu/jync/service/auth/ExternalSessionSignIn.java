@@ -9,7 +9,10 @@ import jakarta.servlet.http.HttpSession;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.csrf.CsrfAuthenticationStrategy;
+import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
 import org.springframework.security.web.savedrequest.RequestCache;
 import org.springframework.security.web.savedrequest.SavedRequest;
@@ -31,8 +34,21 @@ import com.qqmu.jync.util.AuditOrigin;
 @Component
 public class ExternalSessionSignIn {
 
+    /**
+     * The application's CSRF token store, shared by every sign-in. It is the same session
+     * attribute the servlet filter reads, so a stateless instance per call would work too, but
+     * one instance keeps the parameter/header names in one place.
+     */
+    private static final HttpSessionCsrfTokenRepository CSRF_TOKENS =
+            new HttpSessionCsrfTokenRepository();
+
+    private static final HttpSessionSecurityContextRepository CONTEXT_STORE =
+            new HttpSessionSecurityContextRepository();
+
     private final AdminAuditService auditService;
     private final RequestCache requestCache = new HttpSessionRequestCache();
+    private final SessionAuthenticationStrategy csrfStrategy =
+            new CsrfAuthenticationStrategy(CSRF_TOKENS);
 
     public ExternalSessionSignIn(AdminAuditService auditService) {
         this.auditService = auditService;
@@ -54,7 +70,11 @@ public class ExternalSessionSignIn {
         SecurityContext context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
         SecurityContextHolder.setContext(context);
-        new HttpSessionSecurityContextRepository().saveContext(context, request, response);
+        CONTEXT_STORE.saveContext(context, request, response);
+        // Rotate the token handed out before sign-in: it was minted for an anonymous session
+        // and must not keep driving the authenticated one. Form login already does this through
+        // the session-authentication strategy; this manual path has to ask for it.
+        csrfStrategy.onAuthentication(authentication, request, response);
 
         auditService.record(AuditAction.LOGIN,
                 AuditDetail.of("audit.detail.loginVia", AuditOrigin.of(request),

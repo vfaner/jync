@@ -119,6 +119,22 @@ class HttpTicketValidationClientTest {
                 .isEqualTo("ticket=a%26b%3Dc%2Bd+%E4%B8%AD%E6%96%87");
     }
 
+    /**
+     * The parameter name comes from the settings page. Left raw, a {@code &} in it would end the
+     * name and start a parameter of the page's choosing — the ticket could be read under the
+     * wrong name, or a second parameter could be injected into the portal's request.
+     */
+    @Test
+    void aTicketParameterNameWithReservedCharactersIsEncoded() {
+        respond("/validate", 200, "{\"data\":{\"username\":\"alice\"}}");
+        OaAuthConfig config = config("/validate");
+        config.setTicketParam("a b&c");
+
+        client().validate(config, "t-1");
+
+        assertThat(rawQuery.get()).isEqualTo("a+b%26c=t-1");
+    }
+
     @Test
     void aNon2xxResponseIsRejectedEvenWhenTheBodySaysSuccess() {
         respond("/validate", 500, "{\"ok\":true,\"data\":{\"username\":\"alice\"}}");

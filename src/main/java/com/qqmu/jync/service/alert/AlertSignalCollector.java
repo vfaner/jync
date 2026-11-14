@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.alert;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Reads the application's existing state and reports the faults the alert rules can see.
@@ -10,5 +11,9 @@ import java.util.List;
  */
 public interface AlertSignalCollector {
 
-    List<AlertEvent> collect();
+    /**
+     * @param locale the language the resulting alert text must be written in; collection runs
+     *               in a scheduler thread that has no request locale of its own
+     */
+    List<AlertEvent> collect(Locale locale);
 }

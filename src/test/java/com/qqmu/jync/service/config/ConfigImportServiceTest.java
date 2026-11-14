@@ -30,6 +30,7 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlCheckpoint;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.ObjectType;
+import com.qqmu.jync.model.OaAuthConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncProgress;
@@ -442,6 +443,108 @@ class ConfigImportServiceTest {
                     assertThat(restored.isEnabled()).isTrue();
                     assertThat(cryptoUtil.decrypt(restored.getWebhookUrl()))
                             .isEqualTo("https://hook.example.com/one");
+                });
+    }
+
+    /**
+     * The import writes the singleton rows straight through the repository, so without its own
+     * validation a package could install settings the page refuses: alerting enabled with no
+     * webhook, or a cooldown the evaluator would read as zero. Both leave the alert loop in a
+     * state only a hand-edited database can produce.
+     */
+    @Test
+    @DisplayName("an enabled alert config from a package without a webhook is refused")
+    void anEnabledAlertConfigFromAPackageWithoutAWebhookIsRefused() {
+        seedAdmin();
+        AlertConfig config = new AlertConfig();
+        config.setId(1L);
+        config.setEnabled(true);
+        alertConfig.save(config);
+
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+
+        assertThatThrownBy(() -> importService.importPackage(pkg, PASSPHRASE, true))
+                .isInstanceOf(ConfigPackageException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.config.import.alertInvalid");
+        assertThat(alertConfig.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an alert cooldown outside the page's range is refused on import")
+    void anOutOfRangeAlertCooldownIsRefusedOnImport() {
+        seedAdmin();
+        AlertConfig config = new AlertConfig();
+        config.setId(1L);
+        config.setCooldownMinutes(0);
+        alertConfig.save(config);
+
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+
+        assertThatThrownBy(() -> importService.importPackage(pkg, PASSPHRASE, true))
+                .isInstanceOf(ConfigPackageException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.config.import.alertInvalid");
+        assertThat(alertConfig.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("the alert language travels in the package and defaults when the source has none")
+    void theAlertLanguageTravelsInThePackage() {
+        seedAdmin();
+        AlertConfig config = new AlertConfig();
+        config.setId(1L);
+        config.setLanguage(AlertConfig.LANGUAGE_EN);
+        alertConfig.save(config);
+
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+        importService.importPackage(pkg, PASSPHRASE, true);
+
+        assertThat(alertConfig.findAll()).singleElement()
+                .satisfies(restored ->
+                        assertThat(restored.getLanguage()).isEqualTo(AlertConfig.LANGUAGE_EN));
+    }
+
+    @Test
+    @DisplayName("an external-auth row that would let nobody in is refused on import")
+    void anExternalAuthRowThatLocksEverybodyOutIsRefusedOnImport() {
+        seedAdmin();
+        OaAuthConfig oa = new OaAuthConfig();
+        oa.setId(1L);
+        oa.setEnabled(false);
+        oa.setLocalLoginEnabled(false);
+        oaAuthConfig.save(oa);
+
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+
+        assertThatThrownBy(() -> importService.importPackage(pkg, PASSPHRASE, true))
+                .isInstanceOf(ConfigPackageException.class)
+                .hasFieldOrPropertyWithValue("messageKey", "error.config.import.oaInvalid");
+        assertThat(oaAuthConfig.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an imported external-auth timeout is clamped to the range the login path allows")
+    void anImportedExternalAuthTimeoutIsClamped() {
+        seedAdmin();
+        OaAuthConfig oa = new OaAuthConfig();
+        oa.setId(1L);
+        oa.setTimeoutMs(1);
+        oaAuthConfig.save(oa);
+
+        byte[] pkg = export(false).bytes();
+        wipeConfiguration();
+        importService.importPackage(pkg, PASSPHRASE, true);
+
+        assertThat(oaAuthConfig.findAll()).singleElement()
+                .satisfies(restored -> {
+                    assertThat(restored.getTimeoutMs())
+                            .isEqualTo(com.qqmu.jync.service.auth.oa.OaAuthConfigService.MIN_TIMEOUT_MS);
+                    // The package never carries the timestamp; an import is a write of the row,
+                    // so it must record when, exactly as a page save does.
+                    assertThat(restored.getUpdatedAt()).isNotNull();
                 });
     }
 

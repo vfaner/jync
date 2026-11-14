@@ -17,11 +17,15 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.dto.OaAuthConfigForm;
+import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.OaAuthConfig;
+import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.auth.ExternalIdentity;
 import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 import com.qqmu.jync.service.auth.oa.OaAuthResult;
 import com.qqmu.jync.service.auth.oa.TicketValidationClient;
+import com.qqmu.jync.util.AuditOrigin;
 import com.qqmu.jync.util.ClientIpResolver;
 
 /**
@@ -36,11 +40,14 @@ public class ExternalAuthSettingsController {
 
     private final OaAuthConfigService configService;
     private final TicketValidationClient ticketClient;
+    private final AdminAuditService audit;
 
     public ExternalAuthSettingsController(OaAuthConfigService configService,
-                                          TicketValidationClient ticketClient) {
+                                          TicketValidationClient ticketClient,
+                                          AdminAuditService audit) {
         this.configService = configService;
         this.ticketClient = ticketClient;
+        this.audit = audit;
     }
 
     @GetMapping
@@ -56,9 +63,20 @@ public class ExternalAuthSettingsController {
 
     @PostMapping
     public String save(@ModelAttribute("config") OaAuthConfigForm form,
-                       Model model, RedirectAttributes flash) {
+                       Model model, RedirectAttributes flash, HttpServletRequest request) {
         try {
-            configService.save(form.toEntity(), form.getSecretHeaderValue(), form.isClearSecret());
+            OaAuthConfig saved = configService.save(form.toEntity(),
+                    form.getSecretHeaderValue(), form.isClearSecret());
+            // How everyone signs in is a security-relevant mutation; the shared secret is not
+            // part of the record.
+            audit.record(AuditAction.EXTERNAL_AUTH_SAVE,
+                    AuditDetail.of("audit.detail.externalAuthSave", AuditOrigin.of(request),
+                            saved.isEnabled()
+                                    ? "@msg:audit.value.enabled" : "@msg:audit.value.disabled",
+                            "@msg:oa.mode." + (saved.getMode() == null
+                                    ? OaAuthConfig.Mode.PASSWORD : saved.getMode()).name(),
+                            saved.isLocalLoginAllowed()
+                                    ? "@msg:audit.value.enabled" : "@msg:audit.value.disabled"));
             flash.addFlashAttribute("message", "msg.oa.saved");
             return "redirect:/external-auth";
         } catch (IllegalArgumentException | IllegalStateException e) {

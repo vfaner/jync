@@ -10,7 +10,6 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Locale;
 
 import org.springframework.stereotype.Component;
 
@@ -32,15 +31,7 @@ public class HttpTicketValidationClient implements TicketValidationClient {
 
     private static final String DEFAULT_TICKET_PARAM = "ticket";
 
-    /**
-     * One client for every validation, for the same reason as {@link HttpOaAuthClient}: the
-     * instance owns a selector thread and a connection pool. The per-call deadline stays on
-     * the request; the connect timeout only bounds the TCP handshake.
-     */
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build();
+    private final HttpClient httpClient = OaHttp.client();
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -54,22 +45,22 @@ public class HttpTicketValidationClient implements TicketValidationClient {
         String param = config.getTicketParam() == null || config.getTicketParam().isBlank()
                 ? DEFAULT_TICKET_PARAM : config.getTicketParam().trim();
         String encoded = URLEncoder.encode(ticket == null ? "" : ticket, StandardCharsets.UTF_8);
+        // The name is operator input too: a raw '&' or space would end the parameter or break
+        // the URI, and the ticket would reach the portal under a name it never chose.
+        String paramName = URLEncoder.encode(param, StandardCharsets.UTF_8);
         URI uri;
         try {
             uri = post ? URI.create(base)
-                    : URI.create(base + (base.contains("?") ? "&" : "?") + param + "=" + encoded);
+                    : URI.create(base + (base.contains("?") ? "&" : "?") + paramName + "=" + encoded);
         } catch (IllegalArgumentException ex) {
             return OaAuthResult.failure("error.oa.url.invalid");
         }
-        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
-        if (!scheme.equals("http") && !scheme.equals("https")) {
-            return OaAuthResult.failure("error.oa.url.invalid");
-        }
-        if (scheme.equals("http") && !config.isAllowInsecureHttp()) {
-            return OaAuthResult.failure("error.oa.url.notHttps");
+        String schemeKey = OaHttp.schemeErrorKey(uri, config);
+        if (schemeKey != null) {
+            return OaAuthResult.failure(schemeKey);
         }
 
-        int timeoutMs = config.getTimeoutMs() == null ? 5000 : config.getTimeoutMs();
+        int timeoutMs = OaHttp.timeoutMs(config);
         HttpRequest request;
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
@@ -79,7 +70,7 @@ public class HttpTicketValidationClient implements TicketValidationClient {
                     ? builder.header("Content-Type",
                                     "application/x-www-form-urlencoded; charset=UTF-8")
                             .POST(HttpRequest.BodyPublishers.ofString(
-                                    param + "=" + encoded, StandardCharsets.UTF_8))
+                                    paramName + "=" + encoded, StandardCharsets.UTF_8))
                             .build()
                     : builder.GET().build();
         } catch (IllegalArgumentException ex) {

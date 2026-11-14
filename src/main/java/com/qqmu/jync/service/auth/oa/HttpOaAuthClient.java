@@ -11,7 +11,6 @@ import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.stereotype.Component;
@@ -35,15 +34,7 @@ import lombok.extern.slf4j.Slf4j;
 @Component
 public class HttpOaAuthClient implements OaAuthClient {
 
-    /**
-     * One client for every sign-in: it owns a selector thread and a connection pool, and the
-     * JDK expects instances to be reused. The per-attempt deadline stays on the request
-     * ({@code config.timeoutMs}); this connect timeout only bounds the TCP handshake.
-     */
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .followRedirects(HttpClient.Redirect.NEVER)
-            .build();
+    private final HttpClient httpClient = OaHttp.client();
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -55,15 +46,12 @@ public class HttpOaAuthClient implements OaAuthClient {
         } catch (IllegalArgumentException ex) {
             return OaAuthResult.failure("error.oa.url.invalid");
         }
-        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
-        if (!scheme.equals("http") && !scheme.equals("https")) {
-            return OaAuthResult.failure("error.oa.url.invalid");
-        }
-        if (scheme.equals("http") && !config.isAllowInsecureHttp()) {
-            return OaAuthResult.failure("error.oa.url.notHttps");
+        String schemeKey = OaHttp.schemeErrorKey(uri, config);
+        if (schemeKey != null) {
+            return OaAuthResult.failure(schemeKey);
         }
 
-        int timeoutMs = config.getTimeoutMs() == null ? 5000 : config.getTimeoutMs();
+        int timeoutMs = OaHttp.timeoutMs(config);
         HttpRequest request;
         try {
             request = HttpRequest.newBuilder(uri)

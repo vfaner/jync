@@ -46,6 +46,8 @@ class ExternalAuthSettingsViewTest {
     private TicketValidationClient ticketClient;
     @MockitoBean
     private BuildProperties buildProperties;
+    @MockitoBean
+    private com.qqmu.jync.service.AdminAuditService audit;
 
     private OaAuthConfig stored;
 
@@ -82,6 +84,19 @@ class ExternalAuthSettingsViewTest {
         }
         assertThat(page).contains("外部认证");
         assertThat(page).doesNotContain("??");
+    }
+
+    /**
+     * The filter reads the first value of the identity header. A gateway that appends its own
+     * value after the client's therefore signs the visitor in under the name the client chose —
+     * the exact spoofing the shared secret is supposed to prevent.
+     */
+    @Test
+    void headerModeWarnsThatTheProxyMustOverwriteTheIdentityHeader() throws Exception {
+        String page = mvc.perform(get("/external-auth").locale(Locale.SIMPLIFIED_CHINESE))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(page).contains("必须覆盖", "而不是追加");
     }
 
     @Test
@@ -238,6 +253,28 @@ class ExternalAuthSettingsViewTest {
         verify(configService).save(saved.capture(), eq("s3cr3t"), eq(false));
         assertThat(saved.getValue().getMode()).isEqualTo(OaAuthConfig.Mode.HEADER);
         assertThat(saved.getValue().getUserHeader()).isEqualTo("X-Auth-User");
+    }
+
+    /**
+     * Changing how everyone signs in is a security-relevant mutation, and the shared secret must
+     * not ride into the append-only audit table with it.
+     */
+    @Test
+    void savingRecordsAnAuditRowWithoutTheSharedSecret() throws Exception {
+        mvc.perform(post("/external-auth").locale(Locale.SIMPLIFIED_CHINESE)
+                        .param("enabled", "true")
+                        .param("mode", "HEADER")
+                        .param("userHeader", "X-Auth-User")
+                        .param("secretHeaderName", "X-Auth-Secret")
+                        .param("secretHeaderValue", "s3cr3t")
+                        .param("localLoginEnabled", "true"))
+                .andExpect(status().is3xxRedirection());
+
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(audit).record(eq(com.qqmu.jync.model.AuditAction.EXTERNAL_AUTH_SAVE),
+                detail.capture());
+        assertThat(detail.getValue()).contains("@msg:oa.mode.HEADER")
+                .doesNotContain("s3cr3t", "X-Auth-Secret");
     }
 
     @Test

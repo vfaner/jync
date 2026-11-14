@@ -19,14 +19,8 @@ public final class ExternalUserRoles {
     }
 
     public static boolean matchesUsername(String commaSeparated, String username) {
-        if (commaSeparated == null || username == null) {
-            return false;
-        }
-        for (String part : commaSeparated.split(",")) {
-            if (part.trim().equals(username)) {
-                return true;
-            }
-        }
-        return false;
+        // One implementation with the response-field comparison: the two used to trim on
+        // opposite sides, which is invisible today and a role bug the day it is not.
+        return ExternalIdentity.matches(username, commaSeparated);
     }
 }

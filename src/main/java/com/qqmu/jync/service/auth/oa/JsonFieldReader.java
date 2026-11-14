@@ -1,5 +1,7 @@
 package com.qqmu.jync.service.auth.oa;
 
+import com.qqmu.jync.service.auth.ExternalIdentity;
+
 import tools.jackson.databind.JsonNode;
 
 /** Dot-path lookup and accepted-value matching over a JSON response. */
@@ -37,15 +39,7 @@ public final class JsonFieldReader {
         if (path == null || values == null) {
             return false;
         }
-        String actual = textAt(root, path);
-        if (actual == null) {
-            return false;
-        }
-        for (String accepted : values.split(",")) {
-            if (accepted.trim().equals(actual)) {
-                return true;
-            }
-        }
-        return false;
+        // Same trim-accept-both-sides rule as the configured admin list; one implementation.
+        return ExternalIdentity.matches(textAt(root, path), values);
     }
 }

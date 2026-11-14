@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -67,6 +68,46 @@ class AlertConfigServiceTest {
         // "enabled but nothing selected".
         assertThat(config.enabledCategorySet()).containsExactlyInAnyOrder(AlertCategory.values());
         assertThat(service.webhookUrlOrNull()).isNull();
+    }
+
+    /**
+     * Scheduled evaluation has no request locale, so the JVM default used to decide the
+     * language of every alert. The setting makes that choice explicit and defaults to the
+     * product's primary language.
+     */
+    @Test
+    void aRowWithoutAnAlertLanguageDefaultsToChinese() {
+        when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
+
+        AlertConfig config = service.load();
+
+        assertThat(config.languageOrDefault()).isEqualTo(AlertConfig.LANGUAGE_ZH_CN);
+        assertThat(config.alertLocale()).isEqualTo(Locale.SIMPLIFIED_CHINESE);
+    }
+
+    @Test
+    void theAlertLanguageIsStoredAndALanguageTagIsNormalised() {
+        when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
+        AlertConfigForm form = form(false);
+        form.setLanguage("en-US");
+
+        service.save(form);
+
+        ArgumentCaptor<AlertConfig> saved = ArgumentCaptor.forClass(AlertConfig.class);
+        verify(repository).save(saved.capture());
+        assertThat(saved.getValue().getLanguage()).isEqualTo(AlertConfig.LANGUAGE_EN);
+        assertThat(saved.getValue().alertLocale()).isEqualTo(Locale.ENGLISH);
+    }
+
+    @Test
+    void anUnknownAlertLanguageIsRefused() {
+        when(repository.findById(AlertConfigService.SINGLETON_ID)).thenReturn(Optional.empty());
+        AlertConfigForm form = form(false);
+        form.setLanguage("fr");
+
+        assertThatThrownBy(() -> service.save(form))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.alert.language");
     }
 
     @Test

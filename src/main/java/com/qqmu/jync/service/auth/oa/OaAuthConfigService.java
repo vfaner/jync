@@ -105,6 +105,42 @@ public class OaAuthConfigService {
     @Transactional
     public OaAuthConfig save(OaAuthConfig config, String newSecretValue, boolean clearSecret) {
         config.setId(SINGLETON_ID);
+        normaliseFields(config);
+
+        OaAuthConfig stored = repository.findById(SINGLETON_ID).orElse(null);
+        if (clearSecret) {
+            // A header name without a value is rejected below, so clearing removes the pair:
+            // a half-configured shared secret must never look like one that is enforced.
+            config.setSecretHeaderName(null);
+            config.setSecretHeaderValue(null);
+        } else {
+            config.setSecretHeaderValue(resolveSecret(stored, newSecretValue));
+        }
+
+        validate(config);
+        config.setUpdatedAt(Instant.now());
+        return repository.save(config);
+    }
+
+    /**
+     * Validates a row restored from a configuration package, in place.
+     *
+     * <p>Import writes the entity through the repository (the secret is already re-keyed to
+     * this instance), so without this call it would bypass every rule the settings page
+     * enforces — and the login path would start using a half-configured endpoint. The secret
+     * ciphertext is left untouched.
+     *
+     * @throws IllegalArgumentException carrying an i18n key when the row is unusable
+     */
+    public void validateImported(OaAuthConfig config) {
+        config.setId(SINGLETON_ID);
+        normaliseFields(config);
+        validate(config);
+        config.setUpdatedAt(Instant.now());
+    }
+
+    /** Shared with import: makes the mode's unused fields empty and its used ones defaulted. */
+    private void normaliseFields(OaAuthConfig config) {
         config.setMode(config.getMode() == null ? OaAuthConfig.Mode.PASSWORD : config.getMode());
         config.setLoginUrl(OaText.trimToNull(config.getLoginUrl()));
         config.setUsernameField(OaText.orDefault(config.getUsernameField(), DEFAULT_USERNAME_FIELD));
@@ -129,19 +165,11 @@ public class OaAuthConfigService {
         config.setRequestFormat(config.getRequestFormat() == null
                 ? OaAuthConfig.RequestFormat.FORM : config.getRequestFormat());
 
-        OaAuthConfig stored = repository.findById(SINGLETON_ID).orElse(null);
-        if (clearSecret) {
-            // A header name without a value is rejected below, so clearing removes the pair:
-            // a half-configured shared secret must never look like one that is enforced.
-            config.setSecretHeaderName(null);
-            config.setSecretHeaderValue(null);
-        } else {
-            config.setSecretHeaderValue(resolveSecret(stored, newSecretValue));
-        }
-
         int timeout = config.getTimeoutMs() == null ? DEFAULT_TIMEOUT_MS : config.getTimeoutMs();
         config.setTimeoutMs(Math.max(MIN_TIMEOUT_MS, Math.min(MAX_TIMEOUT_MS, timeout)));
+    }
 
+    private void validate(OaAuthConfig config) {
         if (config.isEnabled()) {
             validateEnabled(config);
         } else if (!config.isLocalLoginAllowed()) {
@@ -149,9 +177,6 @@ public class OaAuthConfigService {
             // that lets nobody in and cannot be undone from the UI.
             throw new IllegalArgumentException("error.oa.local.required");
         }
-
-        config.setUpdatedAt(Instant.now());
-        return repository.save(config);
     }
 
     /**

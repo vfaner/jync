@@ -13,6 +13,8 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.UserRole;
@@ -50,6 +52,31 @@ class ExternalSessionSignInTest {
         assertThat(principal.getRole()).isEqualTo(UserRole.VIEWER);
         verify(auditService).record(eq(AuditAction.LOGIN), contains("@method:header"),
                 eq("alice"));
+    }
+
+    /**
+     * The pre-sign-in page already handed the browser a CSRF token. Keeping it after the
+     * privilege level changes would let a token minted for an anonymous session drive the new
+     * authenticated one (the classic session-fixation/CSRF-token-reuse pairing).
+     */
+    @Test
+    void signingInRotatesTheCsrfToken() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/login");
+        MockHttpSession session = new MockHttpSession();
+        request.setSession(session);
+        HttpSessionCsrfTokenRepository repository = new HttpSessionCsrfTokenRepository();
+        CsrfToken before = repository.generateToken(request);
+        repository.saveToken(before, request, new MockHttpServletResponse());
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        signIn.signIn(request, response, "alice", UserRole.VIEWER, "HEADER");
+
+        // Spring Security 7 discards the old token immediately and mints the replacement when
+        // the next page asks for one (deferred); what matters is that the pre-sign-in value is
+        // gone and the replacement carries a different secret.
+        assertThat(repository.loadToken(request)).isNull();
+        CsrfToken after = repository.loadDeferredToken(request, response).get();
+        assertThat(after.getToken()).isNotEqualTo(before.getToken());
     }
 
     @Test

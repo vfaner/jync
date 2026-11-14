@@ -3,6 +3,7 @@ package com.qqmu.jync.dto;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.qqmu.jync.model.AlertConfig;
 import com.qqmu.jync.model.AlertWebhookFormat;
 
 import lombok.Getter;
@@ -27,4 +28,6 @@ public class AlertConfigForm {
     /** {@link com.qqmu.jync.model.AlertCategory} names, as submitted by the checkboxes. */
     private List<String> categories = new ArrayList<>();
     private Integer cooldownMinutes = 30;
+    /** {@link AlertConfig#LANGUAGE_ZH_CN} or {@link AlertConfig#LANGUAGE_EN}. */
+    private String language = AlertConfig.LANGUAGE_ZH_CN;
 }

@@ -45,6 +45,7 @@ class AlertSettingsViewTest {
     @Autowired private MockMvc mvc;
     @MockitoBean private AlertConfigService configService;
     @MockitoBean private AlertNotifier notifier;
+    @MockitoBean private com.qqmu.jync.service.AdminAuditService audit;
 
     private AlertConfig config(boolean enabled, String storedUrl) {
         AlertConfig config = new AlertConfig();
@@ -94,6 +95,8 @@ class AlertSettingsViewTest {
         assertThat(page).contains("同步失败", "轮询卡死", "项目未运行", "CDC 停摆",
                 "数据漂移", "连接健康", "PG slot 积压", "CDC DDL 被跳过");
         assertThat(page).contains("发送测试消息");
+        // Scheduled alerts have no request locale; the operator picks their language here.
+        assertThat(page).contains("name=\"language\"", "中文", "English");
     }
 
     /**
@@ -145,6 +148,7 @@ class AlertSettingsViewTest {
                         .param("enabled", "true")
                         .param("webhookUrl", "https://hooks.example.com/x")
                         .param("format", "GENERIC")
+                        .param("language", "en")
                         .param("categories", "SYNC_FAILURE")
                         .param("cooldownMinutes", "30"))
                 .andExpect(status().is3xxRedirection())
@@ -159,6 +163,30 @@ class AlertSettingsViewTest {
         assertThat(saved.getValue().isEnabled()).isTrue();
         assertThat(saved.getValue().getCategories()).containsExactly("SYNC_FAILURE");
         assertThat(saved.getValue().getCooldownMinutes()).isEqualTo(30);
+        assertThat(saved.getValue().getLanguage()).isEqualTo("en");
+    }
+
+    /**
+     * The webhook URL is a bearer credential, so the audit row has to say what changed without
+     * carrying the secret or any part of it into an append-only table.
+     */
+    @Test
+    void savingRecordsAnAuditRowWithoutTheWebhookSecret() throws Exception {
+        mvc.perform(post("/alert-settings").with(asAdmin()).with(csrf())
+                        .param("enabled", "true")
+                        .param("webhookUrl", "https://hooks.example.com/secret-token")
+                        .param("format", "WE_COM")
+                        .param("categories", "SYNC_FAILURE")
+                        .param("cooldownMinutes", "15"))
+                .andExpect(status().is3xxRedirection());
+
+        org.mockito.ArgumentCaptor<String> detail =
+                org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(audit).record(eq(com.qqmu.jync.model.AuditAction.ALERT_CONFIG_SAVE),
+                detail.capture());
+        assertThat(detail.getValue())
+                .contains("@msg:alert.format.weCom", "|15|", "|1")
+                .doesNotContain("secret-token", "hooks.example.com");
     }
 
     @Test

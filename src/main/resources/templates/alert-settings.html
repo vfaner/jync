@@ -77,6 +77,16 @@
 
                     <div class="grid-2">
                         <div class="field">
+                            <label for="language" th:text="#{alert.language}">Message language</label>
+                            <select class="select" id="language" th:field="*{language}">
+                                <option value="zh_CN" th:text="#{alert.language.zh}">中文</option>
+                                <option value="en" th:text="#{alert.language.en}">English</option>
+                            </select>
+                            <div class="help" th:text="#{alert.languageHelp}">
+                                Messages are written in this language, not the page's.
+                            </div>
+                        </div>
+                        <div class="field">
                             <label for="format" th:text="#{alert.format}">Payload format</label>
                             <select class="select" id="format" th:field="*{format}">
                                 <option th:each="f : ${formats}" th:value="${f.name()}"

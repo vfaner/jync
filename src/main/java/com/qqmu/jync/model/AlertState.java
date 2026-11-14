@@ -18,10 +18,15 @@ import lombok.Setter;
 /**
  * What the evaluator last said about one (category, project, object) triple.
  *
- * <p>The row is the deduplication point across nodes: whichever node notices a fault first
- * writes {@code active = true} and sends, and the others find the row active and stay quiet
- * until the cooldown expires. A cleared condition keeps the row with {@code active = false},
- * preserving the last times for the next fault's cooldown arithmetic.
+ * <p>The row is the deduplication point across nodes. Reading it is not enough — two nodes read
+ * the same values before either writes — so every announcement first claims the row with a
+ * conditional update on this table (see {@code AlertStateRepository}); the node whose update
+ * matches zero rows stays quiet. The first announcement of a fault is claimed by the unique key:
+ * the losing insert fails, and its caller does not send.
+ *
+ * <p>A cleared row is flipped to {@code active = false} by the node that sends the recovery, and
+ * pruned at the end of that evaluation. A later fault of the same kind writes fresh timestamps,
+ * so nothing worth keeping is lost.
  */
 @Entity
 @Table(name = "alert_state", uniqueConstraints = @UniqueConstraint(

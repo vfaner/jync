@@ -55,6 +55,8 @@ import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.RedisTargetRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.repository.SystemSettingRepository;
+import com.qqmu.jync.service.alert.AlertConfigService;
+import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 
 /**
  * Restores a configuration package into this deployment's metadata database.
@@ -105,7 +107,9 @@ public class ConfigImportService {
     private final MigrationTaskRepository migrationTasks;
     private final AiProviderRepository aiProviders;
     private final AlertConfigRepository alertConfig;
+    private final AlertConfigService alertConfigService;
     private final OaAuthConfigRepository oaAuthConfig;
+    private final OaAuthConfigService oaAuthConfigService;
     private final AppUserRepository users;
     private final SystemSettingRepository systemSettings;
     private final com.qqmu.jync.service.settings.SystemSettingService settingService;
@@ -129,7 +133,9 @@ public class ConfigImportService {
                                MigrationTaskRepository migrationTasks,
                                AiProviderRepository aiProviders,
                                AlertConfigRepository alertConfig,
+                               AlertConfigService alertConfigService,
                                OaAuthConfigRepository oaAuthConfig,
+                               OaAuthConfigService oaAuthConfigService,
                                AppUserRepository users,
                                SystemSettingRepository systemSettings,
                                com.qqmu.jync.service.settings.SystemSettingService settingService,
@@ -152,7 +158,9 @@ public class ConfigImportService {
         this.migrationTasks = migrationTasks;
         this.aiProviders = aiProviders;
         this.alertConfig = alertConfig;
+        this.alertConfigService = alertConfigService;
         this.oaAuthConfig = oaAuthConfig;
+        this.oaAuthConfigService = oaAuthConfigService;
         this.users = users;
         this.systemSettings = systemSettings;
         this.settingService = settingService;
@@ -508,7 +516,15 @@ public class ConfigImportService {
         config.setFormat(dto.format());
         config.setCategories(dto.categories());
         config.setCooldownMinutes(dto.cooldownMinutes());
-        config.setUpdatedAt(Instant.now());
+        config.setLanguage(dto.language());
+        // The import writes through the repository, bypassing AlertConfigService.save, so the
+        // page's rules are applied here instead. The key is all the page learns: the values in
+        // the package (including the webhook) must not reach a view or a log.
+        try {
+            alertConfigService.validateImported(config);
+        } catch (IllegalArgumentException e) {
+            throw new ConfigPackageException("error.config.import.alertInvalid");
+        }
         alertConfig.save(config);
     }
 
@@ -542,7 +558,13 @@ public class ConfigImportService {
         config.setAdminValue(dto.adminValue());
         config.setTimeoutMs(dto.timeoutMs());
         config.setAllowInsecureHttp(dto.allowInsecureHttp());
-        config.setUpdatedAt(Instant.now());
+        try {
+            oaAuthConfigService.validateImported(config);
+        } catch (IllegalArgumentException e) {
+            // Same reasoning as the alert row: the specific message key stays behind; the
+            // package's URLs and header names never reach the flash.
+            throw new ConfigPackageException("error.config.import.oaInvalid");
+        }
         oaAuthConfig.save(config);
     }
 

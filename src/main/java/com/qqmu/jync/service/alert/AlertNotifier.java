@@ -42,6 +42,12 @@ public class AlertNotifier {
     /** One failure log line per URL per interval: a down channel must not flood the log. */
     static final Duration WARN_INTERVAL = Duration.ofMinutes(10);
 
+    /**
+     * WeCom rejects a text message whose {@code content} exceeds 2048 bytes — with HTTP 200 and
+     * a non-zero errcode, so the alert would silently disappear.
+     */
+    static final int WE_COM_MAX_CONTENT_BYTES = 2048;
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     /** One delivery's outcome, shown on the settings page so a silent channel is visible. */
@@ -199,7 +205,9 @@ public class AlertNotifier {
 
     /** The JSON body for one message, in the selected product's envelope. */
     static String payload(AlertWebhookFormat format, String text) {
-        String escaped = escape(text);
+        String content = format == AlertWebhookFormat.WE_COM
+                ? fitBytes(text, WE_COM_MAX_CONTENT_BYTES) : text;
+        String escaped = escape(content);
         switch (format) {
             case WE_COM:
             case DING_TALK:
@@ -210,6 +218,26 @@ public class AlertNotifier {
             default:
                 return "{\"event\":\"jync.alert\",\"text\":\"" + escaped + "\"}";
         }
+    }
+
+    /**
+     * Cuts a message to fit a byte limit, ending on a code-point boundary so the result is still
+     * valid UTF-8, and marking the cut so the reader knows the alert continues.
+     */
+    static String fitBytes(String text, int maxBytes) {
+        if (text == null) {
+            return "";
+        }
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length <= maxBytes) {
+            return text;
+        }
+        int end = maxBytes - "…".getBytes(StandardCharsets.UTF_8).length;
+        // A continuation byte (10xxxxxx) means the cut landed inside a character.
+        while (end > 0 && (bytes[end] & 0xC0) == 0x80) {
+            end--;
+        }
+        return new String(bytes, 0, end, StandardCharsets.UTF_8) + "…";
     }
 
     /** Minimal JSON string escaping — enough for the text field of a fixed envelope. */

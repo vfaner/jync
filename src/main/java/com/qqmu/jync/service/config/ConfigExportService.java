@@ -350,13 +350,15 @@ public class ConfigExportService {
 
     private static ConfigPackageDtos.AlertConfigDto toDto(AlertConfig config) {
         return new ConfigPackageDtos.AlertConfigDto(config.isEnabled(), config.getWebhookUrl(),
-                config.getFormat(), config.getCategories(), config.getCooldownMinutes());
+                config.getFormat(), config.getCategories(), config.getCooldownMinutes(),
+                config.getLanguage());
     }
 
     /** An installation that never opened the alerting page still exports a usable default. */
     private static ConfigPackageDtos.AlertConfigDto defaultAlertConfig() {
         return new ConfigPackageDtos.AlertConfigDto(false, null,
-                com.qqmu.jync.model.AlertWebhookFormat.GENERIC, null, 30);
+                com.qqmu.jync.model.AlertWebhookFormat.GENERIC, null, 30,
+                AlertConfig.LANGUAGE_ZH_CN);
     }
 
     private static ConfigPackageDtos.OaAuthConfigDto toDto(OaAuthConfig config) {

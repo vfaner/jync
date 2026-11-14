@@ -54,6 +54,13 @@ public enum AuditAction {
     /** The saved TLS certificate was removed on the 系统配置 page (applies after a restart). */
     TLS_CONFIG_DELETE,
     /**
+     * The alerting settings were saved, including the webhook target. The detail never carries
+     * the URL or any part of it: it is a bearer credential.
+     */
+    ALERT_CONFIG_SAVE,
+    /** The external-authentication settings were saved. The detail never carries the secret. */
+    EXTERNAL_AUTH_SAVE,
+    /**
      * Legacy: the 系统配置 metadata-database connection tester wrote this before it was
      * removed. Kept so the append-only rows still load ({@code @Enumerated(STRING)} is
      * strict); nothing records it any more.

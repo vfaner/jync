@@ -125,8 +125,10 @@ public class AlertConfigService {
         if (cooldown < MIN_COOLDOWN_MINUTES || cooldown > MAX_COOLDOWN_MINUTES) {
             throw new IllegalArgumentException("error.alert.cooldown");
         }
+        String language = normalizeLanguage(form.getLanguage());
 
         config.setEnabled(form.isEnabled());
+        config.setLanguage(language);
         config.setFormat(form.getFormat() == null
                 ? AlertWebhookFormat.GENERIC : form.getFormat());
         config.setCategories(AlertCategory.toCsv(categories));
@@ -140,6 +142,61 @@ public class AlertConfigService {
         }
         config.setUpdatedAt(Instant.now());
         repository.save(config);
+    }
+
+    /**
+     * Validates and normalises a row restored from a configuration package, in place.
+     *
+     * <p>Import writes the singleton straight through the repository, so without this call a
+     * package exported from a hand-edited database could install states the page refuses —
+     * alerting enabled with no webhook, a cooldown the evaluator would read as zero, an unknown
+     * category name. The secret is already re-keyed to this instance by the time it gets here.
+     *
+     * @throws IllegalArgumentException carrying an i18n key when the row is unusable
+     */
+    public void validateImported(AlertConfig config) {
+        config.setId(SINGLETON_ID);
+        config.setFormat(config.getFormat() == null
+                ? AlertWebhookFormat.GENERIC : config.getFormat());
+        config.setLanguage(normalizeLanguage(config.getLanguage()));
+
+        int cooldown = config.getCooldownMinutes() == null
+                ? DEFAULT_COOLDOWN_MINUTES : config.getCooldownMinutes();
+        if (cooldown < MIN_COOLDOWN_MINUTES || cooldown > MAX_COOLDOWN_MINUTES) {
+            throw new IllegalArgumentException("error.alert.cooldown");
+        }
+        config.setCooldownMinutes(cooldown);
+
+        // Categories are left as exported: unlike the page, the evaluator reads null/blank as
+        // "every category" and skips names a newer version wrote, so neither is a broken row.
+
+        String url = decryptOrNull(config.getWebhookUrl());
+        if (url != null) {
+            validateUrl(url);
+        }
+        if (config.isEnabled() && url == null) {
+            throw new IllegalArgumentException("error.alert.url.required");
+        }
+        config.setUpdatedAt(Instant.now());
+    }
+
+    /**
+     * The alert language is stored as one of two canonical values, because the evaluator maps
+     * it straight to a bundle locale. Accepts a plain language tag ({@code en}, {@code en-US},
+     * {@code zh-CN}); anything else is refused rather than silently falling back.
+     */
+    static String normalizeLanguage(String value) {
+        if (!StringUtils.hasText(value)) {
+            return AlertConfig.LANGUAGE_ZH_CN;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        if (normalized.equals("zh") || normalized.startsWith("zh_")) {
+            return AlertConfig.LANGUAGE_ZH_CN;
+        }
+        if (normalized.equals("en") || normalized.startsWith("en_")) {
+            return AlertConfig.LANGUAGE_EN;
+        }
+        throw new IllegalArgumentException("error.alert.language");
     }
 
     private static Set<AlertCategory> parseCategories(List<String> names) {
