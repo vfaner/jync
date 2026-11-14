@@ -209,10 +209,6 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     @Override
     public void run() {
         long projectId = project.getId();
-        taskStore.markCdcRunning(projectId);
-        if (targetRepair != null) {
-            targetRepair.resetAttempts(projectId);
-        }
         // Pair the stop line with a start line so restarts do not read as a crash loop.
         try {
             stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
@@ -221,8 +217,22 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             log.warn("Could not record the PG start log for project {}: {}",
                     projectId, e.getMessage());
         }
-        String slotName = slotName(projectId, properties);
         try {
+            // Everything that can fail lives INSIDE this try. Its finally holds the only
+            // lock.close() of the whole run — the call that releases the per-project JVM
+            // semaphore and disarms the lease watchdog's unbounded renewal. A prelude
+            // statement left outside escaped run() into the thread's uncaught handler with
+            // the handle still open: no later run could acquire the semaphore on this node
+            // (supervise's dead-thread prune included) and no other node could take the
+            // lease, so the project stayed wedged until a process restart.
+            taskStore.markCdcRunning(projectId);
+            if (targetRepair != null) {
+                targetRepair.resetAttempts(projectId);
+            }
+            // Validates sync.cdc.pg.slot-prefix (P2-10) and throws for anything PG would
+            // reject; a bad prefix must park the project with a visible failure, not leak
+            // the lease out through the thread's uncaught-exception handler.
+            String slotName = slotName(projectId, properties);
             CdcPosition position = positionStore.find(projectId).orElse(null);
             if (position == null || !Boolean.TRUE.equals(position.isBaselineDone())) {
                 // F-8(docker 实测):slot 必须在基线之前建好。pg_create_logical_replication_slot

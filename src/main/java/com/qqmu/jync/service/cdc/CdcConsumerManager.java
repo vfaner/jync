@@ -79,11 +79,19 @@ public class CdcConsumerManager {
         final ManagedCdcConsumer consumer;
         final Thread thread;
         final CdcRuntimeStats stats;
+        /**
+         * The lease this consumer runs under. Kept here so a dead thread's handle can be
+         * released even when the consumer never reached its own finally block; closing it
+         * twice is a no-op (see {@link SyncLockService.LockHandle#close}).
+         */
+        final SyncLockService.LockHandle lock;
 
-        Registration(ManagedCdcConsumer consumer, Thread thread, CdcRuntimeStats stats) {
+        Registration(ManagedCdcConsumer consumer, Thread thread, CdcRuntimeStats stats,
+                     SyncLockService.LockHandle lock) {
             this.consumer = consumer;
             this.thread = thread;
             this.stats = stats;
+            this.lock = lock;
         }
     }
 
@@ -309,7 +317,7 @@ public class CdcConsumerManager {
                     return;
                 }
                 Thread thread = starter.start(consumer, "jync-cdc-" + projectId);
-                registry.put(projectId, new Registration(consumer, thread, stats));
+                registry.put(projectId, new Registration(consumer, thread, stats, lock));
             }
             log.info("CDC consumer ({}) for project {} started on this node as {}",
                     strategy, projectId, lock.owner());
@@ -497,6 +505,14 @@ public class CdcConsumerManager {
                 return false;
             }
             log.info("Pruning dead CDC consumer registration for project {}", entry.getKey());
+            // Release the lease with the registration. A consumer that died before its own
+            // finally (a failure in its prelude — the task-store mark, the slot-name check)
+            // never closed the handle, and an unclosed handle keeps the per-project JVM
+            // semaphore at zero forever: this node could never acquire it again — the B6
+            // failback this prune exists for would stay broken — while the handle's
+            // watchdog kept renewing the DB lease so no other node could take over either.
+            // Idempotent: a clean exit already closed it.
+            entry.getValue().lock.close();
             return true;
         });
 

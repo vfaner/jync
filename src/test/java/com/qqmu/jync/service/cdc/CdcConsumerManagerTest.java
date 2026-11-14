@@ -489,6 +489,32 @@ class CdcConsumerManagerTest {
         verify(lockService, times(2)).tryAcquireForDaemon(9L, 30_000L);
     }
 
+    @Test
+    void pruningADeadRegistrationReleasesItsLeaseHandle() {
+        // 消费者线程在自己的 try/finally 之前就死掉(启动前的登记写入、slot 名校验等),
+        // 那个租约句柄就永远不会被 close:LockHandle 的 close 是唯一释放每项目 JVM 信号量、
+        // 并且停掉 DB 租约守护续期的地方。只除名不放手 → 本节点的 supervise 永远抢不到
+        // 信号量(B6 failback 失效),别的节点也拿不到租约(守护线程续期 Integer.MAX_VALUE 次),
+        // 整个集群只能靠重启进程。除名必须顺手 close —— 正常退出已 close 过,幂等无副作用。
+        CdcConsumerManager deadThreadManager = new CdcConsumerManager(projectRepository,
+                taskRepository, lockService, contextFactory, clientFactory, positionStore,
+                baselineService, taskStore, stateWriter, dataSourceManager, new SyncProperties(),
+                (consumer, threadName) -> new Thread(consumer, threadName),
+                (source, startScn, batchSize) -> {
+                    throw new UnsupportedOperationException();
+                }, yStreamClientFactory, yStreamLifecycle, redisTargets, redisProjectionWriter);
+        deadThreadManager.onApplicationReady();
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+        when(taskRepository.findByProjectId(9L)).thenReturn(Optional.empty());
+
+        deadThreadManager.ensureStarted(cdcProject(9L, true));   // 注册一个从未运行的死线程
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of());
+
+        deadThreadManager.supervise();                          // 除名(项目已停用,不重启)
+
+        verify(lock).close();
+    }
+
     // —— v1.6.0 双策略分派(LOGMINER_CDC) ——
 
     @Test

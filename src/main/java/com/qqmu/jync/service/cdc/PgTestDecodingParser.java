@@ -34,6 +34,9 @@ import java.util.Map;
  *       plain updates print only the new image;</li>
  *   <li>A TOASTed value that was not modified prints as {@code unchanged-toast-datum} —
  *       the real value is not in the stream and must never be written to the target;</li>
+ *   <li>An array column's type tag carries its element type's brackets
+ *       ({@code tags[text[]]:'…'}) and its value is PG's text representation of the array
+ *       ({@code '{a,b}'}), which cannot be bound to a target array column;</li>
  *   <li>Column names are preserved case exactly as PG stored them — a quoted identifier
  *       such as {@code "OrderID"} keeps mixed case here, so the parser must NOT lower-case
  *       them; the caller's {@link CdcTableBinding} uses the exact column name.</li>
@@ -55,6 +58,16 @@ public final class PgTestDecodingParser {
      * whose real value happens to be the same literal.
      */
     private static final Object UNCHANGED_TOAST_MARKER = new Object();
+
+    /**
+     * Parsed in place of an array value. test_decoding prints an array as its text
+     * representation ({@code arr[integer[]]:'{1,2,3}'}), and a String cannot be bound to an
+     * array-typed target column — every driver rejects it, so writing it out would either
+     * fail the transaction forever or (on a text target) store a value that means something
+     * else. The marker keeps the row out of the applier so the caller can classify the skip
+     * per table, the same way it handles {@link #UNCHANGED_TOAST_MARKER}.
+     */
+    private static final Object ARRAY_VALUE_MARKER = new Object();
 
     /** "new-tuple:" starts the new image of an UPDATE that logged the old tuple. */
     private static final String NEW_TUPLE_MARKER = "new-tuple:";
@@ -80,9 +93,10 @@ public final class PgTestDecodingParser {
      *       (e.g. {@code TRUNCATE}); surfaced and counted, but the stream is being
      *       decoded fine, so it is not a decode failure;</li>
      *   <li>{@link #VALUE_UNAVAILABLE} — a change whose value {@code test_decoding}
-     *       cannot reproduce (an unmodified TOASTed column). The row cannot be applied,
-     *       but nothing is wrong with the decoder: the consumer reports it per table
-     *       with a throttled warning, the same way LogMiner reports out-of-line LOBs.</li>
+     *       cannot reproduce (an unmodified TOASTed column) or prints in a form jync cannot
+     *       apply (an array's text representation). The row cannot be applied, but nothing
+     *       is wrong with the decoder: the consumer reports it per table with a throttled
+     *       warning, the same way LogMiner reports out-of-line LOBs.</li>
      * </ul>
      */
     public enum Skip { IGNORABLE, UNSUPPORTED_EVENT, VALUE_UNAVAILABLE, DECODE_FAILURE }
@@ -275,6 +289,29 @@ public final class PgTestDecodingParser {
                                 + " on " + op + " for " + qualified));
             }
         }
+        if (row.containsValue(ARRAY_VALUE_MARKER)) {
+            if (op == Op.DELETE) {
+                // A DELETE binds only the key columns (REPLICA IDENTITY FULL still prints
+                // the whole old row), so dropping the un-appliable array value keeps the
+                // delete exact and the remaining columns parse on.
+                row.values().removeIf(value -> value == ARRAY_VALUE_MARKER);
+            } else {
+                StringBuilder columns = new StringBuilder();
+                for (Map.Entry<String, Object> entry : row.entrySet()) {
+                    if (entry.getValue() == ARRAY_VALUE_MARKER) {
+                        if (columns.length() > 0) {
+                            columns.append(", ");
+                        }
+                        columns.append(entry.getKey());
+                    }
+                }
+                return SlotLine.row(ParsedChange.valueUnavailable(unquoteQualified(qualified),
+                        "array-typed column(s) " + columns + ": test_decoding prints an array as"
+                                + " its text representation, which cannot be applied to a target"
+                                + " array column; the row is skipped on " + op + " for "
+                                + qualified));
+            }
+        }
         return SlotLine.row(ParsedChange.ok(op, unquoteQualified(qualified), row, oldImage));
     }
 
@@ -339,6 +376,33 @@ public final class PgTestDecodingParser {
             i++;
         }
         return body.length();
+    }
+
+    /**
+     * Index of the ']' closing the type tag that starts at {@code from}, or -1 when there
+     * is none. A tag may hold ']' of its own ({@code integer[]}, {@code numeric(10,2)[]}),
+     * so the terminator is identified by what follows it: the ':' separating type from
+     * value (the caller skips whitespace after the tag before expecting that colon).
+     */
+    private static int endOfTypeTag(String body, int from) {
+        for (int i = from; i < body.length(); i++) {
+            if (body.charAt(i) != ']') {
+                continue;
+            }
+            int j = i + 1;
+            while (j < body.length() && Character.isWhitespace(body.charAt(j))) {
+                j++;
+            }
+            if (j < body.length() && body.charAt(j) == ':') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Whether a test_decoding type tag names an array ({@code integer[]}, {@code text[]}…). */
+    private static boolean isArrayType(String type) {
+        return type != null && type.trim().endsWith("[]");
     }
 
     /** A single quoted identifier with its {@code ""} escapes resolved, or the input as-is. */
@@ -427,8 +491,13 @@ public final class PgTestDecodingParser {
                     : body.indexOf('[', i);
             if (nameEnd < 0) return null;
             String name = unquoteIdentifier(body.substring(i, nameEnd).trim());
-            // read type up to ']'
-            int typeEnd = body.indexOf(']', nameEnd + 1);
+            // Read the type tag up to the ']' that closes it. Not the FIRST ']': an array
+            // tag prints its element type's brackets too ({@code integer[]}), so a plain
+            // indexOf(']') stopped inside the tag, left "integer[" as the type and the
+            // cursor on the stray ']' — every row of a table with an array column then
+            // failed as a malformed payload, and six consecutive ones parked the project
+            // as PARSE_STRIKE_OUT.
+            int typeEnd = endOfTypeTag(body, nameEnd + 1);
             if (typeEnd < 0) return null;
             String type = body.substring(nameEnd + 1, typeEnd);
             i = typeEnd + 1;
@@ -478,6 +547,9 @@ public final class PgTestDecodingParser {
             // type bigint but expression is of type character varying").
             if (value instanceof String s) {
                 value = coerceByType(s, type);
+            }
+            if (value != null && value != UNCHANGED_TOAST_MARKER && isArrayType(type)) {
+                value = ARRAY_VALUE_MARKER;
             }
             row.put(name, value);
         }

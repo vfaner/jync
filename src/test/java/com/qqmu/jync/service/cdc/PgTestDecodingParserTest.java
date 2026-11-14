@@ -428,4 +428,57 @@ class PgTestDecodingParserTest {
         assertThat(line.change.row).containsOnlyKeys("a[b");
         assertThat(line.change.row.get("a[b")).isEqualTo(1);
     }
+
+    // —— 数组类型:test_decoding 的格式是 列名[<元素类型>[]]:值 ——
+    // docker 实测(postgres:16):arr[integer[]]:'{1,2,3}'。类型标签里自带一个 ']',
+    // 旧的「读到第一个 ']'」把类型截成 "integer["、i 停在多余的 ']' 上，整行判
+    // malformed column payload → DECODE_FAILURE;消费端累计 6 行就 PARSE_STRIKE_OUT
+    // 把项目 park 掉，而该表的每一行都会这样 —— 一张带数组列的表就能停掉整个项目。
+    // 数组值本身是 PG 的文本表示（'{1,2,3}'），无法原样绑定到目标的数组列，
+    // 所以按「值不在可应用形态」跳过并按表计数（与 TOAST 同口径），绝不 park。
+
+    @Test
+    void arrayTypeTagWithItsOwnBracketsIsParsedAsOneField() {
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: INSERT: id[integer]:1 tags[text[]]:'{a,b}'");
+
+        assertThat(line.change.skip).isEqualTo(PgTestDecodingParser.Skip.VALUE_UNAVAILABLE);
+        assertThat(line.change.qualifiedTable).isEqualTo("public.t");
+        assertThat(line.change.unsupportedReason).contains("tags");
+    }
+
+    @Test
+    void arrayValueOnUpdateIsAValueWeCannotReproduce() {
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: UPDATE: id[integer]:1 nums[integer[]]:'{1,2}'");
+
+        assertThat(line.change.skip).isEqualTo(PgTestDecodingParser.Skip.VALUE_UNAVAILABLE);
+        assertThat(line.change.unsupportedReason).contains("nums");
+    }
+
+    @Test
+    void nullArrayValueIsAppliedNormallyInsteadOfRefusingTheRow() {
+        // NULL 数组没有「文本表示绑不上」的问题：显式写 NULL 是准确的，行照常应用。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: INSERT: id[integer]:1 nums[integer[]]:null note[text]:'x'");
+
+        assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.row).containsOnlyKeys("id", "nums", "note");
+        assertThat(line.change.row.get("id")).isEqualTo(1);
+        assertThat(line.change.row.get("nums")).isNull();
+        assertThat(line.change.row.get("note")).isEqualTo("x");
+    }
+
+    @Test
+    void arrayValueOnDeleteDropsOnlyThatColumnAndKeepsParsingTheKey() {
+        // DELETE 只绑定主键列：丢掉无法应用形态的数组值，主键照常解析（数组在前也
+        // 必须正确跳过它的值，否则后面的主键会被错位吞掉）。REPLICA IDENTITY FULL
+        // 下 DELETE 的旧镜像就是整行，数组列就在里面。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: DELETE: nums[integer[]]:'{1,2}' id[integer]:5");
+
+        assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.row).containsOnlyKeys("id");
+        assertThat(line.change.row.get("id")).isEqualTo(5);
+    }
 }

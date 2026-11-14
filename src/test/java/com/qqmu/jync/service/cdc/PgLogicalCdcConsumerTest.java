@@ -151,6 +151,31 @@ class PgLogicalCdcConsumerTest {
     }
 
     @Test
+    void anInvalidSlotPrefixStillReleasesTheLeaseAndRecordsTheFailure() {
+        // run() 的启动前置步骤必须在主 try 之内。slotName() 校验 sync.cdc.pg.slot-prefix,
+        // 前缀配置错了会抛 IllegalStateException —— 它过去写在 try 之前,异常直接逃出
+        // run() 进入线程的未捕获处理器,finally 里那唯一一次 lock.close() 永远不会执行:
+        // 该项目的 JVM 信号量永久泄漏(本节点再也抢不到锁,supervise 的除名重建也无效),
+        // DB 租约还被 LockHandle 的守护线程无限续期。这里钉住:配置错误必须走 catch-all
+        // (recordCdcFailure 戴 ERROR 帽)并且租约放回。
+        SyncProperties broken = new SyncProperties();
+        broken.getCdc().getPg().setSlotPrefix("JYNC_");
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        SyncTaskStore taskStore = mock(SyncTaskStore.class);
+        PgLogicalCdcConsumer consumer = new PgLogicalCdcConsumer(
+                projectOf(81L), lock, mock(com.qqmu.jync.service.sync.SyncContext.class),
+                mock(CdcPositionStore.class), mock(CdcBaselineService.class), taskStore,
+                mock(SyncStateWriter.class), mock(DataSourceManager.class),
+                new CdcRuntimeStats(), broken);
+
+        assertThatCode(consumer::run).doesNotThrowAnyException();
+
+        verify(lock).close();                                          // 租约必须放回
+        verify(taskStore).recordCdcFailure(
+                org.mockito.ArgumentMatchers.eq(81L), contains("slot-prefix"));
+    }
+
+    @Test
     void slotNameAcceptsLowercaseAlnumUnderscorePrefix() {
         // 守护:默认与常规小写前缀不受影响。
         assertThat(PgLogicalCdcConsumer.slotName(1L, properties)).isEqualTo("jync_1");
