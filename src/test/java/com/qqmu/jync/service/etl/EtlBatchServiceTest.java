@@ -126,6 +126,24 @@ class EtlBatchServiceTest {
                 .hasMessage("error.etl.cron.required");
     }
 
+    /**
+     * Same gap as a standalone task: a batch row from before save-time validation can hold an
+     * unparseable cron. The scheduler then refuses the trigger, but the page keeps showing the
+     * batch as scheduled and none of its tables ever runs again.
+     */
+    @Test
+    void enablingRejectsACronTheSchedulerCannotParse() {
+        EtlBatch batch = batch(5L);
+        batch.setCronExpression("every night");
+        when(batchRepository.findById(5L)).thenReturn(Optional.of(batch));
+        when(taskRepository.findByBatchIdOrderByIdAsc(5L))
+                .thenReturn(List.of(member(9L, 5L)));
+
+        assertThatThrownBy(() -> service.setEnabled(5L, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.cron.invalid");
+    }
+
     @Test
     void enablingRequiresAtLeastOneTable() {
         EtlBatch batch = batch(5L);

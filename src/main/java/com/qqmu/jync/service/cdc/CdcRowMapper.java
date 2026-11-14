@@ -35,6 +35,18 @@ public final class CdcRowMapper {
     }
 
     /**
+     * Decode facts for one column, resolved once per binding instead of once per cell: see
+     * {@link CdcTableBinding#columnPlans()}.
+     */
+    public record ColumnPlan(ColumnMeta column, String charset, CdcEnumDefinition enumDefinition,
+                             boolean json, boolean charLike) {
+
+        String name() {
+            return column == null ? null : column.getName();
+        }
+    }
+
+    /**
      * Maps one row image and hands oversized values to {@code spiller}. The spiller is the
      * transaction buffer's: it owns the files until the buffer is cleared, so the mapper
      * only rewrites values in place.
@@ -42,21 +54,27 @@ public final class CdcRowMapper {
     public Map<String, Object> mapRow(Serializable[] binlogRow, CdcTableBinding binding,
                                       CdcRuntimeStats stats, CdcLobSpiller spiller)
             throws CdcUnmappableValueException {
-        java.util.List<ColumnMeta> columns = binding.getMeta().getColumns();
-        if (binlogRow.length != columns.size()) {
+        java.util.List<ColumnPlan> plans = binding.columnPlans();
+        if (binlogRow.length != plans.size()) {
             throw new CdcUnmappableValueException(binding.getTable(), "row-image",
                     "binlog row has " + binlogRow.length + " cells but metadata has "
-                            + columns.size() + " columns (stale binding after DDL?)");
+                            + plans.size() + " columns (stale binding after DDL?)");
         }
-        Map<String, Object> row = new LinkedHashMap<>();
+        // Sized for the row image: the default 16-bucket map rehashed once on wider tables,
+        // and a transaction can hold thousands of these before it is flushed.
+        Map<String, Object> row = new LinkedHashMap<>(
+                Math.max(16, (int) (plans.size() / 0.75f) + 1));
         for (int i = 0; i < binlogRow.length; i++) {
-            ColumnMeta column = columns.get(i);
-            String charset = binding.getCharsetByUpperColumn()
-                    .get(column.getName().toUpperCase(Locale.ROOT));
-            row.put(column.getName(), mapValue(binlogRow[i], column, charset, stats,
-                    binding.enumDefinition(column.getName())));
+            ColumnPlan plan = plans.get(i);
+            row.put(plan.name(), mapValue(binlogRow[i], plan, stats));
         }
         return spiller.spill(binding, row);
+    }
+
+    static Object mapValue(Serializable raw, ColumnPlan plan, CdcRuntimeStats stats)
+            throws CdcUnmappableValueException {
+        return mapValue(raw, plan.column(), plan.charset(), stats, plan.enumDefinition(),
+                plan.json(), plan.charLike());
     }
 
     static Object mapValue(Serializable raw, ColumnMeta column, String charsetName,
@@ -66,6 +84,15 @@ public final class CdcRowMapper {
 
     static Object mapValue(Serializable raw, ColumnMeta column, String charsetName,
                            CdcRuntimeStats stats, CdcEnumDefinition enumDefinition)
+            throws CdcUnmappableValueException {
+        // No pre-resolved flags on this entry point: resolve them from the type name, but
+        // only when a byte[] actually arrives.
+        return mapValue(raw, column, charsetName, stats, enumDefinition, null, null);
+    }
+
+    private static Object mapValue(Serializable raw, ColumnMeta column, String charsetName,
+                                   CdcRuntimeStats stats, CdcEnumDefinition enumDefinition,
+                                   Boolean json, Boolean charLike)
             throws CdcUnmappableValueException {
         if (raw == null) {
             return null;
@@ -128,7 +155,7 @@ public final class CdcRowMapper {
 
         if (raw instanceof byte[]) {
             byte[] bytes = (byte[]) raw;
-            if (isJson(column.getTypeName())) {
+            if (json != null ? json : isJsonType(column.getTypeName())) {
                 // Ruling R2: in the binlog a JSON column carries MySQL's INTERNAL BINARY
                 // format (type-code byte + offset tables), not text — charset-decoding it
                 // produces garbage. The client library bundles the JsonBinary codec (the
@@ -136,7 +163,7 @@ public final class CdcRowMapper {
                 // canonical text form here and keep the baseline path's String contract.
                 return decodeBinaryJson(bytes, column);
             }
-            if (isCharLike(jdbcType, column.getTypeName())) {
+            if (charLike != null ? charLike : isCharLikeType(jdbcType, column.getTypeName())) {
                 return new String(bytes, resolveCharset(charsetName, column));
             }
             if (jdbcType == Types.BIT) {
@@ -283,7 +310,7 @@ public final class CdcRowMapper {
         return out;
     }
 
-    private static boolean isJson(String typeName) {
+    static boolean isJsonType(String typeName) {
         return typeName != null && typeName.toUpperCase(Locale.ROOT).contains("JSON");
     }
 
@@ -309,7 +336,7 @@ public final class CdcRowMapper {
         }
     }
 
-    private static boolean isCharLike(int jdbcType, String typeName) {
+    static boolean isCharLikeType(int jdbcType, String typeName) {
         if (typeName != null && typeName.toUpperCase(Locale.ROOT).contains("JSON")) {
             return true; // MySQL JSON is reported as LONGVARCHAR; it is text to us
         }

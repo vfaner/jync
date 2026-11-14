@@ -172,6 +172,24 @@ class EtlTaskServiceTest {
         verify(taskRepository, never()).save(any());
     }
 
+    /**
+     * A row saved by an installation that predates save-time cron validation can still carry a
+     * cron the scheduler cannot parse. Enabling it only checks for blankness, so the flag flips
+     * to on and the scheduler rejects the trigger in a warn log: the list page says the task is
+     * scheduled while it never fires again.
+     */
+    @Test
+    void enablingRejectsACronTheSchedulerCannotParse() {
+        EtlTask existing = existing(5L, "SELECT id FROM src");
+        existing.setCronExpression("every minute");
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> service.setEnabled(5L, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.cron.invalid");
+        verify(taskRepository, never()).save(any());
+    }
+
     @Test
     void saveRejectsAResumeKeyThatIsNotAPlainColumnName() {
         stubConnections(1L, 2L);

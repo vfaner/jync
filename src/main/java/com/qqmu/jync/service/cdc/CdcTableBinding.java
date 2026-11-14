@@ -54,6 +54,12 @@ public final class CdcTableBinding {
      */
     private volatile List<String> columnNames;
     private volatile Map<String, Integer> typeByColumn;
+    /**
+     * Per-column decode facts in row-image order, built once: the charset, ENUM/SET labels and
+     * type-name tests used to be re-resolved (each with a fresh upper-cased string) for every
+     * column of every row.
+     */
+    private volatile List<CdcRowMapper.ColumnPlan> columnPlans;
 
     private CdcTableBinding(String database, String table, TableMeta meta, String targetTable,
                             Map<String, String> charsetByUpperColumn,
@@ -118,6 +124,34 @@ public final class CdcTableBinding {
             typeByColumn = types;
         }
         return types;
+    }
+
+    /**
+     * Per-column decode facts in row-image order, resolved once from this snapshot.
+     *
+     * <p>{@link CdcRowMapper#mapRow} runs for every row of every transaction; resolving the
+     * charset, the ENUM/SET labels and the JSON / char-like type tests there upper-cased the
+     * column name and the type name several times per cell. A layout change rebuilds the
+     * binding, so the plan cannot outlive the schema it describes.
+     */
+    public List<CdcRowMapper.ColumnPlan> columnPlans() {
+        List<CdcRowMapper.ColumnPlan> plans = columnPlans;
+        if (plans == null) {
+            List<ColumnMeta> columns = meta == null || meta.getColumns() == null
+                    ? List.of() : meta.getColumns();
+            List<CdcRowMapper.ColumnPlan> built = new ArrayList<>(columns.size());
+            for (ColumnMeta column : columns) {
+                String name = column.getName();
+                String upper = name == null ? "" : name.toUpperCase(Locale.ROOT);
+                built.add(new CdcRowMapper.ColumnPlan(column,
+                        charsetByUpperColumn.get(upper), enumByUpperColumn.get(upper),
+                        CdcRowMapper.isJsonType(column.getTypeName()),
+                        CdcRowMapper.isCharLikeType(column.getJdbcType(), column.getTypeName())));
+            }
+            plans = List.copyOf(built);
+            columnPlans = plans;
+        }
+        return plans;
     }
 
     /**

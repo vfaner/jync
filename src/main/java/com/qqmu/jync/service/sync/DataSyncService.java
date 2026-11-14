@@ -2248,11 +2248,20 @@ public class DataSyncService {
         }
 
         WriteStats stats = new WriteStats();
+        // The existence probe runs once per replayed-but-unchanged row, which a cursor
+        // window's safety margin can make every row of the window on every cycle. Prepared
+        // once here, like the UPDATE and INSERT, instead of once per probe.
+        String existsSql = guardUnchanged && generic != null
+                ? generic.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns)
+                : null;
         try (PreparedStatement insert = targetConn.prepareStatement(insertSql);
              PreparedStatement update = updateSql == null ? null
-                     : targetConn.prepareStatement(updateSql)) {
+                     : targetConn.prepareStatement(updateSql);
+             PreparedStatement exists = existsSql == null ? null
+                     : targetConn.prepareStatement(existsSql)) {
             JdbcUtil.applyQueryTimeout(insert, properties.getQueryTimeoutSeconds());
             JdbcUtil.applyQueryTimeout(update, properties.getQueryTimeoutSeconds());
+            JdbcUtil.applyQueryTimeout(exists, properties.getQueryTimeoutSeconds());
             int sinceCommit = 0;
             long mark = System.nanoTime();
             // Same reuse as the native writer: one row map for the whole pass.
@@ -2308,8 +2317,8 @@ public class DataSyncService {
                     // key needs the INSERT; the replay must stay a no-op, or the change log
                     // files the same edit again on every poll.
                     if (updated == 0 && guardUnchanged
-                            && rowExists(targetConn, generic, targetTable, pkColumns, row,
-                                    typeByColumn, ctx)) {
+                            && rowExists(exists, targetConn, generic, targetTable, pkColumns,
+                                    row, typeByColumn, ctx)) {
                         log.debug("Row already holds these values in {}; replayed, not written",
                                 targetTable);
                     } else if (updated == 0) {
@@ -2339,8 +2348,9 @@ public class DataSyncService {
                                         ctx.getTargetDialect(), lobTracker);
                                 if (update.executeUpdate() != 0) {
                                     stats.updated++;
-                                } else if (guardUnchanged && rowExists(targetConn, generic,
-                                        targetTable, pkColumns, row, typeByColumn, ctx)) {
+                                } else if (guardUnchanged && rowExists(exists, targetConn,
+                                        generic, targetTable, pkColumns, row,
+                                        typeByColumn, ctx)) {
                                     log.debug("Row already holds these values in {};"
                                             + " replayed, not written", targetTable);
                                 } else {
@@ -2353,7 +2363,7 @@ public class DataSyncService {
                                 // holding this key is identical to the one rejected, making
                                 // re-delivery a no-op. An absent key means some other
                                 // constraint rejected the row, and that must surface.
-                                if (generic == null || !rowExists(targetConn, generic,
+                                if (generic == null || !rowExists(exists, targetConn, generic,
                                         targetTable, pkColumns, row, typeByColumn, ctx)) {
                                     throw e;
                                 }
@@ -2387,20 +2397,33 @@ public class DataSyncService {
     }
 
     /**
-     * Whether the target already holds the row with this primary key. Only reached from the
-     * key-only conflict path of the emulated upsert, so it costs nothing on the normal flow.
+     * Whether the target already holds the row with this primary key. Reached only when a
+     * replayed row's UPDATE matched nothing and the guard is on, or on the key-only conflict
+     * path; {@code prepared} is the statement the caller prepared once per copy pass.
      */
-    private boolean rowExists(Connection conn, GenericSqlDialect generic, String targetTable,
+    private boolean rowExists(PreparedStatement prepared, Connection conn,
+                              GenericSqlDialect generic, String targetTable,
                               List<String> pkColumns, Map<String, Object> row,
                               Map<String, Integer> typeByColumn, SyncContext ctx)
             throws SQLException {
-        String sql = generic.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns);
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
-            JdbcRowMapper.bind(ps, row, pkColumns, typeByColumn, ctx.getTargetDialect());
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
+        if (prepared == null) {
+            // Only reachable on the key-only conflict path, where the caller did not ask for
+            // the probe statement up front; that path is a one-off, not a per-row loop.
+            String sql = generic.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns);
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
+                return probe(ps, pkColumns, row, typeByColumn, ctx);
             }
+        }
+        return probe(prepared, pkColumns, row, typeByColumn, ctx);
+    }
+
+    private static boolean probe(PreparedStatement ps, List<String> pkColumns,
+                                 Map<String, Object> row, Map<String, Integer> typeByColumn,
+                                 SyncContext ctx) throws SQLException {
+        JdbcRowMapper.bind(ps, row, pkColumns, typeByColumn, ctx.getTargetDialect());
+        try (ResultSet rs = ps.executeQuery()) {
+            return rs.next();
         }
     }
 

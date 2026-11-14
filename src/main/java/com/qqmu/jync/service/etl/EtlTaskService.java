@@ -181,9 +181,17 @@ public class EtlTaskService {
         if (task.getBatchId() != null) {
             throw new IllegalStateException("error.etl.batch.managed");
         }
-        if (enabled && (task.getCronExpression() == null
-                || task.getCronExpression().isBlank())) {
-            throw new IllegalArgumentException("error.etl.cron.required");
+        if (enabled) {
+            if (task.getCronExpression() == null || task.getCronExpression().isBlank()) {
+                throw new IllegalArgumentException("error.etl.cron.required");
+            }
+            // Save rejects an invalid cron, but a row written before that check existed can
+            // still carry one. The scheduler would refuse its trigger and only log a warning,
+            // leaving the page showing a task that is "enabled" and never fires — refuse here,
+            // where the operator can see why.
+            if (!CronExpression.isValidExpression(task.getCronExpression().trim())) {
+                throw new IllegalArgumentException("error.etl.cron.invalid");
+            }
         }
         task.setEnabled(enabled);
         taskRepository.save(task);

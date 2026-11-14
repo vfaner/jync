@@ -349,14 +349,19 @@ public final class JdbcRowMapper {
         }
     }
 
-    /** Type names whose value carries its own offset, whatever JDBC type they report. */
+    /**
+     * Type names whose value carries its own offset, whatever JDBC type they report.
+     *
+     * <p>Runs once per temporal value, so it compares in place: upper-casing the name first
+     * allocated a throwaway string for every timestamp cell of every row.
+     */
     private static boolean isZoneAwareTimestampName(String typeName) {
         if (typeName == null) {
             return false;
         }
-        String n = typeName.trim().toUpperCase(java.util.Locale.ROOT);
-        return n.equals("TIMESTAMPTZ") || n.equals("DATETIMEOFFSET")
-                || n.equals("TIMESTAMP WITH TIME ZONE");
+        String n = typeName.trim();
+        return "TIMESTAMPTZ".equalsIgnoreCase(n) || "DATETIMEOFFSET".equalsIgnoreCase(n)
+                || "TIMESTAMP WITH TIME ZONE".equalsIgnoreCase(n);
     }
 
     private static boolean isMysqlYear(String typeName) {
@@ -630,6 +635,10 @@ public final class JdbcRowMapper {
     /** Date the driver itself uses when a {@code java.sql.Time} lands on an Oracle DATE. */
     private static final String TIME_OF_DAY_ANCHOR = "1970-01-01 ";
 
+    /** {@code HH:mm:ss[.f…]} with a two-digit hour; see {@link #wallClockFromTimeOfDay}. */
+    private static final java.util.regex.Pattern TIME_OF_DAY_PATTERN =
+            java.util.regex.Pattern.compile("([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(\\.\\d{1,9})?");
+
     /**
      * The literal as a wall clock on {@value #TIME_OF_DAY_ANCHOR}, or null when it is not a
      * clock time {@code HH:mm:ss[.f…]}. Deliberately strict about the hour of day: the MySQL
@@ -639,8 +648,9 @@ public final class JdbcRowMapper {
     private static LocalDateTime wallClockFromTimeOfDay(String text) {
         String t = text.trim();
         // Two-digit hours only: LocalDateTime.parse reads fixed offsets, so "9:05:07" would
-        // be misparsed rather than rejected.
-        if (!t.matches("([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(\\.\\d{1,9})?")) {
+        // be misparsed rather than rejected. Compiled once — String.matches recompiled the
+        // pattern for every text value bound to a temporal target.
+        if (!TIME_OF_DAY_PATTERN.matcher(t).matches()) {
             return null;
         }
         try {

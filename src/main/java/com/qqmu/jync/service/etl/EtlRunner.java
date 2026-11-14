@@ -144,7 +144,7 @@ public class EtlRunner {
                     // A pre-existing target without a unique index on exactly the keys cannot
                     // make a repeated key collide: ON DUPLICATE KEY UPDATE would insert a
                     // second copy instead of updating the first.
-                    log.info("ETL target {} has no unique index on {}, using the emulated",
+                    log.info("ETL target {} has no unique index on {}, using the emulated upsert",
                             targetName, upsertKeys);
                     nativeUpsertSql = null;
                 }

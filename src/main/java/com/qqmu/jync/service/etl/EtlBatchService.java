@@ -301,6 +301,12 @@ public class EtlBatchService {
             if (batch.getCronExpression() == null || batch.getCronExpression().isBlank()) {
                 throw new IllegalArgumentException("error.etl.cron.required");
             }
+            // A batch saved before save-time validation existed may carry a cron the scheduler
+            // cannot parse; enabling it would only log a warning and leave the group marked as
+            // scheduled while none of its tables ever runs.
+            if (!CronExpression.isValidExpression(batch.getCronExpression().trim())) {
+                throw new IllegalArgumentException("error.etl.cron.invalid");
+            }
             if (taskRepository.findByBatchIdOrderByIdAsc(id).isEmpty()) {
                 throw new IllegalArgumentException("error.etl.batch.empty");
             }
