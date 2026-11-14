@@ -364,6 +364,45 @@ class EsToEasysearchEngineTest {
     }
 
     @Test
+    void bothSearchRequestsAskTheSourceForRouting() throws Exception {
+        // ES builds a hit's metadata fields (_routing among them) only when stored_fields is
+        // non-empty: with the request carrying just _source, FetchPhase leaves metaFields
+        // empty and the hit has no "_routing" at all. Both requests read hit.get("_routing"),
+        // so both have to ask: the copy turns it into the bulk action's routing (a routed
+        // child document written without it lands on the wrong shard and the join breaks),
+        // and the sample turns it into the _mget refs.
+        stubCat("orders");
+        stubSourceIndex("orders");
+        when(targetClient.exists("/orders")).thenReturn(false);
+        when(sourceClient.search(startsWith("/orders/_search?scroll="), any()))
+                .thenReturn(page("s1", hit("1", "tenant-7", "{\"name\":\"a\"}")));
+        when(sourceClient.postJson(eq("/_search/scroll"), any())).thenReturn(page("s1"));
+        when(targetClient.bulk(anyList())).thenReturn(BulkResult.success());
+        when(sourceClient.get("/orders/_count")).thenReturn(count(1));
+        when(targetClient.get("/orders/_count")).thenReturn(count(1));
+        when(targetClient.postJson(eq("/orders/_refresh"), any())).thenReturn(null);
+        when(sourceClient.search(startsWith("/orders/_search?size="), any()))
+                .thenReturn(page(null, hit("1", "tenant-7", "{\"name\":\"a\"}")));
+        when(targetClient.postJson(eq("/orders/_mget"), any()))
+                .thenReturn(json("{\"docs\":[{\"_id\":\"1\",\"found\":true,"
+                        + "\"_source\":{\"name\":\"a\"}}]}"));
+
+        run(options("{\"verifyCount\":true,\"verifySampleSize\":1}"));
+
+        assertThat(storedFieldsOf("/orders/_search?scroll=")).contains("\"_routing\"");
+        assertThat(storedFieldsOf("/orders/_search?size=")).contains("\"_routing\"");
+    }
+
+    private String storedFieldsOf(String pathPrefix) {
+        ArgumentCaptor<JsonNode> body = ArgumentCaptor.forClass(JsonNode.class);
+        verify(sourceClient).search(startsWith(pathPrefix), body.capture());
+        JsonNode stored = body.getValue().path("stored_fields");
+        assertThat(stored.isArray())
+                .as("stored_fields in request %s", body.getValue()).isTrue();
+        return stored.toString();
+    }
+
+    @Test
     void aTargetThatRefusesTheIndexFailsOnlyThatIndex() throws Exception {
         stubCat("orders");
         stubSourceIndex("orders");

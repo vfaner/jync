@@ -235,6 +235,10 @@ final class EsToEasysearchEngine {
         ArrayNode sort = query.putArray("sort");
         sort.add("_doc");
         query.put("_source", true);
+        // A hit's metadata fields are only built when stored_fields is non-empty; asking for
+        // _source alone yields hits without "_routing", and a custom-routed document copied
+        // without it lands on a different shard than its join parent.
+        query.putArray("stored_fields").add("_routing");
         query.putObject("query").putObject("match_all");
 
         String searchPath = sourcePath + "/_search?scroll=" + options.getScrollTtl();
@@ -352,6 +356,9 @@ final class EsToEasysearchEngine {
         ObjectNode query = JSON.createObjectNode();
         query.put("size", options.getVerifySampleSize());
         query.put("_source", true);
+        // Same as the scroll request: without stored_fields the sampled hit carries no
+        // "_routing", and its _mget ref would point at the default shard.
+        query.putArray("stored_fields").add("_routing");
         query.putObject("query").putObject("match_all");
 
         JsonNode sample = sourceClient.search(

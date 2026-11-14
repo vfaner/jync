@@ -589,7 +589,7 @@ public class TlsKeystoreStore {
                 for (String name : names) {
                     writer.write(name);
                     writer.write('=');
-                    writer.write(properties.getProperty(name));
+                    writer.write(escapeValue(properties.getProperty(name)));
                     writer.write('\n');
                 }
             }
@@ -604,6 +604,30 @@ public class TlsKeystoreStore {
         } finally {
             Files.deleteIfExists(temp);
         }
+    }
+
+    /**
+     * Escapes a value the way {@link Properties#load} reads one.
+     *
+     * <p>The sidecar is written by hand to keep {@code enc:} greppable, so this method owns the
+     * escaping {@code Properties.store} would otherwise do. A Windows path is the case that
+     * matters: written raw, {@code keystorePath=C:\certs\server.p12} is read back as
+     * {@code C:certsserver.p12} (each backslash starts an escape), which is no longer absolute,
+     * and the next start refuses to boot. A newline would split one value into two lines.
+     */
+    private static String escapeValue(String value) {
+        StringBuilder out = new StringBuilder(value.length() + 8);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '\\' -> out.append("\\\\");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default -> out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     private void createDirectory() throws IOException {

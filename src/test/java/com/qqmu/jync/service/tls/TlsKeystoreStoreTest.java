@@ -295,6 +295,25 @@ class TlsKeystoreStoreTest {
     }
 
     @Test
+    void aPathContainingABackslashSurvivesTheSidecarRoundTrip() throws Exception {
+        // Windows absolute paths use backslashes, and java.util.Properties reads a backslash in
+        // a value as an escape: written raw, C:\certs\server.p12 comes back as
+        // C:certsserver.p12, which is no longer absolute — the next read reports pathInvalid and
+        // the boot refuses to start. A backslash is an ordinary filename character on POSIX, so
+        // the same asymmetry is reachable here.
+        Path external = Files.write(dir.resolve("win\\style.p12"), TestKeystores.pkcs12());
+        TlsKeystoreStore store = store();
+
+        store.saveKeystorePath(external, TestKeystores.pkcs12(), TlsKeystoreFormat.PKCS12,
+                PASSPHRASE.toCharArray(), 8443, true);
+
+        TlsStoreSnapshot snapshot = store.snapshot();
+        assertThat(snapshot.problemKey()).isNull();
+        assertThat(snapshot.config().orElseThrow().file())
+                .isEqualTo(external.toAbsolutePath().normalize().toString());
+    }
+
+    @Test
     void aReplacedKeystoreAtTheConfiguredPathIsPickedUpWithoutADigestError() throws Exception {
         Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
         TlsKeystoreStore store = store();
