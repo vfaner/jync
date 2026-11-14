@@ -591,14 +591,17 @@ class CdcDdlTaskServiceTest {
 
     @Test
     void theMappedTableNameIsAppliedToEverySingleTableHead() {
-        assertThat(CdcDdlTaskService.retargetTable(
-                "CREATE TABLE `tgt_db`.`orders` (`id` INT)", "orders", "orders_tgt", "`"))
+        assertThat(CdcDdlTaskService.retargetTables(
+                "CREATE TABLE `tgt_db`.`orders` (`id` INT)",
+                CdcDdlTaskServiceTest::mapOrders, "`"))
                 .isEqualTo("CREATE TABLE `tgt_db`.`orders_tgt` (`id` INT)");
-        assertThat(CdcDdlTaskService.retargetTable(
-                "DROP TABLE IF EXISTS `tgt_db`.`orders`", "orders", "orders_tgt", "`"))
+        assertThat(CdcDdlTaskService.retargetTables(
+                "DROP TABLE IF EXISTS `tgt_db`.`orders`",
+                CdcDdlTaskServiceTest::mapOrders, "`"))
                 .isEqualTo("DROP TABLE IF EXISTS `tgt_db`.`orders_tgt`");
-        assertThat(CdcDdlTaskService.retargetTable(
-                "TRUNCATE TABLE `tgt_db`.`orders`", "orders", "orders_tgt", "`"))
+        assertThat(CdcDdlTaskService.retargetTables(
+                "TRUNCATE TABLE `tgt_db`.`orders`",
+                CdcDdlTaskServiceTest::mapOrders, "`"))
                 .isEqualTo("TRUNCATE TABLE `tgt_db`.`orders_tgt`");
     }
 
@@ -606,9 +609,9 @@ class CdcDdlTaskServiceTest {
     void renamingAMappedTableKeepsTheOldSideMapped() {
         // The old name is the one the sync knows; the new name is left as the source wrote
         // it — the project has no mapping for a name it has never seen.
-        assertThat(CdcDdlTaskService.retargetTable(
+        assertThat(CdcDdlTaskService.retargetTables(
                 "RENAME TABLE `tgt_db`.`orders` TO `tgt_db`.`orders_old`",
-                "orders", "orders_tgt", "`"))
+                CdcDdlTaskServiceTest::mapOrders, "`"))
                 .isEqualTo("RENAME TABLE `tgt_db`.`orders_tgt` TO `tgt_db`.`orders_old`");
     }
 

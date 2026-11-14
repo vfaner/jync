@@ -1171,28 +1171,6 @@ public class CdcDdlTaskService {
     }
 
     /**
-     * Rewrites the table a DDL statement changes to the project's mapped target name.
-     *
-     * <p>Kept for the single-table callers; {@link #retargetTables} is what the execute path
-     * uses, because a statement may name more than one table.
-     */
-    static String retargetTable(String sql, String sourceTable, String targetTable,
-                                String identifierQuote) {
-        String target = targetTable == null ? "" : targetTable.trim();
-        if (sql == null || target.isEmpty() || sourceTable == null
-                || target.equalsIgnoreCase(sourceTable.trim())) {
-            return sql;
-        }
-        String quoted = java.util.regex.Matcher.quoteReplacement(
-                com.qqmu.jync.util.JdbcUtil.quotedIdentifier(identifierQuote, target));
-        return sql.replaceFirst(
-                "(?is)^(\\s*(?:" + TABLE_HEAD + "))"
-                        + "((?:" + IDENT + "\\s*\\.\\s*)?)"
-                        + "(" + IDENT + ")",
-                "$1$2" + quoted);
-    }
-
-    /**
      * The schema the statement must be applied to: the configured one, the database name for
      * MySQL (where the two coincide), or the connection's current schema.
      */

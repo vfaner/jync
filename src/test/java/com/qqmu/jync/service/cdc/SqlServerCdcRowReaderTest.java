@@ -106,6 +106,34 @@ class SqlServerCdcRowReaderTest {
         assertThat(SqlServerCdcConsumer.RowReader.of(rs, null, Set.of("id"))).isNull();
     }
 
+    /**
+     * Delete and update-before images never reach the target whole — the fold keeps only
+     * their primary keys — so their reader must not pay for the rest of the payload (LOBs
+     * included). PK names are matched case-insensitively against the binding's columns.
+     */
+    @Test
+    void aKeysOnlyReaderReadsOnlyThePrimaryKeyColumns() throws SQLException {
+        SqlServerCdcConsumer.RowReader reader = SqlServerCdcConsumer.RowReader.of(
+                rs, binding(), Set.of("id", "body", "note"), Set.of("id"));
+
+        assertThat(reader.read(rs)).containsExactly(Map.entry("ID", 1L));
+    }
+
+    /** The image's __$operation decides which reader it needs. */
+    @Test
+    void deleteAndUpdateBeforeImagesUseTheKeysOnlyReader() throws SQLException {
+        SqlServerCdcConsumer.RowReader full =
+                SqlServerCdcConsumer.RowReader.of(rs, binding(), Set.of("id", "body", "note"));
+        SqlServerCdcConsumer.RowReader keys =
+                SqlServerCdcConsumer.RowReader.of(rs, binding(), Set.of("id", "body", "note"),
+                        Set.of("ID"));
+
+        assertThat(SqlServerCdcConsumer.readerFor(1, full, keys)).isSameAs(keys);
+        assertThat(SqlServerCdcConsumer.readerFor(3, full, keys)).isSameAs(keys);
+        assertThat(SqlServerCdcConsumer.readerFor(2, full, keys)).isSameAs(full);
+        assertThat(SqlServerCdcConsumer.readerFor(4, full, keys)).isSameAs(full);
+    }
+
     private static CdcTableBinding binding() {
         TableMeta meta = new TableMeta();
         meta.setName("orders");

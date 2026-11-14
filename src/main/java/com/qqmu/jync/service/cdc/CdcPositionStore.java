@@ -300,11 +300,15 @@ public class CdcPositionStore {
                 break;                                       // corrupt: keep what is readable
             }
             int keyStart = colon + 1;
-            int signatureStart = keyStart + keyLength;
-            int signatureEnd = signatureStart + LAYOUT_SIGNATURE_CHARS;
-            if (keyLength < 0 || signatureEnd > encoded.length()) {
+            // Bound the key before adding it to an offset: a corrupt length near
+            // Integer.MAX_VALUE would overflow keyStart + keyLength into a negative index and
+            // throw out of every position read instead of decoding the readable prefix.
+            if (keyLength < 0
+                    || keyLength > encoded.length() - keyStart - LAYOUT_SIGNATURE_CHARS) {
                 break;
             }
+            int signatureStart = keyStart + keyLength;
+            int signatureEnd = signatureStart + LAYOUT_SIGNATURE_CHARS;
             out.put(encoded.substring(keyStart, signatureStart),
                     encoded.substring(signatureStart, signatureEnd));
             i = signatureEnd;

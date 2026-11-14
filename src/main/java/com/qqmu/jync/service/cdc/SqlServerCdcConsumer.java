@@ -721,6 +721,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 Set<String> availableCols = null;
                 CdcTableBinding binding = null;
                 RowReader reader = null;
+                RowReader keysOnlyReader = null;
                 while (running && !Thread.currentThread().isInterrupted() && rs.next()) {
                     if (availableCols == null) {
                         // The binding and the reader are per-window constants: resolving
@@ -753,6 +754,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                         }
                         missingColumnWarnings.remove(ci.captureInstance);
                         reader = RowReader.of(rs, binding, availableCols);
+                        // Reads only the primary key. Used for the delete and update-before
+                        // images, whose payload never reaches the target.
+                        keysOnlyReader = binding.pkNames().isEmpty() ? reader
+                                : RowReader.of(rs, binding, availableCols,
+                                        new HashSet<>(binding.pkNames()));
                     }
                     // Column 1 is projected as CONVERT(varchar(32), __$start_lsn, 1) by
                     // changesSql/changesSqlInclusive. Do NOT select the raw binary column:
@@ -769,7 +775,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                         stats.addUnsupportedTable(ci.schema + "." + ci.table);
                         continue;
                     }
-                    Map<String, Object> row = reader.read(rs);
+                    Map<String, Object> row = readerFor(op, reader, keysOnlyReader).read(rs);
                     if (op == 2 || op == 4) {
                         // Insert / update-after images reach the target whole. Delete (1) and
                         // update-before (3) images only supply primary keys to the fold, so
@@ -783,6 +789,15 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 }
             }
         }
+    }
+
+    /**
+     * The reader a row image needs: delete (1) and update-before (3) images only supply
+     * primary keys to {@link SqlServerTxFold}, while insert (2) and update-after (4) images
+     * are applied whole.
+     */
+    static RowReader readerFor(int op, RowReader full, RowReader keysOnly) {
+        return op == 1 || op == 3 ? keysOnly : full;
     }
 
     /**
@@ -1113,15 +1128,39 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
          */
         static RowReader of(ResultSet rs, CdcTableBinding binding, Set<String> availableCols)
                 throws SQLException {
+            return of(rs, binding, availableCols, null);
+        }
+
+        /**
+         * A reader limited to {@code onlyColumns} (matched case-insensitively against the
+         * binding's own columns), or every binding column when {@code onlyColumns} is null.
+         *
+         * <p>Delete ({@code __$operation=1}) and update-before ({@code =3}) images are never
+         * applied whole: the fold keeps only their primary keys, so reading the rest of the
+         * payload — LOBs included — is wasted driver work on every delete and every update.
+         */
+        static RowReader of(ResultSet rs, CdcTableBinding binding, Set<String> availableCols,
+                            Set<String> onlyColumns) throws SQLException {
             if (binding == null || !binding.isApplicable()) {
                 return null;
+            }
+            Set<String> wanted = null;
+            if (onlyColumns != null) {
+                wanted = new HashSet<>();
+                for (String column : onlyColumns) {
+                    wanted.add(column.toLowerCase(Locale.ROOT));
+                }
             }
             List<String> names = new ArrayList<>();
             List<Integer> indexes = new ArrayList<>();
             List<ColumnMeta> metas = new ArrayList<>();
             for (String col : binding.columnNames()) {
-                if (!availableCols.contains(col.toLowerCase(Locale.ROOT))) {
+                String lower = col.toLowerCase(Locale.ROOT);
+                if (!availableCols.contains(lower)) {
                     continue; // not captured by this CDC instance — leave absent
+                }
+                if (wanted != null && !wanted.contains(lower)) {
+                    continue; // only the key is needed from this image
                 }
                 names.add(col);
                 indexes.add(rs.findColumn(col));

@@ -60,6 +60,14 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     static final int MAX_PARSE_FAILURES = 5;
 
     /**
+     * How many times one drain cycle re-peeks a transaction truncated by the row budget. Each
+     * peek restarts at confirmed_flush, so a server that always truncates at max_changes would
+     * keep returning the same rows; a small bound turns an endless spin into one retryable
+     * cycle.
+     */
+    static final int MAX_HALF_TRANSACTION_PEEKS = 3;
+
+    /**
      * How long a table's metadata is trusted after a refresh triggered by a row-shape
      * mismatch. A binding that keeps disagreeing with the stream (a column the metadata
      * reader does not report, say) must not turn into one source connection per row; a
@@ -453,6 +461,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         long projectId = project.getId();
         int batchSize = (int) Math.min(Integer.MAX_VALUE, properties.getCdc().getPg().getBatchSize());
         int total = 0;
+        int consecutiveHalfPeeks = 0;
         CdcTransactionBuffer tx = new CdcTransactionBuffer();
         CdcTransactionBudget budget = CdcTransactionBudget.from(properties);
         String lastCommitLsn = null;
@@ -666,8 +675,20 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 projectId, tx.size());
                         break;
                     }
-                    continue; // budget cut mid-stream: peek again (complete txns only)
+                    // Budget cut mid-stream: peek again (complete txns only). Bounded because
+                    // every peek restarts at confirmed_flush — a server that keeps truncating
+                    // the same transaction at max_changes would otherwise re-read the same
+                    // rows forever without ever reaching COMMIT.
+                    if (++consecutiveHalfPeeks >= MAX_HALF_TRANSACTION_PEEKS) {
+                        log.warn("PG slot for project {} kept returning a truncated transaction"
+                                + " ({} buffered rows after {} peeks, slot not advanced);"
+                                + " giving up this cycle and retrying from the same position",
+                                projectId, tx.size(), consecutiveHalfPeeks);
+                        break;
+                    }
+                    continue;
                 }
+                consecutiveHalfPeeks = 0;
                 if (total >= batchSize || rowsThisCall < batchSize) {
                     break; // cycle budget spent at a tx boundary, or slot empty
                 }

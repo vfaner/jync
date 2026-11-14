@@ -401,6 +401,8 @@ public class ChangeLogDetailsLocalizer {
             case "targeted repair is disabled (sync.cdc.target-table-repair-enabled=false)" ->
                     "repairDisabled";
             case "the source no longer has the table named by the fault" -> "repairSourceGone";
+            case "no selected source table is missing its target right now" ->
+                    "repairNothingMissing";
             case "the repair cycle did not succeed" -> "repairCycleFailed";
             case "targeted repair is not wired on this engine" -> "repairNotWired";
             default -> null;

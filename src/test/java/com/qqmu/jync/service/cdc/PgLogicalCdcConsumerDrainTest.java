@@ -456,6 +456,34 @@ class PgLogicalCdcConsumerDrainTest {
     }
 
     @Test
+    void aTransactionThatIsAlwaysTruncatedAtTheBudgetIsRetriedOnlyAFewTimes() throws Exception {
+        // peek always restarts at confirmed_flush, so a server that keeps truncating the same
+        // transaction at max_changes returns BEGIN + the same batchSize rows on every call.
+        // Re-peeking without a bound is a livelock that re-reads those rows forever without
+        // reaching COMMIT; the cycle must give up after a few attempts and let the next
+        // drain retry from the same position.
+        properties.getCdc().getPg().setBatchSize(2);
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", insert(1L, "x")});
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", insert(1L, "x")});
+        scriptCall(
+                new String[]{"0/1000", BEGIN},
+                new String[]{"0/1001", insert(1L, "x")});
+
+        int total = consumer.drain(source, "jync_1");
+
+        assertThat(total).isEqualTo(6);
+        assertThat(targetRowCount()).isZero();
+        verify(peekPs, times(3)).executeQuery();
+        verify(advancePs, never()).executeQuery();
+        verify(positionStore, never()).advanceLsn(anyLong(), anyString());
+        verify(source).rollback();
+    }
+
+    @Test
     void cutoffMidTransactionRepeeksWholeTransactionAndAdvancesAtCommit() throws Exception {
         // batchSize=2:首次 peek 到 BEGIN+INSERT 满预算;二次 peek 整个事务从头返回
         // (BEGIN 再来)——半截缓冲必须丢弃重建,id=1 不得落两次。

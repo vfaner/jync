@@ -200,6 +200,16 @@ class ChangeLogDetailsLocalizerTest {
                 + " targeted repair is not wired on this engine", Locale.ENGLISH)).isEqualTo(
                 "TARGET_TABLE_MISSING: targeted repair NOT_APPLICABLE: targeted repair is not"
                         + " wired on this engine");
+        // The classifier called it a missing-table fault, but no exception named a table and
+        // no selected table's target is missing: the old wording claimed the source had lost
+        // the table, which was not what had been observed.
+        assertThat(localizer.localize("TARGET_TABLE_MISSING: targeted repair NOT_APPLICABLE:"
+                + " no selected source table is missing its target right now", ZH)).isEqualTo(
+                "目标表缺失（TARGET_TABLE_MISSING）：定向修复不适用："
+                        + "当前没有被选中的源表缺少目标表");
+        assertThat(localizer.localize("TARGET_TABLE_MISSING: targeted repair NOT_APPLICABLE:"
+                + " the source no longer has the table named by the fault", ZH)).isEqualTo(
+                "目标表缺失（TARGET_TABLE_MISSING）：定向修复不适用：源端已不存在故障所指的表");
     }
 
     @Test

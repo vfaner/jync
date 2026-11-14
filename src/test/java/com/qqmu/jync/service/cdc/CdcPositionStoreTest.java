@@ -209,6 +209,19 @@ class CdcPositionStoreTest {
     }
 
     @Test
+    void anOverlongCorruptKeyLengthDoesNotBreakLayoutDecoding() {
+        // A corrupt length near Integer.MAX_VALUE used to overflow the offset arithmetic and
+        // throw StringIndexOutOfBoundsException out of every position read that touched the
+        // stored column. The decoder's contract is "keep what is readable", so the bad tail
+        // must be ignored and the readable prefix kept.
+        String encoded = CdcPositionStore.encodeLayoutSignatures(
+                Map.of("app.orders", signature('a')));
+        assertThat(CdcPositionStore.decodeLayoutSignatures(encoded + "2147483647:x"))
+                .containsEntry("app.orders", signature('a'));
+        assertThat(CdcPositionStore.decodeLayoutSignatures("2147483647:x")).isEmpty();
+    }
+
+    @Test
     void advanceMergesNewLayoutsAndKeepsTheOtherTables() {
         position.setBinlogFile("mysql-bin.000007");
         position.setBinlogPos(100L);

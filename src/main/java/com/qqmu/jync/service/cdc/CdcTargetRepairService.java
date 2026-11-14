@@ -144,8 +144,12 @@ public class CdcTargetRepairService {
             return Outcome.of(Status.FAILED, List.of(), detail);
         }
         if (repairTables.isEmpty()) {
-            return Outcome.of(Status.NOT_APPLICABLE, List.of(),
-                    "the source no longer has the table named by the fault");
+            // The classifier said "target table missing", but no exception named a table and
+            // no selected table's target is missing right now. Only the first case can mean
+            // the source dropped the table; claiming that for the second was misleading.
+            return Outcome.of(Status.NOT_APPLICABLE, List.of(), missing == null
+                    ? "no selected source table is missing its target right now"
+                    : "the source no longer has the table named by the fault");
         }
 
         used.incrementAndGet();
