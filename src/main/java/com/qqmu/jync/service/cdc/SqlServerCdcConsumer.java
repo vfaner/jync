@@ -755,8 +755,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                         missingColumnWarnings.remove(ci.captureInstance);
                         reader = RowReader.of(rs, binding, availableCols);
                         // Reads only the primary key. Used for the delete and update-before
-                        // images, whose payload never reaches the target.
-                        keysOnlyReader = binding.pkNames().isEmpty() ? reader
+                        // images, whose payload never reaches the target. An absent binding
+                        // makes both readers null: the row-level check below counts the whole
+                        // table as unsupported instead of dereferencing it here.
+                        keysOnlyReader = binding == null || binding.pkNames().isEmpty() ? reader
                                 : RowReader.of(rs, binding, availableCols,
                                         new HashSet<>(binding.pkNames()));
                     }

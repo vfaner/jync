@@ -62,17 +62,13 @@ public class LogMinerSession implements AutoCloseable {
     private static final String Q_CONTENTS_FILTER =
             " AND OPERATION IN ('INSERT','UPDATE','DELETE','DDL') ORDER BY CSCN, RS_ID";
 
-    /** 12c+: SRC_CON_ID exists and carries the row's origin container on a CDB. */
+    /**
+     * 12c+: SRC_CON_ID exists and carries the row's origin container on a CDB. Oracle 11g
+     * has no such column (verified on 11.2.0.2 — selecting it raises ORA-00904), so the
+     * minimum supported source is 12c.
+     */
     static final String Q_CONTENTS = Q_CONTENTS_HEAD + "SRC_CON_ID" + Q_CONTENTS_FROM
             + " > ?" + Q_CONTENTS_FILTER;
-
-    /**
-     * Oracle 11g: V$LOGMNR_CONTENTS has no SRC_CON_ID (verified on 11.2.0.2 — selecting it
-     * raises ORA-00904). A literal 0 keeps the result shape and makes the consumer's
-     * container filter a no-op, exactly as it is on a non-CDB.
-     */
-    static final String Q_CONTENTS_PRE_12C = Q_CONTENTS_HEAD + "0 AS SRC_CON_ID"
-            + Q_CONTENTS_FROM + " > ?" + Q_CONTENTS_FILTER;
 
     private final Connection source;
     private final long startScn;

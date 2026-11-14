@@ -44,10 +44,6 @@ public final class EtlSqlSupport {
      * {@code --} line comment, and appended on the same line the comment would swallow the
      * paren, the alias and the zero-row condition.
      */
-    static String zeroRowProbe(String sql) {
-        return zeroRowProbe(sql, null);
-    }
-
     static String zeroRowProbe(String sql, DatabaseType.DialectFamily family) {
         return "SELECT * FROM (" + derivedTableSource(sql, family) + "\n) "
                 + SUBQUERY_ALIAS + " WHERE 1 = 0";

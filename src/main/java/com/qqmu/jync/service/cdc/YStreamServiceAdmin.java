@@ -48,7 +48,6 @@ public final class YStreamServiceAdmin {
     /** Measured: a table entry is ~30–40 characters; 50 per call stays well inside limits. */
     static final int TABLES_PER_CALL = 50;
 
-    static final String STATUS_CREATED = "CREATED";
     static final String STATUS_STARTED = "STARTED";
     static final String STATUS_RUNNING = "RUNNING";
 
