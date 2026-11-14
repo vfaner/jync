@@ -605,6 +605,42 @@ class LogMinerCdcConsumerFailureEscalationTest {
         verify(lock).close();
     }
 
+    /**
+     * The target commit already landed; what failed afterwards is the lease check in
+     * {@code flushTransaction}. That is a clean unwind — another node owns the project now —
+     * not a target write failure. Counting it towards the apply strike-out parked the project
+     * as APPLY_STRIKE_OUT for losing a lease it no longer wanted.
+     */
+    @Test
+    void aLeaseLostAfterTheTargetCommitIsNotCountedAsAnApplyFailure() throws Exception {
+        SyncContext ctx = stagedTargetContext(true).toBuilder()
+                .lockRenewer(() -> false)
+                .build();
+        LogMinerCdcConsumer consumer = newConsumer(ctx, boundedLock(8));
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+        // The rows still landed: each cycle committed before the lease check fired.
+        assertThat(targetRowCount()).isNotZero();
+    }
+
+    @Test
+    void aStopRequestedAfterTheTargetCommitIsNotCountedAsAnApplyFailure() throws Exception {
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("lm-1");
+        SyncContext ctx = stagedTargetContext(true).toBuilder()
+                .project(project)
+                .stopRequested(() -> true)
+                .build();
+        LogMinerCdcConsumer consumer = newConsumer(ctx, boundedLock(8));
+
+        consumer.run();
+
+        verify(taskStore, never()).recordCdcFailure(anyLong(), anyString());
+    }
+
     @Test
     void requestStopDoesNotCloseTheSessionFromTheCallingThread() throws Exception {
         // 会话的 JDBC 对象(Connection/PreparedStatement/ResultSet)属于消费者线程。

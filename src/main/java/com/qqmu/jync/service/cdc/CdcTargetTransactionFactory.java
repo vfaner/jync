@@ -37,6 +37,13 @@ public class CdcTargetTransactionFactory {
      */
     private final Map<String, Set<String>> hashColumnsByTable = new ConcurrentHashMap<>();
 
+    /**
+     * Statements, bind types and column rules shared by every transaction of this run. Built
+     * on the first JDBC transaction — the factory is constructed before the run's context
+     * exists — and keyed by binding identity, so a DDL-rebuilt binding gets a fresh plan.
+     */
+    private volatile CdcWritePlanCache writePlans;
+
     public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds) {
         this(stats, queryTimeoutSeconds, null, null);
     }
@@ -59,6 +66,20 @@ public class CdcTargetTransactionFactory {
             return new RedisCdcTargetTransaction(ctx, redisTargets, redisWriter, stats,
                     hashColumnsByTable);
         }
-        return new JdbcCdcTargetTransaction(ctx, stats, queryTimeoutSeconds);
+        return new JdbcCdcTargetTransaction(ctx, stats, queryTimeoutSeconds, writePlans(ctx));
+    }
+
+    /**
+     * The run's statement cache, created once. One consumer drives its transactions from a
+     * single thread, so the plain check-then-set cannot race in production; it stays
+     * assignment-safe for a hand-built caller that opens transactions from two threads.
+     */
+    CdcWritePlanCache writePlans(SyncContext ctx) {
+        CdcWritePlanCache current = writePlans;
+        if (current == null) {
+            current = new CdcWritePlanCache(ctx);
+            writePlans = current;
+        }
+        return current;
     }
 }

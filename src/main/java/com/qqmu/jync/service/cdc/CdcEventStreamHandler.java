@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
@@ -23,6 +24,7 @@ import com.github.shyiko.mysql.binlog.event.UpdateRowsEventData;
 import com.github.shyiko.mysql.binlog.event.WriteRowsEventData;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.service.lob.LobSpillStore;
+import com.qqmu.jync.service.sync.ColumnCleanser;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -139,6 +141,12 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      */
     private volatile CdcLobSpiller spiller;
 
+    /**
+     * Table name -> compiled column rules for the spiller, shared across this cycle's
+     * transactions; {@code null} compiles them per spiller (hand-built callers).
+     */
+    private final Function<String, ColumnCleanser> spillCleansers;
+
     /** tableId -> TABLE_MAP payload; kept only to name tables in ignored-row diagnostics. */
     private final Map<Long, TableMapEventData> tableMaps = new LinkedHashMap<>();
     /** tableId -> binding; filtered ids (wrong schema, unselected, no PK) are absent. */
@@ -199,7 +207,8 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                           LobSpillStore spillStore, long spillThresholdBytes,
                           CdcTransactionBudget budget) {
         this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink,
-                spillStore, spillThresholdBytes, budget, (db, sql, file, position) -> { });
+                spillStore, spillThresholdBytes, budget, (db, sql, file, position) -> { },
+                null);
     }
 
     /**
@@ -211,6 +220,20 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                           Supplier<String> gtidSetSupplier, TransactionSink sink,
                           LobSpillStore spillStore, long spillThresholdBytes,
                           CdcTransactionBudget budget, DdlSink ddlSink) {
+        this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink,
+                spillStore, spillThresholdBytes, budget, ddlSink, null);
+    }
+
+    /**
+     * @param spillCleansers the run-scoped column-rule cache the spiller consults; null
+     *                       compiles the rules per spiller (hand-built callers)
+     */
+    CdcEventStreamHandler(SyncConfig config, String sourceSchema, CdcTableMetaSupplier supplier,
+                          CdcRowMapper mapper, CdcRuntimeStats stats,
+                          Supplier<String> gtidSetSupplier, TransactionSink sink,
+                          LobSpillStore spillStore, long spillThresholdBytes,
+                          CdcTransactionBudget budget, DdlSink ddlSink,
+                          Function<String, ColumnCleanser> spillCleansers) {
         this.config = config;
         this.sourceSchema = sourceSchema;
         this.supplier = supplier;
@@ -222,6 +245,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         this.spillThresholdBytes = Math.max(0L, spillThresholdBytes);
         this.budget = budget;
         this.ddlSink = ddlSink == null ? (db, sql, file, position) -> { } : ddlSink;
+        this.spillCleansers = spillCleansers;
     }
 
     /**
@@ -772,7 +796,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         if (spillStore == null || spillThresholdBytes <= 0) {
             return CdcLobSpiller.disabled();
         }
-        current = new CdcLobSpiller(spillStore, spillThresholdBytes, config);
+        current = new CdcLobSpiller(spillStore, spillThresholdBytes, config, spillCleansers);
         spiller = current;
         return current;
     }

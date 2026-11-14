@@ -300,6 +300,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 } finally {
                     closeQuietly(currentSource);
                     currentSource = null;
+                    // Cycle boundary: the position throttle may still hold the newest
+                    // committed LSN; write it before the connection goes away.
+                    flushPosition(projectId);
                 }
                 if (!running) {
                     break;
@@ -1139,6 +1142,16 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     private static void closeQuietly(AutoCloseable c) {
         if (c != null) {
             try { c.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    /** Writes the throttled position; a failure here must never fail the cycle. */
+    private void flushPosition(Long projectId) {
+        try {
+            positionStore.flush(projectId);
+        } catch (RuntimeException e) {
+            log.warn("Could not flush the CDC position for project {}: {}",
+                    projectId, e.getMessage());
         }
     }
 

@@ -6,6 +6,7 @@ import java.sql.Statement;
 import java.util.regex.Pattern;
 
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.util.JdbcUtil;
 
 /**
@@ -44,8 +45,65 @@ public final class EtlSqlSupport {
      * paren, the alias and the zero-row condition.
      */
     static String zeroRowProbe(String sql) {
-        return "SELECT * FROM (" + stripTrailingSemicolon(sql) + "\n) "
+        return zeroRowProbe(sql, null);
+    }
+
+    static String zeroRowProbe(String sql, DatabaseType.DialectFamily family) {
+        return "SELECT * FROM (" + derivedTableSource(sql, family) + "\n) "
                 + SUBQUERY_ALIAS + " WHERE 1 = 0";
+    }
+
+    /** Whether this source family rejects some valid SELECTs when they sit in a derived table. */
+    static boolean wrapsAsDerivedTable(DatabaseConfig config) {
+        return config != null && wrapsAsDerivedTable(config.resolvedFamily());
+    }
+
+    static boolean wrapsAsDerivedTable(DatabaseType.DialectFamily family) {
+        return family == DatabaseType.DialectFamily.SQLSERVER
+                || family == DatabaseType.DialectFamily.DB2;
+    }
+
+    /**
+     * The extraction as it can appear inside the wrapper on this family: SQL Server and DB2
+     * refuse a top-level {@code ORDER BY} in a derived table, so a redundant one is dropped.
+     */
+    static String derivedTableSource(String sql, DatabaseType.DialectFamily family) {
+        String stripped = stripTrailingSemicolon(sql);
+        return wrapsAsDerivedTable(family)
+                ? EtlSqlScript.stripTopLevelOrderBy(stripped) : stripped;
+    }
+
+    /**
+     * Whether wrapping this statement would be refused by the family's derived-table rules.
+     * Only a top-level {@code WITH} qualifies: a {@code ORDER BY} is either dropped by
+     * {@link #derivedTableSource} or legal in the derived table because it carries {@code TOP /
+     * OFFSET / FETCH}. A non-resumable run never wraps the extraction, so its precheck must
+     * not either.
+     */
+    static boolean derivedTableRejects(String sql, DatabaseType.DialectFamily family) {
+        return wrapsAsDerivedTable(family) && EtlSqlScript.startsWithWith(sql);
+    }
+
+    /**
+     * The extraction wrapped so the stored checkpoint value can be counted before resuming.
+     *
+     * <p>The continuation treats the checkpoint as a watermark ({@code key > ?}). If several
+     * rows share that value, the rows the previous run had not reached are skipped without
+     * any error; this wrapper is what lets {@link JdbcEtlSource} notice and stop instead.
+     */
+    static String resumeBoundary(String sql, String key, DatabaseType.DialectFamily family) {
+        return "SELECT " + key + " FROM (" + derivedTableSource(sql, family) + "\n) "
+                + SUBQUERY_ALIAS + " WHERE " + key + " = ?";
+    }
+
+    /**
+     * The extraction wrapped so the precheck can look for a non-unique resume key in one pass.
+     *
+     * <p>It returns one row per repeated key; the caller only needs to know whether any exist.
+     */
+    static String duplicateKeyScan(String sql, String key, DatabaseType.DialectFamily family) {
+        return "SELECT " + key + " FROM (" + derivedTableSource(sql, family) + "\n) "
+                + SUBQUERY_ALIAS + " GROUP BY " + key + " HAVING COUNT(*) > 1";
     }
 
     static String qualified(DatabaseConfig targetConfig, String configuredTable) {

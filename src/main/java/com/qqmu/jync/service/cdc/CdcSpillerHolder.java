@@ -1,7 +1,11 @@
 package com.qqmu.jync.service.cdc;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.service.lob.LobSpillStore;
+import com.qqmu.jync.service.sync.ColumnCleanser;
 import com.qqmu.jync.service.sync.SyncContext;
 
 /**
@@ -17,6 +21,13 @@ import com.qqmu.jync.service.sync.SyncContext;
  */
 final class CdcSpillerHolder {
 
+    /**
+     * Compiled column rules per source table. The holder belongs to one consumer run, so a
+     * stream whose every commit spills compiles each table's rules once instead of once
+     * per transaction.
+     */
+    private final Map<String, ColumnCleanser> cleansers = new HashMap<>();
+
     private CdcLobSpiller spiller;
 
     /**
@@ -28,7 +39,9 @@ final class CdcSpillerHolder {
         if (spiller == null) {
             spiller = store == null ? CdcLobSpiller.disabled()
                     : new CdcLobSpiller(store, properties.getLob().getCdcSpillThresholdBytes(),
-                            ctx.getConfig());
+                            ctx.getConfig(),
+                            table -> cleansers.computeIfAbsent(table,
+                                    name -> ColumnCleanser.forTable(ctx.getConfig(), name)));
         }
         return spiller;
     }

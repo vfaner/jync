@@ -2,7 +2,10 @@ package com.qqmu.jync.service.etl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -40,6 +43,8 @@ class JdbcEtlSourceTest {
     private PreparedStatement statement;
     private ResultSet resultSet;
     private ResultSetMetaData metadata;
+    private PreparedStatement boundaryStatement;
+    private ResultSet boundaryRows;
 
     @BeforeEach
     void setUp() throws SQLException {
@@ -47,9 +52,17 @@ class JdbcEtlSourceTest {
         statement = mock(PreparedStatement.class);
         resultSet = mock(ResultSet.class);
         metadata = mock(ResultSetMetaData.class);
+        boundaryStatement = mock(PreparedStatement.class);
+        boundaryRows = mock(ResultSet.class);
         when(connection.prepareStatement(anyString(),
                 eq(ResultSet.TYPE_FORWARD_ONLY), eq(ResultSet.CONCUR_READ_ONLY)))
                 .thenReturn(statement);
+        // The resume boundary check is the only equality-filtered wrapper on the connection;
+        // an empty result set lets every resume test get past it unless it says otherwise.
+        when(connection.prepareStatement(argThat(sql -> sql != null && sql.contains(" = ?")),
+                eq(ResultSet.TYPE_FORWARD_ONLY), eq(ResultSet.CONCUR_READ_ONLY)))
+                .thenReturn(boundaryStatement);
+        when(boundaryStatement.executeQuery()).thenReturn(boundaryRows);
         when(connection.createStatement()).thenReturn(statement);
         when(statement.executeQuery(anyString())).thenReturn(resultSet);
         when(statement.executeQuery()).thenReturn(resultSet);
@@ -90,6 +103,146 @@ class JdbcEtlSourceTest {
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
         verify(statement).setLong(1, 3L);
         cursor.close();
+    }
+
+    /**
+     * A resume key that is not unique loses data: the continuation filters {@code key > ?},
+     * so every row sharing the checkpoint value that the previous run had not reached yet is
+     * skipped without a trace. The guard must stop the run instead of copying a gap.
+     */
+    @Test
+    void refusesToResumeWhenTheCheckpointKeyIsNotUnique() throws SQLException {
+        when(boundaryRows.next()).thenReturn(true, true);
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        EtlProgramException failure = catchThrowableOfType(
+                () -> source.query(task(EtlWriteMode.APPEND, "id"),
+                        new EtlCheckpointValue(Types.INTEGER, "3")),
+                EtlProgramException.class);
+
+        assertThat(failure).hasMessage("error.etl.resumeKey.duplicate:id");
+    }
+
+    @Test
+    void checksTheCheckpointBoundaryWithAnEqualityQuery() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        source.query(task(EtlWriteMode.APPEND, "id"),
+                new EtlCheckpointValue(Types.INTEGER, "3")).close();
+
+        verify(connection).prepareStatement(
+                "SELECT id FROM (SELECT id FROM src\n) jync_etl_src WHERE id = ?",
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+        verify(boundaryStatement).setMaxRows(2);
+        verify(boundaryStatement).setLong(1, 3L);
+    }
+
+    @Test
+    void aFreshRunDoesNotLookAtTheCheckpointBoundary() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        source.query(task(EtlWriteMode.APPEND, "id"), null).close();
+
+        verify(connection, never()).prepareStatement(
+                argThat(sql -> sql != null && sql.contains(" = ?")),
+                eq(ResultSet.TYPE_FORWARD_ONLY), eq(ResultSet.CONCUR_READ_ONLY));
+    }
+
+    @Test
+    void probeRejectsARepeatedResumeKeyBeforeTheRun() throws SQLException {
+        ResultSet duplicates = mock(ResultSet.class);
+        when(statement.executeQuery(contains("GROUP BY"))).thenReturn(duplicates);
+        when(duplicates.next()).thenReturn(true);
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        EtlSourceProbe probe = source.probe(task(EtlWriteMode.APPEND, "id"), 15);
+
+        assertThat(probe.issues())
+                .filteredOn(issue -> "etl.precheck.resume.duplicate".equals(issue.code()))
+                .extracting(EtlSourceIssue::level)
+                .containsExactly(EtlPrecheckResult.Level.ERROR);
+    }
+
+    @Test
+    void probeWarnsWhenTheDuplicateScanCannotFinish() throws SQLException {
+        when(statement.executeQuery(contains("GROUP BY")))
+                .thenThrow(new SQLException("query timeout"));
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        EtlSourceProbe probe = source.probe(task(EtlWriteMode.APPEND, "id"), 15);
+
+        assertThat(probe.issues())
+                .filteredOn(issue -> "etl.precheck.resume.unverified".equals(issue.code()))
+                .extracting(EtlSourceIssue::level)
+                .containsExactly(EtlPrecheckResult.Level.WARN);
+    }
+
+    @Test
+    void anUnsetResumeKeyIsNotScannedForDuplicates() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        source.probe(task(EtlWriteMode.APPEND, null), 15);
+
+        verify(statement, never()).executeQuery(contains("GROUP BY"));
+    }
+
+    /**
+     * SQL Server rejects ORDER BY in a derived table unless TOP/OFFSET/FOR accompanies it.
+     * The resumption wrapper moves the customer's SELECT into exactly that position, so a
+     * redundant top-level order (the wrapper adds its own) has to go.
+     */
+    @Test
+    void aSqlServerResumeDropsTheRedundantOrderByFromTheDerivedTable() throws SQLException {
+        EtlTask task = task(EtlWriteMode.APPEND, "id");
+        task.setSourceSql("SELECT id FROM src ORDER BY created_at");
+        JdbcEtlSource source = source(DatabaseType.SQLSERVER);
+
+        source.query(task, null).close();
+
+        verify(connection).prepareStatement(
+                "SELECT * FROM (SELECT id FROM src\n) jync_etl_src ORDER BY id",
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+    }
+
+    @Test
+    void aDb2ResumeAlsoDropsTheRedundantOrderBy() throws SQLException {
+        EtlTask task = task(EtlWriteMode.APPEND, "id");
+        task.setSourceSql("SELECT id FROM src ORDER BY created_at");
+        JdbcEtlSource source = source(DatabaseType.DB2);
+
+        source.query(task, null).close();
+
+        verify(connection).prepareStatement(
+                "SELECT * FROM (SELECT id FROM src\n) jync_etl_src ORDER BY id",
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+    }
+
+    /**
+     * A non-resumable run leaves the extraction unwrapped, so its precheck must not refuse a
+     * WITH statement on SQL Server just because the zero-row wrapper would be invalid there.
+     */
+    @Test
+    void aSqlServerCteProbeRunsTheStatementUnwrapped() throws SQLException {
+        EtlTask task = task(EtlWriteMode.OVERWRITE, null);
+        task.setSourceSql("WITH c AS (SELECT id FROM src) SELECT id FROM c");
+        JdbcEtlSource source = source(DatabaseType.SQLSERVER);
+
+        source.probe(task, 15);
+
+        verify(statement).executeQuery(
+                "WITH c AS (SELECT id FROM src) SELECT id FROM c");
+        verify(statement).setMaxRows(1);
+    }
+
+    @Test
+    void aWrappableSelectStillUsesTheZeroRowProbe() throws SQLException {
+        JdbcEtlSource source = source(DatabaseType.SQLSERVER);
+
+        source.probe(task(EtlWriteMode.OVERWRITE, null), 15);
+
+        verify(statement).executeQuery(
+                "SELECT * FROM (SELECT id FROM src\n) jync_etl_src WHERE 1 = 0");
+        verify(statement, never()).setMaxRows(1);
     }
 
     @Test

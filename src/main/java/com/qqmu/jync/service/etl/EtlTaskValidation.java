@@ -89,6 +89,35 @@ final class EtlTaskValidation {
                 && !EtlSqlSupport.RESUME_KEY.matcher(task.getResumeKeyColumn().trim()).matches()) {
             throw new IllegalArgumentException("error.etl.resumeKey.invalid");
         }
+        if (!isNativeMongo(source)) {
+            validateResumableWrapper(task, source);
+        }
+    }
+
+    /**
+     * SQL Server and DB2 refuse a top-level {@code WITH} once the extraction sits inside the
+     * resume wrapper. Refusing it here keeps the form from saving a task that can only fail at
+     * run time, and gives the operator a message that names the cause.
+     *
+     * <p>A top-level {@code ORDER BY} is not refused: a redundant one is dropped by
+     * {@link EtlSqlSupport#derivedTableSource}, and one that carries {@code TOP / OFFSET /
+     * FETCH} is legal inside a derived table — rejecting it would refuse statements those
+     * products accept.
+     */
+    static void validateResumableWrapper(EtlTask task, DatabaseConfig source) {
+        if (!resumable(task) || source == null || isNativeMongo(source)
+                || !EtlSqlSupport.wrapsAsDerivedTable(source)) {
+            return;
+        }
+        String select = EtlSqlScript.lastStatement(task.getSourceSql());
+        if (select != null && EtlSqlScript.startsWithWith(select)) {
+            throw new IllegalArgumentException("error.etl.resume.cte");
+        }
+    }
+
+    private static boolean resumable(EtlTask task) {
+        return task.getWriteMode() != null && task.getWriteMode().supportsResume()
+                && task.getResumeKeyColumn() != null && !task.getResumeKeyColumn().isBlank();
     }
 
     static boolean isNativeMongo(DatabaseConfig config) {

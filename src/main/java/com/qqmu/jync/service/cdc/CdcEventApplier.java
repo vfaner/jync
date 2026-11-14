@@ -53,15 +53,27 @@ public final class CdcEventApplier {
      */
     private final int queryTimeoutSeconds;
 
+    /**
+     * Statements, bind types and column rules this run reuses across transactions; the
+     * factory hands over one per run so a burst of transactions builds each statement once.
+     */
+    private final CdcWritePlanCache plans;
+
     /** No-timeout convenience overload; existing call sites keep their behavior. */
     public CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats) {
         this(ctx, stats, 0);
     }
 
     public CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats, int queryTimeoutSeconds) {
+        this(ctx, stats, queryTimeoutSeconds, new CdcWritePlanCache(ctx));
+    }
+
+    CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats, int queryTimeoutSeconds,
+                    CdcWritePlanCache plans) {
         this.ctx = ctx;
         this.stats = stats;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
+        this.plans = plans;
     }
 
     public void applyUpserts(Connection targetConn, CdcTableBinding binding,
@@ -71,8 +83,9 @@ public final class CdcEventApplier {
         }
         cleanse(binding, rows);
         List<String> columns = projectColumns(targetConn, binding);
+        CdcWritePlanCache.UpsertPlan plan = plans.upsertPlan(binding, columns);
         try {
-            write(targetConn, binding, columns, rows);
+            write(targetConn, plan, rows);
         } catch (SQLException e) {
             // A dropped target table is not a transient disconnect: reconnecting replays the
             // same transaction against the same absent table forever. Name it so the
@@ -104,18 +117,15 @@ public final class CdcEventApplier {
     }
 
     /** The actual write, shared by the first attempt and the projected replay. */
-    private void write(Connection targetConn, CdcTableBinding binding, List<String> columns,
+    private void write(Connection targetConn, CdcWritePlanCache.UpsertPlan plan,
                        List<Map<String, Object>> rows) throws SQLException {
         // Same dispatch as the polling engine: emulate only when there is a key to update
         // by; a keyless binding (unreachable in CDC — the handler gates on isApplicable)
         // degrades to the plain-INSERT branch rather than an update with an empty WHERE.
-        if (!binding.pkNames().isEmpty()
-                && ctx.getTargetDialect() instanceof GenericSqlDialect
-                && !((GenericSqlDialect) ctx.getTargetDialect()).supportsNativeUpsert()) {
-            applyEmulatedUpserts(targetConn, binding, columns, rows,
-                    (GenericSqlDialect) ctx.getTargetDialect());
+        if (plan.emulated) {
+            applyEmulatedUpserts(targetConn, plan, rows);
         } else {
-            applyNativeUpserts(targetConn, binding, columns, rows);
+            applyNativeUpserts(targetConn, plan, rows);
         }
     }
 
@@ -324,15 +334,12 @@ public final class CdcEventApplier {
         // A cleansed primary key must be transformed the same way the upsert was, or the
         // delete would look for a row the target does not hold.
         cleanse(binding, rows);
-        List<String> pkColumns = binding.pkNames();
-        String sql = ctx.getTargetDialect().getDeleteByPkSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), pkColumns);
-        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType());
-        try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
+        CdcWritePlanCache.DeletePlan plan = plans.deletePlan(binding);
+        try (PreparedStatement ps = targetConn.prepareStatement(plan.sql)) {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
             for (Map<String, Object> row : rows) {
-                JdbcRowMapper.bind(ps, row, pkColumns, types, ctx.getTargetDialect());
+                JdbcRowMapper.bind(ps, row, plan.pkColumns, plan.types, ctx.getTargetDialect());
                 ps.addBatch();
                 if (++inBatch >= ctx.getBatchSize()) {
                     ps.executeBatch();
@@ -370,34 +377,23 @@ public final class CdcEventApplier {
      * twice on values that are already clean.
      */
     private void cleanse(CdcTableBinding binding, List<Map<String, Object>> rows) {
-        ColumnCleanser cleanser = ColumnCleanser.forTable(ctx.getConfig(), binding.getTable());
+        ColumnCleanser cleanser = plans.cleanser(binding.getTable());
         for (Map<String, Object> row : rows) {
             cleanser.apply(row);
         }
     }
 
     /** The normal path: one idempotent statement per row, executed in JDBC batches. */
-    private void applyNativeUpserts(Connection targetConn, CdcTableBinding binding,
-                                    List<String> columns,
+    private void applyNativeUpserts(Connection targetConn, CdcWritePlanCache.UpsertPlan plan,
                                     List<Map<String, Object>> rows) throws SQLException {
-        List<String> pkColumns = binding.pkNames();
-        Map<String, Integer> types = binding.typeByColumn(ctx.getTargetDialect(), ctx.effectiveSourceType());
-        // Same typed-marker support as the polling write path: DB2 MERGE re-resolves
-        // untyped markers across ON/UPDATE/INSERT and fails with SQL0418 when the contexts
-        // disagree; other dialects ignore the extra argument.
-        Map<String, String> declarations = binding.declarationByColumn(
-                ctx.getTargetDialect(), ctx.effectiveSourceType());
-        String sql = ctx.getTargetDialect().getUpsertSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns, types,
-                false, declarations);
-        List<String> bindOrder = ctx.getTargetDialect().upsertBindOrder(columns, pkColumns);
         // Temporary LOBs live until the batch is executed; they are freed right after.
         LobBinder.Tracker lobTracker = LobBinder.newTracker();
-        try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
+        try (PreparedStatement ps = targetConn.prepareStatement(plan.sql)) {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
             for (Map<String, Object> row : rows) {
-                JdbcRowMapper.bind(ps, row, bindOrder, types, ctx.getTargetDialect(), lobTracker);
+                JdbcRowMapper.bind(ps, row, plan.bindOrder, plan.types,
+                        ctx.getTargetDialect(), lobTracker);
                 ps.addBatch();
                 if (++inBatch >= ctx.getBatchSize()) {
                     ps.executeBatch();
@@ -419,35 +415,11 @@ public final class CdcEventApplier {
      * batched — the update's row count decides whether the insert runs — but still
      * idempotent, and still inside the caller's transaction.
      */
-    private void applyEmulatedUpserts(Connection targetConn, CdcTableBinding binding,
-                                      List<String> columns,
-                                      List<Map<String, Object>> rows, GenericSqlDialect generic)
-            throws SQLException {
-        List<String> pkColumns = binding.pkNames();
-        // One map for both consumers: the insert SQL's placeholder types and the per-row
-        // binding below. Building it twice walked every column (and re-mapped each vendor
-        // type) twice per flushed transaction.
-        Map<String, Integer> types = binding.typeByColumn(
-                ctx.getTargetDialect(), ctx.effectiveSourceType());
-        String updateSql = generic.getUpdateByPkSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), columns, pkColumns);
-        String insertSql = ctx.getTargetDialect().getUpsertSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), columns, List.of(), types);
-
-        List<String> updateBindOrder = new ArrayList<>();
-        if (updateSql != null) {
-            // SET clause values first, then the WHERE key values.
-            for (String column : columns) {
-                if (!CollectionUtil.containsIgnoreCase(pkColumns, column)) {
-                    updateBindOrder.add(column);
-                }
-            }
-            updateBindOrder.addAll(pkColumns);
-        }
-
-        try (PreparedStatement insert = targetConn.prepareStatement(insertSql);
-             PreparedStatement update = updateSql == null ? null
-                     : targetConn.prepareStatement(updateSql)) {
+    private void applyEmulatedUpserts(Connection targetConn, CdcWritePlanCache.UpsertPlan plan,
+                                      List<Map<String, Object>> rows) throws SQLException {
+        try (PreparedStatement insert = targetConn.prepareStatement(plan.sql);
+             PreparedStatement update = plan.updateSql == null ? null
+                     : targetConn.prepareStatement(plan.updateSql)) {
             JdbcUtil.applyQueryTimeout(insert, queryTimeoutSeconds);
             JdbcUtil.applyQueryTimeout(update, queryTimeoutSeconds);
             for (Map<String, Object> row : rows) {
@@ -457,14 +429,15 @@ public final class CdcEventApplier {
                 try {
                     int updated = 0;
                     if (update != null) {
-                        JdbcRowMapper.bind(update, row, updateBindOrder, types,
+                        JdbcRowMapper.bind(update, row, plan.updateBindOrder, plan.types,
                                 ctx.getTargetDialect(), lobTracker);
                         updated = update.executeUpdate();
                     }
                     if (updated > 0) {
                         continue;
                     }
-                    JdbcRowMapper.bind(insert, row, columns, types, ctx.getTargetDialect(), lobTracker);
+                    JdbcRowMapper.bind(insert, row, plan.columns, plan.types,
+                            ctx.getTargetDialect(), lobTracker);
                     try {
                         insert.executeUpdate();
                     } catch (SQLException e) {
@@ -475,7 +448,7 @@ public final class CdcEventApplier {
                             // the conflicting row carries a DIFFERENT key (another unique index,
                             // or a vendor 23000 that was not a duplicate at all); swallowing it
                             // would drop the change while the position still advances.
-                            JdbcRowMapper.bind(update, row, updateBindOrder, types,
+                            JdbcRowMapper.bind(update, row, plan.updateBindOrder, plan.types,
                                     ctx.getTargetDialect(), lobTracker);
                             if (update.executeUpdate() == 0) {
                                 throw e;
@@ -487,11 +460,11 @@ public final class CdcEventApplier {
                             // this key is identical to the one rejected and re-delivery is a
                             // no-op, while an absent key means some other constraint rejected
                             // the row and it must surface.
-                            if (!rowExists(targetConn, binding, row, pkColumns, types)) {
+                            if (!rowExists(targetConn, row, plan)) {
                                 throw e;
                             }
                             log.debug("Row already present in key-only table {}; re-delivery"
-                                    + " is a no-op", binding.getTargetTable());
+                                    + " is a no-op", plan.targetTable);
                         } else {
                             throw e;
                         }
@@ -507,15 +480,14 @@ public final class CdcEventApplier {
      * Whether the target already holds the row with this primary key. Only reached from the
      * key-only conflict path, so the extra statement costs nothing on the normal flow.
      */
-    private boolean rowExists(Connection targetConn, CdcTableBinding binding,
-                              Map<String, Object> row, List<String> pkColumns,
-                              Map<String, Integer> types) throws SQLException {
+    private boolean rowExists(Connection targetConn, Map<String, Object> row,
+                              CdcWritePlanCache.UpsertPlan plan) throws SQLException {
         GenericSqlDialect generic = (GenericSqlDialect) ctx.getTargetDialect();
         String sql = generic.getSelectByPkSql(
-                ctx.getTargetSchema(), binding.getTargetTable(), pkColumns);
+                ctx.getTargetSchema(), plan.targetTable, plan.pkColumns);
         try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
-            JdbcRowMapper.bind(ps, row, pkColumns, types, ctx.getTargetDialect());
+            JdbcRowMapper.bind(ps, row, plan.pkColumns, plan.types, ctx.getTargetDialect());
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next();
             }

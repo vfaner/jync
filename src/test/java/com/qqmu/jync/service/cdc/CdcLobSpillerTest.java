@@ -121,6 +121,40 @@ class CdcLobSpillerTest {
         }
     }
 
+    /**
+     * The holder passes a run-scoped rule cache; the spiller must ask it instead of
+     * compiling the table's rules for every transaction, and must still keep ruled
+     * columns inline (the rules are String-only).
+     */
+    @Test
+    void aSuppliedCleanserCacheKeepsRuledColumnsInlineWithoutRebuildingThem() {
+        SyncConfig config = new SyncConfig();
+        ColumnRule trim = new ColumnRule();
+        trim.setTable("docs");
+        trim.setColumn("BODY");
+        trim.setType(ColumnRuleType.TRIM);
+        config.setColumnRules(List.of(trim));
+        java.util.concurrent.atomic.AtomicInteger builds =
+                new java.util.concurrent.atomic.AtomicInteger();
+        CdcLobSpiller cached = new CdcLobSpiller(store, 50, config, table -> {
+            builds.incrementAndGet();
+            return com.qqmu.jync.service.sync.ColumnCleanser.forTable(config, table);
+        });
+        try {
+            Map<String, Object> row = row("  " + "x".repeat(100) + "  ");
+            CdcTableBinding docs = docs();
+
+            // The consumer's supplier hands back the same binding across transactions.
+            cached.spill(docs, row);
+            cached.spill(docs, row);
+
+            assertThat(row.get("BODY")).isInstanceOf(String.class);
+            assertThat(builds).hasValue(1);
+        } finally {
+            cached.close();
+        }
+    }
+
     @Test
     void closeDeletesEverySpilledFile() {
         spiller.spill(docs(), row("中".repeat(100)));

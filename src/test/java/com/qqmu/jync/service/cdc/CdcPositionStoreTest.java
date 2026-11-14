@@ -4,12 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,7 +35,9 @@ class CdcPositionStoreTest {
     @BeforeEach
     void setUp() {
         repository = mock(CdcPositionRepository.class);
-        store = new CdcPositionStore(repository);
+        // Interval 0: these tests pin the monotonicity and layout contracts, not the
+        // persistence throttle — every accepted advance must reach the repository here.
+        store = new CdcPositionStore(repository, 0L, System::currentTimeMillis);
         position = new CdcPosition();
         position.setProjectId(1L);
         when(repository.findByProjectId(1L)).thenReturn(Optional.of(position));
@@ -324,6 +328,136 @@ class CdcPositionStoreTest {
 
         store.resetAnchorKeepingProjectionSignature(2L); // must not throw
 
+        verify(repository, never()).save(any());
+    }
+
+    // —— 位点落库节流:一笔已提交的源事务不再各自换一次 H2 写 ——
+
+    /** A store that may persist at most once per simulated second. */
+    private CdcPositionStore throttled(AtomicLong now) {
+        return new CdcPositionStore(repository, 1_000L, now::get);
+    }
+
+    @Test
+    void aBurstOfAdvancesWritesThePositionOncePerInterval() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+        position.setScn(100L);
+
+        throttled.advanceScn(1L, 101L);
+        throttled.advanceScn(1L, 102L);
+        throttled.advanceScn(1L, 103L);
+        verify(repository, never()).save(any());
+
+        now.addAndGet(1_000L);
+        throttled.advanceScn(1L, 104L);
+
+        verify(repository).save(position);
+        assertThat(position.getScn()).isEqualTo(104L);
+    }
+
+    @Test
+    void findShowsTheBufferedPositionBeforeItIsPersisted() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+
+        throttled.advanceScn(1L, 150L);
+
+        assertThat(throttled.find(1L).orElseThrow().getScn()).isEqualTo(150L);
+        assertThat(position.getScn()).isNull();        // the row itself is untouched
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void flushPersistsTheBufferedPositionAtTheCycleBoundary() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+
+        throttled.advanceScn(1L, 140L);
+        throttled.flush(1L);
+
+        assertThat(position.getScn()).isEqualTo(140L);
+        verify(repository, times(1)).save(any());
+
+        throttled.flush(1L);                           // nothing buffered any more
+        verify(repository, times(1)).save(any());
+    }
+
+    @Test
+    void aRewindInsideTheBufferIsStillRejected() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+        position.setScn(100L);
+
+        throttled.advanceScn(1L, 120L);
+        throttled.advanceScn(1L, 110L);
+        throttled.flush(1L);
+
+        assertThat(position.getScn()).isEqualTo(120L);
+    }
+
+    @Test
+    void bufferedLayoutsOfSeveralTransactionsAreAllRecorded() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+
+        throttled.advance(1L, "mysql-bin.000007", 200L, null,
+                Map.of("app.orders", signature('a')));
+        throttled.advance(1L, "mysql-bin.000007", 300L, null,
+                Map.of("app.items", signature('b')));
+        throttled.flush(1L);
+
+        assertThat(CdcPositionStore.decodeLayoutSignatures(position.getSchemaSignatures()))
+                .containsEntry("app.orders", signature('a'))
+                .containsEntry("app.items", signature('b'));
+        assertThat(position.getBinlogPos()).isEqualTo(300L);
+    }
+
+    @Test
+    void aDdlAdvanceDropsLayoutsBufferedBeforeIt() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+
+        throttled.advance(1L, "mysql-bin.000007", 200L, null,
+                Map.of("app.orders", signature('a')));
+        throttled.advance(1L, "mysql-bin.000007", 300L, null,
+                Map.of("app.items", signature('b')), true);
+        throttled.flush(1L);
+
+        assertThat(CdcPositionStore.decodeLayoutSignatures(position.getSchemaSignatures()))
+                .containsOnlyKeys("app.items");
+    }
+
+    @Test
+    void aResetDropsTheBufferedPosition() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+
+        throttled.advance(1L, "mysql-bin.000007", 200L, null);
+        throttled.resetAnchorKeepingProjectionSignature(1L);
+        throttled.flush(1L);
+
+        assertThat(position.getBinlogFile()).isNull();
+        assertThat(position.getBinlogPos()).isNull();
+    }
+
+    @Test
+    void aCompetingWriterAheadInTheStoreWinsAtFlushTime() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+        position.setScn(100L);
+
+        throttled.advanceScn(1L, 150L);
+        position.setScn(200L);                         // another node moved the row
+        throttled.flush(1L);
+
+        assertThat(position.getScn()).isEqualTo(200L);
         verify(repository, never()).save(any());
     }
 }

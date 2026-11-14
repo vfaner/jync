@@ -3,6 +3,7 @@ package com.qqmu.jync.dto;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -13,7 +14,6 @@ import java.util.Set;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.qqmu.jync.model.CaptureStrategy;
-import com.qqmu.jync.util.CollectionUtil;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -38,6 +38,14 @@ public class SyncConfig {
 
     /** Selected table names. Empty means all — or none when {@link #objectSelectionExplicit}. */
     private Set<String> tables = new LinkedHashSet<>();
+
+    /** Derived membership indexes of the three selections; never persisted. */
+    @JsonIgnore
+    private final SelectionIndex tablesLookup = new SelectionIndex();
+    @JsonIgnore
+    private final SelectionIndex viewsLookup = new SelectionIndex();
+    @JsonIgnore
+    private final SelectionIndex proceduresLookup = new SelectionIndex();
 
     /** Selected view names. Empty means all — or none when {@link #objectSelectionExplicit}. */
     private Set<String> views = new LinkedHashSet<>();
@@ -136,23 +144,61 @@ public class SyncConfig {
     }
 
     public boolean includesTable(String tableName) {
-        return includes(tables, tableName);
+        return includes(tables, tableName, tablesLookup);
     }
 
     public boolean includesView(String viewName) {
-        return includes(views, viewName);
+        return includes(views, viewName, viewsLookup);
     }
 
     public boolean includesProcedure(String procName) {
-        return includes(procedures, procName);
+        return includes(procedures, procName, proceduresLookup);
     }
 
     /** Empty set: all for a legacy config, none once an explicit selection was saved. */
-    private boolean includes(Set<String> selection, String name) {
+    private boolean includes(Set<String> selection, String name, SelectionIndex index) {
         if (selection.isEmpty()) {
             return !objectSelectionExplicit;
         }
-        return CollectionUtil.containsIgnoreCase(selection, name);
+        return index.contains(selection, name);
+    }
+
+    /**
+     * Case-insensitive membership index of one selection set, built on its first lookup and
+     * reused afterwards. {@code includes*} sits on CDC's per-event path (every binlog
+     * TABLE_MAP event) and on every metadata discovery pass, where scanning the selection
+     * with {@code equalsIgnoreCase} made a pass O(selection²).
+     *
+     * <p>The selection is a configuration snapshot: it is replaced through its setter or
+     * grown before the first lookup. Identity plus size catches both re-assignment (even to
+     * a same-sized set) and in-place additions; a same-sized in-place substitution is not
+     * detected, which no production path performs.
+     */
+    private static final class SelectionIndex {
+
+        private Set<String> source;
+        private int sourceSize = -1;
+        private Set<String> lower;
+
+        boolean contains(Set<String> selection, String name) {
+            if (name == null) {
+                return false;
+            }
+            Set<String> current = lower;
+            if (source != selection || sourceSize != selection.size()) {
+                Set<String> built = new HashSet<>(Math.max(4, selection.size() * 2));
+                for (String value : selection) {
+                    if (value != null) {
+                        built.add(value.toLowerCase(Locale.ROOT));
+                    }
+                }
+                lower = built;      // publish before the guard fields: a racing reader
+                source = selection; // either sees the old pair or the completed one
+                sourceSize = selection.size();
+                current = built;
+            }
+            return current.contains(name.toLowerCase(Locale.ROOT));
+        }
     }
 
     /**

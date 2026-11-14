@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
+
 import org.junit.jupiter.api.Test;
 
 /**
@@ -124,5 +126,55 @@ class EtlSqlScriptTest {
     void validateKeepsAcceptingASingleStatementAsBefore() {
         assertThatCode(() -> EtlSqlScript.validate("DELETE FROM t"))
                 .doesNotThrowAnyException();
+    }
+
+    // --- derived-table adaptation ---------------------------------------------------------
+
+    @Test
+    void aTopLevelOrderByIsRemovedForADerivedTable() {
+        assertThat(EtlSqlScript.stripTopLevelOrderBy("SELECT id FROM src ORDER BY id"))
+                .isEqualTo("SELECT id FROM src");
+    }
+
+    @Test
+    void anOrderByInsideAWindowOrSubqueryIsKept() {
+        String sql = "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS r"
+                + " FROM (SELECT id FROM src ORDER BY id) x";
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(sql)).isEqualTo(sql);
+        assertThat(EtlSqlScript.hasTopLevelOrderBy(sql)).isFalse();
+    }
+
+    @Test
+    void aLimitingClauseKeepsTheTopLevelOrderBy() {
+        for (String sql : List.of(
+                "SELECT TOP 10 id FROM src ORDER BY id",
+                "SELECT id FROM src ORDER BY id LIMIT 10",
+                "SELECT id FROM src ORDER BY id OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY",
+                "SELECT id FROM src ORDER BY id FETCH FIRST 10 ROWS ONLY",
+                "SELECT id FROM src ORDER BY id FOR UPDATE")) {
+            assertThat(EtlSqlScript.stripTopLevelOrderBy(sql)).isEqualTo(sql);
+        }
+    }
+
+    @Test
+    void orderByInsideAStringOrCommentDoesNotCount() {
+        String sql = "SELECT 'ORDER BY x' AS note, \"ORDER BY\" FROM src -- ORDER BY y";
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(sql)).isEqualTo(sql);
+        assertThat(EtlSqlScript.hasTopLevelOrderBy(sql)).isFalse();
+    }
+
+    @Test
+    void startsWithWithSeesThroughLeadingComments() {
+        assertThat(EtlSqlScript.startsWithWith(
+                "-- note\nWITH c AS (SELECT 1 AS id) SELECT id FROM c")).isTrue();
+        assertThat(EtlSqlScript.startsWithWith("SELECT id FROM c")).isFalse();
+    }
+
+    @Test
+    void theLastStatementIsTheRowReturningOne() {
+        assertThat(EtlSqlScript.lastStatement(
+                "CREATE TEMP TABLE t (id INT); SELECT id FROM t"))
+                .isEqualTo("SELECT id FROM t");
+        assertThat(EtlSqlScript.lastStatement("-- nothing")).isNull();
     }
 }

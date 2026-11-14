@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.service.lob.LobBinder;
@@ -43,6 +44,12 @@ public final class CdcLobSpiller implements AutoCloseable {
     private final LobSpillStore store;
     private final long thresholdBytes;
     private final SyncConfig config;
+    /**
+     * Where the table's compiled column rules come from. A spiller lives one transaction,
+     * but the rules are a pure function of the configuration: the owning holder passes a
+     * run-scoped cache so a stream that spills every commit compiles each rule once.
+     */
+    private final Function<String, ColumnCleanser> cleansers;
 
     /** binding -> upper-cased names of columns that must stay in memory (PKs + ruled). */
     private final Map<CdcTableBinding, Set<String>> forceInline = new HashMap<>();
@@ -52,13 +59,23 @@ public final class CdcLobSpiller implements AutoCloseable {
 
     /** A spiller that changes nothing; keeps every existing call site on the old path. */
     public static CdcLobSpiller disabled() {
-        return new CdcLobSpiller(null, 0L, null);
+        return new CdcLobSpiller(null, 0L, null, null);
     }
 
     public CdcLobSpiller(LobSpillStore store, long thresholdBytes, SyncConfig config) {
+        this(store, thresholdBytes, config, null);
+    }
+
+    /**
+     * @param cleansers table name -> compiled column rules; {@code null} compiles the rules
+     *                  for every spiller, which is what hand-built call sites keep doing
+     */
+    public CdcLobSpiller(LobSpillStore store, long thresholdBytes, SyncConfig config,
+                         Function<String, ColumnCleanser> cleansers) {
         this.store = store;
         this.thresholdBytes = Math.max(0L, thresholdBytes);
         this.config = config;
+        this.cleansers = cleansers;
     }
 
     public boolean enabled() {
@@ -128,10 +145,11 @@ public final class CdcLobSpiller implements AutoCloseable {
             for (String pk : b.pkNames()) {
                 names.add(key(pk));
             }
-            if (config != null) {
-                for (String column : ColumnCleanser.forTable(config, b.getTable()).columns()) {
-                    names.add(key(column));
-                }
+            ColumnCleanser cleanser = cleansers == null
+                    ? ColumnCleanser.forTable(config, b.getTable())
+                    : cleansers.apply(b.getTable());
+            for (String column : cleanser.columns()) {
+                names.add(key(column));
             }
             return names;
         });

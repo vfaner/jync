@@ -42,11 +42,104 @@ class EtlUpsertSqlTest {
                         + " ON DUPLICATE KEY UPDATE id = id");
     }
 
+    /**
+     * PostgreSQL 系把冲突交给 {@code ON CONFLICT}:目标端按键更新,不再每行先 UPDATE 再
+     * 探测/INSERT。冲突目标必须是一个已有唯一约束/主键(由 EtlUpsertIndexes 把关)。
+     */
     @Test
-    void aTargetWithoutAPortableSingleStatementFormHasNone() {
+    void postgresUsesOnConflictDoUpdate() {
         assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.POSTGRESQL, "dst",
-                List.of("id", "name"), List.of("id"))).isNull();
+                List.of("id", "name", "amount"), List.of("id")))
+                .isEqualTo("INSERT INTO dst (id, name, amount) VALUES (?, ?, ?)"
+                        + " ON CONFLICT (id) DO UPDATE SET"
+                        + " name = EXCLUDED.name, amount = EXCLUDED.amount");
+    }
+
+    @Test
+    void aKeyOnlyPostgresTableDoesNothingOnConflict() {
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.POSTGRESQL, "dst",
+                List.of("id"), List.of("id")))
+                .isEqualTo("INSERT INTO dst (id) VALUES (?) ON CONFLICT (id) DO NOTHING");
+    }
+
+    /**
+     * openGauss / GaussDB 默认 {@code sql_compatibility='A'},解析器拒绝 ON CONFLICT 但接受
+     * MySQL 风味(与同步侧 OpenGaussDialect 的取舍一致)。
+     */
+    @Test
+    void openGaussAndGaussKeepTheMysqlFlavouredForm() {
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.OPENGAUSS, "dst",
+                List.of("id", "name"), List.of("id")))
+                .isEqualTo("INSERT INTO dst (id, name) VALUES (?, ?)"
+                        + " ON DUPLICATE KEY UPDATE name = VALUES(name)");
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.GAUSSDB, "dst",
+                List.of("id", "name"), List.of("id")))
+                .contains("ON DUPLICATE KEY UPDATE");
+    }
+
+    /** Oracle 系(Oracle / 达梦 / 崖山):MERGE 的源行就是绑定列。 */
+    @Test
+    void oracleUsesMergeWithTheBoundRowAsTheSource() {
         assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.ORACLE, "dst",
+                List.of("id", "name", "amount"), List.of("id")))
+                .isEqualTo("MERGE INTO dst t"
+                        + " USING (SELECT ? AS id, ? AS name, ? AS amount FROM DUAL) s"
+                        + " ON (t.id = s.id)"
+                        + " WHEN MATCHED THEN UPDATE SET t.name = s.name, t.amount = s.amount"
+                        + " WHEN NOT MATCHED THEN INSERT (id, name, amount)"
+                        + " VALUES (s.id, s.name, s.amount)");
+    }
+
+    /** 纯键表没有可更新列:MERGE 只保留 INSERT 分支,冲突时自然成为无操作。 */
+    @Test
+    void aKeyOnlyOracleTableStillMergesInserts() {
+        String sql = EtlUpsertSql.nativeUpsert(DatabaseType.ORACLE, "dst",
+                List.of("id"), List.of("id"));
+
+        assertThat(sql).doesNotContain("WHEN MATCHED");
+        assertThat(sql).endsWith("WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)");
+    }
+
+    @Test
+    void damengAndYashanShareTheOracleMerge() {
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.DM, "dst",
+                List.of("id", "name"), List.of("id")))
+                .startsWith("MERGE INTO dst t");
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.YASHANDB, "dst",
+                List.of("id", "name"), List.of("id")))
+                .startsWith("MERGE INTO dst t");
+    }
+
+    /**
+     * T-SQL 的 MERGE 必须以分号结束;HOLDLOCK 防止并发下的键不存在→同时插入。
+     */
+    @Test
+    void sqlServerUsesMergeWithAHoldlockAndTrailingSemicolon() {
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.SQLSERVER, "dst",
+                List.of("id", "name", "amount"), List.of("id")))
+                .isEqualTo("MERGE dst WITH (HOLDLOCK) AS t"
+                        + " USING (VALUES (?, ?, ?)) AS s (id, name, amount)"
+                        + " ON (t.id = s.id)"
+                        + " WHEN MATCHED THEN UPDATE SET t.name = s.name, t.amount = s.amount"
+                        + " WHEN NOT MATCHED THEN INSERT (id, name, amount)"
+                        + " VALUES (s.id, s.name, s.amount);");
+    }
+
+    @Test
+    void aKeyOnlySqlServerTableStillMergesInserts() {
+        String sql = EtlUpsertSql.nativeUpsert(DatabaseType.SQLSERVER, "dst",
+                List.of("id"), List.of("id"));
+
+        assertThat(sql).doesNotContain("WHEN MATCHED");
+        assertThat(sql).endsWith(";");
+    }
+
+    /** DB2 MERGE 需要 CAST 标记,HANA 的 UPSERT 绑定主键;二者保持模拟路径。 */
+    @Test
+    void db2HanaAndUnknownTargetsKeepTheEmulation() {
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.DB2, "dst",
+                List.of("id", "name"), List.of("id"))).isNull();
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.HANA, "dst",
                 List.of("id", "name"), List.of("id"))).isNull();
         assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.H2, "dst",
                 List.of("id", "name"), List.of("id"))).isNull();

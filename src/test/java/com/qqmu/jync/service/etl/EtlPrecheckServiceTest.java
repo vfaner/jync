@@ -122,6 +122,50 @@ class EtlPrecheckServiceTest {
     }
 
     @Test
+    void repeatedResumeKeysAreReportedBeforeTheRun() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)",
+                "INSERT INTO src VALUES (1), (1), (2)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask form = form("SELECT id FROM src", "dst", EtlWriteMode.APPEND);
+        form.setResumeKeyColumn("id");
+
+        EtlPrecheckResult result = service.check(form, source, target, connections);
+
+        assertThat(result.passed()).isFalse();
+        EtlPrecheckResult.Check duplicate = check(result, "etl.precheck.resume.duplicate");
+        assertThat(duplicate.level()).isEqualTo(EtlPrecheckResult.Level.ERROR);
+        assertThat(duplicate.detail()).isEqualTo("id");
+    }
+
+    @Test
+    void aUniqueResumeKeyPassesTheDuplicateScan() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)",
+                "INSERT INTO src VALUES (1), (2), (3)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask form = form("SELECT id FROM src", "dst", EtlWriteMode.APPEND);
+        form.setResumeKeyColumn("id");
+
+        EtlPrecheckResult result = service.check(form, source, target, connections);
+
+        assertThat(result.passed()).isTrue();
+        assertThat(codes(result)).doesNotContain("etl.precheck.resume.duplicate");
+    }
+
+    @Test
+    void anUnresumableModeIsNotScannedForDuplicateKeys() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)",
+                "INSERT INTO src VALUES (1), (1), (2)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask form = form("SELECT id FROM src", "dst", EtlWriteMode.UPSERT);
+        form.setResumeKeyColumn("id");
+        form.setUpsertKeyColumns("id");
+
+        EtlPrecheckResult result = service.check(form, source, target, connections);
+
+        assertThat(codes(result)).doesNotContain("etl.precheck.resume.duplicate");
+    }
+
+    @Test
     void anUpsertKeyMissingFromTheResultIsAnError() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)");
         execute(TARGET_URL, "CREATE TABLE dst (id INT)");

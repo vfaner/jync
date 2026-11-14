@@ -32,6 +32,129 @@ final class EtlSqlScript {
         }
     }
 
+    /** The row-returning statement of the script, without its trailing semicolon. */
+    static String lastStatement(String sql) {
+        List<String> statements = split(sql);
+        return statements.isEmpty() ? null : statements.get(statements.size() - 1);
+    }
+
+    /** Whether the statement starts with a {@code WITH} clause, after any comments. */
+    static boolean startsWithWith(String statement) {
+        List<Token> tokens = topLevelTokens(statement);
+        return !tokens.isEmpty() && isWord(tokens.get(0).word(), "WITH");
+    }
+
+    /** Whether the statement has an {@code ORDER BY} outside every parentheses level. */
+    static boolean hasTopLevelOrderBy(String statement) {
+        return orderByStart(topLevelTokens(statement)) >= 0;
+    }
+
+    /**
+     * Removes a top-level {@code ORDER BY} so the statement can sit inside a derived table.
+     *
+     * <p>SQL Server refuses {@code ORDER BY} in a derived table unless {@code TOP}, {@code OFFSET}
+     * or {@code FOR XML/JSON} makes it part of the row selection; DB2 has the same restriction
+     * unless a {@code FETCH FIRST} clause is present. The caller only applies this to those
+     * families. A statement that carries such a limiting clause is returned unchanged: removing
+     * its order would change which rows it selects.
+     */
+    static String stripTopLevelOrderBy(String statement) {
+        List<Token> tokens = topLevelTokens(statement);
+        if (hasLimitingClause(tokens)) {
+            return statement;
+        }
+        int start = orderByStart(tokens);
+        return start < 0 ? statement : statement.substring(0, start).stripTrailing();
+    }
+
+    private static int orderByStart(List<Token> tokens) {
+        int start = -1;
+        for (int i = 0; i + 1 < tokens.size(); i++) {
+            if (isWord(tokens.get(i).word(), "ORDER")
+                    && isWord(tokens.get(i + 1).word(), "BY")) {
+                start = tokens.get(i).start();
+            }
+        }
+        return start;
+    }
+
+    private static boolean hasLimitingClause(List<Token> tokens) {
+        for (Token token : tokens) {
+            String word = token.word();
+            if (isWord(word, "TOP") || isWord(word, "LIMIT") || isWord(word, "FETCH")
+                    || isWord(word, "OFFSET") || isWord(word, "FOR")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isWord(String token, String keyword) {
+        return token != null && token.equalsIgnoreCase(keyword);
+    }
+
+    /**
+     * Identifier-like words outside parentheses, quotes and comments, with their offsets.
+     *
+     * <p>Keyword checks must not see text inside a literal, a quoted identifier, a comment or a
+     * nested expression — a window function's {@code OVER (ORDER BY ...)} is not a statement-level
+     * order, and a column alias {@code "ORDER"} is not a clause.
+     */
+    static List<Token> topLevelTokens(String sql) {
+        List<Token> tokens = new ArrayList<>();
+        if (sql == null) {
+            return tokens;
+        }
+        StringBuilder sink = new StringBuilder();
+        int depth = 0;
+        int i = 0;
+        int length = sql.length();
+        while (i < length) {
+            char c = sql.charAt(i);
+            char next = i + 1 < length ? sql.charAt(i + 1) : '\0';
+            if ((c == 'q' || c == 'Q') && next == '\'' && i + 2 < length
+                    && (i == 0 || !isNameChar(sql.charAt(i - 1)))) {
+                i = appendAlternativeQuoted(sql, i, clear(sink));
+            } else if (c == '\'' || c == '"' || c == '`') {
+                i = appendQuoted(sql, i, c, clear(sink));
+            } else if (c == '[') {
+                i = appendBracketed(sql, i, clear(sink));
+            } else if (c == '-' && next == '-') {
+                i = appendLineComment(sql, i, clear(sink));
+            } else if (c == '/' && next == '*') {
+                i = appendBlockComment(sql, i, clear(sink));
+            } else if (c == '$' && startsDollarQuote(sql, i)) {
+                i = appendDollarQuoted(sql, i, clear(sink));
+            } else if (c == '(') {
+                depth++;
+                i++;
+            } else if (c == ')') {
+                depth = Math.max(0, depth - 1);
+                i++;
+            } else if (isNameChar(c)) {
+                int start = i;
+                while (i < length && isNameChar(sql.charAt(i))) {
+                    i++;
+                }
+                if (depth == 0) {
+                    tokens.add(new Token(sql.substring(start, i), start, i));
+                }
+            } else {
+                i++;
+            }
+        }
+        return tokens;
+    }
+
+    private static StringBuilder clear(StringBuilder sink) {
+        sink.setLength(0);
+        return sink;
+    }
+
+    /** One top-level identifier-like word and the offsets it occupies in the statement. */
+    record Token(String word, int start, int end) {
+    }
+
     /** The statements of the script, in order, without their separating semicolons. */
     static List<String> split(String sql) {
         if (sql == null) {

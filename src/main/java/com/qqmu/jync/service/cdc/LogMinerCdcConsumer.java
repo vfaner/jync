@@ -22,6 +22,7 @@ import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.lob.LobSpillStore;
 import com.qqmu.jync.service.sync.LockLostException;
+import com.qqmu.jync.service.sync.StopRequestedException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -208,6 +209,10 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             long idlePollMs = CdcReconnectBackoff.effectiveIdlePollMs(
                     ctx.getConfig().getCdcIdlePollMs(),
                     properties.getCdc().getLogminer().getIdlePollMs());
+            // A quiet project would otherwise re-run a full mining session every idle poll;
+            // consecutive empty cycles stretch the wait, any applied row snaps it back.
+            CdcIdleLadder idleLadder = new CdcIdleLadder(idlePollMs,
+                    Math.max(idlePollMs, CdcIdleLadder.DEFAULT_CEILING_MS));
             windowLogger.start();
             // The throughput window covers the whole run, not one mining cycle: the panel
             // divides the cumulative rows applied by the elapsed window. Stamping it inside
@@ -291,11 +296,19 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     closeQuietly(currentSource);
                     currentSession = null;
                     currentSource = null;
+                    // Cycle boundary: the position throttle may still hold the newest
+                    // committed SCN; write it before the mining session goes away.
+                    flushPosition(projectId);
                 }
                 if (!running) {
                     break;
                 }
                 Throwable failure = lastFailure.get();
+                if (failure != null) {
+                    // The failed cycle's wait is the reconnect backoff's; the idle ladder
+                    // must start over so recovery is detected at the configured poll.
+                    idleLadder.reset();
+                }
                 if (failure == null) {
                     // F-12 counts CONSECUTIVE failed cycles. A cycle that completed
                     // without an exception — even one that drained zero rows and flushed
@@ -339,9 +352,10 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     backoff.reset();
                 }
                 // 繁忙轮(捞到数据)立即开下一轮,把高峰延迟压到一个挖掘周期;
-                // 只有真正空闲才休眠 idlePollMs,失败走指数退避。
-                long delay = CdcReconnectBackoff.nextCycleDelayMs(
-                        failure, drained > 0, backoff, idlePollMs);
+                // 只有真正空闲才休眠 idlePollMs(连续空轮按阶梯拉长),失败走指数退避。
+                long delay = failure != null
+                        ? backoff.nextDelayMs()
+                        : idleLadder.nextDelayMs(drained > 0);
                 // lastError feeds the project panel's "last error" row, which the template
                 // renders only when non-null. A healthy cycle must leave it null, and its
                 // completion line belongs at DEBUG: idle mining polls every 1000 ms by
@@ -572,7 +586,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     try {
                         flushTransaction(projectId, currentCsn, tx);
                     } catch (Exception e) {
-                        applyFailedThisCycle = true; // 写目标端失败才计入熔断
+                        // 写目标端失败才计入熔断。提交成功后的租约/停止检查也会从
+                        // flushTransaction 抛出,那是一笔已经落库的事务,不是写失败。
+                        if (!isStopUnwind(e)) {
+                            applyFailedThisCycle = true;
+                        }
                         throw e;
                     }
                     tx.clear();
@@ -672,7 +690,9 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             try {
                 flushTransaction(projectId, currentCsn, tx);
             } catch (Exception e) {
-                applyFailedThisCycle = true;        // 写目标端失败才计入熔断
+                if (!isStopUnwind(e)) {
+                    applyFailedThisCycle = true;    // 写目标端失败才计入熔断
+                }
                 throw e;
             }
         }
@@ -756,6 +776,31 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
 
     private boolean applyStrikeOut() {
         return applyFailures.get() > MAX_APPLY_FAILURES;
+    }
+
+    /** Writes the throttled position; a failure here must never fail the cycle. */
+    private void flushPosition(Long projectId) {
+        try {
+            positionStore.flush(projectId);
+        } catch (RuntimeException e) {
+            log.warn("Could not flush the CDC position for project {}: {}",
+                    projectId, e.getMessage());
+        }
+    }
+
+    /**
+     * Whether an exception is a deliberate unwind after the target commit — the lease was
+     * taken away or the run was asked to stop. The data is already in the target, so such a
+     * cycle is not a write failure and must not count towards the apply strike-out; the
+     * caller rethrows it so the run winds down the same way it does at the loop head.
+     */
+    private static boolean isStopUnwind(Throwable failure) {
+        for (Throwable c = failure; c != null; c = c.getCause() == c ? null : c.getCause()) {
+            if (c instanceof LockLostException || c instanceof StopRequestedException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

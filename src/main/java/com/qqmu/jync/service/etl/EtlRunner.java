@@ -371,6 +371,7 @@ public class EtlRunner {
             // program error whose message is the i18n key.
             try {
                 EtlSqlScript.validate(task.getSourceSql());
+                EtlTaskValidation.validateResumableWrapper(task, sourceConfig);
             } catch (IllegalArgumentException e) {
                 throw new EtlProgramException(e.getMessage());
             }

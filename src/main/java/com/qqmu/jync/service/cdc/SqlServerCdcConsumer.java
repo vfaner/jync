@@ -279,6 +279,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 } finally {
                     closeQuietly(currentSource);
                     currentSource = null;
+                    // Cycle boundary: the position throttle may still hold the newest
+                    // committed LSN; write it before the connection goes away.
+                    flushPosition(projectId);
                 }
                 if (!running) break;
                 Throwable failure = lastFailure.get();
@@ -713,14 +716,21 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             ps.setString(2, toLsn);
             try (ResultSet rs = ps.executeQuery()) {
                 // Cache the real column set of the CT row ONCE per ci, on the first row
-                // (an empty window must not cost a metadata read) — readRow consults it
+                // (an empty window must not cost a metadata read) — RowReader consults it
                 // to distinguish "not captured" from genuine errors.
                 Set<String> availableCols = null;
+                CdcTableBinding binding = null;
+                RowReader reader = null;
                 while (running && !Thread.currentThread().isInterrupted() && rs.next()) {
                     if (availableCols == null) {
+                        // The binding and the reader are per-window constants: resolving
+                        // them once keeps the per-row cost to the actual read (the supplier
+                        // is consulted again on the next scan, so a DDL invalidated between
+                        // cycles still lands on a fresh binding).
+                        binding = supplier.binding(ci);
                         availableCols = availableColumns(rs);
                         List<String> missingCols =
-                                missingBindingColumns(supplier.binding(ci), availableCols);
+                                missingBindingColumns(binding, availableCols);
                         if (!missingCols.isEmpty()) {
                             // @captured_column_list captured only a subset of the table (or
                             // the column was added after the instance was created). The
@@ -742,6 +752,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                             return;
                         }
                         missingColumnWarnings.remove(ci.captureInstance);
+                        reader = RowReader.of(rs, binding, availableCols);
                     }
                     // Column 1 is projected as CONVERT(varchar(32), __$start_lsn, 1) by
                     // changesSql/changesSqlInclusive. Do NOT select the raw binary column:
@@ -754,12 +765,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     // Verified on SQL Server 2022 with mssql-jdbc 12.10.2.
                     String startLsn = rs.getString(1);
                     int op = rs.getInt(2);
-                    CdcTableBinding binding = supplier.binding(ci);
-                    if (binding == null || !binding.isApplicable()) {
+                    if (reader == null) {
                         stats.addUnsupportedTable(ci.schema + "." + ci.table);
                         continue;
                     }
-                    Map<String, Object> row = readRow(rs, binding, availableCols);
+                    Map<String, Object> row = reader.read(rs);
                     if (op == 2 || op == 4) {
                         // Insert / update-after images reach the target whole. Delete (1) and
                         // update-before (3) images only supply primary keys to the fold, so
@@ -1070,7 +1080,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     }
 
     /**
-     * Read the captured columns into a map keyed by column name (case-preserved).
+     * The per-window column plan of one capture instance's change-table ResultSet: the
+     * binding columns the CT carries, their ResultSet indexes, and their metadata —
+     * resolved once on the window's first row instead of per row and per column.
+     *
+     * <p>Reads the captured columns into a map keyed by column name (case-preserved).
      *
      * <p>Columns the CT does NOT carry are omitted from the row map, but they are never
      * applied half-way: {@code scanCi} refuses a capture instance whose CT lacks any
@@ -1081,35 +1095,73 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * <p>True SQLException (connection drop, type mismatch) propagates — the drain
      * aborts and the watermark does not advance, so the same rows re-read on retry.
      */
-    private Map<String, Object> readRow(ResultSet rs, CdcTableBinding binding,
-                                        Set<String> availableCols) throws SQLException {
-        Map<String, Object> row = new LinkedHashMap<>();
-        for (String col : binding.columnNames()) {
-            if (!availableCols.contains(col.toLowerCase(Locale.ROOT))) {
-                continue; // not captured by this CDC instance — leave absent
-            }
-            ColumnMeta column = binding.getMeta().column(col).orElse(null);
-            Object normalized = column != null && JdbcValueNormalizer.handles(column.getTypeName())
-                    ? JdbcValueNormalizer.read(rs, rs.findColumn(col), column.getJdbcType(),
-                            column.getTypeName(), DatabaseType.SQLSERVER)
-                    : JdbcValueNormalizer.UNHANDLED;
-            if (normalized != JdbcValueNormalizer.UNHANDLED) {
-                // UNIQUEIDENTIFIER/MONEY/DATETIMEOFFSET/XML/geometry: the identity the
-                // target driver can actually bind (String/BigDecimal/OffsetDateTime/WKB).
-                row.put(col, normalized);
-                continue;
-            }
-            Object value = rs.getObject(col);
-            // Remaining unknown types (hierarchyid, geography) arrive as driver-proprietary
-            // classes that the target JDBC cannot bind. Fall back to getString() so the row
-            // still flows through — with a string, the target driver has a coercion path.
-            if (value != null && looksLikeDriverProprietary(value.getClass().getName())) {
-                row.put(col, rs.getString(col));
-            } else {
-                row.put(col, value);
-            }
+    static final class RowReader {
+
+        private final List<String> names;
+        private final int[] indexes;
+        private final ColumnMeta[] metas;
+
+        private RowReader(List<String> names, int[] indexes, ColumnMeta[] metas) {
+            this.names = names;
+            this.indexes = indexes;
+            this.metas = metas;
         }
-        return row;
+
+        /**
+         * Null when the table cannot be applied at all (absent or unsupported binding):
+         * the scan loop counts those rows as unsupported before reading anything.
+         */
+        static RowReader of(ResultSet rs, CdcTableBinding binding, Set<String> availableCols)
+                throws SQLException {
+            if (binding == null || !binding.isApplicable()) {
+                return null;
+            }
+            List<String> names = new ArrayList<>();
+            List<Integer> indexes = new ArrayList<>();
+            List<ColumnMeta> metas = new ArrayList<>();
+            for (String col : binding.columnNames()) {
+                if (!availableCols.contains(col.toLowerCase(Locale.ROOT))) {
+                    continue; // not captured by this CDC instance — leave absent
+                }
+                names.add(col);
+                indexes.add(rs.findColumn(col));
+                metas.add(binding.getMeta().column(col).orElse(null));
+            }
+            return new RowReader(names,
+                    indexes.stream().mapToInt(Integer::intValue).toArray(),
+                    metas.toArray(new ColumnMeta[0]));
+        }
+
+        Map<String, Object> read(ResultSet rs) throws SQLException {
+            Map<String, Object> row = new LinkedHashMap<>();
+            for (int i = 0; i < names.size(); i++) {
+                String col = names.get(i);
+                int index = indexes[i];
+                ColumnMeta column = metas[i];
+                Object normalized = column != null
+                        && JdbcValueNormalizer.handles(column.getTypeName())
+                        ? JdbcValueNormalizer.read(rs, index, column.getJdbcType(),
+                                column.getTypeName(), DatabaseType.SQLSERVER)
+                        : JdbcValueNormalizer.UNHANDLED;
+                if (normalized != JdbcValueNormalizer.UNHANDLED) {
+                    // UNIQUEIDENTIFIER/MONEY/DATETIMEOFFSET/XML/geometry: the identity the
+                    // target driver can actually bind (String/BigDecimal/OffsetDateTime/WKB).
+                    row.put(col, normalized);
+                    continue;
+                }
+                Object value = rs.getObject(index);
+                // Remaining unknown types (hierarchyid, geography) arrive as
+                // driver-proprietary classes that the target JDBC cannot bind. Fall back
+                // to getString() so the row still flows through — with a string, the
+                // target driver has a coercion path.
+                if (value != null && looksLikeDriverProprietary(value.getClass().getName())) {
+                    row.put(col, rs.getString(index));
+                } else {
+                    row.put(col, value);
+                }
+            }
+            return row;
+        }
     }
 
     private static boolean looksLikeDriverProprietary(String className) {
@@ -1139,6 +1191,16 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private static void closeQuietly(AutoCloseable c) {
         if (c != null) {
             try { c.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    /** Writes the throttled position; a failure here must never fail the cycle. */
+    private void flushPosition(Long projectId) {
+        try {
+            positionStore.flush(projectId);
+        } catch (RuntimeException e) {
+            log.warn("Could not flush the CDC position for project {}: {}",
+                    projectId, e.getMessage());
         }
     }
 

@@ -64,6 +64,9 @@ final class JdbcEtlSource implements EtlSource {
         }
 
         boolean resumable = resumable(task);
+        if (checkpoint != null && resumable) {
+            requireUniqueBoundary(select, task, checkpoint);
+        }
         String sql = sourceQuery(select, task, checkpoint, resumable);
         PreparedStatement statement = connection.prepareStatement(
                 sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
@@ -105,23 +108,36 @@ final class JdbcEtlSource implements EtlSource {
             if (script) {
                 runLeading(statement, statements.subList(0, statements.size() - 1));
             }
-            try (ResultSet resultSet = statement.executeQuery(
-                    EtlSqlSupport.zeroRowProbe(select))) {
-                EtlSourceProbe probe = probe(resultSet, task);
-                if (!script) {
-                    return probe;
-                }
-                List<EtlSourceIssue> issues = new ArrayList<>(probe.issues());
-                issues.add(0, new EtlSourceIssue(EtlPrecheckResult.Level.OK,
-                        "etl.precheck.script.ok", String.valueOf(statements.size())));
-                // Leading statements executed against the real source, and the rollback cannot
-                // be relied on for DDL. The operator has to know the precheck may have left
-                // the source changed.
-                issues.add(1, new EtlSourceIssue(EtlPrecheckResult.Level.WARN,
-                        "etl.precheck.script.sideEffects",
-                        String.valueOf(statements.size() - 1)));
-                return new EtlSourceProbe(probe.columns(), probe.resumeKeyIndex(), issues);
+            DatabaseType.DialectFamily family = family();
+            String probeSql = EtlSqlSupport.zeroRowProbe(select, family);
+            if (!resumable(task) && EtlSqlSupport.derivedTableRejects(select, family)) {
+                // The run leaves a non-resumable extraction unwrapped, so the precheck must
+                // not be the one refusing a statement the run would accept.
+                statement.setMaxRows(1);
+                probeSql = select;
             }
+            EtlSourceProbe probe;
+            try (ResultSet resultSet = statement.executeQuery(probeSql)) {
+                probe = probe(resultSet, task);
+            }
+            if (resumable(task) && probe.resumeKeyIndex() > 0) {
+                List<EtlSourceIssue> issues = new ArrayList<>(probe.issues());
+                checkDuplicateResumeKey(statement, select, task, family, issues);
+                probe = new EtlSourceProbe(probe.columns(), probe.resumeKeyIndex(), issues);
+            }
+            if (!script) {
+                return probe;
+            }
+            List<EtlSourceIssue> issues = new ArrayList<>(probe.issues());
+            issues.add(0, new EtlSourceIssue(EtlPrecheckResult.Level.OK,
+                    "etl.precheck.script.ok", String.valueOf(statements.size())));
+            // Leading statements executed against the real source, and the rollback cannot
+            // be relied on for DDL. The operator has to know the precheck may have left
+            // the source changed.
+            issues.add(1, new EtlSourceIssue(EtlPrecheckResult.Level.WARN,
+                    "etl.precheck.script.sideEffects",
+                    String.valueOf(statements.size() - 1)));
+            return new EtlSourceProbe(probe.columns(), probe.resumeKeyIndex(), issues);
         } finally {
             if (script) {
                 rollbackQuietly();
@@ -171,6 +187,35 @@ final class JdbcEtlSource implements EtlSource {
             }
         }
         return new EtlSourceProbe(columns, keyIndex, issues);
+    }
+
+    /**
+     * Runs the precheck's duplicate-key scan. It reads the whole extraction, so a timeout or a
+     * dialect quirk is reported as "could not verify" rather than blocking a manual precheck;
+     * the runner's boundary check still protects the actual resume.
+     */
+    private static void checkDuplicateResumeKey(Statement statement, String select, EtlTask task,
+                                                DatabaseType.DialectFamily family,
+                                                List<EtlSourceIssue> issues) {
+        String key = task.getResumeKeyColumn().trim();
+        try {
+            statement.setMaxRows(1);
+            try (ResultSet duplicates = statement.executeQuery(
+                    EtlSqlSupport.duplicateKeyScan(select, key, family))) {
+                if (duplicates.next()) {
+                    issues.add(new EtlSourceIssue(EtlPrecheckResult.Level.ERROR,
+                            "etl.precheck.resume.duplicate", key));
+                }
+            }
+        } catch (SQLException e) {
+            issues.add(new EtlSourceIssue(EtlPrecheckResult.Level.WARN,
+                    "etl.precheck.resume.unverified", message(e)));
+        }
+    }
+
+    private static String message(SQLException e) {
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
     }
 
     private static EtlSourceColumn column(java.sql.ResultSetMetaData meta, int index, String label)
@@ -229,21 +274,56 @@ final class JdbcEtlSource implements EtlSource {
 
     // --- query shape ----------------------------------------------------------------------
 
+    private DatabaseType.DialectFamily family() {
+        return config == null ? null : config.resolvedFamily();
+    }
+
     private static boolean resumable(EtlTask task) {
         String key = task.getResumeKeyColumn();
         return task.getWriteMode() != null && task.getWriteMode().supportsResume()
                 && key != null && !key.isBlank();
     }
 
-    private static String sourceQuery(String select, EtlTask task, EtlCheckpointValue checkpoint,
-                                      boolean resumable) {
+    /**
+     * Refuses to resume from a checkpoint whose key value still occurs more than once.
+     *
+     * <p>The continuation filters {@code key > ?}, so it cannot tell the rows of that value it
+     * already copied from the ones it did not. Failing here costs a rerun; guessing would cost
+     * the rows silently, which is the one outcome an ETL is not allowed to produce.
+     */
+    private void requireUniqueBoundary(String select, EtlTask task, EtlCheckpointValue checkpoint)
+            throws SQLException {
+        String key = task.getResumeKeyColumn().trim();
+        try (PreparedStatement boundary = connection.prepareStatement(
+                EtlSqlSupport.resumeBoundary(select, key, family()),
+                ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+            boundary.setMaxRows(2);
+            Integer timeout = task.getTimeoutSeconds();
+            if (timeout != null && timeout > 0) {
+                boundary.setQueryTimeout(timeout);
+            }
+            bindResumeKey(boundary, checkpoint, config == null ? null : config.effectiveType());
+            try (ResultSet rows = boundary.executeQuery()) {
+                if (rows.next() && rows.next()) {
+                    // Same shape as the runner's other resume-key guards: the key is appended
+                    // after ':' so the run history can translate the main sentence.
+                    throw new EtlProgramException("error.etl.resumeKey.duplicate:" + key);
+                }
+            }
+        }
+    }
+
+    private String sourceQuery(String select, EtlTask task, EtlCheckpointValue checkpoint,
+                               boolean resumable) {
         String sql = select;
         String key = task.getResumeKeyColumn() == null
                 ? null : task.getResumeKeyColumn().trim();
         if (resumable) {
             // The newline keeps a trailing "--" comment in the customer's SQL from
             // swallowing the closing paren and the resume condition.
-            String wrapped = "SELECT * FROM (" + sql + "\n) " + EtlSqlSupport.SUBQUERY_ALIAS;
+            String wrapped = "SELECT * FROM ("
+                    + EtlSqlSupport.derivedTableSource(sql, family())
+                    + "\n) " + EtlSqlSupport.SUBQUERY_ALIAS;
             if (checkpoint != null) {
                 wrapped += " WHERE " + key + " > ?";
             }

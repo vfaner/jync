@@ -140,8 +140,12 @@ class SqlServerCdcConsumerLobSpillTest {
         when(rs.next()).thenReturn(true, false);
         when(rs.getString(1)).thenReturn(TX_LSN);
         when(rs.getInt(2)).thenAnswer(inv -> operation);
-        when(rs.getObject("id")).thenReturn(1);
-        when(rs.getObject("body")).thenReturn(body);
+        // The consumer resolves each captured column to its ResultSet index once per window
+        // and reads by index; the CT projects the two capture columns after lsn/operation.
+        when(rs.findColumn("id")).thenReturn(3);
+        when(rs.findColumn("body")).thenReturn(4);
+        when(rs.getObject(3)).thenReturn(1);
+        when(rs.getObject(4)).thenReturn(body);
 
         PreparedStatement changesPs = mock(PreparedStatement.class);
         when(changesPs.executeQuery()).thenReturn(rs);

@@ -28,7 +28,17 @@ public final class JdbcCdcTargetTransaction implements CdcTargetTransaction {
 
     public JdbcCdcTargetTransaction(SyncContext ctx, CdcRuntimeStats stats,
                                     int queryTimeoutSeconds) throws SQLException {
-        this.applier = new CdcEventApplier(ctx, stats, queryTimeoutSeconds);
+        this(ctx, stats, queryTimeoutSeconds, new CdcWritePlanCache(ctx));
+    }
+
+    /**
+     * @param plans the run's statement cache; one instance is handed to every transaction of
+     *              the run so each upsert/delete statement is built once, not per commit
+     */
+    public JdbcCdcTargetTransaction(SyncContext ctx, CdcRuntimeStats stats,
+                                    int queryTimeoutSeconds, CdcWritePlanCache plans)
+            throws SQLException {
+        this.applier = new CdcEventApplier(ctx, stats, queryTimeoutSeconds, plans);
         Connection opened = ctx.getConnectionProvider().open(ctx.getTargetConfig());
         boolean original = true;
         try {

@@ -5,9 +5,12 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,15 +29,81 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class CdcPositionStore {
 
-    private final CdcPositionRepository repository;
+    /**
+     * How long a committed transaction's position may wait before it reaches the metadata
+     * database. Every source transaction used to buy one SELECT + one UPDATE in its own
+     * transaction on the consumer's critical path; a busy stream spent more time writing
+     * its own progress than applying changes. Within this window the newest position is
+     * kept in memory (and served to readers), then written once.
+     *
+     * <p>Losing the window to a hard kill only replays up to a second of already committed
+     * transactions, which the idempotent target writes absorb; a graceful stop flushes it
+     * ({@link #flush}), so an ordinary restart loses nothing.
+     */
+    static final long ADVANCE_PERSIST_INTERVAL_MS = 1_000L;
 
+    private final CdcPositionRepository repository;
+    private final long advancePersistIntervalMs;
+    /** Test seam for the throttle window. */
+    private LongSupplier clock = System::currentTimeMillis;
+    /** Newest committed but not yet persisted position per project. */
+    private final Map<Long, Pending> pendingByProject = new ConcurrentHashMap<>();
+
+    @Autowired
     public CdcPositionStore(CdcPositionRepository repository) {
+        this(repository, ADVANCE_PERSIST_INTERVAL_MS);
+    }
+
+    /** Tests pin the window (0 = persist on every advance) and the clock. */
+    CdcPositionStore(CdcPositionRepository repository, long advancePersistIntervalMs) {
+        this(repository, advancePersistIntervalMs, System::currentTimeMillis);
+    }
+
+    CdcPositionStore(CdcPositionRepository repository, long advancePersistIntervalMs,
+                     LongSupplier clock) {
         this.repository = repository;
+        this.advancePersistIntervalMs = advancePersistIntervalMs;
+        this.clock = clock;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public Optional<CdcPosition> find(Long projectId) {
-        return repository.findByProjectId(projectId);
+        Optional<CdcPosition> stored = repository.findByProjectId(projectId);
+        Pending pending = pendingByProject.get(projectId);
+        if (!stored.isPresent() || pending == null) {
+            return stored;
+        }
+        synchronized (pending) {
+            return pending.dirty ? Optional.of(pending.overlay(stored.get())) : stored;
+        }
+    }
+
+    /**
+     * Writes the position buffered by the throttle, if any. Consumers call this when a
+     * cycle ends and when the run stops, so a graceful exit never leaves the newest
+     * committed position only in memory.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void flush(Long projectId) {
+        Pending pending = pendingByProject.get(projectId);
+        if (pending == null) {
+            return;
+        }
+        synchronized (pending) {
+            if (!pending.dirty) {
+                return;
+            }
+            try {
+                persist(projectId, pending, clock.getAsLong());
+            } catch (RuntimeException e) {
+                // The source transaction is already committed on the target and the buffer
+                // survives, so a failed flush must not fail the cycle: it retries at the
+                // next advance or cycle boundary. Losing it entirely only replays an
+                // idempotent window after a restart.
+                log.warn("CDC position for project {} could not be flushed ({}); it is"
+                        + " retried at the next advance", projectId, e.getMessage());
+            }
+        }
     }
 
     /**
@@ -44,7 +113,7 @@ public class CdcPositionStore {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public Map<String, String> layoutSignatures(Long projectId) {
-        return repository.findByProjectId(projectId)
+        return find(projectId)
                 .map(position -> decodeLayoutSignatures(position.getSchemaSignatures()))
                 .orElseGet(java.util.Collections::emptyMap);
     }
@@ -53,6 +122,7 @@ public class CdcPositionStore {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CdcPosition recordBaselineStart(Long projectId, String file, long pos,
                                            String gtidSet, long serverId) {
+        discard(projectId); // the baseline replaces whatever was buffered
         CdcPosition position = repository.findByProjectId(projectId).orElseGet(() -> {
             CdcPosition created = new CdcPosition();
             created.setProjectId(projectId);
@@ -152,39 +222,37 @@ public class CdcPositionStore {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advance(Long projectId, String file, long pos, String gtidSet,
                         Map<String, String> layoutSignatures, boolean replaceLayouts) {
-        Optional<CdcPosition> existing = repository.findByProjectId(projectId);
-        if (!existing.isPresent()) {
-            log.warn("CDC position for project {} not advanced to {}:{}: no position row"
-                    + " (deleted underneath the consumer?); the transaction replays after"
-                    + " the next reconnect", projectId, file, pos);
-            return;
-        }
-        CdcPosition position = existing.get();
-        if (position.getBinlogFile() != null && position.getBinlogPos() != null) {
-            int cmp = compareBinlog(position.getBinlogFile(), position.getBinlogPos(), file, pos);
-            if (cmp < 0) {
-                log.warn("CDC position for project {} not advanced to {}:{}: behind the"
-                        + " stored position {}:{} — refusing to rewind (replay bug or"
-                        + " competing writer?)", projectId, file, pos,
-                        position.getBinlogFile(), position.getBinlogPos());
+        Pending pending = pending(projectId);
+        synchronized (pending) {
+            seedIfNeeded(projectId, pending);
+            if (!pending.seeded) {
+                log.warn("CDC position for project {} not advanced to {}:{}: no position row"
+                        + " (deleted underneath the consumer?); the transaction replays after"
+                        + " the next reconnect", projectId, file, pos);
                 return;
             }
-            if (cmp == 0) {
-                return; // same file, same pos — already there, nothing to save
+            if (pending.file != null && pending.pos != null) {
+                int cmp = compareBinlog(pending.file, pending.pos, file, pos);
+                if (cmp < 0) {
+                    log.warn("CDC position for project {} not advanced to {}:{}: behind the"
+                            + " stored position {}:{} — refusing to rewind (replay bug or"
+                            + " competing writer?)", projectId, file, pos,
+                            pending.file, pending.pos);
+                    return;
+                }
+                if (cmp == 0) {
+                    return; // same file, same pos — already there, nothing to record
+                }
             }
+            pending.file = file;
+            pending.pos = pos;
+            if (gtidSet != null) {
+                pending.gtidSet = gtidSet;
+            }
+            pending.recordLayouts(layoutSignatures, replaceLayouts);
+            pending.dirty = true;
+            maybePersist(projectId, pending);
         }
-        position.setBinlogFile(file);
-        position.setBinlogPos(pos);
-        if (gtidSet != null) {
-            position.setGtidSet(gtidSet);
-        }
-        if (replaceLayouts) {
-            position.setSchemaSignatures(encodeLayoutSignatures(layoutSignatures));
-        } else {
-            mergeLayoutSignatures(position, layoutSignatures);
-        }
-        position.setUpdatedAt(Instant.now());
-        repository.save(position);
     }
 
     /** Length of one {@link CdcTableBinding#layoutSignature()} in the encoded text. */
@@ -244,6 +312,120 @@ public class CdcPositionStore {
         return out;
     }
 
+    // —— advance throttle (see ADVANCE_PERSIST_INTERVAL_MS) ——
+
+    private Pending pending(Long projectId) {
+        return pendingByProject.computeIfAbsent(projectId, id -> new Pending(clock.getAsLong()));
+    }
+
+    /** Reads the stored anchor once; later advances compare against the buffered copy. */
+    private void seedIfNeeded(Long projectId, Pending pending) {
+        if (!pending.seeded) {
+            repository.findByProjectId(projectId).ifPresent(pending::seedFrom);
+        }
+    }
+
+    private void maybePersist(Long projectId, Pending pending) {
+        long now = clock.getAsLong();
+        if (pending.dirty && now - pending.persistedAt >= advancePersistIntervalMs) {
+            persist(projectId, pending, now);
+        }
+    }
+
+    /**
+     * Writes the buffered position. The monotonic checks run again here against the row as
+     * it is NOW — the buffer only spares the round trips, it never mutes the "a competing
+     * writer moved ahead" protection.
+     */
+    private void persist(Long projectId, Pending pending, long now) {
+        Optional<CdcPosition> existing = repository.findByProjectId(projectId);
+        if (!existing.isPresent()) {
+            log.warn("CDC position for project {} not advanced to {}: no position row"
+                    + " (deleted underneath the consumer?); the transaction replays after"
+                    + " the next reconnect", projectId, pending.describeTarget());
+            pending.afterPersist(null, now);
+            return;
+        }
+        CdcPosition position = existing.get();
+        boolean changed = false;
+        boolean rewound = false;
+        if (pending.file != null && pending.pos != null) {
+            if (position.getBinlogFile() == null || position.getBinlogPos() == null) {
+                position.setBinlogFile(pending.file);
+                position.setBinlogPos(pending.pos);
+                if (pending.gtidSet != null) {
+                    position.setGtidSet(pending.gtidSet);
+                }
+                changed = true;
+            } else {
+                int cmp = compareBinlog(position.getBinlogFile(), position.getBinlogPos(),
+                        pending.file, pending.pos);
+                if (cmp < 0) {
+                    log.warn("CDC position for project {} not advanced to {}:{}: behind the"
+                            + " stored position {}:{} — refusing to rewind (replay bug or"
+                            + " competing writer?)", projectId, pending.file, pending.pos,
+                            position.getBinlogFile(), position.getBinlogPos());
+                    rewound = true;
+                } else if (cmp > 0) {
+                    position.setBinlogFile(pending.file);
+                    position.setBinlogPos(pending.pos);
+                    if (pending.gtidSet != null) {
+                        position.setGtidSet(pending.gtidSet);
+                    }
+                    changed = true;
+                }
+            }
+        }
+        if (pending.scn != null) {
+            Long stored = position.getScn();
+            if (stored != null && pending.scn <= stored) {
+                if (pending.scn < stored) {
+                    log.warn("CDC position for project {} not advanced to SCN {}: behind the"
+                            + " stored SCN {} — refusing to rewind (replay bug or competing"
+                            + " writer?)", projectId, pending.scn, stored);
+                    rewound = true;
+                }
+            } else {
+                position.setScn(pending.scn);
+                changed = true;
+            }
+        }
+        if (pending.lsn != null) {
+            String stored = position.getLsn();
+            if (stored == null) {
+                position.setLsn(pending.lsn);
+                changed = true;
+            } else {
+                int cmp = compareLsn(pending.lsn, stored);
+                if (cmp < 0) {
+                    log.warn("CDC position for project {} not advanced to LSN {}: behind the"
+                            + " stored LSN {} — refusing to rewind (replay bug or competing"
+                            + " writer?)", projectId, pending.lsn, stored);
+                    rewound = true;
+                } else if (!(cmp == 0 && stored.equals(pending.lsn))) {
+                    position.setLsn(pending.lsn);
+                    changed = true;
+                }
+            }
+        }
+        // A rejected rewind must not record the layouts of the transactions it describes:
+        // the row already points past them, and a competing writer may have changed them.
+        if (!rewound) {
+            if (pending.replaceLayouts) {
+                position.setSchemaSignatures(encodeLayoutSignatures(pending.layouts));
+                changed = true;
+            } else if (!pending.layouts.isEmpty()) {
+                mergeLayoutSignatures(position, pending.layouts);
+                changed = true;
+            }
+        }
+        if (changed) {
+            position.setUpdatedAt(Instant.now());
+            repository.save(position);
+        }
+        pending.afterPersist(position, now);
+    }
+
     private static void mergeLayoutSignatures(CdcPosition position,
                                               Map<String, String> signatures) {
         if (signatures == null || signatures.isEmpty()) {
@@ -256,7 +438,17 @@ public class CdcPositionStore {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void delete(Long projectId) {
+        discard(projectId);
         repository.deleteByProjectId(projectId);
+    }
+
+    /**
+     * Drops the buffered position. Every anchor-mutating operation calls this: a reset, a
+     * baseline start or a delete supersedes whatever the throttle was holding, and a later
+     * flush must never resurrect it.
+     */
+    private void discard(Long projectId) {
+        pendingByProject.remove(projectId);
     }
 
     /**
@@ -273,6 +465,7 @@ public class CdcPositionStore {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void resetAnchorKeepingProjectionSignature(Long projectId) {
+        discard(projectId);
         repository.findByProjectId(projectId).ifPresent(position -> {
             position.setBinlogFile(null);
             position.setBinlogPos(null);
@@ -294,6 +487,7 @@ public class CdcPositionStore {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CdcPosition recordBaselineStartScn(Long projectId, long scn) {
+        discard(projectId);
         CdcPosition position = repository.findByProjectId(projectId).orElseGet(() -> {
             CdcPosition created = new CdcPosition();
             created.setProjectId(projectId);
@@ -314,26 +508,28 @@ public class CdcPositionStore {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advanceScn(Long projectId, long scn) {
-        Optional<CdcPosition> existing = repository.findByProjectId(projectId);
-        if (!existing.isPresent()) {
-            log.warn("CDC position for project {} not advanced to SCN {}: no position row"
-                    + " (deleted underneath the consumer?); the transaction replays after"
-                    + " the next reconnect", projectId, scn);
-            return;
-        }
-        CdcPosition position = existing.get();
-        // P1-3: monotonic — SCN is a plain number, no format ambiguity.
-        if (position.getScn() != null && scn <= position.getScn()) {
-            if (scn < position.getScn()) {
-                log.warn("CDC position for project {} not advanced to SCN {}: behind the"
-                        + " stored SCN {} — refusing to rewind (replay bug or competing"
-                        + " writer?)", projectId, scn, position.getScn());
+        Pending pending = pending(projectId);
+        synchronized (pending) {
+            seedIfNeeded(projectId, pending);
+            if (!pending.seeded) {
+                log.warn("CDC position for project {} not advanced to SCN {}: no position row"
+                        + " (deleted underneath the consumer?); the transaction replays after"
+                        + " the next reconnect", projectId, scn);
+                return;
             }
-            return;
+            // P1-3: monotonic — SCN is a plain number, no format ambiguity.
+            if (pending.scn != null && scn <= pending.scn) {
+                if (scn < pending.scn) {
+                    log.warn("CDC position for project {} not advanced to SCN {}: behind the"
+                            + " stored SCN {} — refusing to rewind (replay bug or competing"
+                            + " writer?)", projectId, scn, pending.scn);
+                }
+                return;
+            }
+            pending.scn = scn;
+            pending.dirty = true;
+            maybePersist(projectId, pending);
         }
-        position.setScn(scn);
-        position.setUpdatedAt(Instant.now());
-        repository.save(position);
     }
 
     /**
@@ -343,6 +539,7 @@ public class CdcPositionStore {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CdcPosition recordBaselineStartLsn(Long projectId, String lsn) {
+        discard(projectId);
         CdcPosition position = repository.findByProjectId(projectId).orElseGet(() -> {
             CdcPosition created = new CdcPosition();
             created.setProjectId(projectId);
@@ -360,33 +557,35 @@ public class CdcPositionStore {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advanceLsn(Long projectId, String lsn) {
-        Optional<CdcPosition> existing = repository.findByProjectId(projectId);
-        if (!existing.isPresent()) {
-            log.warn("CDC position for project {} not advanced to LSN {}: no position row"
-                    + " (deleted underneath the consumer?); the transaction replays after"
-                    + " the next reconnect", projectId, lsn);
-            return;
-        }
-        CdcPosition position = existing.get();
-        // P1-3: monotonic. compareLsn gives no verdict (0) on null/mixed/unparseable
-        // formats — a 0 with identical text means "already there", a 0 with different
-        // text passes through so an unknown format can never stall the position.
-        String stored = position.getLsn();
-        if (stored != null && lsn != null) {
-            int cmp = compareLsn(lsn, stored);
-            if (cmp < 0) {
-                log.warn("CDC position for project {} not advanced to LSN {}: behind the"
-                        + " stored LSN {} — refusing to rewind (replay bug or competing"
-                        + " writer?)", projectId, lsn, stored);
+        Pending pending = pending(projectId);
+        synchronized (pending) {
+            seedIfNeeded(projectId, pending);
+            if (!pending.seeded) {
+                log.warn("CDC position for project {} not advanced to LSN {}: no position row"
+                        + " (deleted underneath the consumer?); the transaction replays after"
+                        + " the next reconnect", projectId, lsn);
                 return;
             }
-            if (cmp == 0 && stored.equals(lsn)) {
-                return; // already at this exact LSN — nothing to save
+            // P1-3: monotonic. compareLsn gives no verdict (0) on null/mixed/unparseable
+            // formats — a 0 with identical text means "already there", a 0 with different
+            // text passes through so an unknown format can never stall the position.
+            String stored = pending.lsn;
+            if (stored != null && lsn != null) {
+                int cmp = compareLsn(lsn, stored);
+                if (cmp < 0) {
+                    log.warn("CDC position for project {} not advanced to LSN {}: behind the"
+                            + " stored LSN {} — refusing to rewind (replay bug or competing"
+                            + " writer?)", projectId, lsn, stored);
+                    return;
+                }
+                if (cmp == 0 && stored.equals(lsn)) {
+                    return; // already at this exact LSN — nothing to record
+                }
             }
+            pending.lsn = lsn;
+            pending.dirty = true;
+            maybePersist(projectId, pending);
         }
-        position.setLsn(lsn);
-        position.setUpdatedAt(Instant.now());
-        repository.save(position);
     }
 
     // —— P1-3 monotonicity helpers (package-private for tests) ——
@@ -489,6 +688,100 @@ public class CdcPositionStore {
             return Long.parseLong(m.group(1));
         } catch (NumberFormatException e) {
             return null; // absurdly long digit run — undecidable
+        }
+    }
+
+    /**
+     * The newest committed position of one project that has not reached the database yet.
+     * Guarded by its own monitor so a slow write for one project never blocks another.
+     */
+    private static final class Pending {
+
+        private String file;
+        private Long pos;
+        private String gtidSet;
+        private Long scn;
+        private String lsn;
+        private final Map<String, String> layouts = new LinkedHashMap<>();
+        private boolean replaceLayouts;
+        private boolean dirty;
+        private boolean seeded;
+        private long persistedAt;
+
+        private Pending(long now) {
+            this.persistedAt = now;
+        }
+
+        private void seedFrom(CdcPosition row) {
+            file = row.getBinlogFile();
+            pos = row.getBinlogPos();
+            gtidSet = row.getGtidSet();
+            scn = row.getScn();
+            lsn = row.getLsn();
+            seeded = true;
+        }
+
+        private void recordLayouts(Map<String, String> signatures, boolean replace) {
+            if (replace) {
+                replaceLayouts = true;
+                layouts.clear();
+            }
+            if (signatures != null && !signatures.isEmpty()) {
+                layouts.putAll(signatures);
+            }
+        }
+
+        /** The buffered values applied over the stored row; readers see the newest position. */
+        private CdcPosition overlay(CdcPosition stored) {
+            CdcPosition copy = new CdcPosition();
+            copy.setId(stored.getId());
+            copy.setProjectId(stored.getProjectId());
+            copy.setServerId(stored.getServerId());
+            copy.setProjectionSignature(stored.getProjectionSignature());
+            copy.setBaselineDone(stored.isBaselineDone());
+            copy.setUpdatedAt(stored.getUpdatedAt());
+            copy.setOptVersion(stored.getOptVersion());
+            copy.setBinlogFile(file != null ? file : stored.getBinlogFile());
+            copy.setBinlogPos(pos != null ? pos : stored.getBinlogPos());
+            copy.setGtidSet(gtidSet != null ? gtidSet : stored.getGtidSet());
+            copy.setScn(scn != null ? scn : stored.getScn());
+            copy.setLsn(lsn != null ? lsn : stored.getLsn());
+            if (replaceLayouts || !layouts.isEmpty()) {
+                Map<String, String> merged = replaceLayouts
+                        ? new LinkedHashMap<>()
+                        : decodeLayoutSignatures(stored.getSchemaSignatures());
+                merged.putAll(layouts);
+                copy.setSchemaSignatures(encodeLayoutSignatures(merged));
+            } else {
+                copy.setSchemaSignatures(stored.getSchemaSignatures());
+            }
+            return copy;
+        }
+
+        /** {@code row} is the entity just written (or read when the row vanished). */
+        private void afterPersist(CdcPosition row, long now) {
+            dirty = false;
+            layouts.clear();
+            replaceLayouts = false;
+            persistedAt = now;
+            if (row == null) {
+                seeded = false;         // the next advance re-reads the row
+            } else {
+                seedFrom(row);
+            }
+        }
+
+        private String describeTarget() {
+            if (file != null) {
+                return file + ":" + pos;
+            }
+            if (scn != null) {
+                return "SCN " + scn;
+            }
+            if (lsn != null) {
+                return "LSN " + lsn;
+            }
+            return "unknown position";
         }
     }
 }

@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -45,6 +46,14 @@ public final class CdcTableBinding {
      * written with" — see {@link CdcSchemaDrift}.
      */
     private final String layoutSignature;
+    /**
+     * {@link #columnNames()} is a per-row call on several paths, and LogMiner's redo parser
+     * calls {@link #typeByColumn()} once per parsed row. Both are pure functions of
+     * {@link #meta}, which is a snapshot — a layout change rebuilds the binding — so the
+     * first caller pays and everyone after reuses one immutable copy.
+     */
+    private volatile List<String> columnNames;
+    private volatile Map<String, Integer> typeByColumn;
 
     private CdcTableBinding(String database, String table, TableMeta meta, String targetTable,
                             Map<String, String> charsetByUpperColumn,
@@ -79,10 +88,16 @@ public final class CdcTableBinding {
         return column == null ? null : enumByUpperColumn.get(column.toUpperCase(Locale.ROOT));
     }
 
+    /** Ordered column names of the binding's schema snapshot; immutable and cached. */
     public List<String> columnNames() {
-        List<String> names = new ArrayList<>();
-        for (ColumnMeta column : meta.getColumns()) {
-            names.add(column.getName());
+        List<String> names = columnNames;
+        if (names == null) {
+            List<String> built = new ArrayList<>(meta.getColumns().size());
+            for (ColumnMeta column : meta.getColumns()) {
+                built.add(column.getName());
+            }
+            names = List.copyOf(built);
+            columnNames = names;
         }
         return names;
     }
@@ -91,10 +106,16 @@ public final class CdcTableBinding {
         return meta.getPrimaryKeys();
     }
 
+    /** Source JDBC type per column; immutable and cached. */
     public Map<String, Integer> typeByColumn() {
-        Map<String, Integer> types = new LinkedHashMap<>();
-        for (ColumnMeta column : meta.getColumns()) {
-            types.put(column.getName(), column.getJdbcType());
+        Map<String, Integer> types = typeByColumn;
+        if (types == null) {
+            Map<String, Integer> built = new LinkedHashMap<>();
+            for (ColumnMeta column : meta.getColumns()) {
+                built.put(column.getName(), column.getJdbcType());
+            }
+            types = Collections.unmodifiableMap(built);
+            typeByColumn = types;
         }
         return types;
     }

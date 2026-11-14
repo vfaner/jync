@@ -33,6 +33,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -323,6 +327,59 @@ class YStreamCdcConsumerTest {
 
         // 两张镜像都没有主键:这一行没有身份,只能跳过,不能猜。
         assertThat(count("id=1 AND name='old'")).isEqualTo(1);
+    }
+
+    /**
+     * A table whose supplemental logging omits the key loses every row; that fact must reach
+     * the operator, but once per table and interval, not once per row. The volume stays
+     * visible in the runtime counters.
+     */
+    @Test
+    void repeatedKeylessRowsShareOneWarning() throws Exception {
+        Map<String, Object> changed = new LinkedHashMap<>();
+        changed.put("NAME", "new");
+        consumer.setClock(() -> 1_000_000L);
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(YStreamCdcConsumer.class);
+        try {
+            handle(YStreamEvent.begin(pos(1)),
+                    update("ORDERS", changed, changed, pos(1)),
+                    update("ORDERS", changed, changed, pos(1)),
+                    YStreamEvent.commit(pos(2)));
+        } finally {
+            LogCapture.detach(YStreamCdcConsumer.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .filteredOn(message -> message.contains("no primary-key image"))
+                .hasSize(1);
+        assertThat(stats.snapshot().get("unmappable")).isEqualTo(2L);
+    }
+
+    @Test
+    void aKeylessRowWarnsAgainAfterTheInterval() throws Exception {
+        Map<String, Object> changed = new LinkedHashMap<>();
+        changed.put("NAME", "new");
+        java.util.concurrent.atomic.AtomicLong now =
+                new java.util.concurrent.atomic.AtomicLong(1_000_000L);
+        consumer.setClock(now::get);
+
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(YStreamCdcConsumer.class);
+        try {
+            handle(YStreamEvent.begin(pos(1)),
+                    update("ORDERS", changed, changed, pos(1)),
+                    YStreamEvent.commit(pos(2)));
+            now.addAndGet(300_001L);
+            handle(YStreamEvent.begin(pos(3)),
+                    update("ORDERS", changed, changed, pos(3)),
+                    YStreamEvent.commit(pos(4)));
+        } finally {
+            LogCapture.detach(YStreamCdcConsumer.class, logs);
+        }
+
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .filteredOn(message -> message.contains("no primary-key image"))
+                .hasSize(2);
     }
 
     @Test

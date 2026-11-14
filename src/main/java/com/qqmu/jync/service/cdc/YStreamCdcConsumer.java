@@ -12,9 +12,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -76,6 +78,13 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
      */
     private static final long ENGINE_IDLE_POLL_MS = 0L;
 
+    /**
+     * How often one table+operation may repeat the "row carries no primary-key image"
+     * warning. A missing key image loses every row of that operation, so the counter and
+     * one line per table are enough; a warning per row would flood the log.
+     */
+    private static final long UNMAPPABLE_WARN_INTERVAL_MS = 300_000L;
+
     private final Project project;
     private final SyncLockService.LockHandle lock;
     private final SyncContext ctx;
@@ -100,6 +109,10 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
     private final CdcTransactionBudget budget;
     private final CdcChangeWindowLogger windowLogger;
     private final BindingSupplier bindings = new BindingSupplier();
+    /** Last time each table+operation warned about a keyless row; see {@link #skipWithoutKey}. */
+    private final Map<String, Long> unmappableWarnedAt = new ConcurrentHashMap<>();
+    /** Test seam for the warning throttle. */
+    private LongSupplier clock = System::currentTimeMillis;
 
     private volatile boolean running = true;
     /** The open stream; {@code requestStop()} closes it so a blocking poll returns at once. */
@@ -258,6 +271,9 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                         adapter.close();
                     }
                     currentAdapter = null;
+                    // Cycle boundary: the position throttle may still hold the newest
+                    // committed position; write it before the stream goes away.
+                    flushPosition(projectId);
                 }
                 if (!running) {
                     break;
@@ -664,9 +680,35 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
 
     private void skipWithoutKey(CdcTableBinding binding, Operation operation) {
         stats.addUnmappable(1);
+        // A table whose supplemental logging omits the key loses every row of that operation.
+        // The counter carries the volume; the log line would otherwise repeat for every row and
+        // bury the rest of the cycle's output.
+        String key = binding.getDatabase() + '\u0000' + binding.getTable()
+                + '\u0000' + operation;
+        long now = clock.getAsLong();
+        Long last = unmappableWarnedAt.get(key);
+        if (last != null && now - last < UNMAPPABLE_WARN_INTERVAL_MS) {
+            return;
+        }
+        unmappableWarnedAt.put(key, now);
         log.warn("YStream {} row of {}.{} carries no primary-key image; skipping it — check"
                 + " the table's (ALL) COLUMNS supplemental logging",
                 operation, binding.getDatabase(), binding.getTable());
+    }
+
+    /** Test seam: the warning throttle reads this clock. */
+    void setClock(LongSupplier clock) {
+        this.clock = clock;
+    }
+
+    /** Writes the throttled position; a failure here must never fail the cycle. */
+    private void flushPosition(long projectId) {
+        try {
+            positionStore.flush(projectId);
+        } catch (RuntimeException e) {
+            log.warn("Could not flush the CDC position for project {}: {}",
+                    projectId, e.getMessage());
+        }
     }
 
     private void onDdl(YStreamEvent event) {

@@ -261,6 +261,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     // A failed flush keeps its buffer (and spilled files) for the replay
                     // story, but this handler dies with the connection: release now.
                     handler.releaseSpill();
+                    // Cycle boundary: the position throttle may still hold the newest
+                    // committed position; write it before the connection goes away.
+                    flushPosition(projectId);
                 }
                 stats.setConnected(false);
                 if (!running) {
@@ -498,6 +501,16 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         log.error("CDC consumer for project {} parking in ERROR — {}", projectId, detail);
     }
 
+    /** Writes the throttled position; a failure here must never fail the cycle. */
+    private void flushPosition(Long projectId) {
+        try {
+            positionStore.flush(projectId);
+        } catch (RuntimeException e) {
+            log.warn("Could not flush the CDC position for project {}: {}",
+                    projectId, e.getMessage());
+        }
+    }
+
     private void disconnectQuietly(BinaryLogClient client) {
         if (client == null) {
             return;
@@ -541,7 +554,10 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     // binlog file — ``lastFile`` only advances on a committed transaction,
                     // so a DDL right after a rotation would be filed under the old file.
                     stateWriter.recordSkippedDdl(project.getId(), db, sql, file, position);
-                });
+                },
+                // The run's cache lives on the target factory; the spiller reads the same
+                // compiled column rules instead of rebuilding them per transaction.
+                targetTransactions.writePlans(ctx)::cleanser);
         handler.attachClient(client);                            // R1:choke 时自行断连
         client.registerEventListener(handler);
         client.registerLifecycleListener(new BinaryLogClient.AbstractLifecycleListener() {
