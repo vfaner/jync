@@ -4,9 +4,9 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -312,6 +312,13 @@ final class EsToEasysearchEngine {
         }
         BulkResult result = targetClient.bulk(lines);
         if (result != null && result.hasErrors()) {
+            // A bulk request is not atomic: the items without an error did reach the target,
+            // and the run history should say so. Every failed item is one document of this
+            // batch, so the successes are the rest. An errors flag with no parsed items means
+            // the response shape was unreadable, not that everything succeeded — count nothing.
+            if (!result.failedItems().isEmpty()) {
+                counters.written += Math.max(0, documents - result.failedItems().size());
+            }
             BulkResult.FailedItem failure = result.failedItems().isEmpty() ? null
                     : result.failedItems().get(0);
             String detail = failure == null ? "unknown item"
@@ -354,22 +361,33 @@ final class EsToEasysearchEngine {
             return 0;
         }
 
-        Map<String, JsonNode> expected = new LinkedHashMap<>();
-        ArrayNode ids = JSON.createArrayNode();
+        // The request must carry each sampled document's routing: an id-only _mget looks the
+        // document up on the default shard, so a custom-routed document comes back as
+        // not-found and the run warns about a difference that does not exist. Docs are also
+        // paired by position (the _mget contract) because the same _id may legitimately exist
+        // under two routing values.
+        ArrayNode refs = JSON.createArrayNode();
+        List<JsonNode> expected = new ArrayList<>();
         for (JsonNode hit : hits) {
             String id = hit.path("_id").asString("");
             if (id.isEmpty()) {
                 continue;
             }
-            ids.add(id);
-            expected.put(id, hit.get("_source"));
+            ObjectNode ref = JSON.createObjectNode();
+            ref.put("_id", id);
+            JsonNode routing = hit.get("_routing");
+            if (routing != null && !routing.isNull()) {
+                ref.set("routing", routing);
+            }
+            refs.add(ref);
+            expected.add(hit.get("_source"));
         }
-        if (ids.isEmpty()) {
+        if (refs.isEmpty()) {
             return 0;
         }
 
         ObjectNode body = JSON.createObjectNode();
-        body.set("ids", ids);
+        body.set("docs", refs);
         JsonNode response = targetClient.postJson(targetPath + "/_mget", body);
         JsonNode docs = response == null ? null : response.path("docs");
         if (docs == null || !docs.isArray()) {
@@ -377,14 +395,14 @@ final class EsToEasysearchEngine {
         }
 
         int mismatches = 0;
-        for (JsonNode doc : docs) {
-            String id = doc.path("_id").asString("");
-            JsonNode source = expected.get(id);
-            if (source == null) {
+        for (int i = 0; i < expected.size(); i++) {
+            if (i >= docs.size()) {
+                mismatches++;
                 continue;
             }
+            JsonNode doc = docs.get(i);
             if (!doc.path("found").asBoolean(false)
-                    || !source.equals(doc.get("_source"))) {
+                    || !Objects.equals(expected.get(i), doc.get("_source"))) {
                 mismatches++;
             }
         }

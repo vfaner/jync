@@ -263,6 +263,27 @@ class EsToEasysearchEngineTest {
     }
 
     @Test
+    void aPartiallyFailedBulkStillCountsTheItemsThatWereWritten() throws Exception {
+        stubCat("orders");
+        stubSourceIndex("orders");
+        when(targetClient.exists("/orders")).thenReturn(false);
+        when(sourceClient.search(startsWith("/orders/_search?scroll="), any()))
+                .thenReturn(page("s1",
+                        hit("1", null, "{\"name\":\"a\"}"),
+                        hit("2", null, "{\"name\":\"b\"}")));
+        when(targetClient.bulk(anyList())).thenReturn(new BulkResult(true,
+                List.of(new BulkResult.FailedItem("2", "mapper_parsing_exception"))));
+
+        MigrationRunResult result = run(options("{}"));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.documentsRead()).isEqualTo(2);
+        // The batch failed on one item; the other document did reach the target, so the run
+        // history must not claim nothing was written.
+        assertThat(result.documentsWritten()).isEqualTo(1);
+    }
+
+    @Test
     void cancellationBetweenPagesClearsTheScrollAndReturnsCancelled() throws Exception {
         stubCat("orders");
         stubSourceIndex("orders");
@@ -308,6 +329,38 @@ class EsToEasysearchEngineTest {
 
         assertThat(result.success()).as(result.toString()).isTrue();
         assertThat(result.message()).contains("WARN");
+    }
+
+    @Test
+    void sampleVerificationSendsRoutingSoRoutedDocumentsAreFound() throws Exception {
+        // A custom-routing index cannot be read back by _id alone: an id-only _mget looks on
+        // the default shard, reports found=false, and the run warns about a "mismatch" that
+        // never happened. The sampled request has to carry the source's routing.
+        stubCat("orders");
+        stubSourceIndex("orders");
+        when(targetClient.exists("/orders")).thenReturn(false);
+        when(sourceClient.search(startsWith("/orders/_search?scroll="), any()))
+                .thenReturn(page("s1", hit("1", "tenant-7", "{\"name\":\"a\"}")));
+        when(sourceClient.postJson(eq("/_search/scroll"), any())).thenReturn(page("s1"));
+        when(targetClient.bulk(anyList())).thenReturn(BulkResult.success());
+        when(sourceClient.get("/orders/_count")).thenReturn(count(1));
+        when(targetClient.get("/orders/_count")).thenReturn(count(1));
+        when(targetClient.postJson(eq("/orders/_refresh"), any())).thenReturn(null);
+        when(sourceClient.search(startsWith("/orders/_search?size="), any()))
+                .thenReturn(page(null, hit("1", "tenant-7", "{\"name\":\"a\"}")));
+        when(targetClient.postJson(eq("/orders/_mget"), any()))
+                .thenReturn(json("{\"docs\":[{\"_id\":\"1\",\"found\":true,"
+                        + "\"_source\":{\"name\":\"a\"}}]}"));
+
+        MigrationRunResult result = run(options("{\"verifyCount\":true,"
+                + "\"verifySampleSize\":1}"));
+
+        ArgumentCaptor<JsonNode> body = ArgumentCaptor.forClass(JsonNode.class);
+        verify(targetClient).postJson(eq("/orders/_mget"), body.capture());
+        JsonNode request = body.getValue().path("docs").path(0);
+        assertThat(request.path("_id").asString("")).isEqualTo("1");
+        assertThat(request.path("routing").asString("")).isEqualTo("tenant-7");
+        assertThat(result.success()).as(result.toString()).isTrue();
     }
 
     @Test

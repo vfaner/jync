@@ -13,6 +13,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
+import com.qqmu.jync.service.migration.MigrationTargetNaming;
+
 /** Pure helpers shared by precheck and the migration engine: names, globs, settings cleanup. */
 public final class EsIndexSupport {
 
@@ -50,21 +52,15 @@ public final class EsIndexSupport {
             "store.snapshot",
             "resize.source");
 
-    public enum TargetNaming {
-        SAME,
-        PREFIX,
-        SUFFIX
-    }
-
     private EsIndexSupport() {
     }
 
-    public static String targetName(String sourceIndex, TargetNaming naming,
+    public static String targetName(String sourceIndex, MigrationTargetNaming naming,
                                     String prefix, String suffix) {
         String name;
-        if (naming == TargetNaming.PREFIX) {
+        if (naming == MigrationTargetNaming.PREFIX) {
             name = (prefix == null ? "" : prefix) + sourceIndex;
-        } else if (naming == TargetNaming.SUFFIX) {
+        } else if (naming == MigrationTargetNaming.SUFFIX) {
             name = sourceIndex + (suffix == null ? "" : suffix);
         } else {
             name = sourceIndex;
@@ -73,10 +69,16 @@ public final class EsIndexSupport {
         return name;
     }
 
-    /** Rejects names Elasticsearch refuses: uppercase, leading punctuation, or too long. */
+    /**
+     * Rejects names Elasticsearch refuses: uppercase, leading punctuation, a name that is only
+     * dots, or too long. A leading dot is allowed because a system index (which discovery can
+     * explicitly select) must keep its name; Elasticsearch permits it anywhere but for the
+     * names {@code "."} and {@code ".."}.
+     */
     public static void validateTargetName(String name) {
         if (name == null || name.isEmpty() || name.length() > 255
-                || !name.matches("[a-z0-9][a-z0-9._-]*")) {
+                || ".".equals(name) || "..".equals(name)
+                || !name.matches("[a-z0-9.][a-z0-9._-]*")) {
             throw new IllegalArgumentException("error.migration.target.name.invalid");
         }
     }

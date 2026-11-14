@@ -92,12 +92,20 @@ public class MigrationRunStore {
      */
     public void fail(Long runId, Long taskId, String message, String summary) {
         Instant finishedAt = Instant.now();
-        runRepository.findById(runId).ifPresent(run -> {
+        MigrationRun run = runRepository.findById(runId).orElse(null);
+        if (run != null && run.getStatus() != MigrationRunStatus.RUNNING) {
+            // finish() already gave this run its terminal state. The only way fail() runs
+            // after it is the crash handler reacting to finish()'s task-summary write
+            // throwing; rewriting the committed outcome (and its badge) would be worse than
+            // the lost summary, which is why finish() tolerates that exception at all.
+            return;
+        }
+        if (run != null) {
             run.setStatus(MigrationRunStatus.FAILED);
             run.setFinishedAt(finishedAt);
             run.setMessage(message);
             runRepository.save(run);
-        });
+        }
         updateTaskSummary(taskId, finishedAt, false,
                 summary == null || summary.isBlank() ? "FAILED" : "FAILED " + summary);
     }

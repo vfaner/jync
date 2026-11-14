@@ -184,6 +184,26 @@ class MigrationRunStoreTest {
     }
 
     @Test
+    void failNeverRewritesARunThatAlreadyReachedItsTerminalState() {
+        // finish() writes the run row before the task summary. If that summary write throws a
+        // non-optimistic exception, the executor's crash handler calls fail() — which must not
+        // turn the committed SUCCESS/CANCELLED row (or the badge) back into a crash.
+        MigrationRun run = running(100L, 9L);
+        run.setStatus(MigrationRunStatus.SUCCESS);
+        run.setDocumentsRead(10);
+        run.setDocumentsWritten(10);
+        when(runRepository.findById(100L)).thenReturn(Optional.of(run));
+
+        store.fail(100L, 9L, "crashed outside the engine: boom",
+                "crashed outside the engine");
+
+        assertThat(run.getStatus()).isEqualTo(MigrationRunStatus.SUCCESS);
+        assertThat(run.getMessage()).isNull();
+        verify(runRepository, never()).save(run);
+        verify(taskRepository, never()).save(any(MigrationTask.class));
+    }
+
+    @Test
     void failKeepsTheLatestSummaryFreeOfAMessageKey() {
         MigrationRun run = running(100L, 9L);
         MigrationTask task = task(9L);

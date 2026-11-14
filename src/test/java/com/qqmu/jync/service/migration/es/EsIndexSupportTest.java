@@ -7,6 +7,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.service.migration.MigrationTargetNaming;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -101,12 +102,12 @@ class EsIndexSupportTest {
 
     @Test
     void targetNamesAreValidatedAgainstElasticsearchRules() {
-        assertThat(EsIndexSupport.targetName("orders", EsIndexSupport.TargetNaming.SAME,
+        assertThat(EsIndexSupport.targetName("orders", MigrationTargetNaming.SAME,
                 "", "_migrated")).isEqualTo("orders");
         assertThat(EsIndexSupport.targetName("orders",
-                EsIndexSupport.TargetNaming.PREFIX, "bak_", "")).isEqualTo("bak_orders");
+                MigrationTargetNaming.PREFIX, "bak_", "")).isEqualTo("bak_orders");
         assertThat(EsIndexSupport.targetName("orders",
-                EsIndexSupport.TargetNaming.SUFFIX, "", "_v2")).isEqualTo("orders_v2");
+                MigrationTargetNaming.SUFFIX, "", "_v2")).isEqualTo("orders_v2");
 
         assertThatThrownBy(() -> EsIndexSupport.validateTargetName("Orders"))
                 .hasMessage("error.migration.target.name.invalid");
@@ -117,6 +118,23 @@ class EsIndexSupportTest {
         assertThatThrownBy(() -> EsIndexSupport.validateTargetName(""))
                 .hasMessage("error.migration.target.name.invalid");
         assertThatThrownBy(() -> EsIndexSupport.validateTargetName("x".repeat(256)))
+                .hasMessage("error.migration.target.name.invalid");
+    }
+
+    @Test
+    void aSystemIndexCanKeepItsDottedNameOnTheTarget() {
+        // Discovery explicitly includes dotted system indices when the pattern names one, so a
+        // same-name copy must be allowed to keep the leading dot Elasticsearch requires for
+        // them; the old validator rejected every dotted name and failed that migration.
+        assertThat(EsIndexSupport.targetName(".kibana_1", MigrationTargetNaming.SAME,
+                null, null)).isEqualTo(".kibana_1");
+        assertThat(EsIndexSupport.targetName(".kibana_1", MigrationTargetNaming.PREFIX,
+                "snap-", null)).isEqualTo("snap-.kibana_1");
+
+        // A name made only of dots is still not a valid index.
+        assertThatThrownBy(() -> EsIndexSupport.validateTargetName("."))
+                .hasMessage("error.migration.target.name.invalid");
+        assertThatThrownBy(() -> EsIndexSupport.validateTargetName(".."))
                 .hasMessage("error.migration.target.name.invalid");
     }
 }

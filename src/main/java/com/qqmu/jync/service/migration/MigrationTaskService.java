@@ -124,7 +124,6 @@ public class MigrationTaskService {
         MigrationTask entity;
         if (isNew) {
             entity = new MigrationTask();
-            entity.setEnabled(false);
         } else {
             entity = taskRepository.findById(form.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.migration.not.found"));
@@ -162,6 +161,12 @@ public class MigrationTaskService {
         if (enabled && (task.getCronExpression() == null
                 || task.getCronExpression().isBlank())) {
             throw new IllegalArgumentException("error.migration.cron.required");
+        }
+        if (enabled && !CronExpression.isValidExpression(task.getCronExpression().trim())) {
+            // save() validates, but a row from an older release can still carry an expression
+            // the scheduler rejects. Enabling it would show the task as on while the
+            // scheduler silently refused to register it.
+            throw new IllegalArgumentException("error.migration.cron.invalid");
         }
         task.setEnabled(enabled);
         taskRepository.save(task);

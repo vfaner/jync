@@ -8,6 +8,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
+import com.qqmu.jync.service.migration.MigrationTargetNaming;
+
 import lombok.Getter;
 
 /**
@@ -27,12 +29,6 @@ public final class EsToEasysearchOptions {
     public static final String DEFAULT_SCROLL_TTL = "5m";
     public static final int DEFAULT_MAX_INDICES = 200;
 
-    public enum TargetNaming {
-        SAME,
-        PREFIX,
-        SUFFIX
-    }
-
     public enum WriteMode {
         OVERWRITE,
         APPEND,
@@ -40,7 +36,7 @@ public final class EsToEasysearchOptions {
     }
 
     private final String indicesText;
-    private final TargetNaming targetNaming;
+    private final MigrationTargetNaming targetNaming;
     private final String targetPrefix;
     private final String targetSuffix;
     private final WriteMode writeMode;
@@ -56,7 +52,7 @@ public final class EsToEasysearchOptions {
     private final boolean probeCompatibility;
     private final int maxIndices;
 
-    private EsToEasysearchOptions(String indicesText, TargetNaming targetNaming,
+    private EsToEasysearchOptions(String indicesText, MigrationTargetNaming targetNaming,
                                   String targetPrefix, String targetSuffix, WriteMode writeMode,
                                   boolean copySettings, boolean copyMappings,
                                   boolean copyAliases, boolean continueOnError, int batchSize,
@@ -84,7 +80,7 @@ public final class EsToEasysearchOptions {
     /** Reads and validates stored JSON. Unknown fields are ignored. */
     public static EsToEasysearchOptions parse(JsonNode node) {
         String indicesText = text(node, "indicesText", "");
-        TargetNaming targetNaming = enumValue(TargetNaming.class,
+        MigrationTargetNaming targetNaming = enumValue(MigrationTargetNaming.class,
                 text(node, "targetNaming", "SAME"), "error.migration.options.targetNaming.invalid");
         String targetPrefix = text(node, "targetPrefix", "");
         String targetSuffix = text(node, "targetSuffix", "_migrated");
@@ -140,9 +136,7 @@ public final class EsToEasysearchOptions {
 
     /** Source index name to target index name, validated against Elasticsearch's rules. */
     public String targetName(String sourceIndex) {
-        EsIndexSupport.TargetNaming naming = EsIndexSupport.TargetNaming.valueOf(
-                targetNaming.name());
-        return EsIndexSupport.targetName(sourceIndex, naming, targetPrefix, targetSuffix);
+        return EsIndexSupport.targetName(sourceIndex, targetNaming, targetPrefix, targetSuffix);
     }
 
     public ObjectNode toJson() {

@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.service.migration.MigrationTargetNaming;
+
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -21,7 +23,7 @@ class EsToEasysearchOptionsTest {
         EsToEasysearchOptions options = parse("{}");
 
         assertThat(options.getIndicesText()).isEmpty();
-        assertThat(options.getTargetNaming()).isEqualTo(EsToEasysearchOptions.TargetNaming.SAME);
+        assertThat(options.getTargetNaming()).isEqualTo(MigrationTargetNaming.SAME);
         assertThat(options.getTargetPrefix()).isEmpty();
         assertThat(options.getTargetSuffix()).isEqualTo("_migrated");
         assertThat(options.getWriteMode()).isEqualTo(EsToEasysearchOptions.WriteMode.OVERWRITE);

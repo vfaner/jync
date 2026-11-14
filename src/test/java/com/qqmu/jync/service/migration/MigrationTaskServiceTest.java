@@ -366,6 +366,22 @@ class MigrationTaskServiceTest {
     }
 
     @Test
+    void setEnabledRefusesACronTheSchedulerCannotRead() {
+        // save() validates the expression, but a row written by an older release (or edited by
+        // hand) can still carry a broken one. Enabling it would show the task as on while the
+        // scheduler silently refuses to register it, so enabling must fail loudly instead.
+        MigrationTask task = storedTask(9L);
+        task.setCronExpression("every five minutes");
+        when(taskRepository.findById(9L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> service.setEnabled(9L, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.migration.cron.invalid");
+        assertThat(task.getEnabled()).isFalse();
+        verify(taskRepository, never()).save(task);
+    }
+
+    @Test
     void setEnabledSavesAndAnnouncesTheChange() {
         MigrationTask task = storedTask(9L);
         task.setCronExpression("0 */5 * * * *");
