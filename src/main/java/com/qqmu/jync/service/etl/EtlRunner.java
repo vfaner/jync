@@ -7,10 +7,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -458,10 +455,11 @@ public class EtlRunner {
      * probe: some drivers count <em>changed</em> rows, so an UPDATE that matched an identical
      * row answers zero, and inserting then would create a second copy.
      *
-     * <p>A key repeated inside the batch is handled only at its last occurrence. Sequential
-     * writes ended with the last row's values (each repeated UPDATE simply ran again); with the
-     * inserts deferred to the flush, inserting every occurrence would either leave the first
-     * row's values or collide on the target's unique key.
+     * <p>The rows are visited from the last to the first on purpose. When the source returns
+     * the same key twice, sequential writes ended with the last row's values; inserting the
+     * last occurrence first and letting the earlier ones find it in the probe keeps that,
+     * without comparing keys in memory — Java's equality need not agree with the target's
+     * (case-insensitive collations, padded CHARs, DECIMAL scales).
      */
     private static void flushUpsertRows(PreparedStatement update, PreparedStatement insert,
                                         PreparedStatement probe, List<EtlSourceColumn> columns,
@@ -473,53 +471,34 @@ public class EtlRunner {
             counts = update.executeBatch();
             update.clearBatch();
         }
-        if (!rows.isEmpty()) {
-            Map<List<Object>, Integer> lastOccurrence = new HashMap<>();
-            for (int i = 0; i < rows.size(); i++) {
-                lastOccurrence.put(keyOf(rows.get(i), keyIndexes), i);
+        for (int i = rows.size() - 1; i >= 0; i--) {
+            int count = counts == null || i >= counts.length ? -1 : counts[i];
+            if (count == Statement.EXECUTE_FAILED) {
+                // Never reported without an exception by the drivers used here, but a
+                // failed UPDATE must not fall through to a silent insert.
+                throw new SQLException("the batched upsert UPDATE failed for row " + (i + 1));
             }
-            for (int i = 0; i < rows.size(); i++) {
-                int count = counts == null || i >= counts.length ? -1 : counts[i];
-                if (count == Statement.EXECUTE_FAILED) {
-                    // Never reported without an exception by the drivers used here, but a
-                    // failed UPDATE must not fall through to a silent insert.
-                    throw new SQLException("the batched upsert UPDATE failed for row " + (i + 1));
-                }
-                if (count > 0) {
-                    continue;
-                }
-                Object[] values = rows.get(i);
-                Integer last = lastOccurrence.get(keyOf(values, keyIndexes));
-                if (last == null || last != i) {
-                    continue;
-                }
-                if (exists(probe, keyColumns, values, keyIndexes, dialect)) {
-                    continue;
-                }
-                bindRow(insert, columns, values, dialect);
-                try {
-                    insert.executeUpdate();
-                } catch (SQLException e) {
-                    // A concurrent writer may have inserted this key between our probe and
-                    // the INSERT. Only a collision on a key the target now holds is absorbed;
-                    // any other integrity violation must surface instead of dropping the row.
-                    if (!UniqueViolations.isUniqueViolation(e)
-                            || !exists(probe, keyColumns, values, keyIndexes, dialect)) {
-                        throw e;
-                    }
+            if (count > 0) {
+                continue;
+            }
+            Object[] values = rows.get(i);
+            if (exists(probe, keyColumns, values, keyIndexes, dialect)) {
+                continue;
+            }
+            bindRow(insert, columns, values, dialect);
+            try {
+                insert.executeUpdate();
+            } catch (SQLException e) {
+                // A concurrent writer may have inserted this key between our probe and
+                // the INSERT. Only a collision on a key the target now holds is absorbed;
+                // any other integrity violation must surface instead of dropping the row.
+                if (!UniqueViolations.isUniqueViolation(e)
+                        || !exists(probe, keyColumns, values, keyIndexes, dialect)) {
+                    throw e;
                 }
             }
         }
         rows.clear();
-    }
-
-    /** A row's key values, in the order the operator configured — the map key for de-duplication. */
-    private static List<Object> keyOf(Object[] values, List<Integer> keyIndexes) {
-        Object[] key = new Object[keyIndexes.size()];
-        for (int i = 0; i < key.length; i++) {
-            key[i] = values[keyIndexes.get(i)];
-        }
-        return Arrays.asList(key);
     }
 
     private static boolean exists(PreparedStatement probe, List<EtlSourceColumn> keyColumns,

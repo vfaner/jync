@@ -11,8 +11,18 @@ package com.qqmu.jync.service.etl;
  */
 public interface EtlLeaseStore {
 
-    /** Whether a lease row exists at all, expired or not. */
+    /**
+     * Whether a lease row exists at all, expired or not. This is the acquire path's signal: an
+     * expired row is taken over by {@link #claim}, not by a fresh {@link #insert}.
+     */
     boolean exists(String key);
+
+    /**
+     * Whether an unexpired lease holds the key — what the destructive operations ask before
+     * deleting a task or changing its extraction SQL. A row whose owner was killed mid-run stays
+     * behind with an expiry in the past; it is not a live run and must not block them.
+     */
+    boolean isLive(String key);
 
     /**
      * Creates the row. Racing owners both see {@link #exists} false; the primary key decides,

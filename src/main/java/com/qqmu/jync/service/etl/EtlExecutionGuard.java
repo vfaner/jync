@@ -187,7 +187,9 @@ public class EtlExecutionGuard {
             return false;
         }
         try {
-            return leaseStore.exists(key);
+            // isLive, not exists: a row left by a killed node is expired and must not keep its
+            // task undeletable (nothing else ever removes such a row).
+            return leaseStore.isLive(key);
         } catch (RuntimeException e) {
             log.warn("Could not read the ETL lease for {}; treating it as free: {}",
                     key, e.getMessage());

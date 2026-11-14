@@ -123,6 +123,16 @@ class EtlExecutionGuardTest {
     }
 
     @Test
+    void anExpiredLeaseElsewhereDoesNotBlockDestructiveOperations() {
+        nodeA.tryAcquire(1L);
+        // What a killed node leaves behind: the row is still there, its expiry is not.
+        store.expire("task:1");
+
+        assertThat(store.isLive("task:1")).isFalse();
+        assertThat(nodeB.isLeased(1L)).isFalse();
+    }
+
+    @Test
     void aDeletedTaskLeavesNoLeaseBehind() {
         nodeA.tryAcquire(1L);
 
@@ -136,6 +146,7 @@ class EtlExecutionGuardTest {
     private static final class FakeLeaseStore implements EtlLeaseStore {
 
         private final Map<String, String> owners = new HashMap<>();
+        private final java.util.Set<String> expired = new java.util.HashSet<>();
         boolean failEverything;
         int renewCalls;
 
@@ -143,6 +154,16 @@ class EtlExecutionGuardTest {
         public boolean exists(String key) {
             failIfAsked();
             return owners.containsKey(key);
+        }
+
+        @Override
+        public boolean isLive(String key) {
+            failIfAsked();
+            return owners.containsKey(key) && !expired.contains(key);
+        }
+
+        void expire(String key) {
+            expired.add(key);
         }
 
         @Override

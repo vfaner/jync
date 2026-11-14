@@ -247,6 +247,27 @@ class AlertSettingsViewTest {
                 eq(AlertWebhookFormat.GENERIC), anyString());
     }
 
+    /**
+     * The test button fetches the typed URL from the server, exactly like a saved webhook
+     * does. Without the address policy here, pressing Test reaches loopback and intranet
+     * addresses that saving refuses.
+     */
+    @Test
+    void aTestSendToAnInternalAddressIsRefusedBeforeAnyRequest() throws Exception {
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("error.alert.url.private"))
+                .when(configService).validateWebhookUrl("http://10.1.2.3/hook");
+
+        mvc.perform(post("/alert-settings/test").with(asAdmin()).with(csrf())
+                        .param("webhookUrl", "http://10.1.2.3/hook")
+                        .param("format", "GENERIC"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/alert-settings"))
+                .andExpect(flash().attribute("message", "error.alert.url.private"));
+
+        verify(notifier, org.mockito.Mockito.never())
+                .sendNow(anyString(), any(), anyString());
+    }
+
     private static RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();
         user.setId(1L);

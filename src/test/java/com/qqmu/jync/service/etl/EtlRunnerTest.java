@@ -457,6 +457,27 @@ class EtlRunnerTest {
                 .containsExactly("1|last", "2|x");
     }
 
+    /**
+     * "Last row wins" must not depend on Java's equality of the key values. A case-insensitive
+     * collation, a padded CHAR or a DECIMAL scale makes two values collide in the target whose
+     * in-memory forms differ, so a de-duplication map keyed by {@code equals} would keep the
+     * first row where the old sequential writes ended with the last one.
+     */
+    @Test
+    void theLastDuplicateWinsEvenWhenTheTargetComparesKeysLoosely() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id VARCHAR(20), name VARCHAR(20))",
+                "INSERT INTO src VALUES ('a', 'first'), ('A', 'last')");
+        execute(TARGET_URL,
+                "CREATE TABLE dst (id VARCHAR_IGNORECASE(20) PRIMARY KEY, name VARCHAR(20))");
+
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(rows("SELECT id, name FROM dst")).containsExactly("A|last");
+    }
+
     @Test
     void overwriteIgnoresAndClearsTheCheckpoint() throws SQLException {        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
                 "INSERT INTO src VALUES (1, 'a'), (2, 'b')");

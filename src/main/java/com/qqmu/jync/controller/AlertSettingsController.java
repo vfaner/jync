@@ -110,11 +110,23 @@ public class AlertSettingsController {
     @PostMapping("/test")
     public String test(@ModelAttribute("form") AlertConfigForm form,
                        RedirectAttributes flash) {
-        String url = StringUtils.hasText(form.getWebhookUrl())
-                ? form.getWebhookUrl().trim() : storedUrl();
+        boolean typed = StringUtils.hasText(form.getWebhookUrl());
+        String url = typed ? form.getWebhookUrl().trim() : storedUrl();
         if (url == null) {
             flash.addFlashAttribute("message", "error.alert.url.required");
             return "redirect:/alert-settings";
+        }
+        if (typed) {
+            // This button fetches the typed URL from the server, so it is the same request
+            // surface as a saved webhook. Only a typed URL is re-checked: the stored one was
+            // validated when it was saved, and an intranet deployment that raised the flag
+            // later must not see its own working channel refused here.
+            try {
+                configService.validateWebhookUrl(url);
+            } catch (IllegalArgumentException e) {
+                flash.addFlashAttribute("message", e.getMessage());
+                return "redirect:/alert-settings";
+            }
         }
         AlertWebhookFormat format = form.getFormat() == null
                 ? AlertWebhookFormat.GENERIC : form.getFormat();

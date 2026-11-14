@@ -229,6 +229,17 @@ public class AlertConfigService {
         return categories;
     }
 
+    /**
+     * Validates a webhook URL typed on the settings page without saving it.
+     *
+     * <p>The "send a test message" button posts to the typed URL, so it performs the same
+     * server-side fetch as a saved webhook and must answer to the same address policy —
+     * otherwise the private-address refusal is bypassed by pressing Test.
+     */
+    public void validateWebhookUrl(String url) {
+        validateUrl(url);
+    }
+
     private void validateUrl(String url) {
         if (url.length() > MAX_URL_LENGTH) {
             throw new IllegalArgumentException("error.alert.url.invalid");

@@ -17,6 +17,13 @@ import com.qqmu.jync.model.EtlRunLock;
 public interface EtlRunLockRepository extends JpaRepository<EtlRunLock, String> {
 
     /**
+     * Whether the row is still unexpired. The destructive operations ask this, not
+     * {@code existsById}: a node killed mid-run leaves its row behind forever, and counting it
+     * as a live run would make its task undeletable.
+     */
+    boolean existsByLockKeyAndExpiresAtAfter(String lockKey, Instant now);
+
+    /**
      * Takes an existing row when it is free, already ours, or expired — the same freshness rule
      * as {@code SyncTaskRepository.acquireLock}, so "live owner" means one thing across the app.
      */

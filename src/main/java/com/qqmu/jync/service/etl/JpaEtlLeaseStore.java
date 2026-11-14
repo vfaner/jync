@@ -35,6 +35,12 @@ public class JpaEtlLeaseStore implements EtlLeaseStore {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public boolean isLive(String key) {
+        return repository.existsByLockKeyAndExpiresAtAfter(key, Instant.now());
+    }
+
+    @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void insert(String key, String owner, long ttlMs) {
         EtlRunLock lock = new EtlRunLock();

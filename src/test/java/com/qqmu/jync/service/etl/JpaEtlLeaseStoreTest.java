@@ -77,6 +77,20 @@ class JpaEtlLeaseStoreTest {
         assertThat(store.claim("task:4", NODE_A, MINUTE)).isFalse();
     }
 
+    /**
+     * A node killed mid-run leaves its row behind with an expiry in the past. Destructive
+     * operations consult {@code isLeased}, so counting that row as a live run would leave the
+     * task impossible to delete (or to change its extraction SQL) forever — the row is never
+     * cleaned up by anything else.
+     */
+    @Test
+    void anExpiredRowDoesNotLookLikeALiveRun() {
+        store.insert("task:5", NODE_A, -MINUTE);
+        EtlExecutionGuard guard = new EtlExecutionGuard(store, NODE_B);
+
+        assertThat(guard.isLeased("task:5")).isFalse();
+    }
+
     @Test
     void discardingRemovesTheRowSoADeletedTaskLeavesNothingBehind() {
         store.insert("batch:9", NODE_A, MINUTE);
