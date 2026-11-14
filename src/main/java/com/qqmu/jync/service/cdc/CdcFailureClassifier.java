@@ -104,6 +104,14 @@ public final class CdcFailureClassifier {
                 return Kind.PURGED;
             }
             if (message.contains("ora-01031")        // insufficient privileges
+                    // ORA-01017 (invalid username/password), ORA-28000 (account locked) and
+                    // ORA-28001 (password expired): the driver reports these with SQLState
+                    // 72000, so the 28* check below never sees them. Left unmatched they
+                    // classify as TRANSIENT and the consumer reconnect-backoffs forever
+                    // without parking — the same hot loop as MySQL "access denied".
+                    || message.contains("ora-01017")
+                    || message.contains("ora-28000")
+                    || message.contains("ora-28001")
                     // ORA-65040: wrong container — mining session started in CDB$ROOT but
                     // executing against a PDB, or vice versa. Retrying with the same
                     // connection will never succeed; park it for the user to fix the

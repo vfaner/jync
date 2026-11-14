@@ -496,6 +496,7 @@ public final class PgTestDecodingParser {
      */
     static int findNewImageStart(String body) {
         boolean inQuote = false;
+        boolean inIdentifier = false;
         for (int i = 0; i < body.length(); i++) {
             char c = body.charAt(i);
             if (inQuote) {
@@ -508,8 +509,25 @@ public final class PgTestDecodingParser {
                 }
                 continue;
             }
+            // Quoted identifiers are skipped as a unit too: test_decoding prints a name
+            // that needs quoting inside double quotes, and a name containing an apostrophe
+            // ("it's") would otherwise open a pseudo-literal that swallows the real marker
+            // — the UPDATE is then refused as "old image without a new image" and, after
+            // the strike-out cap, the project parks over a perfectly decodable change.
+            if (inIdentifier) {
+                if (c == '"') {
+                    if (i + 1 < body.length() && body.charAt(i + 1) == '"') {
+                        i++; // "" escape — still inside the identifier
+                    } else {
+                        inIdentifier = false;
+                    }
+                }
+                continue;
+            }
             if (c == '\'') {
                 inQuote = true;
+            } else if (c == '"') {
+                inIdentifier = true;
             } else if (isMarkerAt(body, i, NEW_TUPLE_MARKER)) {
                 return i + NEW_TUPLE_MARKER.length();
             }

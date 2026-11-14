@@ -1004,4 +1004,33 @@ class CdcDdlTaskServiceTest {
                 CdcDdlTaskServiceTest::mapOrders, "`"))
                 .isEqualTo("ALTER TABLE `tgt_db`.`orders_tgt` ADD COLUMN c INT");
     }
+
+    @Test
+    void ddlEditGuardKeepsDifferentDottedLiteralsApart() {
+        // normalizeDdl 去掉 schema 限定是为了容忍方言细节,但它此前既不区分字面量、也
+        // 不要求裸标识符以字母开头:1.5 与 9.5 都被改成 5,'a.b' 与 'x.b' 都被改成 'b'。
+        // assertStructureUnchanged 因此认为管理员改掉 DEFAULT 后的语句「与原结构一致」,
+        // 放行了让目标结构与源端静默分叉的编辑。
+        assertThat(CdcDdlTaskService.normalizeDdl(
+                "ALTER TABLE app.orders ALTER COLUMN amount SET DEFAULT 1.5"))
+                .isNotEqualTo(CdcDdlTaskService.normalizeDdl(
+                        "ALTER TABLE app.orders ALTER COLUMN amount SET DEFAULT 9.5"));
+        assertThat(CdcDdlTaskService.normalizeDdl(
+                "ALTER TABLE app.orders ALTER COLUMN name SET DEFAULT 'a.b'"))
+                .isNotEqualTo(CdcDdlTaskService.normalizeDdl(
+                        "ALTER TABLE app.orders ALTER COLUMN name SET DEFAULT 'x.b'"));
+    }
+
+    @Test
+    void ddlEditGuardStillIgnoresSchemaQualificationAndQuoting() {
+        // 不回归:容忍 schema 限定、标识符引号与大小写,否则映射项目的重试会被永久卡住。
+        assertThat(CdcDdlTaskService.normalizeDdl(
+                "ALTER TABLE `src_db`.`orders` ADD COLUMN c INT"))
+                .isEqualTo(CdcDdlTaskService.normalizeDdl(
+                        "ALTER TABLE orders ADD COLUMN c INT"));
+        assertThat(CdcDdlTaskService.normalizeDdl(
+                "ALTER TABLE \"SRC\".\"ORDERS\" ADD COLUMN c INT"))
+                .isEqualTo(CdcDdlTaskService.normalizeDdl(
+                        "ALTER TABLE orders ADD COLUMN c INT"));
+    }
 }

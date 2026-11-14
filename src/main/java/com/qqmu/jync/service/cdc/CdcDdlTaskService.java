@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
@@ -1261,15 +1262,66 @@ public class CdcDdlTaskService {
         String s = sql == null ? "" : sql.trim();
         s = s.replaceAll("(?is)\\bCOMMENT\\s+'(?:[^']|'')*'", " ");
         s = s.replaceAll("(?is)\\bCOMMENT\\s+\"(?:[^\"]|\"\")*\"", " ");
-        // `db`.`table` / db.table -> table: schema qualification is a dialect detail.
-        s = s.replaceAll("(?i)(`[^`]+`|\"[^\"]+\"|[A-Za-z0-9_$]+)\\s*\\.\\s*"
-                + "(`[^`]+`|\"[^\"]+\"|[A-Za-z0-9_$]+)", "$2");
+        s = stripSchemaQualification(s);
         s = s.replaceAll("[`\"\\[\\]]", "");
         s = s.replaceAll("\\s+", " ").trim().toUpperCase(Locale.ROOT);
         while (s.endsWith(";")) {
             s = s.substring(0, s.length() - 1).trim();
         }
         return s;
+    }
+
+    /**
+     * A schema-qualified name: {@code db.table}, {@code `db`.`table`} or {@code "DB"."T"}.
+     * The bare form must start with a letter, {@code _} or {@code $}, so a decimal
+     * ({@code 1.5}) is never mistaken for a qualified name.
+     */
+    private static final Pattern QUALIFIED_NAME = Pattern.compile(
+            "(?i)(`[^`]+`|\"[^\"]+\"|[A-Za-z_$][A-Za-z0-9_$]*)\\s*\\.\\s*"
+                    + "(`[^`]+`|\"[^\"]+\"|[A-Za-z_$][A-Za-z0-9_$]*)");
+
+    /**
+     * Drop the schema part of {@code db.table} outside string literals. A quoted value is
+     * data, not a name: {@code DEFAULT 'a.b'} and {@code DEFAULT 'x.b'} are different
+     * defaults, and stripping the qualifier inside them made both normalize to
+     * {@code 'B'} — {@link #assertStructureUnchanged} then accepted an edit that silently
+     * changed the target's DEFAULT. The same pass made {@code DEFAULT 1.5} and
+     * {@code DEFAULT 9.5} both read {@code DEFAULT 5}.
+     */
+    private static String stripSchemaQualification(String sql) {
+        StringBuilder out = new StringBuilder(sql.length());
+        int i = 0;
+        int codeStart = 0;
+        while (i < sql.length()) {
+            if (sql.charAt(i) != '\'') {
+                i++;
+                continue;
+            }
+            int end = endOfStringLiteral(sql, i);
+            out.append(QUALIFIED_NAME.matcher(sql.substring(codeStart, i)).replaceAll("$2"));
+            out.append(sql, i, end);              // the literal itself stays verbatim
+            i = end;
+            codeStart = end;
+        }
+        out.append(QUALIFIED_NAME.matcher(sql.substring(codeStart)).replaceAll("$2"));
+        return out.toString();
+    }
+
+    /** Index just past the closing quote of the literal starting at {@code start},
+     * resolving {@code ''} escapes; an unterminated literal runs to the end. */
+    private static int endOfStringLiteral(String sql, int start) {
+        int i = start + 1;
+        while (i < sql.length()) {
+            if (sql.charAt(i) == '\'') {
+                if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
+                    i += 2;
+                    continue;
+                }
+                return i + 1;
+            }
+            i++;
+        }
+        return sql.length();
     }
 
     private static String brief(Throwable failure, int limit) {

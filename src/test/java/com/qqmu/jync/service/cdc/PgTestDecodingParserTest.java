@@ -288,6 +288,19 @@ class PgTestDecodingParserTest {
         assertThat(line.change.row.get("note")).isEqualTo("x");
     }
 
+    @Test
+    void updateWithQuotedIdentifierContainingAnApostropheParsesTheNewImage() {
+        // test_decoding 对需要引用的列名输出双引号形式(quote_identifier)。列名本身带
+        // 撇号时,只跟踪单引号的扫描器把撇号当成字符串起点,真正的 new-tuple: 标记被
+        // 跳过 → 判成「有旧映像无新映像」的解码失败;连续 6 次会把项目停进 ERROR。
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.t: UPDATE: old-key: \"it's\"[text]:'a' id[integer]:1"
+                        + " new-tuple: \"it's\"[text]:'b' id[integer]:1");
+        assertThat(line.change.isSkipped()).isFalse();
+        assertThat(line.change.row.get("it's")).isEqualTo("b");
+        assertThat(line.change.row.get("id")).isEqualTo(1);
+    }
+
     // —— test_decoding 的 TOAST 占位符:unchanged-toast-datum ——
     // 未修改的 TOASTed 值(test_decoding.c: VARATT_IS_EXTERNAL_ONDISK)只输出占位符,
     // 真实值不在流里。把它当普通字符串写进目标 = 静默损坏。

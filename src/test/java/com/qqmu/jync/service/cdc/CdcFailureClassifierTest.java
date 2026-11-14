@@ -363,4 +363,21 @@ class CdcFailureClassifierTest {
                         + " 'fn_cdc_get_all_changes_dbo_orders_CT'")))
                 .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
     }
+
+    @Test
+    void oracleCredentialAndAccountFailuresParkAsAuthFailure() {
+        // ORA-01017(用户名/口令无效)、ORA-28000(账户被锁)、ORA-28001(口令过期)都不是
+        // 「换一次连接就会好」的问题。Oracle 驱动给它们的 SQLState 是 72000,落不进 28*
+        // 分支;不补消息匹配就归 TRANSIENT,消费者会无限退避重连、永不进入 ERROR,
+        // 运维只能在日志里猜。与 MySQL access denied / SQL Server login failed 同类。
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "ORA-01017: invalid username/password; logon denied")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "ORA-28000: the account is locked")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "ORA-28001: the password has expired")))
+                .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
+    }
 }
