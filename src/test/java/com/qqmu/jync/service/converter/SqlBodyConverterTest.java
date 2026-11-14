@@ -706,6 +706,28 @@ class SqlBodyConverterTest {
         assertThat(out).contains("CONCAT(a, b) IS NULL");
     }
 
+    /**
+     * A nested ISNULL call must not crash the conversion. The inner call sits inside the outer
+     * call's argument, so after the outer call is rewritten the matcher still reports the inner
+     * one at a position the output builder has already passed; appending from there threw
+     * IndexOutOfBoundsException, which the sync engine reported as a failed view whose message
+     * was the literal string "null".
+     *
+     * <p>The nested shape has no predicate spelling on the targets — ISNULL returns 1/0 and is
+     * never NULL, so the outer test would need a nested boolean expression — and leaving it for
+     * the function-name maps produced COALESCE(COALESCE(a)), which compiles and returns a
+     * different value. Block instead, naming the rewrite and the override.
+     */
+    @Test
+    void nestedIsnullCallsAreBlockedInsteadOfCrashingOrBecomingCoalesce() {
+        SqlBodyConverter.ConversionResult result = converter.convert(
+                "SELECT * FROM t WHERE ISNULL(ISNULL(a))",
+                DatabaseType.MYSQL, DatabaseType.POSTGRESQL);
+        assertThat(result.blocked()).isTrue();
+        assertThat(result.blockingReasons().get(0))
+                .contains("ISNULL").contains("DDL override");
+    }
+
     /** The word ISNULL inside a literal is, as always, not code and must stay put. */
     @Test
     void isnullInsideALiteralIsNotTurnedIntoAPredicate() {

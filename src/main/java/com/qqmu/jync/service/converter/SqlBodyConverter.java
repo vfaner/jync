@@ -231,10 +231,11 @@ public class SqlBodyConverter {
         // left intact and reported as a block.
         ConditionalRewrite conditional = rewriteOracleConditionals(sql, from, to);
         String result = conditional.sql();
+        java.util.List<String> blocking = new java.util.ArrayList<>();
         warnOnFormatSensitiveFunctions(result, from, to);
         result = convertIdentifierQuotes(result, from, to);
         result = convertConcatenation(result, from, to);
-        result = convertMysqlIsNullPredicate(result, from, to);
+        result = convertMysqlIsNullPredicate(result, from, to, blocking);
         result = rewriteEomonthMonthOffset(result, from, to);
         result = convertFunctions(result, from, to);
         CastRewrite cast = rewriteCastAndConvert(result, sourceType, targetType);
@@ -244,7 +245,6 @@ public class SqlBodyConverter {
         result = convertSetDifference(result, from, to);
         result = convertGroupingExtensions(result, from, to);
 
-        java.util.List<String> blocking = new java.util.ArrayList<>();
         result = convertBooleanLiterals(result, from, to, blocking);
         // '||' -> MySQL would be read as logical OR: a view/function returning 0/1 instead of
         // the concatenated text, with no error. Block rather than emit it.
@@ -1424,21 +1424,40 @@ public class SqlBodyConverter {
      */
     String convertMysqlIsNullPredicate(String sql, DatabaseType.DialectFamily from,
                                        DatabaseType.DialectFamily to) {
+        return convertMysqlIsNullPredicate(sql, from, to, new ArrayList<>());
+    }
+
+    /** Overload that reports a nested ISNULL, which no target can spell as a predicate. */
+    String convertMysqlIsNullPredicate(String sql, DatabaseType.DialectFamily from,
+                                       DatabaseType.DialectFamily to, List<String> blocking) {
         if (from != DatabaseType.DialectFamily.MYSQL || to == DatabaseType.DialectFamily.MYSQL) {
             return sql;
         }
-        return applyOutsideLiterals(sql, from, to, this::rewriteIsNullCalls);
+        return applyOutsideLiterals(sql, from, to,
+                code -> rewriteIsNullCalls(code, blocking));
     }
 
     private static final Pattern ISNULL_CALL = Pattern.compile(
             "(?i)\\bISNULL\\s*\\(");
 
+    /** Block reason for a nested ISNULL, whose inner 1/0 result is never NULL. */
+    private static final String NESTED_ISNULL_REASON =
+            "the body nests an ISNULL() call inside another ISNULL() call, whose inner result"
+                    + " is 1/0 and never NULL, so the outer test has no predicate spelling on"
+                    + " the target; rewrite the expression or provide a DDL override";
+
     /** Balanced-parenthesis rewrite of every ISNULL(...) call in a literal-free code segment. */
-    private String rewriteIsNullCalls(String code) {
+    private String rewriteIsNullCalls(String code, List<String> blocking) {
         Matcher m = ISNULL_CALL.matcher(code);
         StringBuilder sb = new StringBuilder();
         int pos = 0;
         while (m.find()) {
+            if (m.start() < pos) {
+                // A call nested inside one already emitted: its text is part of the previous
+                // replacement, and appending from a position the matcher has not caught up to
+                // threw IndexOutOfBoundsException (a failed view whose message was "null").
+                continue;
+            }
             int open = code.indexOf('(', m.start());
             int depth = 1;
             int j = open + 1;
@@ -1456,7 +1475,19 @@ public class SqlBodyConverter {
             }
             String argument = code.substring(open + 1, j - 1).trim();
             sb.append(code, pos, m.start());
-            sb.append(argument).append(" IS NULL");
+            if (ISNULL_CALL.matcher(argument).find()) {
+                // ISNULL(ISNULL(x)) has no predicate spelling: the inner call yields 1/0, never
+                // NULL, so the outer test would need a nested boolean expression the targets do
+                // not accept in SQL. Leaving it for the name maps produced COALESCE(COALESCE(x)),
+                // which compiles and returns a different value, so block instead and keep the
+                // source text for the preview.
+                if (!blocking.contains(NESTED_ISNULL_REASON)) {
+                    blocking.add(NESTED_ISNULL_REASON);
+                }
+                sb.append(code, m.start(), j);
+            } else {
+                sb.append(argument).append(" IS NULL");
+            }
             pos = j;
         }
         sb.append(code, pos, code.length());
