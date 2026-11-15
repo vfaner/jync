@@ -204,11 +204,13 @@ class OaLoginControllerTest {
     @Test
     void anOaCallThatNeverRanStillNeedsTheCsrfToken() throws Exception {
         // CSRF rejects before the handler; the app's access-denied handler answers HTML with a
-        // redirect to /?denied rather than a bare 403.
+        // redirect to the sign-in form and its expiry notice rather than a bare 403. It must
+        // not answer /?denied: nobody signed in can be denied a permission, and the entry point
+        // would save that URL as the post-login destination.
         mvc.perform(post("/login/oa")
                         .param("username", "alice").param("password", "pw"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/?denied"));
+                .andExpect(redirectedUrl("/login/local?expired"));
 
         verify(oaAuthClient, never()).authenticate(any(), anyString(), anyString());
     }

@@ -124,6 +124,21 @@ class LoginPageModeViewTest {
         assertThat(html).contains("失败次数过多");
     }
 
+    /**
+     * A form whose session expired is sent back here by the access-denied handler. The page has
+     * to say what happened; without the banner the visitor just sees the same form again and
+     * concludes the first attempt "did nothing".
+     */
+    @Test
+    void aStaleSignInFormSaysWhyItCameBack() throws Exception {
+        config.setEnabled(true);
+        config.setMode(OaAuthConfig.Mode.PASSWORD);
+
+        String html = page("/login/local?expired");
+
+        assertThat(html).contains("登录页面已过期");
+    }
+
     @Test
     void theLocalFormStaysAvailableInEveryMode() throws Exception {
         config.setEnabled(true);

@@ -57,6 +57,14 @@
             <svg class="ico"><use href="#x-circle-fill"/></svg>
             <div class="alert-body" th:text="#{login.failed}">Wrong username or password.</div>
         </div>
+        <!--/* 表单所在的会话已经过期：提交时 CSRF 校验不过，安全链把访问者送回这里。
+               这句话就是「第一次登录没反应」的全部解释。 */-->
+        <div class="alert alert-danger" th:if="${param.expired}">
+            <svg class="ico"><use href="#x-circle-fill"/></svg>
+            <div class="alert-body" th:text="#{login.expired}">
+                This sign-in page expired. Please sign in again.
+            </div>
+        </div>
         <div class="alert alert-ok" th:if="${param.logout}">
             <svg class="ico"><use href="#check-circle-fill"/></svg>
             <div class="alert-body" th:text="#{login.loggedOut}">Signed out.</div>

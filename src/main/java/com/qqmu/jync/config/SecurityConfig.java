@@ -12,12 +12,15 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AccountExpiredException;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.CredentialsExpiredException;
 import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
 import org.springframework.security.authentication.LockedException;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -29,6 +32,9 @@ import org.springframework.security.web.authentication.SavedRequestAwareAuthenti
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.logout.LogoutSuccessHandler;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
+import org.springframework.security.web.savedrequest.RequestCache;
+import org.springframework.security.web.savedrequest.SavedRequest;
 import org.springframework.security.web.util.matcher.AnyRequestMatcher;
 
 import com.qqmu.jync.model.AuditAction;
@@ -338,6 +344,9 @@ public class SecurityConfig {
     /**
      * Clears the failed-attempt counter, then performs the default saved-request redirect so that
      * a deep link is not lost on login.
+     *
+     * <p>The saved request is read through {@link DeniedFreeRequestCache}: a destination that
+     * only exists to show the "no permission" banner must never become the landing page.
      */
     private org.springframework.security.web.authentication.AuthenticationSuccessHandler
             authenticationSuccessHandler(LoginAttemptService attemptService,
@@ -345,6 +354,7 @@ public class SecurityConfig {
         SavedRequestAwareAuthenticationSuccessHandler delegate =
                 new SavedRequestAwareAuthenticationSuccessHandler();
         delegate.setDefaultTargetUrl("/");
+        delegate.setRequestCache(new DeniedFreeRequestCache());
         return (request, response, authentication) -> {
             attemptService.recordSuccess(attemptKey(request));
             // Audit before the redirect: a failure here must not lose the sign-in record,
@@ -446,10 +456,102 @@ public class SecurityConfig {
         return (request, response, denied) -> {
             if (isApiRequest(request)) {
                 writeJson(response, HttpStatus.FORBIDDEN, "error.forbidden");
+            } else if (isAnonymous()) {
+                // An anonymous caller cannot be denied a role; the only refusal that reaches this
+                // branch is CSRF, i.e. a sign-in form posted from a page whose session is gone
+                // (an old tab, a back/forward restore). Answering /?denied told that visitor the
+                // wrong story, and the entry point then saved /?denied as the post-login
+                // destination: the NEXT successful sign-in replayed it, so an administrator
+                // landed on the home page under a "no permission" banner that was never true.
+                // Send them back to the form with a notice instead.
+                response.sendRedirect(request.getContextPath() + "/login/local?expired");
             } else {
                 response.sendRedirect(request.getContextPath() + "/?denied");
             }
         };
+    }
+
+    /**
+     * Whether the current request carries no authenticated principal.
+     *
+     * <p>The CSRF filter runs before the anonymous filter, so at a token rejection the context is
+     * empty rather than holding an {@link AnonymousAuthenticationToken}; both mean "not signed
+     * in". A restored session (an authenticated form re-post) is the case handled like a role
+     * denial.
+     */
+    private static boolean isAnonymous() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication == null || authentication instanceof AnonymousAuthenticationToken;
+    }
+
+    /**
+     * A saved-request cache that forgets destinations carrying the denied flag.
+     *
+     * <p>{@code /?denied} is a banner for someone who is signed in. A signed-out visitor who
+     * lands on it — stale history, a bookmark, the old CSRF redirect — would have it saved and
+     * replayed after signing in, showing the banner to an account that holds every right. There
+     * is no legitimate reason to resume at that URL, so it is dropped and the default target is
+     * used.
+     */
+    private static final class DeniedFreeRequestCache implements RequestCache {
+
+        private final RequestCache delegate = new HttpSessionRequestCache();
+
+        @Override
+        public void saveRequest(HttpServletRequest request, HttpServletResponse response) {
+            this.delegate.saveRequest(request, response);
+        }
+
+        @Override
+        public SavedRequest getRequest(HttpServletRequest request, HttpServletResponse response) {
+            SavedRequest saved = this.delegate.getRequest(request, response);
+            if (saved != null && carriesDeniedFlag(saved.getRedirectUrl())) {
+                this.delegate.removeRequest(request, response);
+                return null;
+            }
+            return saved;
+        }
+
+        @Override
+        public HttpServletRequest getMatchingRequest(HttpServletRequest request,
+                                                     HttpServletResponse response) {
+            return this.delegate.getMatchingRequest(request, response);
+        }
+
+        @Override
+        public void removeRequest(HttpServletRequest request, HttpServletResponse response) {
+            this.delegate.removeRequest(request, response);
+        }
+    }
+
+    /**
+     * Whether a URL's query names {@code denied}, the home page's banner trigger.
+     *
+     * <p>Name, not substring: a future {@code ?deniedAt=...} or {@code ?x=denied} is a different
+     * thing. The saved URL is absolute and already ends in Spring Security 7's {@code continue}
+     * marker, which parses as its own empty parameter and is simply skipped.
+     */
+    private static boolean carriesDeniedFlag(String url) {
+        if (url == null) {
+            return false;
+        }
+        int mark = url.indexOf('?');
+        if (mark < 0) {
+            return false;
+        }
+        String query = url.substring(mark + 1);
+        int fragment = query.indexOf('#');
+        if (fragment >= 0) {
+            query = query.substring(0, fragment);
+        }
+        for (String pair : query.split("&")) {
+            int equals = pair.indexOf('=');
+            String name = equals < 0 ? pair : pair.substring(0, equals);
+            if ("denied".equals(name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Unauthenticated JSON calls get JSON, not a redirect to the login page's HTML. */

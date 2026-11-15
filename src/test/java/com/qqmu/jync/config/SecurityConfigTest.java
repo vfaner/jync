@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -174,14 +175,22 @@ class SecurityConfigTest {
                 .andExpect(redirectedUrl("/login?oaDisabled"));
     }
 
-    /** Being anonymous is not a reason to skip CSRF: the form still needs the token. */
+    /**
+     * Being anonymous is not a reason to skip CSRF: the form still needs the token.
+     *
+     * <p>A missing token here means the browser posted a page whose session is gone (an old tab,
+     * a back/forward restore). The answer has to be the sign-in page with an expiry note, not
+     * {@code /?denied}: nobody who is not signed in can be "denied a permission", and the entry
+     * point that handles {@code /?denied} saves it as the post-login destination — the next
+     * successful sign-in then replays a URL whose banner claims the caller has no rights.
+     */
     @Test
-    void theOaLoginEndpointStillNeedsTheCsrfToken() throws Exception {
+    void aStaleSignInFormIsAnsweredWithTheFormItself() throws Exception {
         mvc.perform(post("/login/oa")
                         .param("username", "someone")
                         .param("password", "secret"))
                 .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/?denied"));
+                .andExpect(redirectedUrl("/login/local?expired"));
     }
 
     // ── VIEWER ─────────────────────────────────────────────────────────────────
@@ -336,6 +345,44 @@ class SecurityConfigTest {
         mvc.perform(post("/login").with(csrf())
                         .param("username", "admin")
                         .param("password", "123456"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/"));
+    }
+
+    @Autowired
+    private com.qqmu.jync.repository.AppUserRepository userRepository;
+
+    @Autowired
+    private org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
+
+    /**
+     * A signed-out visit to {@code /?denied} (stale browser history, or the old CSRF redirect)
+     * gets saved as the post-login destination. Replaying it drops the administrator on the home
+     * page under a "no permission" banner that was never true. Sign-in must refuse such a target
+     * and fall back to the default home redirect.
+     *
+     * <p>The probe account exists because the seeded administrator still carries the shipped
+     * password, and that login short-circuits to the home page before the saved request is read.
+     */
+    @Test
+    void aSavedDeniedUrlIsNotReplayedAfterSigningIn() throws Exception {
+        userRepository.findByUsername("saved-request-probe").orElseGet(() -> {
+            AppUser probe = new AppUser();
+            probe.setUsername("saved-request-probe");
+            probe.setPasswordHash(passwordEncoder.encode("Probe-pass-123"));
+            probe.setRole(UserRole.ADMIN);
+            return userRepository.save(probe);
+        });
+
+        MockHttpSession session = new MockHttpSession();
+        // Signed out, the home page sits behind the entry point, which stores this URL.
+        mvc.perform(get("/?denied").session(session))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login"));
+
+        mvc.perform(post("/login").session(session).with(csrf())
+                        .param("username", "saved-request-probe")
+                        .param("password", "Probe-pass-123"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl("/"));
     }
@@ -623,8 +670,12 @@ class SecurityConfigTest {
      */
     @Test
     void aWriteWithoutTheTokenIsRefusedEvenForAnAdmin() throws Exception {
-        // HTML endpoint redirects to /?denied; API endpoint returns 403.
-        assertThat(statusOf(post(A_WRITE).with(asAdmin()))).isEqualTo(302);
+        // HTML endpoint redirects to /?denied; API endpoint returns 403. A signed-in caller
+        // keeps that banner: only an anonymous post — which cannot be a permission problem —
+        // is answered with the sign-in form and its expiry notice.
+        mvc.perform(post(A_WRITE).with(asAdmin()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/?denied"));
         assertThat(statusOf(post(AN_API_WRITE).with(asAdmin()))).isEqualTo(403);
     }
 }
