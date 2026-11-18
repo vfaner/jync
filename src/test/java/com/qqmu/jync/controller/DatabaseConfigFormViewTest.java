@@ -226,6 +226,20 @@ class DatabaseConfigFormViewTest {
     }
 
     @Test
+    void everyWriterGetsTheDriverDiscoveryButton() throws Exception {
+        // The lookup reads the class names out of the jar the caller names, which is a path
+        // that same caller may already put on its own connection. It therefore follows the
+        // connection form's own permission level and is offered to an operator as well.
+        String adminPage = html(mvc.perform(get("/databases/new").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+        assertThat(adminPage).contains("data-role=\"find-drivers\"");
+
+        String opsPage = html(mvc.perform(get("/databases/new").with(as(UserRole.OPS)))
+                .andExpect(status().isOk()));
+        assertThat(opsPage).contains("data-role=\"find-drivers\"");
+    }
+
+    @Test
     void otherTypesHideTheSqlServerPortHelp() throws Exception {
         DatabaseConfig dm = new DatabaseConfig();
         dm.setId(9L);

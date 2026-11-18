@@ -226,6 +226,8 @@
                             <input type="text" class="input mono" id="customJarPath" th:field="*{customJarPath}"
                                    placeholder="/opt/drivers/gbase-jdbc.jar"
                                    th:disabled="${driverCardEnabled and !mongoNative} ? null : 'disabled'">
+                            <!--/* 探测驱动读的是调用者自己填的 jar：与这张表单同一权限级（写角色），
+                                   所以不用 isAdmin 门控；访客本就打不开这张表单。 */-->
                             <button type="button" class="btn btn-ghost" data-role="find-drivers"
                                     th:attr="data-action=@{/api/databases/discover-drivers}"
                                     th:disabled="${driverCardEnabled and !mongoNative} ? null : 'disabled'">

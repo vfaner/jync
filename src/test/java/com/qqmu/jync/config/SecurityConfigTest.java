@@ -230,7 +230,7 @@ class SecurityConfigTest {
 
     /**
      * Form pages write nothing, but a read-only user has no use for a form whose Save button is
-     * guaranteed to fail, and driver discovery would disclose server-side paths.
+     * guaranteed to fail. Driver discovery is a form helper, so it is locked with the form.
      */
     @Test
     void aViewerIsNotOfferedTheFormPages() throws Exception {
@@ -295,8 +295,8 @@ class SecurityConfigTest {
 
     /**
      * The system surface is the administrator's on both verbs. The webhook URL, the SSO
-     * endpoints and shared secret, the audit trail, the update poll and driver discovery all
-     * answer an operator exactly as they answer a viewer.
+     * endpoints and shared secret, the audit trail and the update poll all answer an operator
+     * exactly as they answer a viewer.
      */
     @Test
     void anOpsIsDeniedTheSystemSurface() throws Exception {
@@ -305,8 +305,6 @@ class SecurityConfigTest {
             assertThat(statusOf(get(page).with(asOps()))).as(page).isEqualTo(302);
         }
         assertThat(statusOf(get("/api/upgrade/status").with(asOps()))).isEqualTo(403);
-        assertThat(statusOf(get("/api/databases/discover-drivers").with(asOps())))
-                .isEqualTo(403);
 
         for (String path : new String[] {"/system-config/update-check", "/external-auth",
                 "/alert-settings", "/ai/1/delete", "/change-logs/clear"}) {
@@ -330,6 +328,10 @@ class SecurityConfigTest {
                 "/redis/targets/new"}) {
             assertThat(statusOf(get(page).with(asOps()))).as(page).isEqualTo(200);
         }
+        // Driver discovery is a helper of the connection form and reads only the jar the
+        // caller names — a path the same caller may already put on its own connection.
+        assertThat(statusOf(get("/api/databases/discover-drivers")
+                .param("jarPath", "/nonexistent/driver.jar").with(asOps()))).isEqualTo(200);
     }
 
     /** CPU, heap and GC describe the JVM every task shares, so no role has a reason to hide them. */

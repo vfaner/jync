@@ -105,10 +105,7 @@ public class SecurityConfig {
             "/audits",
             // One-click upgrade is an administrator action end to end; an operator is never
             // shown the button, so the status poll must not answer for one either.
-            "/api/upgrade/status",
-            // Driver discovery discloses server-side filesystem paths; the database form is a
-            // business configuration page, but this lookup is an administrator's tool.
-            "/api/databases/discover-drivers"
+            "/api/upgrade/status"
     };
 
     /**
@@ -157,6 +154,11 @@ public class SecurityConfig {
             // target to list its tables. Advisory for the form, but still a dial into a
             // production database, so it is locked like the probe above.
             "/api/databases/*/tables",
+            // Driver discovery reads the class names out of the jar the caller names — a path
+            // the same caller may already put on its own connection — so it follows the
+            // connection form and admits operators. A viewer is still refused: it is a form
+            // helper, and no viewer may open the form.
+            "/api/databases/discover-drivers",
             // Preview returns row data straight out of the configured databases, and the two
             // lookups expose an arbitrary table's schema. The CDC probe is read-only in the
             // HTTP sense but opens a connection to the configured source and runs capability
