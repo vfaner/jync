@@ -2197,6 +2197,22 @@ a.type-card:focus-visible {
 .support-msg.is-thinking { color: var(--ink-mute); font-style: italic; }
 .support-tool { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--ink-soft); font-size: 12px; }
 
+/* 助手回答按 Markdown 渲染；user 气泡仍是纯文本，保留输入的换行。 */
+.support-md-host { white-space: normal; }
+.support-md-p { margin: 0 0 6px; }
+.support-md-p:last-child { margin-bottom: 0; }
+.support-md-h { margin: 8px 0 4px; font-weight: 600; }
+.support-md-h:first-child { margin-top: 0; }
+.support-md-list { margin: 4px 0 6px; padding-left: 18px; }
+.support-md-list li { margin: 1px 0; }
+.support-md code { font-family: var(--mono); font-size: 12.5px; background: var(--bg-soft); border-radius: 4px; padding: 1px 4px; }
+.support-md-pre { margin: 6px 0; padding: 8px 10px; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+.support-md-pre code { background: none; padding: 0; font-size: 12.5px; }
+.support-md-table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 12.5px; }
+.support-md-table th, .support-md-table td { border: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
+.support-md-table th { background: var(--bg-soft); font-weight: 600; }
+.support-md a { color: var(--brand); text-decoration: underline; }
+
 .support-draft {
   align-self: flex-start; width: 100%; padding: 12px; border-radius: var(--radius);
   background: var(--fb-brand-06); border: 1px solid var(--fb-brand-20);

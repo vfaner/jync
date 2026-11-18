@@ -87,13 +87,120 @@
     save({ max: max });
   }
 
-  function appendBubble(role, textToShow) {
+  function appendBubble(role, textToShow, markdown) {
     var el = document.createElement('div');
     el.className = 'support-msg support-' + role;
-    el.textContent = textToShow || '';
+    if (markdown) {
+      el.classList.add('support-md-host');
+      el.innerHTML = mdToHtml(textToShow || '');
+    } else {
+      el.textContent = textToShow || '';
+    }
     log.appendChild(el);
     log.scrollTop = log.scrollHeight;
     return el;
+  }
+
+  // —— 轻量 Markdown 渲染 ——
+  // 安全边界：先把整段文本做 HTML 转义，再只生成白名单标签（p/strong/em/code/
+  // pre/ul/ol/li/table/a），模型输出无法注入脚本；链接只放行 http(s) 与站内
+  // 相对地址，并强制 noopener。内联代码先抽出占位，避免里面的 * 与 [ 被二次处理。
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function inlineMd(escaped) {
+    var codes = [];
+    var out = escaped.replace(/`([^`\n]+)`/g, function (m, code) {
+      codes.push('<code>' + code + '</code>');
+      return '\u0001' + (codes.length - 1) + '\u0001';
+    });
+    out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+    out = out.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, function (m, label, url) {
+      if (!/^(https?:\/\/|\/|#)/i.test(url)) return m;
+      return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+    });
+    return out.replace(/\u0001(\d+)\u0001/g, function (m, n) { return codes[+n]; });
+  }
+  function mdTable(rows) {
+    function cells(line) {
+      var s = line.trim();
+      if (s.charAt(0) === '|') s = s.substring(1);
+      if (s.charAt(s.length - 1) === '|') s = s.substring(0, s.length - 1);
+      return s.split('|');
+    }
+    var head = cells(rows[0]);
+    var html = '<table class="support-md-table"><thead><tr>';
+    head.forEach(function (cell) { html += '<th>' + inlineMd(esc(cell.trim())) + '</th>'; });
+    html += '</tr></thead><tbody>';
+    rows.slice(2).forEach(function (line) {
+      var cols = cells(line);
+      html += '<tr>';
+      head.forEach(function (_, j) {
+        html += '<td>' + inlineMd(esc((cols[j] || '').trim())) + '</td>';
+      });
+      html += '</tr>';
+    });
+    return html + '</tbody></table>';
+  }
+  function mdToHtml(src) {
+    // 占位符用的控制字符先剔除，保证它只来自本函数的代码抽出。
+    var lines = String(src == null ? '' : src).replace(/\u0001/g, '').split('\n');
+    var html = [];
+    var i = 0;
+    var listRe = /^\s*(?:([-*•])|(\d+)\.)\s+(.*)$/;
+    while (i < lines.length) {
+      var line = lines[i];
+      if (/^\s*```/.test(line)) {
+        var code = [];
+        i++;
+        while (i < lines.length && !/^\s*```/.test(lines[i])) {
+          code.push(lines[i]);
+          i++;
+        }
+        i++;
+        html.push('<pre class="support-md-pre"><code>' + esc(code.join('\n')) + '</code></pre>');
+        continue;
+      }
+      if (/^\s*\|/.test(line) && i + 1 < lines.length && /\|/.test(lines[i + 1])
+          && /^[\s|:-]+$/.test(lines[i + 1]) && lines[i + 1].indexOf('-') >= 0) {
+        var rows = [];
+        while (i < lines.length && /^\s*\|/.test(lines[i])) {
+          rows.push(lines[i]);
+          i++;
+        }
+        html.push(mdTable(rows));
+        continue;
+      }
+      var item = line.match(listRe);
+      if (item) {
+        var ordered = !!item[2];
+        var items = [];
+        while (i < lines.length) {
+          var next = lines[i].match(listRe);
+          if (!next || !!next[2] !== ordered) break;
+          items.push('<li>' + inlineMd(esc(next[3])) + '</li>');
+          i++;
+        }
+        var tag = ordered ? 'ol' : 'ul';
+        html.push('<' + tag + ' class="support-md-list">' + items.join('') + '</' + tag + '>');
+        continue;
+      }
+      var heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+      if (heading) {
+        html.push('<div class="support-md-h">' + inlineMd(esc(heading[1])) + '</div>');
+        i++;
+        continue;
+      }
+      if (/^\s*$/.test(line)) {
+        i++;
+        continue;
+      }
+      html.push('<p class="support-md-p">' + inlineMd(esc(line)) + '</p>');
+      i++;
+    }
+    return html.join('');
   }
 
   // 首次打开（或点「新会话」后）的欢迎语；只作提示，不计入会话轮次。
@@ -124,7 +231,7 @@
     }
     if (!s.max && s.x != null && s.y != null) place(s.x, s.y);
     (s.turns || []).forEach(function (turn) {
-      appendBubble(turn.role, turn.text);
+      appendBubble(turn.role, turn.text, turn.role === 'assistant');
     });
     if (!(s.turns || []).length) showGreeting();
     if (s.draftUsed) markDraftUsed(s.draftUsed);
@@ -253,9 +360,34 @@
     });
 
     var bubble = appendBubble('assistant', '');
-    bubble.classList.add('is-thinking');
-    bubble.textContent = labels.thinking;
+    bubble.classList.add('support-md-host', 'is-thinking');
+    var thinkingEl = document.createElement('span');
+    thinkingEl.textContent = labels.thinking;
+    bubble.appendChild(thinkingEl);
+    var answerEl = document.createElement('div');
+    answerEl.className = 'support-md';
     var answer = '';
+    var answered = false;
+    var paintPending = false;
+    function startAnswer() {
+      if (answered) return;
+      answered = true;
+      bubble.classList.remove('is-thinking');
+      if (thinkingEl.parentNode === bubble) bubble.removeChild(thinkingEl);
+      bubble.appendChild(answerEl);
+    }
+    // 流式期间按帧合并重绘：逐 token 重排整段 Markdown 会明显掉帧。
+    function paint() {
+      if (paintPending) return;
+      paintPending = true;
+      var flush = function () {
+        paintPending = false;
+        answerEl.innerHTML = mdToHtml(answer);
+        log.scrollTop = log.scrollHeight;
+      };
+      if (window.requestAnimationFrame) window.requestAnimationFrame(flush);
+      else flush();
+    }
 
     busy = true;
     sendBtn.disabled = true;
@@ -282,14 +414,10 @@
         return response.json().then(function (data) { showError(data.messageKey); });
       }
       return consume(response, function (name, data) {
-        if (bubble.classList.contains('is-thinking')) {
-          bubble.classList.remove('is-thinking');
-          bubble.textContent = '';
-        }
+        startAnswer();
         if (name === 'delta') {
           answer += data.text || '';
-          bubble.textContent = answer;
-          log.scrollTop = log.scrollHeight;
+          paint();
         } else if (name === 'tool') {
           var toolLine = document.createElement('div');
           toolLine.className = 'support-tool';
@@ -306,10 +434,14 @@
       showError('error.network');
     }).finally(function () {
       bubble.classList.remove('is-thinking');
-      if (!answer && bubble.textContent === labels.thinking) {
-        bubble.textContent = '';
+      if (answer) {
+        answerEl.innerHTML = mdToHtml(answer);
+        remember('assistant', answer);
       }
-      if (answer) remember('assistant', answer);
+      // 没正文也没工具进度（例如只回了错误事件）：不留空气泡。
+      if (!answer && !bubble.querySelector('.support-tool') && bubble.parentNode) {
+        bubble.parentNode.removeChild(bubble);
+      }
       busy = false;
       sendBtn.disabled = unusable;
       input.disabled = unusable;
