@@ -108,12 +108,6 @@ public class EtlController {
             return "redirect:/etl";
         }
         model.addAttribute("task", task);
-        model.addAttribute("running", etlTaskService.isRunning(id));
-        if (task.getBatchId() != null) {
-            // The banner and the locked connection pair come from the owning batch.
-            etlBatchService.findById(task.getBatchId())
-                    .ifPresent(batch -> model.addAttribute("batch", batch));
-        }
         addFormOptions(model, task);
         return "etl-form";
     }
@@ -193,6 +187,22 @@ public class EtlController {
     }
 
     private void addFormOptions(Model model, EtlTask task) {
+        EtlTask stored = task == null || task.getId() == null
+                ? null : etlTaskService.findById(task.getId()).orElse(null);
+        if (stored != null) {
+            // The form posts only the id: membership and the stored schedule are not fields.
+            // Without this, a re-render after a rejected save or a precheck would show a member
+            // as a standalone task — editable connections and a cron box the save then refuses.
+            if (task.getBatchId() == null) {
+                task.setBatchId(stored.getBatchId());
+            }
+            model.addAttribute("running", etlTaskService.isRunning(task.getId()));
+        }
+        if (task != null && task.getBatchId() != null) {
+            // The banner and the locked connection pair come from the owning batch.
+            etlBatchService.findById(task.getBatchId())
+                    .ifPresent(batch -> model.addAttribute("batch", batch));
+        }
         List<DatabaseConfig> connections = etlTaskService.connections();
         List<DatabaseConfig> sources = EtlConnectionOptions.sources(connections,
                 task == null ? null : task.getSourceDbId());

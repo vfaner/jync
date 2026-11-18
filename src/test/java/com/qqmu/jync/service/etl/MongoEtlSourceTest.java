@@ -351,6 +351,17 @@ class MongoEtlSourceTest {
                 .contains("etl.precheck.mongo.resume.error");
     }
 
+    @Test
+    void probeIgnoresAResumeKeyTheWriteModeNeverReads() {
+        // Same rule as the JDBC probe: only the modes that resume read the key, so an
+        // overwrite with a leftover name must not be refused by its own precheck.
+        EtlSourceProbe probe = source().probe(task(EtlWriteMode.OVERWRITE, "unsampled"), 15);
+
+        assertThat(probe.resumeKeyIndex()).isEqualTo(-1);
+        assertThat(probe.issues()).extracting(EtlSourceIssue::code)
+                .doesNotContain("etl.precheck.mongo.resume.error");
+    }
+
     /**
      * A field may be absent from the first sampled document and present in the others. Looking
      * only at sample one would warn about a null resume value that does not exist.

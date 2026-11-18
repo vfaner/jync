@@ -136,7 +136,10 @@ public final class MongoEtlSource implements EtlSource {
             }
             issues.add(ok("etl.precheck.mongo.sample.ok", String.valueOf(samples.size())));
 
-            int keyIndex = checkResumeKey(columns, samples, task, issues);
+            // Only the modes that resume read the key; a leftover name in a hidden field is
+            // ignored by save and the run, so the precheck must ignore it as well.
+            int keyIndex = resumable(task)
+                    ? checkResumeKey(columns, samples, task, issues) : -1;
             return new EtlSourceProbe(columns, keyIndex, issues);
         } catch (RuntimeException e) {
             throw sourceFailure(e);

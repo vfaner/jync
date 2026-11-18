@@ -123,6 +123,22 @@ class EtlFormTemplateAssemblyTest {
                 .contains("th:fragment=\"" + fragment + "\"");
     }
 
+    @Test
+    void everyIconInTheBlocksIsClosed() throws IOException {
+        // An unclosed <svg> swallows the label beside it and the icon does not draw. The
+        // parser is lenient, so only a raw read catches it.
+        try (var files = Files.list(FORM)) {
+            for (Path file : files.toList()) {
+                String html = read(file);
+                long open = html.split("<svg\\b", -1).length - 1;
+                long close = html.split("</svg>", -1).length - 1;
+                assertThat(close)
+                        .as("%s closes every <svg> it opens", file.getFileName())
+                        .isEqualTo(open);
+            }
+        }
+    }
+
     private static String read(Path path) throws IOException {
         return Files.readString(path, StandardCharsets.UTF_8);
     }

@@ -1,9 +1,13 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -77,6 +81,35 @@ class EtlBatchMemberFormViewTest {
                 .doesNotContain("id=\"targetDbId\"")
                 .doesNotContain("name=\"cronExpression\"")
                 .contains("formaction=\"/etl/precheck\"");
+    }
+
+    @Test
+    void aMemberFormKeepsItsBatchContextWhenASaveIsRejected() throws Exception {
+        when(etlTaskService.findById(7L)).thenReturn(Optional.of(task(7L, 5L)));
+        when(etlTaskService.connections()).thenReturn(List.of(source(1L), target(2L)));
+        when(etlTaskService.isRunning(7L)).thenReturn(false);
+        when(etlBatchService.findById(5L)).thenReturn(Optional.of(batch(5L, "nightly")));
+        doThrow(new IllegalArgumentException("error.etl.name.required"))
+                .when(etlTaskService).save(any());
+
+        String page = mvc.perform(post("/etl/save").with(asAdmin()).with(csrf())
+                        .param("id", "7")
+                        .param("name", "")
+                        .param("sourceDbId", "1")
+                        .param("targetDbId", "2")
+                        .param("targetTable", "orders")
+                        .param("writeMode", "OVERWRITE"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The form posts only the id; the rejected save must not turn a member into a
+        // standalone task with editable connections and a cron box of its own.
+        assertThat(page)
+                .contains("data-role=\"batch-banner\"")
+                .doesNotContain("data-role=\"batch-hint\"")
+                .contains("type=\"hidden\" name=\"sourceDbId\"")
+                .doesNotContain("id=\"sourceDbId\"")
+                .doesNotContain("name=\"cronExpression\"");
     }
 
     @Test

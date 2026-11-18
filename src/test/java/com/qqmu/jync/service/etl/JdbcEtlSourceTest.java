@@ -402,6 +402,21 @@ class JdbcEtlSourceTest {
     }
 
     @Test
+    void probeIgnoresAResumeKeyTheWriteModeNeverReads() throws SQLException {
+        // Save accepts a value left in the hidden field for a mode that never reads it, and
+        // the run ignores it. The precheck must agree: judging it would refuse a task that
+        // saves and runs.
+        when(resultSet.findColumn("not_there")).thenThrow(new SQLException("no such column"));
+        JdbcEtlSource source = source(DatabaseType.H2);
+
+        EtlSourceProbe probe = source.probe(task(EtlWriteMode.OVERWRITE, "not_there"), 15);
+
+        assertThat(probe.resumeKeyIndex()).isEqualTo(-1);
+        assertThat(probe.issues()).extracting(EtlSourceIssue::code)
+                .doesNotContain("etl.precheck.resume.error");
+    }
+
+    @Test
     void aMissingResumeKeyFailsTheQueryAsAProgramError() throws SQLException {
         when(resultSet.findColumn("not_there")).thenThrow(new SQLException("no such column"));
         JdbcEtlSource source = source(DatabaseType.H2);

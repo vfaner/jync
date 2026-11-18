@@ -185,7 +185,10 @@ final class JdbcEtlSource implements EtlSource {
 
         int keyIndex = -1;
         String key = task.getResumeKeyColumn();
-        if (key != null && !key.isBlank()) {
+        // Only the modes that resume read the key. The form hides the field for the others
+        // but still submits it, so a leftover name must not fail a precheck over a check the
+        // run never performs — save and the runner already ignore it.
+        if (resumable(task) && key != null && !key.isBlank()) {
             String trimmed = key.trim();
             try {
                 keyIndex = resultSet.findColumn(trimmed);
