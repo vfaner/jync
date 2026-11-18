@@ -151,7 +151,17 @@ sync:
   crypto-salt: ""
 ```
 
-首次访问 `http://<服务器>:8080`，使用 `admin / 123456`（管理员）或 `view / 123456`（访客），**首次登录强制修改密码**（未修改前只能停留在改密页）。生产部署、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)、[部署页](https://jync.qqmu.com/deploy.html)与[容器部署说明](docs/deploy-container.md)。HTTPS 有两种方式：前置反向代理终止 TLS（推荐），或直接在「系统管理 → 系统配置」上传 PKCS#12 / JKS 密钥库或 PEM 证书与私钥，由 Jync 自己监听 HTTPS，重启后生效；同一页还可开关强制 HTTPS、导出/导入配置包——细节见[配置文档](docs/configuration.md)。
+首次访问 `http://<服务器>:8080`，使用内置账号 `admin / 123456`（系统管理员）、`ops / 123456`（运维）或 `view / 123456`（访客），**首次登录强制修改密码**（未修改前只能停留在改密页）。三种角色的权限见下表；从旧版本升级时若不需要 `ops` 账号，用 SQL 删除即可，重启不会重建。
+
+| 账号 | 角色 | 能做什么 |
+|---|---|---|
+| `admin` | 系统管理员 | 全部资源与系统配置：连接、项目、ETL、迁移、AI、外部认证、告警、审计、升级 |
+| `ops` | 运维 | 查看全部资源；新建、编辑、删除、运行只限于自己名下的资源；不能进入系统配置、外部认证、告警、审计、AI 配置与配置包 |
+| `view` | 访客 | 只读：可看全部资源与进程指标，所有写请求被拒 |
+
+> 归属按创建者账号记录。升级前创建的连接与项目没有归属（系统所有），运维只读且不能在新任务里引用；管理员不受影响。
+
+生产部署、外部元数据库、systemd、Docker / Kubernetes、反向代理与 HTTPS、升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)、[部署页](https://jync.qqmu.com/deploy.html)与[容器部署说明](docs/deploy-container.md)。HTTPS 有两种方式：前置反向代理终止 TLS（推荐），或直接在「系统管理 → 系统配置」上传 PKCS#12 / JKS 密钥库或 PEM 证书与私钥，由 Jync 自己监听 HTTPS，重启后生效；同一页还可开关强制 HTTPS、导出/导入配置包——细节见[配置文档](docs/configuration.md)。
 
 > 🔐 升级前备份 `./data`（连同 `<库名>.key`）、`./logs` 与 `application.yml`。密钥丢失后，已保存的连接密码、AI 密钥与告警地址将无法解密。
 

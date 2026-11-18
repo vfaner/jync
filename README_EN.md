@@ -150,7 +150,17 @@ sync:
   crypto-salt: ""
 ```
 
-Open `http://<server>:8080` and sign in as `admin / 123456` (administrator) or `view / 123456` (viewer); **you must change the password on first sign-in** (until then, only the change-password page is reachable). Production settings, external metadata store, systemd, Docker / Kubernetes, reverse proxy and HTTPS, upgrades and backups: [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf), the website's [deployment page](https://jync.qqmu.com/deploy.html) and [container notes](docs/deploy-container.md). HTTPS works two ways: terminate TLS at a reverse proxy (recommended), or upload a PKCS#12 / JKS keystore or PEM certificate and key under System → System settings and let Jync serve HTTPS itself; changes apply after a restart. The same page toggles force-HTTPS, exports/imports configuration packages and tests a candidate metadata database. See [configuration](docs/configuration.md).
+Open `http://<server>:8080` and sign in as the built-in `admin / 123456` (system administrator), `ops / 123456` (operator) or `view / 123456` (viewer); **you must change the password on first sign-in** (until then, only the change-password page is reachable). The three roles are described below; an upgraded installation can delete the `ops` account with SQL and it will not come back on restart.
+
+| Account | Role | What it may do |
+|---|---|---|
+| `admin` | System administrator | Everything, including system settings, external auth, AI, alerting, audit and upgrades |
+| `ops` | Operator | Read every resource; create, edit, delete and run only resources it owns; no system settings, external auth, alerting, audit, AI configuration or configuration packages |
+| `view` | Viewer | Read-only: sees every resource and the process metrics, all write requests are refused |
+
+> Ownership is recorded per creating account. Resources created before the upgrade have no owner (system-owned): operators can only read them and cannot reference them from new tasks; administrators are unaffected.
+
+Production settings, external metadata store, systemd, Docker / Kubernetes, reverse proxy and HTTPS, upgrades and backups: [Operations Guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf), the website's [deployment page](https://jync.qqmu.com/deploy.html) and [container notes](docs/deploy-container.md). HTTPS works two ways: terminate TLS at a reverse proxy (recommended), or upload a PKCS#12 / JKS keystore or PEM certificate and key under System → System settings and let Jync serve HTTPS itself; changes apply after a restart. The same page toggles force-HTTPS, exports/imports configuration packages and tests a candidate metadata database. See [configuration](docs/configuration.md).
 
 > 🔐 Back up `./data` (including `<db>.key`), `./logs` and `application.yml` before upgrading. Without the key, saved connection passwords, AI keys and alert URLs cannot be decrypted.
 
