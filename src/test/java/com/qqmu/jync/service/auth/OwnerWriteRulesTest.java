@@ -179,6 +179,28 @@ class OwnerWriteRulesTest {
         assertThat(etlBatches.saveSettings(edit, ALICE).getOwnerUsername()).isEqualTo("alice");
     }
 
+    @Test
+    void aNewBatchMustNotReferenceAnotherOperatorsConnections() {
+        DatabaseConfig aliceSource = databaseConfigs.save(connection("s-src"), "pw", null, ALICE);
+        DatabaseConfig aliceTarget = databaseConfigs.save(targetConnection("s-dst"), "pw", null,
+                ALICE);
+        String name = "borrowed-" + System.nanoTime();
+
+        EtlBatch form = new EtlBatch();
+        form.setName(name);
+        form.setSourceDbId(aliceSource.getId());
+        form.setTargetDbId(aliceTarget.getId());
+
+        // The /etl/batches/save create branch is a second way into a new batch. If it skipped
+        // the reference rule, an operator could bind a batch he owns to her connections, then
+        // add tables and run it — reading her source and writing her target with her secrets.
+        assertThatThrownBy(() -> etlBatches.saveSettings(form, BOB))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageStartingWith("error.ownership.reference");
+        assertThat(etlBatchRepository.findAll())
+                .noneMatch(batch -> name.equals(batch.getName()));
+    }
+
     /** The smallest connection the service accepts: MySQL, SOURCE, TCP, one database. */
     private static DatabaseConfig connection(String name) {
         return connection(name, ConnectionRole.SOURCE);

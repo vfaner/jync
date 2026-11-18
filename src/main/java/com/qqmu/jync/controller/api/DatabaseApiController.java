@@ -139,7 +139,8 @@ public class DatabaseApiController {
         DatabaseConfig config = form.toEntity();
         // The form posts both secrets; a blank one means "keep the stored value".
         Map<String, Object> body =
-                describe(service.testTransient(config, rawPassword, rawMinerPassword));
+                describe(service.testTransient(config, rawPassword, rawMinerPassword,
+                        AccessGuard.current()));
         body.put("jdbcUrl", service.previewUrl(config));
         return ResponseEntity.ok(body);
     }

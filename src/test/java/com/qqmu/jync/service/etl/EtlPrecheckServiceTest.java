@@ -20,6 +20,7 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.connection.DataSourceManager;
 
 /**
@@ -354,7 +355,7 @@ class EtlPrecheckServiceTest {
         form.setSourceDbId(1L);
         form.setTargetDbId(1L);
 
-        assertThatThrownBy(() -> service.check(form))
+        assertThatThrownBy(() -> service.check(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.same.database");
     }
@@ -366,7 +367,7 @@ class EtlPrecheckServiceTest {
         form.setSourceDbId(1L);
         form.setTargetDbId(2L);
 
-        assertThatThrownBy(() -> service.check(form))
+        assertThatThrownBy(() -> service.check(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.targetTable.invalid");
     }
@@ -378,7 +379,7 @@ class EtlPrecheckServiceTest {
         form.setSourceDbId(1L);
         form.setTargetDbId(2L);
 
-        assertThatThrownBy(() -> service.check(form))
+        assertThatThrownBy(() -> service.check(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.range.required");
     }

@@ -5,6 +5,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.model;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -154,6 +155,24 @@ class OwnershipMatrixTest {
     }
 
     @Test
+    void aTransientTestCannotBorrowAnotherOperatorsStoredSecret() throws Exception {
+        DatabaseConfig alices = connection(unique("alice-db-borrow"), "alice",
+                ConnectionRole.SOURCE);
+
+        // The form's blank secret means "use the stored one". With a foreign id that would
+        // decrypt her password and hand it to a host this request chose.
+        forbidden(post("/api/databases/test").with(asOps("bob")).with(csrf())
+                .param("id", alices.getId().toString())
+                .param("name", unique("borrower"))
+                .param("role", "SOURCE")
+                .param("type", "MYSQL")
+                .param("host", "127.0.0.1")
+                .param("port", "1")
+                .param("databaseName", "demo")
+                .param("username", "sync"));
+    }
+
+    @Test
     void theDatabasePerformanceEndpointsRefuseForeignConnections() throws Exception {
         DatabaseConfig alices = connection(unique("alice-db-perf"), "alice",
                 ConnectionRole.SOURCE);
@@ -262,6 +281,26 @@ class OwnershipMatrixTest {
     }
 
     @Test
+    void theEtlPrecheckRefusesForeignConnections() throws Exception {
+        DatabaseConfig alices = connection(unique("alice-etl-pre-src"), "alice",
+                ConnectionRole.SOURCE);
+        DatabaseConfig bobs = connection(unique("bob-etl-pre-dst"), "bob", ConnectionRole.TARGET);
+
+        // A new task has no id to guard, but the precheck still opens both connections — and
+        // runs the caller's SQL (leading script statements for real) against the source.
+        mvc.perform(post("/etl/precheck").with(asOps("bob")).with(csrf())
+                        .param("name", unique("precheck"))
+                        .param("sourceDbId", alices.getId().toString())
+                        .param("targetDbId", bobs.getId().toString())
+                        .param("sourceSql", "select 1")
+                        .param("targetTable", "orders")
+                        .param("writeMode", "OVERWRITE"))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("precheckError",
+                        org.hamcrest.Matchers.startsWith("error.ownership.reference")));
+    }
+
+    @Test
     void anOpsCanOpenItsOwnEtlTask() throws Exception {
         DatabaseConfig src = connection(unique("bob-etl-src"), "bob", ConnectionRole.SOURCE);
         DatabaseConfig dst = connection(unique("bob-etl-dst"), "bob", ConnectionRole.TARGET);
@@ -329,6 +368,35 @@ class OwnershipMatrixTest {
     }
 
     @Test
+    void aTransientMigrationTestCannotBorrowAnotherOperatorsStoredSecret() throws Exception {
+        MigrationConnection alices = migrationConnection(unique("alice-search-borrow"), "alice");
+
+        forbidden(post("/api/migrations/connections/test").with(asOps("bob")).with(csrf())
+                .param("id", alices.getId().toString())
+                .param("name", unique("borrower"))
+                .param("kind", "ELASTICSEARCH")
+                .param("baseUrl", "http://127.0.0.1:1")
+                .param("authType", "BASIC")
+                .param("username", "sync"));
+    }
+
+    @Test
+    void theMigrationPrecheckRefusesForeignConnections() throws Exception {
+        MigrationConnection alices = migrationConnection(unique("alice-pre-src"), "alice");
+        MigrationConnection bobs = migrationConnection(unique("bob-pre-dst"), "bob",
+                MigrationConnectionKind.EASYSEARCH);
+
+        // The precheck dials both stored endpoints and creates a throwaway index on the target.
+        mvc.perform(post("/migrations/es-to-easysearch/precheck").with(asOps("bob")).with(csrf())
+                        .param("name", unique("precheck"))
+                        .param("sourceConnectionId", alices.getId().toString())
+                        .param("targetConnectionId", bobs.getId().toString()))
+                .andExpect(status().isOk())
+                .andExpect(model().attribute("error",
+                        org.hamcrest.Matchers.startsWith("error.ownership.reference")));
+    }
+
+    @Test
     void theMigrationTaskActionsRefuseAnotherOperatorsTask() throws Exception {
         MigrationTaskFixture fixture = foreignMigrationTask("alice");
         String path = "/migrations/es-to-easysearch/" + fixture.task().getId();
@@ -364,6 +432,19 @@ class OwnershipMatrixTest {
         RedisTarget own = redisTarget(unique("bob-cache"), "bob");
         mvc.perform(get("/redis/targets/" + own.getId() + "/edit").with(asOps("bob")))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void aTransientRedisVerifyCannotBorrowAnotherOperatorsStoredSecret() throws Exception {
+        RedisTarget alices = redisTarget(unique("alice-cache-verify"), "alice");
+
+        // A blank password with a foreign id would decrypt her password and send AUTH to a
+        // host this request chose.
+        denied(post("/redis/targets/verify").with(asOps("bob")).with(csrf())
+                .param("id", alices.getId().toString())
+                .param("name", unique("borrower"))
+                .param("host", "127.0.0.1")
+                .param("port", "1"));
     }
 
     // ---------------------------------------------------------------- fixture

@@ -297,21 +297,18 @@ public class DatabaseConfigService {
      *
      * <p>Lets the user verify settings before committing them, which matters most for custom
      * drivers where the jar path and class name are easy to get wrong.
-     */
-    public ConnectionTestService.TestResult testTransient(DatabaseConfig config, String rawPassword) {
-        return testTransient(config, rawPassword, null);
-    }
-
-    /**
-     * Both secrets follow save's contract: a blank field on an edit means "keep the stored
+     *
+     * <p>Both secrets follow save's contract: a blank field on an edit means "keep the stored
      * one". The mining password is not decoration — the LogMiner readiness probe decides
      * whether a CDB source has a mining account configured from it, so dropping it made every
      * test of a saved CDB source report a red "configure the miner" check.
+     *
+     * <p>Naming a stored row is a reference to it: only its owner (or an administrator) may
+     * borrow its secrets, and the form chooses the host they are sent to.
      */
     public ConnectionTestService.TestResult testTransient(DatabaseConfig config, String rawPassword,
-                                                         String rawMinerPassword) {
-        DatabaseConfig existing = config.getId() == null ? null
-                : repository.findById(config.getId()).orElse(null);
+                                                         String rawMinerPassword, AccessGuard actor) {
+        DatabaseConfig existing = existingForTest(config, actor);
         if (rawPassword != null && !rawPassword.isEmpty()) {
             config.setPassword(cryptoUtil.encrypt(rawPassword));
         } else if (existing != null) {
@@ -323,6 +320,18 @@ public class DatabaseConfigService {
             config.setMinerPassword(existing.getMinerPassword());
         }
         return connectionTestService.test(config);
+    }
+
+    /** Loads the row the form names, refusing a stale id owned by someone else. */
+    private DatabaseConfig existingForTest(DatabaseConfig config, AccessGuard actor) {
+        if (config.getId() == null) {
+            return null;
+        }
+        DatabaseConfig existing = repository.findById(config.getId()).orElse(null);
+        if (existing != null) {
+            actor.requireEditable(existing.getOwnerUsername());
+        }
+        return existing;
     }
 
     /**

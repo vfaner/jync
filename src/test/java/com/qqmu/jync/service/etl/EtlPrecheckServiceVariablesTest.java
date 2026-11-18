@@ -24,6 +24,7 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.connection.DataSourceManager;
 
 /**
@@ -114,7 +115,7 @@ class EtlPrecheckServiceVariablesTest {
         when(configService.findById(1L)).thenReturn(Optional.of(h2(1L)));
         when(configService.findById(2L)).thenReturn(Optional.of(h2(2L)));
 
-        assertThatThrownBy(() -> service.check(task))
+        assertThatThrownBy(() -> service.check(task, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.var.unknown:nope");
     }

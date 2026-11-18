@@ -135,7 +135,7 @@ public class EtlController {
                 // The form names an existing task: rehearsal must be the task owner's too.
                 etlTaskService.requireEditable(task.getId(), AccessGuard.current());
             }
-            EtlPrecheckResult result = precheckService.check(task);
+            EtlPrecheckResult result = precheckService.check(task, AccessGuard.current());
             model.addAttribute("precheck", result);
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("precheckError", e.getMessage());

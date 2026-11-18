@@ -15,8 +15,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.access.AccessDeniedException;
 
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.dto.RedisTargetForm;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.repository.ProjectRepository;
@@ -125,13 +127,30 @@ class RedisTargetServiceTest {
     }
 
     @Test
+    void verifyRefusesARowIdOwnedBySomeoneElseEvenWhenAPasswordIsSupplied() {
+        RedisTarget foreign = new RedisTarget();
+        foreign.setId(4L);
+        foreign.setOwnerUsername("alice");
+        when(targets.findById(4L)).thenReturn(Optional.of(foreign));
+        RedisTargetForm form = form("cache-1", 4L);
+        form.setPort(1);
+
+        // The id is a reference to a stored target, and only its owner may act on it — the
+        // stored password is not the only thing a foreign form could reach.
+        assertThatThrownBy(() -> service.verify(form, "own-secret",
+                AccessGuard.of("bob", UserRole.OPS)))
+                .isInstanceOf(AccessDeniedException.class);
+        verify(cryptoUtil, never()).decrypt(any());
+    }
+
+    @Test
     void verifyReportsUnreachableWithoutThrowing() {
         RedisTargetForm form = form("cache-1", null);
         form.setHost("127.0.0.1");
         form.setPort(1);
         form.setConnectTimeoutMs(300);
 
-        VerifyResult result = service.verify(form, null);
+        VerifyResult result = service.verify(form, null, AccessGuard.system());
 
         assertThat(result.ok()).isFalse();
         assertThat(result.messageKey()).isEqualTo("redis.target.verify.failed");

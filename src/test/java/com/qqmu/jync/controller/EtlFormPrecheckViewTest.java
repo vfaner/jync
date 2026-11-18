@@ -71,7 +71,7 @@ class EtlFormPrecheckViewTest {
     @Test
     void theCardRendersLocalizedMessagesWithTheirDetailAndKeepsTheBadgeClass()
             throws Exception {
-        when(precheckService.check(any())).thenReturn(new EtlPrecheckResult(
+        when(precheckService.check(any(), any())).thenReturn(new EtlPrecheckResult(
                 List.of(new Check(Level.OK, "etl.precheck.source.ok", "12"),
                         new Check(Level.ERROR, "etl.precheck.target.columns.error", "id")),
                 List.of(new ColumnInfo("id", "INT"))));

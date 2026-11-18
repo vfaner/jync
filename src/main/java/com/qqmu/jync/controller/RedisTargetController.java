@@ -91,7 +91,7 @@ public class RedisTargetController {
     public String verify(@ModelAttribute RedisTargetForm form,
                          @RequestParam(required = false) String rawPassword,
                          Model model) {
-        VerifyResult result = service.verify(form, rawPassword);
+        VerifyResult result = service.verify(form, rawPassword, AccessGuard.current());
         model.addAttribute("form", form);
         if (result.ok()) {
             model.addAttribute("message", result.messageKey());

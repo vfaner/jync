@@ -40,8 +40,11 @@ import com.qqmu.jync.service.bulk.BulkPlanService;
  * create a task from a stale preview. Creating is a single transaction inside the service;
  * every failure here is flashed back as a message key.
  *
- * <p>Admin-only: the GET is listed in {@code ADMIN_ONLY_GET} and every POST is admin-only by
- * the blanket rule, because both reading a listing and creating tasks are configuration work.
+ * <p>Writer-only: the GET is listed in {@code WRITER_ONLY_GET} and the POSTs follow the
+ * blanket writer rule, because reading a listing and creating tasks are configuration work an
+ * operator does for its own connections. The wizard only ever creates projects owned by the
+ * caller, and {@code BulkPlanService} resolves both connections through
+ * {@code Ownership.requireReferenceable}.
  */
 @Controller
 @RequestMapping("/projects/bulk")

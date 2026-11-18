@@ -113,7 +113,7 @@
                                     </div>
                                 </details>
                                 <button type="button" class="badge badge-btn"
-                                        th:if="${log.resolutionStatus != null}"
+                                        th:if="${log.resolutionStatus != null and (isAdmin or editableProjectIds.contains(log.projectId))}"
                                         th:classappend="${statusCls}"
                                         th:attr="data-role=ddl-open,data-ddl-id=${log.id},data-ddl-sql=${log.targetDdlSql},data-ddl-src-db=${log.objectName},data-ddl-target-db=${targetDatabaseName},data-ddl-error=${log.errorDetail},data-ddl-executed=${log.ddlExecuted != null and log.ddlExecuted},data-ddl-replayed=${log.replayDone != null and log.replayDone},data-ddl-text-pending=#{log.ddl.pending},data-ddl-text-executed=#{log.ddl.awaitingReplay},data-ddl-text-processed=#{log.ddl.processed},data-ddl-confirm=#{log.ddl.retryConfirm},data-ddl-dismiss-confirm=#{log.ddl.dismissConfirm},data-ddl-needs-ddl=#{log.ddl.retryNeedsDdl},data-ddl-gap=${log.affectedTables}"
                                         th:text="#{${statusKey}}">pending</button>

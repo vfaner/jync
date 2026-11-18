@@ -18,6 +18,8 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.service.connection.DataSourceManager;
 
 /**
@@ -66,12 +68,16 @@ public class EtlPrecheckService {
     }
 
     /** Prechecks a form that has not been saved yet. */
-    public EtlPrecheckResult check(EtlTask form) {
+    public EtlPrecheckResult check(EtlTask form, AccessGuard actor) {
         EtlTaskValidation.validateExtraction(form, databaseConfigService);
         DatabaseConfig source = databaseConfigService.findById(form.getSourceDbId())
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.source.missing"));
         DatabaseConfig target = databaseConfigService.findById(form.getTargetDbId())
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.target.missing"));
+        // A rehearsal opens both connections and runs the caller's SQL against the source, so
+        // the same reference rule as save applies before anything is dialed.
+        Ownership.requireReferenceable(source.getOwnerUsername(), source.getName(), actor);
+        Ownership.requireReferenceable(target.getOwnerUsername(), target.getName(), actor);
         try (EtlConnections connections = new EtlConnections(dataSourceManager)) {
             return check(form, source, target, connections);
         }

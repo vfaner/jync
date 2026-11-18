@@ -51,7 +51,7 @@ class DatabaseTransientTestApiTest {
 
     private void stubTransientTest() {
         ConnectionTestService.TestResult result = mock(ConnectionTestService.TestResult.class);
-        when(service.testTransient(any(DatabaseConfig.class), any(), any())).thenReturn(result);
+        when(service.testTransient(any(DatabaseConfig.class), any(), any(), any())).thenReturn(result);
         when(service.previewUrl(any(DatabaseConfig.class))).thenReturn("jdbc:oracle:thin:@x");
     }
 
@@ -69,7 +69,7 @@ class DatabaseTransientTestApiTest {
                         .param("rawMinerPassword", "miner-pw"))
                 .andExpect(status().isOk());
 
-        verify(service).testTransient(any(DatabaseConfig.class), eq("pw"), eq("miner-pw"));
+        verify(service).testTransient(any(DatabaseConfig.class), eq("pw"), eq("miner-pw"), any());
     }
 
     @Test
@@ -85,6 +85,6 @@ class DatabaseTransientTestApiTest {
                         .param("rawMinerPassword", ""))
                 .andExpect(status().isOk());
 
-        verify(service).testTransient(any(DatabaseConfig.class), eq(""), eq(""));
+        verify(service).testTransient(any(DatabaseConfig.class), eq(""), eq(""), any());
     }
 }

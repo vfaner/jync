@@ -18,6 +18,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.util.CryptoUtil;
@@ -76,7 +77,7 @@ class DatabaseConfigServiceTransientTest {
 
     private DatabaseConfig tested(DatabaseConfig config, String rawPassword,
                                   String rawMinerPassword) {
-        service.testTransient(config, rawPassword, rawMinerPassword);
+        service.testTransient(config, rawPassword, rawMinerPassword, AccessGuard.system());
         ArgumentCaptor<DatabaseConfig> captor = ArgumentCaptor.forClass(DatabaseConfig.class);
         verify(connectionTestService).test(captor.capture());
         return captor.getValue();

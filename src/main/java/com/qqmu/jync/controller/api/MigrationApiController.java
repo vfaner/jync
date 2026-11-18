@@ -61,8 +61,12 @@ public class MigrationApiController {
                                              @RequestParam(required = false) String rawPassword,
                                              @RequestParam(required = false) String rawApiKey) {
         try {
-            return result(service.testTransient(form, rawPassword, rawApiKey),
-                    form.getBaseUrl());
+            return result(service.testTransient(form, rawPassword, rawApiKey,
+                    AccessGuard.current()), form.getBaseUrl());
+        } catch (AccessDeniedException e) {
+            // Denial is not a failed connection test: rethrow so the shared 403 handler answers
+            // instead of a 200 body that hides it.
+            throw e;
         } catch (RuntimeException e) {
             return failure(e.getMessage());
         }

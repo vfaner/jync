@@ -60,7 +60,7 @@ class MigrationApiControllerTest {
 
     @Test
     void aTransientConnectionCanBeTestedBeforeSaving() throws Exception {
-        when(service.testTransient(any(), any(), any())).thenReturn(
+        when(service.testTransient(any(), any(), any(), any())).thenReturn(
                 new MigrationConnectionTestResult(true, null,
                         "elasticsearch", "7.17.22", "prod", 12));
 
@@ -77,7 +77,7 @@ class MigrationApiControllerTest {
 
     @Test
     void aFailedTestStillAnswers200WithTheReason() throws Exception {
-        when(service.testTransient(any(), any(), any())).thenReturn(
+        when(service.testTransient(any(), any(), any(), any())).thenReturn(
                 new MigrationConnectionTestResult(false,
                         "GET / -> 401 Unauthorized", null, null, null, 5));
 

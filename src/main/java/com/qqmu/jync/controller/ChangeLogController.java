@@ -1,6 +1,8 @@
 package com.qqmu.jync.controller;
 
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.MessageSource;
@@ -20,6 +22,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.model.ChangeLog;
+import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.ChangeLogService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.AccessGuard;
@@ -68,7 +71,16 @@ public class ChangeLogController {
 
         model.addAttribute("logs", logs);
         model.addAttribute("pager", pager);
-        model.addAttribute("projects", projectService.findAll());
+        List<Project> projects = projectService.findAll();
+        model.addAttribute("projects", projects);
+        // The skipped-DDL button posts to a handler that requires editing the log's project.
+        // Rendering it for a foreign project would hand the operator a button whose answer is
+        // a 302 the page's fetch cannot parse; an administrator passes that check everywhere.
+        AccessGuard actor = AccessGuard.current();
+        model.addAttribute("editableProjectIds", projects.stream()
+                .filter(project -> actor.canEdit(project.getOwnerUsername()))
+                .map(Project::getId)
+                .collect(Collectors.toSet()));
         model.addAttribute("selectedProjectId", projectId);
         // A binlog DDL qualifies the table with the source database; the target's own name
         // is what the statement has to run against.

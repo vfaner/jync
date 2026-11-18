@@ -160,13 +160,20 @@ public class RedisTargetService {
     /**
      * Probes the endpoint with {@code PING}. A saved form with a blank password falls back to the
      * stored credential. Failure is returned, never thrown: the form renders it as a message.
+     *
+     * <p>Naming a stored row is a reference to it: only its owner (or an administrator) may
+     * borrow its password, and the form chooses the host AUTH sends it to.
      */
-    public VerifyResult verify(RedisTargetForm form, String rawPassword) {
+    public VerifyResult verify(RedisTargetForm form, String rawPassword, AccessGuard actor) {
         String password = rawPassword;
-        if ((password == null || password.isEmpty()) && form.getId() != null) {
+        if (form.getId() != null) {
             RedisTarget existing = targets.findById(form.getId()).orElse(null);
-            if (existing != null && existing.getPasswordEnc() != null) {
-                password = cryptoUtil.decrypt(existing.getPasswordEnc());
+            if (existing != null) {
+                actor.requireEditable(existing.getOwnerUsername());
+                if ((password == null || password.isEmpty())
+                        && existing.getPasswordEnc() != null) {
+                    password = cryptoUtil.decrypt(existing.getPasswordEnc());
+                }
             }
         }
         RedisTarget target = form.toEntity();

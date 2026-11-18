@@ -237,15 +237,20 @@ public class MigrationConnectionService {
     /**
      * Tests form values before saving. A saved form with blank secrets (the edit page never
      * receives them) falls back to the stored values.
+     *
+     * <p>Naming a stored row is a reference to it: only its owner (or an administrator) may
+     * borrow its secrets, and the form chooses the endpoint they are sent to.
      */
     public MigrationConnectionTestResult testTransient(MigrationConnectionForm form,
-                                                       String rawPassword, String rawApiKey) {
+                                                       String rawPassword, String rawApiKey,
+                                                       AccessGuard actor) {
         MigrationConnection entity = form.toEntity();
         String password = rawPassword;
         String apiKey = rawApiKey;
         if (form.getId() != null) {
             MigrationConnection existing = connections.findById(form.getId()).orElse(null);
             if (existing != null) {
+                actor.requireEditable(existing.getOwnerUsername());
                 if ((password == null || password.isEmpty())
                         && existing.getPasswordEnc() != null) {
                     password = cryptoUtil.decrypt(existing.getPasswordEnc());

@@ -21,6 +21,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.dto.MigrationTaskForm;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationRunTrigger;
@@ -182,10 +183,17 @@ public class MigrationController {
         ObjectNode submitted = formOptions(request);
         JsonNode options = displayOptions(handler, submitted);
         try {
+            MigrationConnection source = connection(form.getSourceConnectionId(),
+                    "error.migration.source.missing");
+            MigrationConnection target = connection(form.getTargetConnectionId(),
+                    "error.migration.target.missing");
+            // The rehearsal dials both stored endpoints and creates a throwaway index on the
+            // target, so it obeys the same reference rule as saving a task.
+            AccessGuard actor = AccessGuard.current();
+            Ownership.requireReferenceable(source.getOwnerUsername(), source.getName(), actor);
+            Ownership.requireReferenceable(target.getOwnerUsername(), target.getName(), actor);
             MigrationPrecheckResult result = handler.precheck(
-                    transientTask(form, resolved), options,
-                    connection(form.getSourceConnectionId(), "error.migration.source.missing"),
-                    connection(form.getTargetConnectionId(), "error.migration.target.missing"));
+                    transientTask(form, resolved), options, source, target);
             model.addAttribute("precheck", result);
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());

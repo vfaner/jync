@@ -129,7 +129,7 @@ class MigrationConnectionServiceMongoTest {
         when(database.runCommand(any(Document.class)))
                 .thenReturn(new Document("version", "6.0.5"));
 
-        MigrationConnectionTestResult result = service.testTransient(form, "", null);
+        MigrationConnectionTestResult result = service.testTransient(form, "", null, AccessGuard.system());
 
         assertThat(result.success()).isTrue();
         verify(factory).open(any(MigrationConnection.class), eq("old-secret"));

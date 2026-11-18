@@ -285,8 +285,14 @@ public class EtlBatchService {
         validateSettings(form);
         EtlBatch entity;
         if (form.getId() == null) {
-            EtlTaskValidation.validateConnections(databaseConfigService,
+            DatabaseConfig source = EtlTaskValidation.validateConnections(databaseConfigService,
                     form.getSourceDbId(), form.getTargetDbId());
+            DatabaseConfig target = targetConfig(form.getTargetDbId());
+            // The create branch is a second way into a new batch. A batch is a standing
+            // instruction to read one side and write the other with the stored credentials,
+            // so it obeys the same reference rule as createWithTables.
+            Ownership.requireReferenceable(source.getOwnerUsername(), source.getName(), actor);
+            Ownership.requireReferenceable(target.getOwnerUsername(), target.getName(), actor);
             entity = new EtlBatch();
             entity.setEnabled(false);
             entity.setSourceDbId(form.getSourceDbId());
